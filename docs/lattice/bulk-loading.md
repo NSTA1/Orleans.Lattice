@@ -111,3 +111,27 @@ sequenceDiagram
 - **Deterministic grain IDs:** New leaves use IDs derived from `{shardKey}/append/{operationId}/leaf/{index}`, so retries target the same grains.
 - **Idempotent sibling wiring:** `SetNextSiblingAsync` and `SetPrevSiblingAsync` are safe to call multiple times with the same value.
 - **Idempotent separator propagation:** `AcceptSplitAsync` detects duplicate `(separatorKey, childId)` pairs and skips them.
+
+## WAL grain-hop budget
+
+Every per-leaf chunk built by `BulkLoadAsync`, `BulkLoadRawAsync`, and
+`BulkAppendAsync` is handed to the leaf as a single
+`MergeEntriesAsync(batch)` call, where `batch` is sized at
+`LatticeOptions.MaxLeafKeys` (default 250). On the leaf, the merge path
+collapses the whole chunk into one batched
+`ICommitLogWriter.AppendManyAsync` dispatch, which the default
+`WalCommitLogWriter` forwards to `IWalShardGrain.AppendBatchAsync`.
+
+The grain-hop budget per bulk-loaded leaf is therefore:
+
+| Cost component | Per leaf |
+|---|---|
+| Leaf `MergeEntriesAsync` calls | 1 |
+| WAL grain hops (`IWalShardGrain.AppendBatchAsync`) | 1 per WAL partition touched (typically 1) |
+| Provider flushes (`IWalStorageProvider.AppendBatchAsync` / `AppendEncodedBatchAsync`) | 1 when the chunk fits inside `WalMaxBatchEntries` / `WalMaxBatchBytes`, otherwise a fixed cutover count |
+
+A 1M-entry initial import distributed across 4000 leaves (250 keys per
+leaf) therefore pays 4000 WAL grain hops in steady state, not 1M. See
+`docs/lattice/wal.md#batched-leaf-write-path` for the contract that
+backs this.
+

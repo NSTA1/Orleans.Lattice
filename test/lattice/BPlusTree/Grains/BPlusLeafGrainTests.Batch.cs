@@ -1,4 +1,8 @@
+using NSubstitute;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using System.Text;
 
@@ -193,6 +197,150 @@ public partial class BPlusLeafGrainTests
         Assert.That(count, Is.EqualTo(1));
         Assert.That(await grain.GetAsync("b"), Is.Null);
         Assert.That(await grain.GetAsync("c"), Is.Not.Null);
+    }
+
+    // --- batched WAL append on the leaf write path ---
+
+    [Test]
+    public async Task SetMany_collapses_per_key_wal_appends_into_a_single_batched_call()
+    {
+        // SetManyAsync's foreground fast path must dispatch the whole
+        // batch through ICommitLogWriter.AppendManyAsync once, not via
+        // per-key AppendAsync calls. The FakeCommitLogWriter records
+        // both paths so the assertion fails loudly if a future change
+        // re-introduces the per-key loop.
+        var writer = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: writer);
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        for (var i = 0; i < 16; i++)
+        {
+            entries.Add(new($"k{i:D2}", Encoding.UTF8.GetBytes($"v{i}")));
+        }
+
+        await grain.SetManyAsync(entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(writer.AppendManyCallCount, Is.EqualTo(1),
+                "Foreground SetManyAsync must dispatch as a single batched commit-log call.");
+            Assert.That(writer.AppendCount, Is.EqualTo(16),
+                "Every entry must still be present in the WAL append capture.");
+        });
+    }
+
+    [Test]
+    public async Task SetMany_batched_path_produces_projection_identical_to_per_key_loop()
+    {
+        // The batched path must store every entry in the leaf
+        // projection with the same key->value mapping the per-key loop
+        // would have produced. Mixed key shapes and overlapping writes
+        // exercise the LWW merge inside StoreEntry.
+        var grain = CreateGrain();
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k01", Encoding.UTF8.GetBytes("first")),
+            new("k02", Encoding.UTF8.GetBytes("second")),
+            new("k03", Encoding.UTF8.GetBytes("third")),
+            new("k01", Encoding.UTF8.GetBytes("first-rewritten")),
+        };
+
+        await grain.SetManyAsync(entries);
+
+        var k01 = await grain.GetAsync("k01");
+        var k02 = await grain.GetAsync("k02");
+        var k03 = await grain.GetAsync("k03");
+        Assert.Multiple(() =>
+        {
+            Assert.That(Encoding.UTF8.GetString(k01!), Is.EqualTo("first-rewritten"));
+            Assert.That(Encoding.UTF8.GetString(k02!), Is.EqualTo("second"));
+            Assert.That(Encoding.UTF8.GetString(k03!), Is.EqualTo("third"));
+        });
+    }
+
+    [Test]
+    public async Task SetMany_batched_path_advances_clock_and_version_once_per_entry()
+    {
+        // Every entry must advance the leaf's HLC; the batched path's
+        // end-of-batch PublishVersionAdvance must dominate the
+        // pre-batch version.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        var clockBefore = state.State.Clock;
+        var versionBefore = state.State.Version.Clone();
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+            new("b", Encoding.UTF8.GetBytes("2")),
+            new("c", Encoding.UTF8.GetBytes("3")),
+        };
+        await grain.SetManyAsync(entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Clock, Is.GreaterThan(clockBefore),
+                "Batched SetMany must still tick the HLC for every entry.");
+            Assert.That(state.State.Version.DominatesOrEquals(versionBefore), Is.True);
+            Assert.That(versionBefore.DominatesOrEquals(state.State.Version), Is.False,
+                "Batched SetMany must publish a version-vector advance.");
+        });
+    }
+
+    [Test]
+    public async Task SetMany_returns_split_result_when_batch_overflows_leaf_capacity()
+    {
+        // The batched fast path triggers a single end-of-batch split
+        // when the cumulative entries exceed MaxLeafKeys. The split's
+        // sibling key is the median of the merged projection by
+        // construction; the test pins that a split was reported.
+        var siblingContext = Substitute.For<IGrainContext>();
+        siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString()));
+        var sibling = Substitute.For<IBPlusLeafGrain, IGrainBase>();
+        ((IGrainBase)sibling).GrainContext.Returns(siblingContext);
+        sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
+            .Returns(Task.FromResult<SplitResult?>(null));
+        sibling.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
+        sibling.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+        sibling.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
+
+        var grain = CreateGrain(siblingStub: sibling, maxLeafKeys: 4);
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        for (var i = 0; i < 8; i++)
+        {
+            entries.Add(new($"k{i:D2}", Encoding.UTF8.GetBytes($"v{i}")));
+        }
+
+        var split = await grain.SetManyAsync(entries);
+
+        Assert.That(split, Is.Not.Null,
+            "Batch overflowing MaxLeafKeys must surface a SplitResult.");
+    }
+
+    [Test]
+    public async Task SetMany_empty_batch_does_not_call_commit_log()
+    {
+        var writer = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: writer);
+
+        var result = await grain.SetManyAsync(new List<KeyValuePair<string, byte[]>>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.Null);
+            Assert.That(writer.AppendManyCallCount, Is.Zero);
+            Assert.That(writer.AppendCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void SetMany_throws_on_null_entries()
+    {
+        var grain = CreateGrain();
+        Assert.That(async () => await grain.SetManyAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
     }
 }
 

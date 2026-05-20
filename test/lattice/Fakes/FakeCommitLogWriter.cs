@@ -56,4 +56,31 @@ internal sealed class FakeCommitLogWriter : ICommitLogWriter
         Appended.Add(mutation);
         return Task.FromResult((long)(Appended.Count - 1));
     }
+
+    /// <summary>
+    /// Total number of <see cref="AppendManyAsync"/> calls. Used by
+    /// tests that pin the "leaf bulk-write path collapses N per-key
+    /// WAL round-trips into a single batched commit-log call"
+    /// invariant on the batched leaf write path.
+    /// </summary>
+    public int AppendManyCallCount { get; private set; }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<LatticeMutation> mutations, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(mutations);
+        AppendManyCallCount++;
+        if (ThrowOnAppend is { } ex)
+        {
+            ThrowOnAppend = null;
+            throw ex;
+        }
+        var offsets = new long[mutations.Count];
+        for (var i = 0; i < mutations.Count; i++)
+        {
+            Appended.Add(mutations[i]);
+            offsets[i] = Appended.Count - 1;
+        }
+        return Task.FromResult<IReadOnlyList<long>>(offsets);
+    }
 }

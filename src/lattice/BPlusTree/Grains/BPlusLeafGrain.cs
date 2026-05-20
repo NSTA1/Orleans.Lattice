@@ -825,14 +825,186 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
-        SplitResult? lastSplit = null;
-        foreach (var entry in entries)
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
         {
-            var split = await SetAsync(entry.Key, entry.Value);
-            if (split is not null)
-                lastSplit = split;
+            return null;
         }
-        return lastSplit;
+
+        // Fast path: in the common foreground bulk-write case we can
+        // collapse the per-key WAL round-trip into a single batched
+        // commit-log dispatch via ICommitLogWriter.AppendManyAsync. The
+        // fast path is gated by the conditions that distinguish the
+        // simple commit path inside CommitSetAsync - if any per-call
+        // context flag would otherwise alter the per-key semantics, we
+        // fall through to the per-key loop and pay the original cost.
+        // The gated branches are:
+        //   * an in-progress split (the split recovery in SetCoreAsync
+        //     forwards mid-batch entries across two grains and we keep
+        //     that path serialized);
+        //   * the saga prepare-phase write (entries route to the
+        //     pending-tx map and do not advance the projection, so the
+        //     digest / observer fan-out shape is different);
+        //   * the atomic-batch context (atomic-batch envelopes carry
+        //     per-entry index/size and the batched path would lose
+        //     that ordering across the WAL grain).
+        var isPrepared = LatticePreparedContext.Current;
+        var hasAtomicBatch = LatticeAtomicBatchContext.Current is not null;
+        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        if (isPrepared || hasAtomicBatch || splitInProgress)
+        {
+            SplitResult? lastSplit = null;
+            foreach (var entry in entries)
+            {
+                var split = await SetAsync(entry.Key, entry.Value);
+                if (split is not null)
+                    lastSplit = split;
+            }
+            return lastSplit;
+        }
+
+        return await CommitSetManyAsync(entries);
+    }
+
+    /// <summary>
+    /// Foreground bulk-write commit path. Collapses the per-key WAL
+    /// round-trip into a single <see cref="ICommitLogWriter.AppendManyAsync"/>
+    /// call so a N-key batch routed to the same WAL partition pays one
+    /// grain RPC instead of N. The per-key in-memory apply, observer
+    /// publication, and digest publication still happen, but the
+    /// digest funnel only fires once at the end of the batch (it is
+    /// idempotent against <c>_digestDirty</c>) and the split predicate
+    /// is checked once after every per-key apply has landed - if any
+    /// per-key apply pushed the leaf above <see cref="ResolvedLatticeOptions.MaxLeafKeys"/>,
+    /// a single <see cref="SplitAsync"/> runs at the end and produces
+    /// the same <see cref="SplitResult"/> shape the per-key loop would
+    /// have produced for its final overflowing entry.
+    /// </summary>
+    private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        var count = entries.Count;
+        var mutations = new List<LatticeMutation>(count);
+        var stamps = new HybridLogicalClock[count];
+        var values = new LwwValue<byte[]>[count];
+
+        // step 0 (build) - HLC tick per entry, mutation envelope per
+        // entry. We do not call PublishVersionAdvance per entry; the
+        // version vector tracks the highest local clock, so a single
+        // publish of the last-assigned stamp at the end of the batch
+        // dominates every individual entry's stamp by monotonic-tick
+        // construction. BumpLocalRevision is also folded to a single
+        // call at the end - the registry observes one revision bump
+        // per batched commit, which is the correct shape for the
+        // LeafCacheGrain refresh protocol (every refresh sees the
+        // whole batch as one logical delta).
+        var origin = LatticeOriginContext.Current;
+        var vectorClock = LatticeVectorClockContext.Current;
+        var delta = LatticeDeltaContext.Current;
+        var transactionId = LatticeTransactionContext.Current;
+        var category = LatticeMaintenanceContext.Current;
+        var treeId = state.State.TreeId ?? string.Empty;
+        var shardIndex = state.State.ShardIndex ?? 0;
+
+        for (var i = 0; i < count; i++)
+        {
+            var key = entries[i].Key;
+            var value = entries[i].Value;
+            var stamp = AdvanceClockOrOverride();
+            stamps[i] = stamp;
+            var lww = LwwValue<byte[]>.CreateWithExpiry(value, stamp, 0L)
+                with
+                {
+                    OriginClusterId = origin,
+                    VectorClock = vectorClock,
+                };
+            values[i] = lww;
+            mutations.Add(new LatticeMutation
+            {
+                TreeId = treeId,
+                Kind = MutationKind.Set,
+                Key = key,
+                Value = lww.IsTombstone ? null : lww.Value,
+                Timestamp = lww.Timestamp,
+                IsTombstone = lww.IsTombstone,
+                ExpiresAtTicks = lww.ExpiresAtTicks,
+                OriginClusterId = lww.OriginClusterId,
+                VectorClock = lww.VectorClock,
+                TransactionId = transactionId,
+                Category = category,
+                DeltaKind = delta?.Kind,
+                DeltaPayload = delta?.Payload,
+                AtomicBatchSize = 0,
+                AtomicBatchIndex = 0,
+                IsPrepared = false,
+                ShardIndex = shardIndex,
+            });
+        }
+
+        // Publish the highest assigned stamp once - the version vector
+        // for this replica jumps directly to the batch's end.
+        var highStamp = stamps[count - 1];
+        PublishVersionAdvance(highStamp);
+        BumpLocalRevision();
+
+        var options = await GetOptionsAsync();
+
+        // step 1 (wal) - one batched dispatch. Pre-Apply failure here
+        // leaves projection state untouched and surfaces the WAL error
+        // to the caller, exactly matching the per-key path's contract.
+        var walStartTicks = Stopwatch.GetTimestamp();
+        var writer = ResolveCommitLogWriter();
+        if (writer is not null)
+        {
+            await writer.AppendManyAsync(mutations);
+        }
+        RecordCommitStep("wal", walStartTicks);
+
+        // step 2 (apply) - per-key LWW merge into the projection. The
+        // split predicate is checked once at the end; if multiple
+        // entries push the leaf above capacity, a single SplitAsync
+        // produces the same SplitResult the per-key loop would have
+        // produced on its final overflowing entry.
+        var applyStartTicks = Stopwatch.GetTimestamp();
+        SplitResult? splitResult = null;
+        for (var i = 0; i < count; i++)
+        {
+            StoreEntry(entries[i].Key, values[i]);
+        }
+        if (state.State.Entries.Count > options.MaxLeafKeys)
+        {
+            splitResult = await SplitAsync();
+        }
+        RecordCommitStep("apply", applyStartTicks);
+
+        // step 3 (observer) - publish each committed entry under a
+        // single commit-log scope. The fan-out shape is per-key (one
+        // notification per mutation), matching the per-key loop's
+        // contract; the saving in this method is in the WAL round-trip
+        // and the digest publication, not the observer fan-out.
+        var observerStartTicks = Stopwatch.GetTimestamp();
+        if (mutationObservers.HasObservers)
+        {
+            using (LatticeCommitLogContext.BeginScope())
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    var key = entries[i].Key;
+                    var published = state.State.Entries.TryGetValue(key, out var committed) ? committed : values[i];
+                    await PublishSetAsync(key, published);
+                }
+            }
+        }
+        RecordCommitStep("observer", observerStartTicks);
+
+        // step 4 (digest) - one digest fold for the whole batch. The
+        // dirty-flag is idempotent so the funnel coalesces every
+        // per-key StoreEntry hash contribution into a single parent
+        // notification.
+        var digestStartTicks = Stopwatch.GetTimestamp();
+        await PublishDigestUpwardAsync();
+        RecordCommitStep("digest", digestStartTicks);
+
+        return splitResult;
     }
 
     public async Task<bool> DeleteAsync(string key)
@@ -1544,60 +1716,80 @@ internal sealed partial class BPlusLeafGrain(
         var maintenance = LatticeMaintenanceContext.Current;
         var transactionId = LatticeTransactionContext.Current;
         var maxIncoming = HybridLogicalClock.Zero;
+
+        // step 0 (build) - one mutation envelope per incoming entry. The
+        // per-key WAL grain hop that this loop used to do has been
+        // collapsed into a single batched ICommitLogWriter.AppendManyAsync
+        // dispatch below, matching the foreground SetManyAsync fast path.
+        // Bulk-load / snapshot-restore / sibling-redistribute all reach
+        // this method with batches sized at MaxLeafKeys, so the per-call
+        // grain-hop count drops from O(MaxLeafKeys) to O(1) on the
+        // merge channel as well.
+        List<LatticeMutation>? mutations = null;
+        if (writer is not null && entries.Count > 0)
+            mutations = new List<LatticeMutation>(entries.Count);
+
         foreach (var (key, incoming) in entries)
         {
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
 
-            if (writer is not null)
+            mutations?.Add(new LatticeMutation
             {
-                var mutation = new LatticeMutation
-                {
-                    TreeId = treeId,
-                    Kind = incoming.IsTombstone ? MutationKind.Delete : MutationKind.Set,
-                    Key = key,
-                    Value = incoming.IsTombstone ? null : incoming.Value,
-                    Timestamp = incoming.Timestamp,
-                    IsTombstone = incoming.IsTombstone,
-                    ExpiresAtTicks = incoming.IsTombstone ? 0 : incoming.ExpiresAtTicks,
-                    OriginClusterId = incoming.OriginClusterId,
-                    VectorClock = incoming.VectorClock,
-                    TransactionId = transactionId,
-                    Category = maintenance,
-                    IsPrepared = false,
-                    IsMerge = true,
-                    ShardIndex = shardIndex,
-                };
+                TreeId = treeId,
+                Kind = incoming.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                Key = key,
+                Value = incoming.IsTombstone ? null : incoming.Value,
+                Timestamp = incoming.Timestamp,
+                IsTombstone = incoming.IsTombstone,
+                ExpiresAtTicks = incoming.IsTombstone ? 0 : incoming.ExpiresAtTicks,
+                OriginClusterId = incoming.OriginClusterId,
+                VectorClock = incoming.VectorClock,
+                TransactionId = transactionId,
+                Category = maintenance,
+                IsPrepared = false,
+                IsMerge = true,
+                ShardIndex = shardIndex,
+            });
+        }
 
-                // Emit the WAL append on the LeafWriteDuration histogram
-                // tagged `kind=merge` so operators can size sibling-
-                // redistribute / replication-apply / snapshot-restore
-                // traffic against ordinary writes on the same instrument.
-                var walStartTicks = Stopwatch.GetTimestamp();
-                try
-                {
-                    await writer.AppendAsync(mutation);
-                }
-                finally
-                {
-                    var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
-                    LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
-                }
+        // step 1 (wal) - one batched dispatch for the whole merge batch.
+        // The LeafWriteDuration histogram is recorded once per batch with
+        // tag `kind=merge` so operators can size sibling-redistribute /
+        // replication-apply / snapshot-restore traffic against ordinary
+        // writes on the same instrument. (Per-entry recording would
+        // inflate the histogram count and bias percentile reads of the
+        // single-write path.)
+        if (mutations is { Count: > 0 })
+        {
+            var walStartTicks = Stopwatch.GetTimestamp();
+            try
+            {
+                await writer!.AppendManyAsync(mutations);
             }
+            finally
+            {
+                var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
+                LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+            }
+        }
 
-            // Cross-leaf migration provenance: stamp IsMigrated=true on
-            // the incoming value before merging. If the imported HLC
-            // wins the LWW merge, the resulting Entries[K] carries the
-            // flag (StoreEntry returns the merged winner). If a
-            // pre-existing dominator wins, its own IsMigrated is
-            // preserved by Merge - either way the value's provenance
-            // travels with the value, and no out-of-band map is
-            // required. The foreground orphan-drain guard in
-            // BPlusLeafGrain.ApplyTxCommit reads existing.IsMigrated
-            // to distinguish a migrated dominator (drain proceeds)
-            // from a sibling-saga drain (drain skips).
+        // step 2 (apply) - per-key LWW merge into the projection.
+        // Cross-leaf migration provenance: stamp IsMigrated=true on
+        // each incoming value before merging. If the imported HLC
+        // wins the LWW merge, the resulting Entries[K] carries the
+        // flag (StoreEntry returns the merged winner). If a
+        // pre-existing dominator wins, its own IsMigrated is
+        // preserved by Merge - either way the value's provenance
+        // travels with the value, and no out-of-band map is
+        // required. The foreground orphan-drain guard in
+        // BPlusLeafGrain.ApplyTxCommit reads existing.IsMigrated
+        // to distinguish a migrated dominator (drain proceeds)
+        // from a sibling-saga drain (drain skips).
+        foreach (var (key, incoming) in entries)
+        {
             StoreEntry(key, incoming with { IsMigrated = true });
         }
 
@@ -1937,6 +2129,36 @@ internal sealed partial class BPlusLeafGrain(
         var transactionId = LatticeTransactionContext.Current;
         var maxIncoming = HybridLogicalClock.Zero;
         var appliedAny = false;
+
+        // step 0 (filter + build) - first pass classifies each incoming
+        // entry under the asymmetric migration-vs-foreground rule
+        // (described in detail below), and builds the per-entry mutation
+        // envelope and post-stamping LwwValue used by both the WAL
+        // append and the projection apply. The per-key WAL grain hop
+        // that used to run inside this loop has been collapsed into a
+        // single batched ICommitLogWriter.AppendManyAsync dispatch
+        // below, matching the foreground SetManyAsync fast path and
+        // the MergeEntriesAsync sibling fast path. Cross-shard migration
+        // (the dominant caller, via online-reshard and shard splits)
+        // gets the same O(1) grain-hop savings as the foreground path.
+        //
+        // Allocation note: the `accepted` work list is only materialised
+        // on the cross-shard migration path, where (a) the asymmetric
+        // guard may filter entries so step 2 cannot iterate `entries`
+        // directly, and (b) each surviving entry's `toStore` value
+        // differs from `incoming` (it carries IsMigrated=true). On the
+        // non-migration path every incoming entry survives unchanged,
+        // so step 2 iterates `entries` directly and the per-batch
+        // `KeyValuePair<string, LwwValue<byte[]>>[]` backing array
+        // (~64 B per entry, ~16 KiB on a default-size leaf) is not
+        // allocated.
+        List<LatticeMutation>? mutations = null;
+        List<KeyValuePair<string, LwwValue<byte[]>>>? accepted = null;
+        if (writer is not null && entries.Count > 0)
+            mutations = new List<LatticeMutation>(entries.Count);
+        if (isCrossShardMigration && entries.Count > 0)
+            accepted = new List<KeyValuePair<string, LwwValue<byte[]>>>(entries.Count);
+
         foreach (var (key, incoming) in entries)
         {
             // Asymmetric migration-vs-foreground rule. Only fires on the
@@ -1986,43 +2208,70 @@ internal sealed partial class BPlusLeafGrain(
             // source-side entry was itself a migration import being
             // re-replicated / re-merged forward.
             var toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
+            accepted?.Add(new KeyValuePair<string, LwwValue<byte[]>>(key, toStore));
 
-            if (writer is not null)
+            mutations?.Add(new LatticeMutation
             {
-                var mutation = new LatticeMutation
-                {
-                    TreeId = treeId,
-                    Kind = toStore.IsTombstone ? MutationKind.Delete : MutationKind.Set,
-                    Key = key,
-                    Value = toStore.IsTombstone ? null : toStore.Value,
-                    Timestamp = toStore.Timestamp,
-                    IsTombstone = toStore.IsTombstone,
-                    ExpiresAtTicks = toStore.IsTombstone ? 0 : toStore.ExpiresAtTicks,
-                    OriginClusterId = toStore.OriginClusterId,
-                    VectorClock = toStore.VectorClock,
-                    TransactionId = transactionId,
-                    Category = maintenance,
-                    IsPrepared = false,
-                    IsMerge = true,
-                    ShardIndex = shardIndex,
-                };
+                TreeId = treeId,
+                Kind = toStore.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                Key = key,
+                Value = toStore.IsTombstone ? null : toStore.Value,
+                Timestamp = toStore.Timestamp,
+                IsTombstone = toStore.IsTombstone,
+                ExpiresAtTicks = toStore.IsTombstone ? 0 : toStore.ExpiresAtTicks,
+                OriginClusterId = toStore.OriginClusterId,
+                VectorClock = toStore.VectorClock,
+                TransactionId = transactionId,
+                Category = maintenance,
+                IsPrepared = false,
+                IsMerge = true,
+                ShardIndex = shardIndex,
+            });
+        }
 
-                var walStartTicks = Stopwatch.GetTimestamp();
-                try
+        // step 1 (wal) - one batched dispatch for the whole accepted
+        // batch. Recorded once on LeafWriteDuration tagged kind=merge;
+        // see MergeEntriesAsync for the per-batch-recording rationale.
+        if (mutations is { Count: > 0 })
+        {
+            var walStartTicks = Stopwatch.GetTimestamp();
+            try
+            {
+                await writer!.AppendManyAsync(mutations);
+            }
+            finally
+            {
+                var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
+                LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+            }
+        }
+
+        // step 2 (apply) - per-key LWW merge into the projection. On
+        // the cross-shard migration path we iterate the post-filter
+        // `accepted` list so guard-rejected entries are not applied;
+        // on the non-migration path every entry survives unchanged and
+        // we iterate `entries` directly to avoid the per-batch work
+        // list allocation.
+        if (isCrossShardMigration)
+        {
+            if (accepted is { Count: > 0 })
+            {
+                for (var i = 0; i < accepted.Count; i++)
                 {
-                    await writer.AppendAsync(mutation);
-                }
-                finally
-                {
-                    var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
-                    LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+                    StoreEntry(accepted[i].Key, accepted[i].Value);
+                    appliedAny = true;
                 }
             }
-
-            StoreEntry(key, toStore);
-            appliedAny = true;
+        }
+        else
+        {
+            foreach (var (key, incoming) in entries)
+            {
+                StoreEntry(key, incoming);
+                appliedAny = true;
+            }
         }
 
         if (appliedAny)

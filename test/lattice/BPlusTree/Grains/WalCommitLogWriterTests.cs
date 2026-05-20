@@ -130,4 +130,164 @@ public class WalCommitLogWriterTests
 
         clusterIdResolver.Received(1).Resolve(TreeId);
     }
+
+    // --- AppendManyAsync (batched leaf write path) ---
+
+    [Test]
+    public async Task AppendManyAsync_empty_list_returns_empty_and_makes_no_grain_call()
+    {
+        var (writer, captured) = CreateWriter();
+
+        var result = await writer.AppendManyAsync(new List<LatticeMutation>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.Empty);
+            Assert.That(captured, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void AppendManyAsync_throws_on_null_mutations()
+    {
+        var (writer, _) = CreateWriter();
+        Assert.That(async () => await writer.AppendManyAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task AppendManyAsync_single_mutation_uses_single_dispatch_fast_path()
+    {
+        var (writer, captured) = CreateWriter();
+
+        var result = await writer.AppendManyAsync(new[] { MakeMutation() });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(captured, Has.Count.EqualTo(1));
+            Assert.That(captured[0].Key, Is.EqualTo("k"));
+        });
+    }
+
+    [Test]
+    public async Task AppendManyAsync_dispatches_one_grain_batch_per_partition()
+    {
+        // Default options pin WalPartitions=1, so every key in a batch
+        // hashes to the same WAL grain, which means a 16-key batched
+        // dispatch produces exactly one AppendBatchAsync call.
+        var partitionCalls = new List<int>();
+        var shard = Substitute.For<IWalShardGrain>();
+        shard
+            .AppendBatchAsync(Arg.Do<IReadOnlyList<WalRecord>>(r => partitionCalls.Add(r.Count)), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var entries = (IReadOnlyList<WalRecord>)call[0];
+                var offsets = new long[entries.Count];
+                for (var i = 0; i < entries.Count; i++) offsets[i] = i;
+                return Task.FromResult<IReadOnlyList<long>>(offsets);
+            });
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
+        modeResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        clusterIdResolver.Resolve(Arg.Any<string>()).Returns("site-test");
+
+        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
+
+        var mutations = new List<LatticeMutation>();
+        for (var i = 0; i < 16; i++)
+        {
+            mutations.Add(new LatticeMutation
+            {
+                TreeId = TreeId,
+                Kind = MutationKind.Set,
+                Key = $"k{i:D2}",
+                Value = new byte[] { (byte)i },
+                Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            });
+        }
+
+        var offsets = await writer.AppendManyAsync(mutations);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(partitionCalls, Has.Count.EqualTo(1),
+                "All keys hash to the single default WAL partition so the writer must dispatch one batched call.");
+            Assert.That(partitionCalls[0], Is.EqualTo(16));
+            Assert.That(offsets, Has.Count.EqualTo(16));
+        });
+    }
+
+    [Test]
+    public async Task AppendManyAsync_returns_offsets_in_input_order_across_multiple_partitions()
+    {
+        // Two WAL partitions: the batched dispatch fans out per
+        // partition, but the writer must reassemble the per-partition
+        // offsets back into the caller's input order.
+        var perGrainOffsets = new Dictionary<string, long>(StringComparer.Ordinal);
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>())
+            .Returns(call =>
+            {
+                var key = (string)call[0];
+                var shardLocal = Substitute.For<IWalShardGrain>();
+                shardLocal
+                    .AppendBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+                    .Returns(c =>
+                    {
+                        var entries = (IReadOnlyList<WalRecord>)c[0];
+                        var offsets = new long[entries.Count];
+                        for (var i = 0; i < entries.Count; i++)
+                        {
+                            perGrainOffsets.TryGetValue(key, out var next);
+                            offsets[i] = next;
+                            perGrainOffsets[key] = next + 1;
+                        }
+                        return Task.FromResult<IReadOnlyList<long>>(offsets);
+                    });
+                return shardLocal;
+            });
+
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalPartitions = 4 });
+        var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
+        modeResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        clusterIdResolver.Resolve(Arg.Any<string>()).Returns("site-test");
+
+        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
+
+        var mutations = new List<LatticeMutation>();
+        for (var i = 0; i < 32; i++)
+        {
+            mutations.Add(new LatticeMutation
+            {
+                TreeId = TreeId,
+                Kind = MutationKind.Set,
+                Key = $"k{i:D2}",
+                Value = new byte[] { (byte)i },
+                Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            });
+        }
+
+        var offsets = await writer.AppendManyAsync(mutations);
+
+        Assert.That(offsets, Has.Count.EqualTo(32));
+        // For every input index i, offsets[i] must equal the
+        // per-partition position of the i-th key inside its partition's
+        // bucket. We re-derive that by hashing each key.
+        var partitions = new Dictionary<int, int>();
+        for (var i = 0; i < mutations.Count; i++)
+        {
+            var partition = Orleans.Lattice.BPlusTree.Grains.WalPartitionHash.Compute(mutations[i].Key, 4);
+            partitions.TryGetValue(partition, out var counter);
+            Assert.That(offsets[i], Is.EqualTo((long)counter),
+                $"input index {i} (key {mutations[i].Key}) should hold its partition-local offset");
+            partitions[partition] = counter + 1;
+        }
+    }
 }

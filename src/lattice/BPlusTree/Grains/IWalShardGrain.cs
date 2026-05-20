@@ -34,6 +34,39 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Persists <paramref name="entries"/> to the WAL as a single
+    /// grain-dispatch envelope and returns the per-shard sequence
+    /// number assigned to each entry, in the same order as the input.
+    /// Sequence numbers are dense and strictly ascending within the
+    /// returned span (entry[i+1] == entry[i] + 1).
+    /// <para>
+    /// This is the batched counterpart to <see cref="AppendAsync"/>;
+    /// the grain encodes every supplied <see cref="WalRecord"/> once,
+    /// enqueues all encoded segments under a single state-gate hold,
+    /// and parks every caller on a separate <see cref="TaskCompletionSource{TResult}"/>
+    /// against a single in-flight flush. The whole batch shares one
+    /// grain-dispatch turn (the caller pays one grain hop, not <c>N</c>);
+    /// each entry's individual durability is signalled the same way
+    /// <see cref="AppendAsync"/> signals it (per-entry TCS completion).
+    /// </para>
+    /// <para>
+    /// All-or-nothing semantics are inherited from the underlying
+    /// <see cref="IWalStorageProvider.AppendBatchAsync"/>: either every
+    /// supplied entry is durably persisted before the returned task
+    /// completes, or every entry's TCS faults with the same exception.
+    /// The whole batch lands in a single per-batch flush window when
+    /// the per-batch limits (<see cref="LatticeOptions.WalMaxBatchEntries"/>,
+    /// <see cref="LatticeOptions.WalMaxBatchBytes"/>) allow it, and is
+    /// transparently split across flushes by the same cutover protocol
+    /// <see cref="AppendAsync"/> uses when the batch exceeds the limit.
+    /// </para>
+    /// </summary>
+    /// <param name="entries">The captured mutation records to append, in caller-defined order. The returned offsets are parallel to this list.</param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>An immutable list of per-shard sequence numbers, one per input entry, in input order.</returns>
+    Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns up to <paramref name="maxEntries"/> entries with sequence
     /// number greater than or equal to <paramref name="fromSequence"/>,
     /// in ascending sequence order. The returned page carries the
