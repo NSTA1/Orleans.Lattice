@@ -182,4 +182,55 @@ public partial class BPlusLeafGrainTests
             "MergeEntriesAsync must route durability through the WAL; the legacy "
             + "state.WriteStateAsync() call site is gone now that merge is WAL-routed.");
     }
+
+    // --- batched WAL append on the merge path ---
+
+    [Test]
+    public async Task MergeEntries_collapses_per_key_wal_appends_into_a_single_batched_call()
+    {
+        // MergeEntriesAsync is the merge channel called by bulk-load
+        // (ShardRootGrain.BulkLoadAsync / BulkLoadRawAsync /
+        // BulkAppendAsync), sibling redistribute, and replication-apply.
+        // The per-entry WAL grain hop must be collapsed into a single
+        // ICommitLogWriter.AppendManyAsync call so a 250-entry leaf
+        // pays one WAL grain hop instead of 250.
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: commitLog);
+
+        var entries = new Dictionary<string, LwwValue<byte[]>>();
+        var clock = HybridLogicalClock.Tick(default);
+        for (var i = 0; i < 16; i++)
+        {
+            clock = HybridLogicalClock.Tick(clock);
+            entries[$"k{i:D2}"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes($"v{i}"), clock);
+        }
+
+        await grain.MergeEntriesAsync(entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(commitLog.AppendManyCallCount, Is.EqualTo(1),
+                "MergeEntriesAsync must dispatch as a single batched commit-log call.");
+            Assert.That(commitLog.AppendCount, Is.EqualTo(16),
+                "Every merged entry must still be captured in the WAL append record.");
+            Assert.That(commitLog.Appended.All(m => m.IsMerge), Is.True,
+                "Every batched envelope must carry IsMerge=true.");
+        });
+    }
+
+    [Test]
+    public async Task MergeEntries_empty_dictionary_does_not_call_AppendManyAsync()
+    {
+        // Sanity-check the empty-batch shortcut: a zero-entry merge must
+        // not dispatch a batched WAL call at all (it would otherwise show
+        // up as a zero-length write on the LeafWriteDuration histogram,
+        // biasing the percentile reads of the merge channel).
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: commitLog);
+
+        await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>());
+
+        Assert.That(commitLog.AppendManyCallCount, Is.EqualTo(0));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(0));
+    }
 }

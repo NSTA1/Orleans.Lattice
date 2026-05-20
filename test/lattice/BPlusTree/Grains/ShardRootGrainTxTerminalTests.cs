@@ -34,6 +34,16 @@ public class ShardRootGrainTxTerminalTests
             Appended.Add(mutation);
             return Task.FromResult((long)Appended.Count - 1);
         }
+        public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<LatticeMutation> mutations, CancellationToken cancellationToken = default)
+        {
+            var offsets = new long[mutations.Count];
+            for (var i = 0; i < mutations.Count; i++)
+            {
+                Appended.Add(mutations[i]);
+                offsets[i] = Appended.Count - 1;
+            }
+            return Task.FromResult<IReadOnlyList<long>>(offsets);
+        }
     }
 
     private sealed class Harness

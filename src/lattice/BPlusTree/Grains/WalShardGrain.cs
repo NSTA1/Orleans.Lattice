@@ -393,6 +393,178 @@ internal sealed class WalShardGrain(
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        if (entries.Count == 0)
+        {
+            return Array.Empty<long>();
+        }
+
+        // If a previous flush in the chain failed, every subsequent
+        // append fails fast with the same exception until the post-
+        // failure resync re-aligns _nextOffset with the provider tail.
+        if (Volatile.Read(ref _stickyFailure) is { } sticky)
+        {
+            throw sticky;
+        }
+
+        // Encode every entry once at append time. The encoded bytes are
+        // the same bytes the storage provider sees on flush via
+        // AppendEncodedBatchAsync - one encode per entry, no second pass
+        // inside the provider. We pre-allocate the segments and the
+        // result-offsets array so the per-entry path inside the lock
+        // is bound-checked but allocation-free.
+        var count = entries.Count;
+        var segments = new ArraySegment<byte>[count];
+        var sizes = new int[count];
+        for (var i = 0; i < count; i++)
+        {
+            var mutation = WalRecordConverter.FromWalRecord(entries[i]);
+            var writer = new PooledByteBufferWriter();
+            try
+            {
+                encoder.Encode(in mutation, writer);
+            }
+            catch
+            {
+                writer.Dispose();
+                // Return already-rented segments to the pool so an
+                // encode failure mid-batch does not leak buffers.
+                for (var j = 0; j < i; j++)
+                {
+                    ReturnSegment(segments[j]);
+                }
+                throw;
+            }
+            var segment = writer.DetachWrittenSegment();
+            segments[i] = segment;
+            sizes[i] = segment.Count;
+        }
+
+        var options = Options;
+        var maxEntries = options.WalMaxBatchEntries;
+        var maxBytes = options.WalMaxBatchBytes;
+        var maxPending = options.WalMaxPendingBatches;
+
+        // Enqueue every entry. For each one, follow the same cutover
+        // protocol AppendAsync uses (flush the current pending batch
+        // when adding the next entry would overflow the per-batch
+        // limits, applying back-pressure when at the in-flight cap).
+        // We hold no segments outside the loop; the segments[] array
+        // and the parked TCSs together form the per-entry pending
+        // state. The loop releases the gate around each await; offset
+        // assignment is serialised under _stateGate so the assigned
+        // offsets remain dense and ascending across the whole batch.
+        var offsets = new long[count];
+        var acks = new TaskCompletionSource<long>[count];
+        for (var i = 0; i < count; i++)
+        {
+            var size = sizes[i];
+
+            while (true)
+            {
+                bool needsCutover;
+                bool atCap;
+                Task? headTask = null;
+                lock (_stateGate)
+                {
+                    needsCutover = _pendingSegments.Count > 0
+                        && (_pendingSegments.Count + 1 > maxEntries || _pendingBatchSizeBytes + size > maxBytes);
+                    if (!needsCutover)
+                    {
+                        break;
+                    }
+                    atCap = _inFlight.Count >= maxPending;
+                    if (atCap)
+                    {
+                        headTask = _inFlight.First!.Value.Task;
+                    }
+                }
+                if (atCap)
+                {
+                    try { await headTask!.ConfigureAwait(true); } catch { /* surfaced via TCSs */ }
+                    if (Volatile.Read(ref _stickyFailure) is { } stickyMid)
+                    {
+                        // Failed mid-batch: return un-enqueued segments
+                        // and surface the sticky failure. Segments at
+                        // indexes < i are already owned by either the
+                        // failed in-flight flush (returned by failure
+                        // handling) or by the still-pending batch which
+                        // will fault its own TCSs.
+                        for (var j = i; j < count; j++)
+                        {
+                            ReturnSegment(segments[j]);
+                        }
+                        throw stickyMid;
+                    }
+                }
+                else
+                {
+                    StartFlush();
+                }
+            }
+
+            if (Volatile.Read(ref _stickyFailure) is { } stickyPost)
+            {
+                for (var j = i; j < count; j++)
+                {
+                    ReturnSegment(segments[j]);
+                }
+                throw stickyPost;
+            }
+
+            bool kickFlush;
+            lock (_stateGate)
+            {
+                var offset = _nextOffset++;
+                offsets[i] = offset;
+                _pendingSegments.Add(segments[i]);
+                _pendingOffsets.Add(offset);
+                _pendingBatchSizeBytes += size;
+
+                var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+                acks[i] = tcs;
+                _pendingAcks.Add(tcs);
+
+                // Only kick a flush mid-batch when the per-batch caps
+                // are saturated; deferring the "_inFlight.Count == 0"
+                // single-entry trigger to the final entry of the batch
+                // is what gives the batched path its win - the whole
+                // batch shares a single flush window when it fits under
+                // the caps.
+                // The final-entry branch reproduces the AppendAsync
+                // protocol's latency-floor guarantee (a lone entry must
+                // not wait for a future cutover) once the entire batch
+                // has been enqueued.
+                var isLast = i == count - 1;
+                kickFlush = _inFlight.Count < maxPending
+                    && (_pendingSegments.Count >= maxEntries
+                        || _pendingBatchSizeBytes >= maxBytes
+                        || (isLast && _inFlight.Count == 0));
+            }
+            if (kickFlush)
+            {
+                StartFlush();
+            }
+        }
+
+        // Await every per-entry ack. The first one's completion is the
+        // batch's commit point in the common case (every entry shares
+        // one flush window); when the batch was cut over mid-stream
+        // the later entries belong to later flushes and we observe
+        // their independent completions here.
+        for (var i = 0; i < count; i++)
+        {
+            await acks[i].Task.ConfigureAwait(true);
+        }
+        return offsets;
+    }
+
+    /// <inheritdoc />
     public async Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

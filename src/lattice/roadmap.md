@@ -475,7 +475,7 @@ The `LeafCacheGrain._cache` dictionary mirrors the primary leaf's live entry set
 
 ---
 
-### F-069 - Batched WAL append on the leaf write path
+### F-069 - Batched WAL append on the leaf write path *(candidate 2 shipped)*
 **Performance / write throughput / investigative (collapse per-key WAL round-trips on `SetManyAsync` / `DeleteRangeAsync` / saga-prepare into a single batched append per leaf, where the underlying `IWalStorageProvider` can express batched durability semantics)**
 
 `BPlusLeafGrain.SetManyAsync` currently iterates `entries` and calls `SetAsync` per key (see `src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs`, the per-key loop around the leaf's bulk-write entry point). Each iteration runs the full per-key commit pipeline: HLC tick, mutation envelope construction, `await writer.AppendAsync(mutation)`, in-memory projection apply, version-advance publish, and digest publication. For a WAL provider whose `AppendAsync` is a network round-trip (Azure Table, future SQL/Cosmos providers, future cross-region replication ship), the per-call latency dominates - a 16-key batch costs 16 sequential HTTP round-trips against the WAL even though the leaf already has the whole batch in hand.
@@ -516,6 +516,16 @@ The measurement that motivates this entry is the Azure throughput harness run on
 - The producer-side Azure throughput harness (`bench/azure-throughput/`) is re-run at the same producer-rate ladder before and after the change and the new steady-state consumer ceiling is captured in the PR description.
 
 **Risk surface.** Candidate 1 widens the `IWalStorageProvider` contract surface; a default-interface implementation keeps the wire compatible but third-party providers may want to override the new method for non-Azure backends with native batch support, so the seam shape must be reviewable. Candidate 2 must preserve the leaf's split-mid-batch contract; a regression here would corrupt the leaf's invariant that the projection reflects every successfully-appended mutation. Candidate 3 may close without shipping if measurement shows the grouping is already optimal. Candidate 4 must preserve the F-055 continuous-reader invariant; the saga-prepare batched append must be atomically-visible at the per-shard linearization point exactly as the per-key prepare path is today.
+
+**Status (candidate 2 shipped).** The leaf-side consumer of the batched seam landed without first widening the `IWalStorageProvider` contract (candidate 1). The seam was placed one layer higher, where it pays off independently of provider-side batch support:
+
+- New `ICommitLogWriter.AppendManyAsync(IReadOnlyList<LatticeMutation>, CancellationToken)` on the leaf-side commit-log writer. The default `WalCommitLogWriter` groups the input batch by WAL partition and dispatches one `IWalShardGrain.AppendBatchAsync` call per touched partition, reassembling the dense per-input offsets in input order.
+- New `IWalShardGrain.AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` on the per-shard WAL grain. The whole input batch coalesces into a single provider flush when it fits inside `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`.
+- Three leaf entry points now consume the batched seam: `BPlusLeafGrain.SetManyAsync` (foreground bulk write), `BPlusLeafGrain.MergeEntriesAsync` (sibling redistribute, snapshot restore, replication-apply, and the bulk-load topology assembly invoked by `ShardRootGrain.BulkLoadAsync` / `BulkLoadRawAsync` / `BulkAppendAsync`), and `BPlusLeafGrain.MergeManyAsync` (cross-shard migration on shard split and online-reshard). For an N-key batch routed to a single WAL partition the grain-hop count drops from O(N) to one.
+
+Candidate 1 (provider-side `AppendManyAsync` on `IWalStorageProvider`) remains open: the existing provider contract already exposes `AppendBatchAsync` / `AppendEncodedBatchAsync` and the WAL grain already coalesces an under-cap batch into one provider call, so the provider-side widening is a separate question of whether `AzureTableWalStorageProvider` can pack a multi-record `TransactionalBatch` instead of looping per record inside `AppendEncodedBatchAsync`. Candidates 3 (shard-root grouping) and 4 (saga-prepare) remain open under their original acceptance thresholds.
+
+The `Bench.WalAppendMany` / `Bench.LeafSetMany` measurement probes called for in the candidate-1 and candidate-2 acceptance criteria were not built for this ship; the regression coverage is the test-level invariants (`AppendManyCallCount == 1` per batched dispatch on the three consumer paths, projection identity against the per-key loop, dense offsets in input order, asymmetric-guard filtering before the WAL append on the migration path). The end-to-end Azure throughput re-run from the candidate-2 acceptance list is gated on candidate 1 shipping (it is the producer-side measurement, not the leaf-side measurement) and is deferred with candidate 1.
 
 ---
 

@@ -306,4 +306,145 @@ public partial class BPlusLeafGrainTests
             + "legacy state.WriteStateAsync() call site is gone now that merge-many is WAL-routed. "
             + "The split-recovery branch's topology-only persist still fires when an interrupted split is recovered.");
     }
+
+    // --- batched WAL append on the merge-many path ---
+
+    [Test]
+    public async Task MergeMany_collapses_per_key_wal_appends_into_a_single_batched_call()
+    {
+        // MergeManyAsync is the cross-shard migration entry point (hot
+        // on online-reshard and shard splits). The per-entry WAL grain
+        // hop must be collapsed into a single ICommitLogWriter.AppendManyAsync
+        // call so the migration channel inherits the same O(1) grain-hop
+        // savings as the foreground SetManyAsync fast path.
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: commitLog);
+
+        var entries = new Dictionary<string, LwwValue<byte[]>>();
+        var clock = HybridLogicalClock.Tick(default);
+        for (var i = 0; i < 16; i++)
+        {
+            clock = HybridLogicalClock.Tick(clock);
+            entries[$"k{i:D2}"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes($"v{i}"), clock);
+        }
+
+        await grain.MergeManyAsync(entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(commitLog.AppendManyCallCount, Is.EqualTo(1),
+                "MergeManyAsync must dispatch as a single batched commit-log call.");
+            Assert.That(commitLog.AppendCount, Is.EqualTo(16),
+                "Every accepted entry must still be captured in the WAL append record.");
+            Assert.That(commitLog.Appended.All(m => m.IsMerge), Is.True,
+                "Every batched envelope must carry IsMerge=true.");
+        });
+    }
+
+    [Test]
+    public async Task MergeMany_batched_call_excludes_entries_dropped_by_asymmetric_guard()
+    {
+        // Cross-shard migration imports MUST be filtered by the
+        // asymmetric guard BEFORE the batched WAL dispatch fires;
+        // otherwise the WAL would record envelopes for entries that
+        // never made it into the projection and crash recovery would
+        // re-apply ghost writes. The batched-merge path runs the guard
+        // in step 0 (filter+build) and only mutations that survive the
+        // filter are appended.
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        // Two foreground (non-migration) entries that the asymmetric
+        // guard must protect from later migration imports.
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("foreground-a"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("foreground-b"));
+        var foregroundAppends = commitLog.AppendCount;
+        var foregroundBatchCalls = commitLog.AppendManyCallCount;
+
+        // Mixed batch: two protected keys (guard drops them) and one
+        // fresh key (guard accepts). The batched call must include
+        // exactly one mutation - the fresh "c" key.
+        var newer = HybridLogicalClock.Tick(state.State.Clock);
+        var imports = new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["a"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("migrated-a"), newer),
+            ["b"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("migrated-b"), newer),
+            ["c"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("migrated-c"), newer),
+        };
+        await grain.MergeManyAsync(imports, isCrossShardMigration: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(commitLog.AppendManyCallCount, Is.EqualTo(foregroundBatchCalls + 1),
+                "the migration import must dispatch exactly one batched commit-log call");
+            Assert.That(commitLog.AppendCount, Is.EqualTo(foregroundAppends + 1),
+                "only the un-guarded entry survives the asymmetric filter");
+            Assert.That(commitLog.Appended.Any(m => m.Key == "c"), Is.True,
+                "the surviving migration envelope is the fresh key");
+            Assert.That(commitLog.Appended.Any(m => m.Key == "a" && m.IsMerge), Is.False,
+                "the guard-rejected keys must not appear in the WAL append record");
+        });
+        Assert.That(Encoding.UTF8.GetString(state.State.Entries["a"].Value!), Is.EqualTo("foreground-a"));
+        Assert.That(Encoding.UTF8.GetString(state.State.Entries["b"].Value!), Is.EqualTo("foreground-b"));
+        Assert.That(Encoding.UTF8.GetString(state.State.Entries["c"].Value!), Is.EqualTo("migrated-c"));
+    }
+
+    [Test]
+    public async Task MergeMany_empty_does_not_call_AppendManyAsync()
+    {
+        // Sanity check: the empty-batch shortcut must not dispatch a
+        // zero-length batched call (which would bias the merge channel's
+        // LeafWriteDuration percentile reads).
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: commitLog);
+
+        await grain.MergeManyAsync([]);
+
+        Assert.That(commitLog.AppendManyCallCount, Is.EqualTo(0));
+        Assert.That(commitLog.AppendCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task MergeMany_non_migration_path_applies_every_dominant_entry()
+    {
+        // The non-migration path (default isCrossShardMigration=false)
+        // bypasses the per-batch `accepted` work-list allocation and
+        // iterates the input dictionary directly in the apply step.
+        // This test pins the projection-identity invariant on that
+        // bypass: every dominant incoming entry must land in the
+        // projection, every tombstone must surface as a tombstone, and
+        // every batched WAL envelope must be emitted under a single
+        // commit-log call.
+        var commitLog = new FakeCommitLogWriter();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, commitLog: commitLog);
+
+        var entries = new Dictionary<string, LwwValue<byte[]>>();
+        var clock = HybridLogicalClock.Tick(default);
+        for (var i = 0; i < 8; i++)
+        {
+            clock = HybridLogicalClock.Tick(clock);
+            entries[$"live-{i:D2}"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes($"v{i}"), clock);
+        }
+        clock = HybridLogicalClock.Tick(clock);
+        entries["dead"] = LwwValue<byte[]>.Tombstone(clock);
+
+        await grain.MergeManyAsync(entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(commitLog.AppendManyCallCount, Is.EqualTo(1),
+                "non-migration MergeManyAsync must still dispatch as a single batched call");
+            Assert.That(commitLog.AppendCount, Is.EqualTo(9),
+                "every incoming entry must be captured in the WAL append record");
+            Assert.That(state.State.Entries, Has.Count.EqualTo(9));
+            Assert.That(state.State.Entries["dead"].IsTombstone, Is.True);
+            for (var i = 0; i < 8; i++)
+            {
+                var key = $"live-{i:D2}";
+                Assert.That(Encoding.UTF8.GetString(state.State.Entries[key].Value!), Is.EqualTo($"v{i}"));
+            }
+        });
+    }
 }

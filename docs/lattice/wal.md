@@ -157,6 +157,7 @@ replication change feed.
 | Member | Purpose |
 |---|---|
 | `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-shard sequence number. |
+| `AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` | Append a contiguous batch of captured mutations under a single grain hop. Returns the dense per-input offsets (`result[i]` is the offset assigned to `entries[i]`) in input order. Empty input returns an empty list and performs no provider work. The whole batch coalesces into one provider flush when under `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`. |
 | `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1`; out-of-range reads return `WalShardPage.Empty(fromSequence)`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
 | `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so dashboards, alerts, and the back-pressure health check observe the persisted footprint rather than a monotonically-growing offset counter. |
@@ -247,6 +248,35 @@ Cutovers below the in-flight cap start a fresh flush immediately;
 cutovers at the cap await the oldest in-flight flush before starting
 another, which provides natural back-pressure under sustained burst
 load.
+
+### Batched leaf write path
+
+Bulk-write entry points on the leaf collapse their per-key WAL grain
+hops into a single batched dispatch through
+`ICommitLogWriter.AppendManyAsync`, which the default
+`WalCommitLogWriter` implementation groups by WAL partition and forwards
+to `IWalShardGrain.AppendBatchAsync`. The leaf entry points that flow
+through this path are:
+
+| Entry point | Caller |
+|---|---|
+| `BPlusLeafGrain.SetManyAsync` | Foreground `Lattice.SetManyAsync` / `TypedLattice.SetManyAsync`. |
+| `BPlusLeafGrain.MergeEntriesAsync` | Sibling redistribute, snapshot restore, replication-apply, and the bulk-load topology assembly invoked by `ShardRootGrain.BulkLoadAsync` / `BulkLoadRawAsync` / `BulkAppendAsync`. |
+| `BPlusLeafGrain.MergeManyAsync` | Cross-shard migration on shard split and online-reshard. |
+
+For an N-key batch routed to a single WAL partition the grain-hop count
+drops from O(N) to one. Multi-partition batches fan out one
+`AppendBatchAsync` call per touched partition and the writer reassembles
+the dense per-input offsets in input order. The whole batch coalesces
+into a single provider flush when it fits inside the
+`WalMaxBatchEntries` / `WalMaxBatchBytes` window; larger batches cut
+over across multiple flushes using the same in-flight cap as
+single-entry `AppendAsync`.
+
+The `LeafWriteDuration` histogram records one sample per batched
+dispatch on the merge channel (`kind=merge`) rather than one sample per
+entry, so percentile reads of the merge channel are not biased by batch
+size.
 
 ### Activation recovery
 

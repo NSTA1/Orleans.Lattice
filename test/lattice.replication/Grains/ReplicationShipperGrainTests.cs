@@ -118,6 +118,17 @@ public partial class ReplicationShipperGrainTests
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
+        public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
+        {
+            var offsets = new long[entries.Count];
+            for (var i = 0; i < entries.Count; i++)
+            {
+                Entries.Add(entries[i]);
+                offsets[i] = Entries.Count - 1;
+            }
+            return Task.FromResult<IReadOnlyList<long>>(offsets);
+        }
+
         public Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
             ReadCalls++;
