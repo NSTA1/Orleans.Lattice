@@ -49,20 +49,24 @@ internal sealed partial class LatticeGrain(
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
-    /// Wall-clock budget for the stale-routing retry loop in
-    /// <see cref="SetAsyncCore"/>. A single
-    /// <see cref="StaleShardRoutingException"/> /
-    /// <see cref="StaleTreeRoutingException"/> retry is insufficient
-    /// under cascading mid-saga topology changes (e.g. a 4-to-8
-    /// reshard with adaptive shard splits in flight), where multiple
-    /// sequential ShardMap swaps can land between the initial fetch
-    /// and the retry. The wall-clock budget here mirrors the saga's
-    /// own per-shard retry pattern in
+    /// Wall-clock budget for every stale-routing retry loop on the public
+    /// <see cref="ILattice"/> surface (reads, writes, and replication apply).
+    /// A single <see cref="StaleShardRoutingException"/> /
+    /// <see cref="StaleTreeRoutingException"/> retry is insufficient because
+    /// (a) under cascading mid-saga topology changes (e.g. a 4-to-8 reshard
+    /// with adaptive shard splits in flight), multiple sequential ShardMap
+    /// swaps can land between the initial fetch and the retry; and
+    /// (b) during an adaptive shard split the source enters Reject phase one
+    /// RPC before the registry's <c>ShardMap</c> is flipped (see
+    /// <c>TreeShardSplitGrain.SwapAsync</c>), so a reader landing in that
+    /// window observes one or more stale-routing throws against the
+    /// pre-flip map before the post-flip map becomes visible. The wall-clock
+    /// budget here mirrors the saga's own per-shard retry pattern in
     /// <c>AtomicWriteGrain.MarkOneShardAsync</c> and
-    /// <c>AtomicWriteGrain.CaptureShardAsync</c>: bounded by wall
-    /// clock rather than attempt count so any reasonable storm can
-    /// drain, but still terminates with the original stale-routing
-    /// throw when the topology never quiesces within the budget.
+    /// <c>AtomicWriteGrain.CaptureShardAsync</c>: bounded by wall clock
+    /// rather than attempt count so any reasonable storm can drain, but
+    /// still terminates with the original stale-routing throw when the
+    /// topology never quiesces within the budget.
     /// </summary>
     private static readonly TimeSpan StaleRoutingWriteRetryBudget = TimeSpan.FromSeconds(60);
 
@@ -106,29 +110,13 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var shard = await GetShardGrainAsync(key);
-        try
-        {
-            return await shard.GetAsync(key);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.GetAsync(key);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.GetAsync(key);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.GetAsync(key);
-        }
+        return await RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                return await shard.GetAsync(key);
+            },
+            cancellationToken);
     }
 
     public async Task<VersionedValue> GetWithVersionAsync(string key, CancellationToken cancellationToken = default)
@@ -136,29 +124,13 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var shard = await GetShardGrainAsync(key);
-        try
-        {
-            return await shard.GetWithVersionAsync(key);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.GetWithVersionAsync(key);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.GetWithVersionAsync(key);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.GetWithVersionAsync(key);
-        }
+        return await RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                return await shard.GetWithVersionAsync(key);
+            },
+            cancellationToken);
     }
 
     public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
@@ -177,29 +149,13 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var shard = await GetShardGrainAsync(key);
-        try
-        {
-            return await shard.ExistsAsync(key);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.ExistsAsync(key);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.ExistsAsync(key);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            return await shard.ExistsAsync(key);
-        }
+        return await RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                return await shard.ExistsAsync(key);
+            },
+            cancellationToken);
     }
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
@@ -475,31 +431,15 @@ internal sealed partial class LatticeGrain(
         await PublishEventAsync(LatticeTreeEventKind.Set, key);
     }
 
-    private async Task SetAsyncTtlCore(string key, byte[] value, long expiresAtTicks, CancellationToken cancellationToken)
+    private Task SetAsyncTtlCore(string key, byte[] value, long expiresAtTicks, CancellationToken cancellationToken)
     {
-        var shard = await GetShardGrainAsync(key);
-        try
-        {
-            await shard.SetAsync(key, value, expiresAtTicks);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            await shard.SetAsync(key, value, expiresAtTicks);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            await shard.SetAsync(key, value, expiresAtTicks);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            await shard.SetAsync(key, value, expiresAtTicks);
-        }
+        return RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                await shard.SetAsync(key, value, expiresAtTicks);
+            },
+            cancellationToken);
     }
 
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
@@ -519,33 +459,15 @@ internal sealed partial class LatticeGrain(
         return applied;
     }
 
-    private async Task<bool> SetIfVersionAsyncCore(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
+    private Task<bool> SetIfVersionAsyncCore(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
     {
-        var shard = await GetShardGrainAsync(key);
-        bool ok;
-        try
-        {
-            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            ok = await shard.SetIfVersionAsync(key, value, expectedVersion);
-        }
-        return ok;
+        return RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                return await shard.SetIfVersionAsync(key, value, expectedVersion);
+            },
+            cancellationToken);
     }
 
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
@@ -566,33 +488,15 @@ internal sealed partial class LatticeGrain(
         return existing;
     }
 
-    private async Task<byte[]?> GetOrSetAsyncCore(string key, byte[] value, CancellationToken cancellationToken)
+    private Task<byte[]?> GetOrSetAsyncCore(string key, byte[] value, CancellationToken cancellationToken)
     {
-        var shard = await GetShardGrainAsync(key);
-        byte[]? prior;
-        try
-        {
-            prior = await shard.GetOrSetAsync(key, value);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            prior = await shard.GetOrSetAsync(key, value);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            prior = await shard.GetOrSetAsync(key, value);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            prior = await shard.GetOrSetAsync(key, value);
-        }
-        return prior;
+        return RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                return await shard.GetOrSetAsync(key, value);
+            },
+            cancellationToken);
     }
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
@@ -604,25 +508,9 @@ internal sealed partial class LatticeGrain(
         await EnsureCompactionReminderAsync();
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
-        try
-        {
-            await SetManyAsyncCore(entries);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await SetManyAsyncCore(entries);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await SetManyAsyncCore(entries);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await SetManyAsyncCore(entries);
-        }
+        await RetryOnStaleRoutingAsync(
+            () => SetManyAsyncCore(entries),
+            cancellationToken);
 
         // Publish one Set event per entry. Emitted only after all shard writes
         // have committed so subscribers never observe a Set for a key that
@@ -782,30 +670,13 @@ internal sealed partial class LatticeGrain(
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
-        var shard = await GetShardGrainAsync(key);
-        bool existed;
-        try
-        {
-            existed = await shard.DeleteAsync(key);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            existed = await shard.DeleteAsync(key);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            existed = await shard.DeleteAsync(key);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            shard = await GetShardGrainAsync(key);
-            existed = await shard.DeleteAsync(key);
-        }
+        var existed = await RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                return await shard.DeleteAsync(key);
+            },
+            cancellationToken);
         if (existed) await PublishEventAsync(LatticeTreeEventKind.Delete, key);
         return existed;
     }
@@ -827,29 +698,11 @@ internal sealed partial class LatticeGrain(
         return deleted;
     }
 
-    private async Task<int> DeleteRangeAsyncOuter(string startInclusive, string endExclusive, CancellationToken cancellationToken)
+    private Task<int> DeleteRangeAsyncOuter(string startInclusive, string endExclusive, CancellationToken cancellationToken)
     {
-        int count;
-        try
-        {
-            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            count = await DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken);
-        }
-        return count;
+        return RetryOnStaleRoutingAsync(
+            () => DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken),
+            cancellationToken);
     }
 
     private async Task<int> DeleteRangeAsyncCore(string startInclusive, string endExclusive, CancellationToken cancellationToken)
@@ -1536,6 +1389,99 @@ internal sealed partial class LatticeGrain(
         _cachedShards = null;
         _cachedRouting = null;
         return true;
+    }
+
+    /// <summary>
+    /// Deadline-bounded stale-routing retry loop used by every per-key
+    /// public surface method (<see cref="GetAsync(string, CancellationToken)"/>,
+    /// <see cref="SetAsync(string, byte[], CancellationToken)"/>, etc.) and
+    /// by the replication apply surface. A single retry is insufficient
+    /// because an adaptive shard split intentionally orders the source-side
+    /// Reject transition before the registry's <c>ShardMap</c> flip (see
+    /// <c>TreeShardSplitGrain.SwapAsync</c>), opening a one-RPC window in
+    /// which a fresh map fetch still returns the pre-flip map and the
+    /// retry hits the same Reject-phase source. The wall-clock budget
+    /// (<see cref="StaleRoutingWriteRetryBudget"/>) absorbs that window
+    /// and any cascading reshard storm, while still surfacing the original
+    /// throw if the topology never quiesces.
+    /// <para>
+    /// The <see cref="InvalidOperationException"/> catch keeps the
+    /// pre-existing single-retry semantics from <c>SetAsyncCore</c>: it is
+    /// typically permanent (tree deleted, alias removed) and looping on it
+    /// would mask deletion semantics and trip Orleans' default response
+    /// timeout. A deleted tree therefore surfaces on the second throw, not
+    /// after the full budget elapses.
+    /// </para>
+    /// </summary>
+    private async Task<T> RetryOnStaleRoutingAsync<T>(
+        Func<Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+        var invalidOpRetried = false;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return await operation();
+            }
+            catch (StaleShardRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                InvalidateShardMap();
+            }
+            catch (StaleTreeRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+            }
+            catch (InvalidOperationException)
+            {
+                if (invalidOpRetried) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+                invalidOpRetried = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Non-generic overload of <see cref="RetryOnStaleRoutingAsync{T}"/> for
+    /// operations that do not produce a value. Duplicates the loop body
+    /// rather than wrapping the generic version in a sentinel closure so
+    /// the void path takes no extra closure allocation.
+    /// </summary>
+    private async Task RetryOnStaleRoutingAsync(
+        Func<Task> operation,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+        var invalidOpRetried = false;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await operation();
+                return;
+            }
+            catch (StaleShardRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                InvalidateShardMap();
+            }
+            catch (StaleTreeRoutingException)
+            {
+                if (DateTime.UtcNow >= deadline) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+            }
+            catch (InvalidOperationException)
+            {
+                if (invalidOpRetried) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+                invalidOpRetried = true;
+            }
+        }
     }
 
     /// <summary>

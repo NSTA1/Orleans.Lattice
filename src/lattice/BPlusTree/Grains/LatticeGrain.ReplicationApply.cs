@@ -107,22 +107,9 @@ internal sealed partial class LatticeGrain
         using var hlcScope = LatticeHlcOverrideContext.With(
             sourceHlc == HybridLogicalClock.Zero ? null : sourceHlc);
 
-        try
-        {
-            await ApplyDeleteRangeCoreAsync(startInclusive, endExclusive);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            await ApplyDeleteRangeCoreAsync(startInclusive, endExclusive);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            await ApplyDeleteRangeCoreAsync(startInclusive, endExclusive);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            await ApplyDeleteRangeCoreAsync(startInclusive, endExclusive);
-        }
+        await RetryOnStaleRoutingAsync(
+            () => ApplyDeleteRangeCoreAsync(startInclusive, endExclusive),
+            CancellationToken.None);
     }
 
     /// <summary>
@@ -136,26 +123,13 @@ internal sealed partial class LatticeGrain
     private async Task ApplyMergeOneAsync(string key, LwwValue<byte[]> lww)
     {
         var batch = new Dictionary<string, LwwValue<byte[]>>(capacity: 1) { [key] = lww };
-        try
-        {
-            var shard = await GetShardGrainAsync(key);
-            await shard.MergeManyAsync(batch);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            var shard = await GetShardGrainAsync(key);
-            await shard.MergeManyAsync(batch);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            var shard = await GetShardGrainAsync(key);
-            await shard.MergeManyAsync(batch);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            var shard = await GetShardGrainAsync(key);
-            await shard.MergeManyAsync(batch);
-        }
+        await RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                await shard.MergeManyAsync(batch);
+            },
+            CancellationToken.None);
     }
 
     private async Task ApplyDeleteRangeCoreAsync(string startInclusive, string endExclusive)
@@ -195,22 +169,9 @@ internal sealed partial class LatticeGrain
             return;
         }
 
-        try
-        {
-            await ApplyMergeManyCoreAsync(items);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            await ApplyMergeManyCoreAsync(items);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            await ApplyMergeManyCoreAsync(items);
-        }
-        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
-        {
-            await ApplyMergeManyCoreAsync(items);
-        }
+        await RetryOnStaleRoutingAsync(
+            () => ApplyMergeManyCoreAsync(items),
+            CancellationToken.None);
     }
 
     private async Task ApplyMergeManyCoreAsync(IReadOnlyList<ApplyMergeItem> items)
@@ -547,31 +508,25 @@ internal sealed partial class LatticeGrain
     /// every transitively-discovered destination, so each call here
     /// targets exactly one shard.
     /// </summary>
-    private async Task ApplyTerminalToShardAsync(
+    private Task ApplyTerminalToShardAsync(
         string physicalTreeId,
         int shardIndex,
         Guid transactionId,
         bool committed,
         CancellationToken cancellationToken)
     {
-        var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-        try
-        {
-            await shard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
-        }
-        catch (StaleShardRoutingException) when (InvalidateShardMap())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var (retryPhysicalTreeId, _) = await GetRoutingAsync();
-            var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
-            await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
-        }
-        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var (retryPhysicalTreeId, _) = await GetRoutingAsync();
-            var retryShard = grainFactory.GetGrain<IShardRootGrain>($"{retryPhysicalTreeId}/{shardIndex}");
-            await retryShard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
-        }
+        // Resolve the physical tree id on every retry attempt so that
+        // after a stale-alias / stale-shard-map invalidation the loop
+        // targets the freshly resolved physical tree, not the snapshot
+        // captured at fan-out time. GetRoutingAsync hits the per-activation
+        // cache on the steady-state path so this adds no per-call cost.
+        return RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var (resolvedPhysicalTreeId, _) = await GetRoutingAsync();
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{resolvedPhysicalTreeId}/{shardIndex}");
+                await shard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
+            },
+            cancellationToken);
     }
 }
