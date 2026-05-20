@@ -370,6 +370,101 @@ Internal-additive:
 
 ---
 
+### F-066 - Caching call-path co-location candidates
+**Performance / investigative / memory + CPU (audits the four-layer read cache stack identified in a vertical call-path review and proposes each co-location-friendly elimination as an independently measurable candidate)**
+
+The current read path traverses four distinct caching layers (`BPlusLeafGrain.state.State.Entries` source-of-truth, `LeafCacheGrain._cache` per-silo read-through mirror, `ShardRootGrain._routingTableCache` per-activation routing-snapshot map, and the `ShardRootGrain._cachedLeaf` / `_cachedLeafCache` / `_cachedInternal` single-slot grain-ref LRUs). The vertical audit that produced this entry confirmed each layer is functionally correct and that the same-silo `LeafRevisionRegistry` cookie eliminates the steady-state CPU cost of the `LeafCacheGrain` refresh on the primary silo. It also identified that the *memory* dimension is unmitigated: on the silo hosting the primary leaf, `LeafCacheGrain._cache` is a structural duplicate of `state.State.Entries` (dictionary buckets + key strings duplicated regardless of whether Orleans elides the value-byte copy), and several smaller hot-path elisions remain on the table. This entry catalogues the candidates and the measurement protocol for each; it does **not** stipulate an expected outcome (each must stand or fall on its own measurement).
+
+**Scope.** Investigative; ship only the candidates whose measured delta justifies the carrying cost in code complexity.
+
+**Candidates.**
+
+1. **Co-located cache pass-through.** When the local `LeafCacheGrain` activation can prove the primary `BPlusLeafGrain` is also activated on this silo (the exact condition that `BPlusLeafGrain.TryGetLeafRevision(primaryId, out _)` returns `true` for), serve reads directly from the leaf's `state.State.Entries` (and `_pendingTx`) via an internal cross-grain seam, bypassing the `LeafCacheGrain._cache` dictionary entirely. The seam must preserve the existing pending-key / `IsMigrated=true` delegation semantics by design - i.e. it is a *physical* short-circuit, not a *semantic* one. Implementation surface: add an internal static `BPlusLeafGrain.TryGetLocalReadAccessor(GrainId leafId, out IBPlusLeafLocalReadAccessor accessor)` registered alongside `LeafRevisionRegistry` from `OnActivateAsync` and cleared in `OnDeactivateAsync`; the accessor exposes the same surface as `IBPlusLeafGrain.GetAsync` / `ExistsAsync` / `GetManyAsync` but skips the cross-grain dispatch turn (still a single-threaded read against the leaf's mailbox via the standard grain dispatcher to avoid violating turn semantics). When the accessor is available, `LeafCacheGrain.GetAsync` / `ExistsAsync` / `GetManyAsync` route to it and skip the mirror dictionary maintenance entirely for that call. On the silo whose activation hosts the cache but not the primary leaf, the existing delta-refresh path continues unchanged.
+
+   *Measurement.* Add a `Bench.LeafCacheCoLocation` micro-probe that pins both the primary leaf and the local cache to a single-silo cluster, runs a 1M-`GetAsync` burst against a 10k-entry leaf, and reports four numbers: per-call wall-time p50 / p95, allocations per call (via `ETW` or `EventListener` on `dotnet-counters`), and steady-state working-set delta of the silo process (`Process.WorkingSet64` sampled at the burst's start and end). Compare baseline (current cache mirror) against the co-located pass-through path under the same load. The acceptance threshold is: ship the change only if the working-set delta is materially smaller (the precise threshold is left to the maintainer review of the measurement, not stipulated here) and the per-call wall-time does not regress beyond measurement noise.
+
+2. **`LeafCacheGrain` skip-when-co-located activation gate.** Stronger variant of (1): when `LatticeOptions.CacheTtl == TimeSpan.Zero` *and* the primary leaf is on the same silo *and* no cross-silo readers are observed for the leaf, skip activating the `LeafCacheGrain` for that leaf entirely. Reads route directly to the leaf via `ShardRootGrain._cachedLeaf`. The gate must be conservative: any cross-silo read against a given leaf forces the cache to be activated for the rest of the leaf's lifetime, because the mirror is the only place a cross-silo cache can fall back to once it has been disabled.
+
+   *Measurement.* Same probe as (1), with the additional dimension of `LatticeOptions.CacheTtl` set to zero. Report the same four numbers. Also instrument `LatticeMetrics.CacheHits` / `CacheMisses` and confirm they drop to zero under the gate (verifying the gate engaged) and that the existing `LatticeMetrics.LeafGetDuration` (or equivalent direct-leaf-read histogram) tracks the reads under the gate. Acceptance threshold: maintainer judgement on measured working-set + wall-time deltas; ship only if the gate adds no observable regression on the cross-silo workload covered by the existing `LeafCacheGrainTests` integration fixtures.
+
+3. **Routing-table snapshot cache LRU.** `ShardRootGrain._routingTableCache` currently grows monotonically; it is bounded in theory by tree fanout but has no eviction. For trees with extreme internal-node counts (deep, narrow fanout) or for long-lived shard roots that observe many internal-node rotations through structural ops, the dictionary can drift larger than necessary. Replace the unbounded `Dictionary<GrainId, RoutingTableSnapshot>` with a fixed-capacity LRU (cap is a new `LatticeOptions.MaxRoutingTableCacheEntries`, default 1024). The fanout-bounded theoretical bound makes the cap effectively unreachable on production-shaped trees; the cap exists for pathological workloads and for memory-attribution clarity.
+
+   *Measurement.* Add a `ShardRootGrainTraversalMicrobench` that traverses a synthetic depth-4 tree (~10k internal nodes) under a uniformly random access pattern and reports the per-traversal wall-time p50 / p95 under the unbounded baseline and under each candidate cap value `{256, 1024, 4096}`. Also report the cache's steady-state entry count (the existing `_routingTableCache.Count` field, observed via a debug-only `IShardRootGrain` test seam). Acceptance threshold: ship the cap if the LRU's per-traversal wall-time regression at the chosen cap is below 5% relative to the unbounded baseline. Pick the smallest cap that meets the threshold.
+
+4. **Single-slot grain-ref LRU widening (root-anchored 2-slot).** `ShardRootGrain._cachedInternal` is a single-slot LRU keyed by `GrainId`. The traversal pattern always hits the root first and then steps through one or more level-1 internals, so the slot flips on every traversal in depth-3+ trees. Widen to a 2-slot LRU: slot 0 always holds the root (immutable for the activation's lifetime, established on first use), slot 1 is the most-recently-used non-root. Same invalidation semantics (implicit on GrainId equality mismatch); explicit `InvalidateRoutingTable` already calls a sibling seam that can simultaneously evict the matching grain-ref slot.
+
+   *Measurement.* Reuse the `ShardRootGrainTraversalMicrobench` from candidate 3. Report per-traversal wall-time and per-traversal `IGrainFactory.GetGrain<IBPlusInternalGrain>` call count (count via a custom listener around the factory). Acceptance threshold: ship only if the `GetGrain` call count per traversal drops materially (the measured factor is left to maintainer review) and per-traversal wall-time improves at p50 *and* p95.
+
+5. **Lazy `GetTreeIdAsync` elision.** `LeafCacheGrain.GetCacheTtlAsync` performs a one-time `primaryLeaf.GetTreeIdAsync()` RPC per activation (to derive the per-tree `LatticeOptions` for the `CacheTtl` value). The cache already has the primary leaf's `GrainId`; the tree id is derivable from the grain key without the round-trip if the grain-key encoding exposes it. Add an internal `GrainId.TryParseTreeId(out string)` helper that decodes the embedded tree id from the leaf grain key directly and consult it from the cache instead of the RPC. The RPC is a one-shot, so the *steady-state* CPU win is zero; the win is one fewer cross-grain hop on first activation per cache, which manifests as cold-start latency reduction.
+
+   *Measurement.* Add a `LeafCacheGrainColdStartMicrobench` that runs 1000 first-`GetAsync` calls across freshly-activated cache grains and reports the p50 / p95 / p99 first-call latency. Acceptance threshold: ship only if the p99 drops materially below the baseline (a cold-start tail reduction); steady-state latencies should be unchanged within noise.
+
+**Out of scope.**
+- *Cache LRU / eviction.* Tracked separately as F-067 below; that entry has different acceptance criteria because the candidate has Orleans-semantics interactions that this entry's purely-local candidates do not.
+- *Cache write-through / write-back.* The current read-through-with-delta-refresh design has no coherence protocol to maintain; introducing one would be a separate feature, not a co-location optimisation.
+- *Per-call positive-result negative-cache.* Adding a "saw the miss this turn" flag inside a single `GetAsync` is an in-method optimisation, not a caching-layer change; if measurement under candidate (1) or (2) surfaces it as the dominant cost, address it under a separate entry.
+- *Cross-silo cache coordination / push invalidation.* Pull-based revision-cookie + cursor delta refresh is the current contract; any push-based change would alter wire surface and is out of scope for an optimisation entry.
+
+**Acceptance.**
+- Each candidate has a self-contained micro-probe under `benchmark/host/` (one per candidate) that produces the numbers stipulated above. The probes do not need to be solution-registered; they follow the `Bench.WalAzureTable` shape (standalone, run manually, gitignored solution-file edits).
+- The micro-probes are committed alongside the candidate they motivate, even if a candidate is ultimately not shipped, so that a future re-investigation has the measurement harness ready.
+- For every candidate that *is* shipped, the corresponding probe's numbers (baseline vs. shipped) are captured in the PR description so the next reviewer can re-run the probe and reproduce the gain.
+- No candidate ships without its probe demonstrating the threshold described in its `Measurement` paragraph; "looks faster locally" is not acceptance.
+- The four-layer read cache stack table in this entry's preamble is reproduced (or linked) in `docs/lattice/caching.md` so the architecture-level picture stays a discoverable single source-of-truth.
+
+**Risk surface.** Candidate (1) introduces a new "co-located accessor" seam on `BPlusLeafGrain` that bypasses the normal grain-dispatch envelope. Orleans turn-isolation guarantees must be preserved (the accessor must dispatch through the leaf's mailbox, not directly into `state.State.Entries` from an arbitrary thread). Candidate (2) is conditional on the absence of cross-silo readers; the gate's "promote to activated once a cross-silo reader is observed" promotion must be one-way (no demotion) to avoid an oscillation under bursty traffic. Candidates (3) - (5) are purely-local refactors with no Orleans-semantics interaction.
+
+---
+
+### F-067 - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
+**Performance / memory / investigative (cap the per-activation read-through cache mirror to a configured size, *only* if an eviction policy can be defined that does not interact with the delta-refresh / pending-key / moved-away protocols)**
+
+The `LeafCacheGrain._cache` dictionary mirrors the primary leaf's live entry set 1:1 and grows monotonically over the cache activation's lifetime (only split, moved-away, and epoch-flip events shrink it). Per-silo per-tree memory therefore scales linearly with the touched-leaf-set's combined entry count, with no operator-side cap. This entry tracks the work to bound that footprint - **but only if** the eviction policy can be designed to leave the four existing correctness contracts intact:
+
+1. **Delta-refresh cursor contract.** `LeafCacheGrain._deliveryCursor` is the activation-scoped pair `(Epoch, Sequence)` against which the leaf decides which entries to ship in the next `GetDeltaSinceCursorAsync` call. Evicting a key from `_cache` does *not* rewind the cursor; the next refresh will not re-deliver the evicted key unless its per-key sequence is bumped on the leaf side. An eviction protocol that does not account for this would silently produce false-misses on the next read of an evicted key.
+
+2. **Pending-key set contract.** `_pendingKeys` is refreshed every time the cache takes the cross-grain refresh path. Evicting a key whose row is in `_pendingKeys` is safe (the delegation path runs anyway), but evicting *and then* observing the same refresh-path miss must not create a window where the cache fails to delegate a pending key.
+
+3. **Moved-away pruning contract.** `_movedAwaySlots` is the cumulative set of virtual slots the primary leaf has reported as migrated. A key whose slot is in this set must surface `StaleShardRoutingException`. Evicting cached entries inside a moved-away slot is the existing behaviour (`keysToRemoveMoved` loop in `RefreshAsync`); evicting cached entries *outside* a moved-away slot must not interact with the slot bitmap.
+
+4. **Migrated-entry delegation contract.** A cached row with `IsMigrated = true` delegates reads to the primary leaf. Evicting such a row is correctness-preserving (the next read takes the delegation path on a miss), but evicting it *and* the per-key sequence not being re-delivered on the next refresh would lose the `IsMigrated` flag and allow the cache to start serving the value directly, bypassing the shadow guard.
+
+**Investigation.** Determine, before committing to ship anything:
+
+1. Whether the leaf's per-key sequence-bump protocol can be extended so that an evicted-and-re-fetched key is correctly re-delivered to the cache on the next refresh, **without** requiring the cache to issue a per-key targeted fetch (which would defeat the point of the delta protocol).
+2. Whether a "negative-LRU" approach - retain only the row's metadata (`Timestamp`, `IsTombstone`, `IsMigrated`, `IsExpired` ticks) and evict only the value-`byte[]` payload - preserves all four contracts while still shrinking the dominant memory cost. The metadata is bounded (≤ ~80 bytes per row including the LWW envelope); the `byte[]` payload is the unbounded dimension. If this hybrid works, a sub-megabyte budget per cache activation may be reachable.
+3. Whether eviction must be coordinated with the leaf (e.g. via a cache-side `IBPlusLeafGrain.NotifyCacheEvictedAsync(IReadOnlyList<string> keys)` hint so the leaf re-publishes those keys' per-key sequences on the next state advance) or can remain purely cache-local. A coordinated approach changes the wire surface; a cache-local approach must prove correctness through the four contracts above.
+
+**Candidate eviction policies to evaluate (each must clear the four-contract gate above).**
+
+1. *Value-payload-only LRU (metadata-retained).* Cap the total `_cache[key].Value.Length` aggregate at a configured byte budget. Evict the `Value` byte array of the least-recently-read row while retaining the `LwwValue<byte[]>` envelope with `Value = null`. Reads against an envelope-only row miss the cache and go to the leaf; the leaf's existing per-key delivery path repopulates the row on the next refresh.
+2. *Full-row LRU (envelope + value).* Cap the total `_cache.Count` at a configured entry count. Evict the least-recently-read row entirely. Must clear contract (1) above - the next refresh must re-deliver the evicted key.
+3. *Memory-pressure-driven eviction.* Subscribe to `GC.RegisterForFullGCNotification` or equivalent; drop a configured fraction of the cache on full-GC trigger. Cheapest to implement; harder to reason about because the eviction set is observation-dependent.
+
+**Measurement protocol.**
+- Build a `Bench.LeafCacheGrowth` standalone probe (same `benchmark/host/` shape as `Bench.WalAzureTable`) that activates a single `LeafCacheGrain` against a primary leaf hosting `{1k, 10k, 100k}` entries with average value size `{64 B, 1 KB, 64 KB}`, runs a uniform-random read workload for a fixed duration, and reports:
+  - `Process.WorkingSet64` and `GC.GetTotalMemory(forceFullCollection: false)` sampled at 1-second cadence;
+  - `_cache.Count` and `sum(_cache[k].Value.Length)` sampled at the same cadence (via a debug-only test seam);
+  - per-read p50 / p99 latency.
+- Run the probe under the baseline (unbounded cache) and under each candidate policy at each value-size point.
+- For each candidate, derive the marginal cost (per-read latency increase, per-read miss-rate-induced refresh load) per unit memory saved.
+
+**Acceptance.**
+- This entry ships **only** if at least one candidate clears the four-contract correctness gate AND the measurement protocol demonstrates a worthwhile memory / latency tradeoff at production-shaped scales. If no candidate clears the gate, the entry is closed with `[x]` and a written justification of which contract each candidate violated; the unbounded behaviour is then documented in `docs/lattice/caching.md` as an intentional design property.
+- The chosen policy's `LatticeOptions.MaxCacheMemoryBytes` (or `MaxCacheEntries`, depending on which candidate ships) is documented in `docs/lattice/configuration.md` with an explicit "default = unbounded; set to bound the per-silo per-leaf memory footprint" note.
+- A new chaos test under `test/lattice/BPlusTree/Grains/LeafCacheGrainTests.Eviction.cs` exercises the chosen policy under concurrent split, moved-away, migration, and pending-tx events and confirms strict semantic equivalence to the unbounded baseline across each of the four contracts.
+- A regression test pins the per-activation memory budget so that a future refactor that re-introduces unbounded growth is caught at CI time.
+
+**Out of scope.**
+- Cross-silo cache coordination / shared LRU across silos (would alter the `[StatelessWorker]` design contract).
+- Push-based invalidation from the leaf to its caches (would alter the leaf's per-write cost envelope; the existing pull-with-cookie design is the contract).
+- Eviction of the routing-table snapshot cache - that is candidate (3) of F-066.
+- Bounding the `_pendingKeys` set - it is bounded by in-flight saga count, which is already capped by the per-tree `TxRegistryGrain` retention envelope (F-055 / F-064 envelopes).
+
+**Risk surface.** Any policy that does not preserve all four correctness contracts must not ship. The `LeafCacheGrain` is the single most-touched grain on the read path; a regression here would surface as silent stale reads or violation of strict-isolation guarantees the F-055 / F-064 / F-065 contracts already deliver. The investigation can produce a "no candidate clears the gate" outcome and that outcome is an acceptable closure of this entry.
+
+---
+
 ### 6 · Documentation & Developer Experience
 
 - [ ] **F-021 - Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.
