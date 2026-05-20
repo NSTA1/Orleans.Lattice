@@ -69,6 +69,7 @@ services:
       # scenarios to compare durable-WAL throughput against the in-memory baseline.
       Lattice__Wal__Provider: ${BENCH_WAL_PROVIDER:-memory}
       Lattice__Wal__TableName: ${BENCH_WAL_TABLE_NAME:-OrleansLatticeWal}
+      Lattice__Wal__PipelinePhaseTwo: ${BENCH_WAL_PIPELINE_PHASE_TWO:-false}
       # Replication switch (only consumed when Telemetry__Sink=lattice).
       Replication__Enabled: ${BENCH_REPLICATION_ENABLED:-false}
       Replication__OriginClusterId: ${BENCH_REPLICATION_CLUSTER_ID:-vfs-bench}

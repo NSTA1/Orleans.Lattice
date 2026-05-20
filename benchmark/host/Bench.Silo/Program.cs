@@ -232,10 +232,22 @@ builder.Host.UseOrleans(silo =>
         if (walProvider == "azuretable")
         {
             var walTableName = builder.Configuration["Lattice:Wal:TableName"] ?? "OrleansLatticeWal";
+            // Lattice:Wal:PipelinePhaseTwo opts the Azure Table WAL provider into
+            // pipelined phase-2 mode (F-070): AppendBatchAsync returns once the
+            // *previous* batch's phase-2 manifest commit lands, while the current
+            // batch's phase-2 continues asynchronously through the per-shard
+            // PhaseTwoWorker. Phase 0+1 stay synchronous and durable on every call,
+            // so durability and crash-recovery are unchanged - the toggle is a
+            // pure throughput-vs-latency knob.
+            var walPipelinePhaseTwo = string.Equals(
+                builder.Configuration["Lattice:Wal:PipelinePhaseTwo"]?.Trim(),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
             silo.AddAzureTableWalStorage(o =>
             {
                 o.ConnectionString = azuriteConnection;
                 o.TableName = walTableName;
+                o.PipelinePhaseTwoCommits = walPipelinePhaseTwo;
             });
         }
     }
