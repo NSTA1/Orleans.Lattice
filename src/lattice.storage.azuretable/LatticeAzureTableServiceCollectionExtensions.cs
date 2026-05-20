@@ -14,9 +14,15 @@ public static class LatticeAzureTableServiceCollectionExtensions
     /// Registers <see cref="AzureTableWalStorageProvider"/> as the
     /// silo's <see cref="IWalStorageProvider"/>, layering on top of the
     /// core <see cref="LatticeServiceCollectionExtensions.AddWalStorage"/>
-    /// seam. Idempotent: the underlying registration uses
-    /// <c>TryAddSingleton</c>, so a previously-registered provider is
-    /// preserved.
+    /// seam. The host-supplied factory is registered via
+    /// <c>Services.Replace</c> under the hood, so this call displaces
+    /// the in-memory baseline that
+    /// <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
+    /// installs - regardless of whether <c>AddLattice</c> is invoked
+    /// before or after <c>AddAzureTableWalStorage</c>. Last
+    /// <c>AddWalStorage</c>-with-factory call wins; calling
+    /// <c>AddAzureTableWalStorage</c> twice keeps the second
+    /// configuration.
     /// </summary>
     /// <param name="builder">The Orleans silo builder.</param>
     /// <param name="configure">Callback that populates

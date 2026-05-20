@@ -465,6 +465,16 @@ The `LeafCacheGrain._cache` dictionary mirrors the primary leaf's live entry set
 
 ---
 
+### F-068 - Order-independent WAL provider registration *(shipped)*
+
+`ISiloBuilder.AddWalStorage(factory)` previously used `TryAddSingleton` for both the no-factory baseline path and the host-supplied factory path. Because `AddLattice` self-registers the in-memory baseline as part of its own setup, any later host call to `AddWalStorage(factory)` (or to a package-level overload that wraps it, such as `AddAzureTableWalStorage`) silently no-opped: the baseline had already won the `TryAdd` race. The host saw a successful build, the silo ran on `InMemoryWalStorageProvider`, and the durable backend the host configured was never touched. This was a footgun specifically because the failure mode is silent - no log line, no exception, no telemetry difference until a host operator notices the durable store is empty.
+
+**Fix.** `AddWalStorage(factory)` now registers via `Services.Replace(ServiceDescriptor.Singleton<IWalStorageProvider>(factory))`. The no-factory baseline path keeps `TryAddSingleton` so `AddLattice`'s self-call does not displace a real provider registered earlier by the host. Net effect: the host's choice of WAL provider is order-independent with respect to `AddLattice`, and last-call-wins applies when multiple factory registrations are stacked. The `AddAzureTableWalStorage` extension inherits the new contract automatically because it forwards through `AddWalStorage(factory)`.
+
+**Acceptance.** Pinned by `LatticeServiceCollectionExtensionsTests` (four cases: baseline-then-baseline idempotency, baseline-then-factory replacement, factory-then-baseline preservation, factory-then-factory last-call-wins) and by `LatticeAzureTableServiceCollectionExtensionsTests.AddAzureTableWalStorage_replaces_prior_in_memory_baseline` / `AddAzureTableWalStorage_wins_when_called_before_baseline`. The XML docs on `AddLattice`, `AddWalStorage`, and `AddAzureTableWalStorage`, plus `docs/lattice/wal-storage-providers.md`, document the new contract explicitly so the failure mode the fix prevents is also visible to a reader scanning the API surface.
+
+---
+
 ### 6 · Documentation & Developer Experience
 
 - [ ] **F-021 - Migration guide**: Document how to migrate data from external stores (Redis, SQL, Cosmos DB) into Lattice using the streaming bulk-load API, including key-design and value-serialization best practices.

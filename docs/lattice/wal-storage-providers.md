@@ -64,6 +64,17 @@ Hosts wire a provider into the silo via `ISiloBuilder.AddWalStorage`. The defaul
 siloBuilder.AddWalStorage(sp => new InMemoryWalStorageProvider());
 ```
 
+`AddWalStorage` has **two different registration semantics depending on the overload**, and the difference is load-bearing because `AddLattice` self-registers the in-memory baseline as part of its own setup:
+
+| Overload | Registration | Wins against |
+|---|---|---|
+| `AddWalStorage()` (no factory) | `TryAddSingleton` - first registration wins | nothing (only installs if no provider is registered yet) |
+| `AddWalStorage(factory)` | `Services.Replace` - last call wins | the in-memory baseline, any prior factory |
+
+Net effect: a host-supplied factory is **order-independent** with respect to `AddLattice`. `siloBuilder.AddLattice(...)` followed by `siloBuilder.AddAzureTableWalStorage(...)` produces the same effective registration as the reverse order - the Azure factory wins either way. Calling `AddWalStorage(factory)` (or one of the package-level overloads that wraps it, such as `AddAzureTableWalStorage`) multiple times follows last-call-wins.
+
+This contract was tightened to fix a silent-drop bug: previously both branches used `TryAddSingleton`, so a host that called `AddLattice` before `AddAzureTableWalStorage` would silently end up on the in-memory baseline because `AddLattice`'s own `AddWalStorage()` call had already won the `TryAdd` race.
+
 The replication package additionally exposes per-tree overrides via `LatticeReplicationOptions.WalStorageProvider` for trees that should opt out of the silo-wide default.
 
 ## Provider catalogue
