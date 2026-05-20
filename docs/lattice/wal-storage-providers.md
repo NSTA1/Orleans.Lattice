@@ -213,6 +213,23 @@ The handler fires **exactly once per faulted pipelined phase-2 task**, on a thre
 
 `AppendBatchAsync`'s `cancellationToken` is wired through the phase-2 wait via `Task.WaitAsync(CancellationToken)`. In default mode this cancels the caller's wait on its own phase-2 task. In pipelined mode it cancels the caller's wait on the *previous* batch's phase-2 task without disturbing that task itself - the predecessor remains in flight and any other observer (the next call, the fault handler, `DisposeAsync`) will continue to see it through to its terminal state. The phase-2 commit itself is not cancellable; cancellation only releases the caller's blocking wait.
 
+##### When to enable
+
+Pipelining trades a phase-2 wait for additional concurrent writer pressure on the WAL backend. The trade is positive only while the backend has spare write concurrency to absorb the overlapped batch, and **the relationship is non-monotonic in offered load** - throughput at saturation can be worse with pipelining than without it.
+
+A representative single-silo Azurite measurement (current-state-no-replication scenario, 30 s window, three load points relative to the host's calibrated saturation knee) shows the shape:
+
+| Offered load                     | Commits/s Δ | WAL append p99 Δ | Verdict                                  |
+|----------------------------------|------------:|-----------------:|------------------------------------------|
+| Well below knee                  |      ~+2 %  |          ~0 %    | near-noise; little phase-2 idle to overlap |
+| Near knee (sustained pressure)   |     ~+11 %  |        ~-36 %    | clear win; phase-2 overlaps next batch     |
+| Past knee (backend saturated)    |     ~-16 %  |        ~+45 %    | regression; concurrent writes contend     |
+
+Two practical rules follow:
+
+- Enable pipelining only on backends that scale write concurrency (e.g. real Azure Tables with multiple WAL shards spreading across partitions). On a single-writer backend - Azurite, a single-shard configuration, or any WAL whose effective write width is one - pipelining can amplify saturation rather than relieve it.
+- Treat `PipelinePhaseTwoCommits` as a per-deployment knob, not a default. Validate it with the workload's actual sustained offered rate against the actual backend; the win regime is bounded both above and below.
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.
