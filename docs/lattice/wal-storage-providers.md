@@ -178,6 +178,58 @@ The activation seam itself - `IWalStorageProvider.ReconcileAsync` - ships with a
 - **Concurrency**: instances are safe for concurrent calls across distinct shards. Concurrent calls into the same shard land in distinct batch partitions during phase 1 (no contention) and serialise through the per-shard phase-2 worker for phase 2. With the default `WalMaxPendingBatches = 1` only one `AppendBatchAsync` is in flight per shard.
 - **Per-call allocations**: percent-encoded tree-id segments are cached process-wide so a repeated tree id pays the encode cost exactly once. The hot path (`AppendEncodedBatchAsync`) materialises the row payload by copying each `ArraySegment<byte>` into a freshly-owned `byte[]` for the entity (the segment's backing buffer is pooled upstream by the WAL grain) and allocates a single `List<TableTransactionAction>` sized to `entries.Count` for the batch. The legacy `AppendBatchAsync` overload additionally reuses a single `ArrayBufferWriter<byte>` across every entry in the batch for the per-entry encode.
 
+#### Phase-2 pipelining
+
+Setting `AzureTableWalStorageOptions.PipelinePhaseTwoCommits = true` opts the provider into a **pipelined phase-2** mode in which `AppendBatchAsync` returns as soon as the **previous** batch's phase-2 commit lands, rather than waiting for the **current** batch's own phase-2. Phase 0 (candidate-row stamp) and phase 1 (entry-row transactional batch) remain synchronous and durable on every call, so a crash at any point still produces a state the activation-time reconciler can roll forward or roll back deterministically. Pipelining only changes when the caller of the *current* `AppendBatchAsync` learns that phase-2 succeeded - it does not relax atomicity, ordering, or recovery.
+
+The mode is off by default and is purely a throughput-vs-latency knob:
+
+| Property | Default | Pipelined |
+|---|---|---|
+| Caller-visible append latency | own phase-0+1+2 | own phase-0+1 + previous phase-2 |
+| Phase-2 commit ordering on a shard | strict ascending start-offset | strict ascending start-offset (unchanged) |
+| Crash recovery semantics | reconciler rolls forward / rolls back | reconciler rolls forward / rolls back (unchanged) |
+| Failure surfacing on the *next* append | the failing call observes its own phase-2 fault | the *next* `AppendBatchAsync` on the shard observes the previous append's phase-2 fault |
+| Failure surfacing when the producer goes quiescent | n/a (every caller observes its own fault) | configurable via `PipelinedPhaseTwoFaultHandler`; default is silent |
+
+##### Surfacing faults on a quiescent shard
+
+In pipelined mode the slot occupant - the previous batch's still-in-flight phase-2 task - is observed only when a successor `AppendBatchAsync` arrives. If the producer drains, idles, or crashes after issuing the *last* batch, that batch's phase-2 fault has no canonical observer: `DisposeAsync` swallows at shutdown by design (the data is recoverable on next activation, but the application that issued the append has no signal). To close that gap, set `PipelinedPhaseTwoFaultHandler` to a log-only delegate at host startup:
+
+```text
+siloBuilder.AddAzureTableWalStorage(o =>
+{
+    o.ServiceUri = new Uri("https://myaccount.table.core.windows.net");
+    o.TokenCredential = new DefaultAzureCredential();
+    o.PipelinePhaseTwoCommits = true;
+    o.PipelinedPhaseTwoFaultHandler = ex => logger.LogError(ex,
+        "Pipelined phase-2 commit failed; data is recoverable on next activation.");
+});
+```
+
+The handler fires **exactly once per faulted pipelined phase-2 task**, on a thread-pool continuation chained off the slot occupant the moment the fault becomes observable - regardless of whether a successor call later arrives (which would also surface the fault to its own caller). Implementations should be **idempotent and observability-only**; exceptions thrown by the handler are swallowed so a misbehaving observer cannot corrupt the pipeline's task graph. The handler is not on any append's request path.
+
+##### Cancellation semantics
+
+`AppendBatchAsync`'s `cancellationToken` is wired through the phase-2 wait via `Task.WaitAsync(CancellationToken)`. In default mode this cancels the caller's wait on its own phase-2 task. In pipelined mode it cancels the caller's wait on the *previous* batch's phase-2 task without disturbing that task itself - the predecessor remains in flight and any other observer (the next call, the fault handler, `DisposeAsync`) will continue to see it through to its terminal state. The phase-2 commit itself is not cancellable; cancellation only releases the caller's blocking wait.
+
+##### When to enable
+
+Pipelining trades a phase-2 wait for additional concurrent writer pressure on the WAL backend. The trade is positive only while the backend has spare write concurrency to absorb the overlapped batch, and **the relationship is non-monotonic in offered load** - throughput at saturation can be worse with pipelining than without it.
+
+A representative single-silo Azurite measurement (current-state-no-replication scenario, 30 s window, three load points relative to the host's calibrated saturation knee) shows the shape:
+
+| Offered load                     | Commits/s Δ | WAL append p99 Δ | Verdict                                  |
+|----------------------------------|------------:|-----------------:|------------------------------------------|
+| Well below knee                  |      ~+2 %  |          ~0 %    | near-noise; little phase-2 idle to overlap |
+| Near knee (sustained pressure)   |     ~+11 %  |        ~-36 %    | clear win; phase-2 overlaps next batch     |
+| Past knee (backend saturated)    |     ~-16 %  |        ~+45 %    | regression; concurrent writes contend     |
+
+Two practical rules follow:
+
+- Enable pipelining only on backends that scale write concurrency (e.g. real Azure Tables with multiple WAL shards spreading across partitions). On a single-writer backend - Azurite, a single-shard configuration, or any WAL whose effective write width is one - pipelining can amplify saturation rather than relieve it.
+- Treat `PipelinePhaseTwoCommits` as a per-deployment knob, not a default. Validate it with the workload's actual sustained offered rate against the actual backend; the win regime is bounded both above and below.
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.

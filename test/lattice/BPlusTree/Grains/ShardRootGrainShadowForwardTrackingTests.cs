@@ -56,6 +56,7 @@ public class ShardRootGrainShadowForwardTrackingTests
 
         var leaf = Substitute.For<IBPlusLeafGrain>();
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
+        leaf.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
         configureLeaf?.Invoke(leaf);
@@ -87,12 +88,12 @@ public class ShardRootGrainShadowForwardTrackingTests
     [Test]
     public async Task SetManyAsync_surfaces_local_exception_when_both_local_and_forward_fail()
     {
-        // Leaf throws a non-transient exception on every local write.
+        // Leaf throws a non-transient exception on the batched write.
         var localFailure = new InvalidOperationException("local-blew-up");
         var forwardFailure = new InvalidOperationException("forward-blew-up");
 
         var h = CreateHarness(
-            configureLeaf: l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+            configureLeaf: l => l.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
                 .Returns<Task<SplitResult?>>(_ => throw localFailure),
             configureShadowTarget: t => t.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
                 .Returns<Task>(_ => Task.FromException(forwardFailure)));

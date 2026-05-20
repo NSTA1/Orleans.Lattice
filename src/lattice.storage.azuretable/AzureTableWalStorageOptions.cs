@@ -101,6 +101,107 @@ public sealed class AzureTableWalStorageOptions
     public Action<TableClientOptions>? ConfigureClientOptions { get; set; }
 
     /// <summary>
+    /// When <see langword="true"/>, an <c>AppendBatchAsync</c> call
+    /// returns as soon as its phase-0 candidate-row and phase-1
+    /// entry-row transactions are durable, without waiting for the
+    /// per-shard <c>PhaseTwoWorker</c> to commit the manifest row +
+    /// <c>TAIL</c> upsert. The next call into the same shard awaits
+    /// the previous call's phase-2 task before returning, so failures
+    /// remain sticky and a caller can never advance past an
+    /// unrecovered phase-2 fault undetected. Default is
+    /// <see langword="false"/> - the safe, simple behaviour where
+    /// every <c>AppendBatchAsync</c> awaits its own phase-2 commit
+    /// before returning.
+    /// <para>
+    /// <b>Why pipeline.</b> With the default
+    /// <c>LatticeOptions.WalMaxPendingBatches = 1</c> the WAL grain
+    /// serialises append calls per shard. Each call's request-path
+    /// latency is then
+    /// <c>max(phase0, phase1) + phase2</c>, and the per-shard worker's
+    /// coalescing window (up to 49 phase-2 commits collapsed into one
+    /// transaction) is wasted because it never sees more than one
+    /// pending commit at a time. Enabling this option overlaps phase
+    /// 2 of batch <c>N</c> with phase 0+1 of batch <c>N+1</c>, which
+    /// halves the steady-state request-path latency per shard and
+    /// turns the worker's coalescing window from "never used" to
+    /// "saturates under burst".
+    /// </para>
+    /// <para>
+    /// <b>What changes.</b> The WAL's all-or-nothing durability
+    /// contract is preserved: phase 0 stamps a candidate-row whose
+    /// <c>Offset</c> column carries <c>endOffsetInclusive</c>, phase
+    /// 1 commits the entry rows atomically, and activation-time
+    /// <see cref="IWalStorageProvider.ReconcileAsync"/> rolls forward
+    /// any candidate-row whose <c>startOffset</c> contiguously
+    /// extends <c>TAIL</c>. A silo crash between phase 1 and phase 2
+    /// leaves the batch as a rollforward-eligible orphan whether or
+    /// not the caller observed phase 2 returning; the only thing
+    /// that moves is when a phase-2 failure surfaces to the caller.
+    /// In pipelined mode it surfaces on the <i>next</i>
+    /// <c>AppendBatchAsync</c> on the same shard rather than the
+    /// failing one. The <c>WalShardGrain</c> sticky-failure resync
+    /// path (<see cref="IWalStorageProvider.GetHighestOffsetAsync"/>
+    /// + <see cref="IWalStorageProvider.ReconcileAsync"/>) is the
+    /// same in both cases because the failed batch's phase 0+1 are
+    /// durable and reconciliation rolls them forward.
+    /// </para>
+    /// <para>
+    /// <b>What stays the same.</b> Strict offset-FIFO ordering of
+    /// phase-2 commits (the worker's <c>SortedSet</c> invariant);
+    /// the worker's "fault the in-flight commit and every later
+    /// pending commit" semantics on a phase-2 transaction failure;
+    /// the activation-time orphan recovery contract; the
+    /// <c>GetHighestOffsetAsync</c> point-read against the
+    /// <c>TAIL</c> row. The only observable change is that
+    /// <c>GetHighestOffsetAsync</c> issued <i>between</i> an
+    /// <c>AppendBatchAsync</c> returning and its phase-2 commit
+    /// landing may return the pre-append <c>TAIL</c> rather than the
+    /// post-append <c>TAIL</c>. <c>WalShardGrain</c> tracks
+    /// <c>_nextOffset</c> in memory and never re-reads <c>TAIL</c>
+    /// outside of activation and post-failure resync, so the lag is
+    /// invisible to the canonical replication path.
+    /// </para>
+    /// </summary>
+    public bool PipelinePhaseTwoCommits { get; set; }
+
+    /// <summary>
+    /// Optional observer invoked when a pipelined phase-2 task faults.
+    /// <para>
+    /// In pipelined mode (<see cref="PipelinePhaseTwoCommits"/> =
+    /// <see langword="true"/>) the per-shard slot holds the previous
+    /// batch's phase-2 task and the next <c>AppendBatchAsync</c> is
+    /// the canonical observer. If no successor call ever arrives -
+    /// e.g. the producer has just appended its last batch and goes
+    /// quiescent - the slot's faulted task would otherwise be
+    /// observed only by <see cref="AzureTableWalStorageProvider.DisposeAsync"/>,
+    /// which intentionally swallows the fault. The data itself is
+    /// still recoverable (phase 0+1 are durable and
+    /// <see cref="IWalStorageProvider.ReconcileAsync"/> rolls the
+    /// batch forward at next activation), but the application
+    /// receives no signal that its last phase-2 failed.
+    /// </para>
+    /// <para>
+    /// When set, this delegate is invoked exactly once per faulted
+    /// pipelined phase-2 task, on a thread-pool continuation chained
+    /// off the slot occupant the moment the fault becomes observable.
+    /// The delegate is fired regardless of whether a successor call
+    /// later arrives (which would also surface the fault), so
+    /// implementations should be idempotent / log-only - typically
+    /// a structured-log emit so the operator-side alerting layer
+    /// learns about the fault even on a quiescent shard. Exceptions
+    /// thrown by the delegate are swallowed; the delegate is not in
+    /// the call's request path.
+    /// </para>
+    /// <para>
+    /// Default <see langword="null"/>: pipelined faults on a
+    /// quiescent shard are silently dropped (the historical
+    /// pre-fix behaviour, retained as the default so the option
+    /// stays purely additive).
+    /// </para>
+    /// </summary>
+    public Action<Exception>? PipelinedPhaseTwoFaultHandler { get; set; }
+
+    /// <summary>
     /// Validates that exactly one authentication mode is configured and
     /// that <see cref="TableName"/> is non-empty. Called by the provider
     /// at first use.

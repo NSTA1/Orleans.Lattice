@@ -397,10 +397,7 @@ internal sealed partial class ShardRootGrain(
         System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
         try
         {
-            foreach (var entry in entries)
-            {
-                await SetAsyncLocalOnly(entry.Key, entry.Value);
-            }
+            await SetManyLocalOnlyAsync(entries);
         }
         catch (Exception ex)
         {
@@ -419,29 +416,170 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <summary>
-    /// Same as <see cref="SetAsync(string, byte[])"/> but skips the per-entry
-    /// shadow-forward so the caller can issue a single batched forward.
-    /// Used exclusively by <see cref="SetManyAsync"/>.
+    /// Local apply path for <see cref="SetManyAsync"/>. Routes each input
+    /// entry to its target leaf, groups the input into per-leaf slices,
+    /// and dispatches one <see cref="IBPlusLeafGrain.SetManyAsync"/> call
+    /// per leaf so the batched commit-log seam
+    /// (<see cref="ICommitLogWriter.AppendManyAsync"/>) collapses the
+    /// per-key WAL grain hops into a single batched dispatch per leaf.
+    /// The pre-batched shape called <c>leaf.SetAsync(key, value)</c> once
+    /// per entry, which routed through the per-key WAL append path and
+    /// paid one WAL round-trip per key - the exact regression that
+    /// suppressed the batched-WAL-append throughput win on the
+    /// foreground bulk-write path.
+    /// <c>TraverseForWriteAsync</c> shape: the parent path captured on
+    /// the first key of each leaf bucket is walked back up if the leaf
+    /// returns a non-null <see cref="SplitResult"/>, and any residual
+    /// split at the top of the path is promoted to a new root via
+    /// <see cref="PromoteRootAsync"/>.
+    /// <para>
+    /// After the batched leaf apply completes, every input key is fed
+    /// through <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>. This
+    /// is the per-key adaptive-split shadow-forward path (distinct from
+    /// the online-resize <c>TrackShadowForward</c> the caller dispatches
+    /// in <see cref="SetManyAsync"/>) and is required so writes for slots
+    /// that have already moved to a sibling shard reach the destination.
+    /// The single-key <c>SetAsync</c> path runs the same per-key forward
+    /// inside its retry envelope; the batched path mirrors it once per
+    /// input key, post-apply, so semantics are unchanged.
+    /// </para>
     /// </summary>
-    private async Task SetAsyncLocalOnly(string key, byte[] value)
+    private async Task SetManyLocalOnlyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
-        ThrowIfRejectedForKey(key);
+        // Flat-tree shortcut: every entry routes to the root leaf, so
+        // the whole batch lands in one leaf.SetManyAsync call.
+        if (state.State.RootIsLeaf)
+        {
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
+                ? existing
+                : ResolveLeafGrainSlow(rootLeafId);
+            await RecordAffectedLeafIfPreparedAsync(rootLeafId);
+            var split = await DispatchLeafBatchWithRetryAsync(leaf, entries);
+            while (split is not null)
+            {
+                split = await PromoteRootAsync(split);
+            }
+            await ForwardLocalWritesToShadowIfNeededAsync(entries);
+            return;
+        }
 
+        // Non-flat tree: group entries by routed leaf. Capture the
+        // root-to-immediate-parent path the first time each leaf is
+        // seen so split promotion has the same shape as the
+        // single-key TraverseForWriteAsync path-pop loop.
+        var buckets = new Dictionary<GrainId, (List<KeyValuePair<string, byte[]>> Slice, List<GrainId> Parents)>(capacity: 4);
+        foreach (var entry in entries)
+        {
+            var leafId = await TraverseToLeafAsync(entry.Key);
+            if (!buckets.TryGetValue(leafId, out var bucket))
+            {
+                var parents = await CaptureLeafParentPathAsync(entry.Key);
+                bucket = (new List<KeyValuePair<string, byte[]>>(), parents);
+                buckets[leafId] = bucket;
+            }
+            bucket.Slice.Add(entry);
+        }
+
+        foreach (var (leafId, bucket) in buckets)
+        {
+            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(leafId))
+                ? existing
+                : ResolveLeafGrainSlow(leafId);
+            await RecordAffectedLeafIfPreparedAsync(leafId);
+            var split = await DispatchLeafBatchWithRetryAsync(leaf, bucket.Slice);
+
+            // Walk the captured parent path bottom-up exactly like the
+            // single-key TraverseForWriteAsync split-pop loop. The path
+            // is ordered root-to-parent so we iterate in reverse.
+            var parents = bucket.Parents;
+            var parentCursor = parents.Count;
+            while (split is not null && parentCursor > 0)
+            {
+                var parentId = parents[--parentCursor];
+                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
+                    ? existingParent
+                    : ResolveInternalGrainSlow(parentId);
+                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
+                InvalidateRoutingTable(parentId);
+            }
+
+            // Any residual split at the root must be promoted into a
+            // new root grain - matches the single-key path's
+            // post-loop PromoteRootAsync.
+            while (split is not null)
+            {
+                split = await PromoteRootAsync(split);
+            }
+        }
+
+        await ForwardLocalWritesToShadowIfNeededAsync(entries);
+    }
+
+    /// <summary>
+    /// Per-key adaptive-split shadow forward applied to every entry after
+    /// the batched local leaf apply succeeds. Each call is a cheap no-op
+    /// when no adaptive split is in progress or when the key's virtual
+    /// slot has not moved, so the steady-state cost is dictionary lookups
+    /// only. During an active split the call forwards the per-key write
+    /// to the post-split owner shard, preserving the same per-entry
+    /// semantics the single-key <c>SetAsync</c> path provides.
+    /// </summary>
+    private async Task ForwardLocalWritesToShadowIfNeededAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        foreach (var entry in entries)
+        {
+            await ForwardLocalWriteToShadowIfNeededAsync(entry.Key, entry.Value);
+        }
+    }
+
+    /// <summary>
+    /// Dispatches a single per-leaf batched <see cref="IBPlusLeafGrain.SetManyAsync"/>
+    /// call with the same transient-exception retry envelope the per-key
+    /// <c>SetAsync</c> path uses. The retry is idempotent under LWW: each
+    /// retry advances the leaf's HLC, but the dominant per-key value the
+    /// leaf would have committed on a successful first try is the same
+    /// value the retry commits, so a partial-leaf-failure recovery
+    /// converges to the same projection state.
+    /// </summary>
+    private async Task<SplitResult?> DispatchLeafBatchWithRetryAsync(
+        IBPlusLeafGrain leaf,
+        List<KeyValuePair<string, byte[]>> slice)
+    {
         for (int attempt = 0; ; attempt++)
         {
             try
             {
-                var splitResult = await TraverseForWriteAsync(key, value);
-                while (splitResult is not null)
-                {
-                    splitResult = await PromoteRootAsync(splitResult);
-                }
-                await ForwardLocalWriteToShadowIfNeededAsync(key, value);
-                return;
+                return await leaf.SetManyAsync(slice);
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
             }
+        }
+    }
+
+    /// <summary>
+    /// Walks root -> ... -> immediate-parent for <paramref name="key"/>,
+    /// returning the list of internal ancestors in root-to-immediate-parent
+    /// order. Excludes the leaf itself. Reuses the same cached routing
+    /// snapshots <c>TraverseToLeafAsync</c> does, so steady-state cost is
+    /// dominated by dictionary lookups - no additional grain RPCs in the
+    /// hot path.
+    /// </summary>
+    private async Task<List<GrainId>> CaptureLeafParentPathAsync(string key)
+    {
+        var parents = new List<GrainId>(capacity: 4);
+        var currentId = state.State.RootNodeId!.Value;
+        while (true)
+        {
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var (childId, childrenAreLeaves) = snapshot.Route(key);
+            parents.Add(currentId);
+            if (childrenAreLeaves)
+            {
+                return parents;
+            }
+            currentId = childId;
         }
     }
 
