@@ -89,6 +89,9 @@ public sealed class ReplicationShipperGrainTypedTransportSkipsEncodeTests
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
+        public Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+            => throw new NotImplementedException("ReadShippingAsync is not exercised by this fixture.");
+
         public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
         {
             var offsets = new long[entries.Count];
@@ -167,7 +170,7 @@ public sealed class ReplicationShipperGrainTypedTransportSkipsEncodeTests
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(feed);
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState,
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, feed, typed, encoder);
@@ -332,7 +335,7 @@ public sealed class ReplicationShipperGrainTypedTransportSkipsEncodeTests
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(localFeed);
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState,
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return grain;

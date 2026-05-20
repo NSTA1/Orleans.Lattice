@@ -115,8 +115,13 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
         }
 
         var channel = ResolvePeerChannel(batch.TargetClusterId);
-        var envelope = BuildEnvelope(batch);
-        var envelopeBox = new ReplicationBatchEnvelopeBox { Value = envelope };
+        var envelopeBox = BuildEnvelopeBox(batch);
+        // Captured for metric tagging only; the framing-only path
+        // does not materialise a typed envelope and therefore reads
+        // the entry count off the framing header instead.
+        var entryCount = envelopeBox.Framing is { } framing
+            ? framing.Header.EntryCount
+            : envelopeBox.Value.Entries?.Count ?? 0;
 
         var stopwatch = ValueStopwatch.StartNew();
         var outcome = "error";
@@ -131,12 +136,10 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
             var ackBox = await call.ResponseAsync.ConfigureAwait(false);
             outcome = "ok";
 
-            // Count successfully shipped entries on ack. The envelope's
-            // Entries collection is the authoritative count; an empty
+            // Count successfully shipped entries on ack. An empty
             // (heartbeat / keep-alive) batch contributes zero. Pairs
             // with WalEntriesAppended on the producer side so operators
             // can compute the growth-rate vs. ship-rate ratio.
-            var entryCount = envelope.Entries?.Count ?? 0;
             if (entryCount > 0)
             {
                 LatticeReplicationMetrics.WalEntriesShipped.Add(
@@ -157,26 +160,29 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
         }
     }
 
-    private ReplicationBatchEnvelope BuildEnvelope(ReplicationBatch batch)
+    private ReplicationBatchEnvelopeBox BuildEnvelopeBox(ReplicationBatch batch)
     {
-        // Framing-only fast path slot. Stage 3 of the one-encode
-        // migration introduced this slot but does not wire the
-        // shipper-side population; stage 4 flips the shipper to
-        // populate it and the transport will then frame the bytes
-        // directly into the gRPC stream's IBufferWriter without going
-        // through the typed envelope. Until that lands, treat a
-        // populated slot as a producer-side bug rather than silently
-        // dropping it onto one of the legacy paths.
-        if (batch.EncodedEnvelope is not null)
+        // Framing-only fast path: the shipper supplied a pre-encoded
+        // entry-segment list and a fixed-shape header. Hand the bytes
+        // straight to the marshaller via the framing slot; no typed
+        // envelope is materialised on the producer side.
+        if (batch.EncodedEnvelope is { } encoded)
         {
-            throw new NotSupportedException(
-                "ReplicationBatch.EncodedEnvelope was populated, but the gRPC push "
-                + "transport's framing-only fast path is not yet wired (stage 4 of the "
-                + "one-encode migration). Either flip LatticeReplicationOptions."
-                + "OneEncodeFastPath to false or upgrade to the version that ships "
-                + "the framing-only shipper path.");
+            return new ReplicationBatchEnvelopeBox
+            {
+                Framing = new ReplicationBatchEnvelopeBox.FramingPayload(
+                    encoded.Header,
+                    batch.TreeName,
+                    batch.OriginClusterId,
+                    encoded.EncodedEntries),
+            };
         }
 
+        return new ReplicationBatchEnvelopeBox { Value = BuildEnvelope(batch) };
+    }
+
+    private ReplicationBatchEnvelope BuildEnvelope(ReplicationBatch batch)
+    {
         // Typed-envelope fast path: when the shipper supplied the
         // pre-built envelope on the batch, ship it verbatim. Skips a
         // per-send `_encoder.Decode(batch.Payload)` call that would
@@ -222,6 +228,14 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
     /// a real gRPC server. Not part of the public API.
     /// </summary>
     internal ReplicationBatchEnvelope BuildEnvelopeForTesting(ReplicationBatch batch) => BuildEnvelope(batch);
+
+    /// <summary>
+    /// Test-only seam exposing the private
+    /// <c>BuildEnvelopeBox</c> dispatch so the framing-only path and
+    /// the typed fallback can be pinned without standing up a real
+    /// gRPC server. Not part of the public API.
+    /// </summary>
+    internal ReplicationBatchEnvelopeBox BuildEnvelopeBoxForTesting(ReplicationBatch batch) => BuildEnvelopeBox(batch);
 
     private PeerChannel ResolvePeerChannel(string targetClusterId)
     {

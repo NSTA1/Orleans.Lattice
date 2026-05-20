@@ -234,7 +234,7 @@ public partial class ReplicationShipperGrainTests
         var grain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState,
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, fakeState, feeds, transport, encoder);
@@ -302,7 +302,7 @@ public partial class ReplicationShipperGrainTests
         var grain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState,
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
 
@@ -426,8 +426,7 @@ public partial class ReplicationShipperGrainTests
         var freshGrain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, freshTransport, new TestEncoder(),
-            Substitute.For<IWalCursorRegistry>(),
+            monitor, freshTransport, new TestEncoder(), Substitute.For<IWalRecordEncoder>(), Substitute.For<IWalCursorRegistry>(),
             BuildGrainFactory(null, stubs, Tree), fakeState,
             new ReplicationPeerStats());
         freshGrain.InitializeForTesting(Tree, Peer);

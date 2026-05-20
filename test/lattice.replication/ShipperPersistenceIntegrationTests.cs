@@ -104,6 +104,9 @@ public class ShipperPersistenceIntegrationTests
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
+        public Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+            => throw new NotImplementedException("ReadShippingAsync is not exercised by this fixture.");
+
         public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
         {
             var offsets = new long[entries.Count];
@@ -199,7 +202,7 @@ public class ShipperPersistenceIntegrationTests
             ctx,
             Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, persistent,
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, persistent,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return grain;

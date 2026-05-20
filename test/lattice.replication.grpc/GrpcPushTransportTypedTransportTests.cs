@@ -49,7 +49,7 @@ public sealed class GrpcPushTransportTypedTransportTests
         var encoder = new StubDecoder();
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), ackSerializer);
         return new GrpcPushTransport(
             method,
             encoder,

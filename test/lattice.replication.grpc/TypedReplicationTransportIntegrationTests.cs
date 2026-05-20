@@ -115,7 +115,7 @@ public sealed class TypedReplicationTransportIntegrationTests
         };
 
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
         _transport = new GrpcPushTransport(
             method,
             _encoder,

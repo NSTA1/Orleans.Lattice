@@ -118,6 +118,9 @@ public partial class ReplicationShipperGrainTests
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
+        public Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+            => throw new NotImplementedException("ReadShippingAsync is not exercised by this fixture.");
+
         public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
         {
             var offsets = new long[entries.Count];
@@ -226,7 +229,7 @@ public partial class ReplicationShipperGrainTests
         var factory = BuildGrainFactory(grainFactory, new[] { feed }, treeName);
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState,
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
@@ -240,6 +243,7 @@ public partial class ReplicationShipperGrainTests
         IOptionsMonitor<LatticeReplicationOptions>? monitor = null,
         IReplicationTransport? transport = null,
         IReplicationBatchEncoder? encoder = null,
+        IWalRecordEncoder? walRecordEncoder = null,
         IWalCursorRegistry? registry = null,
         IGrainFactory? grainFactory = null,
         IPersistentState<ReplicationShipperState>? state = null,
@@ -251,6 +255,7 @@ public partial class ReplicationShipperGrainTests
             monitor ?? Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
             transport ?? Substitute.For<IReplicationTransport>(),
             encoder ?? Substitute.For<IReplicationBatchEncoder>(),
+            walRecordEncoder ?? Substitute.For<IWalRecordEncoder>(),
             registry ?? Substitute.For<IWalCursorRegistry>(),
             grainFactory ?? Substitute.For<IGrainFactory>(),
             state ?? new FakePersistentState<ReplicationShipperState>(),
@@ -274,6 +279,7 @@ public partial class ReplicationShipperGrainTests
                 null!,
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
@@ -292,6 +298,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 null!,
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
@@ -310,6 +317,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 null!,
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
@@ -328,7 +336,27 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 null!,
+                Substitute.For<IGrainFactory>(),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_wal_record_encoder_is_null()
+    {
+        Assert.That(
+            () => new ReplicationShipperGrain(
+                Substitute.For<IGrainContext>(),
+                Substitute.For<IReminderRegistry>(),
+                NullLogger<ReplicationShipperGrain>.Instance,
+                Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
+                Substitute.For<IReplicationTransport>(),
+                Substitute.For<IReplicationBatchEncoder>(),
+                null!,
+                Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
                 new ReplicationPeerStats()),
@@ -346,6 +374,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 null!,
                 new FakePersistentState<ReplicationShipperState>(),
@@ -1045,7 +1074,7 @@ public partial class ReplicationShipperGrainTests
             ctx,
             Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry,
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry,
             factory,
             fakeState,
             new ReplicationPeerStats());
@@ -1149,7 +1178,7 @@ public partial class ReplicationShipperGrainTests
         var stats = new ReplicationPeerStats();
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState, stats);
+            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState, stats);
         grain.InitializeForTesting(Tree, Peer);
         return (grain, feed, transport, stats);
     }

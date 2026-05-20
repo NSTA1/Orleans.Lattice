@@ -40,8 +40,18 @@ public class LatticeReplicationGrpcMarshallersTests
     [Test]
     public void CreateEnvelopeMarshaller_throws_when_encoder_null()
     {
+        var walEncoder = new OrleansBinaryWalRecordEncoder(_sp.GetRequiredService<Serializer<WalRecord>>());
         Assert.That(
-            () => LatticeReplicationGrpcMarshallers.CreateEnvelopeMarshaller(null!),
+            () => LatticeReplicationGrpcMarshallers.CreateEnvelopeMarshaller(null!, walEncoder),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void CreateEnvelopeMarshaller_throws_when_walRecordEncoder_null()
+    {
+        var encoder = new TestEncoder(_envSerializer);
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateEnvelopeMarshaller(encoder, null!),
             Throws.ArgumentNullException);
     }
 

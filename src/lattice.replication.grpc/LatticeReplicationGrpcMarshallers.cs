@@ -1,5 +1,6 @@
 using System.Buffers;
 using Grpc.Core;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Serialization;
 using GrpcDeserializationContext = Grpc.Core.DeserializationContext;
 
@@ -14,10 +15,44 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// boundary and is the only allocation the marshaller introduces per
 /// call - the encoded payload itself is still written straight into
 /// the gRPC stream's <see cref="System.Buffers.IBufferWriter{T}"/>.
+/// <para>
+/// Senders may populate either <see cref="Value"/> (the typed-envelope
+/// path; the marshaller serializer writes the typed bytes via
+/// <see cref="IReplicationBatchEncoder.Encode"/>) or <see cref="Framing"/>
+/// (the framing-only path; the marshaller serializer writes the
+/// framing bytes via
+/// <see cref="IReplicationBatchEncoder.EncodeFraming"/>). Receivers
+/// are agnostic: the deserializer always returns a box whose
+/// <see cref="Value"/> is a fully-inflated
+/// <see cref="ReplicationBatchEnvelope"/>, which is the contract the
+/// receiver-side gRPC service consumes.
+/// </para>
 /// </summary>
 internal sealed class ReplicationBatchEnvelopeBox
 {
     public ReplicationBatchEnvelope Value { get; init; }
+
+    /// <summary>
+    /// Optional sender-side framing payload. When populated, the
+    /// marshaller serializer writes the framing bytes verbatim via
+    /// <see cref="IReplicationBatchEncoder.EncodeFraming"/> using the
+    /// supplied routing strings, and the typed <see cref="Value"/> is
+    /// not consulted. Always <see langword="null"/> on the receiver
+    /// side: the deserializer surfaces the inflated
+    /// <see cref="ReplicationBatchEnvelope"/> through <see cref="Value"/>
+    /// regardless of the wire shape.
+    /// </summary>
+    public FramingPayload? Framing { get; init; }
+
+    /// <summary>
+    /// Sender-side framing payload bundled with the routing strings
+    /// the framing wire format requires.
+    /// </summary>
+    internal readonly record struct FramingPayload(
+        EncodedBatchHeader Header,
+        string TreeName,
+        string OriginClusterId,
+        ReadOnlyMemory<ArraySegment<byte>> Entries);
 }
 
 /// <summary>
@@ -53,19 +88,53 @@ internal static class LatticeReplicationGrpcMarshallers
     /// <summary>
     /// Builds a contextual <see cref="Marshaller{T}"/> for
     /// <see cref="ReplicationBatchEnvelopeBox"/> bound to the supplied
-    /// <paramref name="encoder"/>.
+    /// <paramref name="encoder"/> and <paramref name="walRecordEncoder"/>.
     /// </summary>
-    public static Marshaller<ReplicationBatchEnvelopeBox> CreateEnvelopeMarshaller(IReplicationBatchEncoder encoder)
+    /// <param name="encoder">
+    /// The replication batch encoder used for the typed-envelope
+    /// path and for default framing encode/decode helpers.
+    /// </param>
+    /// <param name="walRecordEncoder">
+    /// The WAL record encoder used to inflate framing-encoded entry
+    /// segments back into <see cref="WalRecord"/> instances on the
+    /// receiver side. Required so the framing-only fast path can
+    /// surface a fully-typed <see cref="ReplicationBatchEnvelope"/>
+    /// to the receiver service.
+    /// </param>
+    public static Marshaller<ReplicationBatchEnvelopeBox> CreateEnvelopeMarshaller(
+        IReplicationBatchEncoder encoder,
+        IWalRecordEncoder walRecordEncoder)
     {
         ArgumentNullException.ThrowIfNull(encoder);
+        ArgumentNullException.ThrowIfNull(walRecordEncoder);
 
         return Marshallers.Create<ReplicationBatchEnvelopeBox>(
             serializer: (box, context) =>
             {
-                encoder.Encode(box.Value, context.GetBufferWriter());
+                if (box.Framing is { } framing)
+                {
+                    // Framing-only fast path: write the framing bytes
+                    // directly into the gRPC stream's buffer writer.
+                    // The typed envelope is not consulted on this
+                    // path; the receiver-side deserializer reconstructs
+                    // it from the framing payload.
+                    encoder.EncodeFraming(
+                        framing.Header,
+                        framing.TreeName,
+                        framing.OriginClusterId,
+                        framing.Entries,
+                        context.GetBufferWriter());
+                }
+                else
+                {
+                    encoder.Encode(box.Value, context.GetBufferWriter());
+                }
                 context.Complete();
             },
-            deserializer: context => new ReplicationBatchEnvelopeBox { Value = DecodeEnvelope(encoder, context) });
+            deserializer: context => new ReplicationBatchEnvelopeBox
+            {
+                Value = DecodeEnvelope(encoder, walRecordEncoder, context),
+            });
     }
 
     /// <summary>
@@ -87,12 +156,15 @@ internal static class LatticeReplicationGrpcMarshallers
             deserializer: context => new ReplicationAckBox { Value = DeserializeAck(serializer, context) });
     }
 
-    private static ReplicationBatchEnvelope DecodeEnvelope(IReplicationBatchEncoder encoder, GrpcDeserializationContext context)
+    private static ReplicationBatchEnvelope DecodeEnvelope(
+        IReplicationBatchEncoder encoder,
+        IWalRecordEncoder walRecordEncoder,
+        GrpcDeserializationContext context)
     {
         var sequence = context.PayloadAsReadOnlySequence();
         if (sequence.IsSingleSegment)
         {
-            return encoder.Decode(sequence.First);
+            return DecodeEnvelopeFromMemory(encoder, walRecordEncoder, sequence.First);
         }
 
         var length = checked((int)sequence.Length);
@@ -100,12 +172,55 @@ internal static class LatticeReplicationGrpcMarshallers
         try
         {
             sequence.CopyTo(rented);
-            return encoder.Decode(new ReadOnlyMemory<byte>(rented, 0, length));
+            return DecodeEnvelopeFromMemory(encoder, walRecordEncoder, new ReadOnlyMemory<byte>(rented, 0, length));
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(rented);
         }
+    }
+
+    private static ReplicationBatchEnvelope DecodeEnvelopeFromMemory(
+        IReplicationBatchEncoder encoder,
+        IWalRecordEncoder walRecordEncoder,
+        ReadOnlyMemory<byte> payload)
+    {
+        // Framing-only fast path: detect the magic prefix before
+        // touching the typed decoder. TryDecodeFraming returns false
+        // (rather than throwing) on a magic mismatch, so a typed
+        // payload still falls through to the typed decode below
+        // without paying for an exception.
+        if (encoder.TryDecodeFraming(
+                payload,
+                out var header,
+                out var treeName,
+                out var originClusterId,
+                out var encodedEntries))
+        {
+            // Inflate the per-entry segments into WalRecord instances
+            // so the receiver service consumes the existing typed
+            // contract. This allocates one WalRecord[] plus the
+            // per-entry WalRecord values; eliminating that allocation
+            // is the next stage of the migration (a framing-aware
+            // applier).
+            var entries = new WalRecord[header.EntryCount];
+            var segments = encodedEntries.Span;
+            for (var i = 0; i < entries.Length; i++)
+            {
+                var seg = segments[i];
+                entries[i] = walRecordEncoder.Decode(seg.AsSpan());
+            }
+
+            return new ReplicationBatchEnvelope
+            {
+                WireVersion = ReplicationBatchEnvelope.CurrentVersion,
+                TreeName = treeName,
+                OriginClusterId = originClusterId,
+                Entries = entries,
+            };
+        }
+
+        return encoder.Decode(payload);
     }
 
     private static ReplicationAck DeserializeAck(Serializer<ReplicationAck> serializer, GrpcDeserializationContext context)

@@ -55,8 +55,18 @@ public readonly record struct EncodedBatchHeader
     /// Wire-format version stamped by the canonical framing encoder.
     /// Bumped on every breaking change to the framing layout; consumers
     /// compare strictly greater-than for rejection.
+    /// <para>
+    /// Version 3 adds the variable-length <c>TreeName</c> +
+    /// <c>OriginClusterId</c> tail (each as a 4-byte little-endian
+    /// length prefix followed by UTF-8 bytes) between the fixed
+    /// header and the per-entry length-prefixed segments, so the
+    /// framing-only payload is fully self-routing on the receiver
+    /// without a typed-envelope sidecar. Version 2 carried only the
+    /// 32-byte fixed header and the entry segment list; receivers
+    /// expecting v2 cannot decode v3 and vice versa.
+    /// </para>
     /// </summary>
-    public const int CurrentWireVersion = 2;
+    public const int CurrentWireVersion = 3;
 
     /// <summary>
     /// Magic prefix. Must equal <see cref="MagicValue"/> on any batch
