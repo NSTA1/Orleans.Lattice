@@ -248,6 +248,48 @@ public class InMemoryWalStorageProviderTests
     }
 
     [Test]
+    public async Task ReadAsync_yields_entries_whose_TreeId_matches_partition_key()
+    {
+        // After the encoded WAL byte layout elides WalRecord.TreeId,
+        // the tree id is recovered from the partition key on the read
+        // structs directly so it short-circuits the strip/restore
+        // round-trip, but the contract surface remains: the read seam
+        // never returns an entry whose Mutation.TreeId disagrees with
+        // the (treeId, shardIndex) it was queried by.
+        const string TreeId = "orders/eu-west-1/v3";
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(
+            TreeId,
+            0,
+            new[]
+            {
+                new WalEntry
+                {
+                    Offset = 0,
+                    Mutation = new LatticeMutation
+                    {
+                        TreeId = TreeId,
+                        Kind = MutationKind.Set,
+                        Key = "k",
+                        Value = new byte[] { 1 },
+                        Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+                        OriginClusterId = "site-a",
+                    },
+                },
+            },
+            CancellationToken.None);
+
+        var emitted = new List<WalEntry>();
+        await foreach (var entry in sut.ReadAsync(TreeId, 0, -1, 100, CancellationToken.None))
+        {
+            emitted.Add(entry);
+        }
+
+        Assert.That(emitted, Has.Count.EqualTo(1));
+        Assert.That(emitted[0].Mutation.TreeId, Is.EqualTo(TreeId));
+    }
+
+    [Test]
     public async Task ReadAsync_caps_at_max_entries()
     {
         var sut = new InMemoryWalStorageProvider();

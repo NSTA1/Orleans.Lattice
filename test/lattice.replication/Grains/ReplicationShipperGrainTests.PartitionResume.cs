@@ -261,7 +261,7 @@ public partial class ReplicationShipperGrainTests
                 var seg = batch.EncodedEnvelope!.Value.EncodedEntries.Span;
                 for (var i = 0; i < seg.Length; i++)
                 {
-                    captured.Add(walEncoder.Decode(seg[i]));
+                    captured.Add(((IWalRecordEncoder)walEncoder).Decode(seg[i].AsSpan(), batch.TreeName));
                 }
                 return new ReplicationAck
                 {

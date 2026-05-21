@@ -175,7 +175,10 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
             var decoded = new WalRecord[segments.Length];
             for (var i = 0; i < segments.Length; i++)
             {
-                decoded[i] = walEncoder.Decode(segments[i]);
+                // Re-stamp TreeId from the surrounding batch context:
+                // the producer's Encode strips the slot, so the
+                // single-argument Decode would yield TreeId == "".
+                decoded[i] = walEncoder.Decode(segments[i].AsSpan(), batch.TreeName);
             }
 
             var result = await applier.ApplyBatchAsync(decoded, cancellationToken).ConfigureAwait(false);
