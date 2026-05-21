@@ -40,7 +40,7 @@ public class ReplicationBatchEncoderFramingTests
             EntryCount = entryCount,
             BatchSequence = batchSeq,
             AtomicBatchSpanCount = 0,
-            Compression = FramingCompression.None,
+            Compression = LatticeCompression.None,
         };
 
     private static ArraySegment<byte> Seg(params byte[] bytes) => new(bytes);

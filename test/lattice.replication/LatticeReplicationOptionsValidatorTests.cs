@@ -736,5 +736,97 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    [Test]
+    public void Validate_fails_on_undefined_LatticeCompression_value()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompression = (LatticeCompression)42,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.FramingCompression)));
+        });
+    }
+
+    [TestCase((byte)0x80)]
+    [TestCase((byte)0xC3)]
+    [TestCase((byte)0xFF)]
+    public void Validate_accepts_host_reserved_compression_tag(byte tag)
+    {
+        // The validator must permit host-defined compression tags in
+        // the reserved [0x80, 0xFF] range so a host can register a
+        // custom ILatticeCompressor without core enum churn. Lookup
+        // of the matching compressor happens later in the encoder
+        // (NotSupportedException) and the gRPC marshaller, not at
+        // options-validation time.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompression = (LatticeCompression)tag,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.That(result.Succeeded, Is.True, result.FailureMessage);
+    }
+
+    [TestCase(0)]
+    [TestCase(23)]
+    [TestCase(-5)]
+    public void Validate_fails_on_out_of_range_FramingCompressionLevel_when_Zstd(int level)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompression = LatticeCompression.Zstd,
+            FramingCompressionLevel = level,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.FramingCompressionLevel)));
+        });
+    }
+
+    [Test]
+    public void Validate_ignores_FramingCompressionLevel_when_compression_is_None()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompression = LatticeCompression.None,
+            FramingCompressionLevel = 9999,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_fails_on_negative_FramingCompressionMinBatchBytes()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompressionMinBatchBytes = -1,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.FramingCompressionMinBatchBytes)));
+        });
+    }
 }
 

@@ -10,6 +10,8 @@ snapshot / eventually consistent) of every operation, see
 [Consistency](consistency.md). For implementation details, follow the
 topic cross-references in each section.
 
+> **Compression** - `ILatticeCompressor`, `LatticeCompression`, `ZstdLatticeCompressor`, and `LatticeCompressionServiceCollectionExtensions.AddLatticeCompressor` are part of the public API surface. They are documented in [`compression.md`](compression.md), which is the source of truth for registration, the tag-space partitioning, and the worked example for plugging in a custom algorithm.
+
 ## Setup
 
 Install the NuGet package:

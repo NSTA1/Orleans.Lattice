@@ -1,5 +1,7 @@
 # Configuration
 
+> **Compression options** (replication framing tail, future WAL/storage payloads) are documented separately - see [`compression.md`](compression.md) for the seam, the registration helpers, the tag-space partitioning, and the relevant option keys.
+
 ## Registering Lattice
 
 Every silo must call `AddLattice` to register the grain storage provider that Lattice grains use internally:

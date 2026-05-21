@@ -284,6 +284,56 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_default_Zstd_framing_compressor()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
+
+        var provider = services.BuildServiceProvider();
+        var compressors = provider.GetServices<ILatticeCompressor>().ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(compressors, Has.Length.EqualTo(1));
+            Assert.That(compressors[0], Is.InstanceOf<ZstdLatticeCompressor>());
+            Assert.That(compressors[0].Algorithm, Is.EqualTo(LatticeCompression.Zstd));
+        });
+    }
+
+    [Test]
+    public void AddLatticeReplication_preserves_pre_registered_Zstd_compressor_with_custom_level()
+    {
+        // Hosts that need a non-default compression level (e.g. for
+        // a WAL provider's per-row payload compression) pre-register
+        // their own ZstdLatticeCompressor singleton before calling
+        // AddLatticeReplication. TryAddEnumerable deduplicates by
+        // (ServiceType, ImplementationType), so the package fallback
+        // must be skipped and the host instance must remain the
+        // single registered compressor.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var custom = new ZstdLatticeCompressor(compressionLevel: 9);
+        services.AddLatticeCompressor(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
+
+        var provider = services.BuildServiceProvider();
+        var compressors = provider.GetServices<ILatticeCompressor>().ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(compressors, Has.Length.EqualTo(1),
+                "TryAddEnumerable must dedupe by ImplementationType so the fallback is skipped");
+            Assert.That(compressors[0], Is.SameAs(custom),
+                "the host-supplied instance must survive the fallback registration");
+        });
+    }
+
+    [Test]
     public void AddLatticeReplication_registers_default_mode_resolver()
     {
         var services = new ServiceCollection();

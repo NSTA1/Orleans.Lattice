@@ -125,3 +125,11 @@ A content-hash-prefixed encoder layered on top of the binary format is the natur
 
 - **Encoders do not see routing context outside the envelope.** A custom encoder cannot dispatch on `ReplicationBatch.TargetClusterId` because the encoder operates on the envelope, not the surrounding call. Cross-cutting concerns belong on the envelope (or on the transport, depending on which layer needs to see the metadata) - never on the encoder.
 - **`Entries` equality is by reference.** `ReplicationBatchEnvelope` is a record struct, so its synthesised equality compares the `Entries` reference, not the contents. Tests that need to assert content equality compare the deserialised lists element-by-element rather than relying on envelope-level `Equals`.
+## Framing-tail compression
+
+The framing layer (``EncodeFraming`` / ``TryDecodeFraming``) carries an optional **tail compression** byte in the fixed 32-byte header (``EncodedBatchHeader.Compression``). The header itself stays plaintext - readers can route, de-duplicate, and validate batches before deciding to inflate the body - and only the variable-length tail (``treeName``, ``originClusterId``, and the entry segments) is replaced with a length-prefixed compressed block when the algorithm is non-``None``.
+
+This means **no wire-version bump**: a receiver that does not know how to decompress a given algorithm tag fails fast with ``NotSupportedException`` rather than silently dropping data. The encoder''s internal dispatch is keyed on the raw compression byte (not on named ``LatticeCompression`` enum members), so a host-defined algorithm whose tag is in the reserved ``[0x80, 0xFF]`` range round-trips through encode/decode without any core enum churn.
+
+The replication options ``FramingCompression``, ``FramingCompressionLevel`` and ``FramingCompressionMinBatchBytes``, the public DI seam (``ILatticeCompressor`` and ``AddLatticeCompressor``), the tag-space partitioning, the worked example for plugging in a new algorithm, and the testing surface are all documented in **[`docs/lattice/compression.md`](../lattice/compression.md)** - that page is the source of truth for everything compression-related across Orleans.Lattice.
+

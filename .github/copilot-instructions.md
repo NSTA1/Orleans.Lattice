@@ -26,6 +26,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 | Element | Convention | Example |
 |---|---|---|
 `MvRegisterAccessor`, `OrMapAccessor`, `RgaAccessor`, `LeafProjectionDigest`
+`LatticeScopedCursor`, `ILatticeCompressor`, `LatticeCompression`, `ZstdLatticeCompressor`, `LatticeCompressionServiceCollectionExtensions` |
 | Internal namespace | `Orleans.Lattice.{Area}` | `Orleans.Lattice.BPlusTree.Grains` |
 | Test namespace | `Orleans.Lattice.Tests.{Area}` | `Orleans.Lattice.Tests.BPlusTree.Grains` |
 `IReceiverFlowControlPolicy`, `ReceiverFlowControlContext`, `ReceiverFlowControlHint`, `NoOpReceiverFlowControlPolicy`, `ITypedReplicationTransport` |

@@ -406,6 +406,16 @@ internal sealed class ReplicationShipperGrain(
                 // matches both the producer-side WAL writer's stamp
                 // and the wire-baseline default of pre-Mode-hoist receivers.
                 Mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister,
+                // Framing-tail compression. Honour the option only
+                // when the uncompressed tail is large enough to
+                // amortise the per-batch fixed overhead; below the
+                // threshold (or when the option is None), stamp
+                // LatticeCompression.None so heartbeat / small-bursty
+                // batches do not pay the compression cost.
+                Compression = options.FramingCompression != LatticeCompression.None
+                              && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
+                    ? options.FramingCompression
+                    : LatticeCompression.None,
             };
             // CollectionsMarshal.AsSpan(...) of List<T> exposes the
             // List's backing array as a contiguous Memory<T>; we copy

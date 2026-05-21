@@ -121,6 +121,20 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         // replication-grpc surface.
         services.TryAddSingleton<IWalRecordEncoder, OrleansBinaryWalRecordEncoder>();
 
+        // Framing-tail compressor registry. Hosts that call
+        // AddLatticeReplication get this registration through the
+        // core replication package; a stand-alone gRPC host (e.g.
+        // an integration test composing only the gRPC surface) gets
+        // the same fallback here so receiver-side decompression of
+        // LatticeCompression.Zstd batches works identically. The
+        // TryAddEnumerable contract is order-insensitive: if both
+        // registration sites run, exactly one ZstdLatticeCompressor
+        // ends up registered (TryAddEnumerable deduplicates by
+        // implementation type).
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILatticeCompressor, ZstdLatticeCompressor>(
+                _ => new ZstdLatticeCompressor(LatticeReplicationOptions.DefaultFramingCompressionLevel)));
+
         // Register the auth interceptor globally so every gRPC
         // service hosted on this pipeline runs through the
         // shared-secret authenticator. The interceptor itself

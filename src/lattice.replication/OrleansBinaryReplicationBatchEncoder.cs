@@ -1,5 +1,7 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
+using System.Buffers.Binary;
+using System.Collections.Frozen;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication;
@@ -35,18 +37,85 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
     public const string BinaryContentType = "application/x-orleans-lattice-replog+binary";
 
     private readonly Serializer<ReplicationBatchEnvelope> _serializer;
+    private readonly FrozenDictionary<byte, ILatticeCompressor> _compressors;
 
     /// <summary>
     /// Initialises the encoder with the supplied
-    /// <see cref="Serializer{T}"/>. Resolved from DI in the standard
-    /// silo registration path; tests construct it directly with a
+    /// <see cref="Serializer{T}"/> and the registered framing
+    /// compressors. Resolved from DI in the standard silo
+    /// registration path; tests construct it directly with a
     /// serializer pulled from
     /// <c>new ServiceCollection().AddSerializer().BuildServiceProvider()</c>.
+    /// The <paramref name="compressors"/> sequence is indexed by the
+    /// raw byte value of <see cref="ILatticeCompressor.Algorithm"/>
+    /// rather than the strongly-typed enum so host-defined algorithms
+    /// (whose tag is reserved in the <c>0x80..0xFF</c> range and is
+    /// not a defined <see cref="LatticeCompression"/> member) round
+    /// trip without core needing to ship an enum value for every
+    /// algorithm. Duplicates throw at construction so a host that
+    /// double-registers a compressor fails fast at startup rather
+    /// than silently shadowing.
     /// </summary>
-    public OrleansBinaryReplicationBatchEncoder(Serializer<ReplicationBatchEnvelope> serializer)
+    public OrleansBinaryReplicationBatchEncoder(
+        Serializer<ReplicationBatchEnvelope> serializer,
+        IEnumerable<ILatticeCompressor>? compressors = null)
     {
         ArgumentNullException.ThrowIfNull(serializer);
         _serializer = serializer;
+
+        if (compressors is null)
+        {
+            _compressors = FrozenDictionary<byte, ILatticeCompressor>.Empty;
+            return;
+        }
+
+        var dict = new Dictionary<byte, ILatticeCompressor>();
+        var coreAssembly = typeof(LatticeCompression).Assembly;
+        foreach (var c in compressors)
+        {
+            ArgumentNullException.ThrowIfNull(c);
+            if (c.Algorithm == LatticeCompression.None)
+            {
+                throw new ArgumentException(
+                    $"An {nameof(ILatticeCompressor)} cannot register {nameof(LatticeCompression)}.{nameof(LatticeCompression.None)}; that value is reserved for the uncompressed pass-through path.",
+                    nameof(compressors));
+            }
+            var tag = (byte)c.Algorithm;
+            // The compression tag space is partitioned: [0x00, 0x7F]
+            // is reserved for core-shipped algorithms and [0x80,
+            // 0xFF] is available to host-defined algorithms. Only
+            // types declared in the core Orleans.Lattice assembly
+            // may claim a tag in the core-reserved range - this
+            // closes two distinct hazards in one rule:
+            //   1. A host claiming an undefined core tag (e.g.
+            //      0x42) would silently collide with whatever
+            //      algorithm a future core release ships at that
+            //      tag.
+            //   2. A host claiming a defined core tag (e.g.
+            //      Zstd, 0x01) with their own non-canonical
+            //      implementation would silently squat on the
+            //      wire identity of the canonical core algorithm,
+            //      producing receiver-side decode failures or
+            //      corrupted streams against any peer running the
+            //      core implementation.
+            // Host-defined algorithms - including Zstd-compatible
+            // variants - must use a tag in [0x80, 0xFF]. See
+            // docs/lattice/compression.md.
+            if (tag < 0x80 && c.GetType().Assembly != coreAssembly)
+            {
+                throw new ArgumentException(
+                    $"{nameof(ILatticeCompressor)} '{c.GetType().FullName}' claims compression tag 0x{tag:X2}, which lies in the core-reserved range [0x00, 0x7F]. "
+                    + "Only types declared in the core Orleans.Lattice assembly may claim a tag in that range; host-defined compressors (including alternative implementations of a core algorithm) must use a tag in the reserved [0x80, 0xFF] range.",
+                    nameof(compressors));
+            }
+            if (!dict.TryAdd(tag, c))
+            {
+                throw new ArgumentException(
+                    $"Multiple {nameof(ILatticeCompressor)} registrations for compression tag 0x{tag:X2} ({nameof(LatticeCompression)}.{c.Algorithm}); only one compressor may be registered per algorithm tag.",
+                    nameof(compressors));
+            }
+        }
+        _compressors = dict.ToFrozenDictionary();
     }
 
     /// <inheritdoc />
@@ -146,5 +215,508 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
         }
 
         return envelope;
+    }
+
+    /// <summary>
+    /// Framing-encode override that adds optional tail compression on
+    /// top of the canonical wire layout authored by the
+    /// <see cref="IReplicationBatchEncoder.EncodeFraming"/> default
+    /// implementation. When
+    /// <see cref="EncodedBatchHeader.Compression"/> is
+    /// <see cref="LatticeCompression.None"/> the bytes are written
+    /// verbatim and the layout is identical to the default. When the
+    /// header asks for a non-<see cref="LatticeCompression.None"/>
+    /// algorithm, the encoder builds the uncompressed tail
+    /// (<c>treeName</c> + <c>originClusterId</c> + length-prefixed
+    /// entry segments) into a pooled buffer, then writes the fixed
+    /// header followed by:
+    /// <list type="number">
+    /// <item><description>4-byte little-endian uncompressed tail length.</description></item>
+    /// <item><description>4-byte little-endian compressed tail length.</description></item>
+    /// <item><description>The compressed tail bytes.</description></item>
+    /// </list>
+    /// An algorithm value with no registered <see cref="ILatticeCompressor"/>
+    /// throws <see cref="NotSupportedException"/>.
+    /// </summary>
+    public void EncodeFraming(
+        in EncodedBatchHeader header,
+        string treeName,
+        string originClusterId,
+        ReadOnlyMemory<ArraySegment<byte>> entries,
+        IBufferWriter<byte> writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(treeName);
+        ArgumentNullException.ThrowIfNull(originClusterId);
+
+        if (header.Compression == LatticeCompression.None)
+        {
+            // Inline the canonical uncompressed layout directly
+            // here. We cannot call back through the
+            // IReplicationBatchEncoder default implementation because
+            // this type provides an override of the same method, so
+            // the interface dispatch would re-enter this overload
+            // and recurse infinitely.
+            EncodeUncompressedFraming(header, treeName, originClusterId, entries, writer);
+            return;
+        }
+
+        if (!_compressors.TryGetValue((byte)header.Compression, out var compressor))
+        {
+            throw new NotSupportedException(
+                $"No {nameof(ILatticeCompressor)} is registered for compression tag 0x{(byte)header.Compression:X2}; register a singleton via DI before encoding batches with this algorithm.");
+        }
+
+        // Pool the uncompressed-tail buffer through ArrayPool<byte>.Shared
+        // so the compressed-encode hot path is allocation-free in
+        // steady state. Pre-computing the exact tail size (UTF-8 byte
+        // counts of the routing strings + per-entry length prefix +
+        // entry body bytes) lets us rent a single right-sized buffer
+        // in one call instead of growing an ArrayBufferWriter and
+        // discarding the intermediate backing arrays. The compressed
+        // bytes are written directly into the caller-supplied
+        // IBufferWriter<byte>, then the 4-byte compressed-length
+        // prefix is patched in-place once the compressor reports the
+        // written count - this avoids a second pool rent for the
+        // compressed scratch buffer.
+        var uncompressedLength = ComputeTailSize(treeName, originClusterId, entries.Span);
+        var uncompressedRented = ArrayPool<byte>.Shared.Rent(uncompressedLength);
+        try
+        {
+            var tailSpan = uncompressedRented.AsSpan(0, uncompressedLength);
+            WriteTailIntoSpan(tailSpan, treeName, originClusterId, entries.Span);
+
+            // Fixed header first (plaintext, with header.Compression set).
+            var headerSpan = writer.GetSpan(EncodedBatchHeader.WireSize);
+            header.WriteTo(headerSpan);
+            writer.Advance(EncodedBatchHeader.WireSize);
+
+            // Uncompressed length prefix.
+            var unprefixSpan = writer.GetSpan(4);
+            BinaryPrimitives.WriteInt32LittleEndian(unprefixSpan, uncompressedLength);
+            writer.Advance(4);
+
+            // Reserve the worst-case compressed-body span (4-byte
+            // length prefix + compressor's max-compressed-length
+            // bound) from the caller's writer in a single GetSpan
+            // call. The compressor writes directly into the reserved
+            // span; afterwards we patch the length prefix and Advance
+            // by the actual written count.
+            var bound = compressor.GetMaxCompressedLength(uncompressedLength);
+            var compressedSpan = writer.GetSpan(4 + bound);
+            var compressedLength = compressor.Compress(tailSpan, compressedSpan[4..(4 + bound)]);
+            BinaryPrimitives.WriteInt32LittleEndian(compressedSpan[0..4], compressedLength);
+            writer.Advance(4 + compressedLength);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(uncompressedRented);
+        }
+    }
+
+    /// <summary>
+    /// Framing-decode override that handles the optional compressed
+    /// tail layout authored by <see cref="EncodeFraming"/>. The
+    /// uncompressed code path delegates to the canonical
+    /// <see cref="IReplicationBatchEncoder.TryDecodeFraming"/>
+    /// implementation; the compressed code path inflates the tail
+    /// bytes into a pooled buffer, then re-runs the canonical
+    /// uncompressed parse over the inflated bytes.
+    /// </summary>
+    public bool TryDecodeFraming(
+        ReadOnlyMemory<byte> payload,
+        out EncodedBatchHeader header,
+        out string treeName,
+        out string originClusterId,
+        out ReadOnlyMemory<ArraySegment<byte>> entries)
+    {
+        header = default;
+        treeName = string.Empty;
+        originClusterId = string.Empty;
+        entries = ReadOnlyMemory<ArraySegment<byte>>.Empty;
+
+        if (payload.Length < EncodedBatchHeader.WireSize)
+        {
+            return false;
+        }
+
+        var span = payload.Span;
+        var magic = BinaryPrimitives.ReadUInt32LittleEndian(span[0..4]);
+        if (magic != EncodedBatchHeader.MagicValue)
+        {
+            return false;
+        }
+
+        var parsed = EncodedBatchHeader.ReadFrom(span);
+        if (parsed.WireVersion > EncodedBatchHeader.CurrentWireVersion)
+        {
+            throw new NotSupportedException(
+                $"Framing wire version {parsed.WireVersion} is newer than the supported "
+                + $"version {EncodedBatchHeader.CurrentWireVersion}; upgrade the receiver "
+                + "before applying payloads from this producer.");
+        }
+
+        if (parsed.Compression == LatticeCompression.None)
+        {
+            return DecodeUncompressedFraming(payload, parsed, out header, out treeName, out originClusterId, out entries);
+        }
+
+        if (!_compressors.TryGetValue((byte)parsed.Compression, out var compressor))
+        {
+            throw new NotSupportedException(
+                $"No {nameof(ILatticeCompressor)} is registered for compression tag 0x{(byte)parsed.Compression:X2}; register a singleton via DI before decoding batches with this algorithm.");
+        }
+
+        // Read the two 4-byte length prefixes from the compressed
+        // tail layout. The fixed header was 32 bytes; the next 4
+        // bytes are uncompressed length, the 4 after that are
+        // compressed length, then the compressed body.
+        var cursor = EncodedBatchHeader.WireSize;
+        if (cursor + 8 > payload.Length)
+        {
+            throw new ArgumentException(
+                $"Framing payload is truncated at the compressed-tail length prefixes; expected at least 8 more bytes at offset {cursor}.",
+                nameof(payload));
+        }
+        var uncompressedLength = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+        cursor += 4;
+        var compressedLength = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+        cursor += 4;
+
+        if (uncompressedLength < 0 || compressedLength < 0)
+        {
+            throw new ArgumentException(
+                $"Framing payload reports a negative tail length (uncompressed={uncompressedLength}, compressed={compressedLength}); payload is corrupt.",
+                nameof(payload));
+        }
+        if (cursor + compressedLength > payload.Length)
+        {
+            throw new ArgumentException(
+                $"Framing payload is truncated at the compressed body; declared compressed length {compressedLength} would overrun the payload (remaining {payload.Length - cursor} bytes).",
+                nameof(payload));
+        }
+
+        // Rent a buffer sized to the uncompressed tail, decompress
+        // into it, then parse the routing strings + entry segments
+        // directly out of the inflated bytes. The
+        // ArraySegment<byte>[] surfaced through `entries` references
+        // the rented buffer; we hand a managed copy back to the
+        // caller and return the rented array to the pool, so callers
+        // can outlive the synchronous return.
+        var rented = ArrayPool<byte>.Shared.Rent(uncompressedLength);
+        try
+        {
+            var inflateDest = new Span<byte>(rented, 0, uncompressedLength);
+            var compressedSlice = span.Slice(cursor, compressedLength);
+            compressor.Decompress(compressedSlice, inflateDest, uncompressedLength);
+
+            // Copy into a freshly-allocated byte[] backing buffer so
+            // the surfaced ArraySegment<byte> entries remain valid
+            // after we return the rented buffer to the pool. This is
+            // one allocation per compressed batch on the receive
+            // path; eliminating it requires widening the contract to
+            // a pooled buffer the caller releases, which is a
+            // separate design pass.
+            var owned = new byte[uncompressedLength];
+            inflateDest.CopyTo(owned);
+
+            ParseTailIntoSegments(
+                owned,
+                parsed.EntryCount,
+                out treeName,
+                out originClusterId,
+                out var segments);
+
+            header = parsed;
+            entries = segments;
+            return true;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private static bool DecodeUncompressedFraming(
+        ReadOnlyMemory<byte> payload,
+        EncodedBatchHeader parsed,
+        out EncodedBatchHeader header,
+        out string treeName,
+        out string originClusterId,
+        out ReadOnlyMemory<ArraySegment<byte>> entries)
+    {
+        header = default;
+        treeName = string.Empty;
+        originClusterId = string.Empty;
+        entries = ReadOnlyMemory<ArraySegment<byte>>.Empty;
+
+        if (parsed.EntryCount < 0)
+        {
+            throw new ArgumentException(
+                $"Framing header reports a negative entry count ({parsed.EntryCount}); payload is corrupt.",
+                nameof(payload));
+        }
+
+        // Resolve the payload to a contiguous byte[] so each entry's
+        // ArraySegment can point back into it without copying. The
+        // canonical caller (gRPC marshaller) always wraps a byte[];
+        // for the rare non-array-backed memory we copy once.
+        byte[] backing;
+        int backingOffset;
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out var seg)
+            && seg.Array is { } backingArray)
+        {
+            backing = backingArray;
+            backingOffset = seg.Offset;
+        }
+        else
+        {
+            backing = payload.ToArray();
+            backingOffset = 0;
+        }
+
+        var span = payload.Span;
+        var cursor = EncodedBatchHeader.WireSize;
+        treeName = ReadLengthPrefixedUtf8(payload, span, ref cursor, "treeName");
+        originClusterId = ReadLengthPrefixedUtf8(payload, span, ref cursor, "originClusterId");
+
+        var segments = parsed.EntryCount == 0
+            ? Array.Empty<ArraySegment<byte>>()
+            : new ArraySegment<byte>[parsed.EntryCount];
+
+        for (var i = 0; i < parsed.EntryCount; i++)
+        {
+            if (cursor + 4 > payload.Length)
+            {
+                throw new ArgumentException(
+                    $"Framing payload is truncated at the length prefix for entry {i} of {parsed.EntryCount}; expected at least 4 more bytes at offset {cursor}.",
+                    nameof(payload));
+            }
+            var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+            cursor += 4;
+            if (length < 0 || cursor + length > payload.Length)
+            {
+                throw new ArgumentException(
+                    $"Framing payload is truncated at the body for entry {i} of {parsed.EntryCount}; declared length {length} would overrun the payload (remaining {payload.Length - cursor} bytes).",
+                    nameof(payload));
+            }
+            segments[i] = new ArraySegment<byte>(backing, backingOffset + cursor, length);
+            cursor += length;
+        }
+
+        header = parsed;
+        entries = segments;
+        return true;
+    }
+
+    private static void ParseTailIntoSegments(
+        byte[] tail,
+        int entryCount,
+        out string treeName,
+        out string originClusterId,
+        out ArraySegment<byte>[] segments)
+    {
+        var span = tail.AsSpan();
+        var cursor = 0;
+        treeName = ReadLengthPrefixedUtf8FromTail(tail, span, ref cursor, "treeName");
+        originClusterId = ReadLengthPrefixedUtf8FromTail(tail, span, ref cursor, "originClusterId");
+
+        segments = entryCount == 0
+            ? Array.Empty<ArraySegment<byte>>()
+            : new ArraySegment<byte>[entryCount];
+
+        for (var i = 0; i < entryCount; i++)
+        {
+            if (cursor + 4 > tail.Length)
+            {
+                throw new ArgumentException(
+                    $"Inflated framing tail is truncated at the length prefix for entry {i} of {entryCount}; expected at least 4 more bytes at offset {cursor}.",
+                    nameof(tail));
+            }
+            var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+            cursor += 4;
+            if (length < 0 || cursor + length > tail.Length)
+            {
+                throw new ArgumentException(
+                    $"Inflated framing tail is truncated at the body for entry {i} of {entryCount}; declared length {length} would overrun the tail (remaining {tail.Length - cursor} bytes).",
+                    nameof(tail));
+            }
+            segments[i] = new ArraySegment<byte>(tail, cursor, length);
+            cursor += length;
+        }
+    }
+
+    private static string ReadLengthPrefixedUtf8(
+        ReadOnlyMemory<byte> payload,
+        ReadOnlySpan<byte> span,
+        ref int cursor,
+        string fieldName)
+    {
+        if (cursor + 4 > payload.Length)
+        {
+            throw new ArgumentException(
+                $"Framing payload is truncated at the length prefix for {fieldName}; expected at least 4 more bytes at offset {cursor}.",
+                nameof(payload));
+        }
+        var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+        cursor += 4;
+        if (length < 0 || cursor + length > payload.Length)
+        {
+            throw new ArgumentException(
+                $"Framing payload is truncated at the body for {fieldName}; declared length {length} would overrun the payload (remaining {payload.Length - cursor} bytes).",
+                nameof(payload));
+        }
+        var value = length == 0
+            ? string.Empty
+            : System.Text.Encoding.UTF8.GetString(span.Slice(cursor, length));
+        cursor += length;
+        return value;
+    }
+
+    private static string ReadLengthPrefixedUtf8FromTail(
+        byte[] tail,
+        ReadOnlySpan<byte> span,
+        ref int cursor,
+        string fieldName)
+    {
+        if (cursor + 4 > tail.Length)
+        {
+            throw new ArgumentException(
+                $"Inflated framing tail is truncated at the length prefix for {fieldName}; expected at least 4 more bytes at offset {cursor}.",
+                nameof(tail));
+        }
+        var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+        cursor += 4;
+        if (length < 0 || cursor + length > tail.Length)
+        {
+            throw new ArgumentException(
+                $"Inflated framing tail is truncated at the body for {fieldName}; declared length {length} would overrun the tail (remaining {tail.Length - cursor} bytes).",
+                nameof(tail));
+        }
+        var value = length == 0
+            ? string.Empty
+            : System.Text.Encoding.UTF8.GetString(span.Slice(cursor, length));
+        cursor += length;
+        return value;
+    }
+
+    private static void EncodeUncompressedFraming(
+        in EncodedBatchHeader header,
+        string treeName,
+        string originClusterId,
+        ReadOnlyMemory<ArraySegment<byte>> entries,
+        IBufferWriter<byte> writer)
+    {
+        if (treeName.Length == 0)
+        {
+            throw new ArgumentException("treeName must be non-empty.", nameof(treeName));
+        }
+        if (originClusterId.Length == 0)
+        {
+            throw new ArgumentException("originClusterId must be non-empty.", nameof(originClusterId));
+        }
+        if (header.EntryCount != entries.Length)
+        {
+            throw new ArgumentException(
+                $"{nameof(EncodedBatchHeader)}.{nameof(EncodedBatchHeader.EntryCount)} ({header.EntryCount}) does not match entries.Length ({entries.Length}).",
+                nameof(header));
+        }
+
+        var headerSpan = writer.GetSpan(EncodedBatchHeader.WireSize);
+        header.WriteTo(headerSpan);
+        writer.Advance(EncodedBatchHeader.WireSize);
+
+        WriteUncompressedTail(writer, treeName, originClusterId, entries);
+    }
+
+    private static void WriteUncompressedTail(
+        IBufferWriter<byte> writer,
+        string treeName,
+        string originClusterId,
+        ReadOnlyMemory<ArraySegment<byte>> entries)
+    {
+        WriteLengthPrefixedUtf8(writer, treeName);
+        WriteLengthPrefixedUtf8(writer, originClusterId);
+        var segments = entries.Span;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var segment = segments[i];
+            var lengthSpan = writer.GetSpan(4);
+            BinaryPrimitives.WriteInt32LittleEndian(lengthSpan, segment.Count);
+            writer.Advance(4);
+            if (segment.Count > 0)
+            {
+                var dest = writer.GetSpan(segment.Count);
+                segment.AsSpan().CopyTo(dest);
+                writer.Advance(segment.Count);
+            }
+        }
+    }
+
+    private static void WriteLengthPrefixedUtf8(IBufferWriter<byte> writer, string value)
+    {
+        var maxBytes = System.Text.Encoding.UTF8.GetMaxByteCount(value.Length);
+        var span = writer.GetSpan(4 + maxBytes);
+        var written = System.Text.Encoding.UTF8.GetBytes(value, span[4..]);
+        BinaryPrimitives.WriteInt32LittleEndian(span[0..4], written);
+        writer.Advance(4 + written);
+    }
+
+    /// <summary>
+    /// Computes the exact byte size of the uncompressed framing tail
+    /// for a given (treeName, originClusterId, entries) triple. Used
+    /// by the compressed-encode path to rent a single right-sized
+    /// buffer from <see cref="ArrayPool{T}.Shared"/> instead of
+    /// growing an <see cref="ArrayBufferWriter{T}"/>.
+    /// </summary>
+    private static int ComputeTailSize(
+        string treeName,
+        string originClusterId,
+        ReadOnlySpan<ArraySegment<byte>> entries)
+    {
+        var size = 4 + System.Text.Encoding.UTF8.GetByteCount(treeName);
+        size += 4 + System.Text.Encoding.UTF8.GetByteCount(originClusterId);
+        for (var i = 0; i < entries.Length; i++)
+        {
+            size += 4 + entries[i].Count;
+        }
+        return size;
+    }
+
+    /// <summary>
+    /// Writes the canonical uncompressed tail layout into a single
+    /// pre-sized destination span. Used by the compressed-encode
+    /// path; the canonical uncompressed-encode path still goes
+    /// through <see cref="WriteUncompressedTail"/> + the caller's
+    /// <see cref="IBufferWriter{T}"/> so its allocation profile is
+    /// unchanged.
+    /// </summary>
+    private static void WriteTailIntoSpan(
+        Span<byte> destination,
+        string treeName,
+        string originClusterId,
+        ReadOnlySpan<ArraySegment<byte>> entries)
+    {
+        var cursor = 0;
+        cursor += WriteLengthPrefixedUtf8ToSpan(destination[cursor..], treeName);
+        cursor += WriteLengthPrefixedUtf8ToSpan(destination[cursor..], originClusterId);
+        for (var i = 0; i < entries.Length; i++)
+        {
+            var entry = entries[i];
+            BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(cursor, 4), entry.Count);
+            cursor += 4;
+            if (entry.Count > 0)
+            {
+                entry.AsSpan().CopyTo(destination.Slice(cursor, entry.Count));
+                cursor += entry.Count;
+            }
+        }
+    }
+
+    private static int WriteLengthPrefixedUtf8ToSpan(Span<byte> destination, string value)
+    {
+        var written = System.Text.Encoding.UTF8.GetBytes(value, destination[4..]);
+        BinaryPrimitives.WriteInt32LittleEndian(destination[0..4], written);
+        return 4 + written;
     }
 }
