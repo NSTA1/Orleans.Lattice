@@ -160,12 +160,21 @@ public readonly record struct EncodedBatchHeader
     public LatticeMergeMode Mode { get; init; }
 
     /// <summary>
-    /// Compression algorithm applied to the entry-segment bytes after
-    /// the header. Reserved for a follow-on roadmap entry; the current
-    /// canonical encoder sets this to <see cref="FramingCompression.None"/>
-    /// on every batch.
+    /// Compression algorithm applied to the framing tail (the
+    /// variable-length bytes after the fixed 32-byte header:
+    /// <c>treeName</c>, <c>originClusterId</c>, and the length-prefixed
+    /// entry segments). The fixed header is always plaintext so
+    /// receivers can read this field before deciding whether to
+    /// allocate an inflate buffer. The canonical encoder writes
+    /// <see cref="LatticeCompression.None"/> when
+    /// <c>LatticeReplicationOptions.FramingCompression</c> is left at
+    /// its default or when the uncompressed tail is shorter than
+    /// <c>LatticeReplicationOptions.FramingCompressionMinBatchBytes</c>;
+    /// otherwise it writes the configured algorithm. An unrecognised
+    /// value at the receiver surfaces as
+    /// <see cref="NotSupportedException"/> from the framing decoder.
     /// </summary>
-    public FramingCompression Compression { get; init; }
+    public LatticeCompression Compression { get; init; }
 
     /// <summary>
     /// Writes this header into the supplied <paramref name="destination"/>
@@ -238,7 +247,7 @@ public readonly record struct EncodedBatchHeader
             BatchSequence = BinaryPrimitives.ReadInt64LittleEndian(source[20..28]),
             AtomicBatchSpanCount = (int)(packed & 0x0000FFFFu),
             Mode = (LatticeMergeMode)(byte)(packed >> 16),
-            Compression = (FramingCompression)(byte)(packed >> 24),
+            Compression = (LatticeCompression)(byte)(packed >> 24),
         };
     }
 
@@ -267,18 +276,4 @@ public readonly record struct EncodedBatchHeader
         }
         return hash;
     }
-}
-
-/// <summary>
-/// Compression algorithm applied to a framing-encoded batch's entry
-/// segments. Reserved for a follow-on roadmap entry; the canonical
-/// encoder currently writes <see cref="None"/> on every batch.
-/// </summary>
-public enum FramingCompression : byte
-{
-    /// <summary>
-    /// Entry segments are written verbatim; no compression layer is
-    /// applied. The only value the current canonical encoder writes.
-    /// </summary>
-    None = 0,
 }

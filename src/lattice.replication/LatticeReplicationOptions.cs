@@ -495,6 +495,64 @@ public class LatticeReplicationOptions
     /// </summary>
     public bool ShipDoorbellEnabled { get; set; } = DefaultShipDoorbellEnabled;
 
+    /// <summary>
+    /// Compression algorithm applied to the framing tail (the
+    /// variable-length bytes following the fixed 32-byte
+    /// <see cref="EncodedBatchHeader"/>: <c>treeName</c>,
+    /// <c>originClusterId</c>, and the length-prefixed entry segments)
+    /// when the shipper builds an outbound batch. Defaults to
+    /// <see cref="LatticeCompression.None"/>; setting this to
+    /// <see cref="LatticeCompression.Zstd"/> opts in to Zstandard
+    /// compression at the level configured by
+    /// <see cref="FramingCompressionLevel"/>.
+    /// <para>
+    /// Compression is skipped (and <see cref="LatticeCompression.None"/>
+    /// is stamped on the wire regardless of this setting) when the
+    /// uncompressed tail is shorter than
+    /// <see cref="FramingCompressionMinBatchBytes"/> - the per-batch
+    /// fixed overhead of compression dominates the bandwidth saving on
+    /// tiny batches.
+    /// </para>
+    /// <para>
+    /// The receiver decompresses based on the on-wire algorithm value,
+    /// not this option, so a coordinated rollout is required: every
+    /// receiver in the topology must run a build that has the
+    /// corresponding <see cref="ILatticeCompressor"/> registered before
+    /// any sender flips this to a non-<see cref="LatticeCompression.None"/>
+    /// value. An unsupported algorithm at the receiver surfaces as
+    /// <see cref="NotSupportedException"/> from the framing decoder
+    /// and routes through the existing transient-backoff +
+    /// dead-letter classification path.
+    /// </para>
+    /// </summary>
+    public LatticeCompression FramingCompression { get; set; } = DefaultFramingCompression;
+
+    /// <summary>
+    /// Compression level forwarded to the algorithm-specific
+    /// <see cref="ILatticeCompressor"/> when
+    /// <see cref="FramingCompression"/> is non-<see cref="LatticeCompression.None"/>.
+    /// Interpreted by the algorithm: for <see cref="LatticeCompression.Zstd"/>
+    /// the valid range is <c>1</c> (fastest, lowest ratio) to
+    /// <c>22</c> (slowest, highest ratio); the canonical default is
+    /// <c>3</c>. Defaults to <see cref="DefaultFramingCompressionLevel"/>.
+    /// </summary>
+    public int FramingCompressionLevel { get; set; } = DefaultFramingCompressionLevel;
+
+    /// <summary>
+    /// Minimum uncompressed-tail byte count below which the shipper
+    /// stamps <see cref="LatticeCompression.None"/> regardless of the
+    /// configured <see cref="FramingCompression"/> value. The
+    /// per-batch fixed overhead of compression (algorithm-specific
+    /// frame header plus the two 4-byte tail length prefixes the
+    /// canonical encoder writes) dominates the bandwidth saving on
+    /// tiny batches; the threshold lets a host enable compression
+    /// for steady-state large batches without paying the overhead on
+    /// heartbeats and small-bursty traffic. Defaults to
+    /// <see cref="DefaultFramingCompressionMinBatchBytes"/>. Must be
+    /// non-negative.
+    /// </summary>
+    public int FramingCompressionMinBatchBytes { get; set; } = DefaultFramingCompressionMinBatchBytes;
+
 
     /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
@@ -709,4 +767,28 @@ public class LatticeReplicationOptions
     /// signalling enabled.
     /// </summary>
     public const bool DefaultShipDoorbellEnabled = true;
+
+    /// <summary>
+    /// Default value for <see cref="FramingCompression"/>: no
+    /// compression. Hosts that want bandwidth-optimised replication
+    /// over a constrained link opt in by setting this to
+    /// <see cref="LatticeCompression.Zstd"/>.
+    /// </summary>
+    public const LatticeCompression DefaultFramingCompression = LatticeCompression.None;
+
+    /// <summary>
+    /// Default value for <see cref="FramingCompressionLevel"/>: <c>3</c>,
+    /// the standard Zstandard "fast" preset that is the canonical
+    /// online-compression knee on modern hardware.
+    /// </summary>
+    public const int DefaultFramingCompressionLevel = 3;
+
+    /// <summary>
+    /// Default value for <see cref="FramingCompressionMinBatchBytes"/>:
+    /// 512 bytes. A batch whose uncompressed tail is shorter than this
+    /// is shipped as <see cref="LatticeCompression.None"/> regardless
+    /// of the configured algorithm; the per-batch fixed overhead
+    /// dominates the bandwidth saving on tiny batches.
+    /// </summary>
+    public const int DefaultFramingCompressionMinBatchBytes = 512;
 }

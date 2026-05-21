@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Serialization;
+using Orleans.Lattice;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 
@@ -194,5 +195,51 @@ public class LatticeReplicationGrpcServiceCollectionExtensionsTests
         Assert.That(
             () => LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpc(null!),
             Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void AddLatticeReplicationGrpc_registers_default_Zstd_framing_compressor()
+    {
+        // Stand-alone gRPC hosts (no AddLatticeReplication call) must
+        // still resolve a ZstdLatticeCompressor so the byte-keyed
+        // compressor registry on the canonical encoder can decode
+        // LatticeCompression.Zstd batches from a peer that does
+        // compress. The fallback is registered via TryAddEnumerable
+        // so co-existing with AddLatticeReplication's identical
+        // fallback is order-insensitive and yields exactly one
+        // registered instance.
+        var services = BaseServices();
+
+        services.AddLatticeReplicationGrpc();
+
+        using var sp = services.BuildServiceProvider();
+        var compressors = sp.GetServices<ILatticeCompressor>().ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(compressors, Has.Length.EqualTo(1));
+            Assert.That(compressors[0], Is.InstanceOf<ZstdLatticeCompressor>());
+            Assert.That(compressors[0].Algorithm, Is.EqualTo(LatticeCompression.Zstd));
+        });
+    }
+
+    [Test]
+    public void AddLatticeReplicationGrpc_preserves_pre_registered_Zstd_compressor_with_custom_level()
+    {
+        // Mirrors the replication-package precedent: a host that
+        // pre-registers ZstdLatticeCompressor with a non-default
+        // level must keep its instance after the gRPC fallback runs.
+        var services = BaseServices();
+        var custom = new ZstdLatticeCompressor(compressionLevel: 9);
+        services.AddLatticeCompressor(custom);
+
+        services.AddLatticeReplicationGrpc();
+
+        using var sp = services.BuildServiceProvider();
+        var compressors = sp.GetServices<ILatticeCompressor>().ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(compressors, Has.Length.EqualTo(1));
+            Assert.That(compressors[0], Is.SameAs(custom));
+        });
     }
 }

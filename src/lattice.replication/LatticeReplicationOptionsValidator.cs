@@ -245,6 +245,45 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + $"{nameof(ILatticeFallOffLogDetector)}.{nameof(ILatticeFallOffLogDetector.CheckAndTriggerAsync)} calls.");
         }
 
+        // Reject the all-bits-zero "well-known None" sentinel range
+        // only when the host has clearly typoed - i.e. the tag is
+        // in the core-reserved range [0x02, 0x7F] but is not a
+        // defined LatticeCompression member. Tags in [0x80, 0xFF]
+        // are reserved for host-defined algorithms and are validated
+        // at encode/decode time by the encoder's compressor lookup
+        // (missing compressor -> NotSupportedException), not at
+        // options-validation time, because the host may register
+        // its compressor independently of the options binding.
+        var compressionTag = (byte)options.FramingCompression;
+        if (compressionTag is >= 0x02 and < 0x80 && !Enum.IsDefined(options.FramingCompression))
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.FramingCompression)} "
+                + $"must be a defined {nameof(LatticeCompression)} value or a host-defined tag in the reserved [0x80, 0xFF] range ({scope}); "
+                + $"got '0x{compressionTag:X2}'. "
+                + "Core-defined tags are LatticeCompression.None (0x00) and LatticeCompression.Zstd (0x01); "
+                + "host-defined algorithms must cast a byte in [0x80, 0xFF] into LatticeCompression and register a matching ILatticeCompressor via AddLatticeCompressor.");
+        }
+
+        if (options.FramingCompression == LatticeCompression.Zstd
+            && (options.FramingCompressionLevel < 1 || options.FramingCompressionLevel > 22))
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.FramingCompressionLevel)} "
+                + $"must be in the closed interval [1, 22] when {nameof(LatticeReplicationOptions.FramingCompression)} "
+                + $"is {nameof(LatticeCompression.Zstd)} ({scope}); got {options.FramingCompressionLevel}. "
+                + "Zstandard accepts levels 1 (fastest) through 22 (highest ratio); the canonical default is 3.");
+        }
+
+        if (options.FramingCompressionMinBatchBytes < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.FramingCompressionMinBatchBytes)} "
+                + $"must be non-negative ({scope}); got {options.FramingCompressionMinBatchBytes}. "
+                + "A negative value has no defined meaning; a zero value disables the threshold so every "
+                + "non-empty batch is compressed when the algorithm is non-None.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

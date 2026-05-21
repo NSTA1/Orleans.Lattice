@@ -14,7 +14,7 @@ public class EncodedBatchHeaderTests
         long batchSequence = 42L,
         int atomicSpanCount = 0,
         LatticeMergeMode mode = LatticeMergeMode.LwwRegister,
-        FramingCompression compression = FramingCompression.None)
+        LatticeCompression compression = LatticeCompression.None)
         => new()
         {
             Magic = magic,
@@ -117,7 +117,7 @@ public class EncodedBatchHeaderTests
         // Use a synthetic enum value that exercises the top-byte
         // packing without colliding with None (0). We re-use None
         // here but assert the byte position via raw inspection.
-        var header = Sample(compression: FramingCompression.None);
+        var header = Sample(compression: LatticeCompression.None);
         var buf = new byte[EncodedBatchHeader.WireSize];
         header.WriteTo(buf);
         var packed = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(28, 4));
@@ -212,12 +212,12 @@ public class EncodedBatchHeaderTests
         // packed slot (bits 16-23 vs. 24-31); pin that they do not
         // alias by setting both to non-default values and asserting
         // independent round-trip.
-        var header = Sample(mode: LatticeMergeMode.PnCounter, compression: FramingCompression.None);
+        var header = Sample(mode: LatticeMergeMode.PnCounter, compression: LatticeCompression.None);
         var buf = new byte[EncodedBatchHeader.WireSize];
         header.WriteTo(buf);
         var decoded = EncodedBatchHeader.ReadFrom(buf);
         Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.PnCounter));
-        Assert.That(decoded.Compression, Is.EqualTo(FramingCompression.None));
+        Assert.That(decoded.Compression, Is.EqualTo(LatticeCompression.None));
     }
 
     [Test]

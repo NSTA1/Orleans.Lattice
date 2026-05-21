@@ -149,6 +149,31 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, ConfiguredLatticeOriginClusterIdResolver>();
 
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
+
+        // Framing-tail compressor registry. Each algorithm-specific
+        // implementation is registered as an ILatticeCompressor so the
+        // canonical encoder's IEnumerable<ILatticeCompressor>
+        // constructor can build its dispatch dictionary once. Zstd is
+        // registered unconditionally so opting in to
+        // LatticeCompression.Zstd via options requires no extra DI
+        // wiring; the underlying ZstdSharp.Port library is pure
+        // managed code so the registration cost when the algorithm is
+        // never used is one allocation at startup. The default
+        // compressor uses LatticeReplicationOptions.DefaultFramingCompressionLevel
+        // (3, the canonical "fast" preset). Hosts that want a non-default
+        // level pre-register their own ILatticeCompressor singleton
+        // (constructed with their preferred level) before calling
+        // AddLatticeReplication, and TryAddEnumerable preserves that
+        // entry. Hosts that want a custom algorithm cast a byte in
+        // [0x80, 0xFF] into LatticeCompression as the
+        // ILatticeCompressor.Algorithm tag and call
+        // AddLatticeCompressor on the service collection - the encoder
+        // keys its dispatch on the raw byte so no core enum churn is
+        // required. See docs/lattice/compression.md.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILatticeCompressor, ZstdLatticeCompressor>(
+                _ => new ZstdLatticeCompressor(LatticeReplicationOptions.DefaultFramingCompressionLevel)));
+
         // Default receiver-side flow-control policy: no-op (no hint
         // stamped on the ack). Hosts that want receiver-driven
         // throttling replace this registration with their own

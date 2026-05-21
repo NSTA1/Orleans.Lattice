@@ -98,6 +98,7 @@ Use these documents for day-to-day use and operations:
 
 - [API Reference](docs/lattice/api.md) - the public `ILattice` interface, batch operations, options, and serializable types.
 - [Configuration](docs/lattice/configuration.md) - options reference, per-tree overrides, immutability constraints, storage provider.
+- [Compression](docs/lattice/compression.md) - the public `ILatticeCompressor` seam, `AddLatticeCompressor` registration, tag-space partitioning, and how to plug in a custom algorithm.
 - [Samples](docs/lattice/samples.md) - runnable sample projects exercising `ILattice`.
 - [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.
 
