@@ -69,6 +69,29 @@ public partial class ReplicationShipperGrainTests
         };
 
     /// <summary>
+    /// Returns the entry count of the most recent
+    /// <see cref="ReplicationBatch"/> handed to <paramref name="transport"/>,
+    /// read from the framing-only <see cref="ReplicationBatchEncodedEnvelope.EncodedEntries"/>
+    /// memory the shipper now writes. Used by tests that previously
+    /// asserted against <c>encoder.LastEnvelope.Value.Entries.Count</c>;
+    /// the encoder is no longer on the steady-state ship path so the
+    /// equivalent signal is the encoded-segment count on the captured
+    /// batch.
+    /// </summary>
+    private static int LastShippedEntryCount(IReplicationTransport transport)
+    {
+        var calls = transport.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync))
+            .ToList();
+        Assert.That(calls, Is.Not.Empty,
+            "the shipper must have invoked the transport at least once before this assertion");
+        var batch = (ReplicationBatch)calls[^1].GetArguments()[0]!;
+        Assert.That(batch.EncodedEnvelope, Is.Not.Null,
+            "the shipper must populate EncodedEnvelope on every batch on the framing-only path");
+        return batch.EncodedEnvelope!.Value.EncodedEntries.Length;
+    }
+
+    /// <summary>
     /// Builds an options monitor that always returns <paramref name="options"/>.
     /// When <paramref name="options"/> is null, defaults to a fresh
     /// instance with <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>=1
@@ -91,20 +114,62 @@ public partial class ReplicationShipperGrainTests
     }
 
     /// <summary>
+    /// In-process <see cref="IWalRecordEncoder"/> shared between
+    /// <see cref="StubReplogShardGrain"/> (which encodes entries into
+    /// shipping-page bytes via this encoder when the shipper drains)
+    /// and the shipper grain itself (which decodes the head bytes
+    /// back to typed <see cref="WalRecord"/> for HLC / ShouldShip
+    /// predicates). Round-trip is keyed on a 4-byte little-endian
+    /// stash index so the test fixture does not need to spin up the
+    /// real Orleans serializer for shipper-grain unit tests.
+    /// </summary>
+    private sealed class StubWalRecordEncoder : IWalRecordEncoder
+    {
+        private readonly List<WalRecord> _stash = new();
+
+        public byte[] EncodeToBytes(WalRecord record)
+        {
+            var idx = _stash.Count;
+            _stash.Add(record);
+            var bytes = new byte[4];
+            BitConverter.TryWriteBytes(bytes, idx);
+            return bytes;
+        }
+
+        public void Encode(in WalRecord record, IBufferWriter<byte> writer)
+        {
+            ArgumentNullException.ThrowIfNull(writer);
+            var idx = _stash.Count;
+            _stash.Add(record);
+            var span = writer.GetSpan(4);
+            BitConverter.TryWriteBytes(span, idx);
+            writer.Advance(4);
+        }
+
+        public WalRecord Decode(ReadOnlySpan<byte> encoded)
+            => _stash[BitConverter.ToInt32(encoded)];
+    }
+
+    /// <summary>
     /// In-memory <see cref="IWalShardGrain"/> stand-in. Tests
     /// populate it via <see cref="Append(WalRecord)"/> (or the
     /// equivalent legacy <see cref="Entries"/> list); the stub assigns
     /// monotonically-increasing sequence numbers starting at <c>0</c>.
+    /// The shipper drains via <see cref="ReadShippingAsync"/>, which
+    /// projects each typed <see cref="WalRecord"/> through the
+    /// activation-shared <see cref="StubWalRecordEncoder"/> so the
+    /// shipper's per-tick decode round-trips back to the same record.
     /// <para>
     /// <see cref="ThrowOnRead"/> simulates a transient WAL read
-    /// failure on the next <see cref="ReadAsync"/> call.
-    /// <see cref="ReadCalls"/> records how many reads have happened
-    /// - used by partition-resume tests to assert the shipper does not
-    /// rescan from sequence 0 each tick.
+    /// failure on the next read call. <see cref="ReadCalls"/> records
+    /// how many reads have happened - used by partition-resume tests
+    /// to assert the shipper does not rescan from sequence 0 each
+    /// tick.
     /// </para>
     /// </summary>
-    private sealed class StubReplogShardGrain : IWalShardGrain
+    private sealed class StubReplogShardGrain(StubWalRecordEncoder? encoder = null) : IWalShardGrain
     {
+        private readonly StubWalRecordEncoder _encoder = encoder ?? new StubWalRecordEncoder();
         public List<WalRecord> Entries { get; } = new();
         public Exception? ThrowOnRead { get; set; }
         public int ReadCalls { get; private set; }
@@ -116,6 +181,42 @@ public partial class ReplicationShipperGrainTests
         {
             Entries.Add(entry);
             return Task.FromResult((long)(Entries.Count - 1));
+        }
+
+        public Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        {
+            ReadCalls++;
+            ReadFromSequences.Add(fromSequence);
+            if (ThrowOnRead is not null)
+            {
+                throw ThrowOnRead;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (fromSequence >= Entries.Count)
+            {
+                return Task.FromResult(new WalShardShippingPage
+                {
+                    Entries = Array.Empty<WalShardShippingEntry>(),
+                    NextSequence = fromSequence,
+                });
+            }
+            var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
+            var capacity = endExclusive - (int)fromSequence;
+            var entries = new WalShardShippingEntry[capacity];
+            for (var i = 0; i < capacity; i++)
+            {
+                var seq = fromSequence + i;
+                entries[i] = new WalShardShippingEntry
+                {
+                    Sequence = seq,
+                    EncodedPayload = _encoder.EncodeToBytes(Entries[(int)seq]),
+                };
+            }
+            return Task.FromResult(new WalShardShippingPage
+            {
+                Entries = entries,
+                NextSequence = endExclusive,
+            });
         }
 
         public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
@@ -131,8 +232,9 @@ public partial class ReplicationShipperGrainTests
 
         public Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
-            ReadCalls++;
-            ReadFromSequences.Add(fromSequence);
+            // ReadCalls / ReadFromSequences are now tracked on the
+            // ReadShippingAsync path the shipper actually drives;
+            // ReadAsync is retained for non-shipper test paths only.
             if (ThrowOnRead is not null)
             {
                 var ex = ThrowOnRead;
@@ -212,7 +314,8 @@ public partial class ReplicationShipperGrainTests
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{treeName}/{peerClusterId}"));
         var reminders = Substitute.For<IReminderRegistry>();
         var monitor = Monitor(options);
-        var feed = new StubReplogShardGrain();
+        var walRecordEncoder = new StubWalRecordEncoder();
+        var feed = new StubReplogShardGrain(walRecordEncoder);
         var transport = Substitute.For<IReplicationTransport>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
@@ -226,7 +329,7 @@ public partial class ReplicationShipperGrainTests
         var factory = BuildGrainFactory(grainFactory, new[] { feed }, treeName);
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState,
+            monitor, transport, encoder, walRecordEncoder, registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
@@ -240,6 +343,7 @@ public partial class ReplicationShipperGrainTests
         IOptionsMonitor<LatticeReplicationOptions>? monitor = null,
         IReplicationTransport? transport = null,
         IReplicationBatchEncoder? encoder = null,
+        IWalRecordEncoder? walRecordEncoder = null,
         IWalCursorRegistry? registry = null,
         IGrainFactory? grainFactory = null,
         IPersistentState<ReplicationShipperState>? state = null,
@@ -251,6 +355,7 @@ public partial class ReplicationShipperGrainTests
             monitor ?? Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
             transport ?? Substitute.For<IReplicationTransport>(),
             encoder ?? Substitute.For<IReplicationBatchEncoder>(),
+            walRecordEncoder ?? Substitute.For<IWalRecordEncoder>(),
             registry ?? Substitute.For<IWalCursorRegistry>(),
             grainFactory ?? Substitute.For<IGrainFactory>(),
             state ?? new FakePersistentState<ReplicationShipperState>(),
@@ -274,6 +379,7 @@ public partial class ReplicationShipperGrainTests
                 null!,
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
@@ -292,6 +398,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 null!,
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
@@ -310,6 +417,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 null!,
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
@@ -328,7 +436,27 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 null!,
+                Substitute.For<IGrainFactory>(),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_wal_record_encoder_is_null()
+    {
+        Assert.That(
+            () => new ReplicationShipperGrain(
+                Substitute.For<IGrainContext>(),
+                Substitute.For<IReminderRegistry>(),
+                NullLogger<ReplicationShipperGrain>.Instance,
+                Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
+                Substitute.For<IReplicationTransport>(),
+                Substitute.For<IReplicationBatchEncoder>(),
+                null!,
+                Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
                 new ReplicationPeerStats()),
@@ -346,6 +474,7 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
                 Substitute.For<IReplicationTransport>(),
                 Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
                 Substitute.For<IWalCursorRegistry>(),
                 null!,
                 new FakePersistentState<ReplicationShipperState>(),
@@ -788,36 +917,16 @@ public partial class ReplicationShipperGrainTests
     }
 
     // --- Schema-shaped encode failure ---
-
-    [Test]
-    public async Task PumpOnceAsync_advances_cursor_past_batch_on_argument_exception_during_encode()
-    {
-        var (grain, state, feed, transport, encoder, _, _) = Create();
-        encoder.ThrowOnEncode = true;
-        encoder.EncodeException = new ArgumentException("malformed");
-        feed.Append(MakeEntry("k", ticks: 7));
-
-        await grain.OnDoorbellAsync(CancellationToken.None);
-
-        // Schema-shaped failure: the cursor advances past the bad
-        // batch so the stream makes progress.
-        Assert.That(state.State.Cursor, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 7, Counter = 0 }));
-        await transport.DidNotReceive().SendAsync(
-            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task PumpOnceAsync_advances_cursor_past_batch_on_invalid_operation_during_encode()
-    {
-        var (grain, state, feed, _, encoder, _, _) = Create();
-        encoder.ThrowOnEncode = true;
-        encoder.EncodeException = new InvalidOperationException("schema-broken");
-        feed.Append(MakeEntry("k", ticks: 9));
-
-        await grain.OnDoorbellAsync(CancellationToken.None);
-
-        Assert.That(state.State.Cursor, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 9, Counter = 0 }));
-    }
+    //
+    // The historical typed-envelope encode-throw -> DLQ path is gone:
+    // the steady-state ship path is framing-only and never invokes
+    // IReplicationBatchEncoder.Encode. Schema-shaped errors during
+    // framing-header construction still route to the per-tree DLQ
+    // (covered by the DLQ-routing tests in
+    // ReplicationDeadLetterGrainTests), but the encoder is no longer
+    // a producer of those errors. The two encoder-throw tests that
+    // exercised the legacy path were removed alongside the
+    // typed-envelope sender-path retirement.
 
     // --- Drain failure ---
 
@@ -917,59 +1026,23 @@ public partial class ReplicationShipperGrainTests
             Assert.That(captured!.Value.TargetClusterId, Is.EqualTo(Peer));
             Assert.That(captured.Value.TreeName, Is.EqualTo(Tree));
             Assert.That(captured.Value.OriginClusterId, Is.EqualTo(LocalCluster));
-            Assert.That(captured.Value.Payload.IsEmpty, Is.False);
+            Assert.That(captured.Value.EncodedEnvelope, Is.Not.Null,
+                "every shipped batch must carry the framing-only EncodedEnvelope slot");
+            Assert.That(captured.Value.EncodedEnvelope!.Value.EncodedEntries.Length, Is.EqualTo(1));
         });
     }
 
     // --- DLQ routing on schema-shaped encode failure ---
-
-    [Test]
-    public async Task PumpOnceAsync_routes_every_entry_to_dlq_on_argument_exception_during_encode()
-    {
-        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
-        var factory = Substitute.For<IGrainFactory>();
-        factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(dlq);
-        var (grain, state, feed, _, encoder, _, _) = Create(grainFactory: factory);
-        encoder.ThrowOnEncode = true;
-        encoder.EncodeException = new ArgumentException("malformed");
-        feed.Append(MakeEntry("k1", ticks: 5));
-        feed.Append(MakeEntry("k2", ticks: 6));
-        feed.Append(MakeEntry("k3", ticks: 7));
-
-        await grain.OnDoorbellAsync(CancellationToken.None);
-
-        // Each entry in the failed batch is parked individually, tagged ReasonSchema.
-        await dlq.Received(3).EnqueueAsync(
-            Arg.Any<WalRecord>(),
-            "malformed",
-            0,
-            LatticeReplicationMetrics.ReasonSchema,
-            Arg.Any<CancellationToken>());
-        // Cursor still advances past the batch so the stream makes progress.
-        Assert.That(state.State.Cursor, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 7, Counter = 0 }));
-    }
-
-    [Test]
-    public async Task PumpOnceAsync_routes_to_dlq_on_invalid_operation_during_encode()
-    {
-        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
-        var factory = Substitute.For<IGrainFactory>();
-        factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(dlq);
-        var (grain, state, feed, _, encoder, _, _) = Create(grainFactory: factory);
-        encoder.ThrowOnEncode = true;
-        encoder.EncodeException = new InvalidOperationException("schema-broken");
-        feed.Append(MakeEntry("k", ticks: 9));
-
-        await grain.OnDoorbellAsync(CancellationToken.None);
-
-        await dlq.Received(1).EnqueueAsync(
-            Arg.Any<WalRecord>(),
-            "schema-broken",
-            0,
-            LatticeReplicationMetrics.ReasonSchema,
-            Arg.Any<CancellationToken>());
-        Assert.That(state.State.Cursor, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 9, Counter = 0 }));
-    }
+    //
+    // The encode-throw -> DLQ tests that used to live here exercised
+    // a code path the framing-only ship path no longer reaches:
+    // IReplicationBatchEncoder.Encode is never called on the
+    // steady-state path, so encoder.ThrowOnEncode never fires. The
+    // DLQ-routing contract itself (ReasonSchema parking + cursor
+    // advance past a poison batch) is still pinned by the framing-
+    // header construction catch in ReplicationShipperGrain.PumpOnceAsync
+    // and by ReplicationDeadLetterGrainTests; no shipper-level
+    // coverage of the legacy encoder-throw shape is preserved.
 
     [Test]
     public async Task PumpOnceAsync_advances_cursor_even_when_dlq_enqueue_throws()
@@ -995,127 +1068,14 @@ public partial class ReplicationShipperGrainTests
     }
 
     // --- Activation-scoped buffer reuse (encoder perf-pass) ---
-
-    private sealed class CapturingEncoder : IReplicationBatchEncoder
-    {
-        public string ContentType => "application/x-test";
-        public int CurrentWireVersion => 1;
-        public List<IReadOnlyList<WalRecord>> CapturedEntryLists { get; } = new();
-        public List<IBufferWriter<byte>> CapturedWriters { get; } = new();
-        public List<int> WrittenCountBeforeEncode { get; } = new();
-        public int BytesPerEncode { get; set; } = 4;
-
-        public void Encode(ReplicationBatchEnvelope envelope, IBufferWriter<byte> writer)
-        {
-            CapturedEntryLists.Add(envelope.Entries);
-            CapturedWriters.Add(writer);
-            // ArrayBufferWriter exposes WrittenCount; capture before writing
-            // so the test can assert ResetWrittenCount() rewound to 0.
-            if (writer is ArrayBufferWriter<byte> abw)
-            {
-                WrittenCountBeforeEncode.Add(abw.WrittenCount);
-            }
-            writer.Write(new byte[BytesPerEncode]);
-        }
-
-        public ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload) =>
-            throw new NotSupportedException();
-    }
-
-    private static (
-        ReplicationShipperGrain Grain,
-        FakePersistentState<ReplicationShipperState> State,
-        StubReplogShardGrain Feed,
-        IReplicationTransport Transport,
-        CapturingEncoder Encoder) CreateWithCapturingEncoder(
-            LatticeReplicationOptions? options = null)
-    {
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
-        var monitor = Monitor(options);
-        var feed = new StubReplogShardGrain();
-        var transport = Substitute.For<IReplicationTransport>();
-        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
-            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
-        var encoder = new CapturingEncoder();
-        var registry = Substitute.For<IWalCursorRegistry>();
-        var fakeState = new FakePersistentState<ReplicationShipperState>();
-        var factory = BuildGrainFactory(null, new[] { feed }, Tree);
-        var grain = new ReplicationShipperGrain(
-            ctx,
-            Substitute.For<IReminderRegistry>(),
-            NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry,
-            factory,
-            fakeState,
-            new ReplicationPeerStats());
-        grain.InitializeForTesting(Tree, Peer);
-        return (grain, fakeState, feed, transport, encoder);
-    }
-
-    [Test]
-    public async Task PumpOnceAsync_reuses_drain_buffer_across_pump_ticks()
-    {
-        var (grain, _, feed, _, encoder) = CreateWithCapturingEncoder();
-        feed.Append(MakeEntry("k1", ticks: 1));
-
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
-
-        // Both ticks encoded once; the entries-list reference must be
-        // the same activation-scoped _drainBuffer instance both times.
-        Assert.That(encoder.CapturedEntryLists, Has.Count.EqualTo(2));
-        Assert.That(
-            encoder.CapturedEntryLists[1],
-            Is.SameAs(encoder.CapturedEntryLists[0]),
-            "The drain buffer should be reused across pump ticks (no per-tick allocation).");
-    }
-
-    [Test]
-    public async Task PumpOnceAsync_reuses_write_buffer_and_resets_written_count_across_pump_ticks()
-    {
-        var (grain, _, feed, _, encoder) = CreateWithCapturingEncoder();
-        feed.Append(MakeEntry("k1", ticks: 1));
-
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(encoder.CapturedWriters, Has.Count.EqualTo(2));
-            Assert.That(
-                encoder.CapturedWriters[1],
-                Is.SameAs(encoder.CapturedWriters[0]),
-                "The framing buffer should be reused across pump ticks.");
-            // ResetWrittenCount() rewinds the write index to 0 between
-            // ticks so each Encode starts at offset 0 even though the
-            // underlying array survives.
-            Assert.That(encoder.WrittenCountBeforeEncode, Is.EqualTo(new[] { 0, 0 }));
-        });
-    }
-
-    [Test]
-    public async Task PumpOnceAsync_recreates_write_buffer_after_capacity_hits_large_threshold()
-    {
-        // Force a large encode (>= 4 MB threshold) on tick 1 so the
-        // shipper recreates the buffer on tick 2 rather than reusing.
-        var (grain, _, feed, _, encoder) = CreateWithCapturingEncoder();
-        encoder.BytesPerEncode = 4 * 1024 * 1024 + 1; // pushes Capacity past LargeWriteBufferThreshold
-        feed.Append(MakeEntry("k1", ticks: 1));
-
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        encoder.BytesPerEncode = 4;
-        feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
-
-        Assert.That(encoder.CapturedWriters, Has.Count.EqualTo(2));
-        Assert.That(
-            encoder.CapturedWriters[1],
-            Is.Not.SameAs(encoder.CapturedWriters[0]),
-            "A buffer that grew at-or-past the soft cap must be recreated on the next pump tick rather than pinning the large array forever.");
-    }
+    //
+    // The historical typed-envelope encode path is gone (folded into
+    // the framing-only ship-path migration).
+    // Steady-state allocation on the framing-only ship path is guarded
+    // by the microbenchmarks under benchmark/host/Bench.Microbench/
+    // (see r114-ship-bench-results.md). The shipper's per-tick scratch
+    // is exercised end-to-end by the partition-cursor and DLQ tests
+    // below; there is no longer a separate IBufferWriter to capture.
 
     // --- Peer stats recording ---
 
@@ -1138,7 +1098,8 @@ public partial class ReplicationShipperGrainTests
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
         var reminders = Substitute.For<IReminderRegistry>();
         var monitor = Monitor(options);
-        var feed = new StubReplogShardGrain();
+        var walEncoder = new StubWalRecordEncoder();
+        var feed = new StubReplogShardGrain(walEncoder);
         var transport = Substitute.For<IReplicationTransport>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
@@ -1149,7 +1110,7 @@ public partial class ReplicationShipperGrainTests
         var stats = new ReplicationPeerStats();
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, registry, factory, fakeState, stats);
+            monitor, transport, encoder, walEncoder, registry, factory, fakeState, stats);
         grain.InitializeForTesting(Tree, Peer);
         return (grain, feed, transport, stats);
     }

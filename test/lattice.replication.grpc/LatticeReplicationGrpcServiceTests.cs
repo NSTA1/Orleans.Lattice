@@ -36,7 +36,7 @@ public class LatticeReplicationGrpcServiceTests
         var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
         var envSerializer = sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>();
         var encoder = new TestEncoder(envSerializer);
-        method = new LatticeReplicationGrpcMethod(encoder, ackSerializer);
+        method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), ackSerializer);
         return new LatticeReplicationGrpcService(method, applier, cursorRegistry, policy, NullLogger<LatticeReplicationGrpcService>.Instance);
     }
 
@@ -102,7 +102,7 @@ public class LatticeReplicationGrpcServiceTests
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
-        var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
+        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
             () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, NullLogger<LatticeReplicationGrpcService>.Instance),
@@ -114,7 +114,7 @@ public class LatticeReplicationGrpcServiceTests
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
-        var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
+        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
             () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!, NullLogger<LatticeReplicationGrpcService>.Instance),
@@ -126,7 +126,7 @@ public class LatticeReplicationGrpcServiceTests
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
-        var method = new LatticeReplicationGrpcMethod(encoder, sp.GetRequiredService<Serializer<ReplicationAck>>());
+        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), sp.GetRequiredService<Serializer<ReplicationAck>>());
 
         Assert.That(
             () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, null!),

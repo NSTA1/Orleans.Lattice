@@ -736,7 +736,7 @@ public class LatticeOptions
     /// Measured against the <i>exact</i> serialised size of each
     /// captured <see cref="WalRecord"/> under the WAL grain's wire
     /// format - the per-entry encoder
-    /// (<c>IWalMutationEncoder</c>) walks every field of the record
+    /// (<c>IWalRecordEncoder</c>) walks every field of the record
     /// through the same Orleans-binary codec that the storage
     /// provider will see, and the bytes it produces are handed
     /// straight to <see cref="IWalStorageProvider.AppendEncodedBatchAsync"/>

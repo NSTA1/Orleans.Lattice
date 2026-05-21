@@ -22,7 +22,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal interface ICommitLogWriter
 {
     /// <summary>
-    /// Persists <paramref name="mutation"/> to the per-shard WAL and
+    /// Persists <paramref name="entry"/> to the per-shard WAL and
     /// returns the per-shard offset assigned to the appended entry.
     /// Offsets start at <c>0</c> for the first entry of a given
     /// <c>(treeId, shardIndex)</c> pair and increase monotonically by
@@ -30,25 +30,40 @@ internal interface ICommitLogWriter
     /// persisted WAL.
     /// <para>
     /// The shard index the entry lands on is determined by the adapter
-    /// from <see cref="LatticeMutation.Key"/> via the same partition
-    /// hash the existing replication sink uses, so a foreground caller
-    /// does not need to compute it.
+    /// from <see cref="WalRecord.Key"/> via the same partition hash the
+    /// existing replication sink uses, so a foreground caller does not
+    /// need to compute it. Saga terminals
+    /// (<see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>)
+    /// route by the base-10 integer parsed from
+    /// <see cref="WalRecord.Key"/> so the shard index slot in
+    /// <see cref="WalRecord.ShardIndex"/> is observed by the adapter
+    /// independently of its hash-routing decision.
+    /// </para>
+    /// <para>
+    /// The producer constructs the <see cref="WalRecord"/> directly at
+    /// the observer site; the adapter still applies the producer-side
+    /// <see cref="ILatticeMergeModeResolver"/> stamp and an
+    /// <see cref="ILatticeOriginClusterIdResolver"/> fallback before
+    /// the entry is persisted, so leaf call sites pass a record with
+    /// <see cref="WalRecord.Mode"/> at its default and an unset
+    /// <see cref="WalRecord.OriginClusterId"/> when no producer-side
+    /// cluster id is in scope.
     /// </para>
     /// </summary>
-    /// <param name="mutation">The mutation to append. Must not be the default value.</param>
+    /// <param name="entry">The pre-built WAL record to append. Must not be the default value.</param>
     /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
     /// <returns>The per-shard offset assigned to the appended entry.</returns>
-    Task<long> AppendAsync(LatticeMutation mutation, CancellationToken cancellationToken = default);
+    Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Persists every mutation in <paramref name="mutations"/> to the
+    /// Persists every entry in <paramref name="entries"/> to the
     /// per-shard WAL as a single grain-dispatch envelope per touched
     /// WAL partition and returns the per-shard offset assigned to each
-    /// mutation, in the same order as the input.
+    /// entry, in the same order as the input.
     /// <para>
     /// This is the batched counterpart to <see cref="AppendAsync"/>;
     /// the adapter groups the input by the partition hash the
-    /// single-mutation overload applies, dispatches one
+    /// single-entry overload applies, dispatches one
     /// <see cref="IWalShardGrain.AppendBatchAsync"/> call per
     /// partition, and stitches the returned offsets back into the
     /// caller's input order. A 64-key bulk write that hashes to a
@@ -57,17 +72,17 @@ internal interface ICommitLogWriter
     /// </para>
     /// <para>
     /// Atomicity is per-partition: the per-partition batch is
-    /// all-or-nothing (every mutation that landed on the same WAL
+    /// all-or-nothing (every entry that landed on the same WAL
     /// partition is durably persisted before its offsets are
-    /// returned, or none of them are), but mutations that hash to
+    /// returned, or none of them are), but entries that hash to
     /// different WAL partitions commit independently. Callers that
     /// require cross-partition atomic semantics drive a saga via
     /// the shard-root coordinator's prepare/commit protocol; this
     /// adapter offers no cross-partition transaction.
     /// </para>
     /// </summary>
-    /// <param name="mutations">The mutations to append, in caller-defined order. The returned offsets are parallel to this list.</param>
+    /// <param name="entries">The entries to append, in caller-defined order. The returned offsets are parallel to this list.</param>
     /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
-    /// <returns>An immutable list of per-shard offsets, one per input mutation, in input order.</returns>
-    Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<LatticeMutation> mutations, CancellationToken cancellationToken = default);
+    /// <returns>An immutable list of per-shard offsets, one per input entry, in input order.</returns>
+    Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default);
 }

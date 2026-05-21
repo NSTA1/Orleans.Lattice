@@ -186,4 +186,6 @@ internal static class TypeAliases
     internal const string IWalShardGrain = "olr.gw";
     internal const string WalShardSequencedEntry = "olr.we";
     internal const string WalShardPage = "olr.wp";
+    internal const string WalShardShippingEntry = "olr.ws";
+    internal const string WalShardShippingPage = "olr.wg";
 }

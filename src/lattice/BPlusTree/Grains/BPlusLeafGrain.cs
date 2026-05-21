@@ -714,33 +714,6 @@ internal sealed partial class BPlusLeafGrain(
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
             };
-        var delta = LatticeDeltaContext.Current;
-        var batch = LatticeAtomicBatchContext.Current;
-        var mutation = new LatticeMutation
-        {
-            TreeId = state.State.TreeId ?? string.Empty,
-            Kind = MutationKind.Set,
-            Key = key,
-            Value = newEntry.IsTombstone ? null : newEntry.Value,
-            Timestamp = newEntry.Timestamp,
-            IsTombstone = newEntry.IsTombstone,
-            ExpiresAtTicks = newEntry.ExpiresAtTicks,
-            OriginClusterId = newEntry.OriginClusterId,
-            VectorClock = newEntry.VectorClock,
-            TransactionId = LatticeTransactionContext.Current,
-            Category = LatticeMaintenanceContext.Current,
-            DeltaKind = delta?.Kind,
-            DeltaPayload = delta?.Payload,
-            AtomicBatchSize = batch?.Size ?? 0,
-            AtomicBatchIndex = batch?.Index ?? 0,
-            IsPrepared = isPrepared,
-            // Stamp the leaf's owning chain-shard index so a sibling
-            // shard's leaf reading the same WAL partition can filter
-            // this entry out at activation-time replay. Falls back to
-            // 0 for the V1 single-shard test path where SetShardIndexAsync
-            // has not yet been called (every chain shard is shard 0).
-            ShardIndex = state.State.ShardIndex ?? 0,
-        };
 
         var options = await GetOptionsAsync();
 
@@ -750,7 +723,13 @@ internal sealed partial class BPlusLeafGrain(
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
-            await writer.AppendAsync(mutation);
+            var entry = WalRecordBuilder.ForSet(
+                state.State.TreeId ?? string.Empty,
+                state.State.ShardIndex ?? 0,
+                key,
+                newEntry,
+                isPrepared);
+            await writer.AppendAsync(entry);
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -762,7 +741,7 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? splitResult = null;
         if (isPrepared)
         {
-            AddPreparedMutation(mutation.TransactionId, key, newEntry);
+            AddPreparedMutation(LatticeTransactionContext.Current, key, newEntry);
         }
         else
         {
@@ -883,20 +862,20 @@ internal sealed partial class BPlusLeafGrain(
     private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         var count = entries.Count;
-        var mutations = new List<LatticeMutation>(count);
+        var walEntries = new List<WalRecord>(count);
         var stamps = new HybridLogicalClock[count];
         var values = new LwwValue<byte[]>[count];
 
-        // step 0 (build) - HLC tick per entry, mutation envelope per
-        // entry. We do not call PublishVersionAdvance per entry; the
-        // version vector tracks the highest local clock, so a single
-        // publish of the last-assigned stamp at the end of the batch
-        // dominates every individual entry's stamp by monotonic-tick
-        // construction. BumpLocalRevision is also folded to a single
-        // call at the end - the registry observes one revision bump
-        // per batched commit, which is the correct shape for the
-        // LeafCacheGrain refresh protocol (every refresh sees the
-        // whole batch as one logical delta).
+        // step 0 (build) - HLC tick per entry, WAL record per entry. We
+        // do not call PublishVersionAdvance per entry; the version
+        // vector tracks the highest local clock, so a single publish of
+        // the last-assigned stamp at the end of the batch dominates
+        // every individual entry's stamp by monotonic-tick construction.
+        // BumpLocalRevision is also folded to a single call at the end
+        // - the registry observes one revision bump per batched commit,
+        // which is the correct shape for the LeafCacheGrain refresh
+        // protocol (every refresh sees the whole batch as one logical
+        // delta).
         var origin = LatticeOriginContext.Current;
         var vectorClock = LatticeVectorClockContext.Current;
         var delta = LatticeDeltaContext.Current;
@@ -918,10 +897,10 @@ internal sealed partial class BPlusLeafGrain(
                     VectorClock = vectorClock,
                 };
             values[i] = lww;
-            mutations.Add(new LatticeMutation
+            walEntries.Add(new WalRecord
             {
                 TreeId = treeId,
-                Kind = MutationKind.Set,
+                Op = MutationKind.Set,
                 Key = key,
                 Value = lww.IsTombstone ? null : lww.Value,
                 Timestamp = lww.Timestamp,
@@ -955,7 +934,7 @@ internal sealed partial class BPlusLeafGrain(
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
-            await writer.AppendManyAsync(mutations);
+            await writer.AppendManyAsync(walEntries);
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -1042,30 +1021,37 @@ internal sealed partial class BPlusLeafGrain(
             };
         var delta = LatticeDeltaContext.Current;
         var batch = LatticeAtomicBatchContext.Current;
-        var mutation = new LatticeMutation
-        {
-            TreeId = state.State.TreeId ?? string.Empty,
-            Kind = MutationKind.Delete,
-            Key = key,
-            Timestamp = tombstone.Timestamp,
-            IsTombstone = true,
-            OriginClusterId = tombstone.OriginClusterId,
-            VectorClock = tombstone.VectorClock,
-            TransactionId = LatticeTransactionContext.Current,
-            Category = LatticeMaintenanceContext.Current,
-            DeltaKind = delta?.Kind,
-            DeltaPayload = delta?.Payload,
-            AtomicBatchSize = batch?.Size ?? 0,
-            AtomicBatchIndex = batch?.Index ?? 0,
-            IsPrepared = isPrepared,
-        };
+        var transactionId = LatticeTransactionContext.Current;
 
         // step 1 (wal)
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
-            await writer.AppendAsync(mutation);
+            // Historical wire shape: the Delete path does not stamp
+            // ShardIndex on the WAL record (see CommitSetAsync for the
+            // Set path, which does). Preserved verbatim through the
+            // direct-WalRecord builder migration so the apply-side
+            // replay filter on the receiving leaf sees the same
+            // default-0 shard slot it always saw on Delete entries.
+            var entry = new WalRecord
+            {
+                TreeId = state.State.TreeId ?? string.Empty,
+                Op = MutationKind.Delete,
+                Key = key,
+                Timestamp = tombstone.Timestamp,
+                IsTombstone = true,
+                OriginClusterId = tombstone.OriginClusterId,
+                VectorClock = tombstone.VectorClock,
+                TransactionId = transactionId,
+                Category = LatticeMaintenanceContext.Current,
+                DeltaKind = delta?.Kind,
+                DeltaPayload = delta?.Payload,
+                AtomicBatchSize = batch?.Size ?? 0,
+                AtomicBatchIndex = batch?.Index ?? 0,
+                IsPrepared = isPrepared,
+            };
+            await writer.AppendAsync(entry);
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -1075,7 +1061,7 @@ internal sealed partial class BPlusLeafGrain(
         var applyStartTicks = Stopwatch.GetTimestamp();
         if (isPrepared)
         {
-            AddPreparedMutation(mutation.TransactionId, key, tombstone);
+            AddPreparedMutation(transactionId, key, tombstone);
         }
         else
         {
@@ -1167,21 +1153,12 @@ internal sealed partial class BPlusLeafGrain(
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
             };
-        var delta = LatticeDeltaContext.Current;
-        var mutation = new LatticeMutation
+
+        // step 1 (wal)
+        var walStartTicks = Stopwatch.GetTimestamp();
+        var writer = ResolveCommitLogWriter();
+        if (writer is not null)
         {
-            TreeId = state.State.TreeId ?? string.Empty,
-            Kind = MutationKind.DeleteRange,
-            Key = startInclusive,
-            EndExclusiveKey = endExclusive,
-            Timestamp = tombstone.Timestamp,
-            IsTombstone = true,
-            OriginClusterId = tombstone.OriginClusterId,
-            VectorClock = tombstone.VectorClock,
-            TransactionId = LatticeTransactionContext.Current,
-            Category = LatticeMaintenanceContext.Current,
-            DeltaKind = delta?.Kind,
-            DeltaPayload = delta?.Payload,
             // Stamp the leaf's owning chain-shard index; see SetAsync
             // for the rationale. DeleteRange replay on the receiving
             // leaf iterates that leaf's own Entries only, so the
@@ -1189,15 +1166,13 @@ internal sealed partial class BPlusLeafGrain(
             // DeleteRange - but stamping consistently keeps every
             // mutation kind on the same wire shape so receivers and
             // operator tooling can rely on the slot being populated.
-            ShardIndex = state.State.ShardIndex ?? 0,
-        };
-
-        // step 1 (wal)
-        var walStartTicks = Stopwatch.GetTimestamp();
-        var writer = ResolveCommitLogWriter();
-        if (writer is not null)
-        {
-            await writer.AppendAsync(mutation);
+            var entry = WalRecordBuilder.ForDeleteRange(
+                state.State.TreeId ?? string.Empty,
+                state.State.ShardIndex ?? 0,
+                startInclusive,
+                endExclusive,
+                tombstone);
+            await writer.AppendAsync(entry);
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -1543,10 +1518,10 @@ internal sealed partial class BPlusLeafGrain(
             {
                 if (writer is not null)
                 {
-                    var mutation = new LatticeMutation
+                    var entry = new WalRecord
                     {
                         TreeId = treeId,
-                        Kind = MutationKind.Tombstone,
+                        Op = MutationKind.Tombstone,
                         Key = key,
                         Timestamp = reapAt,
                         IsTombstone = true,
@@ -1562,7 +1537,7 @@ internal sealed partial class BPlusLeafGrain(
                     var walStartTicks = Stopwatch.GetTimestamp();
                     try
                     {
-                        await writer.AppendAsync(mutation);
+                        await writer.AppendAsync(entry);
                     }
                     finally
                     {
@@ -1777,19 +1752,19 @@ internal sealed partial class BPlusLeafGrain(
         // this method with batches sized at MaxLeafKeys, so the per-call
         // grain-hop count drops from O(MaxLeafKeys) to O(1) on the
         // merge channel as well.
-        List<LatticeMutation>? mutations = null;
+        List<WalRecord>? walEntries = null;
         if (writer is not null && entries.Count > 0)
-            mutations = new List<LatticeMutation>(entries.Count);
+            walEntries = new List<WalRecord>(entries.Count);
 
         foreach (var (key, incoming) in entries)
         {
             if (incoming.Timestamp > maxIncoming)
                 maxIncoming = incoming.Timestamp;
 
-            mutations?.Add(new LatticeMutation
+            walEntries?.Add(new WalRecord
             {
                 TreeId = treeId,
-                Kind = incoming.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                Op = incoming.IsTombstone ? MutationKind.Delete : MutationKind.Set,
                 Key = key,
                 Value = incoming.IsTombstone ? null : incoming.Value,
                 Timestamp = incoming.Timestamp,
@@ -1812,12 +1787,12 @@ internal sealed partial class BPlusLeafGrain(
         // writes on the same instrument. (Per-entry recording would
         // inflate the histogram count and bias percentile reads of the
         // single-write path.)
-        if (mutations is { Count: > 0 })
+        if (walEntries is { Count: > 0 })
         {
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(mutations);
+                await writer!.AppendManyAsync(walEntries);
             }
             finally
             {
@@ -2204,10 +2179,10 @@ internal sealed partial class BPlusLeafGrain(
         // `KeyValuePair<string, LwwValue<byte[]>>[]` backing array
         // (~64 B per entry, ~16 KiB on a default-size leaf) is not
         // allocated.
-        List<LatticeMutation>? mutations = null;
+        List<WalRecord>? walEntries = null;
         List<KeyValuePair<string, LwwValue<byte[]>>>? accepted = null;
         if (writer is not null && entries.Count > 0)
-            mutations = new List<LatticeMutation>(entries.Count);
+            walEntries = new List<WalRecord>(entries.Count);
         if (isCrossShardMigration && entries.Count > 0)
             accepted = new List<KeyValuePair<string, LwwValue<byte[]>>>(entries.Count);
 
@@ -2262,10 +2237,10 @@ internal sealed partial class BPlusLeafGrain(
             var toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
             accepted?.Add(new KeyValuePair<string, LwwValue<byte[]>>(key, toStore));
 
-            mutations?.Add(new LatticeMutation
+            walEntries?.Add(new WalRecord
             {
                 TreeId = treeId,
-                Kind = toStore.IsTombstone ? MutationKind.Delete : MutationKind.Set,
+                Op = toStore.IsTombstone ? MutationKind.Delete : MutationKind.Set,
                 Key = key,
                 Value = toStore.IsTombstone ? null : toStore.Value,
                 Timestamp = toStore.Timestamp,
@@ -2284,12 +2259,12 @@ internal sealed partial class BPlusLeafGrain(
         // step 1 (wal) - one batched dispatch for the whole accepted
         // batch. Recorded once on LeafWriteDuration tagged kind=merge;
         // see MergeEntriesAsync for the per-batch-recording rationale.
-        if (mutations is { Count: > 0 })
+        if (walEntries is { Count: > 0 })
         {
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(mutations);
+                await writer!.AppendManyAsync(walEntries);
             }
             finally
             {

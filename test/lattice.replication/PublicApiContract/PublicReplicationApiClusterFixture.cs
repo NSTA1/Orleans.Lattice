@@ -59,7 +59,18 @@ internal sealed class PublicReplicationApiClusterFixture
     private static readonly TimeSpan ConvergencePollInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>Convergence ceiling used by <see cref="WaitForConvergenceAsync"/>.</summary>
-    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(30);
+    /// <remarks>
+    /// Healthy in-process loopback convergence completes in well under
+    /// a second; the ceiling exists only to surface a structured
+    /// failure when delivery is actually broken (e.g. a transport that
+    /// silently drops batches). Keeping the ceiling tight bounds the
+    /// blast radius of a regression: at 30s, 21 broken tests cost
+    /// ~11 minutes; at 10s, the same break costs ~3.5 minutes and is
+    /// caught faster in the inner dev loop. Individual call sites can
+    /// still pass an explicit longer <paramref name="timeout"/> for
+    /// scenarios that legitimately need more headroom.
+    /// </remarks>
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>The first site's test cluster.</summary>
     public TestCluster SiteA { get; private set; } = null!;

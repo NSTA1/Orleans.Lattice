@@ -48,7 +48,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// the transport.
 /// </para>
 /// </remarks>
-internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposable
+internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
 {
     private readonly LatticeReplicationGrpcMethod _method;
     private readonly IReplicationBatchEncoder _encoder;
@@ -85,10 +85,6 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
     public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
         => SendCoreAsync(batch, cancellationToken);
 
-    /// <inheritdoc />
-    public Task<ReplicationAck> SendTypedAsync(ReplicationBatch batch, CancellationToken cancellationToken)
-        => SendCoreAsync(batch, cancellationToken);
-
     private async Task<ReplicationAck> SendCoreAsync(ReplicationBatch batch, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -115,8 +111,13 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
         }
 
         var channel = ResolvePeerChannel(batch.TargetClusterId);
-        var envelope = BuildEnvelope(batch);
-        var envelopeBox = new ReplicationBatchEnvelopeBox { Value = envelope };
+        var envelopeBox = BuildEnvelopeBox(batch);
+        // Captured for metric tagging only; the framing-only path
+        // does not materialise a typed envelope and therefore reads
+        // the entry count off the framing header instead.
+        var entryCount = envelopeBox.Framing is { } framing
+            ? framing.Header.EntryCount
+            : envelopeBox.Value.Entries?.Count ?? 0;
 
         var stopwatch = ValueStopwatch.StartNew();
         var outcome = "error";
@@ -131,12 +132,10 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
             var ackBox = await call.ResponseAsync.ConfigureAwait(false);
             outcome = "ok";
 
-            // Count successfully shipped entries on ack. The envelope's
-            // Entries collection is the authoritative count; an empty
+            // Count successfully shipped entries on ack. An empty
             // (heartbeat / keep-alive) batch contributes zero. Pairs
             // with WalEntriesAppended on the producer side so operators
             // can compute the growth-rate vs. ship-rate ratio.
-            var entryCount = envelope.Entries?.Count ?? 0;
             if (entryCount > 0)
             {
                 LatticeReplicationMetrics.WalEntriesShipped.Add(
@@ -155,6 +154,27 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, batch.TargetClusterId),
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
         }
+    }
+
+    private ReplicationBatchEnvelopeBox BuildEnvelopeBox(ReplicationBatch batch)
+    {
+        // Framing-only fast path: the shipper supplied a pre-encoded
+        // entry-segment list and a fixed-shape header. Hand the bytes
+        // straight to the marshaller via the framing slot; no typed
+        // envelope is materialised on the producer side.
+        if (batch.EncodedEnvelope is { } encoded)
+        {
+            return new ReplicationBatchEnvelopeBox
+            {
+                Framing = new ReplicationBatchEnvelopeBox.FramingPayload(
+                    encoded.Header,
+                    batch.TreeName,
+                    batch.OriginClusterId,
+                    encoded.EncodedEntries),
+            };
+        }
+
+        return new ReplicationBatchEnvelopeBox { Value = BuildEnvelope(batch) };
     }
 
     private ReplicationBatchEnvelope BuildEnvelope(ReplicationBatch batch)
@@ -204,6 +224,14 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
     /// a real gRPC server. Not part of the public API.
     /// </summary>
     internal ReplicationBatchEnvelope BuildEnvelopeForTesting(ReplicationBatch batch) => BuildEnvelope(batch);
+
+    /// <summary>
+    /// Test-only seam exposing the private
+    /// <c>BuildEnvelopeBox</c> dispatch so the framing-only path and
+    /// the typed fallback can be pinned without standing up a real
+    /// gRPC server. Not part of the public API.
+    /// </summary>
+    internal ReplicationBatchEnvelopeBox BuildEnvelopeBoxForTesting(ReplicationBatch batch) => BuildEnvelopeBox(batch);
 
     private PeerChannel ResolvePeerChannel(string targetClusterId)
     {

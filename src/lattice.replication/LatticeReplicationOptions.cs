@@ -709,5 +709,4 @@ public class LatticeReplicationOptions
     /// signalling enabled.
     /// </summary>
     public const bool DefaultShipDoorbellEnabled = true;
-
 }

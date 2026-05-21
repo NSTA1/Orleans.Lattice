@@ -182,10 +182,10 @@ internal sealed partial class ShardRootGrain
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
-            var terminal = new LatticeMutation
+            var terminal = new WalRecord
             {
                 TreeId = TreeId,
-                Kind = committed ? MutationKind.TxCommit : MutationKind.TxAbort,
+                Op = committed ? MutationKind.TxCommit : MutationKind.TxAbort,
                 Key = ShardIndex.ToString(CultureInfo.InvariantCulture),
                 Timestamp = terminalHlc,
                 OriginClusterId = LatticeOriginContext.Current,

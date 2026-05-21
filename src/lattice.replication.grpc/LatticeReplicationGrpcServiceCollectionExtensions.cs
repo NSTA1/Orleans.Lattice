@@ -112,6 +112,15 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         services.AddOptions<LatticeReplicationSecurityOptions>();
         services.AddOptions<LatticeReplicationOptions>();
 
+        // The framing-aware push marshaller decodes pre-encoded WAL
+        // entry bytes back into WalRecord instances on the receiver
+        // side via IWalRecordEncoder. Hosts that call AddLattice
+        // already register the canonical Orleans-binary encoder; the
+        // TryAdd here is the safe fallback for stand-alone gRPC
+        // hosts (typically integration tests) that compose only the
+        // replication-grpc surface.
+        services.TryAddSingleton<IWalRecordEncoder, OrleansBinaryWalRecordEncoder>();
+
         // Register the auth interceptor globally so every gRPC
         // service hosted on this pipeline runs through the
         // shared-secret authenticator. The interceptor itself
@@ -192,8 +201,9 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         services.TryAddSingleton<LatticeReplicationGrpcMethod>(sp =>
         {
             var encoder = sp.GetRequiredService<IReplicationBatchEncoder>();
+            var walRecordEncoder = sp.GetRequiredService<IWalRecordEncoder>();
             var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
-            var method = new LatticeReplicationGrpcMethod(encoder, ackSerializer);
+            var method = new LatticeReplicationGrpcMethod(encoder, walRecordEncoder, ackSerializer);
             LatticeReplicationGrpcMethodHolder.Current = method;
             return method;
         });

@@ -29,13 +29,13 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 public class AzureTableWalStorageProviderParallelismTests
 {
     private ServiceProvider _services = null!;
-    private Serializer<LatticeMutation> _serializer = null!;
+    private Serializer<WalRecord> _serializer = null!;
 
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
         _services = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        _serializer = _services.GetRequiredService<Serializer<LatticeMutation>>();
+        _serializer = _services.GetRequiredService<Serializer<WalRecord>>();
     }
 
     [OneTimeTearDown]

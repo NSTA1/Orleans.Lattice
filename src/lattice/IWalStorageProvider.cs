@@ -66,7 +66,7 @@ public interface IWalStorageProvider
     /// takes pre-encoded payload bytes alongside their parallel
     /// dense offsets. Producers (the WAL grain) call this overload
     /// when they have already paid the encode cost via
-    /// <see cref="IWalMutationEncoder"/> at append time, so the bytes
+    /// <see cref="IWalRecordEncoder"/> at append time, so the bytes
     /// that informed the per-batch byte budget are the same bytes
     /// handed to the provider - no second encode.
     /// <para>
@@ -74,10 +74,10 @@ public interface IWalStorageProvider
     /// Storage, file-backed providers) hand the segments straight
     /// through to their persistence row. Backends that prefer to own
     /// the codec (for example, ones that index secondary fields off
-    /// <see cref="LatticeMutation.Timestamp"/> or
-    /// <see cref="LatticeMutation.OriginClusterId"/>) decode each
-    /// segment with the configured <see cref="IWalMutationEncoder"/>
-    /// before storing.
+    /// <see cref="WalRecord.Timestamp"/> or
+    /// <see cref="WalRecord.OriginClusterId"/>) decode each segment
+    /// with the configured <see cref="IWalRecordEncoder"/> before
+    /// storing.
     /// </para>
     /// <para>
     /// All-or-nothing atomicity, offset density, and overlap
@@ -102,7 +102,7 @@ public interface IWalStorageProvider
         int shardIndex,
         ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
         ReadOnlyMemory<long> offsets,
-        IWalMutationEncoder encoder,
+        IWalRecordEncoder encoder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -114,21 +114,23 @@ public interface IWalStorageProvider
                 nameof(encodedEntries));
         }
 
-        // Default fallback: decode each segment to a WalEntry and
-        // delegate to the legacy overload so third-party providers
-        // that have not implemented this method keep working.
-        // Providers that can store the segments directly (e.g.
-        // AzureTableWalStorageProvider) override this method and
-        // skip the round-trip.
+        // Default fallback: decode each segment back to the durability-
+        // shaped WalRecord, project it onto the provider-boundary
+        // WalEntry.Mutation (LatticeMutation-shaped), and delegate to
+        // the legacy overload so third-party providers that have not
+        // implemented this method keep working. Providers that can
+        // store the segments directly (e.g. AzureTableWalStorageProvider)
+        // override this method and skip the round-trip.
         var segments = encodedEntries.Span;
         var offsetSpan = offsets.Span;
         var decoded = new WalEntry[segments.Length];
         for (var i = 0; i < segments.Length; i++)
         {
+            var record = encoder.Decode(segments[i].AsSpan());
             decoded[i] = new WalEntry
             {
                 Offset = offsetSpan[i],
-                Mutation = encoder.Decode(segments[i].AsSpan()),
+                Mutation = BPlusTree.Grains.WalRecordConverter.FromWalRecord(in record),
             };
         }
         return AppendBatchAsync(treeId, shardIndex, decoded, cancellationToken);
@@ -152,6 +154,101 @@ public interface IWalStorageProvider
         long fromOffsetExclusive,
         int maxEntries,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Bytes-shaped read seam mirroring
+    /// <see cref="AppendEncodedBatchAsync"/>'s zero-copy write seam.
+    /// Returns the same entries
+    /// <see cref="ReadAsync"/> would yield - strictly greater than
+    /// <paramref name="fromOffsetExclusive"/>, ascending, up to
+    /// <paramref name="maxEntries"/> - but as pre-encoded byte
+    /// segments rather than materialised <see cref="WalEntry"/>
+    /// values. Used by the shipper drain to hand segments straight to
+    /// the outbound framing encoder without an intermediate
+    /// <see cref="WalRecord"/> materialisation.
+    /// <para>
+    /// The default implementation drains <see cref="ReadAsync"/> and
+    /// re-encodes each entry's projected <see cref="WalRecord"/> via
+    /// <paramref name="encoder"/>; providers that natively store the
+    /// encoded bytes (the Azure Table Storage provider's row
+    /// <c>Payload</c> column, an in-memory provider that retained the
+    /// segments from <see cref="AppendEncodedBatchAsync"/>) override
+    /// this method to return the bytes verbatim and skip the
+    /// round-trip. Third-party providers that have not adopted the
+    /// override continue to work unchanged - the default body
+    /// preserves byte-for-byte equivalence with
+    /// <see cref="ReadAsync"/> followed by an element-wise encode.
+    /// </para>
+    /// <para>
+    /// The returned <see cref="WalShardEncodedPage"/> is transient:
+    /// the underlying byte arrays are owned by the provider for the
+    /// duration of the synchronous return and the caller must not
+    /// retain references past consumption.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="fromOffsetExclusive">Strict lower-bound offset; pass <c>-1</c> to read from the start of the log.</param>
+    /// <param name="maxEntries">Maximum number of entries to yield; must be at least <c>1</c>.</param>
+    /// <param name="encoder">Encoder used by the default fallback to project each <see cref="WalEntry.Mutation"/> back to a <see cref="WalRecord"/> and serialise it. Providers that override this method may ignore the argument. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the scan commences and between every yielded segment.</param>
+    async Task<WalShardEncodedPage> ReadEncodedAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        int maxEntries,
+        IWalRecordEncoder encoder,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(encoder);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries),
+                maxEntries,
+                "At least one entry must be requested per read.");
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Default fallback: drain ReadAsync and re-encode each entry's
+        // projected WalRecord. This preserves byte-for-byte equivalence
+        // with the zero-copy override path because (a) the producer
+        // wrote bytes via IWalRecordEncoder.Encode(in WalRecord, writer)
+        // through AppendEncodedBatchAsync, (b) the provider's read path
+        // here materialises a WalEntry whose Mutation field round-trips
+        // through WalRecordConverter, and (c) re-encoding the
+        // converter-projected WalRecord through the same encoder
+        // reproduces the original bytes for the subset of fields
+        // LatticeMutation carries. Providers that hold the original
+        // bytes (Azure Table Storage, or an in-memory provider with a
+        // segment pool retained from AppendEncodedBatchAsync) override
+        // this method and skip the round-trip.
+        var segmentsBuilder = new List<ArraySegment<byte>>(Math.Min(maxEntries, 256));
+        var offsetsBuilder = new List<long>(Math.Min(maxEntries, 256));
+        await foreach (var entry in ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var record = BPlusTree.Grains.WalRecordConverter.ToWalRecord(
+                entry.Mutation,
+                LatticeMergeMode.LwwRegister,
+                string.Empty);
+            var writer = new System.Buffers.ArrayBufferWriter<byte>();
+            encoder.Encode(in record, writer);
+            segmentsBuilder.Add(new ArraySegment<byte>(writer.WrittenSpan.ToArray()));
+            offsetsBuilder.Add(entry.Offset);
+        }
+
+        var segments = segmentsBuilder.ToArray();
+        var offsets = offsetsBuilder.ToArray();
+        return new WalShardEncodedPage
+        {
+            EncodedEntries = segments,
+            Offsets = offsets,
+            HighestOffsetInclusive = offsets.Length == 0 ? -1L : offsets[^1],
+        };
+    }
 
     /// <summary>
     /// Returns the highest <see cref="WalEntry.Offset"/> currently

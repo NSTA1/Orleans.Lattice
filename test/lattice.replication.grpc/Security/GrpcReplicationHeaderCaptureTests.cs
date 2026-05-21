@@ -156,7 +156,7 @@ public class GrpcReplicationHeaderCaptureTests
     public async Task Sender_call_credentials_send_both_secret_and_origin_headers_on_the_wire()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
 
         // Use the same call-credentials path the production sender uses.
         var secrets = Substitute.For<IReplicationSecretProvider>();

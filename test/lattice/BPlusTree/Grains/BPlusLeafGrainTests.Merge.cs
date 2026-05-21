@@ -146,9 +146,9 @@ public partial class BPlusLeafGrainTests
         Assert.That(commitLog.Appended.All(m => m.IsMerge), Is.True,
             "every merge envelope must carry IsMerge=true so receivers can tag the kind dimension");
         Assert.That(commitLog.Appended.Any(m =>
-            m.Key == "live" && m.Kind == MutationKind.Set && !m.IsTombstone), Is.True);
+            m.Key == "live" && m.Op == MutationKind.Set && !m.IsTombstone), Is.True);
         Assert.That(commitLog.Appended.Any(m =>
-            m.Key == "dead" && m.Kind == MutationKind.Delete && m.IsTombstone), Is.True);
+            m.Key == "dead" && m.Op == MutationKind.Delete && m.IsTombstone), Is.True);
     }
 
     [Test]

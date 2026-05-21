@@ -76,7 +76,7 @@ public partial class BPlusLeafGrainTests
         var appended = commitLog.Appended[^1];
         Assert.That(appended.IsBackstop, Is.True,
             "backstop WAL append must carry IsBackstop=true so observers can distinguish it from an ordinary Set");
-        Assert.That(appended.Kind, Is.EqualTo(MutationKind.Set));
+        Assert.That(appended.Op, Is.EqualTo(MutationKind.Set));
         Assert.That(appended.Key, Is.EqualTo("k"));
         Assert.That(appended.Value, Is.EqualTo(new byte[] { 1 }));
         Assert.That(appended.TransactionId, Is.EqualTo(txid),

@@ -158,7 +158,7 @@ public class TransportMetadataPassthroughContractTests
     private async Task PushAsync(ReplicationBatchEnvelope envelope)
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
         var invoker = _channel.CreateCallInvoker();
         var box = new ReplicationBatchEnvelopeBox { Value = envelope };
         using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: default, request: box);

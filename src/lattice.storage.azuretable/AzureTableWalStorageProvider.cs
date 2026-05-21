@@ -6,6 +6,7 @@ using System.Text;
 using Azure;
 using Azure.Data.Tables;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Storage.AzureTable;
@@ -212,7 +213,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         new(StringComparer.Ordinal);
 
     private readonly AzureTableWalStorageOptions _options;
-    private readonly Serializer<LatticeMutation> _serializer;
+    private readonly Serializer<WalRecord> _serializer;
 
     // Per-shard phase-2 workers, lazily created on first append for a
     // given (treeId, shardIndex). Each worker owns a single Task plus
@@ -252,7 +253,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// </summary>
     public AzureTableWalStorageProvider(
         IOptions<AzureTableWalStorageOptions> options,
-        Serializer<LatticeMutation> serializer)
+        Serializer<WalRecord> serializer)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -356,7 +357,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         int shardIndex,
         ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
         ReadOnlyMemory<long> offsets,
-        IWalMutationEncoder encoder,
+        IWalRecordEncoder encoder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -787,6 +788,97 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 yielded++;
             }
         }
+    }
+
+    /// <summary>
+    /// Bytes-shaped read override that hands the row <c>Payload</c>
+    /// bytes back to the caller verbatim, skipping the
+    /// <c>WalRecord</c> -&gt; <c>LatticeMutation</c> projection on
+    /// the read path. Used by the shipper one-encode fast path to
+    /// stream pre-encoded segments straight into the outbound framing
+    /// encoder without an intermediate strongly-typed materialisation.
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="fromOffsetExclusive">Strict lower-bound offset; pass <c>-1</c> to read from the start of the log.</param>
+    /// <param name="maxEntries">Maximum number of entries to yield; must be at least <c>1</c>.</param>
+    /// <param name="encoder">Ignored on this override; the provider holds the encoded bytes verbatim. The argument is preserved on the signature to keep parity with the default fallback. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the scan and between every yielded row.</param>
+    public async Task<WalShardEncodedPage> ReadEncodedAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        int maxEntries,
+        IWalRecordEncoder encoder,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(encoder);
+        if (maxEntries < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxEntries),
+                maxEntries,
+                "At least one entry must be requested per read.");
+        }
+
+        var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
+        var firstWantedOffset = Math.Max(0L, fromOffsetExclusive + 1L);
+        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+
+        var manifestFilter =
+            $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
+
+        // Accumulate the byte segments and offsets in parallel. The
+        // segments wrap each row's Payload array directly - one fewer
+        // allocation per entry than the default fallback (which has
+        // to ToArray() the encoder's WrittenSpan). The Payload arrays
+        // are owned by the freshly-deserialised AzureTableWalEntity
+        // instances, so they outlive the synchronous return of this
+        // method.
+        var segments = new List<ArraySegment<byte>>(Math.Min(maxEntries, 256));
+        var offsets = new List<long>(Math.Min(maxEntries, 256));
+        await foreach (var manifestRow in table
+            .QueryAsync<AzureTableWalEntity>(manifestFilter, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (segments.Count >= maxEntries)
+            {
+                break;
+            }
+
+            var startOffset = long.Parse(
+                manifestRow.RowKey.AsSpan(ManifestRowKeyPrefix.Length),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture);
+
+            var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
+            var batchLowerInclusiveRowKey = BuildEntryRowKey(Math.Max(firstWantedOffset, startOffset));
+            var batchFilter =
+                $"PartitionKey eq '{Escape(batchPartitionKey)}' and RowKey ge '{batchLowerInclusiveRowKey}' and RowKey lt 'F'";
+
+            await foreach (var entity in table
+                .QueryAsync<AzureTableWalEntity>(batchFilter, maxPerPage: Math.Min(maxEntries - segments.Count, 1000), cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (segments.Count >= maxEntries)
+                {
+                    break;
+                }
+                var payload = entity.Payload ?? Array.Empty<byte>();
+                segments.Add(new ArraySegment<byte>(payload));
+                offsets.Add(entity.Offset);
+            }
+        }
+
+        var segmentsArray = segments.ToArray();
+        var offsetsArray = offsets.ToArray();
+        return new WalShardEncodedPage
+        {
+            EncodedEntries = segmentsArray,
+            Offsets = offsetsArray,
+            HighestOffsetInclusive = offsetsArray.Length == 0 ? -1L : offsetsArray[^1],
+        };
     }
 
     /// <inheritdoc />
@@ -1227,14 +1319,24 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     private AzureTableWalEntity BuildEntryEntity(string partitionKey, in WalEntry entry, ArrayBufferWriter<byte> buffer)
     {
         // Serialise via Orleans so the payload survives every
-        // additive change to LatticeMutation under the existing
-        // Orleans-serialization wire-compat rules. The provider does
-        // not need to know the field layout - only that the bytes
-        // round-trip through the same serializer. The caller hands in
-        // a buffer that has already been reset to zero written count;
-        // we own it for the duration of the call but never retain a
-        // reference past the WrittenSpan.ToArray copy below.
-        _serializer.Serialize(entry.Mutation, buffer);
+        // additive change to WalRecord under the existing Orleans-
+        // serialization wire-compat rules. The provider does not need
+        // to know the field layout - only that the bytes round-trip
+        // through the same serializer. The caller hands in a buffer
+        // that has already been reset to zero written count; we own it
+        // for the duration of the call but never retain a reference
+        // past the WrittenSpan.ToArray copy below.
+        // The provider-boundary WalEntry carries the LatticeMutation-
+        // shaped payload; project it to the durability-shaped WalRecord
+        // so the on-disk format matches AppendEncodedBatchAsync exactly.
+        // The legacy AppendBatchAsync path has no mode/origin context,
+        // so we fall back to LwwRegister and an empty origin id (the
+        // converter preserves the mutation's own origin when present).
+        var record = WalRecordConverter.ToWalRecord(
+            entry.Mutation,
+            LatticeMergeMode.LwwRegister,
+            string.Empty);
+        _serializer.Serialize(record, buffer);
         return new AzureTableWalEntity
         {
             PartitionKey = partitionKey,
@@ -1254,7 +1356,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             // provider's behaviour for an absent shard.
             return default;
         }
-        return _serializer.Deserialize(new ReadOnlyMemory<byte>(payload));
+        // On-disk format is WalRecord-shaped; project back to the
+        // provider-boundary LatticeMutation shape so WalEntry.Mutation
+        // consumers see the same surface they always have.
+        var record = _serializer.Deserialize(new ReadOnlyMemory<byte>(payload));
+        return WalRecordConverter.FromWalRecord(in record);
     }
 
     private async ValueTask<TableClient> EnsureTableAsync(CancellationToken cancellationToken)

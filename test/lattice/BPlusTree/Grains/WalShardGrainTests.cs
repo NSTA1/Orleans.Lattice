@@ -25,7 +25,7 @@ public partial class WalShardGrainTests
     private static async Task<WalShardGrain> CreateGrainAsync(
         IWalStorageProvider? provider = null,
         LatticeOptions? options = null,
-        IWalMutationEncoder? encoder = null)
+        IWalRecordEncoder? encoder = null)
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
@@ -84,16 +84,16 @@ public partial class WalShardGrainTests
 
     /// <summary>
     /// Constructs the canonical Orleans-binary encoder backed by a
-    /// fresh <c>Serializer&lt;LatticeMutation&gt;</c> from a minimal
-    /// service provider. Tests that want to assert encoder-injection
+    /// fresh <c>Serializer&lt;WalRecord&gt;</c> from a minimal service
+    /// provider. Tests that want to assert encoder-injection
     /// observability supply their own stub instead.
     /// </summary>
-    private static IWalMutationEncoder CreateDefaultEncoder()
+    private static IWalRecordEncoder CreateDefaultEncoder()
     {
         var services = new ServiceCollection()
             .AddSerializer()
             .BuildServiceProvider();
-        return new OrleansBinaryWalMutationEncoder(services.GetRequiredService<Serializer<LatticeMutation>>());
+        return new OrleansBinaryWalRecordEncoder(services.GetRequiredService<Serializer<WalRecord>>());
     }
 
     [Test]
