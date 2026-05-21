@@ -146,3 +146,81 @@ allocates a distinct `byte[]` per entry, matching producer behavior
 where each `SetAsync` call hands the WAL its own buffer. Reviewers
 considering similar A/B fixtures should ensure per-entry payload
 identity for any batch-encoding microbench.
+
+## R-117 follow-on - per-entry `WalRecord.Mode` slot off the wire
+
+R-117 removes the per-entry `WalRecord.Mode` slot from the encoded
+bytes by de-tagging the property (the field carries `[field:
+NonSerialized]` rather than a `[GenerateSerializer]` `[Id(...)]`
+attribute) so the canonical Orleans codec never writes it. The merge
+mode is hoisted into the framing header (`EncodedBatchHeader.Mode`)
+once per batch since wire version 5; the receiver-side replication
+apply seam re-stamps every decoded entry with that header value via
+the existing 3-arg `IWalRecordEncoder.Decode(span, treeId, mode)`
+overload, so the in-memory `WalRecord.Mode` an applier observes is
+unchanged. Every code path that reads `entry.Mode` (the apply seam's
+mode-dispatch switch, the OR-Set / PN-Counter / VersionVector /
+MvRegister state-merge routes) continues to work transparently.
+
+A direct `Serializer<WalRecord>.Serialize` probe shows the on-the-wire
+saving is **exactly 2 bytes per entry**, deterministic across every
+combination of payload size and entry count we tested (the field tag
+byte plus the enum-zero value byte for the default-shape `LwwRegister`
+mode). Re-running `Ship_FramingOnly` against the post-R-117 encoder
+with the same `"ship-bench"` (10-byte UTF-8) tree name produces the
+fourth column below; the per-entry figure is the difference between
+R-116 and R-117 totals divided by `entryCount`.
+
+| entries | payload | framing only (R-116) | framing only (R-117) | absolute saving | per-entry |
+|--------:|--------:|---------------------:|---------------------:|----------------:|----------:|
+| 16      | 64      | 7.90 KB              | 7.90 KB              | 0 KB            | ~0 B      |
+| 16      | 1024    | 42.30 KB             | 42.24 KB             | 0.06 KB         | ~3.8 B    |
+| 16      | 16384   | 507.32 KB            | 507.26 KB            | 0.06 KB         | ~3.8 B    |
+| 64      | 64      | 31.95 KB             | 31.95 KB             | 0 KB            | ~0 B      |
+| 64      | 1024    | 172.00 KB            | 171.76 KB            | 0.24 KB         | ~3.8 B    |
+| 64      | 16384   | 2,077.14 KB          | 2,076.94 KB          | 0.20 KB         | ~3.2 B    |
+| 256     | 64      | 127.99 KB            | 127.99 KB            | 0 KB            | ~0 B      |
+| 256     | 1024    | 690.67 KB            | 689.68 KB            | 0.99 KB         | ~4.0 B    |
+| 256     | 16384   | 8,356.49 KB          | 8,355.43 KB          | 1.06 KB         | ~4.2 B    |
+| 1024    | 64      | 512.04 KB            | 512.03 KB            | 0.01 KB         | ~0 B      |
+| 1024    | 1024    | 2,765.25 KB          | 2,761.28 KB          | 3.97 KB         | ~4.0 B    |
+| 1024    | 16384   | 33,473.51 KB         | 33,469.41 KB         | 4.10 KB         | ~4.1 B    |
+
+### Interpretation
+
+- The per-entry saving in the BenchmarkDotNet allocation counter is
+  ~4 B at batch sizes of 256+, roughly double the 2 B of raw
+  serialised-bytes saved per entry. The amplification is the second
+  pass each entry takes through `ArrayBufferWriter<byte>` and the
+  framing concatenation buffer - a 2-byte cut in the per-entry encoded
+  span trims both copies, and the allocator's bucket-rounding
+  occasionally pushes a buffer one bucket smaller. The on-the-wire and
+  on-disk savings are still 2 B/entry exactly; the BDN-measured
+  managed-allocation figure is the upper bound and the bandwidth /
+  WAL-growth figure is the lower bound.
+- The zero-saving rows at `payload = 64 B` are the same allocator
+  bucket-rounding artefact as in the R-116 table: at small payloads
+  every entry rounds up to the same bucket whether the Mode slot is
+  present or not. The wire-bytes saving is still 2 B/entry in those
+  rows, just not visible in the managed-allocation counter.
+- Steady-state, a shipper draining 1024-entry batches now saves an
+  additional ~2 KB of wire bytes (~4 KB of managed allocation) per
+  batch on top of R-116's tree-id saving. At a sustained 1k
+  batches/sec cluster-wide that is ~2 MB/sec of replication
+  bandwidth and on-disk growth additionally eliminated.
+- Combined with R-116, a production cluster shipping 1024-entry
+  batches with a 19-byte tree name now saves ~32 B/entry of wire
+  bytes (29 B from R-116 + ~3 B from R-117 - the Mode slot is enum-
+  shape so the saving does not scale with tree-name length). The
+  combined effect on a 1k batches/sec workload is ~32 MB/sec of
+  replication bandwidth and on-disk WAL growth eliminated.
+- Crucially, R-117 is **breaking** at the persistence layer: legacy
+  WAL bytes authored before R-117 still carry a populated `[Id(9)]`
+  slot. The Orleans serializer silently drops unknown ids on decode,
+  so a forward-only upgrade is correct in principle - new silos
+  reading legacy bytes will simply observe `Mode = LwwRegister`
+  (the enum default), which the receiver-side apply seam re-stamps
+  from the framing header. The previous wire id `[Id(9)]` is
+  permanently reserved on `WalRecord` and must never be reused for
+  a different field.
+

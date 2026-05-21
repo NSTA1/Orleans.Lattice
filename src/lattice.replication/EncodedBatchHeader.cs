@@ -56,6 +56,21 @@ public readonly record struct EncodedBatchHeader
     /// Bumped on every breaking change to the framing layout; consumers
     /// compare strictly greater-than for rejection.
     /// <para>
+    /// Version 5 additionally elides the per-entry
+    /// <c>WalRecord.Mode</c> slot from the encoded entry segments and
+    /// hoists it into the framing header's trailing packed slot (8
+    /// bits between <see cref="AtomicBatchSpanCount"/> and
+    /// <see cref="Compression"/>). Mode is uniformly per-tree-constant
+    /// within a single shipped batch, so every entry of a batch
+    /// agrees on it and persisting it on every entry duplicates ~2
+    /// bytes per entry. v4 receivers reject v5 framing payloads via
+    /// the existing strictly-greater-than guard. The header's
+    /// <see cref="WireSize"/> is unchanged at 32 bytes - the new
+    /// field reuses the trailing packed slot's previously reserved
+    /// bits and tightens <see cref="AtomicBatchSpanCount"/>'s
+    /// validated cap from 24 bits to 16 bits.
+    /// </para>
+    /// <para>
     /// Version 4 elides the per-entry <c>WalRecord.TreeId</c> slot
     /// from the encoded entry segments: every storage and transport
     /// seam recovers the tree id from surrounding context (the
@@ -74,7 +89,7 @@ public readonly record struct EncodedBatchHeader
     /// an older version cannot decode a newer version.
     /// </para>
     /// </summary>
-    public const int CurrentWireVersion = 4;
+    public const int CurrentWireVersion = 5;
 
     /// <summary>
     /// Magic prefix. Must equal <see cref="MagicValue"/> on any batch
@@ -124,9 +139,25 @@ public readonly record struct EncodedBatchHeader
     /// (the per-entry <c>AtomicBatchSize</c> / <c>AtomicBatchIndex</c>
     /// / <c>TransactionId</c> slots on
     /// <see cref="BPlusTree.Grains.WalRecord"/> remain the source of
-    /// truth in the interim).
+    /// truth in the interim). Validated cap is <c>0xFFFF</c> (16 bits)
+    /// since v5 - tightened from 24 bits in v4 to free 8 bits for
+    /// <see cref="Mode"/> in the trailing packed slot.
     /// </summary>
     public int AtomicBatchSpanCount { get; init; }
+
+    /// <summary>
+    /// Per-tree replication merge mode hoisted from per-entry
+    /// <c>WalRecord.Mode</c> bytes. Stamped once per batch by the
+    /// shipper from the activation-cached
+    /// <see cref="ILatticeMergeModeResolver.Resolve(string)"/> result;
+    /// the receiver's apply path re-stamps every decoded entry from
+    /// this field instead of paying a per-entry varint on the wire.
+    /// Carried in the trailing packed 32-bit slot's middle byte
+    /// (bits 16-23) since wire version 5; v4 producers wrote
+    /// <see cref="LatticeMergeMode.LwwRegister"/> by enum default so
+    /// downgraded receivers still observe the historical baseline.
+    /// </summary>
+    public LatticeMergeMode Mode { get; init; }
 
     /// <summary>
     /// Compression algorithm applied to the entry-segment bytes after
@@ -159,18 +190,23 @@ public readonly record struct EncodedBatchHeader
         BinaryPrimitives.WriteUInt64LittleEndian(destination[8..16], OriginClusterIdHash);
         BinaryPrimitives.WriteInt32LittleEndian(destination[16..20], EntryCount);
         BinaryPrimitives.WriteInt64LittleEndian(destination[20..28], BatchSequence);
-        // The trailing 4-byte slot packs AtomicBatchSpanCount (low 24
-        // bits) and the Compression enum (top 8 bits). Span counts are
-        // bounded by per-batch entry count and easily fit in 24 bits;
-        // compression enum values fit in a byte.
+        // The trailing 4-byte slot packs AtomicBatchSpanCount (low 16
+        // bits since v5; tightened from 24 bits in v4 to free a byte
+        // for Mode), the Mode enum (bits 16-23), and the Compression
+        // enum (bits 24-31). Span counts are bounded by per-batch
+        // entry count and 65 535 vastly exceeds any realised batch.
+        // Mode and Compression enum values both fit in a byte.
         var spanCount = AtomicBatchSpanCount;
-        if (spanCount < 0 || spanCount > 0x00FFFFFF)
+        if (spanCount < 0 || spanCount > 0x0000FFFF)
         {
             throw new InvalidOperationException(
-                $"{nameof(AtomicBatchSpanCount)} must fit in 24 bits; got {spanCount}.");
+                $"{nameof(AtomicBatchSpanCount)} must fit in 16 bits; got {spanCount}.");
         }
+        var modeByte = (uint)(byte)Mode;
         var compression = (uint)(byte)Compression;
-        var packed = ((uint)spanCount & 0x00FFFFFFu) | (compression << 24);
+        var packed = ((uint)spanCount & 0x0000FFFFu)
+            | (modeByte << 16)
+            | (compression << 24);
         BinaryPrimitives.WriteUInt32LittleEndian(destination[28..32], packed);
     }
 
@@ -200,7 +236,8 @@ public readonly record struct EncodedBatchHeader
             OriginClusterIdHash = BinaryPrimitives.ReadUInt64LittleEndian(source[8..16]),
             EntryCount = BinaryPrimitives.ReadInt32LittleEndian(source[16..20]),
             BatchSequence = BinaryPrimitives.ReadInt64LittleEndian(source[20..28]),
-            AtomicBatchSpanCount = (int)(packed & 0x00FFFFFFu),
+            AtomicBatchSpanCount = (int)(packed & 0x0000FFFFu),
+            Mode = (LatticeMergeMode)(byte)(packed >> 16),
             Compression = (FramingCompression)(byte)(packed >> 24),
         };
     }

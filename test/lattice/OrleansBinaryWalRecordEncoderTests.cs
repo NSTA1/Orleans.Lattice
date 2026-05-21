@@ -327,4 +327,86 @@ public sealed class OrleansBinaryWalRecordEncoderTests
 
         Assert.That(failures, Is.Zero);
     }
+
+    // --- Mode strip / restamp ---
+
+    [Test]
+    public void Encode_strips_Mode_slot_from_encoded_bytes()
+    {
+        // Since wire version 5 the encoder elides the [Id(9)]
+        // Mode slot at serialisation time because Mode is constant
+        // within a single shipped batch and hoisted into the framing
+        // header. The byte payload of an encoded record must therefore
+        // equal the byte payload of the same record with Mode reset
+        // to its enum default (LwwRegister).
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet() with { Mode = LatticeMergeMode.OrSet };
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+
+        var stripped = _serializer.SerializeToArray(record with
+        {
+            TreeId = string.Empty,
+            Mode = LatticeMergeMode.LwwRegister,
+        });
+        Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(stripped));
+    }
+
+    [Test]
+    public void Decode_with_treeId_only_returns_record_with_default_Mode()
+    {
+        // The 2-arg overload restores TreeId only; Mode falls back to
+        // the enum default (LwwRegister). Call sites that have the
+        // batch-level Mode in hand should use the 3-arg overload.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet() with { Mode = LatticeMergeMode.OrSet };
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+
+        var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId);
+        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
+    }
+
+    [Test]
+    public void Decode_with_treeId_and_mode_restamps_both_fields()
+    {
+        // The 3-arg overload restores both TreeId from the surrounding
+        // context and Mode from the framing header's per-batch field.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet() with
+        {
+            TreeId = "orders/eu-west-1/v3",
+            Mode = LatticeMergeMode.PnCounter,
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+
+        var decoded = encoder.Decode(
+            writer.WrittenSpan,
+            record.TreeId,
+            LatticeMergeMode.PnCounter);
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.TreeId, Is.EqualTo("orders/eu-west-1/v3"));
+            Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.PnCounter));
+            Assert.That(decoded.Key, Is.EqualTo(record.Key));
+        });
+    }
+
+    [Test]
+    public void Decode_with_null_treeId_and_mode_throws()
+    {
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet();
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+        var bytes = writer.WrittenSpan.ToArray();
+
+        Assert.That(
+            () => encoder.Decode(bytes, null!, LatticeMergeMode.LwwRegister),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
 }

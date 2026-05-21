@@ -330,7 +330,8 @@ public partial class ReplicationShipperGrainTests
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, encoder, walRecordEncoder, registry, factory, fakeState,
-            new ReplicationPeerStats());
+            new ReplicationPeerStats(),
+            Substitute.For<ILatticeMergeModeResolver>());
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
     }
@@ -347,7 +348,8 @@ public partial class ReplicationShipperGrainTests
         IWalCursorRegistry? registry = null,
         IGrainFactory? grainFactory = null,
         IPersistentState<ReplicationShipperState>? state = null,
-        ReplicationPeerStats? peerStats = null)
+        ReplicationPeerStats? peerStats = null,
+        ILatticeMergeModeResolver? modeResolver = null)
         => new(
             ctx ?? Substitute.For<IGrainContext>(),
             reminders ?? Substitute.For<IReminderRegistry>(),
@@ -359,7 +361,8 @@ public partial class ReplicationShipperGrainTests
             registry ?? Substitute.For<IWalCursorRegistry>(),
             grainFactory ?? Substitute.For<IGrainFactory>(),
             state ?? new FakePersistentState<ReplicationShipperState>(),
-            peerStats ?? new ReplicationPeerStats());
+            peerStats ?? new ReplicationPeerStats(),
+            modeResolver ?? Substitute.For<ILatticeMergeModeResolver>());
 
     [Test]
     public void Constructor_throws_when_options_monitor_is_null() =>
@@ -383,7 +386,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<ILatticeMergeModeResolver>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -402,7 +406,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<ILatticeMergeModeResolver>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -421,7 +426,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<ILatticeMergeModeResolver>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -440,7 +446,8 @@ public partial class ReplicationShipperGrainTests
                 null!,
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<ILatticeMergeModeResolver>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -459,7 +466,8 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IWalCursorRegistry>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationShipperState>(),
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<ILatticeMergeModeResolver>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -478,7 +486,28 @@ public partial class ReplicationShipperGrainTests
                 Substitute.For<IWalCursorRegistry>(),
                 null!,
                 new FakePersistentState<ReplicationShipperState>(),
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<ILatticeMergeModeResolver>()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_mode_resolver_is_null()
+    {
+        Assert.That(
+            () => new ReplicationShipperGrain(
+                Substitute.For<IGrainContext>(),
+                Substitute.For<IReminderRegistry>(),
+                NullLogger<ReplicationShipperGrain>.Instance,
+                Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>(),
+                Substitute.For<IReplicationTransport>(),
+                Substitute.For<IReplicationBatchEncoder>(),
+                Substitute.For<IWalRecordEncoder>(),
+                Substitute.For<IWalCursorRegistry>(),
+                Substitute.For<IGrainFactory>(),
+                new FakePersistentState<ReplicationShipperState>(),
+                new ReplicationPeerStats(),
+                null!),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -1110,7 +1139,8 @@ public partial class ReplicationShipperGrainTests
         var stats = new ReplicationPeerStats();
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, walEncoder, registry, factory, fakeState, stats);
+            monitor, transport, encoder, walEncoder, registry, factory, fakeState, stats,
+            Substitute.For<ILatticeMergeModeResolver>());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, feed, transport, stats);
     }
