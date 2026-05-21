@@ -104,4 +104,27 @@ public static class CrdtLatticeExtensions
         ArgumentException.ThrowIfNullOrEmpty(key);
         return new OrMapAccessor<TKey, TValue>(lattice, key);
     }
+
+    /// <summary>
+    /// Returns a typed accessor for a Replicated Growable Array
+    /// (RGA) sequence stored under <paramref name="key"/> in
+    /// <paramref name="lattice"/>. Concurrent inserts under the same
+    /// parent converge on a deterministic order via the standard RGA
+    /// descending <c>(Counter, ReplicaId)</c> tie-break, and removes
+    /// tombstone the targeted node so a later re-insert against the
+    /// same parent still resolves correctly. The dominant use case is
+    /// collaborative editing of an ordered list or text buffer;
+    /// pairing this with mutation observers gives a real-time
+    /// list / text channel out of the box.
+    /// </summary>
+    /// <typeparam name="T">The user-facing element type. Serialised to and from <see cref="byte"/>[] through the supplied <paramref name="serializer"/> or <see cref="JsonLatticeSerializer{T}"/>.</typeparam>
+    /// <param name="lattice">The tree containing the sequence.</param>
+    /// <param name="key">The key the sequence is stored under.</param>
+    /// <param name="serializer">Optional serializer for <typeparamref name="T"/>. Defaults to <see cref="JsonLatticeSerializer{T}.Default"/>.</param>
+    public static RgaAccessor<T> Sequence<T>(this ILattice lattice, string key, ILatticeSerializer<T>? serializer = null)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        return new RgaAccessor<T>(lattice, key, serializer ?? JsonLatticeSerializer<T>.Default);
+    }
 }

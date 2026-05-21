@@ -58,7 +58,9 @@ public sealed class MyAggregate
 | `MvRegisterEntry` | Dot-tagged `(replicaId, counter, value)` triple inside an `MvRegister`. |
 | `OrMap<TKey, TValue>` | Observed-remove map CRDT (public) of recursively-mergeable CRDT values. Keys follow add-wins observed-remove semantics; per-key values are folded through `ICrdt<TValue>.MergeFrom`, so concurrent writes under the same map key converge into a single recursively-merged value rather than being collapsed by last-writer-wins. Exposed through `ILattice.OrMap<TKey, TValue>(key)`. |
 | `OrMapEntry<TValue>` | Dot-tagged `(replicaId, counter, value)` slot inside an `OrMap`. |
-| `ICrdt<TSelf>` | Internal-feeling but `public` interface declaring `MergeFrom(TSelf)` plus `IsBottom`. Implemented by `OrSet`, `PnCounter`, `VersionVector`, and `MvRegister`; the constraint that lets `OrMap<TKey, TValue>` recurse through nested CRDT values without reflection. |
+| `Rga` | Replicated Growable Array sequence CRDT (public). Stores a tree of dot-tagged nodes linked through `parentDot`; the materialised order is a depth-first walk with descending `(Counter, ReplicaId)` sibling tie-break. Removes tombstone nodes but preserve them in the tree so concurrent inserts under the same parent still resolve. Exposed through `ILattice.Sequence<T>(key)`. |
+| `RgaNode` | Tree node carrying `(replicaId, counter, parentDot, value, isTombstone)` inside an `Rga`. |
+| `ICrdt<TSelf>` | Internal-feeling but `public` interface declaring `MergeFrom(TSelf)` plus `IsBottom`. Implemented by `OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMap`, and `Rga`; the constraint that lets `OrMap<TKey, TValue>` recurse through nested CRDT values without reflection. |
 | `StateDelta` | Captures entries changed since a given version vector |
 | `SplitState` | Enum tracking leaf/internal split lifecycle |
 
