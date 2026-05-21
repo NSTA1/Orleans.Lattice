@@ -103,6 +103,30 @@ internal sealed partial class BPlusLeafGrain
         new(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty);
 
     /// <summary>
+    /// Resolves the ambient compaction-trigger tag for the current call,
+    /// or <see langword="null"/> if no trigger scope is active. Returns
+    /// the cached singleton from <see cref="LatticeMetrics"/> for known
+    /// labels (<c>reminder</c> / <c>ratio</c> / <c>size</c> /
+    /// <c>operator</c>), avoiding a per-call <c>KeyValuePair</c>
+    /// construction; falls back to a freshly-built pair only for an
+    /// unknown label (defence-in-depth - the producers in this
+    /// repository never set anything else).
+    /// </summary>
+    private static KeyValuePair<string, object?>? CompactionTriggerTag()
+    {
+        var raw = LatticeCompactionTriggerContext.Current;
+        return raw switch
+        {
+            null => null,
+            TombstoneCompactionGrain.TriggerReminder => LatticeMetrics.TriggerReminderTag,
+            TombstoneCompactionGrain.TriggerRatio => LatticeMetrics.TriggerRatioTag,
+            TombstoneCompactionGrain.TriggerSize => LatticeMetrics.TriggerSizeTag,
+            TombstoneCompactionGrain.TriggerOperator => LatticeMetrics.TriggerOperatorTag,
+            _ => new KeyValuePair<string, object?>(LatticeMetrics.TagTrigger, raw),
+        };
+    }
+
+    /// <summary>
     /// Lazily resolves the commit-log writer from the activation's
     /// service provider. Returns <see langword="null"/> when no adapter
     /// has been registered (the legacy-only commit path) <em>or</em>

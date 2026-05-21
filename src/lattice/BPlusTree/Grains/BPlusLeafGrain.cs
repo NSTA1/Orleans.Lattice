@@ -1109,6 +1109,11 @@ internal sealed partial class BPlusLeafGrain(
         await PublishDigestUpwardAsync();
         RecordCommitStep("digest", digestStartTicks);
 
+        // Best-effort policy trigger: a fresh tombstone may push the
+        // leaf past the configured ratio / size thresholds. No-op when
+        // both knobs hold their defaults.
+        EvaluateCompactionTrigger();
+
         return true;
     }
 
@@ -1227,6 +1232,10 @@ internal sealed partial class BPlusLeafGrain(
         var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAsync();
         RecordCommitStep("digest", digestStartTicks);
+
+        // Best-effort policy trigger: range deletes can swing the
+        // tombstone ratio sharply on a single leaf.
+        EvaluateCompactionTrigger();
 
         return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
     }
@@ -1422,7 +1431,28 @@ internal sealed partial class BPlusLeafGrain(
     {
         // Skip scan if nothing has changed since last compaction.
         if (state.State.LastCompactionVersion.DominatesOrEquals(state.State.Version))
+        {
+            // Sample the current tombstone ratio on the per-leaf
+            // histogram and notify the pass that this leaf was a
+            // no-op so the visited-counter stays accurate.
+            SampleLeafTombstoneRatio();
+            var noopTreeTag = LeafTreeTag();
+            var noopTriggerTag = CompactionTriggerTag();
+            if (noopTriggerTag is { } noopTrig)
+            {
+                LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig);
+            }
+            else
+            {
+                LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop);
+            }
             return 0;
+        }
+
+        // Pre-scan ratio sample so dashboards see space-amplification
+        // hot spots even on passes that ultimately reap nothing in
+        // this grace window (every tombstone still inside the grace).
+        SampleLeafTombstoneRatio();
 
         // Tombstone-reap is a structural rewrite of state already authored
         // by user writes - not a semantic causal event. Wrap the entire
@@ -1539,7 +1569,7 @@ internal sealed partial class BPlusLeafGrain(
                         var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                         LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
                             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "compact"));
+                            LatticeMetrics.KindCompact);
                     }
                 }
 
@@ -1559,11 +1589,33 @@ internal sealed partial class BPlusLeafGrain(
 
         var elapsedTotalMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         var treeTag = LeafTreeTag();
-        LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag);
-        if (tombstonesRemoved > 0)
-            LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag);
-        if (expiredRemoved > 0)
-            LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag);
+        var triggerTag = CompactionTriggerTag();
+        if (triggerTag is { } trig)
+        {
+            LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag, trig);
+            if (tombstonesRemoved > 0)
+                LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag, trig);
+            if (expiredRemoved > 0)
+                LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag, trig);
+
+            // Pass-level per-leaf outcome: reaped if at least one entry
+            // was physically removed, otherwise noop (the leaf had work
+            // pending but every tombstone was still in the grace window).
+            LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag,
+                toRemove.Count > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop,
+                trig);
+        }
+        else
+        {
+            LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag);
+            if (tombstonesRemoved > 0)
+                LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag);
+            if (expiredRemoved > 0)
+                LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag);
+
+            LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag,
+                toRemove.Count > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop);
+        }
 
         // Forward the projection-hash delta from the reaped tombstones
         // (and the entry-count shrinkage) to the parent internal node.

@@ -42,6 +42,45 @@ public class LatticeOptions
     public TimeSpan TombstoneGracePeriod { get; set; } = DefaultTombstoneGracePeriod;
 
     /// <summary>
+    /// Minimum tombstone-to-total ratio (in <c>[0.0, 1.0]</c>) on a single leaf
+    /// that triggers an out-of-cycle compaction pass for the leaf's shard,
+    /// in addition to the regular reminder-driven cadence governed by
+    /// <see cref="TombstoneGracePeriod"/>. The ratio is computed as
+    /// <c>tombstones / max(liveKeys + tombstones, 1)</c> on each leaf
+    /// commit; when it crosses the threshold, the leaf asks its tree's
+    /// compaction grain to schedule a pass for the affected shard.
+    /// Set to <c>0.0</c> (the default) to disable ratio-based pre-emption -
+    /// only the regular reminder fires.
+    /// </summary>
+    public double MinTombstoneRatioForCompaction { get; set; } = DefaultMinTombstoneRatioForCompaction;
+
+    /// <summary>
+    /// Maximum total entry count (live + tombstones) on a single leaf before
+    /// the leaf requests an out-of-cycle compaction pass for its shard.
+    /// Provides a size-based safety valve that complements
+    /// <see cref="MinTombstoneRatioForCompaction"/>: a small leaf at high
+    /// ratio is reaped through the ratio trigger, while a large leaf that
+    /// has accumulated tombstones (even at low ratio) is reaped through
+    /// this trigger. Only fires when the leaf actually contains at least
+    /// one tombstone or expired entry. Set to <c>0</c> (the default) to
+    /// disable size-based pre-emption.
+    /// </summary>
+    public int MaxLeafEntriesBeforeForcedCompaction { get; set; } = DefaultMaxLeafEntriesBeforeForcedCompaction;
+
+    /// <summary>
+    /// Minimum interval between consecutive out-of-cycle compaction passes
+    /// for the same <c>(treeId, shardIndex)</c> when triggered by
+    /// <see cref="MinTombstoneRatioForCompaction"/> or
+    /// <see cref="MaxLeafEntriesBeforeForcedCompaction"/>. Prevents a hot
+    /// leaf from monopolising the compactor's grain timer with rapid-fire
+    /// requests. The cooldown is independent of the regular reminder
+    /// cadence: a regular reminder pass always proceeds regardless of any
+    /// per-shard cooldown record. Operator-initiated requests via
+    /// <c>RequestCompactionAsync</c> bypass the cooldown.
+    /// </summary>
+    public TimeSpan CompactionTriggerCooldown { get; set; } = DefaultCompactionTriggerCooldown;
+
+    /// <summary>
     /// How long a soft-deleted tree is retained before its grains are permanently
     /// purged. During this window the tree is inaccessible (reads and writes throw
     /// <see cref="InvalidOperationException"/>), but its data still exists in storage
@@ -68,6 +107,15 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="TombstoneGracePeriod"/> (24 hours).</summary>
     public static readonly TimeSpan DefaultTombstoneGracePeriod = TimeSpan.FromHours(24);
+
+    /// <summary>Default value for <see cref="MinTombstoneRatioForCompaction"/> (<c>0.0</c> - disabled).</summary>
+    public const double DefaultMinTombstoneRatioForCompaction = 0.0;
+
+    /// <summary>Default value for <see cref="MaxLeafEntriesBeforeForcedCompaction"/> (<c>0</c> - disabled).</summary>
+    public const int DefaultMaxLeafEntriesBeforeForcedCompaction = 0;
+
+    /// <summary>Default value for <see cref="CompactionTriggerCooldown"/> (5 minutes).</summary>
+    public static readonly TimeSpan DefaultCompactionTriggerCooldown = TimeSpan.FromMinutes(5);
 
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;

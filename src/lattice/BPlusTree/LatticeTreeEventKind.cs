@@ -44,4 +44,14 @@ public enum LatticeTreeEventKind
 
     /// <summary>A <c>SetManyAtomicAsync</c> saga reached its terminal <c>Completed</c> phase.</summary>
     AtomicWriteCompleted = 11,
+
+    /// <summary>
+    /// A leaf observed its tombstone-to-total ratio or total entry count cross
+    /// the configured threshold and asked the tree's compaction grain to
+    /// schedule an out-of-cycle pass for the affected shard. Distinct from
+    /// <see cref="CompactionCompleted"/>, which fires once per finished pass.
+    /// <see cref="LatticeTreeEvent.ShardIndex"/> carries the shard index that
+    /// owns the affected leaf; <see cref="LatticeTreeEvent.Key"/> is unused.
+    /// </summary>
+    CompactionTriggered = 12,
 }

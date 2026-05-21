@@ -760,6 +760,87 @@
           "legendFormat": "{{tree}} non-committed"
         }
       ]
+    },
+    {
+      "id": 19,
+      "title": "Compaction pass duration p95 (ms, by trigger)",
+      "description": "End-to-end RunCompactionPassAsync wall-clock duration split by trigger source: reminder-driven baseline passes, ratio/size policy-trigger passes, and operator-initiated passes. A divergence between trigger labels means policy passes are markedly cheaper or more expensive than baseline passes - investigate the policy thresholds.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 54 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, trigger) (rate(orleans_lattice_compaction_pass_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "{{trigger}} p95"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Compaction leaves visited (rate, by outcome)",
+      "description": "Per-leaf compaction outcome rate: 'reaped' means at least one tombstone was physically removed, 'noop' means the leaf had pending tombstones that were still inside the grace window. A high noop:reaped ratio suggests TombstoneGracePeriod is too long for the workload's tombstone-to-write ratio.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 54 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, outcome) (rate(orleans_lattice_compaction_leaves_visited_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Compaction shard retries / skips (rate)",
+      "description": "Coordinator-level resilience signal. Retries indicate transient leaf-walk failures that the coordinator absorbed. Skips indicate shards the coordinator gave up on after exhausting retries - a non-zero skip rate is an alert-worthy condition.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 61 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "RETRIES",
+          "expr": "sum by (tree) (rate(orleans_lattice_compaction_shard_retries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} retries"
+        },
+        {
+          "refId": "SKIPS",
+          "expr": "sum by (tree) (rate(orleans_lattice_compaction_shard_skipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} skipped"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "Leaf tombstone ratio p95",
+      "description": "Distribution of tombstone-to-live-entry ratio sampled per mutation. The p95 is the headroom signal for MinTombstoneRatioForCompaction: when p95 trends above the configured threshold, the ratio policy will start firing out-of-cycle compaction passes.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 61 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_leaf_tombstone_ratio_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))",
+          "legendFormat": "{{tree}} p95"
+        }
+      ]
     }
   ]
 }
