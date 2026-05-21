@@ -165,8 +165,8 @@ public class LatticeOptions
     /// <summary>Default value for <see cref="CompactionTriggerCooldown"/> (5 minutes).</summary>
     public static readonly TimeSpan DefaultCompactionTriggerCooldown = TimeSpan.FromMinutes(5);
 
-    /// <summary>Default value for <see cref="CompactionShardTickInterval"/> (2 seconds).</summary>
-    public static readonly TimeSpan DefaultCompactionShardTickInterval = TimeSpan.FromSeconds(2);
+    /// <summary>Default value for <see cref="CompactionShardTickInterval"/> (500 milliseconds).</summary>
+    public static readonly TimeSpan DefaultCompactionShardTickInterval = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// Minimum effective value for <see cref="CompactionShardTickInterval"/>

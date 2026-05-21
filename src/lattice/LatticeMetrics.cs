@@ -98,6 +98,15 @@ public static class LatticeMetrics
     public const string TagTrigger = "trigger";
 
     /// <summary>
+    /// Tag key for the path a tombstone-compaction pass took through a
+    /// shard's leaves: <c>walk</c> for the legacy chain walk and
+    /// <c>dirty-set</c> for the dirty-leaves fast path that consults
+    /// the shard-root dirty-leaves snapshot. Emitted on
+    /// <see cref="CompactionLeavesVisited"/>.
+    /// </summary>
+    public const string TagPath = "path";
+
+    /// <summary>
     /// Tag key for a leaf-grain identifier on per-leaf instruments
     /// (e.g. <see cref="LeafTombstoneRatio"/>). Cardinality follows the
     /// same caveats as any per-leaf tag - operators that run very wide
@@ -486,6 +495,19 @@ public static class LatticeMetrics
             description: "Shards whose per-pass retry budget was exhausted, tagged by tree.");
 
     /// <summary>
+    /// Histogram of the dirty-leaf snapshot size pulled from each shard
+    /// root at the start of every compaction shard pass. Tagged with
+    /// <see cref="TagTree"/>. A value of <c>0</c> means the shard
+    /// activated only its shard-root grain on the pass; a non-zero
+    /// value reflects the count of leaves the coordinator activated
+    /// via the dirty-leaves fast path. Capacity-planning signal for the
+    /// "<c>O(shards + dirty_leaves)</c>" pass-cost target.
+    /// </summary>
+    public static readonly Histogram<int> CompactionShardDirtyLeaves =
+        Meter.CreateHistogram<int>("orleans.lattice.compaction.shard.dirty_leaves", unit: "{leaf}",
+            description: "Per-shard dirty-leaf snapshot size at compaction shard-pass start.");
+
+    /// <summary>
     /// Histogram of per-leaf tombstone-to-total ratio
     /// (<c>tombstones / max(liveKeys + tombstones, 1)</c>) sampled
     /// inside a tombstone-compaction pass, just before
@@ -536,5 +558,16 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagTrigger"/> = <c>operator</c>.</summary>
     public static readonly KeyValuePair<string, object?> TriggerOperatorTag = new(TagTrigger, "operator");
-}
 
+    /// <summary><see cref="TagPath"/> = <c>walk</c> (legacy / fallback leaf-chain walk).</summary>
+    public static readonly KeyValuePair<string, object?> PathWalkTag = new(TagPath, "walk");
+
+    /// <summary><see cref="TagPath"/> = <c>dirty-set</c> (dirty-leaves fast path).</summary>
+    public static readonly KeyValuePair<string, object?> PathDirtySetTag = new(TagPath, "dirty-set");
+
+    /// <summary>String label for the legacy leaf-chain walk path.</summary>
+    public const string PathWalk = "walk";
+
+    /// <summary>String label for the shard-root dirty-leaves fast path.</summary>
+    public const string PathDirtySet = "dirty-set";
+}

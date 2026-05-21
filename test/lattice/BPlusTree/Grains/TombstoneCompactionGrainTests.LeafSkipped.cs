@@ -26,6 +26,8 @@ public partial class TombstoneCompactionGrainTests
         var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
         var shardRoot = Substitute.For<IShardRootGrain>();
         grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0").Returns(shardRoot);
+        shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
+            .Returns(Task.FromResult(new DirtyLeavesSnapshot { DirtyLeaves = [], ObservedAdvance = default }));
         shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
         var leafMock = Substitute.For<IBPlusLeafGrain>();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
@@ -86,6 +88,8 @@ public partial class TombstoneCompactionGrainTests
         var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
         var shardRoot = Substitute.For<IShardRootGrain>();
         grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/1").Returns(shardRoot);
+        shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
+            .Returns(Task.FromResult(new DirtyLeavesSnapshot { DirtyLeaves = [], ObservedAdvance = default }));
         shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
         var leafMock = Substitute.For<IBPlusLeafGrain>();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);

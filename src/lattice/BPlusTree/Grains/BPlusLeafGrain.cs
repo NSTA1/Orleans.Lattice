@@ -1413,9 +1413,17 @@ internal sealed partial class BPlusLeafGrain(
             SampleLeafTombstoneRatio();
             var noopTreeTag = LeafTreeTag();
             var noopTriggerTag = CompactionTriggerTag();
+            var noopPathTag = CompactionPathTag();
             if (noopTriggerTag is { } noopTrig)
             {
-                LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig);
+                if (noopPathTag is { } noopPath)
+                    LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig, noopPath);
+                else
+                    LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig);
+            }
+            else if (noopPathTag is { } noopPath2)
+            {
+                LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopPath2);
             }
             else
             {
@@ -1565,6 +1573,8 @@ internal sealed partial class BPlusLeafGrain(
         var elapsedTotalMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         var treeTag = LeafTreeTag();
         var triggerTag = CompactionTriggerTag();
+        var pathTag = CompactionPathTag();
+        var outcomeTag = toRemove.Count > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop;
         if (triggerTag is { } trig)
         {
             LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag, trig);
@@ -1576,9 +1586,10 @@ internal sealed partial class BPlusLeafGrain(
             // Pass-level per-leaf outcome: reaped if at least one entry
             // was physically removed, otherwise noop (the leaf had work
             // pending but every tombstone was still in the grace window).
-            LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag,
-                toRemove.Count > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop,
-                trig);
+            if (pathTag is { } path)
+                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag, trig, path);
+            else
+                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag, trig);
         }
         else
         {
@@ -1588,8 +1599,10 @@ internal sealed partial class BPlusLeafGrain(
             if (expiredRemoved > 0)
                 LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag);
 
-            LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag,
-                toRemove.Count > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop);
+            if (pathTag is { } path)
+                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag, path);
+            else
+                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag);
         }
 
         // Forward the projection-hash delta from the reaped tombstones

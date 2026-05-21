@@ -67,4 +67,30 @@ internal sealed class TombstoneCompactionState
     /// </para>
     /// </summary>
     [Id(6)] public string? NextLeafIdInShard { get; set; }
+
+    /// <summary>
+    /// Snapshot of the dirty-leaf grain ids (as strings) returned by
+    /// <c>IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync</c> when
+    /// the coordinator entered the current shard via the dirty-leaves
+    /// fast path. <c>null</c> means "no fast-path snapshot in flight" -
+    /// either the coordinator has not yet entered a shard, or the
+    /// snapshot was empty and the coordinator fell back to the legacy
+    /// chain walk. Persisted so the snapshot survives silo restarts
+    /// alongside <see cref="NextLeafIdInShard"/>; cleared when the shard
+    /// walk completes.
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <c>null</c>,
+    /// which is the correct semantic default.
+    /// </para>
+    /// </summary>
+    [Id(7)] public string[]? CurrentShardDirtyLeaves { get; set; }
+
+    /// <summary>
+    /// HLC watermark observed alongside
+    /// <see cref="CurrentShardDirtyLeaves"/>. Passed back to the shard
+    /// root via <c>ClearDirtyLeavesUpToAsync</c> when the shard's walk
+    /// completes so deletes that arrived during the in-flight pass are
+    /// preserved for the next pass.
+    /// </summary>
+    [Id(8)] public Primitives.HybridLogicalClock CurrentShardDirtyAdvance { get; set; }
 }
