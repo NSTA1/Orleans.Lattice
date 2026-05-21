@@ -648,7 +648,7 @@ This entry adds a single per-tree option (`LatticeOptions.CompactionShardTickInt
 
 ---
 
-### F-073 - Intra-shard leaf-walk batching for tombstone compaction *(depends on F-072 ✓)*
+### F-073 ✓ shipped - Intra-shard leaf-walk batching for tombstone compaction *(depends on F-072 ✓)*
 **Operability / opt-in (cap peak concurrent leaf activations during a compaction pass by inserting scheduler yields *within* a shard's leaf walk, not just between shards)**
 
 `TombstoneCompactionGrain` walks one shard per timer tick, and within a shard it walks the entire leaf chain back-to-back via `IBPlusLeafGrain.GetNextSiblingAsync` + `CompactTombstonesAsync`. F-072 added a per-tree `CompactionShardTickInterval` to govern the gap *between* shards, but the leaf walk *within* a shard still runs as fast as the per-leaf RPCs complete. Two operability problems fall out:
@@ -682,7 +682,7 @@ This entry adds a single per-tree option (`LatticeOptions.CompactionLeafBatchSiz
 
 ---
 
-### F-074 - Shard-root dirty-leaf tracking to skip idle leaves on compaction *(depends on F-073)*
+### F-074 - Shard-root dirty-leaf tracking to skip idle leaves on compaction *(depends on F-073 ✓)*
 **Architecture / scalability (drop pass-time activation cost from `O(leaves)` to `O(shards + dirty_leaves)` so default cadence can tighten without operator pain)**
 
 The coordinator currently has no way to know which leaves have new tombstones without asking the leaf, so a full pass activates every leaf in the tree even when most have nothing to do. F-073 caps the *peak* concurrent activations but does not reduce the *total*: on a 50 000-leaf tree where 1% of leaves accumulated tombstones since the last pass, today's pass still activates 50 000 leaves. The architecturally correct fix is to push the "is this leaf dirty?" signal up to a coarser-grain owner that already sees every routed mutation - the shard root.

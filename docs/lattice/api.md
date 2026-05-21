@@ -862,6 +862,7 @@ constraints, and per-tree overrides via the
 | `KeysPageSize` | `int` | 512 | Keys per page in enumeration pagination. |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 h | Minimum age before a tombstone is eligible for compaction. `InfiniteTimeSpan` disables compaction. |
 | `CompactionShardTickInterval` | `TimeSpan` | 2 s | Gap between consecutive per-shard ticks during a compaction pass. Floor 100 ms; values below are clamped with a one-shot warning. Snapshotted at pass start. Scheduler-fairness knob, independent of leaf activation lifetime. See [Tombstone Compaction](tombstone-compaction.md#compactionshardtickinterval). |
+| `CompactionLeafBatchSize` | `int` | 64 | Maximum number of leaves the coordinator visits within a single shard before yielding for one `CompactionShardTickInterval`. The leaf walk resumes on the next timer tick from a persisted in-shard cursor, so peak concurrent leaf activations during a pass are capped regardless of tree size. Floor 1; values below are clamped with a one-shot warning. Snapshotted at pass start. See [Tombstone Compaction](tombstone-compaction.md#compactionleafbatchsize). |
 | `SoftDeleteDuration` | `TimeSpan` | 72 h | Retention window after soft-delete before purge. |
 | `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` | Minimum time between read-cache refreshes. Zero means refresh on every read. |
 | `PrefetchKeysScan` | `bool` | `false` | When `true`, `ScanKeysAsync` overlaps the next page fetch with consumption. Overridable per call via `prefetch`. |

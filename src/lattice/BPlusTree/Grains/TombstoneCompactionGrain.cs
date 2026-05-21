@@ -84,6 +84,24 @@ internal sealed class TombstoneCompactionGrain(
     private TimeSpan _currentTickInterval = LatticeOptions.DefaultCompactionShardTickInterval;
 
     /// <summary>
+    /// Snapshot of the resolved <see cref="LatticeOptions.CompactionLeafBatchSize"/>
+    /// for the in-flight pass. Set when the pass transitions into
+    /// <c>InProgress</c> alongside <see cref="_currentTickInterval"/>;
+    /// caps the number of leaves visited per shard timer tick. Mid-pass
+    /// option changes do not retroactively reshape the in-flight pass.
+    /// Falls back to <see cref="LatticeOptions.DefaultCompactionLeafBatchSize"/>
+    /// if the snapshot has not been set.
+    /// </summary>
+    private int _currentLeafBatchSize = LatticeOptions.DefaultCompactionLeafBatchSize;
+
+    /// <summary>
+    /// Test-only seam exposing the snapshot of
+    /// <see cref="LatticeOptions.CompactionLeafBatchSize"/> captured
+    /// when the in-flight pass began.
+    /// </summary>
+    internal int CurrentLeafBatchSizeForTests => _currentLeafBatchSize;
+
+    /// <summary>
     /// Test-only seam exposing the snapshot of
     /// <see cref="LatticeOptions.CompactionShardTickInterval"/> captured
     /// when the in-flight pass began. Returns the
@@ -112,13 +130,32 @@ internal sealed class TombstoneCompactionGrain(
 
         _currentTriggerKind = TriggerOperator;
         _passStartTimestamp = Stopwatch.GetTimestamp();
+        // Snapshot the leaf batch size for this operator-driven pass so
+        // the per-shard loop below honours the same cap as the
+        // reminder-driven pass.
+        _currentLeafBatchSize = (await optionsResolver.ResolveAsync(TreeId)).CompactionLeafBatchSize;
         try
         {
             var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
             foreach (var shardIndex in physicalShards)
             {
-                await CompactShardAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
+                // Operator-driven full pass: drive CompactShardBatchAsync
+                // until it reports the shard is done. The in-shard cursor
+                // lives on state.State.NextLeafIdInShard and is reset
+                // between shards so each shard starts from its leftmost
+                // leaf. This path does not persist between batches; the
+                // operator is willing to block on the full pass.
+                state.State.NextLeafIdInShard = null;
+                bool shardDone;
+                do
+                {
+                    shardDone = await CompactShardBatchAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
+                }
+                while (!shardDone);
             }
+            // Clear the transient in-memory cursor on completion so the
+            // next reminder-driven pass starts fresh.
+            state.State.NextLeafIdInShard = null;
         }
         finally
         {
@@ -222,18 +259,24 @@ internal sealed class TombstoneCompactionGrain(
         _passStartTimestamp = Stopwatch.GetTimestamp();
         // Snapshot the resolved tick interval at pass start; mid-pass
         // option changes do not retroactively reshape the in-flight pass.
-        _currentTickInterval = (await optionsResolver.ResolveAsync(TreeId)).CompactionShardTickInterval;
+        var resolvedScoped = await optionsResolver.ResolveAsync(TreeId);
+        _currentTickInterval = resolvedScoped.CompactionShardTickInterval;
+        _currentLeafBatchSize = resolvedScoped.CompactionLeafBatchSize;
         var prevInProgress = state.State.InProgress;
         var prevNextShardIndex = state.State.NextShardIndex;
         var prevShardRetries = state.State.ShardRetries;
         var prevPhysicalTreeId = state.State.PhysicalTreeId;
         var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
+        var prevNextLeafIdInShard = state.State.NextLeafIdInShard;
 
         state.State.InProgress = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.PhysicalTreeId = physicalTreeId;
         state.State.PhysicalShardIndices = shardIndices;
+        // A scoped pass operates on a distinct shard list; any cursor
+        // left over from a prior pass would apply to the wrong shard.
+        state.State.NextLeafIdInShard = null;
         try
         {
             await state.WriteStateAsync();
@@ -245,6 +288,7 @@ internal sealed class TombstoneCompactionGrain(
             state.State.ShardRetries = prevShardRetries;
             state.State.PhysicalTreeId = prevPhysicalTreeId;
             state.State.PhysicalShardIndices = prevPhysicalShardIndices;
+            state.State.NextLeafIdInShard = prevNextLeafIdInShard;
             throw;
         }
 
@@ -347,7 +391,9 @@ internal sealed class TombstoneCompactionGrain(
 
         // Snapshot the resolved tick interval at pass start; mid-pass
         // option changes do not retroactively reshape the in-flight pass.
-        _currentTickInterval = (await optionsResolver.ResolveAsync(TreeId)).CompactionShardTickInterval;
+        var resolvedBegin = await optionsResolver.ResolveAsync(TreeId);
+        _currentTickInterval = resolvedBegin.CompactionShardTickInterval;
+        _currentLeafBatchSize = resolvedBegin.CompactionLeafBatchSize;
 
         // Snapshot before mutating so a transient WriteStateAsync failure
         // does not leave the in-memory InProgress / shard cursor ahead of
@@ -359,12 +405,22 @@ internal sealed class TombstoneCompactionGrain(
         var prevShardRetries = state.State.ShardRetries;
         var prevPhysicalTreeId = state.State.PhysicalTreeId;
         var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
+        var prevNextLeafIdInShard = state.State.NextLeafIdInShard;
 
         state.State.InProgress = true;
         state.State.NextShardIndex = startFromShard;
         state.State.ShardRetries = 0;
         state.State.PhysicalTreeId = physicalTreeId;
         state.State.PhysicalShardIndices = [.. physicalShards];
+        // Preserve the in-shard cursor only when this is a resume into
+        // the same shard the cursor refers to (the keepalive-fired
+        // resume path). A pass that begins at a different shard - or
+        // that begins at shard 0 with no in-flight state - must start
+        // each shard's leaf walk from the leftmost leaf.
+        if (startFromShard != prevNextShardIndex)
+        {
+            state.State.NextLeafIdInShard = null;
+        }
         try
         {
             await state.WriteStateAsync();
@@ -376,6 +432,7 @@ internal sealed class TombstoneCompactionGrain(
             state.State.ShardRetries = prevShardRetries;
             state.State.PhysicalTreeId = prevPhysicalTreeId;
             state.State.PhysicalShardIndices = prevPhysicalShardIndices;
+            state.State.NextLeafIdInShard = prevNextLeafIdInShard;
             throw;
         }
 
@@ -426,13 +483,24 @@ internal sealed class TombstoneCompactionGrain(
         // doesn't accidentally trip the compaction-failure handler and
         // bump ShardRetries.
         bool compactionSucceeded = false;
+        bool batchCompletedShard = false;
+        // Snapshot the cursor *before* the batch call so we can revert
+        // any in-memory mutation made inside CompactShardBatchAsync if a
+        // subsequent state write fails.
+        var prevCursorBeforeBatch = state.State.NextLeafIdInShard;
         try
         {
-            await CompactShardAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
+            batchCompletedShard = await CompactShardBatchAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
             compactionSucceeded = true;
         }
         catch (Exception ex)
         {
+            // Restore the in-memory cursor; the batch method may have
+            // mutated state.State.NextLeafIdInShard before it threw, and
+            // we have not yet persisted that mutation. Reverting keeps
+            // memory in sync with disk so the shard retry resumes from
+            // the same cursor as before the failed attempt.
+            state.State.NextLeafIdInShard = prevCursorBeforeBatch;
             logger.LogWarning(ex, "Tombstone compaction failed for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
@@ -454,11 +522,15 @@ internal sealed class TombstoneCompactionGrain(
             {
                 LatticeMetrics.CompactionShardSkipped.Add(1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
-                // Exhausted retries for this shard - skip to next.
+                // Exhausted retries for this shard - skip to next and
+                // clear the in-shard cursor so the next shard starts
+                // from its leftmost leaf.
                 var prevNextShardIndex = state.State.NextShardIndex;
                 var prevShardRetries = state.State.ShardRetries;
+                var prevCursor = state.State.NextLeafIdInShard;
                 state.State.NextShardIndex++;
                 state.State.ShardRetries = 0;
+                state.State.NextLeafIdInShard = null;
                 try
                 {
                     await state.WriteStateAsync();
@@ -467,6 +539,7 @@ internal sealed class TombstoneCompactionGrain(
                 {
                     state.State.NextShardIndex = prevNextShardIndex;
                     state.State.ShardRetries = prevShardRetries;
+                    state.State.NextLeafIdInShard = prevCursor;
                     throw;
                 }
             }
@@ -474,23 +547,46 @@ internal sealed class TombstoneCompactionGrain(
 
         if (compactionSucceeded)
         {
-            // Snapshot the cursor before advancing so a transient
-            // WriteStateAsync failure does not leave NextShardIndex /
-            // ShardRetries ahead of disk, which would cause the next tick to
-            // skip a shard or believe a retry budget has been spent.
-            var prevNextShardIndex = state.State.NextShardIndex;
-            var prevShardRetries = state.State.ShardRetries;
-            state.State.NextShardIndex++;
-            state.State.ShardRetries = 0;
-            try
+            if (batchCompletedShard)
             {
-                await state.WriteStateAsync();
+                // Snapshot the cursor before advancing so a transient
+                // WriteStateAsync failure does not leave NextShardIndex /
+                // ShardRetries / cursor ahead of disk, which would cause the next
+                // tick to skip a shard or believe a retry budget has been spent.
+                var prevNextShardIndex = state.State.NextShardIndex;
+                var prevShardRetries = state.State.ShardRetries;
+                var prevCursor = state.State.NextLeafIdInShard; // already null from batch
+                state.State.NextShardIndex++;
+                state.State.ShardRetries = 0;
+                state.State.NextLeafIdInShard = null;
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.NextShardIndex = prevNextShardIndex;
+                    state.State.ShardRetries = prevShardRetries;
+                    state.State.NextLeafIdInShard = prevCursor;
+                    throw;
+                }
             }
-            catch
+            else
             {
-                state.State.NextShardIndex = prevNextShardIndex;
-                state.State.ShardRetries = prevShardRetries;
-                throw;
+                // Mid-shard batch boundary: persist the in-shard cursor so
+                // the next timer tick resumes from the same leaf. The
+                // batch method has already mutated NextLeafIdInShard in
+                // memory; on persist failure restore the prior cursor so
+                // memory stays in sync with disk.
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.NextLeafIdInShard = prevCursorBeforeBatch;
+                    throw;
+                }
             }
         }
     }
@@ -512,12 +608,14 @@ internal sealed class TombstoneCompactionGrain(
         var prevShardRetries = state.State.ShardRetries;
         var prevPhysicalTreeId = state.State.PhysicalTreeId;
         var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
+        var prevNextLeafIdInShard = state.State.NextLeafIdInShard;
 
         state.State.InProgress = false;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.PhysicalTreeId = null;
         state.State.PhysicalShardIndices = [];
+        state.State.NextLeafIdInShard = null;
         try
         {
             await state.WriteStateAsync();
@@ -529,6 +627,7 @@ internal sealed class TombstoneCompactionGrain(
             state.State.ShardRetries = prevShardRetries;
             state.State.PhysicalTreeId = prevPhysicalTreeId;
             state.State.PhysicalShardIndices = prevPhysicalShardIndices;
+            state.State.NextLeafIdInShard = prevNextLeafIdInShard;
             throw;
         }
 
@@ -595,7 +694,7 @@ internal sealed class TombstoneCompactionGrain(
         this.DeactivateOnIdle();
     }
 
-    private async Task CompactShardAsync(string physicalTreeId, int shardIndex, TimeSpan gracePeriod)
+    private async Task<bool> CompactShardBatchAsync(string physicalTreeId, int shardIndex, TimeSpan gracePeriod)
     {
         // Compaction is a maintenance pass: every WAL envelope emitted
         // by the leaf-level reap loop must be classified
@@ -624,9 +723,24 @@ internal sealed class TombstoneCompactionGrain(
             var shardKey = $"{physicalTreeId}/{shardIndex}";
             var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
 
-            var leafId = await shardRoot.GetLeftmostLeafIdAsync();
+            // Resume from the persisted in-shard cursor when present,
+            // otherwise start from the leftmost leaf. A null cursor when
+            // entering the shard is the legacy semantic ("start fresh").
+            GrainId? leafId;
+            var resumeFrom = state.State.NextLeafIdInShard;
+            if (!string.IsNullOrEmpty(resumeFrom))
+            {
+                leafId = GrainId.Parse(resumeFrom);
+            }
+            else
+            {
+                leafId = await shardRoot.GetLeftmostLeafIdAsync();
+            }
 
-            while (leafId is not null)
+            var batchSize = _currentLeafBatchSize > 0 ? _currentLeafBatchSize : LatticeOptions.DefaultCompactionLeafBatchSize;
+            var visited = 0;
+
+            while (leafId is not null && visited < batchSize)
             {
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
                 try
@@ -664,7 +778,23 @@ internal sealed class TombstoneCompactionGrain(
                     throw;
                 }
                 leafId = await leaf.GetNextSiblingAsync();
+                visited++;
             }
+
+            // Cursor semantics:
+            //   leafId == null  -> end of shard reached, return done=true.
+            //   leafId != null  -> batch boundary, persist next leaf id.
+            // The persistence of the cursor itself is deferred to the
+            // caller (ProcessNextShardAsync) so the batch + cursor write
+            // is one atomic state transition rather than two.
+            if (leafId is null)
+            {
+                state.State.NextLeafIdInShard = null;
+                return true;
+            }
+
+            state.State.NextLeafIdInShard = leafId.Value.ToString();
+            return false;
         }
         finally
         {
