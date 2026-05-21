@@ -170,4 +170,45 @@ public class CrdtLatticeExtensionsTests
         var accessor = default(OrMapAccessor<string, OrSet>);
         Assert.That(async () => await accessor.GetAsync(), Throws.InstanceOf<InvalidOperationException>());
     }
+
+    [Test]
+    public void Sequence_returns_accessor_bound_to_lattice_and_key()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var accessor = lattice.Sequence<string>("k1");
+        Assert.That(accessor.Lattice, Is.SameAs(lattice));
+        Assert.That(accessor.Key, Is.EqualTo("k1"));
+        Assert.That(accessor.Serializer, Is.Not.Null);
+    }
+
+    [Test]
+    public void Sequence_uses_supplied_serializer_when_provided()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var serializer = JsonLatticeSerializer<int>.Default;
+        var accessor = lattice.Sequence<int>("k1", serializer);
+        Assert.That(accessor.Serializer, Is.SameAs(serializer));
+    }
+
+    [Test]
+    public void Sequence_throws_on_null_lattice()
+    {
+        ILattice lattice = null!;
+        Assert.That(() => lattice.Sequence<string>("k"), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Sequence_throws_on_empty_key()
+    {
+        var lattice = Substitute.For<ILattice>();
+        Assert.That(() => lattice.Sequence<string>(""), Throws.InstanceOf<ArgumentException>());
+        Assert.That(() => lattice.Sequence<string>(null!), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void Default_RgaAccessor_throws_InvalidOperationException_on_use()
+    {
+        var accessor = default(RgaAccessor<string>);
+        Assert.That(async () => await accessor.GetAsync(), Throws.InstanceOf<InvalidOperationException>());
+    }
 }

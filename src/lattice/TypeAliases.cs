@@ -22,6 +22,8 @@ internal static class TypeAliases
     internal const string MvRegisterDot = "ol.mvd";
     internal const string OrMap = "ol.orm";
     internal const string OrMapEntry = "ol.ome";
+    internal const string Rga = "ol.rga";
+    internal const string RgaNode = "ol.rgn";
     internal const string LeafDeliveryCursor = "ol.ldc";
 
     // Opt-in idempotency-key surface (carried on the ambient

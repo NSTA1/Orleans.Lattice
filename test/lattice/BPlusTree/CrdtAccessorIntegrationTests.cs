@@ -510,4 +510,214 @@ public class CrdtAccessorIntegrationTests
         Assert.That(accessor.Lattice, Is.SameAs(tree));
         Assert.That(accessor.Key, Is.EqualTo("k"));
     }
+
+    // RGA sequence accessor
+
+    [Test]
+    public async Task Sequence_GetAsync_returns_empty_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        var rga = await tree.Sequence<string>("missing").GetAsync();
+        Assert.That(rga.IsEmpty, Is.True);
+    }
+
+    [Test]
+    public async Task Sequence_ToListAsync_returns_empty_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        var values = await tree.Sequence<string>("missing").ToListAsync();
+        Assert.That(values, Is.Empty);
+    }
+
+    [Test]
+    public async Task Sequence_InsertAtAsync_at_head_then_tail_preserves_visible_order()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "r1", "Hello");
+        await seq.InsertAtAsync(1, "r1", " ");
+        await seq.InsertAtAsync(2, "r1", "World");
+
+        var values = await seq.ToListAsync();
+        Assert.That(values, Is.EqualTo(new[] { "Hello", " ", "World" }));
+    }
+
+    [Test]
+    public async Task Sequence_InsertAtAsync_in_middle_inserts_at_visible_position()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "r1", "a");
+        await seq.InsertAtAsync(1, "r1", "c");
+        await seq.InsertAtAsync(1, "r1", "b");
+
+        Assert.That(await seq.ToListAsync(), Is.EqualTo(new[] { "a", "b", "c" }));
+    }
+
+    [Test]
+    public async Task Sequence_RemoveAtAsync_drops_visible_element()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "r1", "a");
+        await seq.InsertAtAsync(1, "r1", "b");
+        await seq.InsertAtAsync(2, "r1", "c");
+        await seq.RemoveAtAsync(1);
+
+        Assert.That(await seq.ToListAsync(), Is.EqualTo(new[] { "a", "c" }));
+    }
+
+    [Test]
+    public async Task Sequence_InsertAfterAsync_uses_returned_dot_as_stable_cursor()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        var headDot = await seq.InsertAfterAsync(Rga.Root, "r1", "head");
+        await seq.InsertAfterAsync(headDot, "r1", "child-of-head");
+
+        Assert.That(await seq.ToListAsync(), Is.EqualTo(new[] { "head", "child-of-head" }));
+    }
+
+    [Test]
+    public async Task Sequence_RemoveAsync_with_dot_tombstones_node()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        var dot = await seq.InsertAfterAsync(Rga.Root, "r1", "x");
+        await seq.RemoveAsync(dot);
+
+        Assert.That(await seq.ToListAsync(), Is.Empty);
+    }
+
+    [Test]
+    public async Task Sequence_MergeAsync_unions_remote_state()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "r1", "local");
+
+        // The remote sequence's value bytes must round-trip through the
+        // same JSON serializer the accessor uses by default.
+        var remote = new Rga();
+        remote.InsertAfter(Rga.Root, "r2", JsonLatticeSerializer<string>.Default.Serialize("remote"));
+        await seq.MergeAsync(remote);
+
+        var values = await seq.ToListAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "local", "remote" }));
+    }
+
+    [Test]
+    public async Task Sequence_InsertAtAsync_throws_on_empty_replica_id()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").InsertAtAsync(0, "", "x"),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task Sequence_InsertAtAsync_throws_on_negative_index()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").InsertAtAsync(-1, "r1", "x"),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task Sequence_InsertAtAsync_throws_when_index_past_end()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").InsertAtAsync(5, "r1", "x"),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task Sequence_RemoveAtAsync_throws_on_negative_index()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").RemoveAtAsync(-1),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task Sequence_RemoveAtAsync_throws_when_index_at_or_past_end()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").RemoveAtAsync(0),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task Sequence_MergeAsync_throws_on_null_other()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").MergeAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task Sequence_InsertAtAsync_throws_on_zero_max_attempts()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").InsertAtAsync(0, "r1", "x", maxAttempts: 0),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task Sequence_accessor_exposes_lattice_and_key_properties()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.Sequence<string>("k");
+        Assert.That(accessor.Lattice, Is.SameAs(tree));
+        Assert.That(accessor.Key, Is.EqualTo("k"));
+        Assert.That(accessor.Serializer, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task Sequence_RemoveAsync_with_unknown_dot_is_noop()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "r1", "x");
+
+        // Removing a dot that was never authored against this sequence
+        // is a tolerated no-op; the live element survives.
+        await seq.RemoveAsync(new OrSetDot { ReplicaId = "missing", Counter = 99 });
+
+        Assert.That(await seq.ToListAsync(), Is.EqualTo(new[] { "x" }));
+    }
+
+    [Test]
+    public async Task Sequence_InsertAfterAsync_throws_on_empty_replica_id()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.Sequence<string>("k").InsertAfterAsync(Rga.Root, "", "x"),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task Sequence_MergeAsync_with_concurrent_remote_state_converges()
+    {
+        // End-to-end check that the typed accessor's MergeAsync applies
+        // a remote snapshot through CAS so the visible projection
+        // contains both sides' authored values.
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "r1", "a");
+
+        var remote = new Rga();
+        remote.InsertAfter(Rga.Root, "r2", JsonLatticeSerializer<string>.Default.Serialize("b"));
+        await seq.MergeAsync(remote);
+
+        var values = await seq.ToListAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "a", "b" }));
+        Assert.That(values.Count, Is.EqualTo(2));
+    }
 }

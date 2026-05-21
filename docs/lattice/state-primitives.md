@@ -179,3 +179,32 @@ Other typical pairings:
 - **Per-key version vectors** (`OrMap<EntityId, VersionVector>`) for tracking causal history of independent entities.
 
 Use `ILattice.OrMap<TKey, TValue>(key)` to obtain the typed accessor; see `docs/lattice/api.md` for the surface.
+
+## Replicated Growable Array (RGA)
+
+`Rga` is a **sequence CRDT for collaborative ordered lists and text**. Each element is a tree node tagged with a causal dot `(replicaId, counter)` and a `parentDot` that links it after a specific predecessor. `InsertAfter(parentDot, replicaId, value)` mints a fresh dot and attaches the new value under the parent; `Remove(dot)` tombstones the node but **preserves it in the tree** so a concurrent insert that targeted the same parent still resolves against a stable predecessor.
+
+```
+RgaNode = (ReplicaId, Counter, ParentDot, Value, IsTombstone)
+Rga = { Nodes: { RgaNode } }
+```
+
+The materialised order is a depth-first walk from the virtual root in which **sibling children of any parent are visited in descending `(Counter, ReplicaId)` order**. That is the standard RGA tie-break: the highest counter wins, the highest replica id breaks counter ties, and every replica that has observed the same node set converges on the same resolved sequence regardless of merge arrival order. Tombstoned nodes are traversed (so their descendants still resolve) but are not emitted.
+
+The merge rule is straightforward:
+
+- Union the two sides' node sets by dot.
+- A node tombstoned on either side is tombstoned in the result (tombstone is monotonic).
+- Same-dot value collisions resolve deterministically by ordinal byte comparison; in normal authoring the dot uniquely identifies an insert so collisions only arise from a transport or forgery error.
+- The resolved order is recomputed from the merged node set and the same descending tie-break.
+
+Because tombstones stay in the tree, the worst-case node count grows with **insert + remove history**, not live length. For long-lived editing sessions a periodic snapshot-and-trim of fully-causally-stable tombstones is a follow-on optimisation; the base primitive keeps the full causal history so convergence is unconditional.
+
+**Example use case:** a collaborative document or chat transcript where two users edit at the same position while one of them is offline. With a plain `LwwValue<List<string>>` the offline user's edits silently overwrite the online user's when they reconnect. With `Rga`, both users' inserts survive the merge, sibling inserts under the same predecessor converge on the same order on every device, and a remove that observed only the local insert does not erase the remote insert. Pairing this with a mutation observer gives a real-time text or list channel out of the box.
+
+Other typical pairings:
+
+- **Append-only event lists** where multiple replicas record events and every replica must see them in the same resolved order.
+- **Tooling that needs stable cursor identity**: `InsertAfterAsync(parentDot, ...)` lets a client capture a dot from a previous read and have a later insert land at exactly that causal position regardless of intervening edits elsewhere in the sequence.
+
+Use `ILattice.Sequence<T>(key)` to obtain the typed accessor (`RgaAccessor<T>` with `InsertAtAsync`, `RemoveAtAsync`, `ToListAsync`, plus the lower-level dot-explicit `InsertAfterAsync`); see [api.md](api.md) for the surface.

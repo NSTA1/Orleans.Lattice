@@ -777,12 +777,19 @@ and CAS retry loops. The underlying state types are CRDTs whose
 `Merge` is commutative, associative, and idempotent, so concurrent
 updates from multiple replicas converge without coordination.
 
+`ILattice.Sequence<T>(key)` adds a Replicated Growable Array (RGA)
+sequence accessor for collaborative ordered lists and text;
+concurrent inserts under the same parent converge on a deterministic
+order via the standard RGA descending `(Counter, ReplicaId)`
+tie-break, and removes tombstone the targeted node so a later
+re-insert against the same parent still resolves correctly.
+
 > See [`state-primitives.md`](state-primitives.md) for the
 > convergence semantics, merge rules, and example use cases of each
 > primitive (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`,
-> `OrMap`) - including when to prefer one primitive over another and
-> the recursive `ICrdt<TSelf>` contract that lets `OrMap` nest other
-> CRDTs as values.
+> `OrMap`, `Rga`) - including when to prefer one primitive over
+> another and the recursive `ICrdt<TSelf>` contract that lets `OrMap`
+> nest other CRDTs as values.
 
 ```csharp verify
 using Orleans.Lattice.Primitives;
@@ -813,6 +820,15 @@ var localTags = new OrSet();
 localTags.Add("urgent"u8.ToArray(), replicaId: "siloA", counter: 1);
 await tagsByUser.SetAsync("alice", "siloA", localTags);
 OrSet? aliceTags = await tagsByUser.GetValueAsync("alice");
+
+// Replicated Growable Array (RGA) sequence: collaborative
+// ordered list / text. Concurrent inserts under the same
+// parent converge on a deterministic order, removes tombstone
+// nodes to keep causal stability for re-inserts.
+var transcript = tree.Sequence<string>("chat:42");
+await transcript.InsertAtAsync(0, "siloA", "Hello");
+await transcript.InsertAtAsync(1, "siloA", "World");
+IReadOnlyList<string> lines = await transcript.ToListAsync();
 ```
 
 | Accessor | Method | Description |
@@ -840,13 +856,21 @@ OrSet? aliceTags = await tagsByUser.GetValueAsync("alice");
 | `OrMapAccessor<TKey, TValue>` | `Task SetAsync(TKey mapKey, string replicaId, TValue value)` | Writes `value` at `mapKey` from `replicaId`, minting a fresh causal dot. Concurrent writes survive the next merge and are folded into a single per-key value via `ICrdt<TValue>.MergeFrom`. |
 | `OrMapAccessor<TKey, TValue>` | `Task RemoveAsync(TKey mapKey)` | Tombstones every dot currently observed for `mapKey`. Concurrent writes on other replicas survive the next merge (add-wins). |
 | `OrMapAccessor<TKey, TValue>` | `Task MergeAsync(OrMap<TKey, TValue> other)` | Merges `other` into the stored state under CAS. Per-key values are folded recursively through `TValue`'s `MergeFrom`. |
+| `RgaAccessor<T>` | `Task<Rga> GetAsync()` | Reads the raw sequence state, including tombstoned nodes preserved for causal stability. |
+| `RgaAccessor<T>` | `Task<IReadOnlyList<T>> ToListAsync()` | Returns the live values in resolved in-order projection (descending `(Counter, ReplicaId)` sibling tie-break). |
+| `RgaAccessor<T>` | `Task<OrSetDot> InsertAtAsync(int index, string replicaId, T value)` | Inserts `value` at the visible position `index` in the materialised projection. Index `0` inserts at the head; an index equal to the count appends at the tail. Returns the new node's stable cursor dot. |
+| `RgaAccessor<T>` | `Task<OrSetDot> InsertAfterAsync(OrSetDot parentDot, string replicaId, T value)` | Inserts as a child of `parentDot` (or `Rga.Root` for a top-level insert). Useful for tooling that captured a stable cursor identity from a previous read. |
+| `RgaAccessor<T>` | `Task RemoveAtAsync(int index)` | Tombstones the live node at the visible position `index`. |
+| `RgaAccessor<T>` | `Task RemoveAsync(OrSetDot dot)` | Tombstones the node identified by `dot`. A no-op when the dot is absent or already tombstoned. |
+| `RgaAccessor<T>` | `Task MergeAsync(Rga other)` | Merges `other` into the stored state under CAS. |
 
 Mutating methods retry on CAS failure up to a per-call budget
 (default `OrSetAccessor.DefaultMaxAttempts` /
 `PnCounterAccessor.DefaultMaxAttempts` /
 `VersionVectorAccessor.DefaultMaxAttempts` /
 `MvRegisterAccessor<T>.DefaultMaxAttempts` /
-`OrMapAccessor<TKey, TValue>.DefaultMaxAttempts` = 16). When the budget is
+`OrMapAccessor<TKey, TValue>.DefaultMaxAttempts` /
+`RgaAccessor<T>.DefaultMaxAttempts` = 16). When the budget is
 exhausted the accessor throws `InvalidOperationException`; raise the
 budget or reduce contention. Values are JSON-serialized via
 `JsonLatticeSerializer<T>`, so the bytes are inspectable through

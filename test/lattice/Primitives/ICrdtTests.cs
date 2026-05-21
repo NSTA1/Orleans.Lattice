@@ -90,4 +90,27 @@ public class ICrdtTests
         Assert.That(merged, Is.Not.Null);
         Assert.That(merged!.Value, Is.EqualTo(7));
     }
+
+    [Test]
+    public void Rga_IsBottom_is_true_for_empty_and_after_every_node_tombstoned()
+    {
+        var r = new Rga();
+        Assert.That(r.IsBottom, Is.True);
+        var d = r.InsertAfter(Rga.Root, "r1", new byte[] { 0x42 });
+        Assert.That(r.IsBottom, Is.False);
+        r.Remove(d);
+        Assert.That(r.IsBottom, Is.True);
+    }
+
+    [Test]
+    public void Rga_implements_ICrdt_and_dispatches_MergeFrom()
+    {
+        ICrdt<Rga> a = new Rga();
+        var b = new Rga();
+        b.InsertAfter(Rga.Root, "r1", new byte[] { 1 });
+
+        a.MergeFrom(b);
+
+        Assert.That(((Rga)a).Count, Is.EqualTo(1));
+    }
 }
