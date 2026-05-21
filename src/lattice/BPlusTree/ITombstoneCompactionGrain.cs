@@ -25,6 +25,25 @@ internal interface ITombstoneCompactionGrain : IGrainWithStringKey
     Task RunCompactionPassAsync();
 
     /// <summary>
+    /// Schedules an out-of-cycle compaction pass for a single shard.
+    /// Honours <see cref="LatticeOptions.CompactionTriggerCooldown"/> when
+    /// <paramref name="triggerKind"/> is <c>"ratio"</c> or <c>"size"</c>:
+    /// if a pass for the same shard ran inside the cooldown window the
+    /// request is silently dropped. <c>"operator"</c> requests bypass the
+    /// cooldown and proceed unconditionally. If a pass is already in
+    /// flight on this grain (regular reminder or otherwise) the request
+    /// is dropped because the in-flight pass will visit every shard.
+    /// Returns <c>true</c> when the request was honoured (a pass was
+    /// scheduled), <c>false</c> when it was dropped.
+    /// </summary>
+    /// <param name="shardIndex">Physical shard index to compact.</param>
+    /// <param name="triggerKind">
+    /// Diagnostic label tagged onto pass-level telemetry. One of
+    /// <c>"ratio"</c>, <c>"size"</c>, or <c>"operator"</c>.
+    /// </param>
+    Task<bool> RequestCompactionAsync(int shardIndex, string triggerKind);
+
+    /// <summary>
     /// Unregisters all compaction reminders and deactivates the grain.
     /// Called when the tree is deleted and compaction is no longer needed.
     /// </summary>

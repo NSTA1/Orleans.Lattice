@@ -511,6 +511,24 @@ public interface ILattice : IGrainWithStringKey
     Task RebuildLeafProjectionAsync(int shardIndex, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Operator-tooling tombstone-compaction request: schedules an
+    /// out-of-cycle compaction pass scoped to a single physical shard,
+    /// bypassing the per-shard cooldown gate that the policy-trigger
+    /// path enforces. Useful for triage when an operator suspects a
+    /// shard has accumulated a tombstone backlog and wants to reap
+    /// before the next reminder tick. Returns <see langword="false"/>
+    /// when compaction is disabled
+    /// (<see cref="LatticeOptions.TombstoneGracePeriod"/> =
+    /// <see cref="Timeout.InfiniteTimeSpan"/>) or when a pass is
+    /// already in flight; returns <see langword="true"/> when the
+    /// request was accepted and the coordinator transitioned into a
+    /// scoped pass.
+    /// </summary>
+    /// <param name="shardIndex">The physical shard index resolved from the per-tree <c>ShardMap</c>.</param>
+    /// <param name="cancellationToken">Cancels the dispatch before the coordinator grain call.</param>
+    Task<bool> CompactShardAsync(int shardIndex, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the largest materialiser-lag value across every
     /// physical shard of this tree - the gap between each shard's
     /// per-shard write-ahead-log head offset and the minimum

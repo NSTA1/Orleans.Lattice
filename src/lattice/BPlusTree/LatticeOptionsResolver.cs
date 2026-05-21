@@ -167,6 +167,9 @@ internal sealed class LatticeOptionsResolver(
             LeafProjectionRetention = baseOptions.LeafProjectionRetention,
             ProjectionRebuildPolicy = baseOptions.ProjectionRebuildPolicy,
             MaxLeafReplayEntries = baseOptions.MaxLeafReplayEntries,
+            MinTombstoneRatioForCompaction = baseOptions.MinTombstoneRatioForCompaction,
+            MaxLeafEntriesBeforeForcedCompaction = baseOptions.MaxLeafEntriesBeforeForcedCompaction,
+            CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,
             MaintainProjectionDigest = maintainDigest,
         };
     }

@@ -42,6 +42,35 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
+    public async Task<bool> CompactShardAsync(
+        int shardIndex,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var (_, shardMap) = await GetRoutingAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var physicalShards = shardMap.GetPhysicalShardIndices();
+        if (!physicalShards.Contains(shardIndex))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(shardIndex),
+                shardIndex,
+                $"Shard index {shardIndex} is not a physical shard of tree '{TreeId}'. " +
+                $"Valid indices: [{string.Join(", ", physicalShards)}].");
+        }
+
+        // Operator-initiated requests bypass the cooldown gate by
+        // virtue of carrying the `operator` trigger label; the
+        // coordinator grain still rejects the request when compaction
+        // is disabled or a pass is already in flight.
+        var compactor = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
+        return await compactor.RequestCompactionAsync(shardIndex, TombstoneCompactionGrain.TriggerOperator);
+    }
+
+    /// <inheritdoc />
     public async Task<long> GetMaterialiserLagAsync(
         CancellationToken cancellationToken = default)
     {

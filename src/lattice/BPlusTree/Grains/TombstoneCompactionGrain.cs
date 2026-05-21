@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
 using Orleans.Timers;
+using System.Diagnostics;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -33,12 +34,38 @@ internal sealed class TombstoneCompactionGrain(
     private const string KeepaliveReminderName = "compaction-keepalive";
     private const int MaxRetriesPerShard = 1;
 
+    /// <summary>Trigger label written to pass-level telemetry.</summary>
+    internal const string TriggerReminder = "reminder";
+    internal const string TriggerRatio = "ratio";
+    internal const string TriggerSize = "size";
+    internal const string TriggerOperator = "operator";
+
     private string TreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
     IGrainContext IGrainBase.GrainContext => context;
 
     private IGrainTimer? _compactionTimer;
     private readonly PublishEventsGate _eventsGate = new();
+
+    /// <summary>
+    /// Trigger label of the in-flight pass; written by
+    /// <see cref="StartCompactionAsync"/> / <see cref="RunCompactionPassAsync"/>
+    /// and consumed by <see cref="CompleteCompactionAsync"/> /
+    /// <see cref="ProcessNextShardAsync"/> to tag pass-level telemetry.
+    /// Defaults to <see cref="TriggerReminder"/>.
+    /// </summary>
+    private string _currentTriggerKind = TriggerReminder;
+
+    /// <summary>Wall-clock start of the in-flight pass, set on transition into <c>InProgress</c>.</summary>
+    private long _passStartTimestamp;
+
+    /// <summary>
+    /// Optional shard-scope filter for the in-flight pass. When non-null,
+    /// <see cref="ProcessNextShardAsync"/> compacts only the listed
+    /// physical shard indices instead of the full topology. Used by
+    /// <see cref="RequestCompactionAsync"/> to scope an out-of-cycle pass.
+    /// </summary>
+    private int[]? _scopedShardIndices;
 
     private bool IsCompactionDisabled => Options.TombstoneGracePeriod == Timeout.InfiniteTimeSpan;
 
@@ -58,11 +85,164 @@ internal sealed class TombstoneCompactionGrain(
     {
         if (IsCompactionDisabled) return;
 
-        var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
-        foreach (var shardIndex in physicalShards)
+        _currentTriggerKind = TriggerOperator;
+        _passStartTimestamp = Stopwatch.GetTimestamp();
+        try
         {
-            await CompactShardAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
+            var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
+            foreach (var shardIndex in physicalShards)
+            {
+                await CompactShardAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
+            }
         }
+        finally
+        {
+            RecordPassDuration(_currentTriggerKind);
+        }
+    }
+
+    public async Task<bool> RequestCompactionAsync(int shardIndex, string triggerKind)
+    {
+        var honoured = await TryBeginRequestedCompactionAsync(shardIndex, triggerKind);
+        if (!honoured) return false;
+
+        // Bookkeeping accepted - now start the per-tick timer outside
+        // the bookkeeping helper so unit tests can drive the
+        // state-machine transition without the Orleans timer
+        // infrastructure (which is unavailable in `Substitute.For<IGrainContext>()`).
+        _compactionTimer = this.RegisterGrainTimer(
+            OnCompactionTimerTick,
+            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
+        return true;
+    }
+
+    /// <summary>
+    /// Validates the cooldown / topology guards, persists the trigger
+    /// timestamp, and transitions the grain into a single-shard
+    /// in-progress pass. Returns <c>true</c> when the request was
+    /// honoured (the caller still needs to start the per-tick timer);
+    /// <c>false</c> when the request was dropped. Exposed as
+    /// <c>internal</c> for unit testing.
+    /// </summary>
+    internal async Task<bool> TryBeginRequestedCompactionAsync(int shardIndex, string triggerKind)
+    {
+        ArgumentNullException.ThrowIfNull(triggerKind);
+        if (IsCompactionDisabled) return false;
+        if (_compactionTimer is not null || state.State.InProgress) return false;
+        if (triggerKind != TriggerRatio && triggerKind != TriggerSize && triggerKind != TriggerOperator)
+        {
+            throw new ArgumentException($"Unknown triggerKind '{triggerKind}'.", nameof(triggerKind));
+        }
+
+        // Cooldown gating - operator requests bypass.
+        if (triggerKind != TriggerOperator)
+        {
+            var cooldown = Options.CompactionTriggerCooldown;
+            if (cooldown > TimeSpan.Zero
+                && state.State.LastTriggerAt is { } map
+                && map.TryGetValue(shardIndex, out var lastAt)
+                && DateTimeOffset.UtcNow - lastAt < cooldown)
+            {
+                return false;
+            }
+        }
+
+        var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
+        var found = false;
+        for (var i = 0; i < physicalShards.Count; i++)
+        {
+            if (physicalShards[i] == shardIndex) { found = true; break; }
+        }
+        if (!found) return false;
+
+        state.State.LastTriggerAt ??= [];
+        state.State.LastTriggerAt[shardIndex] = DateTimeOffset.UtcNow;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: a failed bookkeeping write should not block
+            // the requested compaction. Cooldown enforcement degrades
+            // to "no record exists" on the next request, which means
+            // back-to-back triggers may pass during the persist outage
+            // - acceptable for an event-storm guard.
+            logger.LogWarning(ex, "Failed to persist compaction trigger timestamp for tree {TreeId} shard {ShardIndex}", TreeId, shardIndex);
+        }
+
+        _currentTriggerKind = triggerKind;
+        _scopedShardIndices = [shardIndex];
+        try
+        {
+            await BeginScopedCompactionStateAsync(physicalTreeId, [shardIndex]);
+        }
+        catch
+        {
+            _scopedShardIndices = null;
+            throw;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Persists the in-progress marker for a shard-scoped pass and
+    /// registers the keepalive reminder, but does not start the grain
+    /// timer. Exposed as <c>internal</c> so unit tests can drive the
+    /// state-machine transition without the Orleans timer
+    /// infrastructure.
+    /// </summary>
+    internal async Task BeginScopedCompactionStateAsync(string physicalTreeId, int[] shardIndices)
+    {
+        _passStartTimestamp = Stopwatch.GetTimestamp();
+        var prevInProgress = state.State.InProgress;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevPhysicalTreeId = state.State.PhysicalTreeId;
+        var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
+
+        state.State.InProgress = true;
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 0;
+        state.State.PhysicalTreeId = physicalTreeId;
+        state.State.PhysicalShardIndices = shardIndices;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.PhysicalTreeId = prevPhysicalTreeId;
+            state.State.PhysicalShardIndices = prevPhysicalShardIndices;
+            throw;
+        }
+
+        await reminderRegistry.RegisterOrUpdateReminder(
+            callingGrainId: context.GrainId,
+            reminderName: KeepaliveReminderName,
+            dueTime: TimeSpan.FromMinutes(1),
+            period: TimeSpan.FromMinutes(1));
+    }
+
+    private void RecordPassDuration(string triggerKind)
+    {
+        if (_passStartTimestamp == 0) return;
+        var elapsedMs = (Stopwatch.GetTimestamp() - _passStartTimestamp) * 1000.0 / Stopwatch.Frequency;
+        _passStartTimestamp = 0;
+        var triggerTag = triggerKind switch
+        {
+            TriggerReminder => LatticeMetrics.TriggerReminderTag,
+            TriggerRatio => LatticeMetrics.TriggerRatioTag,
+            TriggerSize => LatticeMetrics.TriggerSizeTag,
+            TriggerOperator => LatticeMetrics.TriggerOperatorTag,
+            _ => new KeyValuePair<string, object?>(LatticeMetrics.TagTrigger, triggerKind),
+        };
+        LatticeMetrics.CompactionPassDuration.Record(elapsedMs,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            triggerTag);
     }
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)
@@ -114,6 +294,9 @@ internal sealed class TombstoneCompactionGrain(
     /// </summary>
     internal async Task StartCompactionAsync(int startFromShard)
     {
+        // Reminder-driven entry point - tag pass-level telemetry as `reminder`.
+        _currentTriggerKind = TriggerReminder;
+        _passStartTimestamp = Stopwatch.GetTimestamp();
         await BeginCompactionStateAsync(startFromShard);
 
         // Fire immediately, then tick every 2 seconds per shard.
@@ -221,6 +404,8 @@ internal sealed class TombstoneCompactionGrain(
             logger.LogWarning(ex, "Tombstone compaction failed for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
+                LatticeMetrics.CompactionShardRetries.Add(1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
                 var prevShardRetries = state.State.ShardRetries;
                 state.State.ShardRetries++;
                 try
@@ -235,6 +420,8 @@ internal sealed class TombstoneCompactionGrain(
             }
             else
             {
+                LatticeMetrics.CompactionShardSkipped.Add(1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
                 // Exhausted retries for this shard - skip to next.
                 var prevNextShardIndex = state.State.NextShardIndex;
                 var prevShardRetries = state.State.ShardRetries;
@@ -317,7 +504,13 @@ internal sealed class TombstoneCompactionGrain(
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "compaction"));
+            LatticeMetrics.KindCompaction);
+
+        RecordPassDuration(_currentTriggerKind);
+        _scopedShardIndices = null;
+        // Reset trigger label so a stale value doesn't carry over to a
+        // subsequent reminder-driven pass that forgot to set it.
+        _currentTriggerKind = TriggerReminder;
 
         await PublishCompactionCompletedAsync();
 
@@ -384,16 +577,66 @@ internal sealed class TombstoneCompactionGrain(
         // own inner scope.
         using var maintenanceScope = LatticeMaintenanceContext.BeginScope();
 
-        var shardKey = $"{physicalTreeId}/{shardIndex}";
-        var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
-
-        var leafId = await shardRoot.GetLeftmostLeafIdAsync();
-
-        while (leafId is not null)
+        // Trigger-label scope: only opened when at least one policy knob
+        // is non-default, so the v3.4.0 reminder-only deployment leaves
+        // the per-leaf instruments un-tagged and existing dashboards
+        // that filter on `trigger=""` keep matching exactly.
+        var opts = Options;
+        IDisposable? triggerScope = null;
+        if (opts.MinTombstoneRatioForCompaction > 0.0 || opts.MaxLeafEntriesBeforeForcedCompaction > 0)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-            await leaf.CompactTombstonesAsync(gracePeriod);
-            leafId = await leaf.GetNextSiblingAsync();
+            triggerScope = LatticeCompactionTriggerContext.BeginScope(_currentTriggerKind);
+        }
+        try
+        {
+            var shardKey = $"{physicalTreeId}/{shardIndex}";
+            var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
+
+            var leafId = await shardRoot.GetLeftmostLeafIdAsync();
+
+            while (leafId is not null)
+            {
+                var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                try
+                {
+                    await leaf.CompactTombstonesAsync(gracePeriod);
+                }
+                catch
+                {
+                    // Per-leaf failure: tag the visited counter with
+                    // outcome=skipped so operators can distinguish a
+                    // leaf the coordinator gave up on from a leaf that
+                    // legitimately had nothing to reap (outcome=noop)
+                    // or actively reaped (outcome=reaped). The
+                    // exception is then re-thrown so the surrounding
+                    // shard-level retry/skip logic in
+                    // ProcessNextShardAsync still drives the
+                    // shard.retries / shard.skipped counters.
+                    var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, physicalTreeId);
+                    if (triggerScope is not null)
+                    {
+                        var trig = _currentTriggerKind switch
+                        {
+                            TriggerReminder => LatticeMetrics.TriggerReminderTag,
+                            TriggerRatio => LatticeMetrics.TriggerRatioTag,
+                            TriggerSize => LatticeMetrics.TriggerSizeTag,
+                            TriggerOperator => LatticeMetrics.TriggerOperatorTag,
+                            _ => new KeyValuePair<string, object?>(LatticeMetrics.TagTrigger, _currentTriggerKind),
+                        };
+                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped, trig);
+                    }
+                    else
+                    {
+                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped);
+                    }
+                    throw;
+                }
+                leafId = await leaf.GetNextSiblingAsync();
+            }
+        }
+        finally
+        {
+            triggerScope?.Dispose();
         }
     }
 

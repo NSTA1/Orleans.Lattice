@@ -84,6 +84,53 @@ siloBuilder.ConfigureLattice("archive-tree", o => o.TombstoneGracePeriod = Timeo
 
 The default grace period is **24 hours**. The reminder interval equals the grace period (clamped to a minimum of 1 minute, the Orleans reminder floor).
 
+## Policy-Driven Triggers
+
+Reminder-driven compaction handles the steady state. Bursty workloads can build a tombstone backlog **between** reminder ticks - either because the delete:write ratio spikes or because a leaf accumulates so many tombstones that scan latency degrades before the next reminder fires. Three optional policy controls let the leaf request an out-of-cycle pass without waiting for the next reminder.
+
+### `MinTombstoneRatioForCompaction`
+
+A `double` in the range `[0.0, 1.0]` (default `0.0` = disabled). When non-zero, every mutation samples the leaf's tombstone-to-live-entry ratio and emits it on the `orleans.lattice.leaf.tombstone.ratio` histogram. When the sampled ratio crosses the threshold, the leaf calls `ITombstoneCompactionGrain.RequestCompactionAsync(shardIndex, "ratio")` to schedule an out-of-cycle pass scoped to that single shard.
+
+### `MaxLeafEntriesBeforeForcedCompaction`
+
+An `int` (default `0` = disabled). When non-zero, the leaf requests an out-of-cycle pass once its total entry count (live + tombstones) exceeds the threshold, with trigger label `"size"`. This is the safety net for workloads where the tombstone ratio stays low but absolute entry count drifts up because deletes never quite outpace writes.
+
+### `CompactionTriggerCooldown`
+
+A `TimeSpan` (default 5 minutes). Per-shard cooldown gate that prevents a hot leaf from re-requesting compaction every mutation. The coordinator persists `LastTriggerAt` per pass; ratio/size requests inside the cooldown window are silently dropped. Operator-initiated requests via `ILattice.CompactShardAsync` bypass the cooldown by carrying the `"operator"` trigger label.
+
+```csharp verify
+// Enable both triggers with a 2-minute cooldown.
+siloBuilder.ConfigureLattice("hot-tree", o =>
+{
+    o.MinTombstoneRatioForCompaction = 0.30;        // 30% tombstones triggers a pass.
+    o.MaxLeafEntriesBeforeForcedCompaction = 50_000; // 50k entries triggers a pass.
+    o.CompactionTriggerCooldown = TimeSpan.FromMinutes(2);
+});
+```
+
+## Operator API
+
+`ILattice.CompactShardAsync(int shardIndex, CancellationToken)` schedules an out-of-cycle pass scoped to a single physical shard, bypassing the cooldown gate. Returns `false` when compaction is disabled (`TombstoneGracePeriod = Timeout.InfiniteTimeSpan`) or when a pass is already in flight. The shard index must be a physical shard of the tree's `ShardMap`; an out-of-range value throws `ArgumentOutOfRangeException`.
+
+```csharp verify
+// Operator triage: force a compaction pass on shard 3.
+var accepted = await lattice.CompactShardAsync(3, cancellationToken);
+```
+
+## Telemetry
+
+Every compaction pass emits the following instruments. See [Metrics](metrics.md) for the full schema:
+
+- `orleans.lattice.compaction.pass.duration` (histogram, ms) - tagged `tree`, `trigger`.
+- `orleans.lattice.compaction.leaves.visited` (counter) - tagged `tree`, `outcome` (`reaped` / `noop`), and `trigger` when a policy-trigger pass is in flight.
+- `orleans.lattice.compaction.shard.retries` (counter) - tagged `tree`.
+- `orleans.lattice.compaction.shard.skipped` (counter) - tagged `tree`. **Any non-zero rate is alert-worthy.**
+- `orleans.lattice.leaf.tombstone.ratio` (histogram) - tagged `tree`. Only emitted when `MinTombstoneRatioForCompaction` is enabled.
+
+The bundled Grafana **Overview** dashboard ships compaction-focused panels for each of these (pass duration p95 by trigger, leaves visited by outcome, shard retries / skips, and tombstone-ratio p95).
+
 ## Design Considerations
 
 | Concern | Approach |

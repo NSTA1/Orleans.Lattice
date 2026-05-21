@@ -199,4 +199,21 @@ public static class LatticeEventConstants
     /// Internal - set through <see cref="LatticeIdempotencyContext"/>.
     /// </summary>
     internal const string IdempotencyKeyRequestContextKey = "ol.idk";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the
+    /// compaction-pass trigger label (<c>reminder</c> / <c>ratio</c> /
+    /// <c>size</c> / <c>operator</c>) from
+    /// <see cref="BPlusTree.Grains.TombstoneCompactionGrain"/> down into
+    /// <see cref="BPlusTree.Grains.BPlusLeafGrain"/>'s
+    /// <c>CompactTombstonesAsync</c> body so per-leaf instruments
+    /// (<see cref="LatticeMetrics.LeafCompactionDuration"/>,
+    /// <see cref="LatticeMetrics.LeafTombstonesReaped"/>,
+    /// <see cref="LatticeMetrics.LeafTombstonesExpired"/>,
+    /// <see cref="LatticeMetrics.CompactionLeavesVisited"/>) can be
+    /// tagged with the originating trigger when at least one policy
+    /// knob is non-default. Internal - set through
+    /// <see cref="LatticeCompactionTriggerContext"/>.
+    /// </summary>
+    internal const string CompactionTriggerRequestContextKey = "ol.ctrig";
 }

@@ -38,4 +38,16 @@ internal sealed class TombstoneCompactionState
     /// ticks. <c>null</c> when no pass is in flight.
     /// </summary>
     [Id(4)] public string? PhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// Per-physical-shard wall-clock timestamp of the last out-of-cycle
+    /// compaction trigger that was honoured (i.e. landed an enqueue or
+    /// mutated <see cref="InProgress"/>). Consulted by ratio- and
+    /// size-based triggers to enforce the
+    /// <c>LatticeOptions.CompactionTriggerCooldown</c> window. Operator
+    /// requests bypass this map. Empty by default; legacy persisted state
+    /// decodes the missing slot to an empty dictionary, the correct
+    /// semantic default ("no triggers seen yet").
+    /// </summary>
+    [Id(5)] public Dictionary<int, DateTimeOffset> LastTriggerAt { get; set; } = [];
 }

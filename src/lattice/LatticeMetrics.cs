@@ -85,6 +85,28 @@ public static class LatticeMetrics
     public const string TagStep = "step";
 
     /// <summary>
+    /// Tag key for the trigger that initiated a tombstone-compaction pass
+    /// (e.g. <c>reminder</c>, <c>ratio</c>, <c>size</c>, <c>operator</c>
+    /// on <see cref="CompactionPassDuration"/>). The tag is also emitted on
+    /// <see cref="LeafCompactionDuration"/>, <see cref="LeafTombstonesReaped"/>,
+    /// and <see cref="LeafTombstonesExpired"/> when at least one policy knob
+    /// (<c>MinTombstoneRatioForCompaction</c> or
+    /// <c>MaxLeafEntriesBeforeForcedCompaction</c>) is non-default; when
+    /// every policy knob holds its default the tag is omitted so existing
+    /// dashboards that filter on <c>trigger=""</c> keep matching.
+    /// </summary>
+    public const string TagTrigger = "trigger";
+
+    /// <summary>
+    /// Tag key for a leaf-grain identifier on per-leaf instruments
+    /// (e.g. <see cref="LeafTombstoneRatio"/>). Cardinality follows the
+    /// same caveats as any per-leaf tag - operators that run very wide
+    /// trees should expect to either drop the tag at the OpenTelemetry
+    /// view layer or sample it.
+    /// </summary>
+    public const string TagLeaf = "leaf";
+
+    /// <summary>
     /// The meter that owns every Lattice instrument. Exposed publicly so integration
     /// tests and custom OpenTelemetry exporters can subscribe by reference rather
     /// than by name.
@@ -411,5 +433,108 @@ public static class LatticeMetrics
     public static readonly Histogram<double> SplitRetroactiveForwardDuration =
         Meter.CreateHistogram<double>("orleans.lattice.split.retroactive_forward.duration", unit: "ms",
             description: "Wall-clock duration of the retroactive prepared-mutation sweep at shard-split BeginShadowWrite entry.");
+
+    // --- Compaction policy instruments (TombstoneCompactionGrain) -----------
+
+    /// <summary>
+    /// Histogram of full <c>RunCompactionPassAsync</c> wall-clock duration
+    /// recorded by <c>TombstoneCompactionGrain.CompleteCompactionAsync</c>.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagTrigger"/>
+    /// (<c>reminder</c> for the periodic reminder, <c>ratio</c> /
+    /// <c>size</c> for the corresponding policy triggers, or
+    /// <c>operator</c> for an explicit <c>RequestCompactionAsync</c>
+    /// call). Distinct from <see cref="LeafCompactionDuration"/>, which
+    /// is per-leaf.
+    /// </summary>
+    public static readonly Histogram<double> CompactionPassDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.compaction.pass.duration", unit: "ms",
+            description: "Full tombstone-compaction pass duration, tagged by tree and trigger.");
+
+    /// <summary>
+    /// Counter of leaves visited by a compaction pass, tagged with
+    /// <see cref="TagTree"/> and <see cref="TagOutcome"/> = <c>reaped</c>
+    /// (the leaf removed at least one tombstone or expired entry),
+    /// <c>noop</c> (the leaf short-circuited because nothing has changed
+    /// since its last compaction), or <c>skipped</c> (the leaf threw and
+    /// the pass advanced past it). Lets operators distinguish work-done
+    /// from work-skipped on a single rate panel.
+    /// </summary>
+    public static readonly Counter<long> CompactionLeavesVisited =
+        Meter.CreateCounter<long>("orleans.lattice.compaction.leaves.visited", unit: "{leaf}",
+            description: "Leaves visited by a tombstone-compaction pass, tagged by outcome.");
+
+    /// <summary>
+    /// Counter incremented once per per-shard retry inside
+    /// <c>TombstoneCompactionGrain.ProcessNextShardAsync</c>. Tagged with
+    /// <see cref="TagTree"/>. A non-zero rate means at least one shard's
+    /// per-leaf compaction call threw and the pass deferred a fresh
+    /// attempt within the same activation.
+    /// </summary>
+    public static readonly Counter<long> CompactionShardRetries =
+        Meter.CreateCounter<long>("orleans.lattice.compaction.shard.retries", unit: "{retry}",
+            description: "Per-shard compaction retries inside a single pass.");
+
+    /// <summary>
+    /// Counter incremented once per shard whose retry budget was
+    /// exhausted and whose cursor advanced without a successful
+    /// compaction. Tagged with <see cref="TagTree"/>. A persistent
+    /// non-zero rate is the operational alert signal that a shard is
+    /// consistently failing past <c>MaxRetriesPerShard</c>.
+    /// </summary>
+    public static readonly Counter<long> CompactionShardSkipped =
+        Meter.CreateCounter<long>("orleans.lattice.compaction.shard.skipped", unit: "{shard}",
+            description: "Shards whose per-pass retry budget was exhausted, tagged by tree.");
+
+    /// <summary>
+    /// Histogram of per-leaf tombstone-to-total ratio
+    /// (<c>tombstones / max(liveKeys + tombstones, 1)</c>) sampled
+    /// inside a tombstone-compaction pass, just before
+    /// <c>CompactTombstonesAsync</c> performs its scan. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagLeaf"/>. Surfaces
+    /// space-amplification hot spots without requiring an
+    /// <c>ObservableGauge</c> over a registry of live activations -
+    /// the histogram is observed lazily inside the pass, so it costs
+    /// nothing on the read or write hot paths.
+    /// </summary>
+    public static readonly Histogram<double> LeafTombstoneRatio =
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.tombstone.ratio", unit: "{ratio}",
+            description: "Per-leaf tombstone-to-total ratio sampled inside compaction passes.");
+
+    // --- Cached constant tag pairs (allocation-free hot-path helpers) -------
+    //
+    // KeyValuePair<string, object?> is a value type and the corresponding
+    // Histogram<T>.Record / Counter<T>.Add overloads with explicit 1/2/3
+    // KeyValuePair parameters never allocate. Caching the constant-valued
+    // pairs as static-readonly fields elides the per-call struct construction
+    // (a handful of CPU cycles) and the dictionary lookup inside the metric
+    // handler, and is more readable than inline `new KeyValuePair<...>(name,
+    // literal)` repeated dozens of times.
+
+    /// <summary><see cref="TagOutcome"/> = <c>noop</c>.</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeNoop = new(TagOutcome, "noop");
+
+    /// <summary><see cref="TagOutcome"/> = <c>reaped</c>.</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeReaped = new(TagOutcome, "reaped");
+
+    /// <summary><see cref="TagOutcome"/> = <c>skipped</c>.</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeSkipped = new(TagOutcome, "skipped");
+
+    /// <summary><see cref="TagKind"/> = <c>compact</c> (per-leaf WAL-write attribution).</summary>
+    public static readonly KeyValuePair<string, object?> KindCompact = new(TagKind, "compact");
+
+    /// <summary><see cref="TagKind"/> = <c>compaction</c> (coordinator-completion attribution).</summary>
+    public static readonly KeyValuePair<string, object?> KindCompaction = new(TagKind, "compaction");
+
+    /// <summary><see cref="TagTrigger"/> = <c>reminder</c>.</summary>
+    public static readonly KeyValuePair<string, object?> TriggerReminderTag = new(TagTrigger, "reminder");
+
+    /// <summary><see cref="TagTrigger"/> = <c>ratio</c>.</summary>
+    public static readonly KeyValuePair<string, object?> TriggerRatioTag = new(TagTrigger, "ratio");
+
+    /// <summary><see cref="TagTrigger"/> = <c>size</c>.</summary>
+    public static readonly KeyValuePair<string, object?> TriggerSizeTag = new(TagTrigger, "size");
+
+    /// <summary><see cref="TagTrigger"/> = <c>operator</c>.</summary>
+    public static readonly KeyValuePair<string, object?> TriggerOperatorTag = new(TagTrigger, "operator");
 }
 
