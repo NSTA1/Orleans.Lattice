@@ -210,4 +210,114 @@ public class LatticeOptionsResolverTests
 
         Assert.That(resolved.MaxLeafReplayEntries, Is.EqualTo(LatticeOptions.DefaultMaxLeafReplayEntries));
     }
+
+    // --- CompactionShardTickInterval ---
+
+    [Test]
+    public async Task CompactionShardTickInterval_propagates_default_when_not_overridden()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedTickIntervalTreesForTests();
+        var (resolver, _) = Build(new LatticeOptions());
+
+        var resolved = await resolver.ResolveAsync("user-tree-default-tick");
+
+        Assert.That(resolved.CompactionShardTickInterval,
+            Is.EqualTo(LatticeOptions.DefaultCompactionShardTickInterval));
+    }
+
+    [Test]
+    public async Task CompactionShardTickInterval_propagates_per_tree_override()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedTickIntervalTreesForTests();
+        var custom = TimeSpan.FromMilliseconds(250);
+        var (resolver, _) = Build(new LatticeOptions { CompactionShardTickInterval = custom });
+
+        var resolved = await resolver.ResolveAsync("user-tree-fast");
+
+        Assert.That(resolved.CompactionShardTickInterval, Is.EqualTo(custom));
+    }
+
+    [Test]
+    public async Task CompactionShardTickInterval_below_floor_is_clamped_to_floor()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedTickIntervalTreesForTests();
+        var below = TimeSpan.FromMilliseconds(50);
+        var (resolver, _) = Build(new LatticeOptions { CompactionShardTickInterval = below });
+
+        var resolved = await resolver.ResolveAsync("user-tree-too-fast");
+
+        Assert.That(resolved.CompactionShardTickInterval,
+            Is.EqualTo(LatticeOptions.MinCompactionShardTickInterval));
+    }
+
+    [Test]
+    public async Task CompactionShardTickInterval_clamp_warning_is_emitted_once_per_tree()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedTickIntervalTreesForTests();
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
+        {
+            CompactionShardTickInterval = TimeSpan.FromMilliseconds(10),
+        });
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+            }));
+
+        var logger = Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeOptionsResolver>>();
+        logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Warning).Returns(true);
+        var resolver = new LatticeOptionsResolver(factory, monitor, logger);
+
+        // Resolve the same tree several times; warning must fire exactly once.
+        await resolver.ResolveAsync("clamp-warn-tree");
+        await resolver.ResolveAsync("clamp-warn-tree");
+        await resolver.ResolveAsync("clamp-warn-tree");
+
+        var warningCalls = logger.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(Microsoft.Extensions.Logging.ILogger.Log)
+                && c.GetArguments()[0] is Microsoft.Extensions.Logging.LogLevel level
+                && level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.That(warningCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task CompactionShardTickInterval_at_floor_is_passed_through_without_warning()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedTickIntervalTreesForTests();
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
+        {
+            CompactionShardTickInterval = LatticeOptions.MinCompactionShardTickInterval,
+        });
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+            }));
+
+        var logger = Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeOptionsResolver>>();
+        logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Warning).Returns(true);
+        var resolver = new LatticeOptionsResolver(factory, monitor, logger);
+
+        var resolved = await resolver.ResolveAsync("at-floor-tree");
+
+        Assert.That(resolved.CompactionShardTickInterval,
+            Is.EqualTo(LatticeOptions.MinCompactionShardTickInterval));
+        var warningCalls = logger.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(Microsoft.Extensions.Logging.ILogger.Log)
+                && c.GetArguments()[0] is Microsoft.Extensions.Logging.LogLevel level
+                && level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.That(warningCalls, Is.EqualTo(0));
+    }
 }

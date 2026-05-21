@@ -67,6 +67,31 @@ internal sealed class TombstoneCompactionGrain(
     /// </summary>
     private int[]? _scopedShardIndices;
 
+    /// <summary>
+    /// Snapshot of the resolved <see cref="LatticeOptions.CompactionShardTickInterval"/>
+    /// for the in-flight pass. Set when the pass transitions into
+    /// <c>InProgress</c> (via <see cref="BeginCompactionStateAsync"/> or
+    /// <see cref="BeginScopedCompactionStateAsync"/>) and read once when
+    /// the grain timer is registered. Mid-pass option changes do not
+    /// retroactively reshape the in-flight pass; the next pass picks up
+    /// the new value. Falls back to
+    /// <see cref="LatticeOptions.DefaultCompactionShardTickInterval"/> if
+    /// the snapshot has not been set (defence-in-depth for callers that
+    /// register the timer without going through the begin helpers - none
+    /// exist in this repository today, but the fallback prevents a
+    /// zero-period timer if someone adds one later).
+    /// </summary>
+    private TimeSpan _currentTickInterval = LatticeOptions.DefaultCompactionShardTickInterval;
+
+    /// <summary>
+    /// Test-only seam exposing the snapshot of
+    /// <see cref="LatticeOptions.CompactionShardTickInterval"/> captured
+    /// when the in-flight pass began. Returns the
+    /// <see cref="LatticeOptions.DefaultCompactionShardTickInterval"/>
+    /// fallback if no pass has been begun on this activation.
+    /// </summary>
+    internal TimeSpan CurrentTickIntervalForTests => _currentTickInterval;
+
     private bool IsCompactionDisabled => Options.TombstoneGracePeriod == Timeout.InfiniteTimeSpan;
 
     public async Task EnsureReminderAsync()
@@ -112,7 +137,7 @@ internal sealed class TombstoneCompactionGrain(
         // infrastructure (which is unavailable in `Substitute.For<IGrainContext>()`).
         _compactionTimer = this.RegisterGrainTimer(
             OnCompactionTimerTick,
-            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
+            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: _currentTickInterval));
         return true;
     }
 
@@ -195,6 +220,9 @@ internal sealed class TombstoneCompactionGrain(
     internal async Task BeginScopedCompactionStateAsync(string physicalTreeId, int[] shardIndices)
     {
         _passStartTimestamp = Stopwatch.GetTimestamp();
+        // Snapshot the resolved tick interval at pass start; mid-pass
+        // option changes do not retroactively reshape the in-flight pass.
+        _currentTickInterval = (await optionsResolver.ResolveAsync(TreeId)).CompactionShardTickInterval;
         var prevInProgress = state.State.InProgress;
         var prevNextShardIndex = state.State.NextShardIndex;
         var prevShardRetries = state.State.ShardRetries;
@@ -299,10 +327,10 @@ internal sealed class TombstoneCompactionGrain(
         _passStartTimestamp = Stopwatch.GetTimestamp();
         await BeginCompactionStateAsync(startFromShard);
 
-        // Fire immediately, then tick every 2 seconds per shard.
+        // Fire immediately, then tick every CompactionShardTickInterval per shard.
         _compactionTimer = this.RegisterGrainTimer(
             OnCompactionTimerTick,
-            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
+            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: _currentTickInterval));
     }
 
     /// <summary>
@@ -316,6 +344,10 @@ internal sealed class TombstoneCompactionGrain(
         // persist it so the pass is resumable across silo restarts and immune
         // to mid-pass shard-map mutations (audit bug #1).
         var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
+
+        // Snapshot the resolved tick interval at pass start; mid-pass
+        // option changes do not retroactively reshape the in-flight pass.
+        _currentTickInterval = (await optionsResolver.ResolveAsync(TreeId)).CompactionShardTickInterval;
 
         // Snapshot before mutating so a transient WriteStateAsync failure
         // does not leave the in-memory InProgress / shard cursor ahead of

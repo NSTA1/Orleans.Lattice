@@ -81,6 +81,26 @@ public class LatticeOptions
     public TimeSpan CompactionTriggerCooldown { get; set; } = DefaultCompactionTriggerCooldown;
 
     /// <summary>
+    /// Per-shard tick interval used by <c>TombstoneCompactionGrain</c>'s
+    /// internal grain timer when walking a compaction pass. The compactor
+    /// processes one shard per tick and waits this long between ticks so
+    /// the grain returns control to the Orleans scheduler between shards
+    /// (avoiding a long-running grain call that could hit Orleans timeouts
+    /// and starve concurrent <c>RequestCompactionAsync</c> callers). The
+    /// interval is a **scheduler-fairness knob, not a grain-deactivation
+    /// knob** - leaf activation lifetime is governed by the silo's
+    /// <c>GrainCollectionOptions.CollectionAge</c> and is independent of
+    /// this value. Lower values speed up full passes (a 1024-shard tree
+    /// at 2 s = ~34 min/pass; same tree at 200 ms = ~3.4 min/pass) at
+    /// the cost of less scheduler headroom for other grains. Values
+    /// below <see cref="MinCompactionShardTickInterval"/> are clamped to
+    /// the floor with a one-shot warning per tree per process.
+    /// Snapshotted at pass start, so mid-pass option changes do not
+    /// retroactively reshape an in-flight pass.
+    /// </summary>
+    public TimeSpan CompactionShardTickInterval { get; set; } = DefaultCompactionShardTickInterval;
+
+    /// <summary>
     /// How long a soft-deleted tree is retained before its grains are permanently
     /// purged. During this window the tree is inaccessible (reads and writes throw
     /// <see cref="InvalidOperationException"/>), but its data still exists in storage
@@ -116,6 +136,19 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="CompactionTriggerCooldown"/> (5 minutes).</summary>
     public static readonly TimeSpan DefaultCompactionTriggerCooldown = TimeSpan.FromMinutes(5);
+
+    /// <summary>Default value for <see cref="CompactionShardTickInterval"/> (2 seconds).</summary>
+    public static readonly TimeSpan DefaultCompactionShardTickInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Minimum effective value for <see cref="CompactionShardTickInterval"/>
+    /// (100 milliseconds). Configured values below this floor are clamped
+    /// up by <see cref="LatticeOptionsResolver"/> with a one-shot warning
+    /// per tree per process. The floor exists so a pathological setting
+    /// (e.g. 1 ms) cannot starve the rest of the compactor grain's
+    /// scheduler quota by yielding too briefly between shard walks.
+    /// </summary>
+    public static readonly TimeSpan MinCompactionShardTickInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;

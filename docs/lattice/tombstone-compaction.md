@@ -84,6 +84,43 @@ siloBuilder.ConfigureLattice("archive-tree", o => o.TombstoneGracePeriod = Timeo
 
 The default grace period is **24 hours**. The reminder interval equals the grace period (clamped to a minimum of 1 minute, the Orleans reminder floor).
 
+### `CompactionShardTickInterval`
+
+A `TimeSpan` (default 2 seconds, floor 100 ms). The compaction grain processes one shard per internal grain-timer tick during a pass, and waits this long between ticks so the grain returns control to the Orleans scheduler between shards. Without this gap a single grain call could span every shard in the tree, hit Orleans' grain-call timeout, and starve concurrent operator-initiated `RequestCompactionAsync` callers.
+
+The cadence is a **scheduler-fairness knob, not a grain-deactivation knob.** Leaf activation lifetime is governed by the silo's `GrainCollectionOptions.CollectionAge` (default 15 minutes) and is independent of this value.
+
+#### What a pass actually touches
+
+Within a single shard the coordinator walks the leaf chain back-to-back via `IBPlusLeafGrain.GetNextSiblingAsync` and `CompactTombstonesAsync`; **the tick interval is *not* inserted between leaves of the same shard**, only between shards. A full pass therefore activates every leaf in the tree at least once. The only thing keeping the live-activation count bounded is `GrainCollectionOptions.CollectionAge`: leaves that finish compacting fall idle and are collected after they've been idle for `CollectionAge`. The peak concurrent leaf activation count during a pass is roughly:
+
+```
+peak ~= leaves walked within the last CollectionAge window
+```
+
+This means **lowering the tick interval directly raises the peak.** A pass that finishes inside one `CollectionAge` window has effectively activated the entire leaf set of the tree at once, because the leaves visited at the start of the pass have not yet been collected when the pass ends.
+
+#### Tuning trade-off
+
+Full-pass wall-clock scales linearly with shard count and tick interval. The table below is for a tree with 1024 physical shards and ~50 leaves per shard (~50 000 leaves total) and shows both the wall-clock saving and the activation-pressure cost. "Peak concurrent activations" is the number of leaves walked in the last 15 minutes of the pass, capped at the tree's leaf count.
+
+| `CompactionShardTickInterval` | Full-pass duration | Peak concurrent leaf activations |
+|---|---|---|
+| 2 s (default) | ~34 minutes | ~22 500 (~45% of leaves) |
+| 500 ms | ~8.5 minutes | ~50 000 (entire tree) |
+| 200 ms | ~3.4 minutes | ~50 000 (entire tree) |
+| 100 ms (floor) | ~1.7 minutes | ~50 000 (entire tree) |
+
+The default 2 s cadence is deliberately conservative on this axis: it spreads activations across multiple `CollectionAge` windows so the directory and silo memory don't see the full leaf set simultaneously. Lower the cadence only after measuring that your silo can absorb the resulting peak activation count, and prefer `ILattice.CompactShardAsync(shardIndex)` for "compact this one shard fast" operator triage - a scoped pass walks only one shard's leaves regardless of the tick interval.
+
+Values below the 100 ms floor are clamped up to the floor with a one-shot warning per tree per process. The floor protects scheduler fairness; lower it only if you have a measured reason. The interval is snapshotted at the start of each pass, so changing the option mid-pass does not reshape the in-flight pass; the next pass picks up the new value.
+
+```csharp verify
+// Speed up compaction triage on a high-shard tree.
+// Verify the silo can absorb the resulting peak activation count first.
+siloBuilder.ConfigureLattice("high-shard-tree", o => o.CompactionShardTickInterval = TimeSpan.FromMilliseconds(500));
+```
+
 ## Policy-Driven Triggers
 
 Reminder-driven compaction handles the steady state. Bursty workloads can build a tombstone backlog **between** reminder ticks - either because the delete:write ratio spikes or because a leaf accumulates so many tombstones that scan latency degrades before the next reminder fires. Three optional policy controls let the leaf request an out-of-cycle pass without waiting for the next reminder.
@@ -142,5 +179,6 @@ The bundled Grafana **Overview** dashboard ships compaction-focused panels for e
 | **Replication isolation** | Reap envelopes carry `MutationCategory.Maintenance`. The replication observer skips maintenance writes entirely, and the change feed plus outbound shipper apply a `MutationKind.Tombstone` filter as defence in depth. Every peer reaps independently against its own grace window. |
 | **Durability of progress** | Compaction progress (`NextShardIndex`, `InProgress`) is persisted to grain storage. A one-minute keepalive reminder ensures the grain is reactivated after a silo restart to resume the in-flight pass. |
 | **Fault tolerance** | If a shard fails during compaction, it is retried once before being skipped. The next reminder tick starts a fresh pass. |
-| **Memory** | Leaves are compacted one at a time via sequential grain calls. Orleans deactivates idle leaves on its normal schedule; no bulk activation occurs. |
+| **Memory** | Leaves are compacted one at a time via sequential grain calls, but the leaf walk within a shard runs back-to-back; only the *between-shard* gap is governed by `CompactionShardTickInterval`. Peak concurrent leaf activations during a pass is roughly the number of leaves walked within one `GrainCollectionOptions.CollectionAge` window (default 15 minutes). The default 2 s cadence is sized to spread activations across multiple `CollectionAge` windows; lowering it raises the peak. |
+| **Scheduler fairness** | The compactor yields between shard walks for `CompactionShardTickInterval` (default 2 s, floor 100 ms) so the grain returns control to the Orleans scheduler and concurrent `RequestCompactionAsync` callers are not starved. The cadence is configurable per tree and snapshotted at pass start. |
 | **Disabling** | Set `TombstoneGracePeriod = Timeout.InfiniteTimeSpan` to disable compaction globally or per tree. |

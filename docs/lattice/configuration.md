@@ -55,6 +55,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 |---|---|---|---|
 | `KeysPageSize` | `int` | 512 | Yes |
 | `TombstoneGracePeriod` | `TimeSpan` | 24 hours | Yes |
+| `CompactionShardTickInterval` | `TimeSpan` | 2 seconds | Yes |
 | `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
 | `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
 | `PrefetchKeysScan` | `bool` | `false` | Yes |
@@ -126,6 +127,12 @@ siloBuilder.ConfigureLattice("archive-tree", o =>
 ```
 
 This option can be changed freely at any time. The new grace period takes effect on the next compaction reminder tick. The reminder interval is automatically set to match the grace period (clamped to a minimum of 1 minute, the Orleans reminder floor).
+
+### `CompactionShardTickInterval`
+
+Gap inserted between consecutive per-shard ticks during a tombstone-compaction pass. Default **2 seconds**, floor **100 milliseconds**. The cadence is a scheduler-fairness knob and the **dominant control on activation pressure during a pass** - lowering it shortens the pass but raises the peak concurrent leaf activation count. The cadence is snapshotted at the start of each pass and can be changed freely at any time; the next pass picks up the new value.
+
+For the worked-example trade-off table, the activation-pressure model, the relationship to `GrainCollectionOptions.CollectionAge`, and operator-triage guidance (use `ILattice.CompactShardAsync` for "compact one shard fast"), see **[Tombstone Compaction - `CompactionShardTickInterval`](tombstone-compaction.md#compactionshardtickinterval)**.
 
 ### `SoftDeleteDuration`
 
