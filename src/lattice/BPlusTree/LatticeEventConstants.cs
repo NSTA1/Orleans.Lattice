@@ -216,4 +216,19 @@ public static class LatticeEventConstants
     /// <see cref="LatticeCompactionTriggerContext"/>.
     /// </summary>
     internal const string CompactionTriggerRequestContextKey = "ol.ctrig";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the
+    /// compaction-pass walk-path label (<c>walk</c> for the legacy
+    /// leaf-chain traversal, <c>dirty-set</c> for the shard-root
+    /// dirty-leaves fast path) from
+    /// <see cref="BPlusTree.Grains.TombstoneCompactionGrain"/> down into
+    /// <see cref="BPlusTree.Grains.BPlusLeafGrain"/>'s
+    /// <c>CompactTombstonesAsync</c> body so per-leaf instruments
+    /// (<see cref="LatticeMetrics.CompactionLeavesVisited"/> and the
+    /// per-leaf trigger-tagged variants) can be tagged with the
+    /// originating walk path. Internal - set through
+    /// <see cref="LatticeCompactionPathContext"/>.
+    /// </summary>
+    internal const string CompactionPathRequestContextKey = "ol.cpath";
 }

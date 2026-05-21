@@ -98,19 +98,19 @@ Within a single shard the coordinator walks the leaf chain in batches of `Compac
 peak ~= min(leaves walked in last CollectionAge, CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval))
 ```
 
-On a healthy default-configured tree (`CompactionLeafBatchSize = 64`, `CompactionShardTickInterval = 2 s`, `CollectionAge = 15 min`) the second term caps at roughly `64 * 450 = 28 800` activations regardless of tree size. Lowering the tick interval or raising the batch size raises the peak; the two knobs are multiplicative.
+On a healthy default-configured tree (`CompactionLeafBatchSize = 64`, `CompactionShardTickInterval = 500 ms`, `CollectionAge = 15 min`) the second term caps at roughly `64 * 1800 = 115 200` activations, but the **dirty-leaves fast path** described below clamps the *actual* per-pass activation cost to `O(shards + dirty_leaves)` in the steady state. On a tree where most leaves have nothing to compact, a full pass activates only one grain per physical shard plus the small set of leaves that observed routed deletes since the previous pass.
 
 Leaves that finish compacting fall idle and are collected after they've been idle for `CollectionAge`. With batching in place, **the leaf walk no longer activates the entire shard's leaf chain back-to-back**, so a pass that finishes inside one `CollectionAge` window does not necessarily activate the whole tree at once.
 
 #### Tuning trade-off
 
-Full-pass wall-clock scales linearly with shard count and tick interval, plus the batch yield within shards. The table below is for a tree with 1024 physical shards and ~50 leaves per shard (~50 000 leaves total). "Peak concurrent activations" is the number of leaves walked in the last 15 minutes of the pass, capped at the tree's leaf count and at the batch-yield bound.
+Full-pass wall-clock scales linearly with shard count and tick interval, plus the batch yield within shards. The table below is for a tree with 1024 physical shards and ~50 leaves per shard (~50 000 leaves total). "Peak concurrent activations" is the number of leaves walked in the last 15 minutes of the pass, capped at the tree's leaf count and at the batch-yield bound. With the dirty-leaves fast path the *typical* pass walks far fewer leaves than the table headline suggests; the figures below describe the legacy chain-walk fallback (e.g. the first pass after upgrade, or a pass that landed an empty dirty snapshot for the shard).
 
-| `CompactionShardTickInterval` | `CompactionLeafBatchSize` | Full-pass duration | Peak concurrent leaf activations |
+| `CompactionShardTickInterval` | `CompactionLeafBatchSize` | Full-pass duration | Peak concurrent leaf activations (chain-walk fallback) |
 |---|---|---|---|
-| 2 s (default) | 64 (default) | ~34 minutes | ~28 800 (capped by batch yield) |
-| 2 s (default) | 1024 (per-shard cap) | ~34 minutes | ~50 000 (entire tree) |
-| 500 ms | 64 (default) | ~8.5 minutes | ~7 200 |
+| 500 ms (default) | 64 (default) | ~8.5 minutes | ~7 200 |
+| 2 s | 64 (default) | ~34 minutes | ~28 800 |
+| 2 s | 1024 (per-shard cap) | ~34 minutes | ~50 000 (entire tree) |
 | 200 ms | 64 (default) | ~3.4 minutes | ~2 880 |
 | 100 ms (floor) | 64 (default) | ~1.7 minutes | ~1 440 |
 | 100 ms (floor) | 1 (floor) | ~1.7 minutes | ~22 (extreme yielding) |
@@ -136,6 +136,18 @@ The default 64 reproduces pre-batching behaviour exactly on shards with <= 64 le
 // within each shard. Trades pass wall-clock for activation headroom.
 siloBuilder.ConfigureLattice("activation-sensitive-tree", o => o.CompactionLeafBatchSize = 16);
 ```
+
+## Dirty-Leaves Fast Path
+
+The shard root maintains a small per-shard "dirty leaves since last compaction" set, populated as it routes `Delete` mutations down to leaves. The compaction coordinator pulls this set at the start of each shard's first batch via `IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync()`, walks only the named leaves, and on shard completion drains the set up to an HLC watermark via `IShardRootGrain.ClearDirtyLeavesUpToAsync(advance)`. The clear is HLC-gated, so deletes that arrived during the in-flight pass are preserved for the next pass rather than silently dropped.
+
+A pass on a tree with no recent deletes activates only the shard root grains (one per physical shard), not every leaf - activation cost drops from `O(leaves)` to `O(shards + dirty_leaves)`. On a 50 000-leaf, 1024-shard tree where 1% of leaves accumulated tombstones since the last pass, the fast path activates ~1 524 grains versus the ~50 000 the legacy chain walk would touch.
+
+When a shard's dirty-leaves snapshot is empty (a fresh tree, an upgraded silo with no signal yet, or a shard whose deletes were all already drained), the coordinator falls back to the legacy leaf-chain walk for that shard so progress is never blocked by the absence of accumulated signal. The fast path takes over from the next pass forward.
+
+The shard root dedupes repeated `Delete` mutations within a dirty-window in memory, so the persistence cost scales with "distinct leaves touched per window", not "deletes per window". Dirty-leaf state is local to each cluster; receiver-side leaves observe the same `Delete` mutations via the standard WAL replication transport, and receiver-cluster shard roots populate their own dirty set from that stream and run their own compaction passes against it.
+
+The active path is reported on `orleans.lattice.compaction.leaves.visited` via the `path` tag (`walk` or `dirty-set`), and the `orleans.lattice.compaction.shard.dirty_leaves` histogram records the per-shard dirty-leaf count at the moment the coordinator enters a shard.
 
 ## Policy-Driven Triggers
 
@@ -177,9 +189,10 @@ var accepted = await lattice.CompactShardAsync(3, cancellationToken);
 Every compaction pass emits the following instruments. See [Metrics](metrics.md) for the full schema:
 
 - `orleans.lattice.compaction.pass.duration` (histogram, ms) - tagged `tree`, `trigger`.
-- `orleans.lattice.compaction.leaves.visited` (counter) - tagged `tree`, `outcome` (`reaped` / `noop`), and `trigger` when a policy-trigger pass is in flight.
+- `orleans.lattice.compaction.leaves.visited` (counter) - tagged `tree`, `outcome` (`reaped` / `noop`), `trigger` when a policy-trigger pass is in flight, and `path` (`walk` / `dirty-set`) per the active fast path.
 - `orleans.lattice.compaction.shard.retries` (counter) - tagged `tree`.
 - `orleans.lattice.compaction.shard.skipped` (counter) - tagged `tree`. **Any non-zero rate is alert-worthy.**
+- `orleans.lattice.compaction.shard.dirty_leaves` (histogram) - tagged `tree`. Records the per-shard dirty-leaf snapshot size at the moment the coordinator enters a shard. Use it to capacity-plan the dirty-leaves fast path.
 - `orleans.lattice.leaf.tombstone.ratio` (histogram) - tagged `tree`. Only emitted when `MinTombstoneRatioForCompaction` is enabled.
 
 The bundled Grafana **Overview** dashboard ships compaction-focused panels for each of these (pass duration p95 by trigger, leaves visited by outcome, shard retries / skips, and tombstone-ratio p95).
@@ -195,6 +208,6 @@ The bundled Grafana **Overview** dashboard ships compaction-focused panels for e
 | **Replication isolation** | Reap envelopes carry `MutationCategory.Maintenance`. The replication observer skips maintenance writes entirely, and the change feed plus outbound shipper apply a `MutationKind.Tombstone` filter as defence in depth. Every peer reaps independently against its own grace window. |
 | **Durability of progress** | Compaction progress (`NextShardIndex`, `InProgress`) is persisted to grain storage. A one-minute keepalive reminder ensures the grain is reactivated after a silo restart to resume the in-flight pass. |
 | **Fault tolerance** | If a shard fails during compaction, it is retried once before being skipped. The next reminder tick starts a fresh pass. |
-| **Memory** | Leaves are compacted in batches of `CompactionLeafBatchSize` (default 64) per timer tick; both the *between-shard* gap and the *between-batch* gap are governed by `CompactionShardTickInterval`. Peak concurrent leaf activations during a pass is bounded by `min(leaves walked in last CollectionAge, CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval))`. The default settings (64-leaf batch, 2 s tick, 15 min `CollectionAge`) cap the peak at roughly 28 800 activations regardless of tree size; lower the tick or raise the batch size to trade activation headroom for pass wall-clock. |
-| **Scheduler fairness** | The compactor yields between shard walks for `CompactionShardTickInterval` (default 2 s, floor 100 ms) so the grain returns control to the Orleans scheduler and concurrent `RequestCompactionAsync` callers are not starved. The cadence is configurable per tree and snapshotted at pass start. |
+| **Memory** | Leaves are compacted in batches of `CompactionLeafBatchSize` (default 64) per timer tick; both the *between-shard* gap and the *between-batch* gap are governed by `CompactionShardTickInterval`. The dirty-leaves fast path (see below) clamps the steady-state per-pass activation count to `O(shards + dirty_leaves)`. The legacy chain-walk fallback (first pass after upgrade, or a shard whose dirty snapshot was empty) is bounded by `min(leaves walked in last CollectionAge, CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval))`. With the default 64-leaf batch, 500 ms tick, and 15 min `CollectionAge`, the chain-walk fallback caps at roughly 115 200 activations regardless of tree size; the fast path runs orders of magnitude lower on most trees. |
+| **Scheduler fairness** | The compactor yields between shard walks for `CompactionShardTickInterval` (default 500 ms, floor 100 ms) so the grain returns control to the Orleans scheduler and concurrent `RequestCompactionAsync` callers are not starved. The cadence is configurable per tree and snapshotted at pass start. |
 | **Disabling** | Set `TombstoneGracePeriod = Timeout.InfiniteTimeSpan` to disable compaction globally or per tree. |

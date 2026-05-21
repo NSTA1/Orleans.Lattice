@@ -33,6 +33,7 @@ internal static class TypeAliases
     internal const string InternalNodeState = "ol.ins";
     internal const string LeafNodeState = "ol.lns";
     internal const string ShardRootState = "ol.srs";
+    internal const string DirtyLeavesSnapshot = "ol.dls";
     internal const string PendingBulkGraft = "ol.pbg";
     internal const string GraftEntry = "ol.ge";
     internal const string TombstoneCompactionState = "ol.tcs";

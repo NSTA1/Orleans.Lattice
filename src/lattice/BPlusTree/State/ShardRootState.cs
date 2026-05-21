@@ -1,4 +1,5 @@
 using Orleans.Lattice;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.State;
 
@@ -105,6 +106,34 @@ internal sealed class ShardRootState
     /// </para>
     /// </summary>
     [Id(11)] public ShadowForwardState? ShadowForward { get; set; }
+
+    /// <summary>
+    /// Map of leaf grain ids on this shard to the
+    /// <see cref="HybridLogicalClock"/> at which the leaf was most recently
+    /// marked dirty by a routed <c>Delete</c> mutation. Populated by
+    /// <c>ShardRootGrain.MarkLeafDirtyAsync</c> as deletes route through this
+    /// shard, and consumed by <c>TombstoneCompactionGrain</c> via
+    /// <see cref="IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync"/>
+    /// to skip activating leaves with nothing to reap. The per-entry HLC
+    /// gates <see cref="IShardRootGrain.ClearDirtyLeavesUpToAsync"/> so a
+    /// delete that arrives during the in-flight pass is preserved for the
+    /// next pass instead of being silently dropped.
+    /// <para>
+    /// Bounded by the shard's leaf count. Persists alongside the rest of the
+    /// shard-root state so a silo restart does not lose pending dirty signal.
+    /// </para>
+    /// </summary>
+    [Id(12)] public Dictionary<string, HybridLogicalClock> DirtyLeavesSinceLastCompaction { get; set; } = new();
+
+    /// <summary>
+    /// HLC watermark below which the dirty-set has been drained. The
+    /// compaction coordinator passes this value to
+    /// <see cref="IShardRootGrain.ClearDirtyLeavesUpToAsync"/> after a
+    /// successful shard pass; entries whose mark HLC compares as
+    /// less-than-or-equal to the watermark are removed, while entries
+    /// marked with a strictly greater HLC are preserved.
+    /// </summary>
+    [Id(13)] public HybridLogicalClock LastDirtyAdvance { get; set; }
 }
 
 /// <summary>
