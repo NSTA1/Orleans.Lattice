@@ -73,7 +73,7 @@ public class GrpcPushTransportBuildEnvelopeTests
         var encoder = new CountingDecoder();
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), ackSerializer);
         var transport = new GrpcPushTransport(
             method,
             encoder,
@@ -223,6 +223,52 @@ public class GrpcPushTransportBuildEnvelopeTests
             Assert.That(encoder.DecodeCalls, Is.Zero);
             Assert.That(actual.WireVersion, Is.EqualTo(42),
                 "caller-supplied envelope must override the heartbeat-default wire version");
+        });
+    }
+
+    [Test]
+    public void BuildEnvelopeBox_routes_populated_EncodedEnvelope_through_the_framing_slot()
+    {
+        // Stage 4b wired the framing-only fast path: a populated
+        // EncodedEnvelope is now consumed straight by the gRPC
+        // marshaller via the framing slot on the envelope box, and
+        // the typed envelope decode is never invoked. Pin both
+        // halves: the box surfaces the framing payload, and the
+        // legacy decode counter stays zero.
+        var (transport, encoder) = CreateTransport();
+        using var _ = transport;
+        var encoded = new ReplicationBatchEncodedEnvelope
+        {
+            Header = new EncodedBatchHeader
+            {
+                Magic = EncodedBatchHeader.MagicValue,
+                WireVersion = EncodedBatchHeader.CurrentWireVersion,
+                OriginClusterIdHash = EncodedBatchHeader.HashClusterId("self"),
+                EntryCount = 0,
+            },
+            EncodedEntries = ReadOnlyMemory<ArraySegment<byte>>.Empty,
+        };
+        var batch = new ReplicationBatch
+        {
+            TargetClusterId = "peer",
+            TreeName = "orders",
+            OriginClusterId = "self",
+            // No bytes / typed envelope; the framing slot is the only
+            // thing the caller supplied.
+            EncodedEnvelope = encoded,
+        };
+
+        var box = transport.BuildEnvelopeBoxForTesting(batch);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(box.Framing, Is.Not.Null,
+                "framing slot must be populated when EncodedEnvelope is supplied");
+            Assert.That(box.Framing!.Value.Header, Is.EqualTo(encoded.Header));
+            Assert.That(box.Framing.Value.TreeName, Is.EqualTo("orders"));
+            Assert.That(box.Framing.Value.OriginClusterId, Is.EqualTo("self"));
+            Assert.That(encoder.DecodeCalls, Is.Zero,
+                "the framing-only slot must not fall through to the typed decode branch");
         });
     }
 }

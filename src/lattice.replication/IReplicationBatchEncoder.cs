@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
+using System.Buffers.Binary;
 
 namespace Orleans.Lattice.Replication;
 
@@ -109,4 +110,264 @@ public interface IReplicationBatchEncoder
     /// fails fast rather than guess at the layout.
     /// </exception>
     ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload);
+
+    /// <summary>
+    /// Writes the supplied fixed-shape <paramref name="header"/>,
+    /// the surrounding routing strings <paramref name="treeName"/>
+    /// and <paramref name="originClusterId"/>, and the
+    /// length-prefixed <paramref name="entries"/> segments into
+    /// <paramref name="writer"/>. This is the framing-only fast path
+    /// used by transports that consume
+    /// <see cref="ReplicationBatch.EncodedEnvelope"/>: each entry is
+    /// already a pre-encoded <see cref="WalRecord"/> byte segment, so
+    /// the encoder writes the bytes verbatim and never materialises a
+    /// strongly-typed entry. The wire layout is:
+    /// <list type="number">
+    /// <item><description>The header bytes (<see cref="EncodedBatchHeader.WireSize"/> bytes, little-endian, see <see cref="EncodedBatchHeader.WriteTo(Span{byte})"/>).</description></item>
+    /// <item><description>4-byte little-endian length prefix followed by the UTF-8 bytes of <paramref name="treeName"/>.</description></item>
+    /// <item><description>4-byte little-endian length prefix followed by the UTF-8 bytes of <paramref name="originClusterId"/>.</description></item>
+    /// <item><description>For each entry segment, a 4-byte little-endian length prefix followed by the segment bytes verbatim.</description></item>
+    /// </list>
+    /// <para>
+    /// Default implementation on the interface writes the canonical
+    /// layout above using <see cref="EncodedBatchHeader.WriteTo(Span{byte})"/>;
+    /// custom encoders override only when they need a different
+    /// framing.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="writer"/>, <paramref name="treeName"/>,
+    /// or <paramref name="originClusterId"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="header"/>'s
+    /// <see cref="EncodedBatchHeader.EntryCount"/> does not match the
+    /// length of <paramref name="entries"/>, or when
+    /// <paramref name="treeName"/> / <paramref name="originClusterId"/>
+    /// is empty.
+    /// </exception>
+    void EncodeFraming(
+        in EncodedBatchHeader header,
+        string treeName,
+        string originClusterId,
+        ReadOnlyMemory<ArraySegment<byte>> entries,
+        IBufferWriter<byte> writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(treeName);
+        ArgumentNullException.ThrowIfNull(originClusterId);
+
+        if (treeName.Length == 0)
+        {
+            throw new ArgumentException("treeName must be non-empty.", nameof(treeName));
+        }
+
+        if (originClusterId.Length == 0)
+        {
+            throw new ArgumentException("originClusterId must be non-empty.", nameof(originClusterId));
+        }
+
+        if (header.EntryCount != entries.Length)
+        {
+            throw new ArgumentException(
+                $"{nameof(EncodedBatchHeader)}.{nameof(EncodedBatchHeader.EntryCount)} "
+                + $"({header.EntryCount}) does not match entries.Length ({entries.Length}).",
+                nameof(header));
+        }
+
+        var headerSpan = writer.GetSpan(EncodedBatchHeader.WireSize);
+        header.WriteTo(headerSpan);
+        writer.Advance(EncodedBatchHeader.WireSize);
+
+        WriteLengthPrefixedUtf8(writer, treeName);
+        WriteLengthPrefixedUtf8(writer, originClusterId);
+
+        var segments = entries.Span;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var segment = segments[i];
+            var lengthSpan = writer.GetSpan(4);
+            BinaryPrimitives.WriteInt32LittleEndian(lengthSpan, segment.Count);
+            writer.Advance(4);
+
+            if (segment.Count > 0)
+            {
+                var dest = writer.GetSpan(segment.Count);
+                segment.AsSpan().CopyTo(dest);
+                writer.Advance(segment.Count);
+            }
+        }
+    }
+
+    private static void WriteLengthPrefixedUtf8(IBufferWriter<byte> writer, string value)
+    {
+        var maxBytes = System.Text.Encoding.UTF8.GetMaxByteCount(value.Length);
+        // Reserve length + body in a single GetSpan so the body bytes
+        // are contiguous with the prefix and the writer never has to
+        // straddle a span boundary mid-string.
+        var span = writer.GetSpan(4 + maxBytes);
+        var written = System.Text.Encoding.UTF8.GetBytes(value, span[4..]);
+        BinaryPrimitives.WriteInt32LittleEndian(span[0..4], written);
+        writer.Advance(4 + written);
+    }
+
+    /// <summary>
+    /// Attempts to decode a framing-encoded payload back into its
+    /// <see cref="EncodedBatchHeader"/> and pre-encoded entry segments.
+    /// Returns <see langword="true"/> on success; <see langword="false"/>
+    /// when the magic prefix does not match or the payload is too
+    /// short for the fixed header. A wire-version mismatch is surfaced
+    /// as a thrown <see cref="NotSupportedException"/> so the receiver
+    /// can distinguish "not a framing-encoded payload" (caller should
+    /// fall back to the typed decode) from "definitely a framing
+    /// payload but built against a newer version".
+    /// <para>
+    /// The returned <paramref name="entries"/> memory references owned
+    /// <see cref="ArraySegment{T}"/> wrappers that point back into
+    /// <paramref name="payload"/>; do not retain them past the
+    /// lifetime of the surrounding payload buffer.
+    /// </para>
+    /// <para>
+    /// Default implementation parses the canonical layout produced by
+    /// <see cref="EncodeFraming"/>; custom encoders override only when
+    /// they need a different framing.
+    /// </para>
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// Thrown when the payload's framing wire version is strictly
+    /// greater than <see cref="EncodedBatchHeader.CurrentWireVersion"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when the payload is truncated mid-entry (the header
+    /// promises more bytes than the payload contains).
+    /// </exception>
+    bool TryDecodeFraming(
+        ReadOnlyMemory<byte> payload,
+        out EncodedBatchHeader header,
+        out string treeName,
+        out string originClusterId,
+        out ReadOnlyMemory<ArraySegment<byte>> entries)
+    {
+        header = default;
+        treeName = string.Empty;
+        originClusterId = string.Empty;
+        entries = ReadOnlyMemory<ArraySegment<byte>>.Empty;
+
+        if (payload.Length < EncodedBatchHeader.WireSize)
+        {
+            return false;
+        }
+
+        var span = payload.Span;
+        var magic = BinaryPrimitives.ReadUInt32LittleEndian(span[0..4]);
+        if (magic != EncodedBatchHeader.MagicValue)
+        {
+            return false;
+        }
+
+        var parsed = EncodedBatchHeader.ReadFrom(span);
+        if (parsed.WireVersion > EncodedBatchHeader.CurrentWireVersion)
+        {
+            throw new NotSupportedException(
+                $"Framing wire version {parsed.WireVersion} is newer than the supported "
+                + $"version {EncodedBatchHeader.CurrentWireVersion}; upgrade the receiver "
+                + "before applying payloads from this producer.");
+        }
+
+        if (parsed.EntryCount < 0)
+        {
+            throw new ArgumentException(
+                $"Framing header reports a negative entry count ({parsed.EntryCount}); "
+                + "payload is corrupt.",
+                nameof(payload));
+        }
+
+        var segments = parsed.EntryCount == 0
+            ? Array.Empty<ArraySegment<byte>>()
+            : new ArraySegment<byte>[parsed.EntryCount];
+
+        // Resolve the payload to a contiguous byte[] so we can wrap
+        // each entry as an ArraySegment that points back into it
+        // without copying. ReadOnlyMemory<byte> backed by an array
+        // exposes its segment via MemoryMarshal.TryGetArray; the
+        // canonical caller (gRPC marshaller, in-memory buffer) always
+        // wraps a byte[], so this fast path covers every production
+        // case. For the rare non-array-backed memory, fall back to
+        // copying into a single buffer.
+        byte[] backing;
+        int backingOffset;
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out var seg)
+            && seg.Array is { } backingArray)
+        {
+            backing = backingArray;
+            backingOffset = seg.Offset;
+        }
+        else
+        {
+            backing = payload.ToArray();
+            backingOffset = 0;
+        }
+
+        var cursor = EncodedBatchHeader.WireSize;
+
+        treeName = ReadLengthPrefixedUtf8(payload, span, ref cursor, "treeName");
+        originClusterId = ReadLengthPrefixedUtf8(payload, span, ref cursor, "originClusterId");
+
+        for (var i = 0; i < parsed.EntryCount; i++)
+        {
+            if (cursor + 4 > payload.Length)
+            {
+                throw new ArgumentException(
+                    $"Framing payload is truncated at the length prefix for entry {i} of "
+                    + $"{parsed.EntryCount}; expected at least 4 more bytes at offset {cursor}.",
+                    nameof(payload));
+            }
+            var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+            cursor += 4;
+            if (length < 0 || cursor + length > payload.Length)
+            {
+                throw new ArgumentException(
+                    $"Framing payload is truncated at the body for entry {i} of "
+                    + $"{parsed.EntryCount}; declared length {length} would overrun the "
+                    + $"payload (remaining {payload.Length - cursor} bytes).",
+                    nameof(payload));
+            }
+            segments[i] = new ArraySegment<byte>(backing, backingOffset + cursor, length);
+            cursor += length;
+        }
+
+        header = parsed;
+        entries = segments;
+        return true;
+    }
+
+    private static string ReadLengthPrefixedUtf8(
+        ReadOnlyMemory<byte> payload,
+        ReadOnlySpan<byte> span,
+        ref int cursor,
+        string fieldName)
+    {
+        if (cursor + 4 > payload.Length)
+        {
+            throw new ArgumentException(
+                $"Framing payload is truncated at the length prefix for {fieldName}; "
+                + $"expected at least 4 more bytes at offset {cursor}.",
+                nameof(payload));
+        }
+        var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
+        cursor += 4;
+        if (length < 0 || cursor + length > payload.Length)
+        {
+            throw new ArgumentException(
+                $"Framing payload is truncated at the body for {fieldName}; declared "
+                + $"length {length} would overrun the payload (remaining "
+                + $"{payload.Length - cursor} bytes).",
+                nameof(payload));
+        }
+        var value = length == 0
+            ? string.Empty
+            : System.Text.Encoding.UTF8.GetString(span.Slice(cursor, length));
+        cursor += length;
+        return value;
+    }
 }

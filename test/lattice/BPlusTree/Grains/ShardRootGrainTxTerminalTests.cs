@@ -28,18 +28,18 @@ public class ShardRootGrainTxTerminalTests
 
     private sealed class CapturingCommitLogWriter : ICommitLogWriter
     {
-        public List<LatticeMutation> Appended { get; } = [];
-        public Task<long> AppendAsync(LatticeMutation mutation, CancellationToken cancellationToken = default)
+        public List<WalRecord> Appended { get; } = [];
+        public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
         {
-            Appended.Add(mutation);
+            Appended.Add(entry);
             return Task.FromResult((long)Appended.Count - 1);
         }
-        public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<LatticeMutation> mutations, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
         {
-            var offsets = new long[mutations.Count];
-            for (var i = 0; i < mutations.Count; i++)
+            var offsets = new long[entries.Count];
+            for (var i = 0; i < entries.Count; i++)
             {
-                Appended.Add(mutations[i]);
+                Appended.Add(entries[i]);
                 offsets[i] = Appended.Count - 1;
             }
             return Task.FromResult<IReadOnlyList<long>>(offsets);
@@ -270,7 +270,7 @@ public class ShardRootGrainTxTerminalTests
     {
         var h = CreateHarness([new HybridLogicalClock { WallClockTicks = 50, Counter = 0 }]);
         await h.Grain.AppendTxTerminalAsync(Guid.NewGuid(), committed: true);
-        Assert.That(h.Writer!.Appended[0].Kind, Is.EqualTo(MutationKind.TxCommit));
+        Assert.That(h.Writer!.Appended[0].Op, Is.EqualTo(MutationKind.TxCommit));
     }
 
     [Test]
@@ -278,7 +278,7 @@ public class ShardRootGrainTxTerminalTests
     {
         var h = CreateHarness([new HybridLogicalClock { WallClockTicks = 50, Counter = 0 }]);
         await h.Grain.AppendTxTerminalAsync(Guid.NewGuid(), committed: false);
-        Assert.That(h.Writer!.Appended[0].Kind, Is.EqualTo(MutationKind.TxAbort));
+        Assert.That(h.Writer!.Appended[0].Op, Is.EqualTo(MutationKind.TxAbort));
     }
 
     // --- Typed shard-index slot ---

@@ -132,7 +132,7 @@ public class GrpcReplicationAuthIntegrationTests
     private LatticeReplicationGrpcMethod ResolveMethod()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        return new LatticeReplicationGrpcMethod(_encoder, ackSerializer);
+        return new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
     }
 
     [Test]

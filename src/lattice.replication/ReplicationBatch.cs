@@ -90,4 +90,35 @@ public readonly record struct ReplicationBatch
     /// </para>
     /// </summary>
     public ReplicationBatchEnvelope? Envelope { get; init; }
+
+    /// <summary>
+    /// Pre-built framing-only envelope corresponding to
+    /// <see cref="Payload"/>. Optional and additive: when
+    /// non-<see langword="null"/>, transports that frame the bytes
+    /// onto their own wire (the gRPC streaming push transport, for
+    /// example) skip both the typed-envelope decode (<see cref="Envelope"/>)
+    /// and the legacy bytes decode (<see cref="Payload"/>) and pull
+    /// the pre-encoded entry segments straight from
+    /// <see cref="ReplicationBatchEncodedEnvelope.EncodedEntries"/>
+    /// into the outbound stream's
+    /// <see cref="System.Buffers.IBufferWriter{T}"/>. This is the
+    /// one-encode fast path the framing seam exists to feed.
+    /// <para>
+    /// When <see langword="null"/>, transports fall back to
+    /// <see cref="Envelope"/> when it is present, then to decoding
+    /// <see cref="Payload"/> through
+    /// <see cref="IReplicationBatchEncoder.Decode(ReadOnlyMemory{byte})"/>.
+    /// Transports that do not understand the framing seam simply
+    /// ignore this slot.
+    /// </para>
+    /// <para>
+    /// The slot's <see cref="ReplicationBatchEncodedEnvelope.EncodedEntries"/>
+    /// memory is borrowed from the shipper's activation-scoped read
+    /// page; the Orleans single-threaded grain turn model makes the
+    /// reference safe for synchronous consumption inside the
+    /// <see cref="IReplicationTransport.SendAsync(ReplicationBatch, CancellationToken)"/>
+    /// call.
+    /// </para>
+    /// </summary>
+    public ReplicationBatchEncodedEnvelope? EncodedEnvelope { get; init; }
 }

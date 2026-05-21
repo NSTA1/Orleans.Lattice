@@ -5,8 +5,8 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Single-pass codec for the WAL's per-entry payload bytes. Captures
 /// both the encode side - producing the bytes a
-/// <see cref="LatticeMutation"/> serialises to under the WAL's chosen
-/// wire format, emitted into a caller-supplied
+/// <see cref="WalRecord"/> serialises to under the WAL's chosen wire
+/// format, emitted into a caller-supplied
 /// <see cref="IBufferWriter{T}"/> so the result can be measured
 /// against <see cref="LatticeOptions.WalMaxBatchBytes"/> and handed
 /// verbatim to
@@ -15,8 +15,8 @@ namespace Orleans.Lattice;
 /// provider on read and by the default
 /// <see cref="IWalStorageProvider.AppendEncodedBatchAsync"/> fallback
 /// to round-trip pre-encoded payloads back to
-/// <see cref="LatticeMutation"/> values for third-party providers
-/// that did not override the zero-copy overload.
+/// <see cref="WalRecord"/> values for third-party providers that did
+/// not override the zero-copy overload.
 /// <para>
 /// Replaces the historical per-entry size heuristic
 /// (<c>key.Length * 2 + value.Length + 128</c>). Producing the bytes
@@ -30,10 +30,21 @@ namespace Orleans.Lattice;
 /// fidelity around vector-clock cardinality.
 /// </para>
 /// <para>
+/// The encoder's subject type is <see cref="WalRecord"/>, not
+/// <see cref="LatticeMutation"/>: the WAL grain already has a
+/// <see cref="WalRecord"/> in hand at append time (the
+/// observer-stamped durability shape), so the encoder consumes it
+/// directly without the producer-side
+/// <see cref="LatticeMutation"/> round-trip. The public
+/// observer-payload surface (<see cref="LatticeMutation"/>) is
+/// unchanged; the durability shape is an implementation detail of the
+/// WAL append path.
+/// </para>
+/// <para>
 /// Implementations must be safe for concurrent invocation from
 /// multiple threads. The default
-/// <see cref="OrleansBinaryWalMutationEncoder"/> wraps the
-/// thread-safe <c>Serializer&lt;LatticeMutation&gt;</c> from
+/// <see cref="OrleansBinaryWalRecordEncoder"/> wraps the thread-safe
+/// <c>Serializer&lt;WalRecord&gt;</c> from
 /// <c>Orleans.Serialization</c>; replacement implementations are
 /// expected to be similarly cheap (no per-call heap allocation
 /// beyond the bytes claimed via
@@ -42,32 +53,31 @@ namespace Orleans.Lattice;
 /// decode path requires).
 /// </para>
 /// </summary>
-public interface IWalMutationEncoder
+public interface IWalRecordEncoder
 {
     /// <summary>
-    /// Encodes <paramref name="mutation"/> into
-    /// <paramref name="writer"/> under the WAL's canonical wire
-    /// format. Callers compute the number of bytes written by
-    /// snapshotting the writer's running count before and after the
-    /// call (or by inspecting <c>WrittenSpan.Length</c> on an
-    /// <see cref="ArrayBufferWriter{T}"/>); the encoded bytes can
-    /// then participate in the per-batch byte budget
+    /// Encodes <paramref name="record"/> into <paramref name="writer"/>
+    /// under the WAL's canonical wire format. Callers compute the
+    /// number of bytes written by snapshotting the writer's running
+    /// count before and after the call (or by inspecting
+    /// <c>WrittenSpan.Length</c> on an
+    /// <see cref="ArrayBufferWriter{T}"/>); the encoded bytes can then
+    /// participate in the per-batch byte budget
     /// (<see cref="LatticeOptions.WalMaxBatchBytes"/>) and be passed
     /// directly to
     /// <see cref="IWalStorageProvider.AppendEncodedBatchAsync"/>.
     /// </summary>
-    /// <param name="mutation">The mutation to encode. Captured state is read-only; the encoder must not mutate it.</param>
+    /// <param name="record">The WAL record to encode. Captured state is read-only; the encoder must not mutate it.</param>
     /// <param name="writer">Destination buffer writer. The encoder calls <see cref="IBufferWriter{T}.GetSpan"/> / <see cref="IBufferWriter{T}.Advance"/> exactly as <c>Orleans.Serialization</c> does. Must not be <see langword="null"/>.</param>
-    void Encode(in LatticeMutation mutation, IBufferWriter<byte> writer);
+    void Encode(in WalRecord record, IBufferWriter<byte> writer);
 
     /// <summary>
     /// Decodes a previously-<see cref="Encode"/>d payload back to a
-    /// <see cref="LatticeMutation"/>. The supplied segment is the
-    /// exact byte sequence the encoder wrote on the producer side
-    /// (the in-memory provider stores it verbatim; the Azure Table
-    /// provider reads it back from the row's <c>Payload</c> column).
+    /// <see cref="WalRecord"/>. The supplied segment is the exact byte
+    /// sequence the encoder wrote on the producer side (the in-memory
+    /// provider stores it verbatim; the Azure Table provider reads it
+    /// back from the row's <c>Payload</c> column).
     /// </summary>
     /// <param name="encoded">The encoded payload bytes. Borrowed for the duration of the call; the implementation must not retain a reference to the underlying array.</param>
-    LatticeMutation Decode(ReadOnlySpan<byte> encoded);
+    WalRecord Decode(ReadOnlySpan<byte> encoded);
 }
-

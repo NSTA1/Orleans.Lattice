@@ -61,11 +61,11 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddSingleton<ICommitLogReader, WalCommitLogReader>();
         // WAL byte-budget encoder: the canonical Orleans-binary
         // implementation produces the exact serialised bytes for each
-        // captured LatticeMutation, so WalShardGrain pays one encode
-        // per append and hands the same bytes straight to the
-        // configured IWalStorageProvider via AppendEncodedBatchAsync.
-        // Singleton-scoped so the underlying codec stays hot.
-        builder.Services.TryAddSingleton<IWalMutationEncoder, OrleansBinaryWalMutationEncoder>();
+        // captured WalRecord, so WalShardGrain pays one encode per
+        // append and hands the same bytes straight to the configured
+        // IWalStorageProvider via AppendEncodedBatchAsync. Singleton-
+        // scoped so the underlying codec stays hot.
+        builder.Services.TryAddSingleton<IWalRecordEncoder, OrleansBinaryWalRecordEncoder>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
         // Single-cluster default for the per-tree origin-cluster-id resolver.
         // Returns string.Empty for every tree so the WAL writer stamps an

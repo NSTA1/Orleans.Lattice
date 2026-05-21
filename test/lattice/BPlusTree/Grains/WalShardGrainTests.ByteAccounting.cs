@@ -11,11 +11,11 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 // Exact byte-accounting regression tests for `WalMaxBatchBytes`
 // cutover. The base fixture lives in WalShardGrainTests.cs; this
 // partial only adds the assertions that exercise the
-// `IWalMutationEncoder` seam.
+// `IWalRecordEncoder` seam.
 public partial class WalShardGrainTests
 {
     /// <summary>
-    /// Stub <see cref="IWalMutationEncoder"/> that writes a
+    /// Stub <see cref="IWalRecordEncoder"/> that writes a
     /// caller-controlled number of bytes per encode. Used so the test
     /// can engineer exact byte-budget boundaries without depending on
     /// the production Orleans-binary encoded footprint of any
@@ -23,12 +23,12 @@ public partial class WalShardGrainTests
     /// (the entry index modulo 256) so a round-trip decode is
     /// observable.
     /// </summary>
-    private sealed class FixedEncoder(int sizePerEntry) : IWalMutationEncoder
+    private sealed class FixedEncoder(int sizePerEntry) : IWalRecordEncoder
     {
         public int Calls;
         public int SizePerEntry { get; set; } = sizePerEntry;
 
-        public void Encode(in LatticeMutation mutation, IBufferWriter<byte> writer)
+        public void Encode(in WalRecord record, IBufferWriter<byte> writer)
         {
             ArgumentNullException.ThrowIfNull(writer);
             Calls++;
@@ -40,14 +40,14 @@ public partial class WalShardGrainTests
             writer.Advance(SizePerEntry);
         }
 
-        public LatticeMutation Decode(ReadOnlySpan<byte> encoded) => default;
+        public WalRecord Decode(ReadOnlySpan<byte> encoded) => default;
     }
 
     [Test]
     public async Task AppendAsync_invokes_encoder_once_per_append()
     {
         // Encoder participation is the contract: the grain must consult
-        // the injected `IWalMutationEncoder` on every foreground append
+        // the injected `IWalRecordEncoder` on every foreground append
         // so the byte budget is driven off exact measurement and the
         // bytes are reused as the provider payload.
         var encoder = new FixedEncoder(sizePerEntry: 1);

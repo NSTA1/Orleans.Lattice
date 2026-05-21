@@ -37,16 +37,18 @@ internal sealed class LatticeReplicationGrpcMethod
     /// </summary>
     public LatticeReplicationGrpcMethod(
         IReplicationBatchEncoder encoder,
+        IWalRecordEncoder walRecordEncoder,
         Serializer<ReplicationAck> ackSerializer)
     {
         ArgumentNullException.ThrowIfNull(encoder);
+        ArgumentNullException.ThrowIfNull(walRecordEncoder);
         ArgumentNullException.ThrowIfNull(ackSerializer);
 
         _push = new Method<ReplicationBatchEnvelopeBox, ReplicationAckBox>(
             type: MethodType.Unary,
             serviceName: ServiceName,
             name: PushMethodName,
-            requestMarshaller: LatticeReplicationGrpcMarshallers.CreateEnvelopeMarshaller(encoder),
+            requestMarshaller: LatticeReplicationGrpcMarshallers.CreateEnvelopeMarshaller(encoder, walRecordEncoder),
             responseMarshaller: LatticeReplicationGrpcMarshallers.CreateAckMarshaller(ackSerializer));
     }
 

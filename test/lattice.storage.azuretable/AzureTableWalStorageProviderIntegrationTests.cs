@@ -32,7 +32,7 @@ public class AzureTableWalStorageProviderIntegrationTests
     private const string TreeId = "tree-int";
 
     private ServiceProvider _services = null!;
-    private Serializer<LatticeMutation> _serializer = null!;
+    private Serializer<WalRecord> _serializer = null!;
     private TableServiceClient _adminClient = null!;
     private string _tableName = null!;
     private AzureTableWalStorageProvider _sut = null!;
@@ -41,7 +41,7 @@ public class AzureTableWalStorageProviderIntegrationTests
     public async Task OneTimeSetUp()
     {
         _services = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        _serializer = _services.GetRequiredService<Serializer<LatticeMutation>>();
+        _serializer = _services.GetRequiredService<Serializer<WalRecord>>();
         _adminClient = new TableServiceClient(AzuriteConnectionString);
 
         try
@@ -556,34 +556,36 @@ public class AzureTableWalStorageProviderIntegrationTests
         // Payload column - no second encode. The provider overrides
         // the default interface implementation; this test exercises
         // the override end-to-end.
-        var encoder = new OrleansBinaryWalMutationEncoder(_serializer);
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
 
-        var mutationOne = new LatticeMutation
+        var recordOne = new WalRecord
         {
             TreeId = TreeId,
-            Kind = MutationKind.Set,
+            Op = MutationKind.Set,
             Key = "encoded-zero",
             Value = new byte[] { 1, 2, 3 },
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
             OriginClusterId = "site-a",
+            Mode = LatticeMergeMode.LwwRegister,
         };
-        var mutationTwo = new LatticeMutation
+        var recordTwo = new WalRecord
         {
             TreeId = TreeId,
-            Kind = MutationKind.Delete,
+            Op = MutationKind.Delete,
             Key = "encoded-one",
             Value = Array.Empty<byte>(),
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
             OriginClusterId = "site-b",
+            Mode = LatticeMergeMode.LwwRegister,
         };
 
-        // Encode each mutation through the encoder. The provider
+        // Encode each record through the encoder. The provider
         // accepts ArraySegment<byte> rentals; an owned byte[] is
         // fine for the test surface.
         var writerOne = new System.Buffers.ArrayBufferWriter<byte>();
-        encoder.Encode(mutationOne, writerOne);
+        encoder.Encode(recordOne, writerOne);
         var writerTwo = new System.Buffers.ArrayBufferWriter<byte>();
-        encoder.Encode(mutationTwo, writerTwo);
+        encoder.Encode(recordTwo, writerTwo);
         var segments = new[]
         {
             new ArraySegment<byte>(writerOne.WrittenSpan.ToArray()),
@@ -616,7 +618,7 @@ public class AzureTableWalStorageProviderIntegrationTests
         // ReadOnlyMemory<ArraySegment<byte>> and ReadOnlyMemory<long>
         // are parallel sequences; the provider must reject a length
         // mismatch synchronously without any I/O.
-        var encoder = new OrleansBinaryWalMutationEncoder(_serializer);
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
 
         var segments = new ArraySegment<byte>[] { new(new byte[] { 1 }) };
         var offsets = new long[] { 0L, 1L };
@@ -727,5 +729,165 @@ public class AzureTableWalStorageProviderIntegrationTests
                 Is.EqualTo(new[] { $"{tree}-k0", $"{tree}-k1" }),
                 $"tree {tree}: per-tree partitioning means no key bleed across trees");
         }
+    }
+
+    [Test]
+    public async Task ReadEncodedAsync_returns_row_payload_bytes_verbatim()
+    {
+        // Pin the override behaviour: ReadEncodedAsync must return the
+        // exact byte sequences AppendEncodedBatchAsync was handed, so
+        // a future shipper one-encode fast path can stream them
+        // straight into the outbound framing encoder without an
+        // intermediate strongly-typed materialisation.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+
+        var record = new WalRecord
+        {
+            TreeId = TreeId,
+            Op = MutationKind.Set,
+            Key = "encoded-read",
+            Value = new byte[] { 0x10, 0x20, 0x30 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "site-a",
+            Mode = LatticeMergeMode.LwwRegister,
+        };
+        var writer = new System.Buffers.ArrayBufferWriter<byte>();
+        encoder.Encode(record, writer);
+        var producedBytes = writer.WrittenSpan.ToArray();
+
+        await _sut.AppendEncodedBatchAsync(
+            TreeId,
+            0,
+            new ReadOnlyMemory<ArraySegment<byte>>(new[] { new ArraySegment<byte>(producedBytes) }),
+            new ReadOnlyMemory<long>(new[] { 0L }),
+            encoder,
+            CancellationToken.None);
+
+        var page = await _sut.ReadEncodedAsync(TreeId, 0, -1L, 64, encoder, CancellationToken.None);
+
+        Assert.That(page.EncodedEntries.Length, Is.EqualTo(1));
+        Assert.That(page.Offsets.Length, Is.EqualTo(1));
+        Assert.That(page.Offsets.Span[0], Is.EqualTo(0L));
+        Assert.That(page.HighestOffsetInclusive, Is.EqualTo(0L));
+        Assert.That(
+            page.EncodedEntries.Span[0].ToArray(),
+            Is.EqualTo(producedBytes),
+            "ReadEncodedAsync must hand back the exact bytes AppendEncodedBatchAsync was given - no re-encode round-trip");
+
+        // And the segment must still decode through the same encoder
+        // to the same record.
+        var decoded = encoder.Decode(page.EncodedEntries.Span[0].AsSpan());
+        Assert.That(decoded.Key, Is.EqualTo("encoded-read"));
+        Assert.That(decoded.Value, Is.EqualTo(new byte[] { 0x10, 0x20, 0x30 }));
+    }
+
+    [Test]
+    public async Task ReadEncodedAsync_respects_fromOffsetExclusive_and_maxEntries()
+    {
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+
+        // Append four entries via the legacy AppendBatchAsync path so
+        // the rows are populated via the production BuildEntryEntity
+        // (which now persists WalRecord bytes). The bytes the override
+        // returns are the row payload bytes, which round-trip through
+        // the same encoder.
+        var entries = new[] { Entry(0, "a"), Entry(1, "b"), Entry(2, "c"), Entry(3, "d") };
+        await _sut.AppendBatchAsync(TreeId, 0, entries, CancellationToken.None);
+
+        var page = await _sut.ReadEncodedAsync(TreeId, 0, fromOffsetExclusive: 0L, maxEntries: 2, encoder, CancellationToken.None);
+
+        Assert.That(page.Offsets.Span.ToArray(), Is.EqualTo(new[] { 1L, 2L }));
+        Assert.That(page.HighestOffsetInclusive, Is.EqualTo(2L));
+        var decoded = encoder.Decode(page.EncodedEntries.Span[0].AsSpan());
+        Assert.That(decoded.Key, Is.EqualTo("b"));
+    }
+
+    [Test]
+    public async Task ReadEncodedAsync_1024_entries_round_trip_through_decode_match_ReadAsync()
+    {
+        // The roadmap acceptance row pins 1024-entry round-trip
+        // equivalence between ReadAsync and ReadEncodedAsync.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+
+        const int N = 1024;
+        // Azure Table Storage caps a single transactional batch at 100
+        // actions; chunk the 1024 append into 100-entry segments so
+        // each call stays inside the per-batch limit. The provider
+        // sees them as 11 distinct batches but the manifest threads
+        // them into one contiguous offset range.
+        const int ChunkSize = 100;
+        var entries = new WalEntry[N];
+        for (var i = 0; i < N; i++)
+        {
+            entries[i] = Entry(i, "k-" + i.ToString("D4"), (byte)(i & 0xFF));
+        }
+        for (var start = 0; start < N; start += ChunkSize)
+        {
+            var len = Math.Min(ChunkSize, N - start);
+            var chunk = new WalEntry[len];
+            Array.Copy(entries, start, chunk, 0, len);
+            await _sut.AppendBatchAsync(TreeId, 0, chunk, CancellationToken.None);
+        }
+
+        var classicEntries = await ReadAllAsync(_sut, TreeId, 0);
+        var page = await _sut.ReadEncodedAsync(TreeId, 0, -1L, N, encoder, CancellationToken.None);
+
+        Assert.That(classicEntries, Has.Count.EqualTo(N));
+        Assert.That(page.EncodedEntries.Length, Is.EqualTo(N));
+        Assert.That(page.HighestOffsetInclusive, Is.EqualTo(N - 1L));
+
+        var segments = page.EncodedEntries.Span;
+        var offsets = page.Offsets.Span;
+        for (var i = 0; i < N; i++)
+        {
+            Assert.That(offsets[i], Is.EqualTo(classicEntries[i].Offset), $"offset mismatch at {i}");
+            var decoded = encoder.Decode(segments[i].AsSpan());
+            Assert.Multiple(() =>
+            {
+                Assert.That(decoded.Key, Is.EqualTo(classicEntries[i].Mutation.Key), $"key[{i}]");
+                Assert.That(decoded.Value, Is.EqualTo(classicEntries[i].Mutation.Value), $"value[{i}]");
+                Assert.That(decoded.Op, Is.EqualTo(classicEntries[i].Mutation.Kind), $"op[{i}]");
+            });
+        }
+    }
+
+    [Test]
+    public async Task ReadEncodedAsync_returns_empty_page_for_unwritten_shard()
+    {
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+
+        var page = await _sut.ReadEncodedAsync(TreeId, 7, -1L, 64, encoder, CancellationToken.None);
+
+        Assert.That(page.EncodedEntries.Length, Is.EqualTo(0));
+        Assert.That(page.Offsets.Length, Is.EqualTo(0));
+        Assert.That(page.HighestOffsetInclusive, Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public void ReadEncodedAsync_throws_on_null_treeId()
+    {
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+
+        Assert.That(
+            async () => await _sut.ReadEncodedAsync(null!, 0, -1L, 1, encoder, CancellationToken.None),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ReadEncodedAsync_throws_on_null_encoder()
+    {
+        Assert.That(
+            async () => await _sut.ReadEncodedAsync(TreeId, 0, -1L, 1, null!, CancellationToken.None),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ReadEncodedAsync_throws_on_zero_max_entries()
+    {
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+
+        Assert.That(
+            async () => await _sut.ReadEncodedAsync(TreeId, 0, -1L, 0, encoder, CancellationToken.None),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
 }

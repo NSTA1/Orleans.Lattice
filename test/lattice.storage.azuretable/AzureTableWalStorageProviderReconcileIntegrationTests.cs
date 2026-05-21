@@ -31,7 +31,7 @@ public class AzureTableWalStorageProviderReconcileIntegrationTests
     private const string TreeId = "tree-recon";
 
     private ServiceProvider _services = null!;
-    private Serializer<LatticeMutation> _serializer = null!;
+    private Serializer<WalRecord> _serializer = null!;
     private TableServiceClient _adminClient = null!;
     private string _tableName = null!;
     private AzureTableWalStorageProvider _sut = null!;
@@ -41,7 +41,7 @@ public class AzureTableWalStorageProviderReconcileIntegrationTests
     public async Task OneTimeSetUp()
     {
         _services = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        _serializer = _services.GetRequiredService<Serializer<LatticeMutation>>();
+        _serializer = _services.GetRequiredService<Serializer<WalRecord>>();
         _adminClient = new TableServiceClient(AzuriteConnectionString);
 
         try
@@ -129,7 +129,11 @@ public class AzureTableWalStorageProviderReconcileIntegrationTests
                     PartitionKey = batchPartitionKey,
                     RowKey = AzureTableWalStorageProvider.BuildEntryRowKey(offset),
                     Offset = offset,
-                    Payload = _serializer.SerializeToArray(entry.Mutation),
+                    Payload = _serializer.SerializeToArray(
+                        Orleans.Lattice.BPlusTree.Grains.WalRecordConverter.ToWalRecord(
+                            entry.Mutation,
+                            LatticeMergeMode.LwwRegister,
+                            string.Empty)),
                 }));
         }
         await _table.SubmitTransactionAsync(actions, CancellationToken.None);

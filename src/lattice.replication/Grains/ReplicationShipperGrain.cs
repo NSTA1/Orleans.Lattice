@@ -34,6 +34,7 @@ internal sealed class ReplicationShipperGrain(
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
     IReplicationTransport transport,
     IReplicationBatchEncoder encoder,
+    IWalRecordEncoder walRecordEncoder,
     IWalCursorRegistry cursorRegistry,
     IGrainFactory grainFactory,
     [PersistentState("replication-shipper", LatticeOptions.StorageProviderName)]
@@ -48,24 +49,14 @@ internal sealed class ReplicationShipperGrain(
         transport ?? throw new ArgumentNullException(nameof(transport));
     private readonly IReplicationBatchEncoder _encoder =
         encoder ?? throw new ArgumentNullException(nameof(encoder));
+    private readonly IWalRecordEncoder _walRecordEncoder =
+        walRecordEncoder ?? throw new ArgumentNullException(nameof(walRecordEncoder));
     private readonly IWalCursorRegistry _cursorRegistry =
         cursorRegistry ?? throw new ArgumentNullException(nameof(cursorRegistry));
     private readonly IGrainFactory _grainFactory =
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly ReplicationPeerStats _peerStats =
         peerStats ?? throw new ArgumentNullException(nameof(peerStats));
-
-    /// <summary>
-    /// Cached typed-transport probe. Non-<see langword="null"/> when the
-    /// configured <see cref="IReplicationTransport"/> also implements
-    /// <see cref="ITypedReplicationTransport"/>, in which case the
-    /// per-tick <c>_encoder.Encode(envelope, _writeBuffer)</c> call is
-    /// skipped (the typed transport consumes
-    /// <see cref="ReplicationBatch.Envelope"/> directly). Resolved once
-    /// at activation rather than re-cast on every pump tick.
-    /// </summary>
-    private readonly ITypedReplicationTransport? _typedTransport =
-        transport as ITypedReplicationTransport;
 
     private string _treeName = "";
     private string _peerClusterId = "";
@@ -104,28 +95,52 @@ internal sealed class ReplicationShipperGrain(
 
     /// <summary>
     /// Activation-scoped drain buffer reused across pump ticks. Cleared
-    /// at the start of every <see cref="PumpOnceAsync"/>; the encoder
-    /// consumes the list synchronously inside <see cref="IReplicationBatchEncoder.Encode"/>
-    /// so reuse is safe (no aliasing past the call). Bounded in size by
-    /// <see cref="LatticeReplicationOptions.ShipBatchSize"/>.
+    /// at the start of every <see cref="PumpOnceAsync"/>. Holds the
+    /// typed <see cref="WalRecord"/> head decoded from each shipping
+    /// page entry (used to apply <see cref="ShouldShip"/> and the HLC
+    /// filter); the matching pre-encoded byte segments are stored in
+    /// lockstep in <see cref="_drainEncodedSegments"/>. Bounded in
+    /// size by <see cref="LatticeReplicationOptions.ShipBatchSize"/>.
     /// </summary>
     private readonly List<WalRecord> _drainBuffer = new();
 
     /// <summary>
-    /// Activation-scoped framing buffer reused across pump ticks. Reset
-    /// via <c>ResetWrittenCount</c> when the previous batch fits within
-    /// the soft budget (<see cref="LargeWriteBufferThreshold"/>); a
-    /// one-time spike past the budget recreates the writer so a single
-    /// outlier batch does not pin a large array on the heap forever.
+    /// Activation-scoped parallel list of pre-encoded entry segments
+    /// that mirrors <see cref="_drainBuffer"/>. Each
+    /// <see cref="ArraySegment{T}"/> borrows the bytes from the
+    /// shipping page returned by
+    /// <see cref="IWalShardGrain.ReadShippingAsync"/> for this tick;
+    /// the segments are passed through to
+    /// <see cref="ReplicationBatch.EncodedEnvelope"/> verbatim so the
+    /// framing-aware transport can write the bytes straight onto the
+    /// wire without re-encoding the typed entries.
     /// </summary>
-    private ArrayBufferWriter<byte> _writeBuffer = new();
+    private readonly List<ArraySegment<byte>> _drainEncodedSegments = new();
 
     /// <summary>
-    /// 4 MB soft cap above which the framing buffer is recreated rather
-    /// than reset. Sized to match the WAL's per-batch byte budget so
-    /// the typical steady-state path always reuses the buffer.
+    /// Activation-scoped reusable backing array for the
+    /// <see cref="ReplicationBatchEncodedEnvelope.EncodedEntries"/>
+    /// <see cref="ReadOnlyMemory{T}"/> handed to the framing-aware
+    /// transport. Grown on demand via <see cref="Array.Resize{T}"/>
+    /// and reused across pump ticks so the steady-state ship path
+    /// allocates nothing beyond the per-page DTOs the WAL grain
+    /// returns. The borrowed segments are stable for the duration
+    /// of the surrounding <see cref="IReplicationTransport.SendAsync"/>
+    /// call (Orleans serialises grain turns and <c>SendAsync</c>
+    /// awaits inline), and the array is overwritten in place at the
+    /// start of every tick.
     /// </summary>
-    private const int LargeWriteBufferThreshold = 4 * 1024 * 1024;
+    private ArraySegment<byte>[] _encodedEnvelopeScratch = Array.Empty<ArraySegment<byte>>();
+
+    /// <summary>
+    /// Running byte total of the segments staged in
+    /// <see cref="_drainEncodedSegments"/> for the current tick.
+    /// Reported as the <c>bytes_behind</c> peer-stat floor on
+    /// success so the ship path is observably tracked on the
+    /// dashboard. Reset to zero at the start of every
+    /// <see cref="PumpOnceAsync"/>.
+    /// </summary>
+    private long _drainEncodedByteCount;
 
     // ── Activation-scoped scratch arrays for the k-way HLC merge ──
     //
@@ -136,16 +151,23 @@ internal sealed class ReplicationShipperGrain(
     //
     // Index range: [0, _partitionCount).
     //
-    //   _partitionPages[p]    - current page entries from partition p,
-    //                           or null when that partition is "drained
+    //   _partitionPages[p]    - current shipping page from partition p
+    //                           (pre-encoded entry payloads from the
+    //                           WAL plus their sequence numbers), or
+    //                           null when that partition is "drained
     //                           for this tick" (no more entries past
-    //                           the saved cursor right now).
+    //                           the saved cursor right now). Each head
+    //                           entry is decoded once (lazily, on first
+    //                           candidate inspection) into
+    //                           _partitionHead[p] so ShouldShip / HLC
+    //                           predicates can run without re-decoding
+    //                           on every merge step.
     //   _partitionPageIndex[p]- next entry index inside the page;
     //                           equals _partitionPages[p].Count when
     //                           the page is exhausted and a refill is
     //                           required to advance further.
     //   _partitionNextSeq[p]  - fromSequence to pass on the next
-    //                           ReadAsync call; mirrors
+    //                           ReadShippingAsync call; mirrors
     //                           state.PartitionCursors[p] but kept as a
     //                           primitive long to avoid dictionary
     //                           lookups inside the merge loop.
@@ -158,12 +180,19 @@ internal sealed class ReplicationShipperGrain(
     //                           least one entry from partition p (used
     //                           to bound the cursor write to changed
     //                           partitions on ack).
-    private IReadOnlyList<WalShardSequencedEntry>?[] _partitionPages = Array.Empty<IReadOnlyList<WalShardSequencedEntry>?>();
+    //   _partitionHead[p]     - lazily-decoded WalRecord for the
+    //                           current head entry on partition p;
+    //                           valid only when
+    //                           _partitionHeadDecoded[p] is true.
+    private IReadOnlyList<WalShardShippingEntry>?[] _partitionPages =
+        Array.Empty<IReadOnlyList<WalShardShippingEntry>?>();
     private int[] _partitionPageIndex = Array.Empty<int>();
     private long[] _partitionNextSeq = Array.Empty<long>();
     private long[] _partitionMaxReadSeq = Array.Empty<long>();
     private bool[] _partitionAdvanced = Array.Empty<bool>();
     private IWalShardGrain?[] _partitionGrainCache = Array.Empty<IWalShardGrain?>();
+    private WalRecord[] _partitionHead = Array.Empty<WalRecord>();
+    private bool[] _partitionHeadDecoded = Array.Empty<bool>();
     private int _partitionCount;
 
     /// <summary>
@@ -311,6 +340,8 @@ internal sealed class ReplicationShipperGrain(
         // Orleans serialises grain turns and the _pumpInFlight guard
         // prevents re-entry, so clearing in place is safe.
         _drainBuffer.Clear();
+        _drainEncodedSegments.Clear();
+        _drainEncodedByteCount = 0L;
         // Clamp the per-tick batch cap to the receiver's last
         // stamped SuggestedBatchSize when present (receiver-side
         // flow-control hint). The receiver may stamp values outside
@@ -344,67 +375,56 @@ internal sealed class ReplicationShipperGrain(
 
         var sourceHlc = _drainBuffer[^1].Timestamp;
 
-        // Encode the batch into a buffer; the gRPC transport hands
-        // the gRPC stream's IBufferWriter through directly so the
-        // encoded bytes never round-trip through a managed array.
-        // The IReplicationTransport seam carries both the opaque
-        // bytes (for transports that ship them verbatim) and the
-        // typed envelope (for transports that re-marshal it onto
-        // their own wire); the typed slot lets the gRPC push
-        // transport skip a per-send decode-then-re-encode round-trip
-        // that would otherwise allocate one `WalRecord[]` per ship.
-        //
-        // When the configured transport implements
-        // <see cref="ITypedReplicationTransport"/> we skip the encode
-        // into _writeBuffer entirely: the typed transport consumes
-        // ReplicationBatch.Envelope directly, and the bytes form was
-        // observably never read on that path. ReplicationBatch.Payload
-        // is then ReadOnlyMemory<byte>.Empty for the typed call; the
-        // typed-transport interface documents this guarantee.
-        //
-        // The framing buffer is activation-scoped and reused across
-        // ticks: in the steady state we ResetWrittenCount() (which
-        // keeps the underlying array, just rewinds the write index),
-        // and a one-time spike at-or-past the soft cap recreates the
-        // writer so a single outlier batch does not pin a multi-MB
-        // array on the heap forever. The encoder consumes _drainBuffer
-        // synchronously inside Encode, so reuse is safe (no aliasing
-        // past the call).
-        var typedTransport = _typedTransport;
-        if (typedTransport is null)
-        {
-            if (_writeBuffer.Capacity >= LargeWriteBufferThreshold)
-            {
-                _writeBuffer = new ArrayBufferWriter<byte>();
-            }
-            else
-            {
-                _writeBuffer.ResetWrittenCount();
-            }
-        }
-        ReplicationBatchEnvelope envelope;
+        // Build the framing-only EncodedEnvelope. The drain has
+        // already populated _drainEncodedSegments with the
+        // pre-encoded WAL entry payloads (the bytes the canonical
+        // IWalRecordEncoder wrote at append time); we wrap them in a
+        // fixed-size header and hand them to the framing-aware
+        // transport verbatim. No producer-side
+        // IReplicationBatchEncoder.Encode call runs on the steady-
+        // state ship path - the bytes the WAL already wrote are
+        // reused exactly once on the wire, achieving the
+        // one-encode-per-entry target end to end.
+        ReplicationBatchEncodedEnvelope encodedEnvelope;
         try
         {
-            envelope = new ReplicationBatchEnvelope
+            var header = new EncodedBatchHeader
             {
-                WireVersion = _encoder.CurrentWireVersion,
-                TreeName = _treeName,
-                OriginClusterId = options.ClusterId,
-                Entries = _drainBuffer,
+                Magic = EncodedBatchHeader.MagicValue,
+                WireVersion = EncodedBatchHeader.CurrentWireVersion,
+                OriginClusterIdHash = EncodedBatchHeader.HashClusterId(options.ClusterId),
+                EntryCount = _drainEncodedSegments.Count,
+                BatchSequence = 0,
             };
-            if (typedTransport is null)
+            // CollectionsMarshal.AsSpan(...) of List<T> exposes the
+            // List's backing array as a contiguous Memory<T>; we copy
+            // into an activation-scoped scratch array (resized
+            // lazily, never shrunk) so the steady-state ship path
+            // allocates nothing beyond the per-page DTOs the WAL
+            // grain returns. The receiver-side framing decode does
+            // not retain the segments past the surrounding SendAsync
+            // call.
+            var count = _drainEncodedSegments.Count;
+            if (_encodedEnvelopeScratch.Length < count)
             {
-                _encoder.Encode(envelope, _writeBuffer);
+                Array.Resize(ref _encodedEnvelopeScratch, count);
             }
+            var src = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_drainEncodedSegments);
+            src.CopyTo(_encodedEnvelopeScratch.AsSpan(0, count));
+            encodedEnvelope = new ReplicationBatchEncodedEnvelope
+            {
+                Header = header,
+                EncodedEntries = new ReadOnlyMemory<ArraySegment<byte>>(_encodedEnvelopeScratch, 0, count),
+            };
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            // Schema-shaped failure during encode: the entries can
-            // never be shipped in their current form. Park every
-            // entry in the offending batch on the per-tree DLQ
-            // tagged ReasonSchema and advance the cursor past the
-            // batch so the stream makes progress. Operators inspect
-            // / replay / discard via ILatticeReplicationDeadLetters.
+            // Schema-shaped failure during framing-header construction:
+            // the entries can never be shipped in their current form.
+            // Park every entry in the offending batch on the per-tree
+            // DLQ tagged ReasonSchema and advance the cursor past the
+            // batch so the stream makes progress. Operators inspect /
+            // replay / discard via ILatticeReplicationDeadLetters.
             Logger.LogWarning(ex,
                 "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
                 _drainBuffer.Count, LogContext, sourceHlc);
@@ -421,24 +441,28 @@ internal sealed class ReplicationShipperGrain(
                 TargetClusterId = _peerClusterId,
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
-                // Payload is the encoded bytes for bytes-only transports;
-                // for typed transports we leave it empty (the typed
-                // transport consumes Envelope directly).
-                Payload = typedTransport is null ? _writeBuffer.WrittenMemory : ReadOnlyMemory<byte>.Empty,
-                // Hand the typed envelope through alongside the
-                // opaque bytes so transports that frame the envelope
-                // onto their own wire (e.g. the gRPC streaming push
-                // transport) can skip the per-send decode-then-re-encode
-                // round-trip the bytes-shaped seam would force. The
-                // reference points at the activation-scoped drain
-                // buffer; Orleans serialises grain turns and
-                // SendAsync awaits inline, so the entry list is
-                // stable for the duration of the call.
-                Envelope = envelope,
+                // Payload is empty on the framing path - the
+                // transport consumes EncodedEnvelope. Bytes-only
+                // transports that need a serialised form are not
+                // supported on the steady-state ship path; the
+                // typed-envelope sender path was retired alongside
+                // the framing-only ship-path migration.
+                Payload = ReadOnlyMemory<byte>.Empty,
+                // Envelope is left null on the steady-state ship
+                // path. The slot is preserved on ReplicationBatch
+                // for in-process loopback transports that already
+                // hold a typed envelope, but the shipper itself no
+                // longer materialises one - the framing path is
+                // unconditional.
+                Envelope = null,
+                // Pre-encoded entry segments for the framing
+                // transport. Borrowed from the per-tick shipping
+                // pages; safe for synchronous consumption inside
+                // the SendAsync call because Orleans serialises
+                // grain turns and SendAsync awaits inline.
+                EncodedEnvelope = encodedEnvelope,
             };
-            ack = typedTransport is not null
-                ? await typedTransport.SendTypedAsync(batch, cancellationToken)
-                : await _transport.SendAsync(batch, cancellationToken);
+            ack = await _transport.SendAsync(batch, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -506,19 +530,14 @@ internal sealed class ReplicationShipperGrain(
         // and report zero. This avoids a hot-path WAL frontier query
         // (one extra grain call per partition per tick) while still
         // making "is this peer keeping up?" answerable on the dashboard.
+        //
+        // bytes_behind sums the pre-encoded entry segment lengths
+        // (already counted into _drainEncodedByteCount during the
+        // drain) - the same bytes that just travelled the wire.
         _peerStats.RecordSuccess(_treeName, _peerClusterId);
         var hitBatchCap = _drainBuffer.Count >= maxPerBatch;
         var entriesBehind = hitBatchCap ? (long)_drainBuffer.Count : 0L;
-        // For bytes-only transports we report the encoded payload
-        // length; for typed transports we skip the encode entirely
-        // so the byte length is unobservable here without re-encoding
-        // (which would defeat the optimisation). Fall back to a
-        // conservative floor of zero in that case - operators can
-        // derive an estimate from entries_behind on the dashboard if
-        // needed.
-        var bytesBehind = hitBatchCap && _typedTransport is null
-            ? (long)_writeBuffer.WrittenCount
-            : 0L;
+        var bytesBehind = hitBatchCap ? _drainEncodedByteCount : 0L;
         _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind, bytesBehind);
     }
 
@@ -778,10 +797,18 @@ internal sealed class ReplicationShipperGrain(
     /// <summary>
     /// Drains up to <paramref name="maxPerBatch"/> entries past each
     /// partition's saved resume cursor, k-way merging by HLC ascending
-    /// via a heap-free linear scan-for-min over partition heads. Applies
-    /// <see cref="ShouldShip"/> inline so filtered entries are
-    /// consumed-but-not-shipped (their sequence still advances the
-    /// partition cursor on ack so the next tick does not re-read them).
+    /// via a heap-free linear scan-for-min over partition heads. Each
+    /// partition's page is pulled via
+    /// <see cref="IWalShardGrain.ReadShippingAsync"/> (pre-encoded
+    /// entry payloads); the shipper decodes each candidate head entry
+    /// once via <see cref="IWalRecordEncoder.Decode"/> to apply the
+    /// HLC filter and <see cref="ShouldShip"/> predicates, then
+    /// records both the typed <see cref="WalRecord"/> in
+    /// <see cref="_drainBuffer"/> and the pre-encoded byte segment in
+    /// <see cref="_drainEncodedSegments"/> in lockstep so the
+    /// producer-side encoder is not invoked at ship time - the bytes
+    /// the WAL already wrote at append time are reused verbatim on
+    /// the wire.
     /// <para>
     /// O(P) per emitted entry - collapses to O(1) for the canonical
     /// single-partition case. Allocates nothing on the hot path beyond
@@ -810,6 +837,7 @@ internal sealed class ReplicationShipperGrain(
             _partitionPages[p] = null;
             _partitionPageIndex[p] = 0;
             _partitionAdvanced[p] = false;
+            _partitionHeadDecoded[p] = false;
             var seeded = state.State.PartitionCursors.TryGetValue(p, out var saved) ? saved : 0L;
             _partitionNextSeq[p] = seeded;
             _partitionMaxReadSeq[p] = seeded - 1;
@@ -847,9 +875,9 @@ internal sealed class ReplicationShipperGrain(
                 }
                 if (_partitionPageIndex[p] >= page.Count)
                 {
-                    // Page exhausted - try to refill. We already advanced
-                    // _partitionNextSeq on the prior consume so the
-                    // refill picks up where we left off.
+                    // Page exhausted - try to refill. We already
+                    // advanced _partitionNextSeq on the prior consume
+                    // so the refill picks up where we left off.
                     await TryRefillPartitionAsync(p, pageSize, cancellationToken);
                     page = _partitionPages[p];
                     if (page is null)
@@ -858,7 +886,18 @@ internal sealed class ReplicationShipperGrain(
                     }
                 }
 
-                var head = page[_partitionPageIndex[p]].Entry.Timestamp;
+                // Decode the head entry once per candidate position;
+                // _partitionHeadDecoded is reset to false on consume
+                // and on refill so the decoded record stays in lock
+                // step with the head index.
+                if (!_partitionHeadDecoded[p])
+                {
+                    _partitionHead[p] = _walRecordEncoder.Decode(
+                        page[_partitionPageIndex[p]].EncodedPayload);
+                    _partitionHeadDecoded[p] = true;
+                }
+
+                var head = _partitionHead[p].Timestamp;
                 if (minPartition < 0 || head.CompareTo(minHlc) < 0)
                 {
                     minPartition = p;
@@ -873,9 +912,11 @@ internal sealed class ReplicationShipperGrain(
             }
 
             var winningPage = _partitionPages[minPartition]!;
-            var winningEntry = winningPage[_partitionPageIndex[minPartition]];
+            var winningShipping = winningPage[_partitionPageIndex[minPartition]];
+            var winningRecord = _partitionHead[minPartition];
             _partitionPageIndex[minPartition]++;
-            _partitionMaxReadSeq[minPartition] = winningEntry.Sequence;
+            _partitionHeadDecoded[minPartition] = false;
+            _partitionMaxReadSeq[minPartition] = winningShipping.Sequence;
             _partitionAdvanced[minPartition] = true;
 
             // Defensive HLC filter: a legacy state with a non-zero
@@ -896,27 +937,35 @@ internal sealed class ReplicationShipperGrain(
             // been observed. DeleteRange entries are tracked solely
             // by partition sequence, which already prevents
             // re-shipping in steady state.
-            if (winningEntry.Entry.Timestamp != HybridLogicalClock.Zero
-                && winningEntry.Entry.Timestamp.CompareTo(state.State.Cursor) <= 0)
+            if (winningRecord.Timestamp != HybridLogicalClock.Zero
+                && winningRecord.Timestamp.CompareTo(state.State.Cursor) <= 0)
             {
                 continue;
             }
 
-            if (!ShouldShip(winningEntry.Entry, options))
+            if (!ShouldShip(winningRecord, options))
             {
                 continue;
             }
 
-            _drainBuffer.Add(winningEntry.Entry);
+            _drainBuffer.Add(winningRecord);
+            // Wrap the pre-encoded payload bytes verbatim. The
+            // shipping page borrows the bytes from the WAL grain's
+            // page DTO; safe for synchronous consumption inside the
+            // outbound SendAsync call because Orleans serialises
+            // grain turns and SendAsync awaits inline.
+            var payload = winningShipping.EncodedPayload;
+            _drainEncodedSegments.Add(new ArraySegment<byte>(payload));
+            _drainEncodedByteCount += payload.Length;
         }
     }
 
     /// <summary>
-    /// Issues a <see cref="IWalShardGrain.ReadAsync"/> against the
-    /// requested partition starting at <see cref="_partitionNextSeq"/>,
+    /// Issues a <see cref="IWalShardGrain.ReadShippingAsync"/> against
+    /// the requested partition starting at <see cref="_partitionNextSeq"/>,
     /// stores the page in the scratch arrays, and updates
     /// <see cref="_partitionNextSeq"/> to the page's
-    /// <see cref="WalShardPage.NextSequence"/>. An empty result
+    /// <see cref="WalShardShippingPage.NextSequence"/>. An empty result
     /// leaves <see cref="_partitionPages"/> at <see langword="null"/>
     /// for that partition - the caller treats that as "drained this
     /// tick" and stops considering the partition for the rest of the
@@ -927,7 +976,7 @@ internal sealed class ReplicationShipperGrain(
         var grain = _partitionGrainCache[partition] ??=
             _grainFactory.GetGrain<IWalShardGrain>($"{_treeName}/{partition}");
         var page = await grain
-            .ReadAsync(_partitionNextSeq[partition], pageSize, cancellationToken)
+            .ReadShippingAsync(_partitionNextSeq[partition], pageSize, cancellationToken)
             ;
         if (page.Entries.Count == 0)
         {
@@ -936,6 +985,7 @@ internal sealed class ReplicationShipperGrain(
         }
         _partitionPages[partition] = page.Entries;
         _partitionPageIndex[partition] = 0;
+        _partitionHeadDecoded[partition] = false;
         _partitionNextSeq[partition] = page.NextSequence;
     }
 
@@ -958,6 +1008,8 @@ internal sealed class ReplicationShipperGrain(
         Array.Resize(ref _partitionMaxReadSeq, partitions);
         Array.Resize(ref _partitionAdvanced, partitions);
         Array.Resize(ref _partitionGrainCache, partitions);
+        Array.Resize(ref _partitionHead, partitions);
+        Array.Resize(ref _partitionHeadDecoded, partitions);
     }
 
     private void ApplyBackoff(LatticeReplicationOptions options, Exception? exception, string reason)

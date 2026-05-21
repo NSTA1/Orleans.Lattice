@@ -146,7 +146,7 @@ public class GrpcPushTransportIntegrationTests
     public async Task Push_round_trips_an_envelope_and_returns_max_hwm()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
         var invoker = _channel.CreateCallInvoker();
 
         var hlcA = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
@@ -183,7 +183,7 @@ public class GrpcPushTransportIntegrationTests
     public async Task Push_returns_zero_hwm_for_empty_batch_over_the_wire()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
         var invoker = _channel.CreateCallInvoker();
 
         var box = new ReplicationBatchEnvelopeBox

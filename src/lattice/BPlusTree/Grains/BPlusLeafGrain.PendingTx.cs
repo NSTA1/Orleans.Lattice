@@ -1126,10 +1126,10 @@ internal sealed partial class BPlusLeafGrain
             {
                 if (writer is not null)
                 {
-                    var mutation = new LatticeMutation
+                    var entry = new WalRecord
                     {
                         TreeId = treeId,
-                        Kind = MutationKind.Set,
+                        Op = MutationKind.Set,
                         Key = kvp.Key,
                         Value = kvp.Value,
                         Timestamp = stamp,
@@ -1157,7 +1157,7 @@ internal sealed partial class BPlusLeafGrain
                     var walStartTicks = Stopwatch.GetTimestamp();
                     try
                     {
-                        await writer.AppendAsync(mutation);
+                        await writer.AppendAsync(entry);
                     }
                     finally
                     {

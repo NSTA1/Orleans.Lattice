@@ -69,10 +69,9 @@ public partial class ReplicationShipperGrainTests
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
-        Assert.That(encoder.LastEnvelope, Is.Not.Null);
-        Assert.That(encoder.LastEnvelope!.Value.Entries.Count, Is.EqualTo(1),
-            "tombstone-reap envelope must be filtered out at the shipper boundary");
-        Assert.That(encoder.LastEnvelope!.Value.Entries[0].Op, Is.EqualTo(MutationKind.Set));
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
+            "tombstone-reap envelope must be filtered out at the shipper boundary - "
+            + "only the user-authored Set must remain in the encoded batch");
     }
 
     [Test]

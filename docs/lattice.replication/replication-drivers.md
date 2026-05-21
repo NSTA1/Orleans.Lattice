@@ -315,22 +315,23 @@ the DLQ is unavailable.
 
 ### Buffer reuse
 
-The shipper maintains two activation-scoped buffers reused across pump
+The shipper maintains activation-scoped buffers reused across pump
 ticks:
 
 - `_drainBuffer` (`List<WalRecord>`) - cleared in place at the start
-  of every `PumpOnceAsync`. The encoder consumes the list synchronously
-  inside `Encode`, so reuse is safe (no aliasing past the call).
-- `_writeBuffer` (`ArrayBufferWriter<byte>`) - reset via
-  `ResetWrittenCount()` between ticks, which keeps the underlying array
-  and rewinds the write index to 0. A one-time spike that grows the
-  buffer at-or-past 4 MB recreates the writer so a single outlier batch
-  does not pin a multi-MB array on the heap forever. The 4 MB threshold
-  matches the WAL's per-batch byte budget so the typical steady-state
-  path always reuses.
+  of every `PumpOnceAsync`. The framing encoder consumes the list
+  synchronously inside `EncodeFraming`, so reuse is safe (no aliasing
+  past the call).
+- `_drainEncodedSegments` (`List<ArraySegment<byte>>`) - cleared in
+  lockstep with `_drainBuffer`. Holds the pre-encoded payload bytes
+  the shard grain returned from `ReadShippingAsync`; the segments are
+  owned by the WAL grain's page DTOs and are safe to wrap because
+  Orleans serialises grain turns and `SendAsync` awaits inline.
 
-Net effect: zero per-tick heap allocation on the steady-state path,
-modulo Orleans-internal serializer wrappers.
+Net effect: zero per-tick heap allocation on the steady-state path
+modulo Orleans-internal serializer wrappers, and zero producer-side
+re-encode of WAL bytes - the framing header is the only thing the
+shipper writes per tick.
 
 ### Partition resume cursor
 
