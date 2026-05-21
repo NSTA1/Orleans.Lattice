@@ -74,8 +74,7 @@ internal sealed partial class ShardRootGrain
             // (start + end + HLC + origin) that consumers may choose to
             // encode here; the lattice library itself never opens the
             // payload.
-            DeltaKind = delta?.Kind,
-            DeltaPayload = delta?.Payload,
+            Delta = delta,
             // Range deletes that fan out from inside a saga inherit the
             // saga's batch metadata verbatim; user-driven range deletes
             // outside a saga stamp 0 / 0. Today no saga emits a range

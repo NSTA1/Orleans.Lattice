@@ -104,6 +104,25 @@ public sealed class PnCounter : ICrdt<PnCounter>
         return copy;
     }
 
+    /// <summary>
+    /// Folds a <see cref="PnCounterDelta"/> into this counter: every
+    /// per-replica entry in <see cref="PnCounterDelta.Increments"/> /
+    /// <see cref="PnCounterDelta.Decrements"/> is pointwise-max'd into
+    /// the matching local component. Commutative, associative, and
+    /// idempotent against arrival order and duplicate delivery.
+    /// </summary>
+    /// <param name="delta">
+    /// The typed CRDT delta authored by the producing call site. Null
+    /// inner dictionaries are treated as empty.
+    /// </param>
+    public void MergeDelta(PnCounterDelta delta)
+    {
+        var inc = delta.Increments;
+        if (inc is { Count: > 0 }) MergeSide(Increments, inc);
+        var dec = delta.Decrements;
+        if (dec is { Count: > 0 }) MergeSide(Decrements, dec);
+    }
+
     private static void MergeSide(Dictionary<string, long> target, Dictionary<string, long> source)
     {
         foreach (var (k, v) in source)

@@ -1,9 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Primitives;
-using Orleans.Lattice.Replication;
 using Orleans.Serialization;
 
-namespace Orleans.Lattice.Replication.Tests.Deltas;
+namespace Orleans.Lattice.Tests.Crdt;
 
 /// <summary>
 /// End-to-end Orleans serializer round-trip tests for every typed CRDT
@@ -79,9 +78,9 @@ public class DeltaSerializerRoundTripTests
     }
 
     [Test]
-    public void OrSetDot_round_trips()
+    public void OrSetDeltaDot_round_trips()
     {
-        var original = new OrSetDot { Element = new byte[] { 0xCA, 0xFE }, ReplicaId = "r-1", Counter = 42L };
+        var original = new OrSetDeltaDot { Element = new byte[] { 0xCA, 0xFE }, ReplicaId = "r-1", Counter = 42L };
 
         var copy = RoundTrip(original);
 
@@ -96,9 +95,9 @@ public class DeltaSerializerRoundTripTests
     [Test]
     public void OrSetDelta_round_trips()
     {
-        var addOne = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r1", Counter = 1 };
-        var addTwo = new OrSetDot { Element = new byte[] { 2 }, ReplicaId = "r1", Counter = 2 };
-        var remove = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r2", Counter = 7 };
+        var addOne = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r1", Counter = 1 };
+        var addTwo = new OrSetDeltaDot { Element = new byte[] { 2 }, ReplicaId = "r1", Counter = 2 };
+        var remove = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r2", Counter = 7 };
         var original = new OrSetDelta
         {
             Adds = new[] { addOne, addTwo },

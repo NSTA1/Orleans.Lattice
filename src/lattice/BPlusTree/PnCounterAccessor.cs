@@ -70,8 +70,14 @@ public readonly record struct PnCounterAccessor
         return MutateAsync(c =>
         {
             c.Increment(replicaId, amount);
-            return new CrdtDeltaPayloads.PnCounterIncrementDelta(replicaId, amount);
-        }, CrdtDeltaKinds.PnCounterIncrement, cancellationToken, maxAttempts);
+            var inc = new Dictionary<string, long>(StringComparer.Ordinal);
+            if (c.Increments.TryGetValue(replicaId, out var value)) inc[replicaId] = value;
+            return new PnCounterDelta
+            {
+                Increments = inc,
+                Decrements = new Dictionary<string, long>(0, StringComparer.Ordinal),
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     /// <summary>
@@ -91,8 +97,14 @@ public readonly record struct PnCounterAccessor
         return MutateAsync(c =>
         {
             c.Decrement(replicaId, amount);
-            return new CrdtDeltaPayloads.PnCounterDecrementDelta(replicaId, amount);
-        }, CrdtDeltaKinds.PnCounterDecrement, cancellationToken, maxAttempts);
+            var dec = new Dictionary<string, long>(StringComparer.Ordinal);
+            if (c.Decrements.TryGetValue(replicaId, out var value)) dec[replicaId] = value;
+            return new PnCounterDelta
+            {
+                Increments = new Dictionary<string, long>(0, StringComparer.Ordinal),
+                Decrements = dec,
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     /// <summary>Merges <paramref name="other"/> into the stored state under CAS.</summary>
@@ -103,15 +115,16 @@ public readonly record struct PnCounterAccessor
         return MutateAsync(c =>
         {
             c.MergeFrom(other);
-            return new CrdtDeltaPayloads.PnCounterMergeDelta(
-                new Dictionary<string, long>(other.Increments),
-                new Dictionary<string, long>(other.Decrements));
-        }, CrdtDeltaKinds.PnCounterMerge, cancellationToken, maxAttempts);
+            return new PnCounterDelta
+            {
+                Increments = new Dictionary<string, long>(other.Increments, StringComparer.Ordinal),
+                Decrements = new Dictionary<string, long>(other.Decrements, StringComparer.Ordinal),
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     private async Task MutateAsync<TDelta>(
         Func<PnCounter, TDelta> mutate,
-        string deltaKind,
         CancellationToken cancellationToken,
         int maxAttempts)
     {
@@ -150,7 +163,7 @@ public readonly record struct PnCounterAccessor
             var delta = mutate(current);
             var bytes = JsonLatticeSerializer<PnCounter>.Default.Serialize(current);
             var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaKind, deltaBytes))
+            using (LatticeDeltaContext.With(deltaBytes))
             {
                 var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
                 if (ok) return;

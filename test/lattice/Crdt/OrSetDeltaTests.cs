@@ -1,14 +1,13 @@
-using Orleans.Lattice.Replication;
 
-namespace Orleans.Lattice.Replication.Tests.Deltas;
+namespace Orleans.Lattice.Tests.Crdt;
 
 [TestFixture]
-public class OrSetDotTests
+public class OrSetDeltaDotTests
 {
     [Test]
     public void Default_instance_has_null_or_zero_fields()
     {
-        var dot = default(OrSetDot);
+        var dot = default(OrSetDeltaDot);
         Assert.Multiple(() =>
         {
             Assert.That(dot.Element, Is.Null);
@@ -21,7 +20,7 @@ public class OrSetDotTests
     public void Properties_are_settable_via_object_initialiser()
     {
         var bytes = new byte[] { 0xAB };
-        var dot = new OrSetDot { Element = bytes, ReplicaId = "r1", Counter = 42L };
+        var dot = new OrSetDeltaDot { Element = bytes, ReplicaId = "r1", Counter = 42L };
 
         Assert.Multiple(() =>
         {
@@ -35,8 +34,8 @@ public class OrSetDotTests
     public void Equality_is_value_based_on_shared_element_reference()
     {
         var bytes = new byte[] { 1 };
-        var a = new OrSetDot { Element = bytes, ReplicaId = "r", Counter = 1 };
-        var b = new OrSetDot { Element = bytes, ReplicaId = "r", Counter = 1 };
+        var a = new OrSetDeltaDot { Element = bytes, ReplicaId = "r", Counter = 1 };
+        var b = new OrSetDeltaDot { Element = bytes, ReplicaId = "r", Counter = 1 };
         Assert.That(a, Is.EqualTo(b));
     }
 
@@ -45,8 +44,8 @@ public class OrSetDotTests
     {
         // Documents the byte[] reference-equality caveat: structurally
         // identical dots backed by independent arrays are NOT equal.
-        var a = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
-        var b = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
+        var a = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
+        var b = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
         Assert.That(a, Is.Not.EqualTo(b));
     }
 }
@@ -93,9 +92,9 @@ public class OrSetDeltaTests
     [Test]
     public void Properties_are_settable_via_object_initialiser()
     {
-        var addOne = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r1", Counter = 1 };
-        var addTwo = new OrSetDot { Element = new byte[] { 2 }, ReplicaId = "r1", Counter = 2 };
-        var remove = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r2", Counter = 7 };
+        var addOne = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r1", Counter = 1 };
+        var addTwo = new OrSetDeltaDot { Element = new byte[] { 2 }, ReplicaId = "r1", Counter = 2 };
+        var remove = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r2", Counter = 7 };
 
         var delta = new OrSetDelta
         {
@@ -118,8 +117,8 @@ public class OrSetDeltaTests
     {
         var delta = new OrSetDelta
         {
-            Adds = Array.Empty<OrSetDot>(),
-            Removes = Array.Empty<OrSetDot>(),
+            Adds = Array.Empty<OrSetDeltaDot>(),
+            Removes = Array.Empty<OrSetDeltaDot>(),
         };
 
         Assert.Multiple(() =>
@@ -135,17 +134,17 @@ public class OrSetDeltaTests
         // Documents the IReadOnlyList<> reference-equality caveat at the
         // delta level: two deltas built from independent arrays of equal
         // dots are NOT equal under record-struct equality.
-        var dot = new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
-        var a = new OrSetDelta { Adds = new[] { dot }, Removes = Array.Empty<OrSetDot>() };
-        var b = new OrSetDelta { Adds = new[] { dot }, Removes = Array.Empty<OrSetDot>() };
+        var dot = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 };
+        var a = new OrSetDelta { Adds = new[] { dot }, Removes = Array.Empty<OrSetDeltaDot>() };
+        var b = new OrSetDelta { Adds = new[] { dot }, Removes = Array.Empty<OrSetDeltaDot>() };
         Assert.That(a, Is.Not.EqualTo(b));
     }
 
     [Test]
     public void Equality_uses_value_equality_on_shared_collection_references()
     {
-        var adds = new[] { new OrSetDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 } };
-        var removes = Array.Empty<OrSetDot>();
+        var adds = new[] { new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r", Counter = 1 } };
+        var removes = Array.Empty<OrSetDeltaDot>();
         var a = new OrSetDelta { Adds = adds, Removes = removes };
         var b = new OrSetDelta { Adds = adds, Removes = removes };
         Assert.That(a, Is.EqualTo(b));
@@ -155,8 +154,8 @@ public class OrSetDeltaTests
     public void Adds_and_removes_can_target_the_same_element_with_different_dots()
     {
         var bytes = new byte[] { 9 };
-        var add = new OrSetDot { Element = bytes, ReplicaId = "r1", Counter = 1 };
-        var remove = new OrSetDot { Element = bytes, ReplicaId = "r2", Counter = 1 };
+        var add = new OrSetDeltaDot { Element = bytes, ReplicaId = "r1", Counter = 1 };
+        var remove = new OrSetDeltaDot { Element = bytes, ReplicaId = "r2", Counter = 1 };
 
         var delta = new OrSetDelta
         {
@@ -175,7 +174,7 @@ public class OrSetDeltaTests
     [Test]
     public void Zero_length_element_is_legal()
     {
-        var dot = new OrSetDot { Element = Array.Empty<byte>(), ReplicaId = "r", Counter = 1 };
+        var dot = new OrSetDeltaDot { Element = Array.Empty<byte>(), ReplicaId = "r", Counter = 1 };
         Assert.That(dot.Element, Is.Empty);
     }
 }

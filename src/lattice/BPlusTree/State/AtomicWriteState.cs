@@ -131,28 +131,29 @@ internal sealed class AtomicWriteState
     [Id(8)] public Guid TransactionId { get; set; }
 
     /// <summary>
-    /// Author-delta kind captured from
+    /// Author-delta payload captured from
     /// <see cref="LatticeDeltaContext.Current"/> when the saga was first
     /// started, or <see langword="null"/> when the caller did not wrap
     /// the <c>SetManyAtomicAsync</c> call in a
-    /// <see cref="LatticeDeltaContext.With"/> scope. Re-stamped onto
-    /// Orleans <see cref="Runtime.RequestContext"/> on every per-key
-    /// <c>SetAsync</c> / <c>DeleteAsync</c> the saga issues - including
-    /// compensation rewrites - so every emitted
+    /// <see cref="LatticeDeltaContext.With(byte[])"/> scope. Re-stamped
+    /// onto Orleans <see cref="Runtime.RequestContext"/> on every
+    /// per-key <c>SetAsync</c> / <c>DeleteAsync</c> the saga issues -
+    /// including compensation rewrites - so every emitted
     /// <see cref="LatticeMutation"/> carries the same author-delta as
-    /// the original batch. Wire-compatible: missing field on legacy
-    /// persisted state decodes to <see langword="null"/>.
-    /// </summary>
-    [Id(9)] public string? DeltaKind { get; set; }
-
-    /// <summary>
-    /// Author-delta payload captured alongside <see cref="DeltaKind"/>.
-    /// Opaque bytes (typically Orleans-serialized typed delta record);
-    /// the lattice library never opens the payload. Wire-compatible:
-    /// missing field on legacy persisted state decodes to
+    /// the original batch. Opaque bytes (Orleans-serialized typed delta
+    /// record); the lattice library never opens the payload.
+    /// <para>
+    /// The wire id <c>10</c> matches the slot previously named
+    /// <c>DeltaPayload</c>; the rename is source-breaking but wire-
+    /// compatible. The companion <c>DeltaKind</c> string (formerly id
+    /// <c>9</c>) was retired in the same change because receivers now
+    /// dispatch on <see cref="LatticeMergeMode"/>; that wire id is
+    /// permanently reserved and must never be reused for a different
+    /// field. Missing field on legacy persisted state decodes to
     /// <see langword="null"/>.
+    /// </para>
     /// </summary>
-    [Id(10)] public byte[]? DeltaPayload { get; set; }
+    [Id(10)] public byte[]? Delta { get; set; }
 
     /// <summary>
     /// Vector-clock frontier captured once from

@@ -1,9 +1,9 @@
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Typed delta record for an observed-remove (OR) set mutation. Carries
 /// the dots added and the dots removed since the receiver's cursor; the
-/// dot context (<see cref="OrSetDot.ReplicaId"/> + <see cref="OrSetDot.Counter"/>)
+/// dot context (<see cref="OrSetDeltaDot.ReplicaId"/> + <see cref="OrSetDeltaDot.Counter"/>)
 /// is what makes OR-Sets converge under concurrent active-active updates
 /// where post-merge LWW-on-bytes would silently drop one side's add.
 /// <para>
@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.OrSetDelta)]
+[Alias(TypeAliases.OrSetDelta)]
 [Immutable]
 public readonly record struct OrSetDelta
 {
@@ -31,14 +31,14 @@ public readonly record struct OrSetDelta
     /// The (element, dot) pairs added since the receiver's cursor.
     /// An empty list indicates a delta that contains only removes.
     /// </summary>
-    [Id(0)] public IReadOnlyList<OrSetDot> Adds { get; init; }
+    [Id(0)] public IReadOnlyList<OrSetDeltaDot> Adds { get; init; }
 
     /// <summary>
     /// The (element, dot) pairs whose adds the originator has now
     /// observed-as-removed. An empty list indicates a delta that
     /// contains only adds.
     /// </summary>
-    [Id(1)] public IReadOnlyList<OrSetDot> Removes { get; init; }
+    [Id(1)] public IReadOnlyList<OrSetDeltaDot> Removes { get; init; }
 
     /// <summary>
     /// A reusable no-op delta with empty (but non-null) <see cref="Adds"/>
@@ -47,7 +47,7 @@ public readonly record struct OrSetDelta
     /// </summary>
     public static OrSetDelta Empty { get; } = new()
     {
-        Adds = Array.Empty<OrSetDot>(),
-        Removes = Array.Empty<OrSetDot>(),
+        Adds = Array.Empty<OrSetDeltaDot>(),
+        Removes = Array.Empty<OrSetDeltaDot>(),
     };
 }

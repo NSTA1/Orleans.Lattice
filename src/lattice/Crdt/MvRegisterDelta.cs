@@ -1,6 +1,6 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Typed delta record for a multi-value register mutation. Carries
@@ -32,7 +32,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.MvRegisterDelta)]
+[Alias(TypeAliases.MvRegisterDelta)]
 [Immutable]
 public readonly record struct MvRegisterDelta
 {

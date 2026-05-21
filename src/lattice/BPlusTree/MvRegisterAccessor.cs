@@ -99,12 +99,18 @@ public readonly record struct MvRegisterAccessor<T>
         {
             var encoded = serializer.Serialize(value);
             register.Set(replicaId, encoded);
-            return new CrdtDeltaPayloads.MvRegisterSetDelta(
-                replicaId,
-                register.Context[replicaId],
-                encoded,
-                BuildContextPayload(register.Context));
-        }, CrdtDeltaKinds.MvRegisterSet, cancellationToken, maxAttempts);
+            var entry = new MvRegisterEntry
+            {
+                ReplicaId = replicaId,
+                Counter = register.Context[replicaId],
+                Value = encoded,
+            };
+            return new MvRegisterDelta
+            {
+                Entries = new[] { entry },
+                Context = new Dictionary<string, long>(register.Context, StringComparer.Ordinal),
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     /// <summary>
@@ -120,17 +126,18 @@ public readonly record struct MvRegisterAccessor<T>
         return MutateAsync(register =>
         {
             register.MergeFrom(other);
-            return new CrdtDeltaPayloads.MvRegisterMergeDelta(
-                other.Entries
-                    .Select(static e => new CrdtDeltaPayloads.MvRegisterEntryPayload(e.ReplicaId, e.Counter, e.Value))
-                    .ToArray(),
-                BuildContextPayload(other.Context));
-        }, CrdtDeltaKinds.MvRegisterMerge, cancellationToken, maxAttempts);
+            var entries = new MvRegisterEntry[other.Entries.Count];
+            for (var i = 0; i < other.Entries.Count; i++) entries[i] = other.Entries[i];
+            return new MvRegisterDelta
+            {
+                Entries = entries,
+                Context = new Dictionary<string, long>(other.Context, StringComparer.Ordinal),
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     private async Task MutateAsync<TDelta>(
         Func<MvRegister, TDelta> mutate,
-        string deltaKind,
         CancellationToken cancellationToken,
         int maxAttempts)
     {
@@ -143,7 +150,7 @@ public readonly record struct MvRegisterAccessor<T>
             var delta = mutate(current);
             var bytes = JsonLatticeSerializer<MvRegister>.Default.Serialize(current);
             var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaKind, deltaBytes))
+            using (LatticeDeltaContext.With(deltaBytes))
             {
                 var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
                 if (ok) return;
@@ -153,9 +160,6 @@ public readonly record struct MvRegisterAccessor<T>
             $"MvRegister CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
             "Increase maxAttempts or reduce contention.");
     }
-
-    private static Dictionary<string, long> BuildContextPayload(Dictionary<string, long> context) =>
-        new(context, StringComparer.Ordinal);
 
     private static MvRegister Decode(byte[]? bytes) =>
         bytes is null ? new MvRegister() : JsonLatticeSerializer<MvRegister>.Default.Deserialize(bytes);

@@ -51,8 +51,11 @@ public readonly record struct VersionVectorAccessor
         return MutateAsync(v =>
         {
             var clock = v.Tick(replicaId);
-            return new CrdtDeltaPayloads.VersionVectorTickDelta(replicaId, clock.WallClockTicks, clock.Counter);
-        }, CrdtDeltaKinds.VersionVectorTick, cancellationToken, maxAttempts);
+            return new VersionVectorDelta
+            {
+                Entries = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { [replicaId] = clock },
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     /// <summary>Merges <paramref name="other"/> into the stored state under CAS.</summary>
@@ -63,18 +66,15 @@ public readonly record struct VersionVectorAccessor
         return MutateAsync(v =>
         {
             v.MergeFrom(other);
-            var entries = new Dictionary<string, CrdtDeltaPayloads.HlcPayload>(other.Entries.Count);
-            foreach (var (id, clock) in other.Entries)
+            return new VersionVectorDelta
             {
-                entries[id] = new CrdtDeltaPayloads.HlcPayload(clock.WallClockTicks, clock.Counter);
-            }
-            return new CrdtDeltaPayloads.VersionVectorMergeDelta(entries);
-        }, CrdtDeltaKinds.VersionVectorMerge, cancellationToken, maxAttempts);
+                Entries = new Dictionary<string, HybridLogicalClock>(other.Entries, StringComparer.Ordinal),
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     private async Task MutateAsync<TDelta>(
         Func<VersionVector, TDelta> mutate,
-        string deltaKind,
         CancellationToken cancellationToken,
         int maxAttempts)
     {
@@ -87,7 +87,7 @@ public readonly record struct VersionVectorAccessor
             var delta = mutate(current);
             var bytes = JsonLatticeSerializer<VersionVector>.Default.Serialize(current);
             var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaKind, deltaBytes))
+            using (LatticeDeltaContext.With(deltaBytes))
             {
                 var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
                 if (ok) return;

@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Typed delta record for a positive-negative (PN) counter mutation.
@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.PnCounterDelta)]
+[Alias(TypeAliases.PnCounterDelta)]
 [Immutable]
 public readonly record struct PnCounterDelta
 {

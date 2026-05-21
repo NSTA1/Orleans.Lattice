@@ -157,32 +157,28 @@ public readonly record struct WalRecord
     [Id(11)] public Primitives.VersionVector? DependencySummary { get; init; }
 
     /// <summary>
-    /// Stable identifier of the typed pre-merge delta authored at the
-    /// originating call site, mirrored verbatim from the producing
-    /// <see cref="LatticeMutation.DeltaKind"/>. Populated by the typed
-    /// CRDT accessors (OR-Set, PN-Counter, version-vector tick / merge,
-    /// etc.) and by callers that opt in via
-    /// <see cref="LatticeDeltaContext"/>; <see langword="null"/> for
-    /// plain <c>Set</c> / <c>Delete</c> writes that did not author a
-    /// delta. Strictly additive on the wire: legacy peers and entries
-    /// authored before this slot existed decode as <see langword="null"/>,
-    /// which receivers treat as "no typed delta available, fall back to
-    /// the post-merge state". Receivers that recognise the kind dispatch
-    /// to the matching delta decoder; unknown kinds are forwarded as
-    /// opaque bytes for forward compatibility.
+    /// Pre-merge author's delta in opaque-bytes form, or
+    /// <see langword="null"/> when the producer did not author a typed
+    /// CRDT delta. Mirrored verbatim from
+    /// <see cref="LatticeMutation.Delta"/>. When non-<see langword="null"/>,
+    /// the bytes are the Orleans-serialised form of the public typed
+    /// delta DTO matching <see cref="Mode"/>; receivers dispatch on the
+    /// mode to pick the deserialiser and call <c>MergeDelta</c> on the
+    /// loaded primitive. Strictly additive on the wire; legacy peers
+    /// and entries authored before this slot existed decode as
+    /// <see langword="null"/>, which receivers treat as "no typed delta,
+    /// fall back to the LWW / opaque-bytes apply over
+    /// <see cref="Value"/>".
+    /// <para>
+    /// The wire id <c>13</c> matches the slot previously named
+    /// <c>DeltaPayload</c>; the rename is source-breaking but wire-
+    /// compatible. The companion <c>DeltaKind</c> string (formerly id
+    /// <c>12</c>) was retired in the same change because receivers now
+    /// dispatch on <see cref="Mode"/>; that wire id is permanently
+    /// reserved and must never be reused for a different field.
+    /// </para>
     /// </summary>
-    [Id(12)] public string? DeltaKind { get; init; }
-
-    /// <summary>
-    /// Opaque payload carrying the typed pre-merge delta identified by
-    /// <see cref="DeltaKind"/>. Mirrored verbatim from the producing
-    /// <see cref="LatticeMutation.DeltaPayload"/>. The payload is
-    /// authored once at the originating call site so every replica that
-    /// applies it converges by replaying the author's intent rather than
-    /// the post-merge state. <see langword="null"/> when no delta was
-    /// authored. Strictly additive on the wire.
-    /// </summary>
-    [Id(13)] public byte[]? DeltaPayload { get; init; }
+    [Id(13)] public byte[]? Delta { get; init; }
 
     /// <summary>
     /// Total number of entries in the enclosing atomic transaction

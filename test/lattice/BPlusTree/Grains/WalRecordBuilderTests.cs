@@ -99,19 +99,15 @@ public class WalRecordBuilderTests
     }
 
     [Test]
-    public void ForSet_captures_LatticeDeltaContext_into_DeltaKind_and_DeltaPayload()
+    public void ForSet_captures_LatticeDeltaContext_into_Delta()
     {
         var committed = StampedValue(new byte[] { 1 });
 
-        using (LatticeDeltaContext.With("lww", new byte[] { 0xAA, 0xBB }))
+        using (LatticeDeltaContext.With(new byte[] { 0xAA, 0xBB }))
         {
             var entry = WalRecordBuilder.ForSet(TreeId, ShardIndex, "k", committed, isPrepared: false);
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(entry.DeltaKind, Is.EqualTo("lww"));
-                Assert.That(entry.DeltaPayload, Is.EqualTo(new byte[] { 0xAA, 0xBB }));
-            });
+            Assert.That(entry.Delta, Is.EqualTo(new byte[] { 0xAA, 0xBB }));
         }
     }
 
@@ -170,8 +166,7 @@ public class WalRecordBuilderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(entry.DeltaKind, Is.Null);
-            Assert.That(entry.DeltaPayload, Is.Null);
+            Assert.That(entry.Delta, Is.Null);
             Assert.That(entry.AtomicBatchSize, Is.Zero);
             Assert.That(entry.AtomicBatchIndex, Is.Zero);
             Assert.That(entry.TransactionId, Is.EqualTo(Guid.Empty));
@@ -220,7 +215,7 @@ public class WalRecordBuilderTests
         LatticeTransactionContext.Set(txId);
         try
         {
-            using (LatticeDeltaContext.With("delete-marker", new byte[] { 1 }))
+            using (LatticeDeltaContext.With(new byte[] { 1 }))
             using (LatticeAtomicBatchContext.With((Size: 8, Index: 6)))
             using (LatticeMaintenanceContext.BeginScope())
             {
@@ -228,8 +223,7 @@ public class WalRecordBuilderTests
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(entry.DeltaKind, Is.EqualTo("delete-marker"));
-                    Assert.That(entry.DeltaPayload, Is.EqualTo(new byte[] { 1 }));
+                    Assert.That(entry.Delta, Is.EqualTo(new byte[] { 1 }));
                     Assert.That(entry.AtomicBatchSize, Is.EqualTo(8));
                     Assert.That(entry.AtomicBatchIndex, Is.EqualTo(6));
                     Assert.That(entry.TransactionId, Is.EqualTo(txId));
@@ -273,15 +267,14 @@ public class WalRecordBuilderTests
         LatticeTransactionContext.Set(txId);
         try
         {
-            using (LatticeDeltaContext.With("range", new byte[] { 0x42 }))
+            using (LatticeDeltaContext.With(new byte[] { 0x42 }))
             using (LatticeMaintenanceContext.BeginScope())
             {
                 var entry = WalRecordBuilder.ForDeleteRange(TreeId, ShardIndex, "a", "z", tombstone);
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(entry.DeltaKind, Is.EqualTo("range"));
-                    Assert.That(entry.DeltaPayload, Is.EqualTo(new byte[] { 0x42 }));
+                    Assert.That(entry.Delta, Is.EqualTo(new byte[] { 0x42 }));
                     Assert.That(entry.TransactionId, Is.EqualTo(txId));
                     Assert.That(entry.Category, Is.EqualTo(MutationCategory.Maintenance));
                 });
