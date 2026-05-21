@@ -62,6 +62,17 @@ public partial class TombstoneCompactionGrainTests
         grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{shardIndex}")
             .Returns(shardRoot);
 
+        // Default to "no dirty signal" so the coordinator falls back to
+        // the legacy chain walk in tests that pre-date the dirty-leaves
+        // fast path. Tests exercising that fast path explicitly stub a
+        // non-empty snapshot.
+        shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
+            .Returns(Task.FromResult(new DirtyLeavesSnapshot
+            {
+                DirtyLeaves = [],
+                ObservedAdvance = default,
+            }));
+
         if (leafIds.Length == 0)
         {
             shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));

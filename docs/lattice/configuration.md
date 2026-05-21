@@ -58,7 +58,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
 | [`CacheTtl`](#cachettl) | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
 | [`CompactionLeafBatchSize`](#compactionleafbatchsize) | `int` | 64 | Yes |
-| [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 2 seconds | Yes |
+| [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
 | [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
@@ -154,7 +154,7 @@ For the relationship between `CompactionLeafBatchSize` and `CompactionShardTickI
 
 ### `CompactionShardTickInterval`
 
-Gap inserted between consecutive per-shard ticks during a tombstone-compaction pass. Default **2 seconds**, floor **100 milliseconds**. The cadence is a scheduler-fairness knob and the **dominant control on activation pressure during a pass** - lowering it shortens the pass but raises the peak concurrent leaf activation count. The cadence is snapshotted at the start of each pass and can be changed freely at any time; the next pass picks up the new value.
+Gap inserted between consecutive per-shard ticks during a tombstone-compaction pass. Default **500 milliseconds**, floor **100 milliseconds**. The cadence is a scheduler-fairness knob and the **dominant control on activation pressure during a pass** - lowering it shortens the pass but raises the peak concurrent leaf activation count. The cadence is snapshotted at the start of each pass and can be changed freely at any time; the next pass picks up the new value. The default was lowered from 2 s to 500 ms once the dirty-leaves fast path landed - on a tree with no recent deletes a pass activates only the shard root grains, so the tighter cadence is safe to ship by default.
 
 For the worked-example trade-off table, the activation-pressure model, the relationship to `GrainCollectionOptions.CollectionAge`, and operator-triage guidance (use `ILattice.CompactShardAsync` for "compact one shard fast"), see **[Tombstone Compaction - `CompactionShardTickInterval`](tombstone-compaction.md#compactionshardtickinterval)**.
 

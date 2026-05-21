@@ -723,12 +723,58 @@ internal sealed class TombstoneCompactionGrain(
             var shardKey = $"{physicalTreeId}/{shardIndex}";
             var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
 
-            // Resume from the persisted in-shard cursor when present,
-            // otherwise start from the leftmost leaf. A null cursor when
-            // entering the shard is the legacy semantic ("start fresh").
-            GrainId? leafId;
+            // Path selection. On the first batch entering this shard
+            // (CurrentShardDirtyLeaves==null AND NextLeafIdInShard==null),
+            // pull the shard-root dirty-leaves snapshot. A non-empty
+            // snapshot locks the shard into the fast path; an empty
+            // snapshot falls back to the legacy chain walk so a tree
+            // with no accumulated signal yet (fresh activation, upgraded
+            // silo) still progresses.
             var resumeFrom = state.State.NextLeafIdInShard;
-            if (!string.IsNullOrEmpty(resumeFrom))
+            string[]? dirtyLeaves = state.State.CurrentShardDirtyLeaves;
+            if (dirtyLeaves is null && string.IsNullOrEmpty(resumeFrom))
+            {
+                var snapshot = await shardRoot.GetDirtyLeavesSinceLastCompactionAsync();
+                LatticeMetrics.CompactionShardDirtyLeaves.Record(snapshot.DirtyLeaves.Count,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, physicalTreeId));
+                if (snapshot.DirtyLeaves.Count > 0)
+                {
+                    dirtyLeaves = new string[snapshot.DirtyLeaves.Count];
+                    for (int i = 0; i < snapshot.DirtyLeaves.Count; i++)
+                        dirtyLeaves[i] = snapshot.DirtyLeaves[i].ToString();
+                    state.State.CurrentShardDirtyLeaves = dirtyLeaves;
+                    state.State.CurrentShardDirtyAdvance = snapshot.ObservedAdvance;
+                }
+            }
+
+            var pathTag = dirtyLeaves is not null ? LatticeMetrics.PathDirtySetTag : LatticeMetrics.PathWalkTag;
+            using var pathScope = LatticeCompactionPathContext.BeginScope(
+                dirtyLeaves is not null ? LatticeMetrics.PathDirtySet : LatticeMetrics.PathWalk);
+
+            var batchSize = _currentLeafBatchSize > 0 ? _currentLeafBatchSize : LatticeOptions.DefaultCompactionLeafBatchSize;
+            var visited = 0;
+
+            // Resolve the starting leaf depending on the active path.
+            GrainId? leafId;
+            int dirtyIndex = 0;
+            if (dirtyLeaves is not null)
+            {
+                if (!string.IsNullOrEmpty(resumeFrom))
+                {
+                    // Locate the cursor inside the persisted dirty-set
+                    // list so a silo restart resumes at the correct
+                    // position. If the cursor cannot be located (an
+                    // edge case: e.g. partial state corruption or a
+                    // mid-pass list re-snapshot), fall back to the
+                    // start of the list - the per-leaf compaction is
+                    // idempotent so re-visiting earlier entries only
+                    // pays a leaf-RPC cost.
+                    dirtyIndex = Array.IndexOf(dirtyLeaves, resumeFrom);
+                    if (dirtyIndex < 0) dirtyIndex = 0;
+                }
+                leafId = dirtyIndex < dirtyLeaves.Length ? GrainId.Parse(dirtyLeaves[dirtyIndex]) : null;
+            }
+            else if (!string.IsNullOrEmpty(resumeFrom))
             {
                 leafId = GrainId.Parse(resumeFrom);
             }
@@ -736,9 +782,6 @@ internal sealed class TombstoneCompactionGrain(
             {
                 leafId = await shardRoot.GetLeftmostLeafIdAsync();
             }
-
-            var batchSize = _currentLeafBatchSize > 0 ? _currentLeafBatchSize : LatticeOptions.DefaultCompactionLeafBatchSize;
-            var visited = 0;
 
             while (leafId is not null && visited < batchSize)
             {
@@ -769,15 +812,23 @@ internal sealed class TombstoneCompactionGrain(
                             TriggerOperator => LatticeMetrics.TriggerOperatorTag,
                             _ => new KeyValuePair<string, object?>(LatticeMetrics.TagTrigger, _currentTriggerKind),
                         };
-                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped, trig);
+                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped, trig, pathTag);
                     }
                     else
                     {
-                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped);
+                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped, pathTag);
                     }
                     throw;
                 }
-                leafId = await leaf.GetNextSiblingAsync();
+                if (dirtyLeaves is not null)
+                {
+                    dirtyIndex++;
+                    leafId = dirtyIndex < dirtyLeaves.Length ? GrainId.Parse(dirtyLeaves[dirtyIndex]) : null;
+                }
+                else
+                {
+                    leafId = await leaf.GetNextSiblingAsync();
+                }
                 visited++;
             }
 
@@ -790,6 +841,28 @@ internal sealed class TombstoneCompactionGrain(
             if (leafId is null)
             {
                 state.State.NextLeafIdInShard = null;
+
+                // Dirty-set path completion: drain the shard-root dirty
+                // set up to the watermark we observed at snapshot time.
+                // Best-effort - a transient failure here just leaves the
+                // entries in place for the next pass to re-walk; the
+                // legacy chain-walk fallback path skips this call.
+                if (dirtyLeaves is not null)
+                {
+                    var advance = state.State.CurrentShardDirtyAdvance;
+                    state.State.CurrentShardDirtyLeaves = null;
+                    state.State.CurrentShardDirtyAdvance = default;
+                    try
+                    {
+                        await shardRoot.ClearDirtyLeavesUpToAsync(advance);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex,
+                            "Failed to clear shard-root dirty-leaves watermark for {ShardKey}",
+                            shardKey);
+                    }
+                }
                 return true;
             }
 

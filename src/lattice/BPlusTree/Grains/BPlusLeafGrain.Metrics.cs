@@ -127,6 +127,26 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Resolves the ambient compaction walk-path tag for the current
+    /// call, or <see langword="null"/> if no path scope is active.
+    /// Returns the cached singleton from <see cref="LatticeMetrics"/>
+    /// for known labels (<c>walk</c> / <c>dirty-set</c>), avoiding a
+    /// per-call <c>KeyValuePair</c> construction; falls back to a
+    /// freshly-built pair only for an unknown label.
+    /// </summary>
+    private static KeyValuePair<string, object?>? CompactionPathTag()
+    {
+        var raw = LatticeCompactionPathContext.Current;
+        return raw switch
+        {
+            null => null,
+            LatticeMetrics.PathWalk => LatticeMetrics.PathWalkTag,
+            LatticeMetrics.PathDirtySet => LatticeMetrics.PathDirtySetTag,
+            _ => new KeyValuePair<string, object?>(LatticeMetrics.TagPath, raw),
+        };
+    }
+
+    /// <summary>
     /// Lazily resolves the commit-log writer from the activation's
     /// service provider. Returns <see langword="null"/> when no adapter
     /// has been registered (the legacy-only commit path) <em>or</em>

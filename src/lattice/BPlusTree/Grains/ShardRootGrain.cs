@@ -606,6 +606,7 @@ internal sealed partial class ShardRootGrain(
                 {
                     var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
                     await RecordAffectedLeafIfPreparedAsync(state.State.RootNodeId!.Value);
+                    await MarkLeafDirtyAsync(state.State.RootNodeId!.Value);
                     result = await leaf.DeleteAsync(key);
                 }
                 else
@@ -614,6 +615,7 @@ internal sealed partial class ShardRootGrain(
                     var leafId = await TraverseToLeafAsync(key);
                     var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
                     await RecordAffectedLeafIfPreparedAsync(leafId);
+                    await MarkLeafDirtyAsync(leafId);
                     result = await leafGrain.DeleteAsync(key);
                 }
 
@@ -667,6 +669,8 @@ internal sealed partial class ShardRootGrain(
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive);
             totalDeleted += result.Deleted;
+            if (result.Deleted > 0)
+                await MarkLeafDirtyAsync(leafId);
 
             if (result.PastRange)
                 break;

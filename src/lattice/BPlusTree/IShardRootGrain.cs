@@ -609,4 +609,44 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// recorded and an empty moved-away-slots map).
     /// </summary>
     Task<List<int>> GetSplitForwardTargetsAsync();
+
+    // ==========================================================================
+    //  Compaction dirty-leaf fast-path primitive
+    // ==========================================================================
+    //  Used by TombstoneCompactionGrain to skip activating leaves with no
+    //  recent deletes. The shard root populates an in-state dirty set as
+    //  Delete mutations route through SetAsync/DeleteAsync/DeleteRangeAsync;
+    //  the coordinator pulls a snapshot at the start of each shard's first
+    //  batch and clears it (HLC-gated) when the shard's walk completes, so
+    //  deletes that arrive mid-pass are retained for the next pass.
+
+    /// <summary>
+    /// Returns the current dirty-leaves set for this shard - the leaf grain
+    /// ids that have observed at least one routed <c>Delete</c> mutation
+    /// since the most recent successful drain - paired with the HLC
+    /// watermark at the moment of capture. The compaction coordinator
+    /// walks the returned leaves directly instead of activating every
+    /// leaf in the shard's chain. An empty list with a zero
+    /// <see cref="DirtyLeavesSnapshot.ObservedAdvance"/> signals the
+    /// coordinator to fall back to the legacy chain walk; the leaf-walk
+    /// fallback then exercises the fast path on the next pass once the
+    /// shard root has accumulated dirty signal.
+    /// </summary>
+    Task<DirtyLeavesSnapshot> GetDirtyLeavesSinceLastCompactionAsync();
+
+    /// <summary>
+    /// Drains the shard-root dirty-leaves set up to (and including) the
+    /// HLC watermark <paramref name="advance"/>. Entries whose recorded
+    /// mark HLC compares as less-than-or-equal to <paramref name="advance"/>
+    /// are removed; entries marked with a strictly greater HLC are
+    /// preserved so the next compaction pass picks them up. Persists the
+    /// new <see cref="State.ShardRootState.LastDirtyAdvance"/> watermark
+    /// alongside the trimmed dictionary in a single state write.
+    /// Idempotent: a second call with the same or earlier watermark is
+    /// a no-op.
+    /// </summary>
+    /// <param name="advance">The HLC watermark observed by the
+    /// coordinator's snapshot. Entries marked at or before this HLC
+    /// are removed.</param>
+    Task ClearDirtyLeavesUpToAsync(HybridLogicalClock advance);
 }
