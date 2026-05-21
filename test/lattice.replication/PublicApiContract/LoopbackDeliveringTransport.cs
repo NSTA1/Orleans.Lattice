@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Replication.Tests.PublicApiContract;
@@ -17,13 +19,15 @@ namespace Orleans.Lattice.Replication.Tests.PublicApiContract;
 /// Routing works via a static cluster-id -> <see cref="IServiceProvider"/>
 /// map populated at silo startup (one entry per silo, last-writer-wins).
 /// On <see cref="SendAsync(ReplicationBatch, CancellationToken)"/> the
-/// transport looks up the destination cluster's services, resolves the
-/// destination's <see cref="IReplicationBatchEncoder"/> and
-/// <see cref="IReplicationApplier"/>, decodes the envelope, and
-/// invokes <see cref="IReplicationApplier.ApplyBatchAsync"/>. The
-/// returned <see cref="ReplicationAck"/> carries the receiver-side
-/// high-water-mark so the sender's per-peer cursor advances as it
-/// would over a real wire.
+/// transport looks up the destination cluster's services and decodes
+/// the batch's pre-encoded entry segments through the destination's
+/// <see cref="IWalRecordEncoder"/>; the resulting <see cref="WalRecord"/>
+/// list is handed to <see cref="IReplicationApplier.ApplyBatchAsync"/>
+/// and the returned <see cref="ReplicationAck"/> carries the
+/// receiver-side high-water-mark so the sender's per-peer cursor
+/// advances as it would over a real wire. An empty batch with no
+/// <see cref="ReplicationBatch.EncodedEnvelope"/> is honoured as a
+/// heartbeat without invoking the applier.
 /// </para>
 /// </summary>
 internal sealed class LoopbackDeliveringTransport : IReplicationTransport
@@ -143,26 +147,43 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
             return new ReplicationAck { Accepted = false, HighestAppliedHlc = default };
         }
 
-        // Empty payload (heartbeat / keep-alive) - accept without
-        // decoding so the wire-shape contract for empty batches is
-        // honoured end-to-end.
-        if (batch.Payload.IsEmpty)
+        // Empty payload AND no framing-only encoded envelope: this is
+        // the heartbeat / no-op tick shape. Accept without invoking
+        // the applier so the wire-shape contract for empty batches
+        // is honoured end-to-end. Production today never sends this
+        // shape (the shipper only constructs a batch when it has
+        // segments to ship), but the cheap guard documents the
+        // contract and keeps the routing-failure path narrow.
+        if (batch.Payload.IsEmpty && batch.EncodedEnvelope is null)
         {
             return new ReplicationAck { Accepted = true, HighestAppliedHlc = default };
         }
 
+        // Steady-state ship path: the shipper writes only
+        // EncodedEnvelope (Payload is always empty, Envelope is always
+        // null on the framing-only ship path). Decode each pre-encoded
+        // entry segment via the destination's canonical
+        // IWalRecordEncoder so the apply path sees the same WalRecord
+        // shape it would have got from a typed envelope decode.
         try
         {
-            var encoder = dest.GetRequiredService<IReplicationBatchEncoder>();
+            var encoded = batch.EncodedEnvelope!.Value;
             var applier = dest.GetRequiredService<IReplicationApplier>();
-            var envelope = encoder.Decode(batch.Payload);
+            var walEncoder = dest.GetRequiredService<IWalRecordEncoder>();
 
-            var result = await applier.ApplyBatchAsync(envelope.Entries, cancellationToken).ConfigureAwait(false);
+            var segments = encoded.EncodedEntries.Span;
+            var decoded = new WalRecord[segments.Length];
+            for (var i = 0; i < segments.Length; i++)
+            {
+                decoded[i] = walEncoder.Decode(segments[i]);
+            }
+
+            var result = await applier.ApplyBatchAsync(decoded, cancellationToken).ConfigureAwait(false);
             Deliveries.Enqueue(new DeliveryRecord(
                 batch.TargetClusterId,
                 batch.TreeName,
                 batch.OriginClusterId,
-                envelope.Entries.Count,
+                decoded.Length,
                 result));
 
             return new ReplicationAck

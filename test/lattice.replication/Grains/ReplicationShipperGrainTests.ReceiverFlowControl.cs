@@ -44,7 +44,7 @@ public partial class ReplicationShipperGrainTests
         // Tick 1: one entry, ships it, picks up the hint of 2.
         feed.Append(MakeEntry("k1", ticks: 1));
         await grain.OnDoorbellAsync(CancellationToken.None);
-        Assert.That(encoder.LastEnvelope!.Value.Entries.Count, Is.EqualTo(1),
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "tick 1 is unhinted; the shipper drains everything available");
 
         // Tick 2: three new entries available. The previous ack's
@@ -54,7 +54,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k4", ticks: 4));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        Assert.That(encoder.LastEnvelope!.Value.Entries.Count, Is.EqualTo(2),
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "tick 2 must respect the receiver's suggested cap");
     }
 
@@ -89,7 +89,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k4", ticks: 4));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        Assert.That(encoder.LastEnvelope!.Value.Entries.Count, Is.EqualTo(opts.ShipBatchSize),
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "an oversize hint must never exceed the configured ShipBatchSize");
     }
 
@@ -127,7 +127,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k5", ticks: 5));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        Assert.That(encoder.LastEnvelope!.Value.Entries.Count, Is.EqualTo(opts.ShipBatchSize),
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "a zero hint must collapse back to the configured ShipBatchSize");
     }
 
@@ -164,7 +164,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
         await grain.OnDoorbellAsync(CancellationToken.None);
-        Assert.That(encoder.LastEnvelope!.Value.Entries.Count, Is.EqualTo(1),
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "throttle is active");
 
         // Tick 3: receiver recovered; null hint clears the clamp.
@@ -187,7 +187,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k10", ticks: 10));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        Assert.That(encoder.LastEnvelope!.Value.Entries.Count, Is.EqualTo(opts.ShipBatchSize),
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "recovered receiver returning null hint must restore full ShipBatchSize");
     }
 

@@ -42,22 +42,20 @@ public class ShipperPersistenceIntegrationTests
         public List<long> SentHlcSequence { get; } = new();
         public List<int> BatchSizes { get; } = new();
         public Func<int, ReplicationAck>? AckOverride { get; set; }
-        private readonly TestEncoder _encoder;
+        private readonly StubWalRecordEncoder _walEncoder;
 
-        public RecordingTransport(TestEncoder encoder)
+        public RecordingTransport(StubWalRecordEncoder walEncoder)
         {
-            _encoder = encoder;
+            _walEncoder = walEncoder;
         }
 
         public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
         {
-            // The TestEncoder records the entries it's handed via a
-            // session list captured from the previous Encode call.
-            var entries = _encoder.LastEncoded;
-            BatchSizes.Add(entries.Count);
-            foreach (var e in entries)
+            var seg = batch.EncodedEnvelope!.Value.EncodedEntries.Span;
+            BatchSizes.Add(seg.Length);
+            for (var i = 0; i < seg.Length; i++)
             {
-                SentHlcSequence.Add(e.Timestamp.WallClockTicks);
+                SentHlcSequence.Add(_walEncoder.Decode(seg[i]).Timestamp.WallClockTicks);
             }
             var ack = AckOverride?.Invoke(BatchSizes.Count - 1)
                 ?? new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
@@ -66,20 +64,51 @@ public class ShipperPersistenceIntegrationTests
     }
 
     /// <summary>
-    /// Pass-through encoder that captures the entry list of the last
-    /// batch it encoded. The transport reads that list to record the
-    /// shipped HLC sequence so the assertion can verify delivery order
-    /// and idempotence-folding.
+    /// Stash-based <see cref="IWalRecordEncoder"/> shared between the
+    /// in-process WAL stub and the shipper grain. Each Encode call
+    /// stamps a 4-byte little-endian stash index that Decode looks up
+    /// to recover the original record - no Orleans serializer is
+    /// required.
+    /// </summary>
+    private sealed class StubWalRecordEncoder : IWalRecordEncoder
+    {
+        private readonly List<WalRecord> _stash = new();
+
+        public byte[] EncodeToBytes(WalRecord record)
+        {
+            var idx = _stash.Count;
+            _stash.Add(record);
+            var bytes = new byte[4];
+            BitConverter.TryWriteBytes(bytes, idx);
+            return bytes;
+        }
+
+        public void Encode(in WalRecord record, IBufferWriter<byte> writer)
+        {
+            ArgumentNullException.ThrowIfNull(writer);
+            var idx = _stash.Count;
+            _stash.Add(record);
+            var span = writer.GetSpan(4);
+            BitConverter.TryWriteBytes(span, idx);
+            writer.Advance(4);
+        }
+
+        public WalRecord Decode(ReadOnlySpan<byte> encoded)
+            => _stash[BitConverter.ToInt32(encoded)];
+    }
+
+    /// <summary>
+    /// Pass-through replication-batch encoder; retained on the shipper
+    /// constructor signature even though the framing-only ship path
+    /// no longer drives it on the steady-state send.
     /// </summary>
     private sealed class TestEncoder : IReplicationBatchEncoder
     {
         public string ContentType => "application/x-test";
         public int CurrentWireVersion => 1;
-        public List<WalRecord> LastEncoded { get; private set; } = new();
 
         public void Encode(ReplicationBatchEnvelope envelope, IBufferWriter<byte> writer)
         {
-            LastEncoded = new List<WalRecord>(envelope.Entries);
             writer.Write(new byte[] { 1 });
         }
 
@@ -90,10 +119,12 @@ public class ShipperPersistenceIntegrationTests
     /// <summary>
     /// In-process <see cref="IWalShardGrain"/> stand-in. The same
     /// instance is reused across activations to model "WAL persists
-    /// across silo crash".
+    /// across silo crash". Shipper-side reads project entries through
+    /// the shared <see cref="StubWalRecordEncoder"/>.
     /// </summary>
-    private sealed class WalShardStub : IWalShardGrain
+    private sealed class WalShardStub(StubWalRecordEncoder walEncoder) : IWalShardGrain
     {
+        private readonly StubWalRecordEncoder _walEncoder = walEncoder;
         public List<WalRecord> Entries { get; } = new();
 
         public void Append(WalRecord entry) => Entries.Add(entry);
@@ -105,7 +136,34 @@ public class ShipperPersistenceIntegrationTests
         }
 
         public Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
-            => throw new NotImplementedException("ReadShippingAsync is not exercised by this fixture.");
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (fromSequence >= Entries.Count)
+            {
+                return Task.FromResult(new WalShardShippingPage
+                {
+                    Entries = Array.Empty<WalShardShippingEntry>(),
+                    NextSequence = fromSequence,
+                });
+            }
+            var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
+            var capacity = endExclusive - (int)fromSequence;
+            var entries = new WalShardShippingEntry[capacity];
+            for (var i = 0; i < capacity; i++)
+            {
+                var seq = fromSequence + i;
+                entries[i] = new WalShardShippingEntry
+                {
+                    Sequence = seq,
+                    EncodedPayload = _walEncoder.EncodeToBytes(Entries[(int)seq]),
+                };
+            }
+            return Task.FromResult(new WalShardShippingPage
+            {
+                Entries = entries,
+                NextSequence = endExclusive,
+            });
+        }
 
         public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
         {
@@ -119,30 +177,7 @@ public class ShipperPersistenceIntegrationTests
         }
 
         public Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (fromSequence >= Entries.Count)
-            {
-                return Task.FromResult(WalShardPage.Empty(fromSequence));
-            }
-            var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
-            var capacity = endExclusive - (int)fromSequence;
-            var entries = new WalShardSequencedEntry[capacity];
-            for (var i = 0; i < capacity; i++)
-            {
-                var seq = fromSequence + i;
-                entries[i] = new WalShardSequencedEntry
-                {
-                    Sequence = seq,
-                    Entry = Entries[(int)seq],
-                };
-            }
-            return Task.FromResult(new WalShardPage
-            {
-                Entries = entries,
-                NextSequence = endExclusive,
-            });
-        }
+            => throw new NotSupportedException("ReadAsync is not exercised by the framing-only shipper path.");
 
         public Task<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);
@@ -192,6 +227,7 @@ public class ShipperPersistenceIntegrationTests
         FakePersistentState<ReplicationShipperState> persistent,
         IReplicationTransport transport,
         IReplicationBatchEncoder encoder,
+        IWalRecordEncoder walRecordEncoder,
         IWalCursorRegistry registry,
         IGrainFactory factory,
         IOptionsMonitor<LatticeReplicationOptions> monitor)
@@ -202,7 +238,7 @@ public class ShipperPersistenceIntegrationTests
             ctx,
             Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, persistent,
+            monitor, transport, encoder, walRecordEncoder, registry, factory, persistent,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return grain;
@@ -230,16 +266,17 @@ public class ShipperPersistenceIntegrationTests
             ShipBatchSize = 1,
             ReplogPartitions = 1,
         };
-        var shards = new[] { new WalShardStub() };
+        var walEncoder = new StubWalRecordEncoder();
+        var shards = new[] { new WalShardStub(walEncoder) };
         for (var i = 1; i <= totalEntries; i++)
         {
             shards[0].Append(MakeEntry($"k{i}", ticks: i));
         }
         var encoder = new TestEncoder();
-        var transport = new RecordingTransport(encoder);
+        var transport = new RecordingTransport(walEncoder);
         var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
-        var grainA = BuildGrain(persistent, transport, encoder, registry,
+        var grainA = BuildGrain(persistent, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         // Pump 7 times - first flush at tick 4, then 3 pending writes
@@ -270,7 +307,7 @@ public class ShipperPersistenceIntegrationTests
         {
             State = crashedDurableState,
         };
-        var grainB = BuildGrain(persistent2, transport, encoder, registry,
+        var grainB = BuildGrain(persistent2, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         // Recover: pump enough times for the post-crash activation to
@@ -330,16 +367,17 @@ public class ShipperPersistenceIntegrationTests
             ShipBatchSize = 1,
             ReplogPartitions = 1,
         };
-        var shards = new[] { new WalShardStub() };
+        var walEncoder = new StubWalRecordEncoder();
+        var shards = new[] { new WalShardStub(walEncoder) };
         for (var i = 1; i <= totalEntries; i++)
         {
             shards[0].Append(MakeEntry($"k{i}", ticks: i));
         }
         var encoder = new TestEncoder();
-        var transport = new RecordingTransport(encoder);
+        var transport = new RecordingTransport(walEncoder);
         var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
-        var grainA = BuildGrain(persistent, transport, encoder, registry,
+        var grainA = BuildGrain(persistent, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         // Pump every entry under interval=100 (no organic flush).
@@ -368,7 +406,7 @@ public class ShipperPersistenceIntegrationTests
         {
             State = inheritedState,
         };
-        var grainB = BuildGrain(persistent2, transport, encoder, registry,
+        var grainB = BuildGrain(persistent2, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         // Drive several pumps against a now-fully-shipped WAL; the
@@ -400,16 +438,17 @@ public class ShipperPersistenceIntegrationTests
             ShipBatchSize = 1,
             ReplogPartitions = 1,
         };
-        var shards = new[] { new WalShardStub() };
+        var walEncoder = new StubWalRecordEncoder();
+        var shards = new[] { new WalShardStub(walEncoder) };
         for (var i = 1; i <= totalEntries; i++)
         {
             shards[0].Append(MakeEntry($"k{i}", ticks: i));
         }
         var encoder = new TestEncoder();
-        var transport = new RecordingTransport(encoder);
+        var transport = new RecordingTransport(walEncoder);
         var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
-        var grainA = BuildGrain(persistent, transport, encoder, registry,
+        var grainA = BuildGrain(persistent, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         for (var i = 0; i < totalEntries; i++)
@@ -440,7 +479,7 @@ public class ShipperPersistenceIntegrationTests
         {
             State = inheritedState,
         };
-        var grainB = BuildGrain(persistent2, transport, encoder, registry,
+        var grainB = BuildGrain(persistent2, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         for (var i = 0; i < totalEntries + 4; i++)
@@ -474,7 +513,8 @@ public class ShipperPersistenceIntegrationTests
             ShipBatchSize = 4,
             ReplogPartitions = 3,
         };
-        var shards = new[] { new WalShardStub(), new WalShardStub(), new WalShardStub() };
+        var walEncoder = new StubWalRecordEncoder();
+        var shards = new[] { new WalShardStub(walEncoder), new WalShardStub(walEncoder), new WalShardStub(walEncoder) };
         // Spread HLCs 1..12 round-robin across the three partitions.
         // Partition 0: 1, 4, 7, 10
         // Partition 1: 2, 5, 8, 11
@@ -484,10 +524,10 @@ public class ShipperPersistenceIntegrationTests
             shards[(hlc - 1) % 3].Append(MakeEntry($"k{hlc}", ticks: hlc));
         }
         var encoder = new TestEncoder();
-        var transport = new RecordingTransport(encoder);
+        var transport = new RecordingTransport(walEncoder);
         var registry = Substitute.For<IWalCursorRegistry>();
         var persistent = new FakePersistentState<ReplicationShipperState>();
-        var grainA = BuildGrain(persistent, transport, encoder, registry,
+        var grainA = BuildGrain(persistent, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         // Pre-crash pumps - drain a few batches.
@@ -509,7 +549,7 @@ public class ShipperPersistenceIntegrationTests
         {
             State = crashedState,
         };
-        var grainB = BuildGrain(persistent2, transport, encoder, registry,
+        var grainB = BuildGrain(persistent2, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
         // Drain everything else.

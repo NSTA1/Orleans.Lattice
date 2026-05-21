@@ -110,28 +110,11 @@ The wire format inside `Payload` is the concern of [`IReplicationBatchEncoder`](
 
 The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.Grpc` sub-package - see [`grpc-push-transport.md`](grpc-push-transport.md) for topology, registration, and operations notes.
 
-## Typed-transport capability seam
+## Framing-only ship path
 
-Transports that consume the typed `ReplicationBatchEnvelope` directly (the gRPC streaming push transport is the canonical example) implement the additive `ITypedReplicationTransport` interface:
+The shipper's outbound path is unconditionally framing-only. Every batch the shipper hands to `SendAsync` carries a populated `ReplicationBatch.EncodedEnvelope` (a fixed 32-byte header plus length-prefixed pre-encoded entry segments produced by `IReplicationBatchEncoder.EncodeFraming`). Each entry's bytes are the verbatim segment the WAL stored at append time via `IWalStorageProvider.ReadShippingAsync` - no per-tick re-encode through an envelope-level Orleans serializer call, and no producer-side typed-envelope path. `ReplicationBatch.Payload` and `ReplicationBatch.Envelope` remain on the contract for receiver-side and test-fixture compatibility, but the producer-side shipper writes only `EncodedEnvelope`.
 
-```csharp verify
-sealed class MyTypedTransport : ITypedReplicationTransport
-{
-    public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
-        => SendTypedAsync(batch, cancellationToken);
-
-    public Task<ReplicationAck> SendTypedAsync(ReplicationBatch batch, CancellationToken cancellationToken)
-    {
-        // Consume batch.Envelope directly; batch.Payload is empty on this entry point.
-        _ = batch.Envelope;
-        return Task.FromResult(default(ReplicationAck));
-    }
-}
-```
-
-The outbound shipper probes the registered transport for this interface at activation. When the transport implements it, the shipper skips the per-tick `IReplicationBatchEncoder.Encode(envelope, _writeBuffer)` call that previously populated `ReplicationBatch.Payload` purely so legacy bytes-only transports could read it. `ReplicationBatch.Payload` is then `ReadOnlyMemory<byte>.Empty` on `SendTypedAsync`; the typed envelope is the authoritative payload. Bytes-only transports (the default `NoOpReplicationTransport`, host-supplied HTTP-framed transports, etc.) continue to receive an encoded `Payload` and an unchanged contract.
-
-The seam is strictly additive: every existing `IReplicationTransport` implementation keeps working without changes. Hosts that author a typed transport only need to implement the marker interface and route their bytes-shaped entry point to the typed one (or throw if the legacy seam is never exercised).
+Custom transports that want to consume the framing bytes directly read them off `ReplicationBatch.EncodedEnvelope`. There is no separate typed-transport interface or sender-side capability probe - the shipper does not branch on transport type at activation. Bytes-only transports (the default `NoOpReplicationTransport`, host-supplied HTTP-framed transports) lift the framing bytes off `EncodedEnvelope` and forward them as-is.
 
 ## Caveats
 

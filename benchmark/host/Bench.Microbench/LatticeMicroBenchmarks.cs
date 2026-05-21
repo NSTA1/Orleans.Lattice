@@ -1514,11 +1514,11 @@ public class LatticeMicroBenchmarks
     // entries via OrleansBinaryWalRecordEncoder once in [GlobalSetup] -
     // mirroring the production reality that the shipper retrieves
     // already-encoded bytes from IWalStorageProvider.ReadEncodedAsync
-    // when OneEncodeFastPath is true and from ReadAsync (decoded) when
-    // it is false; the typed-envelope path then has to re-encode every
-    // entry through the envelope-level Orleans serializer call, while
-    // the framing-only path hands the existing segments to the
-    // marshaller verbatim.
+    // (the unconditional shipper path post R-114/R-115); the typed-
+    // envelope baseline shows what the shipper used to pay before
+    // R-114 - re-encoding every entry through the envelope-level
+    // Orleans serializer call - while the framing-only path hands the
+    // existing segments to the marshaller verbatim.
     //
     // Parameter sweep: 16 / 64 / 256 / 1024 entries at 64 B / 1 KB /
     // 16 KB payload. The 1024 x 64 B and 16 x 16 KB corners answer the
@@ -1577,9 +1577,10 @@ public class LatticeMicroBenchmarks
                 // strongly-typed records for the typed-envelope path,
                 // and the same records re-projected to ArraySegment<byte>
                 // for the framing path. This mirrors what the shipper
-                // sees when OneEncodeFastPath is false (decoded entries
-                // from ReadAsync) and when true (segment bytes from
-                // ReadEncodedAsync). Encoding per-entry through the WAL
+                // sees: segment bytes from ReadShippingAsync are the
+                // sole input today, but the typed-envelope baseline
+                // needs the strongly-typed records the pre-R-114
+                // shipper drained. Encoding per-entry through the WAL
                 // record encoder reproduces the exact bytes the in-memory
                 // and Azure-Table providers retain.
                 //
@@ -1654,7 +1655,7 @@ public class LatticeMicroBenchmarks
     /// long. Each invocation Orleans-serialises every entry element-
     /// wise into a fresh <see cref="System.Buffers.ArrayBufferWriter{T}"/>,
     /// matching what <c>ReplicationShipperGrain.PumpOnceAsync</c> pays
-    /// today on the typed-envelope path (<c>OneEncodeFastPath = false</c>).
+    /// paid before R-114 on the typed-envelope path.
     /// </summary>
     [Benchmark(Description = "Ship typed envelope (today)")]
     [ArgumentsSource(nameof(ShipArguments))]
@@ -1679,8 +1680,8 @@ public class LatticeMicroBenchmarks
     /// fixture's segments were produced by
     /// <c>OrleansBinaryWalRecordEncoder.Encode</c> once per entry at
     /// fixture-build time, mirroring what the shipper receives from
-    /// <c>IWalStorageProvider.ReadEncodedAsync</c> when
-    /// <c>OneEncodeFastPath = true</c> - so the per-invocation cost
+    /// <c>IWalStorageProvider.ReadEncodedAsync</c> (the unconditional
+    /// shipper read path after R-114/R-115) - so the per-invocation cost
     /// captured here is purely the framing-header write plus the
     /// length-prefixed segment copies, with no per-entry Orleans
     /// serializer call.

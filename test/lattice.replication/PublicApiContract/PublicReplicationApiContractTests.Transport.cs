@@ -43,7 +43,11 @@ public partial class PublicReplicationApiContractTests
             Assert.That(batch.TargetClusterId, Is.EqualTo(PublicReplicationApiClusterFixture.SiteBClusterId));
             Assert.That(batch.OriginClusterId, Is.EqualTo(PublicReplicationApiClusterFixture.SiteAClusterId));
             Assert.That(batch.TreeName, Is.EqualTo(treeId));
-            Assert.That(batch.Payload.IsEmpty, Is.False);
+            // The framing-only ship path leaves Payload empty and
+            // populates EncodedEnvelope instead. Assert the wire
+            // shape carries entries via the framing slot.
+            Assert.That(batch.EncodedEnvelope, Is.Not.Null);
+            Assert.That(batch.EncodedEnvelope!.Value.EncodedEntries.Length, Is.GreaterThan(0));
         });
     }
 

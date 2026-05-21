@@ -125,7 +125,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(c => new ReplicationAck
             {
                 Accepted = true,
-                HighestAppliedHlc = c.Arg<ReplicationBatch>().Payload.IsEmpty
+                HighestAppliedHlc = c.Arg<ReplicationBatch>().EncodedEnvelope is null || c.Arg<ReplicationBatch>().EncodedEnvelope!.Value.EncodedEntries.IsEmpty
                     ? HybridLogicalClock.Zero
                     : new HybridLogicalClock { WallClockTicks = 1000, Counter = 0 },
             });
@@ -186,7 +186,7 @@ public partial class ReplicationShipperGrainTests
         // The HLC filter dropped entries 0..4 (HLC 1..5 all <= cursor 5);
         // only entries 5..7 (HLC 6..8) made it into the batch.
         Assert.That(captured, Is.Not.Null);
-        Assert.That(captured!.Value.Payload.IsEmpty, Is.False);
+        Assert.That(captured!.Value.EncodedEnvelope, Is.Not.Null);
     }
 
     // K-way HLC merge across two partitions ----------------------------
@@ -219,10 +219,11 @@ public partial class ReplicationShipperGrainTests
             };
         }
         var monitor = Monitor(resolved);
+        var walEncoder = new StubWalRecordEncoder();
         var feeds = new StubReplogShardGrain[partitions];
         for (var i = 0; i < partitions; i++)
         {
-            feeds[i] = new StubReplogShardGrain();
+            feeds[i] = new StubReplogShardGrain(walEncoder);
         }
         var transport = Substitute.For<IReplicationTransport>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
@@ -234,34 +235,41 @@ public partial class ReplicationShipperGrainTests
         var grain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState,
+            monitor, transport, encoder, walEncoder, registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, fakeState, feeds, transport, encoder);
     }
 
     /// <summary>
-    /// Test-only encoder that records the entry list reference handed
-    /// to it. Lets the merge tests inspect the actual order the merge
-    /// loop produced.
+    /// Helper that captures the <see cref="ReplicationBatch"/> handed
+    /// to the transport on the next pump tick, decoding the framing-
+    /// only envelope's entry segments through the supplied
+    /// <see cref="StubWalRecordEncoder"/> so tests can inspect the
+    /// merge order the shipper produced.
     /// </summary>
-    private sealed class OrderRecordingEncoder : IReplicationBatchEncoder
+    private static List<WalRecord> CaptureMergeOrder(
+        IReplicationTransport transport,
+        StubWalRecordEncoder walEncoder,
+        long ackHlc)
     {
-        public string ContentType => "application/x-test-order";
-        public int CurrentWireVersion => 1;
-        public List<WalRecord> CapturedOrder { get; } = new();
-
-        public void Encode(ReplicationBatchEnvelope envelope, System.Buffers.IBufferWriter<byte> writer)
-        {
-            foreach (var e in envelope.Entries)
+        var captured = new List<WalRecord>();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(c =>
             {
-                CapturedOrder.Add(e);
-            }
-            writer.Write(new byte[] { 1 });
-        }
-
-        public ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload) =>
-            throw new NotSupportedException();
+                var batch = c.Arg<ReplicationBatch>();
+                var seg = batch.EncodedEnvelope!.Value.EncodedEntries.Span;
+                for (var i = 0; i < seg.Length; i++)
+                {
+                    captured.Add(walEncoder.Decode(seg[i]));
+                }
+                return new ReplicationAck
+                {
+                    Accepted = true,
+                    HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = ackHlc, Counter = 0 },
+                };
+            });
+        return captured;
     }
 
     [Test]
@@ -278,7 +286,8 @@ public partial class ReplicationShipperGrainTests
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
         var monitor = Monitor(resolved);
-        var feeds = new[] { new StubReplogShardGrain(), new StubReplogShardGrain() };
+        var walEncoder = new StubWalRecordEncoder();
+        var feeds = new[] { new StubReplogShardGrain(walEncoder), new StubReplogShardGrain(walEncoder) };
         // Interleave entries: partition 0 holds HLCs 1, 3, 5;
         // partition 1 holds HLCs 2, 4, 6. The k-way merge must
         // produce 1, 2, 3, 4, 5, 6.
@@ -289,20 +298,15 @@ public partial class ReplicationShipperGrainTests
         feeds[1].Append(MakeEntry("p1/b", ticks: 4));
         feeds[1].Append(MakeEntry("p1/c", ticks: 6));
         var transport = Substitute.For<IReplicationTransport>();
-        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
-            .Returns(new ReplicationAck
-            {
-                Accepted = true,
-                HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 6, Counter = 0 },
-            });
-        var encoder = new OrderRecordingEncoder();
+        var captured = CaptureMergeOrder(transport, walEncoder, ackHlc: 6);
+        var encoder = new TestEncoder();
         var registry = Substitute.For<IWalCursorRegistry>();
         var fakeState = new FakePersistentState<ReplicationShipperState>();
         var factory = BuildGrainFactory(null, feeds, Tree);
         var grain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, transport, encoder, Substitute.For<IWalRecordEncoder>(), registry, factory, fakeState,
+            monitor, transport, encoder, walEncoder, registry, factory, fakeState,
             new ReplicationPeerStats());
         grain.InitializeForTesting(Tree, Peer);
 
@@ -310,8 +314,8 @@ public partial class ReplicationShipperGrainTests
 
         // The merge-loop must emit entries in HLC-ascending order
         // regardless of which partition they came from.
-        Assert.That(encoder.CapturedOrder.Count, Is.EqualTo(6));
-        var hlcs = encoder.CapturedOrder.Select(e => e.Timestamp.WallClockTicks).ToArray();
+        Assert.That(captured.Count, Is.EqualTo(6));
+        var hlcs = captured.Select(e => e.Timestamp.WallClockTicks).ToArray();
         Assert.That(hlcs, Is.EqualTo(new long[] { 1, 2, 3, 4, 5, 6 }));
     }
 
@@ -410,7 +414,8 @@ public partial class ReplicationShipperGrainTests
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
         var monitor = Monitor(resolved2);
-        var stubs = new[] { new StubReplogShardGrain(), new StubReplogShardGrain() };
+        var freshWalEncoder = new StubWalRecordEncoder();
+        var stubs = new[] { new StubReplogShardGrain(freshWalEncoder), new StubReplogShardGrain(freshWalEncoder) };
         // Partition 0 already at sequence 1; new entry at sequence 1.
         // Partition 1 fresh, entry at sequence 0.
         stubs[0].Append(MakeEntry("p0/a", ticks: 1)); // already consumed
@@ -426,7 +431,7 @@ public partial class ReplicationShipperGrainTests
         var freshGrain = new ReplicationShipperGrain(
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
-            monitor, freshTransport, new TestEncoder(), Substitute.For<IWalRecordEncoder>(), Substitute.For<IWalCursorRegistry>(),
+            monitor, freshTransport, new TestEncoder(), freshWalEncoder, Substitute.For<IWalCursorRegistry>(),
             BuildGrainFactory(null, stubs, Tree), fakeState,
             new ReplicationPeerStats());
         freshGrain.InitializeForTesting(Tree, Peer);
@@ -504,7 +509,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(c => new ReplicationAck
             {
                 Accepted = true,
-                HighestAppliedHlc = c.Arg<ReplicationBatch>().Payload.IsEmpty
+                HighestAppliedHlc = c.Arg<ReplicationBatch>().EncodedEnvelope is null || c.Arg<ReplicationBatch>().EncodedEnvelope!.Value.EncodedEntries.IsEmpty
                     ? HybridLogicalClock.Zero
                     : new HybridLogicalClock { WallClockTicks = ackHlc.WallClockTicks, Counter = 0 },
             });

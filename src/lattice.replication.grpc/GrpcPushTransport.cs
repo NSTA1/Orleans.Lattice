@@ -48,7 +48,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// the transport.
 /// </para>
 /// </remarks>
-internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposable
+internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
 {
     private readonly LatticeReplicationGrpcMethod _method;
     private readonly IReplicationBatchEncoder _encoder;
@@ -83,10 +83,6 @@ internal sealed class GrpcPushTransport : ITypedReplicationTransport, IDisposabl
 
     /// <inheritdoc />
     public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
-        => SendCoreAsync(batch, cancellationToken);
-
-    /// <inheritdoc />
-    public Task<ReplicationAck> SendTypedAsync(ReplicationBatch batch, CancellationToken cancellationToken)
         => SendCoreAsync(batch, cancellationToken);
 
     private async Task<ReplicationAck> SendCoreAsync(ReplicationBatch batch, CancellationToken cancellationToken)
