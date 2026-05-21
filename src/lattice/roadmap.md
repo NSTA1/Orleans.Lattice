@@ -613,7 +613,7 @@ This entry adds the missing **policy controls** (ratio-based and size-based pre-
 
 ---
 
-### F-072 - Configurable compaction tick cadence *(depends on F-071 ✓)*
+### F-072 ✓ shipped - Configurable compaction tick cadence *(depends on F-071 ✓)*
 **Operability / opt-in (replace the hard-coded 2-second per-shard tick interval inside `TombstoneCompactionGrain` with a per-tree option, and document why the cadence is a scheduler-fairness knob - not a grain-deactivation knob)**
 
 `TombstoneCompactionGrain` walks one shard per grain-timer tick during a compaction pass and waits a hard-coded `TimeSpan.FromSeconds(2)` between ticks. The constant is duplicated three times (initial pass start, post-`RequestCompactionAsync` start, and `OnReminderTickAsync` mid-pass restart). The current docs justify the cadence by referencing Orleans' "normal idle-collection schedule" for leaves activated by the previous tick, but that justification is incorrect - Orleans' default `GrainCollectionOptions.CollectionAge` is **2 hours**, four orders of magnitude larger than the 2-second tick gap, so leaves activated on tick *N* are guaranteed still activated on tick *N+1* regardless of the gap. Three concrete operability problems fall out:
@@ -645,6 +645,72 @@ This entry adds a single per-tree option (`LatticeOptions.CompactionShardTickInt
 - `docs/lattice/tombstone-compaction.md` is updated in the same commit with the correction and the worked-example numbers above.
 
 **Risk surface.** A misconfigured tick interval (say 1 ms) could starve the rest of the compactor grain's scheduler quota by never yielding for long enough between shard walks. The 100 ms floor closes that risk explicitly. There is no wire-format risk: the option is silo-side configuration only and does not touch any persisted state. There is no replication risk: cadence is a producer-side concern that does not affect WAL envelope shape or replication semantics.
+
+---
+
+### F-073 - Intra-shard leaf-walk batching for tombstone compaction *(depends on F-072 ✓)*
+**Operability / opt-in (cap peak concurrent leaf activations during a compaction pass by inserting scheduler yields *within* a shard's leaf walk, not just between shards)**
+
+`TombstoneCompactionGrain` walks one shard per timer tick, and within a shard it walks the entire leaf chain back-to-back via `IBPlusLeafGrain.GetNextSiblingAsync` + `CompactTombstonesAsync`. F-072 added a per-tree `CompactionShardTickInterval` to govern the gap *between* shards, but the leaf walk *within* a shard still runs as fast as the per-leaf RPCs complete. Two operability problems fall out:
+
+1. **Peak concurrent leaf activations is unbounded by tree size.** Every leaf in a shard is activated in rapid succession; if the full pass completes inside one `GrainCollectionOptions.CollectionAge` window (default 15 minutes), the entire leaf set of the tree is effectively activated at once. On a 50 000-leaf tree this is a directory and silo-memory shock that scales with tree size, not with deletion volume. The F-072 documentation now calls this out honestly, but the only knob the operator has today is to widen `CompactionShardTickInterval` (which spreads shards but not leaves within a shard) or accept the activation peak.
+2. **The peak is paid even on trees with no recent deletes.** A leaf with zero tombstones returns from `CompactTombstonesAsync` via the `LastCompactionVersion` fast-path with effectively no work, but the activation cost (state read + dispatcher overhead per leaf) is paid regardless. On a steady-state tree where most leaves have nothing to do, the dominant cost of a pass is activating idle leaves.
+
+This entry adds a single per-tree option (`LatticeOptions.CompactionLeafBatchSize`, default 64, floor 1) that caps how many leaves the coordinator visits within a single shard before yielding for `CompactionShardTickInterval` (the same gap used between shards). The leaf walk resumes on the next timer tick from the persisted in-shard cursor (`NextLeafIdInShard`), so progress survives silo crashes the same way `NextShardIndex` does. The default 64 reproduces today's behaviour for typical shard sizes (most shards have <= 64 leaves), so existing deployments do not change shape. On large shards the new behaviour caps peak activations to roughly `min(leaves walked within last CollectionAge, CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval))`, which on a 1024-shard tree at default settings drops peak concurrent activations from `O(leaves)` to a few thousand regardless of tree size.
+
+**Scope.**
+
+1. **Per-tree option.** New `LatticeOptions.CompactionLeafBatchSize` (`int`, default 64, floor 1). Validated in `LatticeOptionsResolver`; values below 1 are clamped to 1 with a one-shot warning per tree per process. Propagated through `ResolvedLatticeOptions` and snapshotted at pass start alongside `CompactionShardTickInterval` (matches F-072's snapshot-at-pass-start semantics).
+2. **In-shard cursor on `TombstoneCompactionState`.** New `[Id(6)] string? NextLeafIdInShard` slot (default `null`, decodes from legacy persisted state as `null` = "start of shard"). When the per-shard timer tick fires, the coordinator walks at most `CompactionLeafBatchSize` leaves starting from `NextLeafIdInShard` (or the leftmost leaf if `null`), persists the new cursor, and yields. The next tick resumes from the cursor; when the walk reaches the end of the shard, the cursor clears and `NextShardIndex` advances.
+3. **Coordinator pass loop.** `ProcessNextShardAsync` is split into `ProcessNextShardBatchAsync` (visits up to `CompactionLeafBatchSize` leaves, persists cursor, returns `done?`). The "shard advance" branch fires only when the batch returns `done=true`. The keepalive reminder period and the `compaction.pass.duration` histogram cover the now-longer wall-clock of a pass without modification.
+4. **Telemetry.** No new instruments. `compaction.leaves.visited` already counts per-leaf outcomes; the operator can divide by `compaction.pass.duration` to observe the new effective leaf-rate. A new tag `batch_size` on `compaction.pass.duration` is **out of scope** - the pinned per-tree value is observable via `LatticeRegistry` if needed.
+
+**Out of scope.**
+- *Per-shard leaf-batch size override.* Not needed; per-tree resolution suffices.
+- *Adaptive batch sizing.* Auto-tuning the batch from observed per-leaf latency is appealing but requires evidence of operator demand and a stable feedback policy.
+- *Skipping fast-path leaves entirely.* See F-074 for the architecturally correct fix to "don't activate idle leaves at all".
+
+**Acceptance.**
+- Default behaviour with `CompactionLeafBatchSize = 64` reproduces F-072 behaviour exactly on shards with <= 64 leaves: existing `TombstoneCompactionGrainTests` and `TombstoneCompactionIntegrationTests` pass without modification.
+- On a tree with > 64 leaves per shard, an integration test asserts that an in-flight pass yields between batches by observing the `compaction.pass.duration` histogram split into multiple grain-timer ticks (visible via `IReminderRegistry` interaction count) rather than one continuous walk.
+- Setting `CompactionLeafBatchSize = 0` clamps to 1 and emits exactly one warning per tree per process.
+- A focused unit test `TombstoneCompactionGrainTests.LeafBatch.cs` covers: cursor advance across batches, cursor clear on shard completion, snapshot-at-pass-start semantics for the batch size, and crash-resume from a persisted in-shard cursor.
+- Wire-format additivity: `[Id(6)] string? NextLeafIdInShard` decodes from legacy persisted `TombstoneCompactionState` as `null`, which is the correct semantic default ("start fresh from the leftmost leaf when this shard's turn comes"). No alias renumbering.
+- `docs/lattice/tombstone-compaction.md` is updated in the same commit; the worked-example table grows a third column for **peak concurrent leaf activations** that drops from `O(leaves)` to `O(CompactionLeafBatchSize * CollectionAge / CompactionShardTickInterval)`.
+
+**Risk surface.** The persisted in-shard cursor adds one new persistence path on every batch boundary, increasing `TombstoneCompactionGrain` state writes from once per shard to once per `CompactionLeafBatchSize` leaves. The existing keepalive reminder absorbs the wall-clock of the now-longer pass; no new reminders are introduced. There is no wire-format risk for replication (the cursor is grain state, not a WAL envelope), and there is no consistency risk because each batch's leaves are still individually reaped under their own grace-period check.
+
+---
+
+### F-074 - Shard-root dirty-leaf tracking to skip idle leaves on compaction *(depends on F-073)*
+**Architecture / scalability (drop pass-time activation cost from `O(leaves)` to `O(shards + dirty_leaves)` so default cadence can tighten without operator pain)**
+
+The coordinator currently has no way to know which leaves have new tombstones without asking the leaf, so a full pass activates every leaf in the tree even when most have nothing to do. F-073 caps the *peak* concurrent activations but does not reduce the *total*: on a 50 000-leaf tree where 1% of leaves accumulated tombstones since the last pass, today's pass still activates 50 000 leaves. The architecturally correct fix is to push the "is this leaf dirty?" signal up to a coarser-grain owner that already sees every routed mutation - the shard root.
+
+This entry teaches `ShardRootGrain` to maintain a small per-shard "dirty leaves since last compaction" set populated as the shard root routes `Delete` mutations down to leaves, and teaches `TombstoneCompactionGrain` to consult that set before walking. A pass on a tree with no recent deletes activates only the shard root grains (one per physical shard), not every leaf. Activation cost drops from `O(leaves)` to `O(shards + dirty_leaves)`. On the 50 000-leaf, 1024-shard, 1%-dirty example: 1024 + 500 = 1 524 activations, a ~33x reduction. With this in place, the F-072 default `CompactionShardTickInterval` can tighten substantially (e.g. to 500 ms) without operators having to think about peak activation count, and the F-073 `CompactionLeafBatchSize` becomes effectively a no-op on healthy trees.
+
+**Scope.**
+
+1. **Shard-root dirty-leaf set.** `ShardRootState` gains `[Id(N)] HashSet<string> DirtyLeavesSinceLastCompaction` and `[Id(N+1)] HybridLogicalClock LastDirtyAdvance`. The shard root populates the set as it routes `Delete` mutations down (one persisted state write per leaf per dirty-window, deduplicated by the in-memory hot path). The set is bounded by the shard's leaf count.
+2. **Coordinator pull path.** A new `IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync()` method returns the set + `LastDirtyAdvance`. `TombstoneCompactionGrain.ProcessNextShardBatchAsync` (added in F-073) calls this once per shard at the start of the shard's first batch, walks only the named leaves, and on shard completion calls `IShardRootGrain.ClearDirtyLeavesUpToAsync(HybridLogicalClock advance)` to drain the set up to a watermark. The clear is HLC-gated so writes that arrived during the walk are retained for the next pass.
+3. **Replication interaction.** Receiver-side leaves observe the same `Delete` mutations via the standard WAL replication transport; receiver-cluster shard roots populate their own dirty-leaves set from the same mutation stream and run their own compaction passes against it. No new wire envelope, no cross-cluster coordinator. (R-NNN-A may want a follow-on roadmap entry to make the cross-cluster cadence explicit, but it is not a wire-format change.)
+4. **Backwards compat.** A pre-F-074 persisted `ShardRootState` decodes the new slots as an empty set + zero HLC. The coordinator detects "empty set + zero HLC" as "either a fresh tree or an upgraded tree with no signal yet" and falls back to the F-073 leaf walk for the first pass, then locks in to the dirty-set fast-path on the second.
+5. **Telemetry.** New tag `path` on `compaction.leaves.visited` with values `walk` (legacy / fallback) and `dirty-set` (F-074 fast path). New histogram `compaction.shard.dirty_leaves` (per pass, per tree, per shard) for capacity planning. Existing `compaction.pass.duration` automatically reflects the wall-clock saving without modification.
+6. **Tighten default cadence.** With F-074 in place, `LatticeOptions.DefaultCompactionShardTickInterval` is lowered from 2 s to 500 ms in the same change. F-072's worked-example table is rewritten so the "peak concurrent activations" column reflects the dirty-set fast path. Operators can still raise the cadence per tree if they have a reason to slow it down.
+
+**Out of scope.**
+- *Per-leaf tombstone counters on the shard root.* Just a presence-or-absence set is enough; the leaf still computes the actual reap inside `CompactTombstonesAsync`.
+- *Eviction of the dirty set under memory pressure.* The set is bounded by leaf count, which is bounded by tree size; if leaf count grows unbounded the tree has bigger problems than this set.
+- *Compaction-window scheduling.* Concentrating compaction into a quiet hour (e.g. `CompactionWindow = "02:00-04:00"`) is a separate operability feature; file as a follow-on if there is demand.
+
+**Acceptance.**
+- A tree with no recent deletes runs a full compaction pass in under 5% of the F-073-baseline wall-clock and activates only one grain per physical shard (asserted via `IGrainFactory` interaction count in an integration test).
+- A tree with deletes scattered across 1% of its leaves activates `O(shards + dirty_leaves)` grains during a pass, not `O(leaves)`. Asserted via interaction count.
+- Persisted `ShardRootState` from a pre-F-074 silo activates cleanly under F-074 and falls back to the F-073 walk for one pass, then exercises the fast path on the next.
+- The HLC-gated `ClearDirtyLeavesUpToAsync` watermark is exercised by an integration test where deletes interleave with the in-flight compaction walk; deletes that arrived during the walk are still picked up by the *next* pass, not silently dropped.
+- `LatticeOptions.DefaultCompactionShardTickInterval` is lowered to `TimeSpan.FromSeconds(0.5)` in the same change; the F-072 acceptance test that asserted "default = 2 s" is updated to assert "default = 500 ms" and the worked-example numbers in `docs/lattice/tombstone-compaction.md` are regenerated.
+
+**Risk surface.** The shard root carries new persisted state on every routed `Delete`, raising shard-root state-write frequency on delete-heavy workloads. The hot-path dedup (in-memory set membership check before persist) closes the dominant cost; persists happen only when a previously-unseen leaf id enters the set within a dirty window. Wire-format additivity is the standard `[Id]` slot pattern - legacy decodes as empty set + zero HLC. The HLC-gated clear watermark prevents the classic "races between compaction and concurrent deletes" hazard explicitly: a delete that arrives mid-pass is preserved for the next pass via `LastDirtyAdvance` < `now`. There is no replication risk: dirty-set state is local to each cluster and reconstructed independently from the local WAL stream.
 
 ---
 

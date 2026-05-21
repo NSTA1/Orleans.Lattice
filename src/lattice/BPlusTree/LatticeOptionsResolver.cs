@@ -53,6 +53,14 @@ internal sealed class LatticeOptionsResolver(
     /// </summary>
     private static readonly ConcurrentDictionary<string, byte> WarnedLatchedTrees = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Trees for which a "configured CompactionShardTickInterval below floor"
+    /// warning has already been logged. Re-resolving the same tree must not
+    /// spam the log on every grain activation; the warning is informational
+    /// and the clamp is unconditional.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, byte> WarnedClampedTickIntervalTrees = new(StringComparer.Ordinal);
+
     /// <summary>Resolves the effective options for <paramref name="treeId"/>.</summary>
     public async Task<ResolvedLatticeOptions> ResolveAsync(string treeId)
     {
@@ -138,6 +146,25 @@ internal sealed class LatticeOptionsResolver(
             maintainDigest = !latched && configured;
         }
 
+        // Compaction shard-tick interval: clamp configured values below
+        // the documented floor up to the floor with a one-shot warning
+        // per tree per process. The floor exists so a pathological
+        // setting cannot starve the rest of the compactor grain's
+        // scheduler quota by yielding too briefly between shard walks.
+        var configuredTickInterval = baseOptions.CompactionShardTickInterval;
+        var effectiveTickInterval = configuredTickInterval;
+        if (configuredTickInterval < LatticeOptions.MinCompactionShardTickInterval)
+        {
+            effectiveTickInterval = LatticeOptions.MinCompactionShardTickInterval;
+            if (WarnedClampedTickIntervalTrees.TryAdd(treeId, 0))
+            {
+                _logger.LogWarning(
+                    "Tree {TreeId} has CompactionShardTickInterval={Configured} configured below the {Floor} floor; " +
+                    "clamping to the floor. The floor protects scheduler fairness; lower it only if you have a measured reason.",
+                    treeId, configuredTickInterval, LatticeOptions.MinCompactionShardTickInterval);
+            }
+        }
+
         return new ResolvedLatticeOptions
         {
             MaxLeafKeys = mlk,
@@ -170,6 +197,7 @@ internal sealed class LatticeOptionsResolver(
             MinTombstoneRatioForCompaction = baseOptions.MinTombstoneRatioForCompaction,
             MaxLeafEntriesBeforeForcedCompaction = baseOptions.MaxLeafEntriesBeforeForcedCompaction,
             CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,
+            CompactionShardTickInterval = effectiveTickInterval,
             MaintainProjectionDigest = maintainDigest,
         };
     }
@@ -180,4 +208,12 @@ internal sealed class LatticeOptionsResolver(
     /// observe the warning behaviour independently.
     /// </summary>
     internal static void ResetWarnedLatchedTreesForTests() => WarnedLatchedTrees.Clear();
+
+    /// <summary>
+    /// Test-only seam to reset the per-process "configured tick interval
+    /// below floor" warning memo so multiple test cases can each observe
+    /// the warning behaviour independently.
+    /// </summary>
+    internal static void ResetWarnedClampedTickIntervalTreesForTests() =>
+        WarnedClampedTickIntervalTrees.Clear();
 }
