@@ -78,6 +78,63 @@ Wall-clock: ~4.5 minutes for the 24-row sweep on AMD Ryzen 7 PRO 7840U,
   savings shrink to 0-22%, but the framing path is never worse than
   the typed path.
 
+## R-116 third column - allocated bytes per call
+
+R-116 strips the redundant `WalRecord.TreeId` slot from the per-entry
+encoded bytes; the tree id is restored at every read seam from the
+surrounding partition / framing context. Re-running `Ship_FramingOnly`
+against the post-R-116 encoder with the same `"ship-bench"` (10-byte
+UTF-8) tree name produces the third column below.
+
+| entries | payload | framing only (R-114) | framing only (R-116) | absolute saving | per-entry |
+|--------:|--------:|---------------------:|---------------------:|----------------:|----------:|
+| 16      | 64      | 7.90 KB              | 7.90 KB              | 0 KB            | ~0 B      |
+| 16      | 1024    | 42.61 KB             | 42.30 KB             | 0.31 KB         | ~20 B     |
+| 16      | 16384   | 507.63 KB            | 507.32 KB            | 0.31 KB         | ~20 B     |
+| 64      | 64      | 31.95 KB             | 31.95 KB             | 0 KB            | ~0 B      |
+| 64      | 1024    | 173.25 KB            | 172.00 KB            | 1.25 KB         | ~20 B     |
+| 64      | 16384   | 2,078.40 KB          | 2,077.14 KB          | 1.26 KB         | ~20 B     |
+| 256     | 64      | 127.99 KB            | 127.99 KB            | 0 KB            | ~0 B      |
+| 256     | 1024    | 695.67 KB            | 690.67 KB            | 5.00 KB         | ~20 B     |
+| 256     | 16384   | 8,361.47 KB          | 8,356.49 KB          | 4.98 KB         | ~20 B     |
+| 1024    | 64      | 512.04 KB            | 512.04 KB            | 0 KB            | ~0 B      |
+| 1024    | 1024    | 2,785.26 KB          | 2,765.25 KB          | 20.01 KB        | ~20 B     |
+| 1024    | 16384   | 33,493.41 KB         | 33,473.51 KB         | 19.90 KB        | ~20 B     |
+
+### Interpretation - per-entry, not percentage
+
+The headline number is the **per-entry absolute saving**, not the
+percentage of total batch allocation. The per-entry saving is
+constant at ~20 B for the bench's 10-byte tree name (10 UTF-8 bytes +
+Orleans field tag + wire-type byte + length prefix + alignment
+overhead), and scales linearly with `entryCount`. Production tree
+names like `"orders/eu-west-1/v3"` (19 UTF-8 bytes) push the per-entry
+saving to ~29 B; longer namespaced names like
+`"tenants/acme/orders/eu-west-1/v3"` (32 bytes) reach ~42 B.
+
+What this means in steady-state operations:
+
+- A shipper draining 1024-entry batches saves ~20 KB of gRPC
+  bandwidth and ~20 KB of WAL on-disk bytes per batch (10-byte tree
+  name) or ~30 KB per batch (19-byte tree name).
+- At a sustained 1k batches/sec cluster-wide, that is ~20 MB/sec of
+  replication bandwidth and on-disk growth eliminated for the
+  bench's tree-name length, ~30 MB/sec for production-shaped names.
+- The percentage shrinks at large payload corners only because the
+  payload `byte[]` dominates the batch by 3 orders of magnitude
+  (16,384 B per entry vs. ~20 B saved). The percentage is bounded
+  above by `treeIdWireBytes / (treeIdWireBytes + payloadBytes)` at
+  any given corner, which is not the figure of merit for a
+  bandwidth / WAL-growth optimisation - the per-entry constant is.
+
+The zero-saving rows at `payload = 64 B` are an artefact of the
+underlying allocator's bucket rounding: at small payloads, every
+entry rounds up to the same allocator bucket whether the tree-id
+slot is present or not, so the elision crosses below the bucket
+granularity. The wire-bytes (and on-disk-bytes) saving is still
+present in those rows, just not visible in the managed-allocation
+counter the benchmark exposes.
+
 ## Fixture caveat
 
 An early version of `BuildShipFramingFixture` shared a single

@@ -28,14 +28,42 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
     public void Encode(in WalRecord record, IBufferWriter<byte> writer)
     {
         ArgumentNullException.ThrowIfNull(writer);
-        _serializer.Serialize(record, writer);
+        // Strip the redundant TreeId slot before serialisation: every
+        // storage and transport seam recovers the tree id from
+        // surrounding context (storage partition key, framing header
+        // TreeName tail, shipper grain key), so persisting it on every
+        // entry duplicates ~25-35 bytes per entry for production tree
+        // names. Decoders re-stamp via Decode(span, treeId).
+        if (record.TreeId.Length == 0)
+        {
+            _serializer.Serialize(record, writer);
+            return;
+        }
+        var stripped = record with { TreeId = string.Empty };
+        _serializer.Serialize(stripped, writer);
     }
 
     /// <inheritdoc />
     public WalRecord Decode(ReadOnlySpan<byte> encoded)
     {
         // Serializer<T> exposes a span overload of Deserialize that
-        // avoids copying the bytes; we delegate directly.
+        // avoids copying the bytes; we delegate directly. The returned
+        // record carries TreeId == string.Empty when the producer used
+        // Encode (which strips the slot); forensic tooling that calls
+        // this single-argument overload accepts that invariant. Call
+        // sites with the tree id in hand should call the
+        // Decode(span, treeId) overload instead.
         return _serializer.Deserialize(encoded);
+    }
+
+    /// <inheritdoc />
+    public WalRecord Decode(ReadOnlySpan<byte> encoded, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var record = _serializer.Deserialize(encoded);
+        // Re-stamp TreeId from the caller-supplied context. The
+        // producer's Encode stripped this slot; this overload is the
+        // single seam where it is restored.
+        return record with { TreeId = treeId };
     }
 }

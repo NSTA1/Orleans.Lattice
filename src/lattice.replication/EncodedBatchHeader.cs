@@ -56,17 +56,25 @@ public readonly record struct EncodedBatchHeader
     /// Bumped on every breaking change to the framing layout; consumers
     /// compare strictly greater-than for rejection.
     /// <para>
-    /// Version 3 adds the variable-length <c>TreeName</c> +
-    /// <c>OriginClusterId</c> tail (each as a 4-byte little-endian
-    /// length prefix followed by UTF-8 bytes) between the fixed
-    /// header and the per-entry length-prefixed segments, so the
-    /// framing-only payload is fully self-routing on the receiver
-    /// without a typed-envelope sidecar. Version 2 carried only the
-    /// 32-byte fixed header and the entry segment list; receivers
-    /// expecting v2 cannot decode v3 and vice versa.
+    /// Version 4 elides the per-entry <c>WalRecord.TreeId</c> slot
+    /// from the encoded entry segments: every storage and transport
+    /// seam recovers the tree id from surrounding context (the
+    /// storage partition key, the framing header's <c>TreeName</c>
+    /// tail, the shipper's owning grain key), so persisting it on
+    /// every entry is pure duplication of ~25-35 bytes per entry for
+    /// production tree names. v3 receivers cannot decode v4 entry
+    /// segments because the <c>[Id(0)]</c> field tag is absent and
+    /// <see cref="BPlusTree.Grains.WalRecord.TreeId"/> would
+    /// deserialise as the empty string. Version 3 added the
+    /// variable-length <c>TreeName</c> + <c>OriginClusterId</c> tail
+    /// (each as a 4-byte little-endian length prefix followed by
+    /// UTF-8 bytes) between the fixed header and the per-entry
+    /// length-prefixed segments. Version 2 carried only the 32-byte
+    /// fixed header and the entry segment list; receivers expecting
+    /// an older version cannot decode a newer version.
     /// </para>
     /// </summary>
-    public const int CurrentWireVersion = 3;
+    public const int CurrentWireVersion = 4;
 
     /// <summary>
     /// Magic prefix. Must equal <see cref="MagicValue"/> on any batch
