@@ -72,7 +72,9 @@ public class ChangeFeedTests
     private static (ChangeFeed Feed, IGrainFactory Factory) CreateFeed(int partitions, string clusterId = LocalCluster)
     {
         var factory = Substitute.For<IGrainFactory>();
-        var feed = new ChangeFeed(factory, Monitor(partitions, clusterId));
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        var feed = new ChangeFeed(factory, Monitor(partitions, clusterId), resolver);
         return (feed, factory);
     }
 
@@ -308,7 +310,9 @@ public class ChangeFeedTests
         var factory = Substitute.For<IGrainFactory>();
         var empty = Grain();
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(empty);
-        var feed = new ChangeFeed(factory, monitor);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        var feed = new ChangeFeed(factory, monitor, resolver);
 
         await CollectAsync(feed.Subscribe("alpha", HybridLogicalClock.Zero));
         await CollectAsync(feed.Subscribe("beta", HybridLogicalClock.Zero));
@@ -419,5 +423,87 @@ public class ChangeFeedTests
 
         // Only the durability-only entry (empty origin) survives.
         Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "durability-only" }));
+    }
+
+    [Test]
+    public void Constructor_throws_when_grain_factory_is_null()
+    {
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        Assert.That(
+            () => new ChangeFeed(null!, Monitor(partitions: 1), resolver),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_throws_when_options_monitor_is_null()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        Assert.That(
+            () => new ChangeFeed(factory, null!, resolver),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_throws_when_mode_resolver_is_null()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        Assert.That(
+            () => new ChangeFeed(factory, Monitor(partitions: 1), null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task Subscribe_restamps_mode_on_every_yielded_entry_from_resolver()
+    {
+        // Regression: `WalRecord.Mode` is `[field: NonSerialized]` so
+        // the canonical Orleans codec drops the slot on every grain
+        // RPC return path. `IWalShardGrain.ReadAsync` stamps Mode on
+        // the silo side via its injected resolver, but that stamp is
+        // erased on the way back to the client. Without re-stamping
+        // at the change-feed seam, every CRDT mode collapses to the
+        // default `LwwRegister` and `ReplicationApplier` dispatches
+        // state-merge through the LWW branch instead of the configured
+        // CRDT branch. This test pins the seam: every yielded entry
+        // carries the mode returned by the injected
+        // `ILatticeMergeModeResolver`, regardless of whatever `Mode`
+        // value the underlying grain handed back.
+        var factory = Substitute.For<IGrainFactory>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Tree).Returns(LatticeMergeMode.OrSet);
+        var feed = new ChangeFeed(factory, Monitor(partitions: 1), resolver);
+        // Entries arrive from the grain stamped with the wire default
+        // (Orleans drops the [field: NonSerialized] property), which
+        // happens to be `LwwRegister`. The change feed must override it.
+        var grain = Grain(
+            Entry("k1", Hlc(1)) with { Mode = LatticeMergeMode.LwwRegister },
+            Entry("k2", Hlc(2)) with { Mode = LatticeMergeMode.LwwRegister });
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
+
+        var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
+
+        Assert.That(entries.Select(e => e.Mode), Is.All.EqualTo(LatticeMergeMode.OrSet));
+        resolver.Received().Resolve(Tree);
+    }
+
+    [Test]
+    public async Task Subscribe_falls_back_to_lww_register_when_resolver_returns_null()
+    {
+        // When the resolver returns null (tree not in the replicated set
+        // for this silo), the change feed falls back to `LwwRegister`
+        // rather than yielding `default(LatticeMergeMode)`. This mirrors
+        // the same fallback used by `ReplicationShipperGrain` and the
+        // gRPC marshalling path so receivers see one consistent default.
+        var factory = Substitute.For<IGrainFactory>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Tree).Returns((LatticeMergeMode?)null);
+        var feed = new ChangeFeed(factory, Monitor(partitions: 1), resolver);
+        var grain = Grain(Entry("k1", Hlc(1)));
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
+
+        var entries = await CollectAsync(feed.Subscribe(Tree, HybridLogicalClock.Zero));
+
+        Assert.That(entries, Has.Count.EqualTo(1));
+        Assert.That(entries[0].Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
     }
 }

@@ -38,9 +38,14 @@ namespace Orleans.Lattice.Replication;
 /// </summary>
 internal sealed class ChangeFeed(
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeReplicationOptions> options) : IChangeFeed
+    IOptionsMonitor<LatticeReplicationOptions> options,
+    ILatticeMergeModeResolver modeResolver) : IChangeFeed
 {
     private const int PageSize = 256;
+
+    private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
+    private readonly IOptionsMonitor<LatticeReplicationOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
+    private readonly ILatticeMergeModeResolver _modeResolver = modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
 
     /// <inheritdoc />
     public async IAsyncEnumerable<WalRecord> Subscribe(
@@ -51,16 +56,29 @@ internal sealed class ChangeFeed(
     {
         ArgumentNullException.ThrowIfNull(treeName);
 
-        var resolved = options.Get(treeName);
+        var resolved = _options.Get(treeName);
         var partitions = resolved.ReplogPartitions;
         var localClusterId = resolved.ClusterId;
+
+        // The per-tree LatticeMergeMode is not carried on the wire
+        // form of WalRecord: the property is marked
+        // [field: NonSerialized] so the canonical Orleans codec never
+        // writes it, including across the IWalShardGrain.ReadAsync
+        // grain-RPC return path. The shipper's gRPC seam reconstructs
+        // Mode from the framing header via the 3-arg
+        // IWalRecordEncoder.Decode overload; the change-feed seam has
+        // no framing header to lean on, so it re-stamps from the same
+        // per-tree resolver the silo-side WAL grain used at WAL append
+        // time. Resolving once per Subscribe call is sufficient because
+        // ReplicatedTrees is a per-tree configuration entry.
+        var resolvedMode = _modeResolver.Resolve(treeName) ?? LatticeMergeMode.LwwRegister;
 
         var collected = new List<WalRecord>();
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
+            var grain = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
             var nextSequence = 0L;
             while (true)
             {
@@ -129,7 +147,15 @@ internal sealed class ChangeFeed(
                         continue;
                     }
 
-                    collected.Add(entry);
+                    // Re-stamp Mode from the resolver: the silo-side
+                    // WAL grain stamped Mode at read time, but the
+                    // grain RPC return path re-serialises through the
+                    // canonical Orleans codec, which 
+                    // does not carry Mode (the WalRecord property is
+                    // [field: NonSerialized]). Without this stamp the
+                    // applier would dispatch every CRDT mode through
+                    // the LwwRegister branch.
+                    collected.Add(entry with { Mode = resolvedMode });
                 }
 
                 nextSequence = page.NextSequence;

@@ -126,7 +126,9 @@ public partial class BootstrapAtomicVisibilityTests
                 // view atomic bootstrap visibility forbids.
                 var producerOptions = BuildOptionsMonitor(siteA);
                 var receiverOptions = BuildOptionsMonitor(siteB);
-                var producerFeed = new ChangeFeed(producerCluster.Client, producerOptions);
+                var producerResolver = Substitute.For<ILatticeMergeModeResolver>();
+                producerResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+                var producerFeed = new ChangeFeed(producerCluster.Client, producerOptions, producerResolver);
                 var receiverApplier = new ReplicationApplier(
                     receiverCluster.Client,
                     receiverOptions,
