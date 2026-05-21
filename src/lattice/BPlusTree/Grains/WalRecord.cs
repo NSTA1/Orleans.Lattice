@@ -101,8 +101,28 @@ public readonly record struct WalRecord
     /// <see cref="LatticeMergeMode.LwwRegister"/> for hand-constructed
     /// entries and for entries decoded from older wire formats that
     /// pre-date this field.
+    /// <para>
+    /// <b>Wire-shape note:</b> this slot is deliberately
+    /// <i>not</i> tagged with an Orleans <c>[Id]</c> attribute, so it is
+    /// neither serialised nor deserialised by the canonical
+    /// <see cref="OrleansBinaryWalRecordEncoder"/> codec. The merge mode
+    /// is uniformly per-tree-constant within a single shipped batch, so
+    /// the framing header (<c>EncodedBatchHeader.Mode</c>) carries it
+    /// once per batch and the receiver-side replication apply seam
+    /// re-stamps every decoded entry with that header value via
+    /// <see cref="IWalRecordEncoder.Decode(System.ReadOnlySpan{byte}, string, LatticeMergeMode)"/>.
+    /// Storage seams (the WAL append path) re-stamp the slot from the
+    /// activation-cached
+    /// <see cref="ILatticeMergeModeResolver.Resolve(string)"/> result on
+    /// read-back via the same overload. The previous wire id
+    /// (<c>[Id(9)]</c>) is permanently reserved and must never be
+    /// reused for a different field, because legacy WAL bytes authored
+    /// before the slot was de-tagged still carry it and Orleans
+    /// silently drops unknown ids on decode.
+    /// </para>
     /// </summary>
-    [Id(9)] public LatticeMergeMode Mode { get; init; }
+    [field: NonSerialized]
+    public LatticeMergeMode Mode { get; init; }
 
     /// <summary>
     /// Sparse causal-plus vector-clock frontier

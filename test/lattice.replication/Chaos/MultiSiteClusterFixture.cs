@@ -131,7 +131,16 @@ internal sealed class MultiSiteClusterFixture
             options.CurrentValue.Returns(perSiteOptions);
             options.Get(Arg.Any<string>()).Returns(perSiteOptions);
 
-            _changeFeeds[i] = new ChangeFeed(_sites[i].Client, options);
+            // Client-side resolver mirrors the silo-side ChaosModeResolver:
+            // every tree on this fixture uses the same configured _mode, and
+            // ChangeFeed needs it to re-stamp WalRecord.Mode after the
+            // grain-RPC return path strips it (the property is marked
+            // [field: NonSerialized] so the canonical Orleans codec never
+            // serialises it).
+            var resolver = Substitute.For<ILatticeMergeModeResolver>();
+            resolver.Resolve(Arg.Any<string>()).Returns(_mode);
+
+            _changeFeeds[i] = new ChangeFeed(_sites[i].Client, options, resolver);
             _appliers[i] = new ReplicationApplier(_sites[i].Client, options, new LocalVectorClockCache(_sites[i].Client));
         }
     }

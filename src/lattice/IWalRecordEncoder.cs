@@ -114,4 +114,27 @@ public interface IWalRecordEncoder
         var record = Decode(encoded);
         return record with { TreeId = treeId };
     }
+
+    /// <summary>
+    /// Decodes a previously-<see cref="Encode"/>d payload back to a
+    /// <see cref="WalRecord"/> and re-stamps both
+    /// <see cref="WalRecord.TreeId"/> and <see cref="WalRecord.Mode"/>
+    /// from the supplied <paramref name="treeId"/> and
+    /// <paramref name="mode"/> batch-level context. Producer-side
+    /// <see cref="Encode"/> elides both slots from the encoded bytes
+    /// because they are constant within a single shipped batch (tree
+    /// id from the framing header / grain key, merge mode from the
+    /// framing header's <c>Mode</c> field hoisted by the producer-side
+    /// resolver). This overload is the seam where both fields are
+    /// restored on the receiver-side replication apply path.
+    /// </summary>
+    /// <param name="encoded">The encoded payload bytes. Borrowed for the duration of the call; the implementation must not retain a reference to the underlying array.</param>
+    /// <param name="treeId">The tree id recovered from surrounding context. Stamped onto <see cref="WalRecord.TreeId"/> on the returned value. Must not be <see langword="null"/>.</param>
+    /// <param name="mode">The per-tree merge mode recovered from the framing header. Stamped onto <see cref="WalRecord.Mode"/> on the returned value.</param>
+    WalRecord Decode(ReadOnlySpan<byte> encoded, string treeId, LatticeMergeMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var record = Decode(encoded);
+        return record with { TreeId = treeId, Mode = mode };
+    }
 }

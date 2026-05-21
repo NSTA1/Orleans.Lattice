@@ -28,12 +28,20 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
     public void Encode(in WalRecord record, IBufferWriter<byte> writer)
     {
         ArgumentNullException.ThrowIfNull(writer);
-        // Strip the redundant TreeId slot before serialisation: every
-        // storage and transport seam recovers the tree id from
-        // surrounding context (storage partition key, framing header
-        // TreeName tail, shipper grain key), so persisting it on every
-        // entry duplicates ~25-35 bytes per entry for production tree
-        // names. Decoders re-stamp via Decode(span, treeId).
+        // Strip the redundant TreeId slot (since v4) before
+        // serialisation: every storage and transport seam recovers
+        // the tree id from surrounding context (storage partition
+        // key, framing header TreeName tail, shipper grain key), so
+        // persisting it on every entry duplicates ~25-35 bytes per
+        // entry for production tree names.
+        //
+        // Mode is not stripped here because the WalRecord type itself
+        // no longer marks the slot with [Id] - the canonical Orleans
+        // serializer never writes the field, so there is nothing to
+        // strip. The merge mode is hoisted into the framing header
+        // (EncodedBatchHeader.Mode) once per batch and re-stamped on
+        // decoded records by the Decode(span, treeId, mode) overload
+        // below.
         if (record.TreeId.Length == 0)
         {
             _serializer.Serialize(record, writer);
@@ -48,11 +56,13 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
     {
         // Serializer<T> exposes a span overload of Deserialize that
         // avoids copying the bytes; we delegate directly. The returned
-        // record carries TreeId == string.Empty when the producer used
-        // Encode (which strips the slot); forensic tooling that calls
-        // this single-argument overload accepts that invariant. Call
-        // sites with the tree id in hand should call the
-        // Decode(span, treeId) overload instead.
+        // record carries TreeId == string.Empty (stripped on encode)
+        // and Mode == LwwRegister (the field is not serialised, so it
+        // always decodes to the enum default). Forensic tooling that
+        // calls this single-argument overload accepts those
+        // invariants. Call sites with the tree id and merge mode in
+        // hand should call the Decode(span, treeId, mode) overload
+        // instead.
         return _serializer.Deserialize(encoded);
     }
 
@@ -63,7 +73,24 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         var record = _serializer.Deserialize(encoded);
         // Re-stamp TreeId from the caller-supplied context. The
         // producer's Encode stripped this slot; this overload is the
-        // single seam where it is restored.
+        // seam where it is restored. Mode is left at its enum default
+        // (LwwRegister) - call sites that carry the framing header's
+        // Mode field through (the receiver-side replication apply
+        // seam) should use the Decode(span, treeId, mode) overload
+        // instead.
         return record with { TreeId = treeId };
+    }
+
+    /// <inheritdoc />
+    public WalRecord Decode(ReadOnlySpan<byte> encoded, string treeId, LatticeMergeMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var record = _serializer.Deserialize(encoded);
+        // Re-stamp both TreeId and Mode from the caller-supplied
+        // batch-level context. The framing header carries Mode once
+        // per batch since wire version 5, and the WalRecord.Mode slot
+        // is not serialised so it must be supplied here for the
+        // apply path's mode-dispatch switch to work.
+        return record with { TreeId = treeId, Mode = mode };
     }
 }

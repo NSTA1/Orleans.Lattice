@@ -42,7 +42,9 @@ public class ChangeFeedIntegrationTests
             ClusterId = ClusterId,
             ReplogPartitions = 1,
         });
-        _feed = new ChangeFeed(_cluster.Client, options);
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        _feed = new ChangeFeed(_cluster.Client, options, resolver);
     }
 
     [OneTimeTearDown]

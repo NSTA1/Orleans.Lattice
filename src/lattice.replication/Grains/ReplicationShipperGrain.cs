@@ -39,7 +39,8 @@ internal sealed class ReplicationShipperGrain(
     IGrainFactory grainFactory,
     [PersistentState("replication-shipper", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationShipperState> state,
-    ReplicationPeerStats peerStats)
+    ReplicationPeerStats peerStats,
+    ILatticeMergeModeResolver modeResolver)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -57,6 +58,8 @@ internal sealed class ReplicationShipperGrain(
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly ReplicationPeerStats _peerStats =
         peerStats ?? throw new ArgumentNullException(nameof(peerStats));
+    private readonly ILatticeMergeModeResolver _modeResolver =
+        modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
 
     private string _treeName = "";
     private string _peerClusterId = "";
@@ -395,6 +398,14 @@ internal sealed class ReplicationShipperGrain(
                 OriginClusterIdHash = EncodedBatchHeader.HashClusterId(options.ClusterId),
                 EntryCount = _drainEncodedSegments.Count,
                 BatchSequence = 0,
+                // Hoist Mode from per-entry bytes since wire version
+                // 5: the receiver re-stamps every decoded entry with
+                // header.Mode on the apply path. Resolve via the
+                // injected ILatticeMergeModeResolver; null (tree not
+                // declared replicated) collapses to LwwRegister, which
+                // matches both the producer-side WAL writer's stamp
+                // and the wire-baseline default of pre-Mode-hoist receivers.
+                Mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister,
             };
             // CollectionsMarshal.AsSpan(...) of List<T> exposes the
             // List's backing array as a contiguous Memory<T>; we copy

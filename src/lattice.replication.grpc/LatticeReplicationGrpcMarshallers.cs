@@ -208,11 +208,12 @@ internal static class LatticeReplicationGrpcMarshallers
             for (var i = 0; i < entries.Length; i++)
             {
                 var seg = segments[i];
-                // Re-stamp TreeId from the framing tail's TreeName:
-                // the producer stripped the slot at encode time
-                // because the framing header's variable-length tail
-                // already carries the tree id once per batch.
-                entries[i] = walRecordEncoder.Decode(seg.AsSpan(), treeName);
+                // Re-stamp TreeId from the framing tail's TreeName
+                // and Mode from the framing header's Mode field: the
+                // producer stripped both slots at encode time because
+                // they are batch-constant (TreeId since wire version
+                // 4, Mode since wire version 5).
+                entries[i] = walRecordEncoder.Decode(seg.AsSpan(), treeName, header.Mode);
             }
 
             return new ReplicationBatchEnvelope

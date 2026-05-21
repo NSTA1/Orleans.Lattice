@@ -13,6 +13,7 @@ public class EncodedBatchHeaderTests
         int entryCount = 3,
         long batchSequence = 42L,
         int atomicSpanCount = 0,
+        LatticeMergeMode mode = LatticeMergeMode.LwwRegister,
         FramingCompression compression = FramingCompression.None)
         => new()
         {
@@ -22,6 +23,7 @@ public class EncodedBatchHeaderTests
             EntryCount = entryCount,
             BatchSequence = batchSequence,
             AtomicBatchSpanCount = atomicSpanCount,
+            Mode = mode,
             Compression = compression,
         };
 
@@ -79,12 +81,25 @@ public class EncodedBatchHeaderTests
     }
 
     [Test]
-    public void WriteTo_throws_when_AtomicBatchSpanCount_exceeds_24_bits()
+    public void WriteTo_throws_when_AtomicBatchSpanCount_exceeds_16_bits()
     {
-        var header = Sample(atomicSpanCount: 0x01_00_00_00);
+        // v5 tightened the validated cap from 24 bits to 16 bits to
+        // free 8 bits for Mode in the trailing packed slot.
+        var header = Sample(atomicSpanCount: 0x0001_0000);
         Assert.That(
             () => header.WriteTo(new byte[EncodedBatchHeader.WireSize]),
             Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    [Test]
+    public void WriteTo_accepts_AtomicBatchSpanCount_at_16_bit_boundary()
+    {
+        // 0xFFFF (65 535) is the inclusive upper bound; the writer
+        // must accept it.
+        var header = Sample(atomicSpanCount: 0x0000_FFFF);
+        Assert.That(
+            () => header.WriteTo(new byte[EncodedBatchHeader.WireSize]),
+            Throws.Nothing);
     }
 
     [Test]
@@ -151,5 +166,65 @@ public class EncodedBatchHeaderTests
 
         var c = Sample(entryCount: 4);
         Assert.That(a, Is.Not.EqualTo(c));
+    }
+
+    [Test]
+    public void CurrentWireVersion_is_5()
+    {
+        // The wire version increments any time the framing payload
+        // shape breaks. v5 hoisted Mode out of per-entry bytes into
+        // the header's trailing packed slot. v4 receivers reject v5
+        // payloads via the strictly-greater-than guard.
+        Assert.That(EncodedBatchHeader.CurrentWireVersion, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void Mode_round_trips_through_packed_middle_byte()
+    {
+        var header = Sample(mode: LatticeMergeMode.OrSet);
+        var buf = new byte[EncodedBatchHeader.WireSize];
+        header.WriteTo(buf);
+        var decoded = EncodedBatchHeader.ReadFrom(buf);
+        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.OrSet));
+        // Mode is packed into bits 16-23 of the trailing 32-bit slot.
+        var packed = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(28, 4));
+        Assert.That((byte)(packed >> 16), Is.EqualTo((byte)LatticeMergeMode.OrSet));
+    }
+
+    [Test]
+    public void Mode_default_round_trips_as_LwwRegister()
+    {
+        // The default constructor leaves Mode at the enum default
+        // (LwwRegister = 0), matching the wire-baseline behaviour
+        // that pre-Mode-hoist producers wrote and that downgraded
+        // receivers still observe.
+        var header = Sample();
+        var buf = new byte[EncodedBatchHeader.WireSize];
+        header.WriteTo(buf);
+        var decoded = EncodedBatchHeader.ReadFrom(buf);
+        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
+    }
+
+    [Test]
+    public void Mode_round_trips_independently_of_Compression()
+    {
+        // Mode and Compression occupy separate bytes in the trailing
+        // packed slot (bits 16-23 vs. 24-31); pin that they do not
+        // alias by setting both to non-default values and asserting
+        // independent round-trip.
+        var header = Sample(mode: LatticeMergeMode.PnCounter, compression: FramingCompression.None);
+        var buf = new byte[EncodedBatchHeader.WireSize];
+        header.WriteTo(buf);
+        var decoded = EncodedBatchHeader.ReadFrom(buf);
+        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.PnCounter));
+        Assert.That(decoded.Compression, Is.EqualTo(FramingCompression.None));
+    }
+
+    [Test]
+    public void Equality_distinguishes_Mode()
+    {
+        var lww = Sample(mode: LatticeMergeMode.LwwRegister);
+        var orSet = Sample(mode: LatticeMergeMode.OrSet);
+        Assert.That(lww, Is.Not.EqualTo(orSet));
     }
 }
