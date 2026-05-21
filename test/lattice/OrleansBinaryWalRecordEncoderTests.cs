@@ -73,8 +73,8 @@ public sealed class OrleansBinaryWalRecordEncoderTests
         var writer = new ArrayBufferWriter<byte>();
         encoder.Encode(in record, writer);
 
-        // Encoder strips TreeId at encode time (R-116): every storage
-        // and transport seam recovers the tree id from surrounding
+        // Encoder strips TreeId at encode time: every storage and
+        // transport seam recovers the tree id from surrounding
         // context, so the slot is elided to save ~25-35 bytes per
         // entry. The expected baseline is the same record with
         // TreeId = "".
@@ -155,8 +155,8 @@ public sealed class OrleansBinaryWalRecordEncoderTests
 
         var writer = new ArrayBufferWriter<byte>();
         encoder.Encode(in record, writer);
-        // Use the treeId-supplying overload so TreeId is restored from
-        // surrounding context (R-116). The single-arg overload returns
+        // Use the treeId-supplying overload so TreeId is restored
+        // from surrounding context. The single-arg overload returns
         // a record with TreeId == "" because Encode strips that slot.
         var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId);
 
@@ -264,8 +264,10 @@ public sealed class OrleansBinaryWalRecordEncoderTests
     public void Decode_with_treeId_restores_field_from_context()
     {
         // The treeId-supplying overload re-stamps TreeId from the
-        // caller-supplied context. Round-trip equivalence over every
-        // [Id] slot is the production-path invariant.
+        // caller-supplied context. Round-trip every slot the producer
+        // writes; byte[]-typed Value is compared by content (the
+        // record's default Equals uses reference equality on byte[]
+        // so the field-by-field assertion is the durable shape).
         var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
         var record = MakeSet() with { TreeId = "orders/eu-west-1/v3" };
 
@@ -273,7 +275,16 @@ public sealed class OrleansBinaryWalRecordEncoderTests
         encoder.Encode(in record, writer);
 
         var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId);
-        Assert.That(decoded, Is.EqualTo(record));
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.TreeId, Is.EqualTo(record.TreeId));
+            Assert.That(decoded.Op, Is.EqualTo(record.Op));
+            Assert.That(decoded.Key, Is.EqualTo(record.Key));
+            Assert.That(decoded.Value, Is.EqualTo(record.Value));
+            Assert.That(decoded.Timestamp, Is.EqualTo(record.Timestamp));
+            Assert.That(decoded.OriginClusterId, Is.EqualTo(record.OriginClusterId));
+            Assert.That(decoded.Mode, Is.EqualTo(record.Mode));
+        });
     }
 
     [Test]
@@ -299,7 +310,9 @@ public sealed class OrleansBinaryWalRecordEncoderTests
         // Serializer<T> is thread-safe; pin the wrapper's behaviour.
         var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
         var record = MakeSet();
-        var expected = _serializer.SerializeToArray(record);
+        // Encoder strips TreeId; compare against the stripped-
+        // baseline serializer output.
+        var expected = _serializer.SerializeToArray(record with { TreeId = string.Empty });
 
         var failures = 0;
         Parallel.For(0, 64, _ =>

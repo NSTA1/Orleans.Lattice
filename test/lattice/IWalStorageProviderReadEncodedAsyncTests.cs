@@ -129,7 +129,7 @@ public class IWalStorageProviderReadEncodedAsyncTests
         var segments = page.EncodedEntries.Span;
         for (var i = 0; i < segments.Length; i++)
         {
-            var decoded = encoder.Decode(segments[i].AsSpan());
+            var decoded = encoder.Decode(segments[i].AsSpan(), entries[i].Mutation.TreeId);
             Assert.Multiple(() =>
             {
                 Assert.That(decoded.Key, Is.EqualTo(entries[i].Mutation.Key), $"entry[{i}].Key");
