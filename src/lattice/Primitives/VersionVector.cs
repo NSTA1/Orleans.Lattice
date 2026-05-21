@@ -12,10 +12,19 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.VersionVector)]
-public sealed class VersionVector
+public sealed class VersionVector : ICrdt<VersionVector>
 {
     [Id(0)]
     public Dictionary<string, HybridLogicalClock> Entries { get; set; } = [];
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A <see cref="VersionVector"/> is bottom when no replica has
+    /// ticked - <see cref="Entries"/> is empty. A vector with entries
+    /// at <see cref="HybridLogicalClock.Zero"/> is not bottom because
+    /// the entries themselves carry replica identity.
+    /// </remarks>
+    public bool IsBottom => Entries.Count == 0;
 
     /// <summary>
     /// Advances the clock for the given <paramref name="replicaId"/> and records

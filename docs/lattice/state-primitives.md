@@ -15,6 +15,8 @@ HLC = (WallClockTicks, Counter)
 
 This gives every write a totally-ordered timestamp without requiring a central clock service.
 
+**Example use case:** stamping every write with a timestamp that orders correctly across silos even when their wall clocks drift by a few milliseconds - for example, deciding which of two near-simultaneous edits to the same user profile happened "last" without calling out to a central time service.
+
 ## Last-Writer-Wins Register (LWW)
 
 Each key-value entry in a leaf node is wrapped in `LwwValue<byte[]>`:
@@ -32,6 +34,8 @@ The merge rule is simple: **the entry with the higher `HLC` timestamp wins**. Th
 These three properties make `LwwValue` a join-semilattice - two divergent replicas can always merge to a consistent result regardless of message ordering.
 
 Deletes are represented as **tombstones** (an `LwwValue` with `IsTombstone = true` and a timestamp). A tombstone with a higher timestamp than a live value wins; a live value with a higher timestamp than a tombstone "resurrects" the key.
+
+**Example use case:** a user-profile store where each field (display name, avatar URL, theme) is overwritten by the most recent edit and you are happy to drop a losing concurrent write rather than show the user a conflict prompt. This is the default semantics for plain `SetAsync` / `GetAsync` on the tree.
 
 ## Monotonic Split State
 
@@ -51,6 +55,8 @@ The merge operation is `max()` - once a node reaches `SplitComplete`, no message
 - If two messages arrive out of order (one carrying `SplitInProgress`, one carrying `SplitComplete`), the result is simply `SplitComplete`.
 - After recovery, the caller's original operation (a write for leaves, a split promotion for internal nodes) is routed to the correct node based on the split key - ensuring no operations are silently dropped.
 
+**Example use case:** internal bookkeeping for the tree itself. When a leaf grows past its key budget and splits in two, the silo can crash partway through the split and still come back to a consistent tree on reactivation - no operator intervention, no manual repair. Application code does not interact with this primitive directly.
+
 ## Version Vector
 
 Each leaf node maintains a `VersionVector` - a map from replica ID (the grain's string identity) to the highest `HLC` value produced by that replica:
@@ -68,6 +74,8 @@ Merge({r1→10, r2→5}, {r1→8, r3→3}) = {r1→10, r2→5, r3→3}
 ```
 
 This is commutative, associative, and idempotent - making it safe for uncoordinated consumers to merge version vectors from multiple sources.
+
+**Example use case:** a read-through cache or a downstream replica that periodically asks "what's changed since I last looked?" The caller hands its current version vector to the leaf and gets back only the entries newer than that point, so a sidecar projector can keep an external search index up to date without re-scanning the whole tree on every poll.
 
 ## State Deltas
 
@@ -99,6 +107,8 @@ sequenceDiagram
 
 Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, applying the same delta twice is a no-op. This makes the protocol tolerant of duplicate deliveries and message reordering.
 
+**Example use case:** the wire format for incremental sync between a leaf and its caches or replicas. If the network drops a delta and the consumer retries, replaying the same delta is harmless; if two deltas arrive out of order, applying them in either order produces the same result.
+
 ## Multi-Value Register (MV-Register)
 
 Where `LwwValue` collapses concurrent writes by picking the higher HLC, the multi-value register `MvRegister` preserves every concurrent write as a dot-tagged entry so the application can resolve the conflict itself (e.g. surface every candidate to a user, or merge in a domain-aware way). Like the OR-Set, the register uses **causal dots** - `(replicaId, counter)` pairs - to distinguish concurrent updates from sequential overwrites.
@@ -118,3 +128,54 @@ This is commutative, associative, and idempotent.
 `MvRegister.Set(replicaId, value)` drops every entry the writer has observed locally and mints a fresh dot `(replicaId, NextCounter(replicaId))`. Concurrent writes from other replicas that have not been observed survive the next merge, producing a multi-value result that `MvRegisterAccessor<T>.ValuesAsync()` deserialises to `IReadOnlyList<T>`.
 
 Use the multi-value register when **losing a concurrent write is unacceptable** (shopping carts, collaborative-edit content, tag sets where order does not matter but presence does). Use `LwwValue` when last-writer-wins is the desired semantics and the application is happy to drop the loser silently.
+
+**Example use case:** a shopping-cart `notes` field that two devices edit while one of them is offline. With LWW, the offline device's note silently overwrites the online one when it reconnects. With MV-register, both notes survive the merge and the UI can show the user "you have two pending versions of this note - keep which one?" instead of losing data.
+
+## Recursive CRDT Composition (`ICrdt<TSelf>`)
+
+The primitives above (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`) all share the same merge contract: an in-place `MergeFrom(other)` that is commutative, associative, and idempotent, plus an `IsBottom` predicate that distinguishes a truly empty value from one that merely happens to evaluate to a neutral element (e.g. a `PnCounter` whose increments equal its decrements is **not** bottom because it still carries replica history).
+
+This contract is captured by the generic interface `ICrdt<TSelf>`:
+
+```
+interface ICrdt<TSelf>
+{
+    void MergeFrom(TSelf other);
+    bool IsBottom { get; }
+}
+```
+
+Every built-in primitive implements `ICrdt<TSelf>` so they can compose recursively as values inside container CRDTs without the container needing to know their internal layout.
+
+**Example use case:** building a custom container CRDT (say, a typed dictionary) whose values are any of the existing primitives, without having to write per-value-type merge logic. The container just calls `value.MergeFrom(other)` and trusts the primitive to do the right thing.
+
+## Observed-Remove Map (OR-Map)
+
+`OrMap<TKey, TValue>` is an **add-wins, observed-remove map** whose values are themselves CRDTs. Each `Set(key, replicaId, value)` mints a fresh causal dot `(replicaId, counter)` and stamps the value snapshot under that dot; `Remove(key)` tombstones every dot the local replica has currently observed for the key. Concurrent writes that the remover never observed survive the next merge - so the operation semantics are **add-wins** at the key level, while values under the same surviving dot **fold via `TValue.MergeFrom`**.
+
+```
+OrMapEntry<TValue> = (ReplicaId, Counter, Value)
+OrMap<TKey, TValue> = {
+    Adds:       { TKey -> { OrMapEntry<TValue> } },   // surviving dots and their values
+    Tombstones: { TKey -> { OrSetDot } }              // observed-and-removed dots
+}
+```
+
+`TValue` must satisfy `ICrdt<TValue>` and have a parameterless constructor. The merge rule is:
+
+- For each key, union the two sides' `Adds` and `Tombstones`.
+- Drop any add whose dot is in either side's tombstone set.
+- For surviving dots that appear on both sides with the same `(ReplicaId, Counter)`, recursively `TValue.MergeFrom` the two snapshots.
+- A key is observable iff at least one of its `Adds` entries survived; otherwise the key is absent.
+- `Get(key)` folds every surviving entry's `Value` through `MergeFrom` to produce a single converged `TValue`.
+
+Because the recursion bottoms out at primitives that are themselves commutative-associative-idempotent, the whole structure is a join-semilattice. `IsBottom` is `Adds.Count == 0 && Tombstones.Count == 0` so an `OrMap` of `PnCounter`s, for example, can distinguish "no key has ever been written" from "every key's counter currently sums to zero".
+
+**Example use case:** a per-user feature-flag override map (`OrMap<UserId, OrSet>`). Different silos toggle flags for different users concurrently; one silo removes a user from the override list while another adds new flags for that same user. The OR-Map keeps the new flags (add-wins), folds concurrent flag-set edits together at the value level, and lets removed users stay removed - all without coordination.
+
+Other typical pairings:
+
+- **Per-aggregate counters** (`OrMap<MetricId, PnCounter>`) where each metric must accumulate concurrent increments from many replicas.
+- **Per-key version vectors** (`OrMap<EntityId, VersionVector>`) for tracking causal history of independent entities.
+
+Use `ILattice.OrMap<TKey, TValue>(key)` to obtain the typed accessor; see `docs/lattice/api.md` for the surface.

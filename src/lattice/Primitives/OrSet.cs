@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.OrSet)]
-public sealed class OrSet
+public sealed class OrSet : ICrdt<OrSet>
 {
     /// <summary>
     /// Per-element live-add dots, keyed by the base64 encoding of the
@@ -45,6 +45,16 @@ public sealed class OrSet
             return true;
         }
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// An <see cref="OrSet"/> is bottom when no element has any live
+    /// (un-tombstoned) dot - i.e. <see cref="IsEmpty"/>. Tombstones may
+    /// still be present and are preserved for causal-history purposes,
+    /// but a containing composite (e.g.
+    /// <see cref="OrMap{TKey, TValue}"/>) treats the slot as empty.
+    /// </remarks>
+    public bool IsBottom => IsEmpty;
 
     /// <summary>Adds <paramref name="element"/> with a fresh causal dot.</summary>
     public void Add(byte[] element, string replicaId, long counter)

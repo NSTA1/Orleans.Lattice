@@ -339,4 +339,175 @@ public class CrdtAccessorIntegrationTests
         var tree = await CreateTreeAsync();
         Assert.That(async () => await tree.MvRegister<string>("k").MergeAsync(null!), Throws.ArgumentNullException);
     }
+
+    // ── OrMap ──────────────────────────────────────────────────
+
+    [Test]
+    public async Task OrMap_GetAsync_returns_empty_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        var map = await tree.OrMap<string, OrSet>("missing").GetAsync();
+        Assert.That(map.IsEmpty, Is.True);
+    }
+
+    [Test]
+    public async Task OrMap_SetAsync_then_GetValueAsync_returns_value()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrMap<string, OrSet>("k");
+        var inner = new OrSet();
+        inner.Add(Bytes("alpha"), "r1", 1);
+        await accessor.SetAsync("tags", "r1", inner);
+
+        Assert.That(await accessor.ContainsKeyAsync("tags"), Is.True);
+        var stored = await accessor.GetValueAsync("tags");
+        Assert.That(stored, Is.Not.Null);
+        Assert.That(stored!.Contains(Bytes("alpha")), Is.True);
+    }
+
+    [Test]
+    public async Task OrMap_RemoveAsync_drops_key()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrMap<string, OrSet>("k");
+        var inner = new OrSet();
+        inner.Add(Bytes("a"), "r1", 1);
+        await accessor.SetAsync("tags", "r1", inner);
+        await accessor.RemoveAsync("tags");
+
+        Assert.That(await accessor.ContainsKeyAsync("tags"), Is.False);
+        Assert.That(await accessor.GetValueAsync("tags"), Is.Null);
+    }
+
+    [Test]
+    public async Task OrMap_MergeAsync_unions_remote_state_and_recursively_merges_values()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrMap<string, OrSet>("k");
+
+        var localInner = new OrSet();
+        localInner.Add(Bytes("alpha"), "r1", 1);
+        await accessor.SetAsync("tags", "r1", localInner);
+
+        var remote = new OrMap<string, OrSet>();
+        var remoteInner = new OrSet();
+        remoteInner.Add(Bytes("beta"), "r2", 1);
+        remote.Set("tags", "r2", remoteInner);
+
+        await accessor.MergeAsync(remote);
+
+        var merged = await accessor.GetValueAsync("tags");
+        Assert.That(merged, Is.Not.Null);
+        Assert.That(merged!.Contains(Bytes("alpha")), Is.True);
+        Assert.That(merged.Contains(Bytes("beta")), Is.True);
+    }
+
+    [Test]
+    public async Task OrMap_SetAsync_throws_on_empty_replica_id()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").SetAsync("tags", "", new OrSet()),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task OrMap_SetAsync_throws_on_null_value()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").SetAsync("tags", "r1", null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task OrMap_MergeAsync_throws_on_null_other()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").MergeAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task OrMap_GetValueAsync_throws_on_null_map_key()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").GetValueAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task OrMap_ContainsKeyAsync_throws_on_null_map_key()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").ContainsKeyAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task OrMap_SetAsync_throws_on_null_map_key()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").SetAsync(null!, "r1", new OrSet()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task OrMap_RemoveAsync_throws_on_null_map_key()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").RemoveAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task OrMap_SetAsync_throws_on_zero_max_attempts()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrMap<string, OrSet>("k").SetAsync("tags", "r1", new OrSet(), maxAttempts: 0),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task OrMap_GetValueAsync_returns_null_for_absent_map_key()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrMap<string, OrSet>("k");
+        var inner = new OrSet();
+        inner.Add(Bytes("a"), "r1", 1);
+        await accessor.SetAsync("tags", "r1", inner);
+
+        var missing = await accessor.GetValueAsync("other");
+        Assert.That(missing, Is.Null);
+    }
+
+    [Test]
+    public async Task OrMap_RemoveAsync_is_idempotent()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrMap<string, OrSet>("k");
+        var inner = new OrSet();
+        inner.Add(Bytes("a"), "r1", 1);
+        await accessor.SetAsync("tags", "r1", inner);
+
+        await accessor.RemoveAsync("tags");
+        await accessor.RemoveAsync("tags");
+
+        Assert.That(await accessor.ContainsKeyAsync("tags"), Is.False);
+    }
+
+    [Test]
+    public async Task OrMap_accessor_exposes_lattice_and_key_properties()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrMap<string, OrSet>("k");
+        Assert.That(accessor.Lattice, Is.SameAs(tree));
+        Assert.That(accessor.Key, Is.EqualTo("k"));
+    }
 }
