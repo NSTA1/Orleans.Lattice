@@ -892,8 +892,15 @@ internal sealed class ReplicationShipperGrain(
                 // step with the head index.
                 if (!_partitionHeadDecoded[p])
                 {
+                    // Re-stamp TreeId from the shipper's owning grain
+                    // key: the producer's Encode stripped the slot,
+                    // and the shipper drains exactly one tree per
+                    // grain activation (the grain key is
+                    // "<treeName>/<peerClusterId>"), so _treeName is
+                    // the authoritative source of the tree id.
                     _partitionHead[p] = _walRecordEncoder.Decode(
-                        page[_partitionPageIndex[p]].EncodedPayload);
+                        page[_partitionPageIndex[p]].EncodedPayload,
+                        _treeName);
                     _partitionHeadDecoded[p] = true;
                 }
 

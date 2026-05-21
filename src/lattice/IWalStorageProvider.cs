@@ -126,7 +126,13 @@ public interface IWalStorageProvider
         var decoded = new WalEntry[segments.Length];
         for (var i = 0; i < segments.Length; i++)
         {
-            var record = encoder.Decode(segments[i].AsSpan());
+            // Re-stamp TreeId from the partition-key context: the
+            // producer's Encode strips the slot from the encoded bytes
+            // (every storage seam already supplies the tree id as a
+            // method parameter, so persisting it on every entry is
+            // pure duplication). The decode overload is the single
+            // place that restoration happens.
+            var record = encoder.Decode(segments[i].AsSpan(), treeId);
             decoded[i] = new WalEntry
             {
                 Offset = offsetSpan[i],

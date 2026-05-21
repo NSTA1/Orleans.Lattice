@@ -79,5 +79,39 @@ public interface IWalRecordEncoder
     /// back from the row's <c>Payload</c> column).
     /// </summary>
     /// <param name="encoded">The encoded payload bytes. Borrowed for the duration of the call; the implementation must not retain a reference to the underlying array.</param>
+    /// <remarks>
+    /// The encoder strips the redundant <see cref="WalRecord.TreeId"/>
+    /// slot at encode time because every storage and transport seam
+    /// already supplies the tree id from surrounding context (the
+    /// storage partition key, the framing header's <c>TreeName</c>
+    /// tail, the shipper's owning grain key). The single-argument
+    /// <c>Decode</c> therefore returns a record whose
+    /// <see cref="WalRecord.TreeId"/> is the empty string; call sites
+    /// that have the tree id in hand should prefer the
+    /// <see cref="Decode(ReadOnlySpan{byte}, string)"/> overload so the
+    /// returned record is field-complete. The single-argument overload
+    /// remains useful for forensic tooling that inspects raw WAL
+    /// bytes without surrounding context.
+    /// </remarks>
     WalRecord Decode(ReadOnlySpan<byte> encoded);
+
+    /// <summary>
+    /// Decodes a previously-<see cref="Encode"/>d payload back to a
+    /// <see cref="WalRecord"/> and re-stamps
+    /// <see cref="WalRecord.TreeId"/> from the supplied
+    /// <paramref name="treeId"/> context. Producer-side
+    /// <see cref="Encode"/> elides the tree-id slot from the encoded
+    /// bytes because every storage and transport seam recovers it from
+    /// surrounding context (the storage partition key, the framing
+    /// header's <c>TreeName</c> tail, the shipper's owning grain key);
+    /// this overload is the seam where the re-stamp happens.
+    /// </summary>
+    /// <param name="encoded">The encoded payload bytes. Borrowed for the duration of the call; the implementation must not retain a reference to the underlying array.</param>
+    /// <param name="treeId">The tree id recovered from surrounding context. Stamped onto <see cref="WalRecord.TreeId"/> on the returned value. Must not be <see langword="null"/>.</param>
+    WalRecord Decode(ReadOnlySpan<byte> encoded, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var record = Decode(encoded);
+        return record with { TreeId = treeId };
+    }
 }

@@ -176,7 +176,7 @@ public class IWalStorageProviderReadEncodedAsyncTests
         for (var i = 0; i < N; i++)
         {
             Assert.That(offsets[i], Is.EqualTo(classicEntries[i].Offset), $"offset mismatch at {i}");
-            var decoded = encoder.Decode(segments[i].AsSpan());
+            var decoded = encoder.Decode(segments[i].AsSpan(), classicEntries[i].Mutation.TreeId);
             var projected = Orleans.Lattice.BPlusTree.Grains.WalRecordConverter.FromWalRecord(in decoded);
             Assert.Multiple(() =>
             {
@@ -254,7 +254,7 @@ public class IWalStorageProviderReadEncodedAsyncTests
         var segments = page.EncodedEntries.Span;
         for (var i = 0; i < segments.Length; i++)
         {
-            var decoded = encoder.Decode(segments[i].AsSpan());
+            var decoded = encoder.Decode(segments[i].AsSpan(), entries[i].Mutation.TreeId);
             Assert.That(decoded.Key, Is.EqualTo(entries[i].Mutation.Key), $"entry[{i}].Key");
         }
     }
