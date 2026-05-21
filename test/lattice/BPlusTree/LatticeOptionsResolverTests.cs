@@ -320,4 +320,111 @@ public class LatticeOptionsResolverTests
                 && level == Microsoft.Extensions.Logging.LogLevel.Warning);
         Assert.That(warningCalls, Is.EqualTo(0));
     }
+
+    // --- CompactionLeafBatchSize ---
+
+    [Test]
+    public async Task CompactionLeafBatchSize_propagates_default_when_not_overridden()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedLeafBatchSizeTreesForTests();
+        var (resolver, _) = Build();
+
+        var resolved = await resolver.ResolveAsync("user-tree");
+
+        Assert.That(resolved.CompactionLeafBatchSize,
+            Is.EqualTo(LatticeOptions.DefaultCompactionLeafBatchSize));
+    }
+
+    [Test]
+    public async Task CompactionLeafBatchSize_propagates_per_tree_override()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedLeafBatchSizeTreesForTests();
+        var (resolver, _) = Build(new LatticeOptions { CompactionLeafBatchSize = 16 });
+
+        var resolved = await resolver.ResolveAsync("user-tree-batched");
+
+        Assert.That(resolved.CompactionLeafBatchSize, Is.EqualTo(16));
+    }
+
+    [Test]
+    public async Task CompactionLeafBatchSize_below_floor_is_clamped_to_floor()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedLeafBatchSizeTreesForTests();
+        var (resolver, _) = Build(new LatticeOptions { CompactionLeafBatchSize = 0 });
+
+        var resolved = await resolver.ResolveAsync("user-tree-zero-batch");
+
+        Assert.That(resolved.CompactionLeafBatchSize,
+            Is.EqualTo(LatticeOptions.MinCompactionLeafBatchSize));
+    }
+
+    [Test]
+    public async Task CompactionLeafBatchSize_clamp_warning_is_emitted_once_per_tree()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedLeafBatchSizeTreesForTests();
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
+        {
+            CompactionLeafBatchSize = -5,
+        });
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+            }));
+
+        var logger = Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeOptionsResolver>>();
+        logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Warning).Returns(true);
+        var resolver = new LatticeOptionsResolver(factory, monitor, logger);
+
+        await resolver.ResolveAsync("batch-clamp-warn-tree");
+        await resolver.ResolveAsync("batch-clamp-warn-tree");
+        await resolver.ResolveAsync("batch-clamp-warn-tree");
+
+        var warningCalls = logger.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(Microsoft.Extensions.Logging.ILogger.Log)
+                && c.GetArguments()[0] is Microsoft.Extensions.Logging.LogLevel level
+                && level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.That(warningCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task CompactionLeafBatchSize_at_floor_is_passed_through_without_warning()
+    {
+        LatticeOptionsResolver.ResetWarnedClampedLeafBatchSizeTreesForTests();
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
+        {
+            CompactionLeafBatchSize = LatticeOptions.MinCompactionLeafBatchSize,
+        });
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+            }));
+
+        var logger = Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeOptionsResolver>>();
+        logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Warning).Returns(true);
+        var resolver = new LatticeOptionsResolver(factory, monitor, logger);
+
+        var resolved = await resolver.ResolveAsync("batch-at-floor-tree");
+
+        Assert.That(resolved.CompactionLeafBatchSize,
+            Is.EqualTo(LatticeOptions.MinCompactionLeafBatchSize));
+        var warningCalls = logger.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(Microsoft.Extensions.Logging.ILogger.Log)
+                && c.GetArguments()[0] is Microsoft.Extensions.Logging.LogLevel level
+                && level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.That(warningCalls, Is.EqualTo(0));
+    }
 }

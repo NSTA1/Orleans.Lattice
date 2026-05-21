@@ -53,41 +53,43 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 
 | Option | Type | Default | Safe to change after data exists? |
 |---|---|---|---|
-| `KeysPageSize` | `int` | 512 | Yes |
-| `TombstoneGracePeriod` | `TimeSpan` | 24 hours | Yes |
-| `CompactionShardTickInterval` | `TimeSpan` | 2 seconds | Yes |
-| `SoftDeleteDuration` | `TimeSpan` | 72 hours | Yes |
-| `CacheTtl` | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
-| `PrefetchKeysScan` | `bool` | `false` | Yes |
-| `PrefetchEntriesScan` | `bool` | `false` | Yes |
-| `AutoSplitEnabled` | `bool` | `true` | Yes |
-| `HotShardOpsPerSecondThreshold` | `int` | 200 | Yes |
-| `HotShardSampleInterval` | `TimeSpan` | 30 seconds | Yes |
-| `HotShardSplitCooldown` | `TimeSpan` | 2 minutes | Yes |
-| `MaxConcurrentAutoSplits` | `int` | 2 | Yes |
-| `MaxConcurrentMigrations` | `int` | 4 | Yes |
-| `MaxConcurrentDrains` | `int` | 4 | Yes |
-| `SplitDrainBatchSize` | `int` | 1024 | Yes |
-| `AutoSplitMinTreeAge` | `TimeSpan` | 60 seconds | Yes |
-| `MaxScanRetries` | `int` | 3 | Yes |
-| `CursorIdleTtl` | `TimeSpan` | 48 hours | Yes |
-| `MaxCursorSnapshotPinTtl` | `TimeSpan` | 7 days | Yes |
-| `MaxPinnedSagaDecisions` | `int` | 100 000 | Yes |
-| `AtomicWriteRetention` | `TimeSpan` | 48 hours | Yes |
-| `TxDecisionRetention` | `TimeSpan` | 60 seconds | Yes |
-| `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
-| `DiagnosticsCacheTtl` | `TimeSpan` | 5 seconds | Yes |
-| `MaterialiserCheckpointInterval` | `TimeSpan` | 1 second | Yes |
-| `MaterialiserCheckpointEntries` | `int` | 1000 | Yes |
-| `MaxLeafReplayEntries` | `int` | 10 000 | Yes |
-| `LeafProjectionRetention` | `TimeSpan` | 7 days | Yes |
-| `ProjectionRebuildPolicy` | enum | `SnapshotThenWal` | Yes |
-| `MaintainProjectionDigest` | `bool` | `true` | Yes |
-| `PublishEvents` | `bool` | `false` | Yes |
-| `EventStreamProviderName` | `string` | `"Default"` | Yes (on next publish) |
-| `WalPartitions` | `int` | 1 | No (per-tree, pinned on first WAL write) |
-| `WalMaxBatchEntries` | `int` | 100 | Yes |
-| `WalMaxBatchBytes` | `long` | 4 MiB | Yes |
+| [`AtomicWriteRetention`](#atomicwriteretention) | `TimeSpan` | 48 hours | Yes |
+| [`AutoSplitEnabled`](#autosplitenabled) | `bool` | `true` | Yes |
+| [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
+| [`CacheTtl`](#cachettl) | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
+| [`CompactionLeafBatchSize`](#compactionleafbatchsize) | `int` | 64 | Yes |
+| [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 2 seconds | Yes |
+| [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
+| [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
+| [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
+| [`HotShardOpsPerSecondThreshold`](#hotshardopspersecondthreshold) | `int` | 200 | Yes |
+| [`HotShardSampleInterval`](#hotshardsampleinterval) | `TimeSpan` | 30 seconds | Yes |
+| [`HotShardSplitCooldown`](#hotshardsplitcooldown) | `TimeSpan` | 2 minutes | Yes |
+| [`KeysPageSize`](#keyspagesize) | `int` | 512 | Yes |
+| [`LeafProjectionRetention`](#leafprojectionretention) | `TimeSpan` | 7 days | Yes |
+| [`MaintainProjectionDigest`](#maintainprojectiondigest) | `bool` | `true` | Yes |
+| [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 1000 | Yes |
+| [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 1 second | Yes |
+| [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) | `int` | 2 | Yes |
+| [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
+| [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
+| [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
+| [`MaxLeafReplayEntries`](#maxleafreplayentries) | `int` | 10 000 | Yes |
+| [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
+| [`MaxScanRetries`](#maxscanretries) | `int` | 3 | Yes |
+| [`PrefetchEntriesScan`](#prefetchentriesscan) | `bool` | `false` | Yes |
+| [`PrefetchKeysScan`](#prefetchkeysscan) | `bool` | `false` | Yes |
+| [`ProjectionRebuildPolicy`](#projectionrebuildpolicy) | enum | `SnapshotThenWal` | Yes |
+| [`PublishEvents`](#publishevents) | `bool` | `false` | Yes |
+| [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
+| [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |
+| [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
+| [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
+| [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
+| [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
+| [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
+| [`WalPartitions`](#walpartitions) | `int` | 1 | No (per-tree, pinned on first WAL write) |
+| [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 
 ### Structural sizing (registry-pinned)
 
@@ -103,55 +105,23 @@ The virtual shard space is fixed at `LatticeConstants.DefaultVirtualShardCount =
 
 The pinned `ShardCount` must divide 4096 evenly for the default identity map to preserve `hash % ShardCount` routing exactly; this invariant is validated at use time by `ShardMap.CreateDefault`. The value is a compile-time constant - changing it in source would invalidate every persisted `ShardMap` and is treated as a breaking wire-format change.
 
-### `KeysPageSize`
+### `AtomicWriteRetention`
 
-The number of keys returned per page during ordered key scans (`ScanKeysAsync`). Larger pages reduce the number of grain calls at the cost of larger messages. This is a performance tuning knob and does not affect tree structure.
+Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hours). After a saga reaches a terminal state, its coordinator grain retains its persisted progress for this window so duplicate submissions with the same operation ID are idempotent. A retention reminder fires at the end of the window and clears the state. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup. See [Atomic Writes](atomic-writes.md).
 
-This option can be changed freely at any time. It takes effect on the next `ScanKeysAsync` call.
+This option can be changed freely at any time.
 
-### `TombstoneGracePeriod`
+### `AutoSplitEnabled`
 
-How long a deleted key's tombstone is retained before it becomes eligible for permanent removal by the compaction process. The grace period exists so that all cache replicas (`LeafCacheGrain` activations across silos) have time to observe the delete via delta replication before the tombstone disappears.
+Master switch for [adaptive shard splitting](shard-splitting.md). When `true` (the default), `HotShardMonitorGrain` periodically polls shard hotness counters and triggers splits when a shard's ops/sec exceeds `HotShardOpsPerSecondThreshold`. When `false`, no autonomic splits occur; the shard count remains fixed at `ShardCount`.
 
-Set to `Timeout.InfiniteTimeSpan` to disable tombstone compaction entirely. This is useful for trees where deletes are rare or where tombstone accumulation is acceptable.
+This option can be changed freely at any time. The change takes effect on the next `HotShardMonitorGrain` reminder tick.
 
-```csharp verify
-// Compact aggressively (12 hours)
-siloBuilder.ConfigureLattice(o => o.TombstoneGracePeriod = TimeSpan.FromHours(12));
+### `AutoSplitMinTreeAge`
 
-// Disable compaction for a specific tree
-siloBuilder.ConfigureLattice("archive-tree", o =>
-{
-    o.TombstoneGracePeriod = Timeout.InfiniteTimeSpan;
-});
-```
+Minimum tree age before the hot-shard monitor begins sampling (default: 60 seconds). Prevents splits during initial bulk-load bursts that would otherwise appear as sustained hot-shard traffic.
 
-This option can be changed freely at any time. The new grace period takes effect on the next compaction reminder tick. The reminder interval is automatically set to match the grace period (clamped to a minimum of 1 minute, the Orleans reminder floor).
-
-### `CompactionShardTickInterval`
-
-Gap inserted between consecutive per-shard ticks during a tombstone-compaction pass. Default **2 seconds**, floor **100 milliseconds**. The cadence is a scheduler-fairness knob and the **dominant control on activation pressure during a pass** - lowering it shortens the pass but raises the peak concurrent leaf activation count. The cadence is snapshotted at the start of each pass and can be changed freely at any time; the next pass picks up the new value.
-
-For the worked-example trade-off table, the activation-pressure model, the relationship to `GrainCollectionOptions.CollectionAge`, and operator-triage guidance (use `ILattice.CompactShardAsync` for "compact one shard fast"), see **[Tombstone Compaction - `CompactionShardTickInterval`](tombstone-compaction.md#compactionshardtickinterval)**.
-
-### `SoftDeleteDuration`
-
-How long a soft-deleted tree's data is retained in storage before being permanently purged. During this window the tree is inaccessible - all reads and writes throw `InvalidOperationException` - but its grain state still exists in the storage provider. After the duration elapses, a grain reminder triggers a full purge that walks every shard, clears all leaf and internal node state, and deactivates each grain.
-
-Set to `TimeSpan.Zero` for immediate purge on the next reminder tick (clamped to a 1-minute minimum by the Orleans reminder floor).
-
-```csharp verify
-// Retain deleted trees for 7 days
-siloBuilder.ConfigureLattice(o => o.SoftDeleteDuration = TimeSpan.FromDays(7));
-
-// Immediate purge for a specific tree
-siloBuilder.ConfigureLattice("ephemeral-tree", o =>
-{
-    o.SoftDeleteDuration = TimeSpan.Zero;
-});
-```
-
-This option can be changed freely at any time. The new duration takes effect on the next deletion. Changing it does not affect trees that have already been deleted.
+This option can be changed freely at any time.
 
 ### `CacheTtl`
 
@@ -170,57 +140,50 @@ siloBuilder.ConfigureLattice("realtime", o =>
 
 This option can be changed freely at any time. The new TTL takes effect on the next read. A value of `TimeSpan.Zero` preserves the original behaviour (refresh on every read).
 
-### `PrefetchKeysScan`
+### `CompactionLeafBatchSize`
 
-When enabled, `ScanKeysAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
-
-```csharp verify
-// Enable globally
-siloBuilder.ConfigureLattice(o => o.PrefetchKeysScan = true);
-```
-
-Pre-fetch can also be controlled per-call via the `prefetch` parameter on `ScanKeysAsync`, which overrides the global option:
+Maximum number of leaves the tombstone-compaction coordinator visits within a single shard before yielding for one `CompactionShardTickInterval`. Default **64 leaves**, floor **1**. The leaf walk resumes on the next timer tick from a persisted in-shard cursor, so progress survives silo crashes the same way the shard cursor does. This is the **dominant control on peak concurrent leaf activations during a pass**: with batching, peak activations are bounded by `CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval)` regardless of tree size. The default 64 reproduces pre-batching behaviour exactly on shards with <= 64 leaves (the common case). Values below 1 are clamped to 1 with a one-shot warning per tree per process. Snapshotted at pass start; changing the option mid-pass does not reshape the in-flight pass.
 
 ```csharp verify
-// Override for a single call regardless of global setting
-await foreach (var key in tree.ScanKeysAsync(prefetch: true))
-{
-    // ...
-}
+// Cut peak concurrent leaf activations by yielding more aggressively
+// within each shard. Trades pass wall-clock for activation headroom.
+siloBuilder.ConfigureLattice("activation-sensitive-tree", o => o.CompactionLeafBatchSize = 16);
 ```
 
-Because each pre-fetched page is held in memory until consumed, callers that abort iteration early (e.g. `Take(n)`) pay for pages they never read. For bounded scans, leave this disabled or pass `prefetch: false` explicitly.
+For the relationship between `CompactionLeafBatchSize` and `CompactionShardTickInterval`, the multiplicative activation-pressure bound, and the worked-example table, see **[Tombstone Compaction - `CompactionLeafBatchSize`](tombstone-compaction.md#compactionleafbatchsize)**.
+
+### `CompactionShardTickInterval`
+
+Gap inserted between consecutive per-shard ticks during a tombstone-compaction pass. Default **2 seconds**, floor **100 milliseconds**. The cadence is a scheduler-fairness knob and the **dominant control on activation pressure during a pass** - lowering it shortens the pass but raises the peak concurrent leaf activation count. The cadence is snapshotted at the start of each pass and can be changed freely at any time; the next pass picks up the new value.
+
+For the worked-example trade-off table, the activation-pressure model, the relationship to `GrainCollectionOptions.CollectionAge`, and operator-triage guidance (use `ILattice.CompactShardAsync` for "compact one shard fast"), see **[Tombstone Compaction - `CompactionShardTickInterval`](tombstone-compaction.md#compactionshardtickinterval)**.
+
+### `CursorIdleTtl`
+
+Sliding idle timeout for stateful cursors opened via `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` (default: 48 hours). Each successful cursor step refreshes the reminder; if it fires without intervening activity the cursor grain clears its persisted state, unregisters the reminder, and deactivates. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller values are clamped to the floor. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup - cursors then live until `CloseCursorAsync` is called. See [Durable Cursors](durable-cursors.md).
 
 This option can be changed freely at any time.
 
-### `PrefetchEntriesScan`
+### `DiagnosticsCacheTtl`
 
-When enabled, `ScanEntriesAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
+How long the internal diagnostics grain caches a `TreeDiagnosticReport` before assembling a fresh sample (default: 5 seconds). `ILattice.DiagnoseAsync` is an admin-rate API; caching coalesces repeat callers (e.g. dashboards polling every few seconds) so that a single fan-out walks every shard rather than one per call.
 
-```csharp verify
-// Enable globally
-siloBuilder.ConfigureLattice(o => o.PrefetchEntriesScan = true);
-```
+Shallow (`deep: false`) and deep (`deep: true`) reports are cached independently. The cache is invalidated immediately when an adaptive split commits, so the next call after a topology change always returns a fresh report.
 
-Pre-fetch can also be controlled per-call via the `prefetch` parameter on `ScanEntriesAsync`, which overrides the global option:
+Set to `TimeSpan.Zero` to disable caching entirely - every call assembles a new report. This is useful in tests or for tight polling scenarios where staleness is unacceptable.
 
 ```csharp verify
-// Override for a single call regardless of global setting
-await foreach (var entry in tree.ScanEntriesAsync(prefetch: true))
-{
-    // ...
-}
+// Disable caching for a debug tree
+siloBuilder.ConfigureLattice("debug-tree", o => o.DiagnosticsCacheTtl = TimeSpan.Zero);
 ```
 
-Because each pre-fetched page is held in memory until consumed, callers that abort iteration early (e.g. `Take(n)`) pay for pages they never read. For bounded scans, leave this disabled or pass `prefetch: false` explicitly.
+This option can be changed freely at any time. The new TTL takes effect on the next `DiagnoseAsync` call.
 
-This option can be changed freely at any time.
+### `EventStreamProviderName`
 
-### `AutoSplitEnabled`
+Name of the Orleans stream provider Lattice publishes `LatticeTreeEvent` notifications onto (default: `"Default"`). The same name must be configured on every silo (publishers) and on the client (subscribers); register the provider via the standard `siloBuilder.AddMemoryStreams("Default")` / equivalent durable-stream extension. Only consulted when `PublishEvents` is `true`.
 
-Master switch for [adaptive shard splitting](shard-splitting.md). When `true` (the default), `HotShardMonitorGrain` periodically polls shard hotness counters and triggers splits when a shard's ops/sec exceeds `HotShardOpsPerSecondThreshold`. When `false`, no autonomic splits occur; the shard count remains fixed at `ShardCount`.
-
-This option can be changed freely at any time. The change takes effect on the next `HotShardMonitorGrain` reminder tick.
+This option can be changed freely at any time. The new value takes effect on the next publish.
 
 ### `HotShardOpsPerSecondThreshold`
 
@@ -240,145 +203,15 @@ Minimum time between consecutive splits of the same shard (default: 2 minutes). 
 
 This option can be changed freely at any time.
 
-### `MaxConcurrentAutoSplits`
+### `KeysPageSize`
 
-Maximum number of in-flight adaptive splits per tree (default: 2). Because `HotShardMonitorGrain` is keyed per tree, this limit is enforced independently per tree in a multi-tree cluster.
+The number of keys returned per page during ordered key scans (`ScanKeysAsync`). Larger pages reduce the number of grain calls at the cost of larger messages. This is a performance tuning knob and does not affect tree structure.
 
-This option can be changed freely at any time.
-
-### `MaxConcurrentMigrations`
-
-Maximum number of concurrent active-tombstone migrations per tree (default: 4). Helps limit the burst I/O load during bulk-deletes. Each migration drains a tombstone's shadow-write in the background.
-
-This option can be changed freely at any time.
-
-### `MaxConcurrentDrains`
-
-Maximum number of concurrent shadow-write drains per tree (default: 4). Helps limit the burst I/O load during adaptive splits. Each drain transfers a split shard's data to the new location in the background.
-
-This option can be changed freely at any time.
-
-### `SplitDrainBatchSize`
-
-Number of entries per batch during the shadow-write drain phase of an adaptive split (default: 1024). Larger batches reduce the number of drain rounds but increase per-round memory and storage I/O.
-
-This option can be changed freely at any time.
-
-### `AutoSplitMinTreeAge`
-
-Minimum tree age before the hot-shard monitor begins sampling (default: 60 seconds). Prevents splits during initial bulk-load bursts that would otherwise appear as sustained hot-shard traffic.
-
-This option can be changed freely at any time.
-
-### `MaxScanRetries`
-
-Maximum bounded-retry passes for `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
-
-This option can be changed freely at any time.
-
-### `CursorIdleTtl`
-
-Sliding idle timeout for stateful cursors opened via `OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `OpenDeleteRangeCursorAsync` (default: 48 hours). Each successful cursor step refreshes the reminder; if it fires without intervening activity the cursor grain clears its persisted state, unregisters the reminder, and deactivates. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller values are clamped to the floor. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup - cursors then live until `CloseCursorAsync` is called. See [Durable Cursors](durable-cursors.md).
-
-This option can be changed freely at any time.
-
-### `MaxCursorSnapshotPinTtl`
-
-Hard upper bound on how long the per-tree `ITxRegistryGrain` will retain the saga-decision snapshot captured by a point-in-time durable cursor (default: 7 days). A live point-in-time cursor slides this TTL on every `Next*Async`; a stalled cursor that misses the slide will eventually have its pin reaped by the registry, after which the next call surfaces `LatticeCursorSnapshotExpiredException` and the cursor must be reopened.
-
-The cap exists so a forgotten point-in-time cursor cannot stall registry-tombstone pruning forever. Set `Timeout.InfiniteTimeSpan` to disable the registry-side cap entirely - cursor lifetime then depends solely on `CursorIdleTtl` and on `MaxPinnedSagaDecisions`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors).
-
-This option can be changed freely at any time.
-
-### `MaxPinnedSagaDecisions`
-
-Registry-wide footprint cap on the number of saga decisions that may be pinned across all live point-in-time cursors on a single tree (default: 100 000). `OpenKeyCursorAsync` / `OpenEntryCursorAsync` opened with `pointInTime: true` consult the registry: if accepting the new snapshot would push the pinned-decision count past this cap, the open call throws `LatticeCursorRegistryPinExhaustedException` and no pin is installed. Existing pinned cursors continue paging.
-
-Sized for a tree carrying a steady-state in-flight-saga set in the low thousands plus a handful of overlapping long-running point-in-time cursors. Raise if a workload routinely opens many concurrent multi-day point-in-time cursors against a saga-heavy tree; lower if a single tree must keep registry footprint tightly bounded.
-
-This option can be changed freely at any time.
-
-### `AtomicWriteRetention`
-
-Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hours). After a saga reaches a terminal state, its coordinator grain retains its persisted progress for this window so duplicate submissions with the same operation ID are idempotent. A retention reminder fires at the end of the window and clears the state. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup. See [Atomic Writes](atomic-writes.md).
-
-This option can be changed freely at any time.
-
-### `TxDecisionRetention`
-
-Retention window for a completed saga's commit/abort decision in the per-tree `ITxRegistryGrain` after the saga calls `ForgetAsync` (default: 60 seconds). The registry stamps a `ForgottenAt` tombstone instead of evicting the decision; for the duration of the window `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to surface the decision so that a process which installs a *new* pending bucket on that txid *after* the saga's terminal fan-out can still resolve the verdict and apply the terminal directly.
-
-The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's `_pendingTx` buckets, and its post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast by reading the retained verdict. Without retention, a saga that completed microseconds before the sweep installed its pending bucket would leave a destination-shard orphan with no recoverable outcome.
-
-Tombstones are physically purged on the next `ForgetAsync` / `MarkCommittedAsync` / `MarkAbortedAsync` call against the registry (inline `PruneExpired` pass). Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
-
-This option can be changed freely at any time.
-
-### `VersionVectorRetention`
-
-How long to retain version vectors for deleted keys (default: `InfiniteTimeSpan`, disabled). When a key is deleted, its version vector is retained in the `LeafCacheGrain` for this duration to support historical scans. After the retention window, the vector is expunged from the cache.
-
-This option can be changed freely at any time.
-
-### `DiagnosticsCacheTtl`
-
-How long the internal diagnostics grain caches a `TreeDiagnosticReport` before assembling a fresh sample (default: 5 seconds). `ILattice.DiagnoseAsync` is an admin-rate API; caching coalesces repeat callers (e.g. dashboards polling every few seconds) so that a single fan-out walks every shard rather than one per call.
-
-Shallow (`deep: false`) and deep (`deep: true`) reports are cached independently. The cache is invalidated immediately when an adaptive split commits, so the next call after a topology change always returns a fresh report.
-
-Set to `TimeSpan.Zero` to disable caching entirely - every call assembles a new report. This is useful in tests or for tight polling scenarios where staleness is unacceptable.
-
-```csharp verify
-// Disable caching for a debug tree
-siloBuilder.ConfigureLattice("debug-tree", o => o.DiagnosticsCacheTtl = TimeSpan.Zero);
-```
-
-This option can be changed freely at any time. The new TTL takes effect on the next `DiagnoseAsync` call.
-
-### `MaterialiserCheckpointInterval`
-
-How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 1 second). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode - strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
-
-A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` × steady-state apply rate of replay work on restart.
-
-```csharp verify
-// Strict RTO: checkpoint on every advance.
-siloBuilder.ConfigureLattice("strict-tree", o => o.MaterialiserCheckpointInterval = TimeSpan.Zero);
-```
-
-This option can be changed freely at any time.
-
-### `MaterialiserCheckpointEntries`
-
-Entry-count threshold above which a pending materialiser checkpoint is force-flushed to durable storage even if `MaterialiserCheckpointInterval` has not elapsed (default: 1 000). Together with `MaterialiserCheckpointInterval` this bounds replay cost on a worst-case crash: at most `MaterialiserCheckpointEntries` mutations have to be replayed against the projection on activation.
-
-This option can be changed freely at any time.
-
-### `MaxLeafReplayEntries`
-
-Maximum number of WAL entries a cold leaf is permitted to replay against its projection at activation time before the leaf falls back to the snapshot-then-WAL recovery path indicated by `ProjectionRebuildPolicy` (default: 10 000). Bounds activation latency for a leaf whose persisted checkpoint has fallen far behind the WAL head; see [Projection Rebuild](projection-rebuild.md) for the full trigger set.
-
-```csharp verify
-siloBuilder.ConfigureLattice(o => o.MaxLeafReplayEntries = 100_000);
-```
-
-This option can be changed freely at any time. The new value takes effect on the next leaf activation.
+This option can be changed freely at any time. It takes effect on the next `ScanKeysAsync` call.
 
 ### `LeafProjectionRetention`
 
 Maximum age beyond which a cold leaf's persisted projection is treated as stale, forcing the snapshot-then-WAL recovery path on activation (default: 7 days). Defends against a leaf that has been silent long enough for the WAL to be trimmed past its persisted checkpoint without explicit detection. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger; the offset-gap trigger (`MaxLeafReplayEntries`) and the WAL-trim trigger continue to apply.
-
-This option can be changed freely at any time.
-
-### `ProjectionRebuildPolicy`
-
-Selects the recovery strategy a leaf grain takes when one of the fall-off-log triggers fires (default: `SnapshotThenWal`):
-
-| Value | Behaviour |
-|---|---|
-| `SnapshotThenWal` | Drains the per-leaf snapshot, persists the snapshot offset as the new checkpoint, then tail-replays the remaining WAL slice. Reliable: works even when the WAL has been trimmed below the leaf's previous checkpoint. |
-| `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
-| `Fail` | Surfaces `LeafProjectionStaleException` at activation and waits for an operator-driven rebuild. |
 
 This option can be changed freely at any time.
 
@@ -409,23 +242,204 @@ siloBuilder.ConfigureLattice("audited-tree", opts =>
 
 See [Projection Rebuild](projection-rebuild.md#opting-out-of-digest-maintenance) for the cost model and the WAL-storage rationale.
 
+### `MaterialiserCheckpointEntries`
+
+Entry-count threshold above which a pending materialiser checkpoint is force-flushed to durable storage even if `MaterialiserCheckpointInterval` has not elapsed (default: 1 000). Together with `MaterialiserCheckpointInterval` this bounds replay cost on a worst-case crash: at most `MaterialiserCheckpointEntries` mutations have to be replayed against the projection on activation.
+
+This option can be changed freely at any time.
+
+### `MaterialiserCheckpointInterval`
+
+How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 1 second). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode - strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
+
+A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` × steady-state apply rate of replay work on restart.
+
+```csharp verify
+// Strict RTO: checkpoint on every advance.
+siloBuilder.ConfigureLattice("strict-tree", o => o.MaterialiserCheckpointInterval = TimeSpan.Zero);
+```
+
+This option can be changed freely at any time.
+
+### `MaxConcurrentAutoSplits`
+
+Maximum number of in-flight adaptive splits per tree (default: 2). Because `HotShardMonitorGrain` is keyed per tree, this limit is enforced independently per tree in a multi-tree cluster.
+
+This option can be changed freely at any time.
+
+### `MaxConcurrentDrains`
+
+Maximum number of concurrent shadow-write drains per tree (default: 4). Helps limit the burst I/O load during adaptive splits. Each drain transfers a split shard's data to the new location in the background.
+
+This option can be changed freely at any time.
+
+### `MaxConcurrentMigrations`
+
+Maximum number of concurrent active-tombstone migrations per tree (default: 4). Helps limit the burst I/O load during bulk-deletes. Each migration drains a tombstone's shadow-write in the background.
+
+This option can be changed freely at any time.
+
+### `MaxCursorSnapshotPinTtl`
+
+Hard upper bound on how long the per-tree `ITxRegistryGrain` will retain the saga-decision snapshot captured by a point-in-time durable cursor (default: 7 days). A live point-in-time cursor slides this TTL on every `Next*Async`; a stalled cursor that misses the slide will eventually have its pin reaped by the registry, after which the next call surfaces `LatticeCursorSnapshotExpiredException` and the cursor must be reopened.
+
+The cap exists so a forgotten point-in-time cursor cannot stall registry-tombstone pruning forever. Set `Timeout.InfiniteTimeSpan` to disable the registry-side cap entirely - cursor lifetime then depends solely on `CursorIdleTtl` and on `MaxPinnedSagaDecisions`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors).
+
+This option can be changed freely at any time.
+
+### `MaxLeafReplayEntries`
+
+Maximum number of WAL entries a cold leaf is permitted to replay against its projection at activation time before the leaf falls back to the snapshot-then-WAL recovery path indicated by `ProjectionRebuildPolicy` (default: 10 000). Bounds activation latency for a leaf whose persisted checkpoint has fallen far behind the WAL head; see [Projection Rebuild](projection-rebuild.md) for the full trigger set.
+
+```csharp verify
+siloBuilder.ConfigureLattice(o => o.MaxLeafReplayEntries = 100_000);
+```
+
+This option can be changed freely at any time. The new value takes effect on the next leaf activation.
+
+### `MaxPinnedSagaDecisions`
+
+Registry-wide footprint cap on the number of saga decisions that may be pinned across all live point-in-time cursors on a single tree (default: 100 000). `OpenKeyCursorAsync` / `OpenEntryCursorAsync` opened with `pointInTime: true` consult the registry: if accepting the new snapshot would push the pinned-decision count past this cap, the open call throws `LatticeCursorRegistryPinExhaustedException` and no pin is installed. Existing pinned cursors continue paging.
+
+Sized for a tree carrying a steady-state in-flight-saga set in the low thousands plus a handful of overlapping long-running point-in-time cursors. Raise if a workload routinely opens many concurrent multi-day point-in-time cursors against a saga-heavy tree; lower if a single tree must keep registry footprint tightly bounded.
+
+This option can be changed freely at any time.
+
+### `MaxScanRetries`
+
+Maximum bounded-retry passes for `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
+
+This option can be changed freely at any time.
+
+### `PrefetchEntriesScan`
+
+When enabled, `ScanEntriesAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
+
+```csharp verify
+// Enable globally
+siloBuilder.ConfigureLattice(o => o.PrefetchEntriesScan = true);
+```
+
+Pre-fetch can also be controlled per-call via the `prefetch` parameter on `ScanEntriesAsync`, which overrides the global option:
+
+```csharp verify
+// Override for a single call regardless of global setting
+await foreach (var entry in tree.ScanEntriesAsync(prefetch: true))
+{
+    // ...
+}
+```
+
+Because each pre-fetched page is held in memory until consumed, callers that abort iteration early (e.g. `Take(n)`) pay for pages they never read. For bounded scans, leave this disabled or pass `prefetch: false` explicitly.
+
+This option can be changed freely at any time.
+
+### `PrefetchKeysScan`
+
+When enabled, `ScanKeysAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
+
+```csharp verify
+// Enable globally
+siloBuilder.ConfigureLattice(o => o.PrefetchKeysScan = true);
+```
+
+Pre-fetch can also be controlled per-call via the `prefetch` parameter on `ScanKeysAsync`, which overrides the global option:
+
+```csharp verify
+// Override for a single call regardless of global setting
+await foreach (var key in tree.ScanKeysAsync(prefetch: true))
+{
+    // ...
+}
+```
+
+Because each pre-fetched page is held in memory until consumed, callers that abort iteration early (e.g. `Take(n)`) pay for pages they never read. For bounded scans, leave this disabled or pass `prefetch: false` explicitly.
+
+This option can be changed freely at any time.
+
+### `ProjectionRebuildPolicy`
+
+Selects the recovery strategy a leaf grain takes when one of the fall-off-log triggers fires (default: `SnapshotThenWal`):
+
+| Value | Behaviour |
+|---|---|
+| `SnapshotThenWal` | Drains the per-leaf snapshot, persists the snapshot offset as the new checkpoint, then tail-replays the remaining WAL slice. Reliable: works even when the WAL has been trimmed below the leaf's previous checkpoint. |
+| `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
+| `Fail` | Surfaces `LeafProjectionStaleException` at activation and waits for an operator-driven rebuild. |
+
+This option can be changed freely at any time.
+
 ### `PublishEvents`
 
 When `true`, Lattice publishes `LatticeTreeEvent` notifications on the Orleans stream namespace `orleans.lattice.events` covering per-key writes, atomic-write completions, splits, compactions, snapshots, resizes, reshards, and tree-lifecycle transitions (default: `false`, opt-in per tree). Consumers subscribe via `LatticeExtensions.SubscribeToEventsAsync`. Publication is fire-and-forget and log-and-swallow, so a missing or misconfigured stream provider never breaks the write path. Per-tree overrides applied via `ILattice.SetPublishEventsEnabledAsync` are persisted on the tree's registry entry and override the silo-wide default. See [Events](events.md).
 
 This option can be changed freely at any time. Per-tree overrides take effect on the publishing activation immediately; other activations refresh within a few seconds.
 
-### `EventStreamProviderName`
+### `SoftDeleteDuration`
 
-Name of the Orleans stream provider Lattice publishes `LatticeTreeEvent` notifications onto (default: `"Default"`). The same name must be configured on every silo (publishers) and on the client (subscribers); register the provider via the standard `siloBuilder.AddMemoryStreams("Default")` / equivalent durable-stream extension. Only consulted when `PublishEvents` is `true`.
+How long a soft-deleted tree's data is retained in storage before being permanently purged. During this window the tree is inaccessible - all reads and writes throw `InvalidOperationException` - but its grain state still exists in the storage provider. After the duration elapses, a grain reminder triggers a full purge that walks every shard, clears all leaf and internal node state, and deactivates each grain.
 
-This option can be changed freely at any time. The new value takes effect on the next publish.
+Set to `TimeSpan.Zero` for immediate purge on the next reminder tick (clamped to a 1-minute minimum by the Orleans reminder floor).
 
-### `WalPartitions`
+```csharp verify
+// Retain deleted trees for 7 days
+siloBuilder.ConfigureLattice(o => o.SoftDeleteDuration = TimeSpan.FromDays(7));
 
-Number of independent WAL partitions per tree (default: 1). The foreground commit-log writer hashes the mutation key modulo this value to pick the partition, so increasing the value fans WAL throughput out across multiple `IWalShardGrain` activations when a single partition becomes the bottleneck. The dominant single-cluster shape uses 1.
+// Immediate purge for a specific tree
+siloBuilder.ConfigureLattice("ephemeral-tree", o =>
+{
+    o.SoftDeleteDuration = TimeSpan.Zero;
+});
+```
 
-**Per-tree, pinned on first WAL write.** Changing this value after a tree has accepted writes silently re-routes new mutations to different partitions; existing entries remain in the partition they were originally written to. Set the value before the tree first commits if a non-default fan-out is required.
+This option can be changed freely at any time. The new duration takes effect on the next deletion. Changing it does not affect trees that have already been deleted.
+
+### `SplitDrainBatchSize`
+
+Number of entries per batch during the shadow-write drain phase of an adaptive split (default: 1024). Larger batches reduce the number of drain rounds but increase per-round memory and storage I/O.
+
+This option can be changed freely at any time.
+
+### `TombstoneGracePeriod`
+
+How long a deleted key's tombstone is retained before it becomes eligible for permanent removal by the compaction process. The grace period exists so that all cache replicas (`LeafCacheGrain` activations across silos) have time to observe the delete via delta replication before the tombstone disappears.
+
+Set to `Timeout.InfiniteTimeSpan` to disable tombstone compaction entirely. This is useful for trees where deletes are rare or where tombstone accumulation is acceptable.
+
+```csharp verify
+// Compact aggressively (12 hours)
+siloBuilder.ConfigureLattice(o => o.TombstoneGracePeriod = TimeSpan.FromHours(12));
+
+// Disable compaction for a specific tree
+siloBuilder.ConfigureLattice("archive-tree", o =>
+{
+    o.TombstoneGracePeriod = Timeout.InfiniteTimeSpan;
+});
+```
+
+This option can be changed freely at any time. The new grace period takes effect on the next compaction reminder tick. The reminder interval is automatically set to match the grace period (clamped to a minimum of 1 minute, the Orleans reminder floor).
+
+### `TxDecisionRetention`
+
+Retention window for a completed saga's commit/abort decision in the per-tree `ITxRegistryGrain` after the saga calls `ForgetAsync` (default: 60 seconds). The registry stamps a `ForgottenAt` tombstone instead of evicting the decision; for the duration of the window `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to surface the decision so that a process which installs a *new* pending bucket on that txid *after* the saga's terminal fan-out can still resolve the verdict and apply the terminal directly.
+
+The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's `_pendingTx` buckets, and its post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast by reading the retained verdict. Without retention, a saga that completed microseconds before the sweep installed its pending bucket would leave a destination-shard orphan with no recoverable outcome.
+
+Tombstones are physically purged on the next `ForgetAsync` / `MarkCommittedAsync` / `MarkAbortedAsync` call against the registry (inline `PruneExpired` pass). Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
+
+This option can be changed freely at any time.
+
+### `VersionVectorRetention`
+
+How long to retain version vectors for deleted keys (default: `InfiniteTimeSpan`, disabled). When a key is deleted, its version vector is retained in the `LeafCacheGrain` for this duration to support historical scans. After the retention window, the vector is expunged from the cache.
+
+This option can be changed freely at any time.
+
+### `WalMaxBatchBytes`
+
+Maximum byte budget the partition grain coalesces into a single storage flush (default: 4 MiB). Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
+
+This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
 ### `WalMaxBatchEntries`
 
@@ -433,11 +447,11 @@ Maximum number of WAL entries the partition grain coalesces into a single storag
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
-### `WalMaxBatchBytes`
+### `WalPartitions`
 
-Maximum byte budget the partition grain coalesces into a single storage flush (default: 4 MiB). Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
+Number of independent WAL partitions per tree (default: 1). The foreground commit-log writer hashes the mutation key modulo this value to pick the partition, so increasing the value fans WAL throughput out across multiple `IWalShardGrain` activations when a single partition becomes the bottleneck. The dominant single-cluster shape uses 1.
 
-This option can be changed freely at any time. The new value takes effect on the next batch boundary.
+**Per-tree, pinned on first WAL write.** Changing this value after a tree has accepted writes silently re-routes new mutations to different partitions; existing entries remain in the partition they were originally written to. Set the value before the tree first commits if a non-default fan-out is required.
 
 ### `WalRetention`
 

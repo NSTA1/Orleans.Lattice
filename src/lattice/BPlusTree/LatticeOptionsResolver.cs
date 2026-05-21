@@ -61,6 +61,14 @@ internal sealed class LatticeOptionsResolver(
     /// </summary>
     private static readonly ConcurrentDictionary<string, byte> WarnedClampedTickIntervalTrees = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Trees for which a "configured CompactionLeafBatchSize below floor"
+    /// warning has already been logged. Re-resolving the same tree must not
+    /// spam the log on every grain activation; the warning is informational
+    /// and the clamp is unconditional.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, byte> WarnedClampedLeafBatchSizeTrees = new(StringComparer.Ordinal);
+
     /// <summary>Resolves the effective options for <paramref name="treeId"/>.</summary>
     public async Task<ResolvedLatticeOptions> ResolveAsync(string treeId)
     {
@@ -165,6 +173,25 @@ internal sealed class LatticeOptionsResolver(
             }
         }
 
+        // Compaction leaf-batch size: clamp configured values below the
+        // documented floor (1) up to the floor with a one-shot warning per
+        // tree per process. A batch size of zero would stall the leaf walk
+        // indefinitely; a batch size of one is the legitimate "yield after
+        // every leaf" extreme.
+        var configuredLeafBatchSize = baseOptions.CompactionLeafBatchSize;
+        var effectiveLeafBatchSize = configuredLeafBatchSize;
+        if (configuredLeafBatchSize < LatticeOptions.MinCompactionLeafBatchSize)
+        {
+            effectiveLeafBatchSize = LatticeOptions.MinCompactionLeafBatchSize;
+            if (WarnedClampedLeafBatchSizeTrees.TryAdd(treeId, 0))
+            {
+                _logger.LogWarning(
+                    "Tree {TreeId} has CompactionLeafBatchSize={Configured} configured below the {Floor} floor; " +
+                    "clamping to the floor. A batch size of zero would stall the leaf walk indefinitely.",
+                    treeId, configuredLeafBatchSize, LatticeOptions.MinCompactionLeafBatchSize);
+            }
+        }
+
         return new ResolvedLatticeOptions
         {
             MaxLeafKeys = mlk,
@@ -198,6 +225,7 @@ internal sealed class LatticeOptionsResolver(
             MaxLeafEntriesBeforeForcedCompaction = baseOptions.MaxLeafEntriesBeforeForcedCompaction,
             CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,
             CompactionShardTickInterval = effectiveTickInterval,
+            CompactionLeafBatchSize = effectiveLeafBatchSize,
             MaintainProjectionDigest = maintainDigest,
         };
     }
@@ -216,4 +244,12 @@ internal sealed class LatticeOptionsResolver(
     /// </summary>
     internal static void ResetWarnedClampedTickIntervalTreesForTests() =>
         WarnedClampedTickIntervalTrees.Clear();
+
+    /// <summary>
+    /// Test-only seam to reset the per-process "configured leaf batch size
+    /// below floor" warning memo so multiple test cases can each observe
+    /// the warning behaviour independently.
+    /// </summary>
+    internal static void ResetWarnedClampedLeafBatchSizeTreesForTests() =>
+        WarnedClampedLeafBatchSizeTrees.Clear();
 }

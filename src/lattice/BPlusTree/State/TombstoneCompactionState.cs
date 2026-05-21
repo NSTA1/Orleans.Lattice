@@ -50,4 +50,21 @@ internal sealed class TombstoneCompactionState
     /// semantic default ("no triggers seen yet").
     /// </summary>
     [Id(5)] public Dictionary<int, DateTimeOffset> LastTriggerAt { get; set; } = [];
+
+    /// <summary>
+    /// In-shard leaf-walk cursor for the current shard. Points at the next
+    /// leaf id to visit within the shard the coordinator is currently
+    /// compacting (i.e. the shard at index
+    /// <see cref="NextShardIndex"/> in <see cref="PhysicalShardIndices"/>).
+    /// <c>null</c> means \"start from the leftmost leaf when this shard's
+    /// turn comes\" (the legacy and end-of-shard semantic). The cursor is
+    /// persisted between leaf batches so progress survives silo crashes
+    /// the same way <see cref="NextShardIndex"/> does, and is cleared
+    /// when the shard's leaf walk completes.
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <c>null</c>,
+    /// which is the correct semantic default.
+    /// </para>
+    /// </summary>
+    [Id(6)] public string? NextLeafIdInShard { get; set; }
 }

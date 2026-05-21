@@ -101,6 +101,34 @@ public class LatticeOptions
     public TimeSpan CompactionShardTickInterval { get; set; } = DefaultCompactionShardTickInterval;
 
     /// <summary>
+    /// Maximum number of leaves the tombstone-compaction coordinator visits
+    /// within a single physical shard before yielding for one
+    /// <see cref="CompactionShardTickInterval"/>. The leaf walk resumes on
+    /// the next timer tick from a persisted in-shard cursor, so progress
+    /// survives silo crashes the same way the shard cursor does.
+    /// <para>
+    /// This is the dominant control on **peak concurrent leaf activations**
+    /// during a pass. Within a shard the leaf walk runs back-to-back; the
+    /// tick gap applies only between shards. Without batching, a full pass
+    /// activates every leaf in the tree at least once, and a pass that
+    /// completes inside one <c>GrainCollectionOptions.CollectionAge</c>
+    /// window has effectively activated the entire leaf set at once.
+    /// Batching caps peak activations to roughly
+    /// <c>CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval)</c>
+    /// regardless of tree size.
+    /// </para>
+    /// <para>
+    /// Default 64 reproduces pre-batching behaviour exactly on shards
+    /// with <= 64 leaves (the common case). Values below
+    /// <see cref="MinCompactionLeafBatchSize"/> are clamped to the floor
+    /// with a one-shot warning per tree per process. Snapshotted at pass
+    /// start, so mid-pass option changes do not retroactively reshape an
+    /// in-flight pass.
+    /// </para>
+    /// </summary>
+    public int CompactionLeafBatchSize { get; set; } = DefaultCompactionLeafBatchSize;
+
+    /// <summary>
     /// How long a soft-deleted tree is retained before its grains are permanently
     /// purged. During this window the tree is inaccessible (reads and writes throw
     /// <see cref="InvalidOperationException"/>), but its data still exists in storage
@@ -149,6 +177,19 @@ public class LatticeOptions
     /// scheduler quota by yielding too briefly between shard walks.
     /// </summary>
     public static readonly TimeSpan MinCompactionShardTickInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Default value for <see cref="CompactionLeafBatchSize"/> (64 leaves).</summary>
+    public const int DefaultCompactionLeafBatchSize = 64;
+
+    /// <summary>
+    /// Minimum effective value for <see cref="CompactionLeafBatchSize"/>
+    /// (<c>1</c> leaf). Configured values below this floor are clamped up
+    /// by <see cref="LatticeOptionsResolver"/> with a one-shot warning per
+    /// tree per process. A batch size of zero would stall the pass
+    /// indefinitely; a batch size of one is the legitimate "yield after
+    /// every leaf" extreme.
+    /// </summary>
+    public const int MinCompactionLeafBatchSize = 1;
 
     /// <summary>Default value for <see cref="KeysPageSize"/>.</summary>
     public const int DefaultKeysPageSize = 512;

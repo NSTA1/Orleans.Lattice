@@ -92,26 +92,30 @@ The cadence is a **scheduler-fairness knob, not a grain-deactivation knob.** Lea
 
 #### What a pass actually touches
 
-Within a single shard the coordinator walks the leaf chain back-to-back via `IBPlusLeafGrain.GetNextSiblingAsync` and `CompactTombstonesAsync`; **the tick interval is *not* inserted between leaves of the same shard**, only between shards. A full pass therefore activates every leaf in the tree at least once. The only thing keeping the live-activation count bounded is `GrainCollectionOptions.CollectionAge`: leaves that finish compacting fall idle and are collected after they've been idle for `CollectionAge`. The peak concurrent leaf activation count during a pass is roughly:
+Within a single shard the coordinator walks the leaf chain in batches of `CompactionLeafBatchSize` leaves (default 64) per timer tick, then yields for `CompactionShardTickInterval` before resuming from a persisted in-shard cursor. **The tick interval gates both the gap between shards *and* the gap between leaf batches inside a shard**, so peak concurrent leaf activations during a pass are bounded by:
 
 ```
-peak ~= leaves walked within the last CollectionAge window
+peak ~= min(leaves walked in last CollectionAge, CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval))
 ```
 
-This means **lowering the tick interval directly raises the peak.** A pass that finishes inside one `CollectionAge` window has effectively activated the entire leaf set of the tree at once, because the leaves visited at the start of the pass have not yet been collected when the pass ends.
+On a healthy default-configured tree (`CompactionLeafBatchSize = 64`, `CompactionShardTickInterval = 2 s`, `CollectionAge = 15 min`) the second term caps at roughly `64 * 450 = 28 800` activations regardless of tree size. Lowering the tick interval or raising the batch size raises the peak; the two knobs are multiplicative.
+
+Leaves that finish compacting fall idle and are collected after they've been idle for `CollectionAge`. With batching in place, **the leaf walk no longer activates the entire shard's leaf chain back-to-back**, so a pass that finishes inside one `CollectionAge` window does not necessarily activate the whole tree at once.
 
 #### Tuning trade-off
 
-Full-pass wall-clock scales linearly with shard count and tick interval. The table below is for a tree with 1024 physical shards and ~50 leaves per shard (~50 000 leaves total) and shows both the wall-clock saving and the activation-pressure cost. "Peak concurrent activations" is the number of leaves walked in the last 15 minutes of the pass, capped at the tree's leaf count.
+Full-pass wall-clock scales linearly with shard count and tick interval, plus the batch yield within shards. The table below is for a tree with 1024 physical shards and ~50 leaves per shard (~50 000 leaves total). "Peak concurrent activations" is the number of leaves walked in the last 15 minutes of the pass, capped at the tree's leaf count and at the batch-yield bound.
 
-| `CompactionShardTickInterval` | Full-pass duration | Peak concurrent leaf activations |
-|---|---|---|
-| 2 s (default) | ~34 minutes | ~22 500 (~45% of leaves) |
-| 500 ms | ~8.5 minutes | ~50 000 (entire tree) |
-| 200 ms | ~3.4 minutes | ~50 000 (entire tree) |
-| 100 ms (floor) | ~1.7 minutes | ~50 000 (entire tree) |
+| `CompactionShardTickInterval` | `CompactionLeafBatchSize` | Full-pass duration | Peak concurrent leaf activations |
+|---|---|---|---|
+| 2 s (default) | 64 (default) | ~34 minutes | ~28 800 (capped by batch yield) |
+| 2 s (default) | 1024 (per-shard cap) | ~34 minutes | ~50 000 (entire tree) |
+| 500 ms | 64 (default) | ~8.5 minutes | ~7 200 |
+| 200 ms | 64 (default) | ~3.4 minutes | ~2 880 |
+| 100 ms (floor) | 64 (default) | ~1.7 minutes | ~1 440 |
+| 100 ms (floor) | 1 (floor) | ~1.7 minutes | ~22 (extreme yielding) |
 
-The default 2 s cadence is deliberately conservative on this axis: it spreads activations across multiple `CollectionAge` windows so the directory and silo memory don't see the full leaf set simultaneously. Lower the cadence only after measuring that your silo can absorb the resulting peak activation count, and prefer `ILattice.CompactShardAsync(shardIndex)` for "compact this one shard fast" operator triage - a scoped pass walks only one shard's leaves regardless of the tick interval.
+The default settings spread activations across multiple `CollectionAge` windows so the directory and silo memory don't see the full leaf set simultaneously. Lower the cadence or raise the batch size only after measuring that your silo can absorb the resulting peak activation count, and prefer `ILattice.CompactShardAsync(shardIndex)` for "compact this one shard fast" operator triage - a scoped pass walks only one shard's leaves regardless of the tick interval.
 
 Values below the 100 ms floor are clamped up to the floor with a one-shot warning per tree per process. The floor protects scheduler fairness; lower it only if you have a measured reason. The interval is snapshotted at the start of each pass, so changing the option mid-pass does not reshape the in-flight pass; the next pass picks up the new value.
 
@@ -119,6 +123,18 @@ Values below the 100 ms floor are clamped up to the floor with a one-shot warnin
 // Speed up compaction triage on a high-shard tree.
 // Verify the silo can absorb the resulting peak activation count first.
 siloBuilder.ConfigureLattice("high-shard-tree", o => o.CompactionShardTickInterval = TimeSpan.FromMilliseconds(500));
+```
+
+### CompactionLeafBatchSize
+
+An `int` (default 64, floor 1). Caps how many leaves the coordinator visits within a single shard before yielding for one `CompactionShardTickInterval`. The leaf walk resumes on the next timer tick from the persisted `TombstoneCompactionState.NextLeafIdInShard` cursor, so progress survives silo crashes the same way `NextShardIndex` does. The cursor is cleared when the shard's leaf walk completes; a fresh pass on a different shard list always starts from the leftmost leaf.
+
+The default 64 reproduces pre-batching behaviour exactly on shards with <= 64 leaves (the common case). Raising the batch size shortens pass wall-clock at the cost of higher peak concurrent activations; lowering it does the inverse. Values below 1 are clamped up to 1 with a one-shot warning per tree per process. The batch size is snapshotted at the start of each pass, so changing the option mid-pass does not reshape the in-flight pass; the next pass picks up the new value.
+
+```csharp verify
+// Cut peak concurrent leaf activations by yielding more aggressively
+// within each shard. Trades pass wall-clock for activation headroom.
+siloBuilder.ConfigureLattice("activation-sensitive-tree", o => o.CompactionLeafBatchSize = 16);
 ```
 
 ## Policy-Driven Triggers
@@ -179,6 +195,6 @@ The bundled Grafana **Overview** dashboard ships compaction-focused panels for e
 | **Replication isolation** | Reap envelopes carry `MutationCategory.Maintenance`. The replication observer skips maintenance writes entirely, and the change feed plus outbound shipper apply a `MutationKind.Tombstone` filter as defence in depth. Every peer reaps independently against its own grace window. |
 | **Durability of progress** | Compaction progress (`NextShardIndex`, `InProgress`) is persisted to grain storage. A one-minute keepalive reminder ensures the grain is reactivated after a silo restart to resume the in-flight pass. |
 | **Fault tolerance** | If a shard fails during compaction, it is retried once before being skipped. The next reminder tick starts a fresh pass. |
-| **Memory** | Leaves are compacted one at a time via sequential grain calls, but the leaf walk within a shard runs back-to-back; only the *between-shard* gap is governed by `CompactionShardTickInterval`. Peak concurrent leaf activations during a pass is roughly the number of leaves walked within one `GrainCollectionOptions.CollectionAge` window (default 15 minutes). The default 2 s cadence is sized to spread activations across multiple `CollectionAge` windows; lowering it raises the peak. |
+| **Memory** | Leaves are compacted in batches of `CompactionLeafBatchSize` (default 64) per timer tick; both the *between-shard* gap and the *between-batch* gap are governed by `CompactionShardTickInterval`. Peak concurrent leaf activations during a pass is bounded by `min(leaves walked in last CollectionAge, CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval))`. The default settings (64-leaf batch, 2 s tick, 15 min `CollectionAge`) cap the peak at roughly 28 800 activations regardless of tree size; lower the tick or raise the batch size to trade activation headroom for pass wall-clock. |
 | **Scheduler fairness** | The compactor yields between shard walks for `CompactionShardTickInterval` (default 2 s, floor 100 ms) so the grain returns control to the Orleans scheduler and concurrent `RequestCompactionAsync` callers are not starved. The cadence is configurable per tree and snapshotted at pass start. |
 | **Disabling** | Set `TombstoneGracePeriod = Timeout.InfiniteTimeSpan` to disable compaction globally or per tree. |
