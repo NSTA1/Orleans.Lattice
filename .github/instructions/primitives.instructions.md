@@ -54,6 +54,11 @@ public sealed class MyAggregate
 | `OrSet` | Observed-remove set CRDT (public). State-level merge unions both sides' adds and tombstones; concurrent adds and removes survive a later remove that did not observe them. Exposed through `ILattice.OrSet(key)`. |
 | `OrSetDot` | `(replicaId, counter)` dot tagged on each `OrSet` add. |
 | `PnCounter` | Positive-negative counter CRDT (public). Per-replica monotonic positive/negative components; merge is pointwise-max per side. Exposed through `ILattice.PnCounter(key)`. |
+| `MvRegister` | Multi-value register CRDT (public). Dot-context-tagged set of live values; concurrent writes from different replicas survive merge as conflict candidates rather than collapsing under last-writer-wins. Exposed through `ILattice.MvRegister<T>(key)`. |
+| `MvRegisterEntry` | Dot-tagged `(replicaId, counter, value)` triple inside an `MvRegister`. |
+| `OrMap<TKey, TValue>` | Observed-remove map CRDT (public) of recursively-mergeable CRDT values. Keys follow add-wins observed-remove semantics; per-key values are folded through `ICrdt<TValue>.MergeFrom`, so concurrent writes under the same map key converge into a single recursively-merged value rather than being collapsed by last-writer-wins. Exposed through `ILattice.OrMap<TKey, TValue>(key)`. |
+| `OrMapEntry<TValue>` | Dot-tagged `(replicaId, counter, value)` slot inside an `OrMap`. |
+| `ICrdt<TSelf>` | Internal-feeling but `public` interface declaring `MergeFrom(TSelf)` plus `IsBottom`. Implemented by `OrSet`, `PnCounter`, `VersionVector`, and `MvRegister`; the constraint that lets `OrMap<TKey, TValue>` recurse through nested CRDT values without reflection. |
 | `StateDelta` | Captures entries changed since a given version vector |
 | `SplitState` | Enum tracking leaf/internal split lifecycle |
 

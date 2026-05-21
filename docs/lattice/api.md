@@ -767,17 +767,26 @@ Every method also has a parameterless overload that defaults to
 ## CRDT value-surface accessors
 
 `ILattice.OrSet(key)`, `ILattice.PnCounter(key)`,
-`ILattice.VersionVector(key)`, and `ILattice.MvRegister<T>(key)`
-return lightweight, allocation-free accessors that read and write a
-single key under optimistic concurrency. Each accessor exposes the
-primitive's natural mutation API - add/remove, increment/decrement,
-tick/merge, set/values - instead of forcing callers to hand-roll
-byte arrays and CAS retry loops. The underlying state types are
-CRDTs whose `Merge` is commutative, associative, and idempotent, so
-concurrent updates from multiple replicas converge without
-coordination.
+`ILattice.VersionVector(key)`, `ILattice.MvRegister<T>(key)`, and
+`ILattice.OrMap<TKey, TValue>(key)` return lightweight,
+allocation-free accessors that read and write a single key under
+optimistic concurrency. Each accessor exposes the primitive's
+natural mutation API - add/remove, increment/decrement, tick/merge,
+set/values - instead of forcing callers to hand-roll byte arrays
+and CAS retry loops. The underlying state types are CRDTs whose
+`Merge` is commutative, associative, and idempotent, so concurrent
+updates from multiple replicas converge without coordination.
+
+> See [`state-primitives.md`](state-primitives.md) for the
+> convergence semantics, merge rules, and example use cases of each
+> primitive (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`,
+> `OrMap`) - including when to prefer one primitive over another and
+> the recursive `ICrdt<TSelf>` contract that lets `OrMap` nest other
+> CRDTs as values.
 
 ```csharp verify
+using Orleans.Lattice.Primitives;
+
 // Observed-remove set: concurrent adds and removes converge.
 await tree.OrSet("tags:42").AddAsync("urgent"u8.ToArray(), replicaId: "siloA");
 await tree.OrSet("tags:42").AddAsync("review"u8.ToArray(), replicaId: "siloA");
@@ -795,6 +804,15 @@ var vv = await tree.VersionVector("vv:order:1").GetAsync();
 // Multi-value register: concurrent writes survive as conflict candidates.
 await tree.MvRegister<string>("cart:42").SetAsync("siloA", "Alice's cart");
 IReadOnlyList<string> candidates = await tree.MvRegister<string>("cart:42").ValuesAsync();
+
+// Observed-remove map of CRDT-typed values: per-key values fold via
+// the value CRDT's MergeFrom, so concurrent writes under the same
+// map key converge into a single recursively-merged value.
+var tagsByUser = tree.OrMap<string, OrSet>("tags-by-user");
+var localTags = new OrSet();
+localTags.Add("urgent"u8.ToArray(), replicaId: "siloA", counter: 1);
+await tagsByUser.SetAsync("alice", "siloA", localTags);
+OrSet? aliceTags = await tagsByUser.GetValueAsync("alice");
 ```
 
 | Accessor | Method | Description |
@@ -816,12 +834,19 @@ IReadOnlyList<string> candidates = await tree.MvRegister<string>("cart:42").Valu
 | `MvRegisterAccessor<T>` | `Task<IReadOnlyList<T>> ValuesAsync()` | Returns the live deserialised values. A single-valued register returns one element; a concurrently-written register returns every conflict candidate in deterministic order. |
 | `MvRegisterAccessor<T>` | `Task SetAsync(string replicaId, T value)` | Writes `value` from `replicaId`. Drops every dot the writer observed and mints a fresh one - concurrent writes from other replicas survive the next merge. |
 | `MvRegisterAccessor<T>` | `Task MergeAsync(MvRegister other)` | Merges `other` into the stored state under CAS. Entries observed in only one side are preserved; pointwise-max is applied to the dot context. |
+| `OrMapAccessor<TKey, TValue>` | `Task<OrMap<TKey, TValue>> GetAsync()` | Reads the current map state. |
+| `OrMapAccessor<TKey, TValue>` | `Task<TValue?> GetValueAsync(TKey mapKey)` | Returns the lattice-merged value at `mapKey`, or `null` when the key is absent or every observed dot has been tombstoned. |
+| `OrMapAccessor<TKey, TValue>` | `Task<bool> ContainsKeyAsync(TKey mapKey)` | Returns `true` when `mapKey` has at least one live (un-tombstoned) dot. |
+| `OrMapAccessor<TKey, TValue>` | `Task SetAsync(TKey mapKey, string replicaId, TValue value)` | Writes `value` at `mapKey` from `replicaId`, minting a fresh causal dot. Concurrent writes survive the next merge and are folded into a single per-key value via `ICrdt<TValue>.MergeFrom`. |
+| `OrMapAccessor<TKey, TValue>` | `Task RemoveAsync(TKey mapKey)` | Tombstones every dot currently observed for `mapKey`. Concurrent writes on other replicas survive the next merge (add-wins). |
+| `OrMapAccessor<TKey, TValue>` | `Task MergeAsync(OrMap<TKey, TValue> other)` | Merges `other` into the stored state under CAS. Per-key values are folded recursively through `TValue`'s `MergeFrom`. |
 
 Mutating methods retry on CAS failure up to a per-call budget
 (default `OrSetAccessor.DefaultMaxAttempts` /
 `PnCounterAccessor.DefaultMaxAttempts` /
 `VersionVectorAccessor.DefaultMaxAttempts` /
-`MvRegisterAccessor<T>.DefaultMaxAttempts` = 16). When the budget is
+`MvRegisterAccessor<T>.DefaultMaxAttempts` /
+`OrMapAccessor<TKey, TValue>.DefaultMaxAttempts` = 16). When the budget is
 exhausted the accessor throws `InvalidOperationException`; raise the
 budget or reduce contention. Values are JSON-serialized via
 `JsonLatticeSerializer<T>`, so the bytes are inspectable through

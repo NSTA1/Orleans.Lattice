@@ -69,4 +69,39 @@ public static class CrdtLatticeExtensions
         ArgumentException.ThrowIfNullOrEmpty(key);
         return new MvRegisterAccessor<T>(lattice, key, serializer ?? JsonLatticeSerializer<T>.Default);
     }
+
+    /// <summary>
+    /// Returns a typed accessor for an observed-remove map stored
+    /// under <paramref name="key"/> in <paramref name="lattice"/>.
+    /// Keys inside the map follow add-wins observed-remove semantics
+    /// and per-key values are folded through
+    /// <see cref="Primitives.ICrdt{TSelf}.MergeFrom(TSelf)"/> rather
+    /// than collapsed by last-writer-wins, so concurrent writes from
+    /// different replicas under the same map key converge into a
+    /// single recursively-merged value.
+    /// </summary>
+    /// <typeparam name="TKey">
+    /// The map key type. Must support reasonable dictionary equality
+    /// (e.g. <see cref="string"/>, <see cref="int"/>, <see cref="Guid"/>).
+    /// </typeparam>
+    /// <typeparam name="TValue">
+    /// The recursively-mergeable value CRDT, constrained by
+    /// <see cref="Primitives.ICrdt{TSelf}"/> with a public parameterless
+    /// constructor. Use any of the existing primitives
+    /// (<see cref="Primitives.OrSet"/>,
+    /// <see cref="Primitives.PnCounter"/>,
+    /// <see cref="Primitives.VersionVector"/>,
+    /// <see cref="Primitives.MvRegister"/>) or a custom
+    /// <see cref="Primitives.ICrdt{TSelf}"/>-implementing type.
+    /// </typeparam>
+    /// <param name="lattice">The tree containing the map.</param>
+    /// <param name="key">The key the map is stored under.</param>
+    public static OrMapAccessor<TKey, TValue> OrMap<TKey, TValue>(this ILattice lattice, string key)
+        where TKey : notnull
+        where TValue : Primitives.ICrdt<TValue>, new()
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        return new OrMapAccessor<TKey, TValue>(lattice, key);
+    }
 }

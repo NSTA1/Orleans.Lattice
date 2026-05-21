@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.MvRegister)]
-public sealed class MvRegister
+public sealed class MvRegister : ICrdt<MvRegister>
 {
     /// <summary>
     /// The currently-live dot-tagged values. An <see cref="MvRegister"/>
@@ -51,6 +51,16 @@ public sealed class MvRegister
 
     /// <summary>Returns <c>true</c> when no live values remain.</summary>
     public bool IsEmpty => Entries.Count == 0;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// An <see cref="MvRegister"/> is bottom when no live entries
+    /// remain - i.e. <see cref="IsEmpty"/>. The dot
+    /// <see cref="Context"/> may still be populated and is preserved
+    /// for causal-history purposes; a containing composite treats the
+    /// slot as empty.
+    /// </remarks>
+    public bool IsBottom => IsEmpty;
 
     /// <summary>Returns the number of currently-live values.</summary>
     public int Count => Entries.Count;

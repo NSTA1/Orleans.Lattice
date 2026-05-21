@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Primitives;
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.PnCounter)]
-public sealed class PnCounter
+public sealed class PnCounter : ICrdt<PnCounter>
 {
     /// <summary>Per-replica cumulative positive component.</summary>
     [Id(0)]
@@ -19,6 +19,16 @@ public sealed class PnCounter
     /// <summary>Per-replica cumulative negative component.</summary>
     [Id(1)]
     public Dictionary<string, long> Decrements { get; set; } = [];
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A <see cref="PnCounter"/> is bottom when no replica has
+    /// recorded any increment or decrement. A counter whose recorded
+    /// per-replica components happen to sum to zero is <em>not</em>
+    /// bottom - the components carry replica history that is not the
+    /// lattice bottom element.
+    /// </remarks>
+    public bool IsBottom => Increments.Count == 0 && Decrements.Count == 0;
 
     /// <summary>The counter's current value: sum of <see cref="Increments"/> minus sum of <see cref="Decrements"/>.</summary>
     public long Value
