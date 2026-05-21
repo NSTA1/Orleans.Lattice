@@ -29,6 +29,13 @@
          the provider csproj so the helper is reachable without exposing it
          on the public API. -->
     <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
+    <!-- The replication package is referenced so the bench host can drive
+         the typed-envelope encode (OrleansBinaryReplicationBatchEncoder.Encode)
+         and the framing-only encode (IReplicationBatchEncoder.EncodeFraming)
+         side-by-side. Used by the Ship_TypedEnvelope vs Ship_FramingOnly pair
+         to surface the per-batch allocation drop introduced by R-114 stages 3-4b
+         on the shipper -> gRPC marshaller leg of the composite ship path. -->
+    <ProjectReference Include="..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
   </ItemGroup>
 
   <ItemGroup>

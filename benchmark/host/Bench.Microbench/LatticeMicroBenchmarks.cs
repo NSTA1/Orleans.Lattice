@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using BenchmarkDotNet.Attributes;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,6 +10,7 @@ using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication;
 using Orleans.Lattice.Storage.AzureTable;
 using Orleans.Runtime;
 using Orleans.Serialization;
@@ -429,6 +431,7 @@ public class LatticeMicroBenchmarks
         BuildAtomicConcurrentBatches();
         BuildAtomicReadFixture();
         BuildWalEncodeFixture();
+        BuildShipFramingFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -1494,4 +1497,253 @@ public class LatticeMicroBenchmarks
         _walProvider.EncodeEntriesForBatch(_walEncodePartitionKey, slice, actions);
         return actions;
     }
+
+    // ===== Composite ship-path A/B (typed envelope vs framing-only) =====
+    //
+    // Surfaces the allocation delta on the producer-side leg of the
+    // shipper -> gRPC marshaller composite path between the historical
+    // typed-envelope encode (OrleansBinaryReplicationBatchEncoder.Encode,
+    // which Orleans-serialises a ReplicationBatchEnvelope { WalRecord[] }
+    // element-wise) and the R-114 framing-only encode
+    // (IReplicationBatchEncoder.EncodeFraming, which writes a 32-byte
+    // fixed header plus length-prefixed pre-encoded entry segments).
+    //
+    // Both methods drain the same N pre-encoded WAL entries through the
+    // same encoder instance, so the only difference between the two
+    // measurements is the encode strategy. The fixture pre-encodes the
+    // entries via OrleansBinaryWalRecordEncoder once in [GlobalSetup] -
+    // mirroring the production reality that the shipper retrieves
+    // already-encoded bytes from IWalStorageProvider.ReadEncodedAsync
+    // when OneEncodeFastPath is true and from ReadAsync (decoded) when
+    // it is false; the typed-envelope path then has to re-encode every
+    // entry through the envelope-level Orleans serializer call, while
+    // the framing-only path hands the existing segments to the
+    // marshaller verbatim.
+    //
+    // Parameter sweep: 16 / 64 / 256 / 1024 entries at 64 B / 1 KB /
+    // 16 KB payload. The 1024 x 64 B and 16 x 16 KB corners answer the
+    // roadmap acceptance row's small-payload-dominated and
+    // payload-bytes-dominated extremes respectively.
+
+    private Serializer<ReplicationBatchEnvelope> _shipEnvelopeSerializer = null!;
+    private IReplicationBatchEncoder _shipFramingEncoder = null!;
+    // [payloadIndex, entryCount-index] -> pre-encoded entries in a
+    // ReplicationBatchEnvelope (typed) and as ArraySegment<byte>[]
+    // (framing). Indexed by payload-size bucket then entry-count bucket
+    // so the parameterised benchmark can pick a fixture pair without
+    // rebuilding it per invocation.
+    private ReplicationBatchEnvelope[,] _shipTypedEnvelopes = null!;
+    private ArraySegment<byte>[,][] _shipFramingSegments = null!;
+    private static readonly int[] ShipPayloadBytes = [64, 1024, 16 * 1024];
+    private static readonly int[] ShipEntryCounts = [16, 64, 256, 1024];
+
+    private void BuildShipFramingFixture()
+    {
+        // Self-contained ServiceProvider for the two Orleans serializers
+        // the fixture needs - one for the per-entry WalRecord encode
+        // (driven through OrleansBinaryWalRecordEncoder, replicating the
+        // producer-site append), and one for the envelope-level encode
+        // that the typed-envelope shipper path drives directly. The
+        // production OrleansBinaryReplicationBatchEncoder.Encode method
+        // is internal to Orleans.Lattice.Replication; the benchmark
+        // calls Serializer<ReplicationBatchEnvelope>.Serialize directly,
+        // which is exactly what that method does internally (and what
+        // determines its allocation profile - one per-entry Orleans
+        // codec call element-wise). For the framing-only path the
+        // benchmark uses a 4-line in-bench IReplicationBatchEncoder
+        // stub so the default interface method's framing implementation
+        // dispatches correctly.
+        var sp = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSerializer()
+            .BuildServiceProvider();
+        var walSerializer = (Serializer<WalRecord>)sp.GetService(typeof(Serializer<WalRecord>))!;
+        var walEncoder = new OrleansBinaryWalRecordEncoder(walSerializer);
+        _shipEnvelopeSerializer = (Serializer<ReplicationBatchEnvelope>)sp.GetService(typeof(Serializer<ReplicationBatchEnvelope>))!;
+        _shipFramingEncoder = new BenchFramingEncoder();
+
+        _shipTypedEnvelopes = new ReplicationBatchEnvelope[ShipPayloadBytes.Length, ShipEntryCounts.Length];
+        _shipFramingSegments = new ArraySegment<byte>[ShipPayloadBytes.Length, ShipEntryCounts.Length][];
+
+        for (var pi = 0; pi < ShipPayloadBytes.Length; pi++)
+        {
+            var payloadSize = ShipPayloadBytes[pi];
+
+            for (var ci = 0; ci < ShipEntryCounts.Length; ci++)
+            {
+                var entryCount = ShipEntryCounts[ci];
+                var hlc = HybridLogicalClock.Zero;
+
+                // Build the per-batch WalRecord array first; we need the
+                // strongly-typed records for the typed-envelope path,
+                // and the same records re-projected to ArraySegment<byte>
+                // for the framing path. This mirrors what the shipper
+                // sees when OneEncodeFastPath is false (decoded entries
+                // from ReadAsync) and when true (segment bytes from
+                // ReadEncodedAsync). Encoding per-entry through the WAL
+                // record encoder reproduces the exact bytes the in-memory
+                // and Azure-Table providers retain.
+                //
+                // Critical: every entry gets its OWN distinct payload
+                // byte[]. Real WAL entries come from independent caller
+                // SetAsync invocations - the producer hands a fresh
+                // byte[] per call, so no two entries share a reference.
+                // If the fixture re-used a single payload byte[] across
+                // entries, the Orleans serializer's session-based
+                // reference tracking would emit every entry after the
+                // first as a small back-reference, making the typed-
+                // envelope path look ~10x cheaper than it really is in
+                // production. The per-entry seed pattern below ensures
+                // each WalRecord.Value is a distinct heap object.
+                var records = new WalRecord[entryCount];
+                var segments = new ArraySegment<byte>[entryCount];
+                for (var i = 0; i < entryCount; i++)
+                {
+                    var payload = new byte[payloadSize];
+                    for (var b = 0; b < payload.Length; b++)
+                    {
+                        payload[b] = (byte)((b + i) & 0xFF);
+                    }
+
+                    hlc = HybridLogicalClock.Tick(hlc);
+                    var record = new WalRecord
+                    {
+                        TreeId = "ship-bench",
+                        Op = MutationKind.Set,
+                        Key = "k-" + i.ToString("D6", CultureInfo.InvariantCulture),
+                        Value = payload,
+                        Timestamp = hlc,
+                        IsTombstone = false,
+                        ExpiresAtTicks = 0L,
+                        OriginClusterId = "microbench-source",
+                        Mode = LatticeMergeMode.LwwRegister,
+                    };
+                    records[i] = record;
+
+                    var writer = new System.Buffers.ArrayBufferWriter<byte>(payloadSize + 64);
+                    walEncoder.Encode(in record, writer);
+                    segments[i] = new ArraySegment<byte>(writer.WrittenSpan.ToArray());
+                }
+
+                _shipTypedEnvelopes[pi, ci] = new ReplicationBatchEnvelope
+                {
+                    WireVersion = ReplicationBatchEnvelope.CurrentVersion,
+                    TreeName = "ship-bench",
+                    OriginClusterId = "microbench-source",
+                    Entries = records,
+                };
+                _shipFramingSegments[pi, ci] = segments;
+            }
+        }
+    }
+
+    private static int IndexOf(int[] table, int value)
+    {
+        for (var i = 0; i < table.Length; i++)
+        {
+            if (table[i] == value) return i;
+        }
+        throw new ArgumentOutOfRangeException(nameof(value), value, "value not in table");
+    }
+
+    /// <summary>
+    /// Drives the historical typed-envelope shipper marshaller path:
+    /// <c>OrleansBinaryReplicationBatchEncoder.Encode(envelope, writer)</c>
+    /// over a <see cref="ReplicationBatchEnvelope"/> carrying
+    /// <paramref name="entryCount"/> pre-built <see cref="WalRecord"/>
+    /// values whose <c>Value</c> payload is <paramref name="payloadBytes"/>
+    /// long. Each invocation Orleans-serialises every entry element-
+    /// wise into a fresh <see cref="System.Buffers.ArrayBufferWriter{T}"/>,
+    /// matching what <c>ReplicationShipperGrain.PumpOnceAsync</c> pays
+    /// today on the typed-envelope path (<c>OneEncodeFastPath = false</c>).
+    /// </summary>
+    [Benchmark(Description = "Ship typed envelope (today)")]
+    [ArgumentsSource(nameof(ShipArguments))]
+    public int Ship_TypedEnvelope(int entryCount, int payloadBytes)
+    {
+        var pi = IndexOf(ShipPayloadBytes, payloadBytes);
+        var ci = IndexOf(ShipEntryCounts, entryCount);
+        var envelope = _shipTypedEnvelopes[pi, ci];
+        var writer = new System.Buffers.ArrayBufferWriter<byte>();
+        // Mirrors OrleansBinaryReplicationBatchEncoder.Encode verbatim:
+        // a single Serializer<ReplicationBatchEnvelope>.Serialize call
+        // that walks the WalRecord[] element-wise inside the codec.
+        _shipEnvelopeSerializer.Serialize(envelope, writer);
+        return writer.WrittenCount;
+    }
+
+    /// <summary>
+    /// Drives the R-114 framing-only shipper marshaller path:
+    /// <see cref="IReplicationBatchEncoder.EncodeFraming"/> over a
+    /// pre-encoded <see cref="ArraySegment{T}"/> array of length
+    /// <paramref name="entryCount"/> at the same payload size. The
+    /// fixture's segments were produced by
+    /// <c>OrleansBinaryWalRecordEncoder.Encode</c> once per entry at
+    /// fixture-build time, mirroring what the shipper receives from
+    /// <c>IWalStorageProvider.ReadEncodedAsync</c> when
+    /// <c>OneEncodeFastPath = true</c> - so the per-invocation cost
+    /// captured here is purely the framing-header write plus the
+    /// length-prefixed segment copies, with no per-entry Orleans
+    /// serializer call.
+    /// </summary>
+    [Benchmark(Description = "Ship framing only (R-114)")]
+    [ArgumentsSource(nameof(ShipArguments))]
+    public int Ship_FramingOnly(int entryCount, int payloadBytes)
+    {
+        var pi = IndexOf(ShipPayloadBytes, payloadBytes);
+        var ci = IndexOf(ShipEntryCounts, entryCount);
+        var segments = _shipFramingSegments[pi, ci];
+        var header = new EncodedBatchHeader
+        {
+            WireVersion = EncodedBatchHeader.CurrentWireVersion,
+            EntryCount = segments.Length,
+            BatchSequence = 1L,
+            AtomicBatchSpanCount = 0,
+            OriginClusterIdHash = 0u,
+        };
+        var writer = new System.Buffers.ArrayBufferWriter<byte>();
+        _shipFramingEncoder.EncodeFraming(in header, "ship-bench", "microbench-source", segments, writer);
+        return writer.WrittenCount;
+    }
+
+    /// <summary>
+    /// Sweep over (entryCount x payloadBytes) used by both
+    /// <see cref="Ship_TypedEnvelope"/> and <see cref="Ship_FramingOnly"/>.
+    /// 12 corners covers the small-payload-dominated and
+    /// payload-bytes-dominated extremes the roadmap calls for.
+    /// </summary>
+    public IEnumerable<object[]> ShipArguments()
+    {
+        foreach (var entryCount in ShipEntryCounts)
+        {
+            foreach (var payloadBytes in ShipPayloadBytes)
+            {
+                yield return new object[] { entryCount, payloadBytes };
+            }
+        }
+    }
+}
+
+/// <summary>
+/// In-bench stub <see cref="IReplicationBatchEncoder"/> used solely so
+/// the framing-only benchmark can dispatch through the interface's
+/// default <c>EncodeFraming</c> implementation. The Orleans-binary
+/// production encoder
+/// (<c>Orleans.Lattice.Replication.OrleansBinaryReplicationBatchEncoder</c>)
+/// is internal to its package and the bench stays out of the package's
+/// <c>InternalsVisibleTo</c> ambit on purpose - the framing methods are
+/// pure interface defaults and do not depend on the Orleans codec, so a
+/// minimal stub is sufficient to surface the framing-encode allocation
+/// profile without piercing the internal boundary.
+/// </summary>
+internal sealed class BenchFramingEncoder : IReplicationBatchEncoder
+{
+    public string ContentType => "application/x-bench-framing";
+
+    public int CurrentWireVersion => EncodedBatchHeader.CurrentWireVersion;
+
+    public void Encode(ReplicationBatchEnvelope envelope, IBufferWriter<byte> writer)
+        => throw new NotSupportedException("Stub does not implement the typed envelope path; use the default framing methods only.");
+
+    public ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload)
+        => throw new NotSupportedException("Stub does not implement the typed envelope path; use the default framing methods only.");
 }
