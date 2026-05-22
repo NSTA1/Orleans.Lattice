@@ -114,26 +114,8 @@ For internals (the "how"):
 
 ## Releases
 
-Each publishable package is released by pushing a Git tag whose prefix is the literal folder name under `src/`, joined to the version with `-v`. The publish workflow auto-discovers the matching csproj and test project - adding a new package only requires creating `src/<name>/` and (optionally) `test/<name>/`, no workflow edits.
+See [CHANGELOG.md](CHANGELOG.md) for the per-version notes and [docs/RELEASING.md](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
-| Source folder | Tag pattern | NuGet package id |
-|---|---|---|
-| `src/lattice/` | `lattice-v<X.Y.Z>` | `Orleans.Lattice` |
-| `src/lattice.replication/` | `lattice.replication-v<X.Y.Z>` | `Orleans.Lattice.Replication` |
-| `src/lattice.replication.grpc/` | `lattice.replication.grpc-v<X.Y.Z>` | `Orleans.Lattice.Replication.Grpc` |
-| `src/lattice.storage.azuretable/` | `lattice.storage.azuretable-v<X.Y.Z>` | `Orleans.Lattice.Storage.AzureTable` |
-| `src/lattice.dashboards/` | `lattice.dashboards-v<X.Y.Z>` | `Orleans.Lattice.Dashboards` |
-
-All packages publish from the same monorepo and version-lock together. Cross-package `<ProjectReference>` declarations pack as `>= <Version>` floors automatically, so a tag of `lattice.replication-v<X.Y.Z>` produces a NuGet package whose `Orleans.Lattice` dependency resolves to `>= <X.Y.Z>`.
-
-To cut a release:
-
-```powershell
-git tag lattice.replication.grpc-v<X.Y.Z>
-git push origin lattice.replication.grpc-v<X.Y.Z>
-```
-
-The publish workflow then runs the chaos and deterministic test suites for that package, packs with `-p:PackageVersion=<X.Y.Z>`, pushes to NuGet via OIDC, and creates a GitHub Release with auto-generated notes.
 
 ## Performance Characteristics
 
