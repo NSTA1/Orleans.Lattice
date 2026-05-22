@@ -408,6 +408,50 @@ public partial class ReplicationApplierTests
         return JsonLatticeSerializer<MvRegister>.Default.Serialize(register);
     }
 
+    private static byte[] EncodeOrSetDelta(Action<List<OrSetDeltaDot>>? configure = null)
+    {
+        var adds = new List<OrSetDeltaDot>();
+        configure?.Invoke(adds);
+        return JsonLatticeSerializer<OrSetDelta>.Default.Serialize(new OrSetDelta
+        {
+            Adds = adds,
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        });
+    }
+
+    private static byte[] EncodePnCounterDelta(Action<Dictionary<string, long>>? configureIncrements = null)
+    {
+        var incs = new Dictionary<string, long>(StringComparer.Ordinal);
+        configureIncrements?.Invoke(incs);
+        return JsonLatticeSerializer<PnCounterDelta>.Default.Serialize(new PnCounterDelta
+        {
+            Increments = incs,
+            Decrements = new Dictionary<string, long>(StringComparer.Ordinal),
+        });
+    }
+
+    private static byte[] EncodeVersionVectorDelta(Action<Dictionary<string, HybridLogicalClock>>? configure = null)
+    {
+        var entries = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        configure?.Invoke(entries);
+        return JsonLatticeSerializer<VersionVectorDelta>.Default.Serialize(new VersionVectorDelta
+        {
+            Entries = entries,
+        });
+    }
+
+    private static byte[] EncodeMvRegisterDelta(Action<List<MvRegisterEntry>, Dictionary<string, long>>? configure = null)
+    {
+        var entries = new List<MvRegisterEntry>();
+        var ctx = new Dictionary<string, long>(StringComparer.Ordinal);
+        configure?.Invoke(entries, ctx);
+        return JsonLatticeSerializer<MvRegisterDelta>.Default.Serialize(new MvRegisterDelta
+        {
+            Entries = entries,
+            Context = ctx,
+        });
+    }
+
     private static readonly byte[] OrSetMember = new byte[] { 0xab };
 
     [Test]
@@ -418,6 +462,7 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
+            Delta = EncodeOrSetDelta(a => a.Add(new OrSetDeltaDot { Element = OrSetMember, ReplicaId = "site-b", Counter = 1 })),
         };
 
         var result = await applier.ApplyAsync(entry);
@@ -440,6 +485,7 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.PnCounter,
             Value = EncodePnCounter(c => c.Increment("site-b", 5)),
+            Delta = EncodePnCounterDelta(d => d["site-b"] = 5),
         };
 
         var result = await applier.ApplyAsync(entry);
@@ -462,6 +508,7 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.VersionVector,
             Value = EncodeVersionVector(v => v.Entries["site-b"] = remoteHlc),
+            Delta = EncodeVersionVectorDelta(d => d["site-b"] = remoteHlc),
         };
 
         var result = await applier.ApplyAsync(entry);
@@ -483,6 +530,16 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.MvRegister,
             Value = EncodeMvRegister(r => r.Set("site-b", new byte[] { 0xab })),
+            Delta = EncodeMvRegisterDelta((entries, ctx) =>
+            {
+                entries.Add(new MvRegisterEntry
+                {
+                    ReplicaId = "site-b",
+                    Counter = 1,
+                    Value = new byte[] { 0xab },
+                });
+                ctx["site-b"] = 1;
+            }),
         };
 
         var result = await applier.ApplyAsync(entry);
@@ -508,6 +565,7 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(),
+            Delta = EncodeOrSetDelta(),
         };
 
         var result = await applier.ApplyAsync(entry);
@@ -525,6 +583,7 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(),
+            Delta = EncodeOrSetDelta(),
         };
 
         var result = await applier.ApplyAsync(entry);
@@ -558,6 +617,7 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
+            Delta = EncodeOrSetDelta(a => a.Add(new OrSetDeltaDot { Element = OrSetMember, ReplicaId = "site-b", Counter = 1 })),
         };
 
         var result = await applier.ApplyAsync(entry);
@@ -593,6 +653,7 @@ public partial class ReplicationApplierTests
         {
             Mode = LatticeMergeMode.OrSet,
             Value = EncodeOrSet(),
+            Delta = EncodeOrSetDelta(),
         };
 
         await applier.ApplyAsync(entry);

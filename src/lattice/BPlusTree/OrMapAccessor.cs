@@ -107,7 +107,22 @@ public readonly record struct OrMapAccessor<TKey, TValue>
         EnsureInitialised();
         return MutateAsync(map =>
         {
+            var counter = NextCounter(map, replicaId);
             map.Set(mapKey, replicaId, value);
+            return new OrMapDelta<TKey, TValue>
+            {
+                Adds = new[]
+                {
+                    new OrMapDeltaEntry<TKey, TValue>
+                    {
+                        Key = mapKey,
+                        ReplicaId = replicaId,
+                        Counter = counter,
+                        Value = value,
+                    },
+                },
+                Tombstones = Array.Empty<OrMapDeltaTombstone<TKey>>(),
+            };
         }, cancellationToken, maxAttempts);
     }
 
@@ -123,7 +138,30 @@ public readonly record struct OrMapAccessor<TKey, TValue>
         EnsureInitialised();
         return MutateAsync(map =>
         {
+            OrMapDeltaTombstone<TKey>[] observed;
+            if (map.Adds.TryGetValue(mapKey, out var entries) && entries.Count > 0)
+            {
+                observed = new OrMapDeltaTombstone<TKey>[entries.Count];
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    observed[i] = new OrMapDeltaTombstone<TKey>
+                    {
+                        Key = mapKey,
+                        ReplicaId = entries[i].ReplicaId,
+                        Counter = entries[i].Counter,
+                    };
+                }
+            }
+            else
+            {
+                observed = Array.Empty<OrMapDeltaTombstone<TKey>>();
+            }
             map.Remove(mapKey);
+            return new OrMapDelta<TKey, TValue>
+            {
+                Adds = Array.Empty<OrMapDeltaEntry<TKey, TValue>>(),
+                Tombstones = observed,
+            };
         }, cancellationToken, maxAttempts);
     }
 
@@ -140,10 +178,85 @@ public readonly record struct OrMapAccessor<TKey, TValue>
         return MutateAsync(map =>
         {
             map.MergeFrom(other);
+            return new OrMapDelta<TKey, TValue>
+            {
+                Adds = FlattenAdds(other.Adds),
+                Tombstones = FlattenTombstones(other.Tombstones),
+            };
         }, cancellationToken, maxAttempts);
     }
 
-    private async Task MutateAsync(Action<OrMap<TKey, TValue>> mutate, CancellationToken cancellationToken, int maxAttempts)
+    private static OrMapDeltaEntry<TKey, TValue>[] FlattenAdds(Dictionary<TKey, List<OrMapEntry<TValue>>> map)
+    {
+        if (map.Count == 0) return Array.Empty<OrMapDeltaEntry<TKey, TValue>>();
+        var total = 0;
+        foreach (var entries in map.Values) total += entries.Count;
+        if (total == 0) return Array.Empty<OrMapDeltaEntry<TKey, TValue>>();
+        var result = new OrMapDeltaEntry<TKey, TValue>[total];
+        var i = 0;
+        foreach (var (k, entries) in map)
+        {
+            foreach (var e in entries)
+            {
+                result[i++] = new OrMapDeltaEntry<TKey, TValue>
+                {
+                    Key = k,
+                    ReplicaId = e.ReplicaId,
+                    Counter = e.Counter,
+                    Value = e.Value,
+                };
+            }
+        }
+        return result;
+    }
+
+    private static OrMapDeltaTombstone<TKey>[] FlattenTombstones(Dictionary<TKey, List<OrSetDot>> map)
+    {
+        if (map.Count == 0) return Array.Empty<OrMapDeltaTombstone<TKey>>();
+        var total = 0;
+        foreach (var dots in map.Values) total += dots.Count;
+        if (total == 0) return Array.Empty<OrMapDeltaTombstone<TKey>>();
+        var result = new OrMapDeltaTombstone<TKey>[total];
+        var i = 0;
+        foreach (var (k, dots) in map)
+        {
+            foreach (var d in dots)
+            {
+                result[i++] = new OrMapDeltaTombstone<TKey>
+                {
+                    Key = k,
+                    ReplicaId = d.ReplicaId,
+                    Counter = d.Counter,
+                };
+            }
+        }
+        return result;
+    }
+
+    private static long NextCounter(OrMap<TKey, TValue> map, string replicaId)
+    {
+        long max = 0;
+        foreach (var entries in map.Adds.Values)
+        {
+            foreach (var e in entries)
+            {
+                if (string.Equals(e.ReplicaId, replicaId, StringComparison.Ordinal) && e.Counter > max) max = e.Counter;
+            }
+        }
+        foreach (var dots in map.Tombstones.Values)
+        {
+            foreach (var d in dots)
+            {
+                if (string.Equals(d.ReplicaId, replicaId, StringComparison.Ordinal) && d.Counter > max) max = d.Counter;
+            }
+        }
+        return max + 1;
+    }
+
+    private async Task MutateAsync(
+        Func<OrMap<TKey, TValue>, OrMapDelta<TKey, TValue>> mutate,
+        CancellationToken cancellationToken,
+        int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         for (var attempt = 0; attempt < maxAttempts; attempt++)
@@ -151,10 +264,14 @@ public readonly record struct OrMapAccessor<TKey, TValue>
             cancellationToken.ThrowIfCancellationRequested();
             var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
             var current = Decode(versioned.Value);
-            mutate(current);
+            var delta = mutate(current);
             var bytes = JsonLatticeSerializer<OrMap<TKey, TValue>>.Default.Serialize(current);
-            var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-            if (ok) return;
+            var deltaBytes = JsonLatticeSerializer<OrMapDelta<TKey, TValue>>.Default.Serialize(delta);
+            using (LatticeDeltaContext.With(deltaBytes))
+            {
+                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
+                if (ok) return;
+            }
         }
         throw new InvalidOperationException(
             $"OrMap CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +

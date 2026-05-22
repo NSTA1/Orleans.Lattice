@@ -147,6 +147,8 @@ internal static class TypeAliases
     internal const string VersionVectorDelta = "ol.vvd";
     internal const string MvRegisterDelta = "ol.mvg";
     internal const string OrMapDelta = "ol.omd";
+    internal const string OrMapDeltaEntry = "ol.omx";
+    internal const string OrMapDeltaTombstone = "ol.omt";
 
     // Grain interfaces - each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,

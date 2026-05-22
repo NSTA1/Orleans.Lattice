@@ -403,6 +403,70 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         return null;
     }
 
+    /// <summary>
+    /// Folds an <see cref="OrMapDelta{TKey, TValue}"/> into this map.
+    /// The merge is equivalent to constructing a transient
+    /// <see cref="OrMap{TKey, TValue}"/> from
+    /// <see cref="OrMapDelta{TKey, TValue}.Adds"/> and
+    /// <see cref="OrMapDelta{TKey, TValue}.Tombstones"/> and calling
+    /// <see cref="MergeFrom(OrMap{TKey, TValue})"/>; commutative,
+    /// associative, and idempotent against arrival order and duplicate
+    /// delivery.
+    /// </summary>
+    /// <param name="delta">
+    /// The typed CRDT delta authored by the producing call site. Null
+    /// inner collections are treated as empty.
+    /// </param>
+    public void MergeDelta(OrMapDelta<TKey, TValue> delta)
+    {
+        var adds = delta.Adds;
+        if (adds is { Count: > 0 })
+        {
+            foreach (var add in adds)
+            {
+                if (!Adds.TryGetValue(add.Key, out var entries))
+                {
+                    entries = new List<OrMapEntry<TValue>>(1);
+                    Adds[add.Key] = entries;
+                }
+
+                var existing = FindByDot(entries, add.ReplicaId, add.Counter);
+                if (existing is not null)
+                {
+                    // Same dot from both sides: lattice-merge the value
+                    // snapshots so the result is deterministic even if
+                    // a transport or out-of-band path produced
+                    // divergent values under the same author dot.
+                    existing.Value.MergeFrom(add.Value);
+                }
+                else
+                {
+                    entries.Add(new OrMapEntry<TValue>
+                    {
+                        ReplicaId = add.ReplicaId,
+                        Counter = add.Counter,
+                        Value = add.Value,
+                    });
+                }
+            }
+        }
+
+        var tombs = delta.Tombstones;
+        if (tombs is { Count: > 0 })
+        {
+            foreach (var t in tombs)
+            {
+                if (!Tombstones.TryGetValue(t.Key, out var existing))
+                {
+                    existing = new List<OrSetDot>(1);
+                    Tombstones[t.Key] = existing;
+                }
+                var dot = new OrSetDot { ReplicaId = t.ReplicaId, Counter = t.Counter };
+                if (!ListContainsDot(existing, dot)) existing.Add(dot);
+            }
+        }
+    }
+
     /// <summary>Creates a deep copy of this map (every per-key list is duplicated; value snapshots are referenced as-is).</summary>
     public OrMap<TKey, TValue> Clone()
     {
