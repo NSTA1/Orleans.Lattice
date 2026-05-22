@@ -1225,4 +1225,41 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(grain.EntriesForTest.ContainsKey("k-inherited"), Is.True);
     }
+
+    [Test]
+    public async Task Materialiser_replay_projection_hash_matches_full_walk_of_rebuilt_cache()
+    {
+        // Digest-equivalence gate for R-120 step 6: post step-6 the cache
+        // backing dictionary is rebuilt from WAL on activation (no per-key
+        // persisted state). The incrementally-maintained ProjectionHash
+        // (XOR fold over per-entry XxHash128 contributions, updated by
+        // StoreEntry/RemoveEntry) must equal a from-scratch full walk of
+        // the rebuilt cache after WAL replay. Divergence here would mean
+        // the cache cutover broke the digest fold and cross-replica
+        // digest comparison would silently disagree.
+        var k1Mut = BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 1);
+        var k2Mut = BuildCommittedSet("k2", Encoding.UTF8.GetBytes("v2"), hlcPhysical: 2);
+        var k3Mut = BuildCommittedSet("k3", Encoding.UTF8.GetBytes("v3"), hlcPhysical: 3);
+        var coord = BuildCoordinator(
+            head: 3,
+            new CommitLogSliceEntry(1, k1Mut),
+            new CommitLogSliceEntry(2, k2Mut),
+            new CommitLogSliceEntry(3, k3Mut));
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+
+        await ActivateAsync(grain);
+
+        Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "k1", "k2", "k3" }),
+            "WAL replay must rebuild the cache to contain every committed Set in the slice");
+        Assert.That(state.State.ProjectionHash, Is.Not.Null,
+            "WAL replay must have advanced the incremental ProjectionHash");
+
+        // The incremental hash maintained by StoreEntry must equal the
+        // full-walk hash computed from scratch over the rebuilt cache.
+        // ComputeFullProjectionHashFromState is the regression-oracle
+        // for the incremental fold.
+        var fullWalkHash = grain.ComputeFullProjectionHashFromState();
+        Assert.That(state.State.ProjectionHash, Is.EqualTo(fullWalkHash),
+            "incrementally-maintained ProjectionHash must equal a from-scratch full walk after WAL replay");
+    }
 }
