@@ -73,6 +73,20 @@ drives autonomic splitting.
 | `orleans.lattice.leaf.replay.duration` | `Histogram<double>` | `ms` | Activation-time leaf-projection replay duration. Tagged `outcome=tail` (caught up by replaying the slice `(checkpoint, head]`), `outcome=snapshot_then_wal` (a fall-off-log trigger fired and the snapshot-then-WAL recovery path was taken), or `outcome=full_rebuild` (`ProjectionRebuildPolicy.FullRebuildFromWal`). Emitted on every activation that performs WAL replay. See [Projection Rebuild](projection-rebuild.md) and [Write-Ahead Log](wal.md). |
 | `orleans.lattice.leaf.replay.entries` | `Counter<long>` | `{entry}` | Mutations seen by activation-time leaf-projection replay. Tagged `outcome=applied` (fed to `ILeafProjection.Apply`) or `outcome=skipped` (filtered by the leaf's key-range responsibility before reaching `Apply`). |
 
+### Snapshot cursors (sourced from `SnapshotLeafGrain` / snapshot-cursor open path)
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.snapshot.replay.duration` | `Histogram<double>` | `ms` | Per-shard WAL-replay duration observed during a zero-observable-writes snapshot-leaf open. Emitted by `SnapshotLeafGrain` after a successful replay over `[0, capturedOffset)`. Tagged `tree` and `shard`. |
+| `orleans.lattice.snapshot.replay.entries` | `Counter<long>` | `{entry}` | WAL entries consumed by the snapshot-leaf replay engine; one increment per `CommitLogSliceEntry` processed (including filtered / skipped records, because they contribute to wall-clock replay cost). Tagged `tree` and `shard`. |
+| `orleans.lattice.snapshot.pins` | `UpDownCounter<long>` | `{pin}` | Live WAL-retention pins held by open snapshot cursors. Incremented on `OpenSnapshotKeyCursorAsync` / `OpenSnapshotEntryCursorAsync` after a successful pin report; decremented on close or idle-TTL eviction. Tagged `tree`. |
+
+### WAL garbage collector (sourced from `LatticeWalGc`)
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.wal.entries_trimmed` | `Counter<long>` | `{entry}` | WAL entries removed by the per-tree garbage collector. Emitted only after a pass that trims at least one entry (a zero-trim pass produces no measurement). Tagged `tree`. |
+
 ### Cache (sourced from `LeafCacheGrain`)
 
 | Name | Kind | Unit | Description |

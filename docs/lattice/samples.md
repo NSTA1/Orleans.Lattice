@@ -1,6 +1,6 @@
 # Samples
 
-Each sample lives under [`samples/`](../../samples) and is a self-contained
+Each sample lives under [`samples/`](../../samples) and is a self-contained runnable project.
 
 ## HelloWorld
 
@@ -20,7 +20,7 @@ dotnet run --project samples/HelloWorld
 
 Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage and Azure Storage Queues (Azurite for local development). Models a turbine-blade lifecycle (forge → heat-treat → machining → NDT → MRB → FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for injecting site-level pause/delay/reorder, and a live divergence feed comparing a baseline LWW backend against the Orleans.Lattice fact store.
 
-The sample runs as **two independent Orleans clusters** (`us` and `eu`), each with two silos, connected by an opt-in cross-cluster replication link over HTTP/JSON so changes in one cluster converge on the other. The dashboard, operator surface, and chaos controls work against either cluster and a cluster-wide live activity feed is fanned out over an Azure Storage Queue-backed Orleans stream so every Blazor circuit sees every fact regardless of which silo hosts it. A full `docker-compose.yml` (plus Traefik routing and Azurite) brings both clusters up locally.
+The sample runs as **two independent Orleans clusters** (`us` and `eu`), each with two silos, connected by an opt-in cross-cluster replication link over gRPC so changes in one cluster converge on the other.
 
 Supporting documentation lives alongside the sample:
 

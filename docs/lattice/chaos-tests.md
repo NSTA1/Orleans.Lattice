@@ -41,6 +41,7 @@ Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests
 | LWW register convergence | `LwwRegisterConvergenceChaosTests.cs` | Three sites issue concurrent point writes against a single key under a mid-workload partition; after heal and drain, every site converges to the lexicographic `(HLC, originClusterId)` winner. |
 | OR-Set convergence | `OrSetConvergenceChaosTests.cs` | Three sites issue concurrent OR-Set adds (and, in the second test, observed-removes) against a single key under partition; after drain, every site observes exactly the union of authored adds minus the union of authored removes. |
 | PN-Counter convergence | `PnCounterConvergenceChaosTests.cs` | Three sites issue concurrent increments and decrements against a single counter under partition; after drain, every site reads the same algebraic sum. |
+| MV-Register convergence | `MvRegisterConvergenceChaosTests.cs` | Three sites issue concurrent `Set` operations against a single MV-Register key under partition; after drain, every site observes the same dot-tagged multi-value set with concurrent writes preserved and observed predecessors collapsed. |
 | Multi-site fixture smoke | `MultiSiteClusterFixtureSmokeTests.cs` | Diagnostic smoke tests for `MultiSiteClusterFixture` + `ChaosDeliveryPump`. Not chaos tests themselves - they pin the simpler invariants the convergence suite relies on (per-site WAL capture, per-site change feed yield, end-to-end pump delivery). Tagged `[Category("Chaos")]` so they ship alongside the suite they diagnose. |
 
 ## The workload
@@ -470,9 +471,9 @@ The chaos pump's per-edge loop catches and queues transient grain exceptions ont
 
 Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atomic_write.batch_size` on the authoring site (see [Metrics](metrics.md#saga-coordinator-lifecycle)). On the receiver side
 
-## Test 9 - Per-mode convergence chaos (`LwwRegisterConvergenceChaosTests`, `OrSetConvergenceChaosTests`, `PnCounterConvergenceChaosTests`)
+## Test 9 - Per-mode convergence chaos (`LwwRegisterConvergenceChaosTests`, `OrSetConvergenceChaosTests`, `PnCounterConvergenceChaosTests`, `MvRegisterConvergenceChaosTests`)
 
-Three sibling fixtures - one per `LatticeMergeMode` dispatch path -
+Four sibling fixtures - one per `LatticeMergeMode` dispatch path -
 prove that the producer-side change-feed → shipper → receiver-side
 applier pipeline converges every site to the same final state under
 concurrent multi-site writes and mid-workload partitions. Every
@@ -489,6 +490,7 @@ mode-specific convergence invariant pointwise across sites.
 | `LwwRegisterConvergenceChaosTests` | `LwwRegister` | Every site reads the same `VersionedValue` after drain - the lexicographic `(HLC, originClusterId)` winner across all authored writes | LWW resolution under `SetIfVersionAsync` on the receiver side; per-edge change-feed cursors do not skip entries across partition heal |
 | `OrSetConvergenceChaosTests` | `OrSet` | Every site's `OrSet(key).GetAsync()` yields exactly the union of authored adds (test 1), or the union of authored adds minus the union of authored removes (test 2) | `ReplicationApplier.ApplyStateMergeAsync<OrSet>` under `LatticeOriginContext`; OR-Set's commutative-monoid merge absorbs out-of-order receive |
 | `PnCounterConvergenceChaosTests` | `PnCounter` | Every site's `PnCounter(key).ValueAsync()` returns the same algebraic sum of authored deltas | Receiver-side `ApplyStateMergeAsync<PnCounter>`; per-replica P/N maps merge by component-wise max |
+| `MvRegisterConvergenceChaosTests` | `MvRegister` | Every site's `MvRegister<T>(key).ValuesAsync()` yields exactly the dot-frontier expected from the authored history: concurrent writes survive as a multi-value set, and any write whose dot is causally dominated by a later writer's observed context is superseded on every replica | `ReplicationApplier.ApplyStateMergeAsync<MvRegister>` under `LatticeOriginContext`; dot-context merge drops dominated entries and pointwise-maxes the per-replica context maps |
 
 ### Workload (per fixture)
 
@@ -498,7 +500,8 @@ mode-specific convergence invariant pointwise across sites.
   * OR-Set test 1: 25 sequential `AddAsync` calls per site.
   * OR-Set test 2: 15 adds + 2 observed-removes per site.
   * PN-Counter: 30 increments + 10 decrements per site.
-* **Partition cycle** - one site's loop isolates a target site for the middle third of its workload (the exact (driver, target) pair varies per fixture: site 2 isolates site 1 for LWW; site 0 isolates site 2 for OR-Set; site 1 isolates site 0 for PN-Counter).
+  * MV-Register: two-phase scenario - site 0 issues two sequential `SetAsync` calls and drains so every peer observes its dot context; then sites 1 and 2 write concurrently behind a partition that isolates site 2 from site 1, producing two surviving concurrent dots that both dominate the site-0 entry.
+* **Partition cycle** - one site's loop isolates a target site for the middle third of its workload (the exact (driver, target) pair varies per fixture: site 2 isolates site 1 for LWW; site 0 isolates site 2 for OR-Set; site 1 isolates site 0 for PN-Counter; site 2 is isolated for the concurrent-write phase in MV-Register).
 * **Drain phase** - after every author task completes, `pump.HealAllAndDrainAsync(30 s)` heals every edge and waits for every per-edge cursor to catch up.
 
 ### Pass criteria
@@ -506,10 +509,12 @@ mode-specific convergence invariant pointwise across sites.
 * LWW: pointwise equality of `(Value, Version)` across all 3 sites after drain.
 * OR-Set: pointwise set-equivalence of `Elements()` across all 3 sites against the closed-form expected union.
 * PN-Counter: pointwise equality of `ValueAsync()` across all 3 sites against `SiteCount * (IncrementsPerSite - DecrementsPerSite)`.
+* MV-Register: pointwise set-equivalence of `ValuesAsync()` across all 3 sites against the closed-form expected frontier (surviving concurrent dots only).
 
 ### Tolerated transients
 
 * PN-Counter's call-site retry loop absorbs `CAS budget exhausted` from `IncrementAsync` / `DecrementAsync` under concurrent foreign-origin pump writes against the same key (8 attempts with linear backoff; mirrors what a real application would do). A final unretried call propagates the exception if the CAS contention is sustained.
+* MV-Register uses the same 8-attempt linear-backoff wrapper around `SetAsync` for the same reason: a foreign-origin merge that lands mid-CAS bumps the local state and aborts the local attempt.
 * OR-Set / LWW: no per-call retry needed - the pipeline is non-blocking from the producer side; transient pump errors queue onto `pump.PumpErrors` and surface in the post-drain assertion if convergence stalls.
 
 ### Companion observability
@@ -582,14 +587,15 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 
 ### Per-mode convergence surfaces (Test 9)
 
-| Surface | LWW | OR-Set | PN-Counter |
-|---|:---:|:---:|:---:|
-| Producer-side change feed yields locally-authored mutations with origin id | ✅ | ✅ | ✅ |
-| Shipper drives delivery to every peer site under partition-cycled topology | ✅ | ✅ | ✅ |
-| Receiver-side mode-specific dispatch (`SetIfVersionAsync` / `ApplyStateMergeAsync<T>`) | ✅ | ✅ | ✅ |
-| `LatticeOriginContext` flagging foreign-origin writes during apply | ✅ | ✅ | ✅ |
-| Commutative-monoid CRDT merge absorbs out-of-order receive | - | ✅ | ✅ |
-| CAS-budget exhaustion handled by call-site retry under sustained foreign-origin contention | - | - | ✅ |
+| Surface | LWW | OR-Set | PN-Counter | MV-Register |
+|---|:---:|:---:|:---:|:---:|
+| Producer-side change feed yields locally-authored mutations with origin id | ✅ | ✅ | ✅ | ✅ |
+| Shipper drives delivery to every peer site under partition-cycled topology | ✅ | ✅ | ✅ | ✅ |
+| Receiver-side mode-specific dispatch (`SetIfVersionAsync` / `ApplyStateMergeAsync<T>`) | ✅ | ✅ | ✅ | ✅ |
+| `LatticeOriginContext` flagging foreign-origin writes during apply | ✅ | ✅ | ✅ | ✅ |
+| Commutative-monoid CRDT merge absorbs out-of-order receive | - | ✅ | ✅ | ✅ |
+| Dot-context supersession of causally-dominated entries on merge | - | - | - | ✅ |
+| CAS-budget exhaustion handled by call-site retry under sustained foreign-origin contention | - | - | ✅ | ✅ |
 
 ## Runtime characteristics
 
@@ -606,13 +612,13 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 
 ### Cross-cluster suite (`test/lattice.replication/Chaos/`)
 
-| Property | Cross-cluster atomic vis. | LWW convergence | OR-Set convergence | PN-Counter convergence | Multi-site smoke |
-|---|---|---|---|---|---|
-| Sites | 3 | 3 | 3 | 3 | 2 |
-| Chaos window | 18 sagas across 3 sites, partition cycled mid-workload | 120 writes across 3 sites, site 1 partitioned mid-window | 75 adds (test 1) / 51 adds+removes (test 2) across 3 sites, site 2 partitioned mid-window | 120 increments + 30 decrements across 3 sites, site 0 partitioned mid-window | single deterministic write per test |
-| Drain timeout | up to 60 s | up to 30 s | up to 30 s | up to 30 s | up to 15 s |
-| Wall-clock | ~5 s | ~5 s | ~5 s / test | ~5-10 s | ~3 s / test |
-| Universe size | 72 keys (3 × 6 × 4) | 1 key | 1 key (set-valued) | 1 key (counter) | 1 key |
+| Property | Cross-cluster atomic vis. | LWW convergence | OR-Set convergence | PN-Counter convergence | MV-Register convergence | Multi-site smoke |
+|---|---|---|---|---|---|---|
+| Sites | 3 | 3 | 3 | 3 | 3 | 2 |
+| Chaos window | 18 sagas across 3 sites, partition cycled mid-workload | 120 writes across 3 sites, site 1 partitioned mid-window | 75 adds (test 1) / 51 adds+removes (test 2) across 3 sites, site 2 partitioned mid-window | 120 increments + 30 decrements across 3 sites, site 0 partitioned mid-window | 2 sequential site-0 writes followed by 1 concurrent write per peer with site 2 partitioned | single deterministic write per test |
+| Drain timeout | up to 60 s | up to 30 s | up to 30 s | up to 30 s | up to 30 s | up to 15 s |
+| Wall-clock | ~5 s | ~5 s | ~5 s / test | ~5-10 s | ~5 s / test | ~3 s / test |
+| Universe size | 72 keys (3 × 6 × 4) | 1 key | 1 key (set-valued) | 1 key (counter) | 1 key (multi-value register) | 1 key |
 | Parallel workers | 3 saga writers (one per site) + 6 inter-site delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 1 writer + 2 delivery pumps |
 | Shards (per site) | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 |
 

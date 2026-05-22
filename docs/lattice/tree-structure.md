@@ -32,7 +32,7 @@ Routing walks the separator list from right to left and picks the first child wh
 
 ### Leaf Nodes
 
-Each leaf stores entries in a `SortedDictionary<string, LwwValue<byte[]>>` and maintains `NextSibling` and `PrevSibling` pointers forming a doubly-linked list for forward and reverse range scans:
+Each leaf grain holds its live entries in a per-activation in-memory cache (a `SortedDictionary<string, LwwValue<byte[]>>` rebuilt from the WAL on activation; not part of the persisted leaf state row). Every leaf also maintains `NextSibling` and `PrevSibling` pointers forming a doubly-linked list for forward and reverse range scans:
 
 ```mermaid
 flowchart LR
@@ -71,17 +71,17 @@ sequenceDiagram
     rect rgb(240, 248, 255)
     Note over Leaf: Phase 1 - persist intent
     Leaf->>Leaf: SplitState = SplitInProgress
-    Leaf->>Leaf: Record SplitKey, SplitSiblingId, split entries
-    Leaf->>Leaf: Trim local entries to left half
+    Leaf->>Leaf: Record SplitKey, SplitSiblingId, OldNextSibling, NextSibling = SplitSiblingId
     Leaf->>Leaf: WriteStateAsync()
     end
 
     rect rgb(240, 255, 240)
-    Note over Leaf: Phase 2 - cross-grain ops
-    Leaf->>New: SetTreeIdAsync(treeId)
-    Leaf->>New: MergeEntriesAsync(upper half)
-    Leaf->>New: SetNextSiblingAsync(oldNextSibling)
-    Leaf->>Leaf: SplitState = SplitComplete
+    Note over Leaf: Phase 2 - cross-grain ops (CompleteSplitAsync)
+    Leaf->>New: SetTreeIdAsync / SetShardIndexAsync / SetKeyRangeAsync
+    Leaf->>New: MergeEntriesAsync(right-half entries)
+    Leaf->>New: SetNextSiblingAsync(oldNextSibling), SetPrevSiblingAsync(donor)
+    Leaf->>Leaf: Remove right-half keys from local cache
+    Leaf->>Leaf: HighKeyExclusive = splitKey; SplitState = SplitComplete
     end
 
     Leaf-->>Root: SplitResult { PromotedKey, NewSiblingId }
@@ -95,8 +95,8 @@ sequenceDiagram
     end
 ```
 
-1. **Phase 1 (persist intent):** The leaf finds the **median key**, records the split metadata (`SplitKey`, `SplitSiblingId`, right-half entries) and trims its own entries to the left half - all in a single `WriteStateAsync` call.
-2. **Phase 2 (cross-grain ops):** The new sibling is populated via `MergeEntriesAsync` (an idempotent bulk merge), sibling pointers are updated, and `SplitState` advances to `SplitComplete`.
+1. **Phase 1 (persist intent):** The leaf picks the **median key** from its in-memory cache, allocates the new sibling's `GrainId`, and persists the split metadata (`SplitState = SplitInProgress`, `SplitKey`, `SplitSiblingId`, `OldNextSibling`, and `NextSibling` redirected to the new sibling) in a single `WriteStateAsync` call. The donor's own key-range is *not* trimmed in Phase 1 - the right-half entries remain in the cache until Phase 2.
+2. **Phase 2 (cross-grain ops, `CompleteSplitAsync`):** The donor seeds the new sibling (`SetTreeIdAsync` / `SetShardIndexAsync` / `SetKeyRangeAsync`), populates it via `MergeEntriesAsync` (an idempotent bulk merge of every key `>= splitKey`), wires the sibling pointers, removes the right-half keys from its local cache, advances its own `HighKeyExclusive` to the split key, and transitions `SplitState` to `SplitComplete`.
 3. A `SplitResult` containing the promoted key and new sibling's `GrainId` is returned up the call stack.
 4. The parent internal node inserts the new separator. If *it* overflows, the split cascades further (internal nodes use the same two-phase pattern).
 5. If the split reaches the shard root, a new internal root is created above the old one via a two-phase `PromoteRootAsync`, increasing tree depth by one.

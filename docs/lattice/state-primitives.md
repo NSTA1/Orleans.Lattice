@@ -109,6 +109,45 @@ Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, 
 
 **Example use case:** the wire format for incremental sync between a leaf and its caches or replicas. If the network drops a delta and the consumer retries, replaying the same delta is harmless; if two deltas arrive out of order, applying them in either order produces the same result.
 
+## Observed-Remove Set (OR-Set)
+
+`OrSet` is an **add-wins, observed-remove set** of `byte[]` elements. Every `Add(element, replicaId, counter)` mints a fresh causal dot `(replicaId, counter)` and attaches it to the element under `Adds`; `Remove(element)` moves every currently-observed dot for that element into `Tombstones`. An element is present in the set whenever its `Adds` set contains at least one dot that is not in `Tombstones`:
+
+```
+OrSet = {
+    Adds:       { element -> [OrSetDot(replicaId, counter)] }
+    Tombstones: { element -> [OrSetDot] }   // dots observed-and-removed
+}
+```
+
+Merge is the union of `Adds` and the union of `Tombstones` on both sides, after which each element's effective membership is recomputed. This is commutative, associative, and idempotent.
+
+Because removes only tombstone the dots the local replica has actually observed, a concurrent `Add` from another replica that the remover never saw **survives** the merge - hence "add-wins". The element returns to membership the next time any replica adds it under a fresh dot.
+
+**Example use case:** an operator-visible label set on a shared entity (a maintenance ticket, a vehicle, an instrument) that multiple sites can tag concurrently while one site removes a label. With LWW, the remover's update silently drops the concurrent additions; with `OrSet`, the additions survive and only the dots the remover actually observed disappear.
+
+## Positive-Negative Counter (PN-Counter)
+
+`PnCounter` is a **state-based counter** that supports concurrent increments and decrements without coordination by tracking per-replica cumulative components:
+
+```
+PnCounter = {
+    Increments: { replicaId -> long }   // monotonically non-decreasing
+    Decrements: { replicaId -> long }   // monotonically non-decreasing
+}
+Value = sum(Increments.Values) - sum(Decrements.Values)
+```
+
+`Increment(replicaId, amount)` and `Decrement(replicaId, amount)` simply add a non-negative `amount` to the local replica's row in the appropriate dictionary. Merge is **pointwise-max** on each per-replica row across both `Increments` and `Decrements`:
+
+```
+Merge({r1->10}, {r1->8, r2->5}) = {r1->10, r2->5}
+```
+
+This is commutative, associative, and idempotent: re-delivering an older state never reduces a counter, and concurrent increments on different replicas accumulate correctly because each replica's row advances independently.
+
+**Example use case:** a shift-level production counter aggregated across silos in a factory line. Every site increments its own row when it scans a unit, and any reader summing the rows sees the live total regardless of which sites have synced with which.
+
 ## Multi-Value Register (MV-Register)
 
 Where `LwwValue` collapses concurrent writes by picking the higher HLC, the multi-value register `MvRegister` preserves every concurrent write as a dot-tagged entry so the application can resolve the conflict itself (e.g. surface every candidate to a user, or merge in a domain-aware way). Like the OR-Set, the register uses **causal dots** - `(replicaId, counter)` pairs - to distinguish concurrent updates from sequential overwrites.

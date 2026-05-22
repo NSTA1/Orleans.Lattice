@@ -195,13 +195,14 @@ Before telling the user the work is done, self-review. Each numbered item must b
 Only when the user explicitly asks:
 
 1. **Final cross-solution verify.** Before the commit, run `dotnet test --filter "TestCategory!=Chaos" --blame-hang-timeout 2m --blame-hang-dump-type none` once at the solution root and confirm `Failed: 0` across every test project. This is the only place in the workflow where the full cross-solution suite is mandatory; Phase 6c is deliberately scoped to the changed project to keep the inner dev loop fast.
-2. **Commit** with a conventional commit message: `feat: <description> (F-XXX)` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes.
-3. **Push** the branch.
-4. **Create a PR** using `gh pr create` with:
+2. **Update `CHANGELOG.md`'s `## [Unreleased]` section** with a one-line entry for the feature (or fix / docs change) about to be committed. Add under the appropriate subsection (`### Added`, `### Changed`, `### Fixed`, `### Deprecated`, `### Removed`, `### Security`); create the subsection if it does not yet exist under `[Unreleased]`. Phrase the entry from the user's perspective (what they can now do, or what changed for them), not from the implementation perspective. Do **not** stamp a version number or release date here - that is Phase 9's job. The entry stays under `[Unreleased]` until the next release is cut.
+3. **Commit** with a conventional commit message: `feat: <description> (F-XXX)` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes. The changelog update is part of this same commit.
+4. **Push** the branch.
+5. **Create a PR** using `gh pr create` with:
    - A title matching the commit convention: `feat: <description> (F-XXX)`
    - At least one label: `enhancement`, `bug`, `documentation`, `ci`, `dependencies`, or `breaking`
    - A body written to a tracked scratch file (`.scratch/pr-body.md` - `.scratch/` is gitignored) and passed via `--body-file`. **Never** use `New-TemporaryFile` or inline heredocs piped into `gh`. See "PR body file write path" below.
-5. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
+6. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
 
    ```powershell
    gh pr view <num> --json body --jq .body | Select-Object -First 5
@@ -261,16 +262,28 @@ The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-
 
 When the user explicitly asks to release one or more packages by tagging `main`:
 
-1. **Confirm the PR has merged before tagging.** Check out `main` and pull (`git checkout main && git pull origin main`) so the tag points at the squash-merge commit on `main`, never at the feature branch.
-2. **Tag each package independently.** The publish workflow's per-tag trigger glob (`<package>-v*`) fires on **`push` events to a single tag ref**. A bulk push (`git push origin tag1 tag2 tag3 tag4`) sends all four refs in one HTTP request and GitHub coalesces them into a single push event - so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Push tags **one at a time**:
+1. **Run the docs agent protocol** (`.github/agents/docs.agent.md`) end-to-end across the markdown corpus. The release must not ship documentation drift introduced since the last cut. Apply every fix the docs agent surfaces, in its own commit(s) on a separate docs branch / PR if the corrections are non-trivial, before proceeding to step 2. Do not skip this step on the grounds that "the last feature PR already updated the docs" - the docs agent verifies the whole corpus against the current code, not just the diff of the most recent feature.
+
+2. **Update `CHANGELOG.md` for the release.** Open `CHANGELOG.md`, take every entry currently under `## [Unreleased]`, and move them into a new release section stamped with the target version and **today's date**, in the form `## [X.Y.Z] - YYYY-MM-DD` (use the repo's existing date format - the existing `## [6.0.0] - 2026-05-22` heading is the template). The new section sits **above** the previous most-recent release section and **below** `## [Unreleased]`. After the move, `## [Unreleased]` must be left empty of entries (keep the heading itself in place, ready for the next cycle). Verify with `git diff CHANGELOG.md` that no entry was lost in transit and that subsection headings (`### Added` / `### Changed` / `### Fixed` / etc.) were preserved under the new release section.
+
+3. **Raise a chore release PR.** This PR contains the changelog stamp from step 2 **and** the package-version bumps to `X.Y.Z` across every `.csproj` / `Directory.Packages.props` / version-stamping file that participates in the release. Workflow:
+   - Branch name: `chore/vX.X.X_release` (literal underscore before `release`, matching the user's specified format).
+   - Commit message: `chore: cut vX.X.X release`.
+   - **Verification scope: hygiene gates only.** Run Phase 6a (build clean) and Phase 6b (every hygiene gate) - do **not** run the Phase 6c unit-test suite or the Phase 8 cross-solution sweep. The feature PRs that fed `[Unreleased]` already ran the full suite at their own merge; the release PR is a metadata-only change (changelog text + version strings) and re-running the full suite buys no signal at the cost of CI wall-clock.
+   - PR title: `chore: cut vX.X.X release`. PR label: `dependencies` (closest existing label for a version-bump-only change) plus any release-tracking label the repo uses.
+   - PR body: list each package being bumped and its old/new version, and link the `[X.Y.Z]` changelog section as the source of truth for what's in the release.
+   - **Do not proceed to step 4 until this PR is merged into `main`.** Tagging before the chore PR merges will publish packages whose `CHANGELOG.md` says `Unreleased` and whose assembly versions don't match the tag - the worst of both worlds.
+
+4. **Confirm the PR has merged before tagging.** Check out `main` and pull (`git checkout main && git pull origin main`) so the tag points at the squash-merge commit on `main`, never at the feature branch.
+5. **Tag each package independently.** The publish workflow's per-tag trigger glob (`<package>-v*`) fires on **`push` events to a single tag ref**. A bulk push (`git push origin tag1 tag2 tag3 tag4`) sends all four refs in one HTTP request and GitHub coalesces them into a single push event - so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Push tags **one at a time**:
 
    ```powershell
    git push origin <package>-v<X.Y.Z>
    ```
 
    After each push, poll `gh run list` for a matching `event=push, headBranch=<tag>, name=Publish` run before pushing the next tag. A "no run detected within 2 min" result means the workflow trigger glob did not match - fix the trigger or the tag spelling before pushing further tags.
-3. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
-4. **Recovery for an accidental bulk push.** Delete the trailing remote tags (`git push origin --delete <tag>`) and re-push them individually. Local tags can stay in place; only the remote refs need the delete-and-re-push.
+6. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
+7. **Recovery for an accidental bulk push.** Delete the trailing remote tags (`git push origin --delete <tag>`) and re-push them individually. Local tags can stay in place; only the remote refs need the delete-and-re-push.
 
 ## Important rules
 
@@ -282,7 +295,8 @@ When the user explicitly asks to release one or more packages by tagging `main`:
 - **Always use `--body-file` with a tracked `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body - it has produced silent failures with non-ASCII content.
 - **`gh pr create` and `gh pr edit` silently no-op on malformed body files.** Always verify the live body via `gh pr view <num> --json body` immediately after the call. The PR URL printed by `gh` is not proof the body applied - it is printed in the failure case too.
 - **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"`. The full cross-solution sweep is reserved for the Phase 8 final verify (immediately before commit/push) - running it on every iteration of the inner dev loop wastes wall-clock time without buying additional signal, because CI runs the full suite on every PR.
-- **Always wrap dotnet test with a two-minute hang blame.** Pass `--blame-hang-timeout 2m --blame-hang-dump-type none` on every `dotnet test` invocation - hygiene gates, scoped sweeps, and the Phase 8 final cross-solution verify alike. The terminal tool surfaces a hung child as `A task was canceled.` with no signal as to which test hung, which both wastes wall-clock time and obscures the failure mode. The blame timeout makes the test runner fail fast with the offending test name and its stack trace; `--blame-hang-dump-type none` skips the (large, often-useless) process dump while keeping the actionable failure output. A wedged integration test in the inner dev loop is the most common cause - never assume a long-running `dotnet test` is making progress.
+- **Always run tests in the foreground with failure output immediately visible.** Never launch `dotnet test` as a background command (`run_command_in_terminal` with `background=true`) and never redirect or suppress its output stream - failure messages, assertion diffs, and stack traces must land in the chat transcript on the first run. Re-running a test suite purely to capture the failure output you already had but discarded is a protocol violation: it doubles wall-clock cost and, on flaky or environment-sensitive tests, can mask the original failure entirely. If a `dotnet test` invocation reports `Failed: N > 0`, the very next thing in the chat reply must be the offending test name(s) and their stack trace, quoted verbatim from the run that produced them.
+- **Always wrap dotnet test with a two-minute hang blame.**
 - **Build must be clean** - zero errors, zero warnings - before declaring work complete.
 - **One feature per branch.** Branch name: `feature/fXXX-short-description`.
 - **Never use inline PowerShell `-Command` (or `run_command_in_terminal` heredocs) to edit file content with multi-line strings.** Semicolon-joined inline commands have leaked variable-assignment text into target files (the `README.md` `ath = 'README.md'` incident - the literal text `ath = 'README.md'` ended up inside a csharp code block in the Quick Start). For any edit that involves a multi-line string literal, use one of: (a) `edit_file` / `replace_string_in_file` directly, or (b) seed an empty `.scratch/<edit>.ps1` via `New-Item -Force`, populate it with `edit_file`, then dot-source it. Inline `run_command_in_terminal` is fine for single-line, no-string-content commands like `dotnet build` or `git status`.

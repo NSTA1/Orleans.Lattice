@@ -938,8 +938,8 @@ constraints, and per-tree overrides via the
 | `TxDecisionRetention` | `TimeSpan` | 60 s | Retention window for a completed saga's commit/abort decision in the per-tree registry after `ForgetAsync`. `TimeSpan.Zero` restores legacy immediate-evict semantics. See [Configuration](configuration.md#txdecisionretention). |
 | `VersionVectorRetention` | `TimeSpan` | `InfiniteTimeSpan` | Retention window for version vectors of deleted keys in the read cache. `InfiniteTimeSpan` disables eviction. |
 | `DiagnosticsCacheTtl` | `TimeSpan` | 5 s | Cache lifetime for `DiagnoseAsync` reports. `TimeSpan.Zero` disables caching. |
-| `MaterialiserCheckpointInterval` | `TimeSpan` | 1 s | Time-based threshold for flushing a leaf-projection checkpoint. |
-| `MaterialiserCheckpointEntries` | `int` | 1000 | Entry-count threshold for flushing a leaf-projection checkpoint. |
+| `MaterialiserCheckpointInterval` | `TimeSpan` | 5 s | Time-based threshold for flushing a leaf-projection checkpoint. |
+| `MaterialiserCheckpointEntries` | `int` | 5 000 | Entry-count threshold for flushing a leaf-projection checkpoint. |
 | `MaxLeafReplayEntries` | `int` | 10 000 | Maximum WAL entries a cold leaf may replay at activation before falling back to `ProjectionRebuildPolicy`. |
 | `LeafProjectionRetention` | `TimeSpan` | 7 d | Maximum age a leaf's persisted projection may have before activation forces snapshot-then-WAL recovery. `InfiniteTimeSpan` disables the age trigger. |
 | `ProjectionRebuildPolicy` | enum | `SnapshotThenWal` | Recovery strategy when a leaf's fall-off-log triggers fire. See [Configuration](configuration.md#projectionrebuildpolicy). |

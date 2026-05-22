@@ -8,7 +8,7 @@ Cross-cluster replication for [Orleans.Lattice](../../README.md) - captures ever
 
 - **Capture.** Mutations are intercepted at commit time on the producing cluster and written to a per-tree WAL via the pluggable `IWalStorageProvider` seam (in-memory default, optional Azure Table Storage backend).
 - **Ship.** A per-peer `IReplicationShipperGrain` streams batches to each peer over a long-lived push transport (`IReplicationTransport`, with gRPC as the canonical binding).
-- **Apply.** Inbound entries flow through `IReplicationApplier`, which performs per-origin HWM dedup, causal-dependency parking via the causal-apply buffer, shadow-forward de-duplication, and CRDT-aware merges (LWW-Register, OR-Set, PN-Counter, VersionVector).
+- **Apply.** Inbound entries flow through `IReplicationApplier`, which performs per-origin HWM dedup, causal-dependency parking via the causal-apply buffer, shadow-forward de-duplication, and CRDT-aware merges (LWW-Register, OR-Set, PN-Counter, VersionVector, MV-Register, OR-Map).
 - **Bootstrap.** New or fallen-off-the-log peers seed via the snapshot subsystem (`ISnapshotProvider`, `IRemoteSnapshotTransport`, `LatticeRemoteSnapshotService`, `RemoteSnapshotProvider`) coordinated by the per-tree `LatticeBootstrapCoordinatorGrain` with crash-resumable state.
 - **Operate.** Dead-letter quarantine for poison entries, per-tree merge-mode resolution, operator-driven re-seed, fall-off-log detection, admin introspection (`ILatticeReplicationAdmin`, `ILatticeWalIntrospection`), shared-secret-based mutual auth between clusters, and first-class metrics (apply duration, lag, FIFO violations, bootstrap retries, dead-letter rates) are all in-scope.
 
@@ -16,7 +16,7 @@ No external broker, no shared database, no host-level outgoing-call filter.
 
 It supports:
 
-- Per-tree opt-in with a declared `LatticeMergeMode` (LWW-Register, OR-Set, PN-Counter, VersionVector; MV-Register on the roadmap).
+- Per-tree opt-in with a declared `LatticeMergeMode` (LWW-Register, OR-Set, PN-Counter, VersionVector, MV-Register, OR-Map).
 - Origin-stamped HLC on every record, with at-most-once apply per `(origin, hlc)`.
 - Causal+ delivery - vector-clock-stamped entries with receiver-side dependency satisfaction across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards.
 - Active-active topology: any peer can write to any tree; conflicting updates converge deterministically.
@@ -36,7 +36,7 @@ It supports:
 - **At-most-once apply.** Re-delivery of the same `(origin, hlc, key, op)` is idempotent. Counters do not double-increment, sets do not re-add.
 - **No host-level coupling.** Replication is produced by the silo at commit time. Hosts neither install outgoing-call filters nor route mutations through their own pipeline.
 
-Behaviour is validated end-to-end by active-active convergence chaos tests across OR-Set, PN-Counter, and LWW-Register primitives running through real `AddLatticeReplication` silos.
+Behaviour is validated end-to-end by active-active convergence chaos tests across LWW-Register, OR-Set, PN-Counter, and MV-Register primitives running through real `AddLatticeReplication` silos.
 
 ## Features
 
@@ -56,7 +56,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Pluggable transport** | `IReplicationTransport` is the public seam. gRPC is the canonical implementation; in-process and custom transports plug into the same contract. | [Transport](transport.md) |
 | **Receiver-side flow control** | The receiver stamps optional `SuggestedBatchSize` / `PauseForMs` hints onto every ack; the sender clamps its per-tick batch cap and pauses on request. A struggling receiver throttles in-band without timing out RPCs; a recovered receiver re-accelerates by lifting the hints. | [Receiver Flow Control](receiver-flow-control.md) |
 | **Snapshot bootstrap** | New or re-seeded peers receive a point-in-time snapshot, then switch to incremental shipping at the snapshot's HLC. | [Snapshot Bootstrap](snapshot-bootstrap.md) |
-| **Typed CRDT deltas** | The wire carries typed deltas for LWW-Register, OR-Set, PN-Counter, and VersionVector. Receivers merge by mode, not by opaque-byte LWW. | [Deltas](deltas.md) |
+| **Typed CRDT deltas** | The wire carries typed deltas for LWW-Register, OR-Set, PN-Counter, VersionVector, MV-Register, and OR-Map. Receivers merge by mode, not by opaque-byte LWW. | [Deltas](deltas.md) |
 
 ## Quick Start
 
@@ -126,4 +126,4 @@ For internals (the "how"):
 
 ## Roadmap
 
-The feature plan - including the items still ahead of GA (observable topology, MV-Register dispatch, performance follow-ons) and the satisfied dependencies - lives in [`src/lattice.replication/roadmap.md`](../../src/lattice.replication/roadmap.md).
+The feature plan - including the items still ahead and the satisfied dependencies - lives in [`src/lattice.replication/roadmap.md`](../../src/lattice.replication/roadmap.md).
