@@ -113,7 +113,7 @@ These grains form the structural B+ tree and handle every read/write request:
 | Shard router | `LatticeGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless). Caches the resolved `ShardMap` in memory; invalidated on stale-routing detection. |
 | Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | `ShardRootState` - root node ID + leaf/internal flag + pending promotion + pending bulk graft + last completed bulk operation ID |
 | Internal node | `BPlusInternalGrain` | `Guid` | `InternalNodeState` - sorted children + HLC + split state |
-| Leaf node | `BPlusLeafGrain` | `Guid` | `LeafNodeState` - sorted LWW entries + sibling pointer + HLC + version vector + split state |
+| Leaf node | `BPlusLeafGrain` | `Guid` | `LeafNodeState` - topology (sibling pointers, parent, key range, split state) + HLC + version vector + projection checkpoint offset + 16-byte projection hash. Per-key LWW entries are **not** persisted; the per-activation runtime cache rebuilds from the WAL strictly after `ProjectionCheckpointOffset`. |
 | Leaf cache | `LeafCacheGrain` (`[StatelessWorker]`) | `{leafGrainId}` | None (in-memory LWW-map + version vector) |
 
 ### Tree registry

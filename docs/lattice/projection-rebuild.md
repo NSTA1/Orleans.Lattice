@@ -2,9 +2,12 @@
 
 Orleans.Lattice's per-shard write-ahead log (WAL) is, in a fully replicated
 deployment, the canonical durable record of every leaf mutation. Each leaf
-grain materialises that log into an in-memory + persisted projection
-(its `Entries` dictionary) and advances a per-leaf checkpoint offset as the
-WAL grows. Two operational concerns naturally arise:
+grain materialises that log into a per-activation in-memory projection
+(the entry cache - a sorted dictionary owned by the leaf grain for the
+after the leaf-state collapse)
+persisted leaf state row carries only topology, the checkpoint offset, and a
+16-byte projection-digest XOR fold; the cache is rebuilt from the WAL strictly
+after that offset on every activation. Two operational concerns naturally arise:
 
 1. **Drift detection.** If a silo's leaf projection diverges from the
    WAL prefix it claims to have applied - a cosmic-ray bit flip, a
