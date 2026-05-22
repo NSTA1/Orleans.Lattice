@@ -202,4 +202,105 @@ public sealed class LatticeFallOffLogDetectorTests
 
         Assert.That(decision, Is.EqualTo(FallOffLogDecision.SnapshotThenWal));
     }
+
+    [Test]
+    public async Task ClassifyAsync_returns_SnapshotPending_when_checkpoint_inside_margin()
+    {
+        // head=1000, tail=0, checkpoint=200. Proximity = 200/1000 = 0.20,
+        // within the default 0.30 margin and no hard trigger fires
+        // (checkpoint within budget, no trim, no age). Advisory must fire.
+        var (detector, _) = CreateDetector(head: 1000, tail: 0);
+        var options = await BuildOptionsAsync();
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 200,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.SnapshotPending));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_returns_TailReplay_when_checkpoint_outside_margin()
+    {
+        // head=1000, tail=0, checkpoint=500. Proximity = 0.50, comfortably
+        // outside the 0.30 default margin. Advisory must NOT fire.
+        var (detector, _) = CreateDetector(head: 1000, tail: 0);
+        var options = await BuildOptionsAsync();
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 500,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplay));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_advisory_disabled_when_margin_is_zero()
+    {
+        // LeafSnapshotMargin = 0.0 opts out of the proactive advisory.
+        // Even a checkpoint right at the tail must remain TailReplay
+        // (no hard trigger fires since checkpoint is at tail, not below).
+        var (detector, _) = CreateDetector(head: 1000, tail: 0);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            LeafSnapshotMargin = 0.0,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 1,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplay));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_hard_trigger_silences_SnapshotPending()
+    {
+        // Replay-budget trigger fires (gap exceeds budget). Even though
+        // the proximity would otherwise qualify, the hard trigger wins
+        // and the configured rebuild policy is returned.
+        var (detector, _) = CreateDetector(head: 1000, tail: 0);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            MaxLeafReplayEntries = 100,
+            ProjectionRebuildPolicy = ProjectionRebuildPolicy.SnapshotThenWal,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 200,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        // Gap = 800 > budget 100, so the hard trigger wins.
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.SnapshotThenWal));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_advisory_skipped_for_nothing_applied_sentinel()
+    {
+        // checkpoint = -1 means "nothing applied yet" - there is no
+        // cache content to snapshot, so the advisory must not fire.
+        var (detector, _) = CreateDetector(head: 1000, tail: 0);
+        var options = await BuildOptionsAsync();
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: -1,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplay));
+    }
 }

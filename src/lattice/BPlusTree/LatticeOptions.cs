@@ -664,6 +664,32 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultLeafProjectionRetention = TimeSpan.FromDays(7);
 
     /// <summary>
+    /// Proximity threshold, expressed as a fraction in <c>[0.0, 1.0]</c>,
+    /// at which a leaf's persisted projection checkpoint is considered
+    /// close enough to the WAL tail that a snapshot capture should be
+    /// proactively scheduled. The fall-off-log detector evaluates
+    /// <c>(checkpoint - tail) / (head - tail) &lt;= LeafSnapshotMargin</c>
+    /// after the three hard triggers have been ruled out; when the
+    /// inequality holds the detector returns the
+    /// <see cref="FallOffLogDecision.SnapshotPending"/> advisory and the
+    /// maintenance grain captures a snapshot of the leaf's cache on the
+    /// next <c>ProbeFallOffAsync</c> tick. The advisory is non-fatal:
+    /// the leaf's own activation path treats it as a tail replay, so
+    /// reactivation behaviour is unchanged.
+    /// <para>
+    /// Set to <c>0.0</c> to disable the proactive-capture advisory
+    /// (the hard fall-off triggers continue to apply). Values closer
+    /// to <c>1.0</c> drive more aggressive capture; <c>0.30</c> (the
+    /// default) keeps capture confined to leaves whose checkpoint is
+    /// within the trailing 30% of the readable WAL window.
+    /// </para>
+    /// </summary>
+    public double LeafSnapshotMargin { get; set; } = DefaultLeafSnapshotMargin;
+
+    /// <summary>Default value for <see cref="LeafSnapshotMargin"/> (<c>0.30</c>).</summary>
+    public const double DefaultLeafSnapshotMargin = 0.30;
+
+    /// <summary>
     /// Selects the recovery strategy a leaf grain takes when one of
     /// the fall-off-log triggers fires at activation time
     /// (WAL trimmed past checkpoint, replay budget exceeded, projection

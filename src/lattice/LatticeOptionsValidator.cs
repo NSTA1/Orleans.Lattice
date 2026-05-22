@@ -29,6 +29,12 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.ProjectionRebuildPolicy)} must be a defined {nameof(ProjectionRebuildPolicy)} value.");
         }
+        if (options.LeafSnapshotMargin < 0.0 || options.LeafSnapshotMargin > 1.0
+            || double.IsNaN(options.LeafSnapshotMargin))
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafSnapshotMargin)} must be in the inclusive range [0.0, 1.0].");
+        }
 if (options.WalMaxPendingBatches < 1)
 {
     return ValidateOptionsResult.Fail(

@@ -221,6 +221,7 @@ internal sealed class LatticeOptionsResolver(
             LeafProjectionRetention = baseOptions.LeafProjectionRetention,
             ProjectionRebuildPolicy = baseOptions.ProjectionRebuildPolicy,
             MaxLeafReplayEntries = baseOptions.MaxLeafReplayEntries,
+            LeafSnapshotMargin = baseOptions.LeafSnapshotMargin,
             MinTombstoneRatioForCompaction = baseOptions.MinTombstoneRatioForCompaction,
             MaxLeafEntriesBeforeForcedCompaction = baseOptions.MaxLeafEntriesBeforeForcedCompaction,
             CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,
