@@ -470,6 +470,34 @@ internal sealed partial class LatticeGrain(
             cancellationToken);
     }
 
+    public async Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(deltaBytes);
+        cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
+        await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        var version = LatticeIdempotencyContext.IsActive
+            ? await RunMutationAsync(ct => ApplyCrdtDeltaAsyncCore(key, mode, deltaBytes, ct), cancellationToken)
+            : await ApplyCrdtDeltaAsyncCore(key, mode, deltaBytes, cancellationToken);
+        await PublishEventAsync(LatticeTreeEventKind.Set, key);
+        return version;
+    }
+
+    private Task<HybridLogicalClock> ApplyCrdtDeltaAsyncCore(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken)
+    {
+        return RetryOnStaleRoutingAsync(
+            async () =>
+            {
+                var shard = await GetShardGrainAsync(key);
+                return await shard.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
+            },
+            cancellationToken);
+    }
+
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();

@@ -58,6 +58,7 @@ internal static class TypeAliases
     internal const string GetOrSetResult = "ol.gsr";
     internal const string EntriesPage = "ol.ep";
     internal const string CasResult = "ol.cas";
+    internal const string CrdtApplyResult = "ol.crdtap";
     internal const string Versioned = "ol.ver";
     internal const string VersionedValue = "ol.vvl";
     internal const string ShardHotness = "ol.sh";

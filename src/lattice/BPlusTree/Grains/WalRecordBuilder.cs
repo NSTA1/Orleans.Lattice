@@ -126,4 +126,48 @@ internal static class WalRecordBuilder
             ShardIndex = shardIndex,
         };
     }
+
+    /// <summary>
+    /// Builds a <see cref="WalRecord"/> for a producer-side typed CRDT
+    /// delta-apply commit. Unlike <see cref="ForSet"/>, the delta-apply
+    /// path carries the typed delta bytes in <see cref="WalRecord.Delta"/>
+    /// and a post-merge full-state snapshot in <see cref="WalRecord.Value"/>;
+    /// the post-merge snapshot keeps the producer-side read seam
+    /// (<c>GetAsync</c> -&gt; <c>byte[]</c>) observably-consistent while
+    /// receivers continue to dispatch on <see cref="WalRecord.Delta"/>
+    /// via the canonical encoder strip. The merge mode is stamped onto
+    /// the in-memory record so the leaf-side dispatch can dispatch on
+    /// <paramref name="mode"/> without re-resolving it; the wire-time
+    /// encoder re-stamps from the per-tree resolver.
+    /// </summary>
+    public static WalRecord ForCrdtDelta(
+        string treeId,
+        int shardIndex,
+        string key,
+        LatticeMergeMode mode,
+        LwwValue<byte[]> postMerge,
+        byte[] deltaBytes)
+    {
+        var batch = LatticeAtomicBatchContext.Current;
+        return new WalRecord
+        {
+            TreeId = treeId,
+            Op = MutationKind.Set,
+            Key = key,
+            Value = postMerge.Value,
+            Timestamp = postMerge.Timestamp,
+            IsTombstone = false,
+            ExpiresAtTicks = postMerge.ExpiresAtTicks,
+            OriginClusterId = postMerge.OriginClusterId,
+            VectorClock = postMerge.VectorClock,
+            TransactionId = LatticeTransactionContext.Current,
+            Category = LatticeMaintenanceContext.Current,
+            Delta = deltaBytes,
+            Mode = mode,
+            AtomicBatchSize = batch?.Size ?? 0,
+            AtomicBatchIndex = batch?.Index ?? 0,
+            IsPrepared = false,
+            ShardIndex = shardIndex,
+        };
+    }
 }

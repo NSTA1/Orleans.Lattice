@@ -94,6 +94,34 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
 
     /// <summary>
+    /// Applies a producer-side typed CRDT delta to <paramref name="key"/>
+    /// under the declared <paramref name="mode"/>. The leaf resolves the
+    /// matching <see cref="CrdtShape"/> from the registered
+    /// <see cref="CrdtShapeRegistry"/>, deserialises <paramref name="deltaBytes"/>
+    /// into the typed delta DTO, decodes the current state from
+    /// <see cref="State.LeafNodeState.Entries"/> (or constructs an empty
+    /// instance when the key is absent), folds the delta into the state
+    /// via the shape's <c>MergeDelta</c>, re-serialises the post-merge
+    /// state for the legacy byte[] row, appends a single
+    /// <see cref="MutationKind.Set"/> WAL record whose
+    /// <see cref="WalRecord.Delta"/> slot carries the producer's typed
+    /// delta bytes verbatim, and returns the
+    /// <see cref="HybridLogicalClock"/> stamped on the committed entry.
+    /// <para>
+    /// No CAS - CRDT delta merges are convergent under any interleaving,
+    /// so a single-shot apply suffices. The returned HLC equals the
+    /// committed entry's <see cref="LwwValue{T}.Timestamp"/> and is the
+    /// per-key version observable through the existing read path.
+    /// </para>
+    /// <para>
+    /// <see cref="LatticeMergeMode.LwwRegister"/> is rejected with
+    /// <see cref="ArgumentException"/> - LWW writes flow through
+    /// <see cref="SetAsync(string, byte[])"/> / <see cref="SetIfVersionAsync"/>.
+    /// </para>
+    /// </summary>
+    Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes);
+
+    /// <summary>
     /// Inserts or updates multiple key-value pairs.
     /// Returns the last <see cref="SplitResult"/> if any split occurred, otherwise <c>null</c>.
     /// </summary>
