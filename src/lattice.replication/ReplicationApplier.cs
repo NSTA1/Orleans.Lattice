@@ -28,7 +28,7 @@ internal sealed partial class ReplicationApplier(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
     LocalVectorClockCache localVectorClockCache,
-    OrMapShapeRegistry? orMapShapes = null,
+    CrdtShapeRegistry? crdtShapes = null,
     ILogger<ReplicationApplier>? logger = null) : IReplicationApplier
 {
     private readonly ILogger<ReplicationApplier> _logger =
@@ -790,7 +790,7 @@ internal sealed partial class ReplicationApplier(
 
     /// <summary>
     /// Routes an inbound <see cref="LatticeMergeMode.OrMap"/> entry through
-    /// the registered <see cref="OrMapShape"/> for the entry's
+    /// the registered <see cref="CrdtShape"/> for the entry's
     /// tree. The wire shape is generic over <c>(TKey, TValue)</c>, so the
     /// receiver cannot statically pick a deserialiser; the host registers
     /// the concrete pair via
@@ -813,10 +813,10 @@ internal sealed partial class ReplicationApplier(
                 nameof(entry));
         }
 
-        var shape = orMapShapes?.TryGet(entry.TreeId)
+        var shape = crdtShapes?.TryGet(entry.TreeId, LatticeMergeMode.OrMap)
             ?? throw new InvalidOperationException(
                 $"Tree '{entry.TreeId}' is configured for LatticeMergeMode.OrMap but no "
-                + "OrMapShape is registered with the receiver. Call "
+                + "CrdtShape is registered with the receiver. Call "
                 + "siloBuilder.AddOrMapShape<TKey, TValue>(\"" + entry.TreeId + "\") on the "
                 + "service collection before silo start so the receiver can deserialise the generic delta.");
 
