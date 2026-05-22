@@ -66,8 +66,3 @@ If multiple tags were pushed in a single `git push origin tag1 tag2 ...` operati
 
 Every release moves the working tree's `## [Unreleased]` section into a new dated `## [X.Y.Z] - YYYY-MM-DD` section. The footer `[X.Y.Z]: ...` compare link must be added in the same edit. The ship commit that merges the changelog edit is the commit the tag points at.
 
-## Historical tag backfill
-
-The repository's git tags reflect releases through `v3.2.0` (2026-04-27). Versions `4.0.0`, `5.0.0`, and `5.0.1` shipped to NuGet but were not tagged in git at the time, so a recipient reading the repo cannot do `git checkout v5.0.0`. The current cleanup PR (`chore/v6-release-prep`) does not back-fill these tags; that is deliberately out of scope.
-
-When a v6 release is cut, consider back-filling the missing tags at the commits identified in `CHANGELOG.md` (`4.0.0` at `e1eb239`, `5.0.0` at `0c85a6e`, `5.1.0` at the R-120 ship commit) using `git tag -a <tag> <commit> -m "..."` so future archaeology has fixed reference points.
