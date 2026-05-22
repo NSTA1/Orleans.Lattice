@@ -31,8 +31,7 @@ public class WalRecordConverterTests
             AtomicBatchSize = 7,
             AtomicBatchIndex = 3,
             Category = MutationCategory.User,
-            DeltaKind = "lww",
-            DeltaPayload = new byte[] { 9, 9 },
+            Delta = new byte[] { 9, 9 },
         };
 
         var entry = WalRecordConverter.ToWalRecord(mutation, LatticeMergeMode.LwwRegister, "cluster-A");
@@ -49,8 +48,7 @@ public class WalRecordConverterTests
             Assert.That(entry.ExpiresAtTicks, Is.EqualTo(12345L));
             Assert.That(entry.OriginClusterId, Is.EqualTo("cluster-A"));
             Assert.That(entry.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
-            Assert.That(entry.DeltaKind, Is.EqualTo("lww"));
-            Assert.That(entry.DeltaPayload, Is.EqualTo(new byte[] { 9, 9 }));
+            Assert.That(entry.Delta, Is.EqualTo(new byte[] { 9, 9 }));
             Assert.That(entry.TransactionId, Is.EqualTo(txId));
             Assert.That(entry.AtomicBatchSize, Is.EqualTo(7));
             Assert.That(entry.AtomicBatchIndex, Is.EqualTo(3));
@@ -134,8 +132,7 @@ public class WalRecordConverterTests
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
             ExpiresAtTicks = 999L,
             OriginClusterId = "origin-A",
-            DeltaKind = "lww",
-            DeltaPayload = new byte[] { 1 },
+            Delta = new byte[] { 1 },
         };
 
         var entry = WalRecordConverter.ToWalRecord(original, LatticeMergeMode.LwwRegister, "cluster-A");
@@ -150,8 +147,7 @@ public class WalRecordConverterTests
             Assert.That(roundTripped.Timestamp, Is.EqualTo(original.Timestamp));
             Assert.That(roundTripped.ExpiresAtTicks, Is.EqualTo(original.ExpiresAtTicks));
             Assert.That(roundTripped.OriginClusterId, Is.EqualTo(original.OriginClusterId));
-            Assert.That(roundTripped.DeltaKind, Is.EqualTo(original.DeltaKind));
-            Assert.That(roundTripped.DeltaPayload, Is.EqualTo(original.DeltaPayload));
+            Assert.That(roundTripped.Delta, Is.EqualTo(original.Delta));
             // TransactionId round-trips verbatim through the wire format
             // (the original here did not set one, so it defaults to Empty).
             Assert.That(roundTripped.TransactionId, Is.EqualTo(Guid.Empty));

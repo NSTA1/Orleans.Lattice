@@ -38,25 +38,11 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.ReplicationAck"/>.</summary>
     internal const string ReplicationAck = "olr.ak";
 
-    // Typed CRDT deltas (commit-time wire payloads for replicable primitives)
-
-    /// <summary>Alias for <see cref="LwwRegisterDelta"/>.</summary>
-    internal const string LwwRegisterDelta = "olr.ld";
-
-    /// <summary>Alias for <see cref="OrSetDelta"/>.</summary>
-    internal const string OrSetDelta = "olr.od";
-
-    /// <summary>Alias for <see cref="OrSetDot"/>.</summary>
-    internal const string OrSetDot = "olr.dt";
-
-    /// <summary>Alias for <see cref="PnCounterDelta"/>.</summary>
-    internal const string PnCounterDelta = "olr.pd";
-
-    /// <summary>Alias for <see cref="VersionVectorDelta"/>.</summary>
-    internal const string VersionVectorDelta = "olr.vd";
-
-    /// <summary>Alias for <see cref="MvRegisterDelta"/>.</summary>
-    internal const string MvRegisterDelta = "olr.md";
+    // Typed CRDT deltas moved to core Orleans.Lattice.TypeAliases when
+    // the public delta DTOs were promoted into the core library. The
+    // wire-format alias strings changed at the same time (ol.* prefix);
+    // see TypeAliases.{LwwRegisterDelta, OrSetDelta, OrSetDeltaDot,
+    // PnCounterDelta, VersionVectorDelta, MvRegisterDelta, OrMapDelta}.
 
     // Transport-side resume token
 

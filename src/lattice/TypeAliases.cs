@@ -133,6 +133,23 @@ internal static class TypeAliases
     internal const string MutationCategory = "ol.muc";
     internal const string LatticeDeltaCarry = "ol.dlc";
 
+    // Typed CRDT delta DTOs - the public on-wire author-delta contract
+    // for replicable CRDT primitives. The producer-side accessors emit
+    // these directly into WalRecord.Delta; receivers deserialise the
+    // matching DTO based on LatticeMergeMode and call MergeDelta on
+    // the loaded primitive. Single source of truth for CRDT replication
+    // (previously: dual-path with internal CrdtDeltaPayloads + full-state
+    // JSON in WalRecord.Value).
+    internal const string LwwRegisterDelta = "ol.lwd";
+    internal const string OrSetDelta = "ol.osa";
+    internal const string OrSetDeltaDot = "ol.osc";
+    internal const string PnCounterDelta = "ol.pcd";
+    internal const string VersionVectorDelta = "ol.vvd";
+    internal const string MvRegisterDelta = "ol.mvg";
+    internal const string OrMapDelta = "ol.omd";
+    internal const string OrMapDeltaEntry = "ol.omx";
+    internal const string OrMapDeltaTombstone = "ol.omt";
+
     // Grain interfaces - each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.

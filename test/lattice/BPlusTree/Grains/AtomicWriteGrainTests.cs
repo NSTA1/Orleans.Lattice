@@ -388,13 +388,12 @@ public partial class AtomicWriteGrainTests
     [Test]
     public async Task ReceiveReminder_resumes_execute_re_stamps_persisted_delta_context()
     {
-        // Crash-replay regression: a saga that captured a DeltaKind/DeltaPayload
+        // Crash-replay regression: a saga that captured a Delta payload
         // on its original Prepare call must re-stamp the persisted carry on
         // every resumed per-key write so observers continue to see the
         // author's delta even after a silo restart. Caller-side ambient
         // context is deliberately *unset* here - the value must come from
         // persisted AtomicWriteState alone.
-        const string persistedKind = "test.replay.kind";
         var persistedPayload = new byte[] { 7, 7, 7 };
 
         var state = new FakePersistentState<AtomicWriteState>();
@@ -407,12 +406,11 @@ public partial class AtomicWriteGrainTests
             new() { Key = "b", Value = null, Existed = false },
         };
         state.State.NextIndex = 1;
-        state.State.DeltaKind = persistedKind;
-        state.State.DeltaPayload = persistedPayload;
+        state.State.Delta = persistedPayload;
 
         var (grain, _, _, lattice, _) = CreateGrain(state);
 
-        (string Kind, byte[] Payload)? observedDuringSetB = null;
+        byte[]? observedDuringSetB = null;
         lattice.SetAsync("b", Arg.Any<byte[]>())
             .Returns(_ =>
             {
@@ -425,9 +423,7 @@ public partial class AtomicWriteGrainTests
 
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
-        Assert.That(observedDuringSetB, Is.Not.Null);
-        Assert.That(observedDuringSetB!.Value.Kind, Is.EqualTo(persistedKind));
-        Assert.That(observedDuringSetB.Value.Payload, Is.EqualTo(persistedPayload));
+        Assert.That(observedDuringSetB, Is.EqualTo(persistedPayload));
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
     }
 

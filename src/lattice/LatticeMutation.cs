@@ -138,34 +138,28 @@ public readonly record struct LatticeMutation
     [Id(11)] public MutationCategory Category { get; init; }
 
     /// <summary>
-    /// Stable identifier for the encoding of <see cref="DeltaPayload"/>,
-    /// or <see langword="null"/> when the producer did not supply an
-    /// author's delta. Typically the fully-qualified type name or a short
-    /// alias of a typed delta record from the replication package
-    /// (<c>LwwRegisterDelta</c>, <c>OrSetDelta</c>, <c>PnCounterDelta</c>,
-    /// <c>VersionVectorDelta</c>, <c>MvRegisterDelta</c>). The lattice
-    /// library itself never opens the payload - consumers (the
-    /// replication observer in particular) decode based on this slot.
-    /// Defaults to <see langword="null"/> for wire compatibility with
-    /// observers persisted before this field existed.
-    /// </summary>
-    [Id(12)] public string? DeltaKind { get; init; }
-
-    /// <summary>
     /// Pre-merge author's delta in opaque-bytes form, or
-    /// <see langword="null"/> when the producer did not supply one. The
-    /// minimal record the producer would replay against an in-memory
-    /// projection to reach the same converged state - distinct from
-    /// <see cref="Value"/>, which always carries the post-merge committed
-    /// bytes. Carrying the author's delta lets a deterministic replay path
-    /// (e.g. a future leaf-projection rebuild from the WAL) reach the
-    /// same convergence the originating writer reached, which the
-    /// post-merge bytes alone cannot guarantee for non-LWW CRDTs. The
-    /// lattice library itself never opens the payload. Defaults to
-    /// <see langword="null"/> for wire compatibility with observers
-    /// persisted before this field existed.
+    /// <see langword="null"/> when the producer did not author a typed
+    /// CRDT delta (plain LWW <c>Set</c> / <c>Delete</c> writes). When
+    /// non-<see langword="null"/>, the bytes are the Orleans-serialised
+    /// form of one of the public typed delta DTOs - the one matching the
+    /// <see cref="LatticeMergeMode"/> stamped on the same record. The
+    /// receiver dispatches on the mode to pick the right deserialiser
+    /// and call <c>MergeDelta</c> on the loaded primitive, which is what
+    /// makes CRDT replication converge by replaying the author's intent
+    /// rather than the post-merge state (the latter loses concurrent-
+    /// write information for non-LWW CRDTs).
+    /// <para>
+    /// The wire id <c>13</c> matches the slot previously named
+    /// <c>DeltaPayload</c>; the rename is source-breaking but wire-
+    /// compatible. The companion <c>DeltaKind</c> string (formerly id
+    /// <c>12</c>) was retired in the same change because receivers now
+    /// dispatch on <see cref="LatticeMergeMode"/>; that wire id is
+    /// permanently reserved and must never be reused for a different
+    /// field.
+    /// </para>
     /// </summary>
-    [Id(13)] public byte[]? DeltaPayload { get; init; }
+    [Id(13)] public byte[]? Delta { get; init; }
 
     /// <summary>
     /// Total number of mutations in the enclosing atomic transaction

@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// A single entry in an observed-remove (OR) set delta: a unique
@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Replication;
 /// <strong>Equality caveat.</strong> The synthesized record-struct equality
 /// operator delegates to the default comparer for each field, and the
 /// default comparer for <see cref="byte"/><c>[]</c> is <em>reference</em>
-/// equality. Two structurally-identical <c>OrSetDot</c> instances built
+/// equality. Two structurally-identical <c>OrSetDeltaDot</c> instances built
 /// from independently-allocated <see cref="Element"/> arrays therefore
 /// compare unequal. Consumers comparing dots across deltas (e.g. matching
 /// an entry in <see cref="OrSetDelta.Removes"/> against the local set)
@@ -20,9 +20,9 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.OrSetDot)]
+[Alias(TypeAliases.OrSetDeltaDot)]
 [Immutable]
-public readonly record struct OrSetDot
+public readonly record struct OrSetDeltaDot
 {
     /// <summary>The element bytes the dot is attached to. Never <c>null</c> on emitter-produced dots.</summary>
     [Id(0)] public byte[] Element { get; init; }

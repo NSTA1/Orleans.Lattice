@@ -180,12 +180,18 @@ public class CompressedReplicationApplyIntegrationTests
 
         var remoteSet = new OrSet();
         remoteSet.Add(new byte[] { 2 }, "site-a", 1);
+        var remoteDelta = new OrSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = new byte[] { 2 }, ReplicaId = "site-a", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
         var entry = new WalRecord
         {
             TreeId = tree,
             Op = MutationKind.Set,
             Key = key,
             Value = JsonLatticeSerializer<OrSet>.Default.Serialize(remoteSet),
+            Delta = JsonLatticeSerializer<OrSetDelta>.Default.Serialize(remoteDelta),
             Timestamp = Hlc(1_000),
             Mode = LatticeMergeMode.OrSet,
             OriginClusterId = CompressedTwoSiteClusterFixture.SiteAClusterId,
@@ -216,12 +222,18 @@ public class CompressedReplicationApplyIntegrationTests
         var remoteCounter = new PnCounter();
         remoteCounter.Increment("site-a", 5);
         remoteCounter.Decrement("site-a", 2);
+        var remoteDelta = new PnCounterDelta
+        {
+            Increments = new Dictionary<string, long> { ["site-a"] = 5 },
+            Decrements = new Dictionary<string, long> { ["site-a"] = 2 },
+        };
         var entry = new WalRecord
         {
             TreeId = tree,
             Op = MutationKind.Set,
             Key = key,
             Value = JsonLatticeSerializer<PnCounter>.Default.Serialize(remoteCounter),
+            Delta = JsonLatticeSerializer<PnCounterDelta>.Default.Serialize(remoteDelta),
             Timestamp = Hlc(1_000),
             Mode = LatticeMergeMode.PnCounter,
             OriginClusterId = CompressedTwoSiteClusterFixture.SiteAClusterId,
@@ -245,12 +257,18 @@ public class CompressedReplicationApplyIntegrationTests
 
         var remote = new MvRegister();
         remote.Set("site-a", JsonLatticeSerializer<string>.Default.Serialize("v-a"));
+        var remoteDelta = new MvRegisterDelta
+        {
+            Entries = remote.Entries.ToArray(),
+            Context = new Dictionary<string, long>(remote.Context, StringComparer.Ordinal),
+        };
         var entry = new WalRecord
         {
             TreeId = tree,
             Op = MutationKind.Set,
             Key = key,
             Value = JsonLatticeSerializer<MvRegister>.Default.Serialize(remote),
+            Delta = JsonLatticeSerializer<MvRegisterDelta>.Default.Serialize(remoteDelta),
             Timestamp = Hlc(1_000),
             Mode = LatticeMergeMode.MvRegister,
             OriginClusterId = CompressedTwoSiteClusterFixture.SiteAClusterId,

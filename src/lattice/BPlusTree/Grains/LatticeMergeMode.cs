@@ -75,4 +75,24 @@ public enum LatticeMergeMode
     /// side as <see cref="LwwRegister"/> would.
     /// </summary>
     MvRegister = 4,
+
+    /// <summary>
+    /// Observed-remove map keyed by <c>TKey</c> with recursively-mergeable
+    /// <c>TValue</c> CRDT values. Receivers fold the typed
+    /// <see cref="OrMapDelta{TKey, TValue}"/> carried in
+    /// <see cref="WalRecord.Delta"/> into the loaded
+    /// <see cref="Primitives.OrMap{TKey, TValue}"/> via its
+    /// instance <c>MergeDelta</c> method, recursing into the value CRDT's
+    /// own <see cref="Primitives.ICrdt{TSelf}.MergeFrom(TSelf)"/> for
+    /// concurrent same-key writes. Because the wire shape is generic, the
+    /// host must register the <c>(TKey, TValue)</c> pair through
+    /// <c>AddOrMapReplicationShape&lt;TKey, TValue&gt;()</c> on the
+    /// service collection before the silo starts; the receiver-side
+    /// applier looks the pair up by tree id and routes the deserialise
+    /// + merge through the matching descriptor. Trees configured for
+    /// <see cref="OrMap"/> with no registered shape descriptor fault
+    /// the apply path so the misconfiguration is surfaced rather than
+    /// silently dropping the entry.
+    /// </summary>
+    OrMap = 5,
 }

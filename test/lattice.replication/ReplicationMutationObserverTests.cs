@@ -890,7 +890,7 @@ public class ReplicationMutationObserverTests
     // ------------------------------------------------------------------
 
     [Test]
-    public async Task Delta_kind_and_payload_are_forwarded_verbatim_on_set()
+    public async Task Delta_payload_is_forwarded_verbatim_on_set()
     {
         var sink = new CapturingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
@@ -902,20 +902,15 @@ public class ReplicationMutationObserverTests
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
-            DeltaKind = "ol.crdt.ors.add",
-            DeltaPayload = payload,
+            Delta = payload,
         }, CancellationToken.None);
 
         var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.ors.add"));
-            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
-        });
+        Assert.That(entry.Delta, Is.SameAs(payload));
     }
 
     [Test]
-    public async Task Delta_slots_are_null_on_emit_when_mutation_did_not_author_a_delta()
+    public async Task Delta_slot_is_null_on_emit_when_mutation_did_not_author_a_delta()
     {
         var sink = new CapturingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
@@ -929,15 +924,11 @@ public class ReplicationMutationObserverTests
         }, CancellationToken.None);
 
         var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.DeltaKind, Is.Null);
-            Assert.That(entry.DeltaPayload, Is.Null);
-        });
+        Assert.That(entry.Delta, Is.Null);
     }
 
     [Test]
-    public async Task Delete_mutation_forwards_delta_kind_and_payload()
+    public async Task Delete_mutation_forwards_delta_payload()
     {
         var sink = new CapturingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
@@ -949,16 +940,11 @@ public class ReplicationMutationObserverTests
             Kind = MutationKind.Delete,
             Key = "k",
             IsTombstone = true,
-            DeltaKind = "ol.crdt.ors.rm",
-            DeltaPayload = payload,
+            Delta = payload,
         }, CancellationToken.None);
 
         var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.ors.rm"));
-            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
-        });
+        Assert.That(entry.Delta, Is.SameAs(payload));
     }
 
     [Test]
@@ -979,22 +965,20 @@ public class ReplicationMutationObserverTests
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
-            DeltaKind = "ol.crdt.pnc.inc",
-            DeltaPayload = payload,
+            Delta = payload,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries.Single().DeltaPayload, Is.SameAs(payload));
+        Assert.That(sink.Entries.Single().Delta, Is.SameAs(payload));
     }
 
     [Test]
-    public async Task MvRegister_set_delta_kind_and_payload_are_forwarded_verbatim()
+    public async Task MvRegister_set_delta_payload_is_forwarded_verbatim()
     {
         // MV-Register producer-side delta passthrough: the typed
-        // accessor stamps `CrdtDeltaKinds.MvRegisterSet` with a
-        // JSON-encoded `MvRegisterSetDelta` payload via
-        // `LatticeDeltaContext`. The observer must forward both slots
-        // verbatim so a future receiver-side dispatch path can replay
-        // the *added* dot rather than reconstruct it from the
+        // accessor stamps an Orleans-serialised `MvRegisterDelta`
+        // payload via `LatticeDeltaContext`. The observer must forward
+        // the slot verbatim so the receiver-side dispatch path can
+        // replay the *added* dot rather than reconstruct it from the
         // post-merge full state.
         var sink = new CapturingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
@@ -1006,25 +990,18 @@ public class ReplicationMutationObserverTests
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
-            DeltaKind = "ol.crdt.mvr.set",
-            DeltaPayload = payload,
+            Delta = payload,
         }, CancellationToken.None);
 
-        var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.mvr.set"));
-            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
-        });
+        Assert.That(sink.Entries.Single().Delta, Is.SameAs(payload));
     }
 
     [Test]
-    public async Task MvRegister_merge_delta_kind_and_payload_are_forwarded_verbatim()
+    public async Task MvRegister_merge_delta_payload_is_forwarded_verbatim()
     {
-        // The accessor's out-of-band merge path stamps
-        // `CrdtDeltaKinds.MvRegisterMerge` with a JSON-encoded
-        // `MvRegisterMergeDelta` payload. Forwarded verbatim like
-        // every other typed CRDT delta.
+        // The accessor's out-of-band merge path stamps an Orleans-
+        // serialised `MvRegisterDelta` payload. Forwarded verbatim
+        // like every other typed CRDT delta.
         var sink = new CapturingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
         var payload = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
@@ -1035,16 +1012,10 @@ public class ReplicationMutationObserverTests
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1 },
-            DeltaKind = "ol.crdt.mvr.mrg",
-            DeltaPayload = payload,
+            Delta = payload,
         }, CancellationToken.None);
 
-        var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.mvr.mrg"));
-            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
-        });
+        Assert.That(sink.Entries.Single().Delta, Is.SameAs(payload));
     }
 
     // ----------------------------------------------------------------__

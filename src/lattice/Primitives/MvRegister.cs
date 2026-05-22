@@ -231,4 +231,33 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
     private static bool IsObserved(MvRegisterEntry entry, Dictionary<string, long> context) =>
         context.TryGetValue(entry.ReplicaId, out var observed) && entry.Counter <= observed;
+
+    /// <summary>
+    /// Folds an <see cref="MvRegisterDelta"/> into this register. The
+    /// merge is equivalent to constructing a transient
+    /// <see cref="MvRegister"/> with <see cref="MvRegisterDelta.Entries"/>
+    /// and <see cref="MvRegisterDelta.Context"/> and calling
+    /// <see cref="MergeFrom(MvRegister)"/>; commutative, associative,
+    /// and idempotent against arrival order and duplicate delivery.
+    /// </summary>
+    /// <param name="delta">
+    /// The typed CRDT delta authored by the producing call site. Null
+    /// inner collections are treated as empty.
+    /// </param>
+    public void MergeDelta(MvRegisterDelta delta)
+    {
+        var other = new MvRegister();
+        var entries = delta.Entries;
+        if (entries is { Count: > 0 })
+        {
+            other.Entries.Capacity = entries.Count;
+            foreach (var entry in entries) other.Entries.Add(entry);
+        }
+        var context = delta.Context;
+        if (context is { Count: > 0 })
+        {
+            foreach (var (replicaId, counter) in context) other.Context[replicaId] = counter;
+        }
+        MergeFrom(other);
+    }
 }

@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Replication.Tests.PublicApiContract;
 /// <summary>
 /// Pins the CRDT delta wire-shape contract:
 /// <see cref="LwwRegisterDelta"/>, <see cref="OrSetDelta"/>,
-/// <see cref="OrSetDot"/>, <see cref="PnCounterDelta"/>, and
+/// <see cref="OrSetDeltaDot"/>, <see cref="PnCounterDelta"/>, and
 /// <see cref="VersionVectorDelta"/> are public, serialisable record
 /// structs with the documented <c>Empty</c> /
 /// <c>Tombstone</c> factories, and the typed CRDT accessors
@@ -44,9 +44,9 @@ public partial class PublicReplicationApiContractTests
     }
 
     [Test]
-    public void OrSetDot_carries_element_replica_and_counter_slots()
+    public void OrSetDeltaDot_carries_element_replica_and_counter_slots()
     {
-        var dot = new OrSetDot
+        var dot = new OrSetDeltaDot
         {
             Element = Bytes("a"),
             ReplicaId = "replica-1",

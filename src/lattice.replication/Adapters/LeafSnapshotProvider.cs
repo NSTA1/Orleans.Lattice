@@ -76,8 +76,7 @@ internal sealed class LeafSnapshotProvider(
                 VectorClock = null,
                 TransactionId = Guid.Empty,
                 Category = MutationCategory.User,
-                DeltaKind = null,
-                DeltaPayload = null,
+                Delta = null,
             };
         }
     }

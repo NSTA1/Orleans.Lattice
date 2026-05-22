@@ -211,13 +211,13 @@ public class ShardRootGrainMutationObserverTests
     }
 
     [Test]
-    public async Task DeleteRangeAsync_stamps_DeltaKind_and_DeltaPayload_from_ambient_context()
+    public async Task DeleteRangeAsync_stamps_Delta_from_ambient_context()
     {
         var h = CreateHarness(leafDeletedCount: 2);
         var payload = new byte[] { 0x10, 0x20, 0x30 };
         try
         {
-            using (LatticeDeltaContext.With("range.delta", payload))
+            using (LatticeDeltaContext.With(payload))
             {
                 await h.Grain.DeleteRangeAsync("a", "z");
             }
@@ -225,8 +225,7 @@ public class ShardRootGrainMutationObserverTests
             Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
             var m = h.Observer.Mutations[0];
             Assert.That(m.Kind, Is.EqualTo(MutationKind.DeleteRange));
-            Assert.That(m.DeltaKind, Is.EqualTo("range.delta"));
-            Assert.That(m.DeltaPayload, Is.EqualTo(payload));
+            Assert.That(m.Delta, Is.EqualTo(payload));
         }
         finally
         {
@@ -243,7 +242,6 @@ public class ShardRootGrainMutationObserverTests
         await h.Grain.DeleteRangeAsync("a", "z");
 
         Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
-        Assert.That(h.Observer.Mutations[0].DeltaKind, Is.Null);
-        Assert.That(h.Observer.Mutations[0].DeltaPayload, Is.Null);
+        Assert.That(h.Observer.Mutations[0].Delta, Is.Null);
     }
 }

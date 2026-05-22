@@ -1,6 +1,6 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Typed delta record for a last-writer-wins register mutation. Carries
@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.LwwRegisterDelta)]
+[Alias(TypeAliases.LwwRegisterDelta)]
 [Immutable]
 public readonly record struct LwwRegisterDelta
 {

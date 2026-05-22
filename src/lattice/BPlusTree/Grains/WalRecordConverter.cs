@@ -59,8 +59,7 @@ internal static class WalRecordConverter
             Mode = mode,
             VectorClock = capturedFrontier,
             DependencySummary = capturedFrontier,
-            DeltaKind = mutation.DeltaKind,
-            DeltaPayload = mutation.DeltaPayload,
+            Delta = mutation.Delta,
             AtomicBatchSize = mutation.AtomicBatchSize,
             AtomicBatchIndex = mutation.AtomicBatchIndex,
             TransactionId = mutation.TransactionId,
@@ -111,8 +110,7 @@ internal static class WalRecordConverter
             // the historical wire-compat default this method used to
             // apply unconditionally.
             Category = entry.Category,
-            DeltaKind = entry.DeltaKind,
-            DeltaPayload = entry.DeltaPayload,
+            Delta = entry.Delta,
             IsPrepared = entry.IsPrepared,
             ShardIndex = entry.ShardIndex,
             AtomicShardCount = entry.AtomicShardCount,

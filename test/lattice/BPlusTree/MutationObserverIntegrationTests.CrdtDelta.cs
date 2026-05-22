@@ -9,15 +9,14 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// End-to-end integration tests asserting that the typed CRDT accessors
 /// (<see cref="OrSetAccessor"/>, <see cref="PnCounterAccessor"/>,
 /// <see cref="VersionVectorAccessor"/>) stamp the pre-merge author's
-/// delta onto every committed mutation via
-/// <see cref="LatticeDeltaContext"/>, so observers see
-/// <see cref="LatticeMutation.DeltaKind"/> /
-/// <see cref="LatticeMutation.DeltaPayload"/> populated.
+/// delta onto every committed mutation via <see cref="LatticeDeltaContext"/>,
+/// so observers see <see cref="LatticeMutation.Delta"/> populated with
+/// the Orleans-serialised public typed-delta DTO.
 /// </summary>
 public sealed partial class MutationObserverIntegrationTests
 {
     [Test]
-    public async Task OrSetAccessor_AddAsync_stamps_or_set_add_delta_on_mutation()
+    public async Task OrSetAccessor_AddAsync_stamps_or_set_delta_carrying_added_dot()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-ors-add");
         var element = Encoding.UTF8.GetBytes("alice");
@@ -28,18 +27,19 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "members"
             && m.TreeId == "obs-e2e-crdt-ors-add"
-            && m.DeltaKind == CrdtDeltaKinds.OrSetAdd);
+            && m.Delta is not null);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.OrSetAddDelta>.Default
-            .Deserialize(m.DeltaPayload!);
-        Assert.That(delta.Element, Is.EqualTo(element));
-        Assert.That(delta.ReplicaId, Is.EqualTo("r1"));
-        Assert.That(delta.Counter, Is.EqualTo(1));
+        var delta = JsonLatticeSerializer<OrSetDelta>.Default.Deserialize(m.Delta!);
+        Assert.That(delta.Removes, Is.Empty);
+        Assert.That(delta.Adds, Has.Count.EqualTo(1));
+        var dot = delta.Adds[0];
+        Assert.That(dot.Element, Is.EqualTo(element));
+        Assert.That(dot.ReplicaId, Is.EqualTo("r1"));
+        Assert.That(dot.Counter, Is.EqualTo(1));
     }
 
     [Test]
-    public async Task OrSetAccessor_RemoveAsync_stamps_or_set_remove_delta_with_observed_dots()
+    public async Task OrSetAccessor_RemoveAsync_stamps_or_set_delta_carrying_observed_dots()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-ors-rm");
         var element = Encoding.UTF8.GetBytes("bob");
@@ -52,19 +52,19 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "members"
             && m.TreeId == "obs-e2e-crdt-ors-rm"
-            && m.DeltaKind == CrdtDeltaKinds.OrSetRemove);
+            && m.Delta is not null
+            && JsonLatticeSerializer<OrSetDelta>.Default.Deserialize(m.Delta!).Removes.Count > 0);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.OrSetRemoveDelta>.Default
-            .Deserialize(m.DeltaPayload!);
-        Assert.That(delta.Element, Is.EqualTo(element));
-        Assert.That(delta.ObservedDots, Has.Length.EqualTo(1));
-        Assert.That(delta.ObservedDots[0].ReplicaId, Is.EqualTo("r1"));
-        Assert.That(delta.ObservedDots[0].Counter, Is.EqualTo(1));
+        var delta = JsonLatticeSerializer<OrSetDelta>.Default.Deserialize(m.Delta!);
+        Assert.That(delta.Adds, Is.Empty);
+        Assert.That(delta.Removes, Has.Count.EqualTo(1));
+        Assert.That(delta.Removes[0].ReplicaId, Is.EqualTo("r1"));
+        Assert.That(delta.Removes[0].Counter, Is.EqualTo(1));
+        Assert.That(delta.Removes[0].Element, Is.EqualTo(element));
     }
 
     [Test]
-    public async Task OrSetAccessor_RemoveAsync_stamps_empty_observed_dots_when_element_absent()
+    public async Task OrSetAccessor_RemoveAsync_stamps_empty_delta_when_element_absent()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-ors-rm-absent");
         var element = Encoding.UTF8.GetBytes("ghost");
@@ -75,17 +75,15 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "members"
             && m.TreeId == "obs-e2e-crdt-ors-rm-absent"
-            && m.DeltaKind == CrdtDeltaKinds.OrSetRemove);
+            && m.Delta is not null);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.OrSetRemoveDelta>.Default
-            .Deserialize(m.DeltaPayload!);
-        Assert.That(delta.Element, Is.EqualTo(element));
-        Assert.That(delta.ObservedDots, Is.Empty);
+        var delta = JsonLatticeSerializer<OrSetDelta>.Default.Deserialize(m.Delta!);
+        Assert.That(delta.Adds, Is.Empty);
+        Assert.That(delta.Removes, Is.Empty);
     }
 
     [Test]
-    public async Task OrSetAccessor_MergeAsync_stamps_or_set_merge_delta_with_other_state()
+    public async Task OrSetAccessor_MergeAsync_stamps_or_set_delta_carrying_other_state()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-ors-mrg");
         var other = new OrSet();
@@ -97,20 +95,18 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "members"
             && m.TreeId == "obs-e2e-crdt-ors-mrg"
-            && m.DeltaKind == CrdtDeltaKinds.OrSetMerge);
+            && m.Delta is not null
+            && JsonLatticeSerializer<OrSetDelta>.Default.Deserialize(m.Delta!).Adds.Count > 0);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.OrSetMergeDelta>.Default
-            .Deserialize(m.DeltaPayload!);
+        var delta = JsonLatticeSerializer<OrSetDelta>.Default.Deserialize(m.Delta!);
         Assert.That(delta.Adds, Has.Count.EqualTo(1));
-        var key = Convert.ToBase64String(Encoding.UTF8.GetBytes("x"));
-        Assert.That(delta.Adds.ContainsKey(key), Is.True);
-        Assert.That(delta.Adds[key][0].ReplicaId, Is.EqualTo("r2"));
-        Assert.That(delta.Adds[key][0].Counter, Is.EqualTo(7));
+        Assert.That(delta.Adds[0].ReplicaId, Is.EqualTo("r2"));
+        Assert.That(delta.Adds[0].Counter, Is.EqualTo(7));
+        Assert.That(delta.Adds[0].Element, Is.EqualTo(Encoding.UTF8.GetBytes("x")));
     }
 
     [Test]
-    public async Task PnCounterAccessor_IncrementAsync_stamps_pn_counter_increment_delta()
+    public async Task PnCounterAccessor_IncrementAsync_stamps_pn_counter_delta_with_replica_total()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-pnc-inc");
 
@@ -120,17 +116,15 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "hits"
             && m.TreeId == "obs-e2e-crdt-pnc-inc"
-            && m.DeltaKind == CrdtDeltaKinds.PnCounterIncrement);
+            && m.Delta is not null);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.PnCounterIncrementDelta>.Default
-            .Deserialize(m.DeltaPayload!);
-        Assert.That(delta.ReplicaId, Is.EqualTo("r1"));
-        Assert.That(delta.Amount, Is.EqualTo(5));
+        var delta = JsonLatticeSerializer<PnCounterDelta>.Default.Deserialize(m.Delta!);
+        Assert.That(delta.Decrements, Is.Empty);
+        Assert.That(delta.Increments["r1"], Is.EqualTo(5));
     }
 
     [Test]
-    public async Task PnCounterAccessor_DecrementAsync_stamps_pn_counter_decrement_delta()
+    public async Task PnCounterAccessor_DecrementAsync_stamps_pn_counter_delta_with_replica_total()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-pnc-dec");
 
@@ -140,17 +134,15 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "hits"
             && m.TreeId == "obs-e2e-crdt-pnc-dec"
-            && m.DeltaKind == CrdtDeltaKinds.PnCounterDecrement);
+            && m.Delta is not null);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.PnCounterDecrementDelta>.Default
-            .Deserialize(m.DeltaPayload!);
-        Assert.That(delta.ReplicaId, Is.EqualTo("r2"));
-        Assert.That(delta.Amount, Is.EqualTo(3));
+        var delta = JsonLatticeSerializer<PnCounterDelta>.Default.Deserialize(m.Delta!);
+        Assert.That(delta.Increments, Is.Empty);
+        Assert.That(delta.Decrements["r2"], Is.EqualTo(3));
     }
 
     [Test]
-    public async Task PnCounterAccessor_MergeAsync_stamps_pn_counter_merge_delta_with_other_state()
+    public async Task PnCounterAccessor_MergeAsync_stamps_pn_counter_delta_with_other_state()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-pnc-mrg");
         var other = new PnCounter();
@@ -163,17 +155,16 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "hits"
             && m.TreeId == "obs-e2e-crdt-pnc-mrg"
-            && m.DeltaKind == CrdtDeltaKinds.PnCounterMerge);
+            && m.Delta is not null
+            && JsonLatticeSerializer<PnCounterDelta>.Default.Deserialize(m.Delta!).Increments.Count > 0);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.PnCounterMergeDelta>.Default
-            .Deserialize(m.DeltaPayload!);
+        var delta = JsonLatticeSerializer<PnCounterDelta>.Default.Deserialize(m.Delta!);
         Assert.That(delta.Increments["r1"], Is.EqualTo(4));
         Assert.That(delta.Decrements["r2"], Is.EqualTo(1));
     }
 
     [Test]
-    public async Task VersionVectorAccessor_TickAsync_stamps_version_vector_tick_delta()
+    public async Task VersionVectorAccessor_TickAsync_stamps_version_vector_delta_for_ticked_replica()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-vvc-tick");
 
@@ -183,17 +174,15 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "vec"
             && m.TreeId == "obs-e2e-crdt-vvc-tick"
-            && m.DeltaKind == CrdtDeltaKinds.VersionVectorTick);
+            && m.Delta is not null);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.VersionVectorTickDelta>.Default
-            .Deserialize(m.DeltaPayload!);
-        Assert.That(delta.ReplicaId, Is.EqualTo("r1"));
-        Assert.That(delta.WallClockTicks, Is.GreaterThan(0));
+        var delta = JsonLatticeSerializer<VersionVectorDelta>.Default.Deserialize(m.Delta!);
+        Assert.That(delta.Entries.ContainsKey("r1"), Is.True);
+        Assert.That(delta.Entries["r1"].WallClockTicks, Is.GreaterThan(0));
     }
 
     [Test]
-    public async Task VersionVectorAccessor_MergeAsync_stamps_version_vector_merge_delta_with_other_state()
+    public async Task VersionVectorAccessor_MergeAsync_stamps_version_vector_delta_with_other_state()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-vvc-mrg");
         var other = new VersionVector();
@@ -206,18 +195,17 @@ public sealed partial class MutationObserverIntegrationTests
             m.Kind == MutationKind.Set
             && m.Key == "vec"
             && m.TreeId == "obs-e2e-crdt-vvc-mrg"
-            && m.DeltaKind == CrdtDeltaKinds.VersionVectorMerge);
+            && m.Delta is not null
+            && JsonLatticeSerializer<VersionVectorDelta>.Default.Deserialize(m.Delta!).Entries.Count >= 2);
 
-        Assert.That(m.DeltaPayload, Is.Not.Null);
-        var delta = JsonLatticeSerializer<CrdtDeltaPayloads.VersionVectorMergeDelta>.Default
-            .Deserialize(m.DeltaPayload!);
+        var delta = JsonLatticeSerializer<VersionVectorDelta>.Default.Deserialize(m.Delta!);
         Assert.That(delta.Entries, Has.Count.EqualTo(2));
         Assert.That(delta.Entries.ContainsKey("r1"), Is.True);
         Assert.That(delta.Entries.ContainsKey("r2"), Is.True);
     }
 
     [Test]
-    public async Task Plain_SetAsync_leaves_delta_slots_null_when_no_producer_stamps_context()
+    public async Task Plain_SetAsync_leaves_delta_slot_null_when_no_producer_stamps_context()
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-crdt-plain-set");
 
@@ -228,7 +216,6 @@ public sealed partial class MutationObserverIntegrationTests
             && m.Key == "k"
             && m.TreeId == "obs-e2e-crdt-plain-set");
 
-        Assert.That(m.DeltaKind, Is.Null);
-        Assert.That(m.DeltaPayload, Is.Null);
+        Assert.That(m.Delta, Is.Null);
     }
 }

@@ -1,6 +1,6 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Typed delta record for a version-vector mutation. Carries the
@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.VersionVectorDelta)]
+[Alias(TypeAliases.VersionVectorDelta)]
 [Immutable]
 public readonly record struct VersionVectorDelta
 {

@@ -320,8 +320,7 @@ internal sealed class AtomicWriteGrain(
         var prevFailureMessage = state.State.FailureMessage;
         var prevKeyFingerprint = state.State.KeyFingerprint;
         var prevTransactionId = state.State.TransactionId;
-        var prevDeltaKind = state.State.DeltaKind;
-        var prevDeltaPayload = state.State.DeltaPayload;
+        var prevDelta = state.State.Delta;
         var prevVectorClock = state.State.VectorClock;
         var prevAtomicBatchSize = state.State.AtomicBatchSize;
         var prevSagaStartedAtTicks = state.State.SagaStartedAtTicks;
@@ -342,22 +341,21 @@ internal sealed class AtomicWriteGrain(
 
         // Capture caller's ambient author-delta carry once, on the first
         // Prepare. On a reminder-driven replay (no caller context) the
-        // persisted fields are reused verbatim, mirroring the
+        // persisted field is reused verbatim, mirroring the
         // KeyFingerprint / TransactionId capture-once pattern.
-        if (state.State.DeltaKind is null && state.State.DeltaPayload is null)
+        if (state.State.Delta is null)
         {
             var deltaCarry = LatticeDeltaContext.Current;
-            if (deltaCarry is { } carry)
+            if (deltaCarry is not null)
             {
-                state.State.DeltaKind = carry.Kind;
-                state.State.DeltaPayload = carry.Payload;
+                state.State.Delta = deltaCarry;
             }
         }
 
         // Capture caller's ambient vector-clock frontier once, on the
         // first Prepare. On a reminder-driven replay (no caller
         // context) the persisted value is reused verbatim, mirroring
-        // the KeyFingerprint / TransactionId / DeltaKind capture-once
+        // the KeyFingerprint / TransactionId / Delta capture-once
         // pattern. The guard exists for symmetry with the parallel
         // capture blocks; a persisted-null value is observably
         // indistinguishable from "never captured" because reminder
@@ -519,8 +517,7 @@ internal sealed class AtomicWriteGrain(
             state.State.FailureMessage = prevFailureMessage;
             state.State.KeyFingerprint = prevKeyFingerprint;
             state.State.TransactionId = prevTransactionId;
-            state.State.DeltaKind = prevDeltaKind;
-            state.State.DeltaPayload = prevDeltaPayload;
+            state.State.Delta = prevDelta;
             state.State.VectorClock = prevVectorClock;
             state.State.AtomicBatchSize = prevAtomicBatchSize;
             state.State.SagaStartedAtTicks = prevSagaStartedAtTicks;
@@ -1650,15 +1647,14 @@ internal sealed class AtomicWriteGrain(
     /// <see cref="RequestContext"/> so every per-key <c>SetAsync</c> /
     /// <c>DeleteAsync</c> the saga issues - including compensation
     /// rewrites - surfaces with the same
-    /// <see cref="LatticeMutation.DeltaKind"/> /
-    /// <see cref="LatticeMutation.DeltaPayload"/> as the original batch.
+    /// <see cref="LatticeMutation.Delta"/> as the original batch.
     /// No-op when the caller did not supply a delta context on the first
     /// <see cref="ExecuteAsync"/> call.
     /// </summary>
     private void StampDeltaContext()
     {
-        if (state.State.DeltaKind is null || state.State.DeltaPayload is null) return;
-        LatticeDeltaContext.Current = (state.State.DeltaKind, state.State.DeltaPayload);
+        if (state.State.Delta is null) return;
+        LatticeDeltaContext.Current = state.State.Delta;
     }
 
     /// <summary>

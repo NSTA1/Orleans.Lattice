@@ -174,6 +174,49 @@ public sealed class OrSet : ICrdt<OrSet>
         return copy;
     }
 
+    /// <summary>
+    /// Folds an <see cref="OrSetDelta"/> into this set: every entry in
+    /// <see cref="OrSetDelta.Adds"/> is unioned into <see cref="Adds"/>,
+    /// every entry in <see cref="OrSetDelta.Removes"/> is unioned into
+    /// <see cref="Tombstones"/>. The merge is commutative, associative,
+    /// and idempotent against arrival order and duplicate delivery -
+    /// applying the same delta twice yields the same state because the
+    /// per-(element, dot) sets are unions.
+    /// </summary>
+    /// <param name="delta">
+    /// The typed CRDT delta authored by the producing call site. Empty
+    /// collections are valid; <c>null</c> collections are treated as
+    /// empty.
+    /// </param>
+    public void MergeDelta(OrSetDelta delta)
+    {
+        var adds = delta.Adds;
+        if (adds is { Count: > 0 })
+        {
+            foreach (var dot in adds)
+            {
+                if (dot.Element is null) continue;
+                Add(dot.Element, dot.ReplicaId, dot.Counter);
+            }
+        }
+        var removes = delta.Removes;
+        if (removes is { Count: > 0 })
+        {
+            foreach (var dot in removes)
+            {
+                if (dot.Element is null) continue;
+                var key = Convert.ToBase64String(dot.Element);
+                if (!Tombstones.TryGetValue(key, out var tomb))
+                {
+                    tomb = [];
+                    Tombstones[key] = tomb;
+                }
+                var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
+                if (!tomb.Contains(entry)) tomb.Add(entry);
+            }
+        }
+    }
+
     private int LiveDotCount(string key, List<OrSetDot> dots)
     {
         if (!Tombstones.TryGetValue(key, out var tomb) || tomb.Count == 0) return dots.Count;

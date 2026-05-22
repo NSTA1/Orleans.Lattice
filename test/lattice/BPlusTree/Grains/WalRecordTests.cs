@@ -26,8 +26,7 @@ public class WalRecordTests
             Assert.That(entry.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
             Assert.That(entry.VectorClock, Is.Null);
             Assert.That(entry.DependencySummary, Is.Null);
-            Assert.That(entry.DeltaKind, Is.Null);
-            Assert.That(entry.DeltaPayload, Is.Null);
+            Assert.That(entry.Delta, Is.Null);
             Assert.That(entry.AtomicBatchSize, Is.EqualTo(0));
             Assert.That(entry.AtomicBatchIndex, Is.EqualTo(0));
             Assert.That(entry.ShardIndex, Is.EqualTo(0));
@@ -153,33 +152,24 @@ public class WalRecordOpTests
 public class WalRecordDeltaSlotTests
 {
     [Test]
-    public void Delta_kind_and_payload_are_settable_via_object_initialiser()
+    public void Delta_payload_is_settable_via_object_initialiser()
     {
         var payload = new byte[] { 9, 8, 7 };
         var entry = new WalRecord
         {
             TreeId = "t",
             Key = "k",
-            DeltaKind = "ol.crdt.ors.add",
-            DeltaPayload = payload,
+            Delta = payload,
         };
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.DeltaKind, Is.EqualTo("ol.crdt.ors.add"));
-            Assert.That(entry.DeltaPayload, Is.SameAs(payload));
-        });
+        Assert.That(entry.Delta, Is.SameAs(payload));
     }
 
     [Test]
-    public void Delta_slots_default_to_null_when_unset()
+    public void Delta_slot_defaults_to_null_when_unset()
     {
         var entry = new WalRecord { TreeId = "t", Key = "k" };
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.DeltaKind, Is.Null);
-            Assert.That(entry.DeltaPayload, Is.Null);
-        });
+        Assert.That(entry.Delta, Is.Null);
     }
 }
 

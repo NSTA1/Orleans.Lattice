@@ -52,8 +52,7 @@ public partial class AtomicWriteGrainTests
         var prevTouchedShards = state.State.TouchedShards;
         var prevSagaStartedAtTicks = state.State.SagaStartedAtTicks;
         var prevVectorClock = state.State.VectorClock;
-        var prevDeltaKind = state.State.DeltaKind;
-        var prevDeltaPayload = state.State.DeltaPayload;
+        var prevDelta = state.State.Delta;
 
         state.ThrowOnWrite = new InvalidOperationException("storage transient");
 
@@ -77,8 +76,7 @@ public partial class AtomicWriteGrainTests
             Assert.That(state.State.TouchedShards, Is.SameAs(prevTouchedShards));
             Assert.That(state.State.SagaStartedAtTicks, Is.EqualTo(prevSagaStartedAtTicks));
             Assert.That(state.State.VectorClock, Is.EqualTo(prevVectorClock));
-            Assert.That(state.State.DeltaKind, Is.EqualTo(prevDeltaKind));
-            Assert.That(state.State.DeltaPayload, Is.EqualTo(prevDeltaPayload));
+            Assert.That(state.State.Delta, Is.EqualTo(prevDelta));
             Assert.That(state.WriteCount, Is.Zero,
                 "Failed write must not be counted as a successful persist.");
         });

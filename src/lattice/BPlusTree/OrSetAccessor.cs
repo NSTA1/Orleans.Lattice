@@ -67,8 +67,12 @@ public readonly record struct OrSetAccessor
         {
             var counter = NextCounter(set, replicaId);
             set.Add(element, replicaId, counter);
-            return new CrdtDeltaPayloads.OrSetAddDelta(element, replicaId, counter);
-        }, CrdtDeltaKinds.OrSetAdd, cancellationToken, maxAttempts);
+            return new OrSetDelta
+            {
+                Adds = new[] { new OrSetDeltaDot { Element = element, ReplicaId = replicaId, Counter = counter } },
+                Removes = Array.Empty<OrSetDeltaDot>(),
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     /// <summary>
@@ -83,12 +87,31 @@ public readonly record struct OrSetAccessor
         return MutateAsync(set =>
         {
             var key = Convert.ToBase64String(element);
-            var observed = set.Adds.TryGetValue(key, out var dots) && dots.Count > 0
-                ? dots.Select(d => new CrdtDeltaPayloads.OrSetDotPayload(d.ReplicaId, d.Counter)).ToArray()
-                : Array.Empty<CrdtDeltaPayloads.OrSetDotPayload>();
+            OrSetDeltaDot[] observed;
+            if (set.Adds.TryGetValue(key, out var dots) && dots.Count > 0)
+            {
+                observed = new OrSetDeltaDot[dots.Count];
+                for (var i = 0; i < dots.Count; i++)
+                {
+                    observed[i] = new OrSetDeltaDot
+                    {
+                        Element = element,
+                        ReplicaId = dots[i].ReplicaId,
+                        Counter = dots[i].Counter,
+                    };
+                }
+            }
+            else
+            {
+                observed = Array.Empty<OrSetDeltaDot>();
+            }
             set.Remove(element);
-            return new CrdtDeltaPayloads.OrSetRemoveDelta(element, observed);
-        }, CrdtDeltaKinds.OrSetRemove, cancellationToken, maxAttempts);
+            return new OrSetDelta
+            {
+                Adds = Array.Empty<OrSetDeltaDot>(),
+                Removes = observed,
+            };
+        }, cancellationToken, maxAttempts);
     }
 
     /// <summary>Returns <c>true</c> when <paramref name="element"/> is currently a member of the set.</summary>
@@ -113,14 +136,31 @@ public readonly record struct OrSetAccessor
         return MutateAsync(set =>
         {
             set.MergeFrom(other);
-            return new CrdtDeltaPayloads.OrSetMergeDelta(
-                other.Adds.ToDictionary(
-                    kv => kv.Key,
-                    kv => kv.Value.Select(d => new CrdtDeltaPayloads.OrSetDotPayload(d.ReplicaId, d.Counter)).ToArray()),
-                other.Tombstones.ToDictionary(
-                    kv => kv.Key,
-                    kv => kv.Value.Select(d => new CrdtDeltaPayloads.OrSetDotPayload(d.ReplicaId, d.Counter)).ToArray()));
-        }, CrdtDeltaKinds.OrSetMerge, cancellationToken, maxAttempts);
+            return new OrSetDelta
+            {
+                Adds = FlattenDots(other.Adds),
+                Removes = FlattenDots(other.Tombstones),
+            };
+        }, cancellationToken, maxAttempts);
+    }
+
+    private static OrSetDeltaDot[] FlattenDots(Dictionary<string, List<OrSetDot>> map)
+    {
+        if (map.Count == 0) return Array.Empty<OrSetDeltaDot>();
+        var total = 0;
+        foreach (var dots in map.Values) total += dots.Count;
+        if (total == 0) return Array.Empty<OrSetDeltaDot>();
+        var result = new OrSetDeltaDot[total];
+        var i = 0;
+        foreach (var (key, dots) in map)
+        {
+            var element = Convert.FromBase64String(key);
+            foreach (var d in dots)
+            {
+                result[i++] = new OrSetDeltaDot { Element = element, ReplicaId = d.ReplicaId, Counter = d.Counter };
+            }
+        }
+        return result;
     }
 
     private static long NextCounter(OrSet set, string replicaId)
@@ -145,7 +185,6 @@ public readonly record struct OrSetAccessor
 
     private async Task MutateAsync<TDelta>(
         Func<OrSet, TDelta> mutate,
-        string deltaKind,
         CancellationToken cancellationToken,
         int maxAttempts)
     {
@@ -158,7 +197,7 @@ public readonly record struct OrSetAccessor
             var delta = mutate(current);
             var bytes = JsonLatticeSerializer<OrSet>.Default.Serialize(current);
             var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaKind, deltaBytes))
+            using (LatticeDeltaContext.With(deltaBytes))
             {
                 var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
                 if (ok) return;

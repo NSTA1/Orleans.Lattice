@@ -1,6 +1,5 @@
-using Orleans.Lattice.Replication;
 
-namespace Orleans.Lattice.Replication.Tests.Deltas;
+namespace Orleans.Lattice.Tests.Crdt;
 
 [TestFixture]
 public class PnCounterDeltaTests

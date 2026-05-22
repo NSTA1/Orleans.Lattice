@@ -582,7 +582,7 @@ public sealed class MyReplicationObserver : IMutationObserver
         // mutation.OriginClusterId, mutation.VectorClock,
         // mutation.TransactionId, mutation.Category,
         // mutation.AtomicBatchSize, mutation.AtomicBatchIndex,
-        // mutation.DeltaKind, mutation.DeltaPayload, and for DeleteRange
+        // mutation.Delta, and for DeleteRange
         // also mutation.EndExclusiveKey.
         return Task.CompletedTask;
     }
@@ -622,29 +622,31 @@ when several payloads belong to the same enclosing user call or saga:
 Observers that batch by transaction group on `TransactionId`;
 observers that do not care simply ignore the field.
 
-### Pre-merge author's delta (`DeltaKind` / `DeltaPayload`)
+### Pre-merge author's delta (`Delta`)
 
-Every emit may carry an optional pair of slots - `string? DeltaKind`
-and `byte[]? DeltaPayload` - that lets a producer attach the
-author's pre-merge delta alongside the post-merge committed value.
-Lattice never opens the payload itself; consumers decode it based on
-`DeltaKind`. The delta lets deterministic replay reach the same
-convergence the original writer reached, which the post-merge
+Every emit may carry an optional `byte[]? Delta` slot that lets a
+producer attach the author's pre-merge delta alongside the
+post-merge committed value. Lattice never opens the payload itself;
+consumers decode it based on `WalRecord.Mode` (the declared
+`LatticeMergeMode` of the tree the entry belongs to). The delta lets
+deterministic replay - and active-active CRDT receivers - reach the
+same convergence the original writer reached, which the post-merge
 `Value` bytes alone cannot guarantee for non-LWW CRDTs.
 
 Stamp the slot via the `LatticeDeltaContext` ambient helper:
 
 ```csharp verify
-using (LatticeDeltaContext.With("my.delta.kind", new byte[] { 1, 2, 3 }))
+using (LatticeDeltaContext.With(new byte[] { 1, 2, 3 }))
 {
     await tree.SetAsync("k", new byte[] { 4, 5, 6 }, cancellationToken);
 }
 ```
 
 The CRDT value-surface accessors (`OrSet`, `PnCounter`,
-`VersionVector`, `MvRegister`) and the atomic-write saga set the
-context on the caller's behalf - observers downstream see typed
-delta payloads automatically.
+`VersionVector`, `MvRegister`, `OrMap<TKey, TValue>`) and the
+atomic-write saga set the context on the caller's behalf - the
+replication package's typed-delta receiver dispatch reads the
+stamped slot and applies via `MergeDelta` automatically.
 
 ### Atomic-batch metadata (`AtomicBatchSize` / `AtomicBatchIndex`)
 

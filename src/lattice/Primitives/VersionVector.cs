@@ -138,6 +138,34 @@ public sealed class VersionVector : ICrdt<VersionVector>
     }
 
     /// <summary>
+    /// Folds a <see cref="VersionVectorDelta"/> into this vector. For
+    /// every <c>(replicaId, clock)</c> pair in
+    /// <see cref="VersionVectorDelta.Entries"/>, the local entry becomes
+    /// <c>max(local, clock)</c>. Commutative, associative, and
+    /// idempotent against arrival order and duplicate delivery.
+    /// </summary>
+    /// <param name="delta">
+    /// The typed CRDT delta authored by the producing call site. A null
+    /// <see cref="VersionVectorDelta.Entries"/> is treated as empty.
+    /// </param>
+    public void MergeDelta(VersionVectorDelta delta)
+    {
+        var entries = delta.Entries;
+        if (entries is null || entries.Count == 0) return;
+        foreach (var (id, clock) in entries)
+        {
+            if (Entries.TryGetValue(id, out var existing))
+            {
+                if (clock > existing) Entries[id] = clock;
+            }
+            else
+            {
+                Entries[id] = clock;
+            }
+        }
+    }
+
+    /// <summary>
     /// Removes entries whose <see cref="HybridLogicalClock.WallTimeTicks"/>
     /// is older than <paramref name="minRetainedUtcTicks"/>.
     /// <para>

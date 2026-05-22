@@ -220,8 +220,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // than the post-merge state. Both fields decode as null on
             // legacy peers and on plain Set/Delete writes that did not
             // author a delta.
-            DeltaKind = mutation.DeltaKind,
-            DeltaPayload = mutation.DeltaPayload,
+            Delta = mutation.Delta,
             // Atomic-batch metadata passthrough: mirror
             // LatticeMutation.AtomicBatchSize / AtomicBatchIndex onto
             // the WalRecord verbatim. The slots are wire-shape-stable
