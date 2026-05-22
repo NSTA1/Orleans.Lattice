@@ -635,4 +635,27 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// be <c>null</c>.
     /// </param>
     Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys);
+
+    /// <summary>
+    /// Captures a point-in-time snapshot of this leaf's per-activation
+    /// entry cache and persists it into the dedicated
+    /// <see cref="Grains.ILeafSnapshotStorageGrain"/> keyed by this
+    /// leaf's grain id. The captured snapshot carries the leaf's
+    /// already-persisted <c>ProjectionCheckpointOffset</c> as its
+    /// <c>SnapshotOffset</c>; subsequent activations that find a
+    /// snapshot whose offset exceeds the persisted checkpoint may
+    /// rehydrate the cache from the snapshot instead of replaying
+    /// the WAL from the checkpoint forward.
+    /// <para>
+    /// Driven by the maintenance grain when the fall-off-log detector
+    /// returns the <see cref="Grains.FallOffLogDecision.SnapshotPending"/>
+    /// advisory. The call is a no-op when the leaf has not yet
+    /// applied any WAL entry (the persisted checkpoint is the
+    /// "nothing applied" sentinel <c>-1</c>) or when the leaf has no
+    /// resolved tree id (uninitialised activation). The snapshot grain
+    /// holds at most one blob per leaf; a successful capture overwrites
+    /// any previous snapshot.
+    /// </para>
+    /// </summary>
+    Task CaptureSnapshotAsync();
 }
