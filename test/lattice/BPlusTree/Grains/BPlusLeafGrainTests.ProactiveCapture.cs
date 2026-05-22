@@ -11,8 +11,8 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for the leaf-driven proactive snapshot capture seam
-/// added in R-120 step 7.5. The leaf observes the
+/// Unit tests for the leaf-driven proactive snapshot capture seam.
+/// The leaf observes the
 /// <see cref="FallOffLogDecision.SnapshotPending"/> advisory itself
 /// (at activation and on a configurable per-checkpoint cadence)
 /// instead of relying on a maintenance-grain fan-out. The tests here

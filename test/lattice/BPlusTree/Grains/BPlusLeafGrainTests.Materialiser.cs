@@ -1242,7 +1242,7 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Materialiser_replay_projection_hash_matches_full_walk_of_rebuilt_cache()
     {
-        // Digest-equivalence gate for R-120 step 6: post step-6 the cache
+        // Digest-equivalence gate for the leaf-state collapse: the cache
         // backing dictionary is rebuilt from WAL on activation (no per-key
         // persisted state). The incrementally-maintained ProjectionHash
         // (XOR fold over per-entry XxHash128 contributions, updated by

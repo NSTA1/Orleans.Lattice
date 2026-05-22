@@ -10,8 +10,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// the deserialize-then-merge-then-reserialize round-trip when consecutive
 /// mutations target the same key under the same CRDT mode.
 /// <para>
-/// The cache is **not** persisted. As of R-120 step 6 the persisted leaf state
-/// no longer carries a per-key dictionary; activation rebuilds the cache from
+/// The cache is **not** persisted. The persisted leaf state row
+/// does not carry a per-key dictionary; activation rebuilds the cache from
 /// the WAL replay path strictly after <c>ProjectionCheckpointOffset</c>. The
 /// leaf grain is the sole writer authority, so the cache lives inside a single
 /// activation's lifetime and has no cross-activation sharing.

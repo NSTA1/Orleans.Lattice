@@ -5,7 +5,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// Holds a point-in-time copy of a single leaf grain's entry cache
 /// together with the WAL offset the snapshot is consistent with.
 /// <para>
-/// The blob is the safety net for the R-120 leaf-state collapse: a
+/// The blob is the safety net for the leaf-state collapse: a
 /// leaf whose persisted <c>ProjectionCheckpointOffset</c> would
 /// otherwise fall off WAL retention captures its current projection
 /// into this row, and the reactivation path prefers the snapshot

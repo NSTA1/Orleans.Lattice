@@ -7,8 +7,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="LeafSnapshotBlob"/> per leaf, captured by the
 /// maintenance grain when the owning leaf's persisted
 /// <c>ProjectionCheckpointOffset</c> approaches the WAL retention
-/// boundary (the "snapshot-on-fall-off trigger" from the R-120
-/// step-7 sub-plan).
+/// boundary (the snapshot-on-fall-off trigger of the leaf-snapshot
+/// safety net).
 /// <para>
 /// Grain key format: the <see cref="System.Guid"/> portion of the
 /// owning <see cref="Grains.IBPlusLeafGrain"/>'s
@@ -17,8 +17,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// Decoupled from the leaf state row by design: the leaf row was
-/// collapsed to a small fixed-shape envelope in R-120 step 6, and a
-/// snapshot blob can be multi-MB on a leaf with many live keys.
+/// collapsed to a small fixed-shape envelope (topology, checkpoint,
+/// and digest only), and a snapshot blob can be multi-MB on a leaf
+/// with many live keys.
 /// Persisting the blob to a separate grain row keeps the foreground
 /// leaf state row small and lets the Orleans storage provider's
 /// per-row limit apply only to the snapshot, not to the hot

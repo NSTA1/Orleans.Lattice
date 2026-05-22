@@ -255,7 +255,7 @@ public partial class BPlusLeafGrainTests
         // A grain activated against state that pre-dates the persisted
         // hash slot must produce the same digest as a freshly-written
         // grain. The lazy backfill happens on first mutation or first
-        // digest read. Post R-120 step 6 the per-key data lives in the
+        // digest read. The per-key data lives in the
         // per-activation cache (no longer persisted), so we seed the
         // cache directly via the EntriesForTest backdoor rather than
         // through the removed LeafNodeState.Entries slot.

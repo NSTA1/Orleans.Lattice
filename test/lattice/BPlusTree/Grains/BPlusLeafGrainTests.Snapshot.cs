@@ -8,7 +8,7 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for the snapshot-capture seam introduced in R-120 step 7:
+/// Unit tests for the snapshot-capture seam:
 /// <see cref="IBPlusLeafGrain.CaptureSnapshotAsync"/> copies the
 /// per-activation entry cache into a canonical byte-row
 /// <see cref="LeafSnapshotBlob"/> and routes it through the dedicated

@@ -7,8 +7,8 @@ using Orleans.TestingHost;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// End-to-end safety-net regression for the R-120 step 7 leaf
-/// snapshot path. Drives the full pipeline through the public
+/// End-to-end safety-net regression for the leaf-snapshot
+/// rehydrate path. Drives the full pipeline through the public
 /// <see cref="ILattice"/> surface: write keys, capture a snapshot
 /// via <see cref="IBPlusLeafGrain.CaptureSnapshotAsync"/>, force the
 /// leaf activation to deactivate via the test-only

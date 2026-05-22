@@ -5,9 +5,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class BPlusLeafGrain
 {
     /// <summary>
-    /// Per-activation in-memory entry cache. As of R-120 step 6 the cache owns
-    /// its own private <see cref="SortedDictionary{TKey, TValue}"/> and the
-    /// persisted <c>LeafNodeState.Entries</c> slot is gone; activation
+    /// Per-activation in-memory entry cache. The cache owns
+    /// its own private <see cref="SortedDictionary{TKey, TValue}"/>; the leaf
+    /// state row carries only topology, checkpoint, and digest, so activation
     /// rehydrates the cache from the WAL via the projection materialiser,
     /// and every read and write on the leaf grain flows through it. The
     /// cache is not persisted - it is rebuilt strictly from WAL entries
