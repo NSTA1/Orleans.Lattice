@@ -317,4 +317,21 @@ internal sealed partial class BPlusLeafGrain
         // activation indistinguishable from a fresh activation.
         DisposeProjectionHasher();
     }
+
+    /// <inheritdoc />
+    public Task ForceDeactivateAsync()
+    {
+        // Test-only deactivation seam. Wraps the protected
+        // Grain.DeactivateOnIdle() extension so integration tests can
+        // drive activation-time rehydration end-to-end without relying
+        // on the silo's idle-collection scheduler. The runtime
+        // schedules the deactivation after the current grain turn
+        // completes; the caller must briefly wait (e.g. a short delay
+        // or a poll loop on a fresh activation) before observing the
+        // post-rehydrate activation. We cannot block here without
+        // deadlocking: OnDeactivateAsync can only run once this turn
+        // ends.
+        this.DeactivateOnIdle();
+        return Task.CompletedTask;
+    }
 }
