@@ -548,9 +548,20 @@ internal sealed partial class ReplicationApplier(
 
         return entry.Op switch
         {
+            // The null-Value guard applies only to LwwRegister, whose
+            // Value is the canonical payload the receiver writes
+            // verbatim. CRDT-mode entries carry their
+            // post-merge contribution exclusively via Delta, so a
+            // null Value on a CRDT-mode Set is the expected wire
+            // shape (the encoder strips Value when a typed Delta is
+            // present). A CRDT-mode entry that arrives with both
+            // Value and Delta null is still a hard error and is
+            // surfaced inside the typed-delta dispatch (each
+            // ApplyTypedDeltaAsync overload validates Delta itself).
             MutationKind.Set when entry.Value is null
+                && entry.Mode == LatticeMergeMode.LwwRegister
                 => throw new ArgumentException(
-                    "WalRecord.Value must be non-null for MutationKind.Set.",
+                    "WalRecord.Value must be non-null for MutationKind.Set on LwwRegister entries.",
                     nameof(entry)),
             MutationKind.Set => entry.Mode switch
             {

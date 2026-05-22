@@ -409,4 +409,142 @@ public sealed class OrleansBinaryWalRecordEncoderTests
             () => encoder.Decode(bytes, null!, LatticeMergeMode.LwwRegister),
             Throws.InstanceOf<ArgumentNullException>());
     }
+
+    // --- Value strip / preserve on CRDT-mode entries ---
+
+    [Test]
+    public void Encode_strips_Value_slot_for_crdt_mode_set_with_delta()
+    {
+        // The encoder elides the [Id(4)] Value slot at
+        // serialisation time on CRDT-mode Set entries that carry a
+        // typed Delta. The receiver-side apply path dispatches every
+        // typed CRDT mode through Delta + MergeDelta, so the full-
+        // state Value byte payload is pure overhead on both the
+        // storage WAL and the cross-cluster wire. The byte payload
+        // of an encoded record must therefore equal the byte payload
+        // of the same record with Value cleared, which proves the
+        // slot is absent from the bytes.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet(value: new byte[] { 9, 8, 7, 6, 5, 4, 3, 2, 1 }) with
+        {
+            Mode = LatticeMergeMode.OrSet,
+            Delta = new byte[] { 0x10, 0x11 },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+
+        var stripped = _serializer.SerializeToArray(record with
+        {
+            TreeId = string.Empty,
+            Value = null,
+            Mode = LatticeMergeMode.LwwRegister,
+        });
+        Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(stripped));
+
+        // Encoded bytes must be strictly shorter than the bytes that
+        // would result from serialising the unstripped record.
+        var unstripped = _serializer.SerializeToArray(record);
+        Assert.That(writer.WrittenCount, Is.LessThan(unstripped.Length));
+    }
+
+    [Test]
+    public void Encode_strips_Value_for_every_typed_crdt_mode_with_delta()
+    {
+        // The strip applies uniformly across every typed CRDT mode
+        // the receiver knows how to merge from Delta.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        LatticeMergeMode[] crdtModes =
+        [
+            LatticeMergeMode.OrSet,
+            LatticeMergeMode.PnCounter,
+            LatticeMergeMode.VersionVector,
+            LatticeMergeMode.MvRegister,
+            LatticeMergeMode.OrMap,
+        ];
+
+        foreach (var mode in crdtModes)
+        {
+            var record = MakeSet(value: new byte[] { 1, 2, 3, 4, 5 }) with
+            {
+                Mode = mode,
+                Delta = new byte[] { 0x42 },
+            };
+            var writer = new ArrayBufferWriter<byte>();
+            encoder.Encode(in record, writer);
+
+            var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId, mode);
+            Assert.That(decoded.Value, Is.Null, $"Value should be stripped for {mode}");
+            Assert.That(decoded.Delta, Is.EqualTo(record.Delta), $"Delta should round-trip for {mode}");
+        }
+    }
+
+    [Test]
+    public void Encode_preserves_Value_for_lww_register_set()
+    {
+        // The Value strip does not touch LwwRegister - its Value
+        // remains the canonical payload at both wire and storage layers.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet(value: new byte[] { 9, 8, 7 });
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+
+        var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId, LatticeMergeMode.LwwRegister);
+        Assert.That(decoded.Value, Is.EqualTo(record.Value));
+    }
+
+    [Test]
+    public void Encode_preserves_Value_for_crdt_mode_set_without_delta()
+    {
+        // Defensive: a CRDT-mode entry that arrives without a typed
+        // Delta (a legacy producer, a hand-constructed entry in a
+        // test) keeps Value verbatim so the receiver-side fallback
+        // path retains the bytes it needs to reconstruct state. The
+        // strip is gated on Delta presence.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet(value: new byte[] { 9, 8, 7 }) with
+        {
+            Mode = LatticeMergeMode.OrSet,
+            Delta = null,
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+
+        var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId, LatticeMergeMode.OrSet);
+        Assert.That(decoded.Value, Is.EqualTo(record.Value));
+    }
+
+    [Test]
+    public void Encode_does_not_strip_Value_on_delete_or_delete_range()
+    {
+        // The strip is gated on Op == Set: Delete and DeleteRange
+        // already carry Value == null by contract, so the gate is
+        // a no-op for them. Pin the behaviour to catch a future
+        // refactor that accidentally trips Value through on a
+        // tombstone.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var deleteRecord = new WalRecord
+        {
+            TreeId = "tree",
+            Op = MutationKind.Delete,
+            Key = "k",
+            IsTombstone = true,
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = "site-a",
+            Mode = LatticeMergeMode.OrSet,
+            Delta = new byte[] { 0x01 },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in deleteRecord, writer);
+
+        var expected = _serializer.SerializeToArray(deleteRecord with
+        {
+            TreeId = string.Empty,
+            Mode = LatticeMergeMode.LwwRegister,
+        });
+        Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(expected));
+    }
 }

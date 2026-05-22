@@ -43,6 +43,25 @@ public readonly record struct WalRecord
     /// <summary>
     /// The committed value for <see cref="MutationKind.Set"/>; <c>null</c>
     /// for deletes and range deletes.
+    /// <para>
+    /// <b>Wire-shape note:</b> the canonical
+    /// <see cref="OrleansBinaryWalRecordEncoder"/> codec strips this
+    /// slot on CRDT-mode <see cref="MutationKind.Set"/> entries that
+    /// carry a non-<see langword="null"/> <see cref="Delta"/> (every
+    /// <see cref="LatticeMergeMode"/> other than
+    /// <see cref="LatticeMergeMode.LwwRegister"/>): the receiver-side
+    /// apply path dispatches every typed CRDT mode through
+    /// <see cref="Delta"/> + the primitive's <c>MergeDelta</c>, so
+    /// the full-state byte payload is pure overhead on both the
+    /// storage WAL and the cross-cluster wire. The producer's in-
+    /// grain <see cref="WalRecord"/> instance still carries the slot
+    /// in memory and the leaf store continues to hold the canonical
+    /// post-merge state; this strip is scoped to the encoded bytes
+    /// only. Receivers that decode an encoded entry observe
+    /// <see langword="null"/> for CRDT modes; <see cref="LatticeMergeMode.LwwRegister"/>
+    /// entries are unaffected and continue to carry the canonical
+    /// payload at both wire and storage layers.
+    /// </para>
     /// </summary>
     [Id(4)] public byte[]? Value { get; init; }
 
