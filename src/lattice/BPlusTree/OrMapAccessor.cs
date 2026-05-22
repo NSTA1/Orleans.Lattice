@@ -259,23 +259,17 @@ public readonly record struct OrMapAccessor<TKey, TValue>
         int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
-            var current = Decode(versioned.Value);
-            var delta = mutate(current);
-            var bytes = JsonLatticeSerializer<OrMap<TKey, TValue>>.Default.Serialize(current);
-            var deltaBytes = JsonLatticeSerializer<OrMapDelta<TKey, TValue>>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaBytes))
-            {
-                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-                if (ok) return;
-            }
-        }
-        throw new InvalidOperationException(
-            $"OrMap CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
-            "Increase maxAttempts or reduce contention.");
+        // CAS-free producer-side delta apply: see
+        // PnCounterAccessor.MutateAsync for the single-read +
+        // ApplyCrdtDeltaAsync rationale. The per-replica dot counter
+        // is still computed from the local snapshot, in line with
+        // OrSetAccessor's NextCounter contract.
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<OrMapDelta<TKey, TValue>>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrMap, deltaBytes, cancellationToken).ConfigureAwait(false);
     }
 
     private static OrMap<TKey, TValue> Decode(byte[]? bytes) =>

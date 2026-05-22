@@ -1,7 +1,9 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -53,7 +55,36 @@ public sealed class FourShardClusterFixture
             MaxLeafKeys = SmallMaxLeafKeys,
             ShardCount = TestShardCount,
         });
+        RegisterDefaultOrMapShapes(treeId);
         return Cluster.Client.GetGrain<ILattice>(treeId);
+    }
+
+    /// <summary>
+    /// Registers the OR-Map <c>(string, OrSet)</c> shape on every silo's
+    /// <see cref="CrdtShapeRegistry"/> for the supplied tree id. The
+    /// CRDT-accessor integration tests use this shape exclusively, and
+    /// the producer-side delta-apply seam requires the descriptor to be
+    /// resolvable at write time. Other OR-Map shapes can be registered
+    /// per-test via <see cref="RegisterOrMapShape{TKey, TValue}(string)"/>.
+    /// </summary>
+    private void RegisterDefaultOrMapShapes(string treeId)
+        => RegisterOrMapShape<string, OrSet>(treeId);
+
+    /// <summary>
+    /// Registers a per-test OR-Map shape on every silo's
+    /// <see cref="CrdtShapeRegistry"/>. Mirrors the host-side
+    /// <c>AddOrMapShape&lt;TKey, TValue&gt;</c> but runs after silo
+    /// startup so tests can pick fresh tree ids per test method.
+    /// </summary>
+    public void RegisterOrMapShape<TKey, TValue>(string treeId)
+        where TKey : notnull
+        where TValue : ICrdt<TValue>, new()
+    {
+        foreach (var silo in Cluster.Silos.OfType<InProcessSiloHandle>())
+        {
+            var registry = silo.SiloHost.Services.GetRequiredService<CrdtShapeRegistry>();
+            registry.Register(treeId, CrdtShape.ForOrMap<TKey, TValue>());
+        }
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator

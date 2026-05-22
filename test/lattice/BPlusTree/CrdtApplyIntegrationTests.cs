@@ -170,7 +170,12 @@ public class CrdtApplyIntegrationTests
     [Test]
     public async Task ApplyCrdtDeltaAsync_OrMap_without_registered_shape_throws()
     {
-        var tree = await CreateTreeAsync();
+        // Bypass CreateTreeAsync since the fixture auto-registers a
+        // default OR-Map shape for tree ids it creates. This test needs
+        // a tree id the registry has NOT seen so the leaf surfaces the
+        // configuration error.
+        var treeId = $"crdtapply-ormap-unreg-{Guid.NewGuid():N}";
+        var tree = _fixture.Cluster.Client.GetGrain<ILattice>(treeId);
         // Tree was created without AddOrMapShape<TKey, TValue> - the leaf
         // must surface a clear configuration error rather than silently
         // applying the wrong typed dispatch.

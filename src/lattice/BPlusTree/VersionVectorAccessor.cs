@@ -79,23 +79,18 @@ public readonly record struct VersionVectorAccessor
         int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
-            var current = Decode(versioned.Value);
-            var delta = mutate(current);
-            var bytes = JsonLatticeSerializer<VersionVector>.Default.Serialize(current);
-            var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaBytes))
-            {
-                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-                if (ok) return;
-            }
-        }
-        throw new InvalidOperationException(
-            $"VersionVector CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
-            "Increase maxAttempts or reduce contention.");
+        // CAS-free producer-side delta apply: see
+        // PnCounterAccessor.MutateAsync for the single-read +
+        // ApplyCrdtDeltaAsync rationale. Per-entry merge inside the
+        // leaf takes the max HLC, so a stale local snapshot is
+        // harmless - the worst case is a slightly lower tick that the
+        // leaf will subsume on merge.
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.VersionVector, deltaBytes, cancellationToken).ConfigureAwait(false);
     }
 
     private static VersionVector Decode(byte[]? bytes) =>

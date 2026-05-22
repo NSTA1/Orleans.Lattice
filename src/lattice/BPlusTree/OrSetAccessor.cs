@@ -66,10 +66,10 @@ public readonly record struct OrSetAccessor
         return MutateAsync(set =>
         {
             var counter = NextCounter(set, replicaId);
-            // R-120 step 4: do not mutate the local snapshot - the
-            // leaf grain folds the typed delta authoritatively, and
-            // any local mutation here would be discarded after the
-            // ApplyCrdtDeltaAsync round trip.
+            // Do not mutate the local snapshot - the leaf grain folds
+            // the typed delta authoritatively, and any local mutation
+            // here would be discarded after the ApplyCrdtDeltaAsync
+            // round trip.
             return new OrSetDelta
             {
                 Adds = new[] { new OrSetDeltaDot { Element = element, ReplicaId = replicaId, Counter = counter } },
@@ -108,8 +108,8 @@ public readonly record struct OrSetAccessor
             {
                 observed = Array.Empty<OrSetDeltaDot>();
             }
-            // R-120 step 4: do not mutate the local snapshot - the
-            // leaf grain folds the typed delta authoritatively.
+            // Do not mutate the local snapshot - the leaf grain folds
+            // the typed delta authoritatively.
             return new OrSetDelta
             {
                 Adds = Array.Empty<OrSetDeltaDot>(),
@@ -139,8 +139,8 @@ public readonly record struct OrSetAccessor
         EnsureInitialised();
         return MutateAsync(set =>
         {
-            // R-120 step 4: do not mutate the local snapshot - the
-            // leaf grain folds the typed delta authoritatively.
+            // Do not mutate the local snapshot - the leaf grain folds
+            // the typed delta authoritatively.
             return new OrSetDelta
             {
                 Adds = FlattenDots(other.Adds),
@@ -194,18 +194,18 @@ public readonly record struct OrSetAccessor
         int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-        // R-120 step 4: replaced the read-merge-write CAS loop with a
-        // single read (to compute the next dot counter / observed-dot
-        // set the delta needs) plus one ApplyCrdtDeltaAsync call. The
-        // leaf grain is the single writer authority per key, so the
-        // CAS retry budget is no longer required for convergence; two
-        // concurrent adds against the same replica id are still the
-        // caller's responsibility to avoid (the OR-Set per-replica
-        // monotonicity contract was identical under the old loop).
-        // The maxAttempts parameter is preserved on the public surface
-        // for binary compatibility and validated for an early-failure
-        // signal on misconfiguration, but no longer drives an inner
-        // retry loop.
+        // Producer-side delta apply: replaced the read-merge-write CAS
+        // loop with a single read (to compute the next dot counter /
+        // observed-dot set the delta needs) plus one
+        // ApplyCrdtDeltaAsync call. The leaf grain is the single
+        // writer authority per key, so the CAS retry budget is no
+        // longer required for convergence; two concurrent adds against
+        // the same replica id are still the caller's responsibility to
+        // avoid (the OR-Set per-replica monotonicity contract was
+        // identical under the old loop). The maxAttempts parameter is
+        // preserved on the public surface for binary compatibility and
+        // validated for an early-failure signal on misconfiguration,
+        // but no longer drives an inner retry loop.
         _ = maxAttempts;
         cancellationToken.ThrowIfCancellationRequested();
         var current = await GetAsync(cancellationToken).ConfigureAwait(false);
