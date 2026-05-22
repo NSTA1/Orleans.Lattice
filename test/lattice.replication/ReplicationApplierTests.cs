@@ -594,12 +594,64 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public void ApplyAsync_state_merge_throws_when_value_is_null()
+    public void ApplyAsync_state_merge_throws_when_both_value_and_delta_are_null()
     {
+        // The encoder strips Value from the encoded wire/storage payload on
+        // CRDT-mode Set entries that carry a Delta, so the applier no
+        // longer rejects null Value on CRDT-mode entries by itself.
+        // It does still reject a CRDT-mode entry that arrives with
+        // neither a Value nor a Delta - the typed-delta dispatch
+        // surfaces the missing Delta as an ArgumentException.
         var (applier, _, _, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = LatticeMergeMode.OrSet,
+            Value = null,
+            Delta = null,
+        };
+
+        Assert.That(async () => await applier.ApplyAsync(entry), Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task ApplyAsync_state_merge_applies_when_value_is_null_but_delta_is_present()
+    {
+        // The canonical wire/storage shape for a CRDT-mode Set is
+        // Value == null + Delta != null. The applier must accept that
+        // shape and route through the typed-delta merge path; it must
+        // not require Value just because the legacy shape happened to
+        // carry both slots.
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var entry = SetEntry("k", Hlc(1)) with
+        {
+            Mode = LatticeMergeMode.OrSet,
+            Value = null,
+            Delta = EncodeOrSetDelta(a => a.Add(new OrSetDeltaDot { Element = OrSetMember, ReplicaId = "site-b", Counter = 1 })),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await lattice.Received(1).SetIfVersionAsync(
+            "k",
+            Arg.Any<byte[]>(),
+            Arg.Any<HybridLogicalClock>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void ApplyAsync_lww_register_still_throws_when_value_is_null()
+    {
+        // The null-Value guard is narrowed to LwwRegister only -
+        // CRDT modes carry their post-merge contribution via Delta,
+        // but LwwRegister's Value remains the canonical payload and
+        // must never be null on a Set.
+        var (applier, _, _, _) = CreateTypedCrdtApplier();
+        var entry = SetEntry("k", Hlc(1)) with
+        {
+            Mode = LatticeMergeMode.LwwRegister,
             Value = null,
         };
 

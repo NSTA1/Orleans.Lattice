@@ -35,6 +35,22 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         // persisting it on every entry duplicates ~25-35 bytes per
         // entry for production tree names.
         //
+        // Strip the redundant Value slot on CRDT-mode Set entries
+        // that carry a typed Delta: the receiver-side apply
+        // path dispatches every typed CRDT mode (OrSet, PnCounter,
+        // VersionVector, MvRegister, OrMap) through WalRecord.Delta
+        // + the primitive's MergeDelta, so the full-state Value byte
+        // payload is pure overhead on both the storage WAL and the
+        // cross-cluster wire. Skip-serialise Value when Mode is a
+        // typed CRDT mode and Delta is non-null; LwwRegister entries
+        // (whose Value remains the canonical payload) and CRDT
+        // entries that for whatever reason ship without a Delta (a
+        // legacy producer, a hand-constructed entry in a test) keep
+        // Value verbatim. The producer's in-grain WalRecord instance
+        // still carries Value in memory and the leaf store continues
+        // to hold the canonical post-merge state; this strip is
+        // scoped to the encoded bytes only.
+        //
         // Mode is not stripped here because the WalRecord type itself
         // no longer marks the slot with [Id] - the canonical Orleans
         // serializer never writes the field, so there is nothing to
@@ -42,12 +58,20 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         // (EncodedBatchHeader.Mode) once per batch and re-stamped on
         // decoded records by the Decode(span, treeId, mode) overload
         // below.
-        if (record.TreeId.Length == 0)
+        var stripValue = record.Op == MutationKind.Set
+            && record.Mode != LatticeMergeMode.LwwRegister
+            && record.Delta is not null;
+        var stripTreeId = record.TreeId.Length != 0;
+        if (!stripValue && !stripTreeId)
         {
             _serializer.Serialize(record, writer);
             return;
         }
-        var stripped = record with { TreeId = string.Empty };
+        var stripped = record with
+        {
+            TreeId = stripTreeId ? string.Empty : record.TreeId,
+            Value = stripValue ? null : record.Value,
+        };
         _serializer.Serialize(stripped, writer);
     }
 

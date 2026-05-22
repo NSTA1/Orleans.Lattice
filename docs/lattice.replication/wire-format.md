@@ -48,6 +48,21 @@ This is the canonical fail-fast posture: an older receiver paired with a newer p
 
 Forward-compatible additions (new `[Id(n)]` slots on `WalRecord` with stable defaults, like the `Mode` slot stamped by the commit-time observer when a tree's replication mode is declared) do not require a wire-version bump: the Orleans serializer's per-field id model handles them transparently and unknown ids on a legacy receiver decode as the default value.
 
+## `WalRecord.Value` strip on CRDT-mode entries
+
+The canonical `OrleansBinaryWalRecordEncoder` strips the `[Id(4)] Value` slot on `MutationKind.Set` entries that satisfy both of the following at encode time:
+
+- `Mode` is a typed CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, or `OrMap`), i.e. not `LwwRegister`.
+- `Delta` is non-`null`.
+
+The receiver-side apply path dispatches every typed CRDT mode through `WalRecord.Delta` and the primitive's `MergeDelta` operation, so the full-state `Value` byte payload is pure overhead on both the storage WAL and the cross-cluster wire (a single encode-at-append seam feeds both). The producer's in-grain `WalRecord` instance still carries `Value` in memory and the leaf store continues to hold the canonical post-merge state; this strip is scoped to the encoded bytes only.
+
+`LwwRegister` entries are not affected: `Value` remains the canonical payload, and a `null` `Value` on a `LwwRegister` `Set` continues to be rejected by the receiver-side apply path as an `ArgumentException`. CRDT-mode entries that for whatever reason ship without a `Delta` (a legacy producer, a hand-constructed entry in a test) also retain `Value` verbatim - the strip is gated on `Delta` presence.
+
+**Consumer impact on `IChangeFeed`:** consumers reading `WalRecord.Value` directly on CRDT-mode entries now observe `null`. Such consumers must either (a) read `Delta` and apply it against their own prior observed state via the matching primitive's `MergeDelta`, or (b) read the producer's leaf store via the public lattice surface (`ILattice.GetAsync` or the typed accessor). The `LwwRegister` consumer contract is unchanged.
+
+This strip does not require a `WireVersion` bump: an absent `[Id]` slot decodes to the type's default (`null` for `byte[]?`), which is exactly the behaviour the receiver-side null-tolerance was prepared to accept.
+
 ## Default encoder: Orleans serializer (binary)
 
 The default DI registration is `OrleansBinaryReplicationBatchEncoder`. It serialises the envelope through `Serializer<ReplicationBatchEnvelope>` and tags the payload with the canonical content type:
