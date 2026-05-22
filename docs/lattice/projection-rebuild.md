@@ -4,10 +4,10 @@ Orleans.Lattice's per-shard write-ahead log (WAL) is, in a fully replicated
 deployment, the canonical durable record of every leaf mutation. Each leaf
 grain materialises that log into a per-activation in-memory projection
 (the entry cache - a sorted dictionary owned by the leaf grain for the
-after the leaf-state collapse)
-persisted leaf state row carries only topology, the checkpoint offset, and a
-16-byte projection-digest XOR fold; the cache is rebuilt from the WAL strictly
-after that offset on every activation. Two operational concerns naturally arise:
+lifetime of the activation, not persisted). The persisted leaf state row
+carries only topology, the checkpoint offset, and a 16-byte projection-digest
+XOR fold; the cache is rebuilt from the WAL strictly after that offset on
+every activation. Two operational concerns naturally arise:
 
 1. **Drift detection.** If a silo's leaf projection diverges from the
    WAL prefix it claims to have applied - a cosmic-ray bit flip, a
@@ -72,9 +72,10 @@ defend against forgery.
 
 ### What is folded into the leaf hash
 
-For every entry in the leaf's sorted `Entries` dictionary the implementation
-computes a 16-byte XxHash128 contribution over the following fields, in this
-order:
+For every entry in the leaf's in-memory entry cache (a sorted dictionary keyed
+with `StringComparer.Ordinal`, rebuilt from the WAL on every activation) the
+implementation computes a 16-byte XxHash128 contribution over the following
+fields, in this order:
 
 1. `key` (length-prefixed UTF-8)
 2. `lww.Timestamp.WallClockTicks` (`Int64`, little-endian)
@@ -89,7 +90,7 @@ order:
 
 The per-entry contributions are XOR-folded into a 16-byte running hash
 that is **maintained incrementally on every mutation** and persisted on
-the leaf state. Insert XORs the new contribution in; replace XORs the
+the leaf state row as `LeafNodeState.ProjectionHash`. Insert XORs the new contribution in; replace XORs the
 old contribution out and the new one in (the old contribution cancels
 under self-inverse XOR); delete XORs the contribution out. Because XOR
 is commutative, associative, and self-inverse, the running hash is
@@ -112,7 +113,7 @@ upward.
 
 The digest is byte-stable across silos because every input is canonicalised:
 
-- The leaf's `Entries` is a `SortedDictionary<string, LwwValue<byte[]>>`
+- The leaf's entry cache is a `SortedDictionary<string, LwwValue<byte[]>>`
   built with `StringComparer.Ordinal`, so the per-entry contributions
   are identical on every silo regardless of insertion order.
 - All numeric fields use little-endian framing via `BinaryPrimitives`.
@@ -127,8 +128,8 @@ The digest is byte-stable across silos because every input is canonicalised:
 
 Because the per-entry XOR fold is maintained incrementally on every
 mutation, `GetLeafProjectionDigestAsync` does **not** re-walk the
-leaf's `Entries` on each call - the running hash is already on the
-leaf's in-memory state, so the per-leaf computation collapses to a
+leaf's entry cache on each call - the running hash is already on the
+leaf's persisted state, so the per-leaf computation collapses to a
 single fixed-size XxHash128 over `(running_xor || entryCount ||
 checkpointOffset)`. The shard root delegates to the root internal
 node, which returns its persisted `SubtreeProjectionHash` aggregate in
@@ -457,7 +458,9 @@ await tree.RebuildLeafProjectionAsync(shardIndex: 0, cancellationToken);
 shard via the sibling chain and, for each leaf, **clears only the
 projection-state slots** that the materialiser owns:
 
-- `LeafNodeState.Entries` is emptied.
+- The per-activation entry cache is dropped when the grain
+  deactivates (the cache is never persisted, so there is nothing to
+  clear on the state row itself).
 - `LeafNodeState.ProjectionCheckpointOffset` is reset to the `-1`
   "nothing applied" sentinel (matching the WAL reader's
   `fromOffsetExclusive = -1` start-of-log convention), so the next

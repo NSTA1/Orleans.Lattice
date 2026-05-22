@@ -70,8 +70,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`KeysPageSize`](#keyspagesize) | `int` | 512 | Yes |
 | [`LeafProjectionRetention`](#leafprojectionretention) | `TimeSpan` | 7 days | Yes |
 | [`MaintainProjectionDigest`](#maintainprojectiondigest) | `bool` | `true` | Yes |
-| [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 1000 | Yes |
-| [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 1 second | Yes |
+| [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 5000 | Yes |
+| [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 5 seconds | Yes |
 | [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) | `int` | 2 | Yes |
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
@@ -246,13 +246,13 @@ See [Projection Rebuild](projection-rebuild.md#opting-out-of-digest-maintenance)
 
 ### `MaterialiserCheckpointEntries`
 
-Entry-count threshold above which a pending materialiser checkpoint is force-flushed to durable storage even if `MaterialiserCheckpointInterval` has not elapsed (default: 1 000). Together with `MaterialiserCheckpointInterval` this bounds replay cost on a worst-case crash: at most `MaterialiserCheckpointEntries` mutations have to be replayed against the projection on activation.
+Entry-count threshold above which a pending materialiser checkpoint is force-flushed to durable storage even if `MaterialiserCheckpointInterval` has not elapsed (default: 5 000). Together with `MaterialiserCheckpointInterval` this bounds replay cost on a worst-case crash: at most `MaterialiserCheckpointEntries` mutations have to be replayed against the projection on activation.
 
 This option can be changed freely at any time.
 
 ### `MaterialiserCheckpointInterval`
 
-How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 1 second). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode - strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
+How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 5 seconds). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode - strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
 
 A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` × steady-state apply rate of replay work on restart.
 

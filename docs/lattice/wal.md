@@ -95,7 +95,7 @@ and the observer publish must happen after both, inside a commit-log scope.
    grain-state provider only. Failures here propagate to the caller before any
    in-memory state has been touched.
 
-3. **apply** - LWW-merge the value into the in-memory `Entries` projection. If
+3. **apply** - LWW-merge the value into the in-memory entry cache. If
    the leaf's entry count crosses `MaxLeafKeys`, trigger a split. This step is
    the only place that mutates the per-leaf in-memory state on the foreground
    path.
@@ -364,8 +364,8 @@ byte-equivalent to the projection at the moment the leaf last deactivated.
 
 To keep tail-replay bounded, the leaf flushes a **projection checkpoint**
 durably whenever the elapsed wall-clock time since the last flush reaches
-`MaterialiserCheckpointInterval` (default: 1 second) **or** the count of
-unflushed advances reaches `MaterialiserCheckpointEntries` (default: 1 000),
+`MaterialiserCheckpointInterval` (default: 5 seconds) **or** the count of
+unflushed advances reaches `MaterialiserCheckpointEntries` (default: 5 000),
 whichever happens first. The checkpoint is a single grain-state write that
 captures the in-memory entries, the local HLC, the version vector, and the
 WAL offset of the last applied mutation. On the next activation the replay
@@ -551,8 +551,8 @@ suit most workloads.
 
 | Option | Default | Purpose |
 |---|---|---|
-| `MaterialiserCheckpointInterval` | 1 second | Time-driven flush of any pending projection-checkpoint advance. Set to `Timeout.InfiniteTimeSpan` to disable the time trigger and rely solely on the entry-count trigger. |
-| `MaterialiserCheckpointEntries` | `1_000` | Entry-count trigger: forces a checkpoint flush once this many advances are pending, regardless of `MaterialiserCheckpointInterval`. Bounds the worst-case replay cost when the steady-state apply rate is high. |
+| `MaterialiserCheckpointInterval` | 5 seconds | Time-driven flush of any pending projection-checkpoint advance. Set to `Timeout.InfiniteTimeSpan` to disable the time trigger and rely solely on the entry-count trigger. |
+| `MaterialiserCheckpointEntries` | `5_000` | Entry-count trigger: forces a checkpoint flush once this many advances are pending, regardless of `MaterialiserCheckpointInterval`. Bounds the worst-case replay cost when the steady-state apply rate is high. |
 | `MaxLeafReplayEntries` | `10_000` | Upper bound on the entries `ILeafReplayCoordinatorGrain` streams in a single tail replay. A leaf whose backlog exceeds this falls back to the rebuild path indicated by `ProjectionRebuildPolicy`. |
 | `LeafProjectionRetention` | 7 days | Age beyond which a persisted checkpoint is considered stale; the next activation falls off-log and rebuilds. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger. |
 | `ProjectionRebuildPolicy` | `SnapshotThenWal` | Recovery strategy when a fall-off-log trigger fires (snapshot + WAL tail, or full rebuild from the authoritative source). |
