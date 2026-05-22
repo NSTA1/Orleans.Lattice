@@ -35,6 +35,11 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.LeafSnapshotMargin)} must be in the inclusive range [0.0, 1.0].");
         }
+        if (options.LeafSnapshotReClassifyEveryNCheckpoints < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints)} must be greater than or equal to 0 (0 disables the periodic re-classification).");
+        }
 if (options.WalMaxPendingBatches < 1)
 {
     return ValidateOptionsResult.Fail(

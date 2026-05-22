@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -11,13 +13,53 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="ILeafSnapshotStorageGrain"/> keyed by this leaf's grain
 /// id. The capture is read-only on the leaf side - it stamps the blob
 /// with the already-persisted <c>ProjectionCheckpointOffset</c> and
-/// does not mutate any leaf state. Driven by the maintenance grain on
-/// the <see cref="FallOffLogDecision.SnapshotPending"/> advisory; the
-/// leaf grain itself does not invoke this method from any foreground
-/// or activation path.
+/// does not mutate any leaf state.
+/// <para>
+/// Capture is driven by the leaf itself (not by the maintenance
+/// grain): when the fall-off-log detector raises the
+/// <see cref="FallOffLogDecision.SnapshotPending"/> advisory at
+/// activation time, the leaf latches <see cref="_activationSnapshotPending"/>
+/// and captures once the tail replay has completed. While the leaf
+/// stays active, every
+/// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
+/// successful checkpoint persist re-classifies and (on advisory) drives
+/// another capture. A single-flight guard
+/// (<see cref="_snapshotCaptureInFlight"/>) suppresses overlapping
+/// captures so a slow <c>SaveAsync</c> cannot pin a follow-on capture
+/// behind it - the follow-on is dropped and the next cadence tick
+/// re-evaluates.
+/// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
+    /// <summary>
+    /// Latched at activation when the fall-off-log detector returns
+    /// <see cref="FallOffLogDecision.SnapshotPending"/>. The activation
+    /// hook reads-and-clears the flag after the tail replay so a
+    /// proactive capture fires exactly once per advisory-firing
+    /// activation.
+    /// </summary>
+    private bool _activationSnapshotPending;
+
+    /// <summary>
+    /// Single-flight guard for the snapshot-capture seam. Set on
+    /// entry to <see cref="CaptureSnapshotAsync"/> and the periodic
+    /// recheck path, cleared on completion. Concurrent capture
+    /// invocations observe a <c>true</c> value and return immediately;
+    /// the next cadence tick re-evaluates.
+    /// </summary>
+    private bool _snapshotCaptureInFlight;
+
+    /// <summary>
+    /// Number of successful checkpoint persists since this
+    /// activation last ran the periodic snapshot recheck.
+    /// <see cref="FlushPendingCheckpointAsync"/> increments this on
+    /// every successful persist; when it reaches
+    /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
+    /// the leaf re-runs the fall-off-log detector and, on advisory,
+    /// drives a capture.
+    /// </summary>
+    private int _checkpointPersistCountSinceRecheck;
     /// <inheritdoc />
     public async Task CaptureSnapshotAsync()
     {
@@ -41,27 +83,144 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        // Single-threaded copy of the cache rows under the grain
-        // turn. EnumerateRows yields the SortedDictionary's
-        // key-ordered KeyValuePair sequence; the resulting list is
-        // a self-contained value snapshot that survives subsequent
-        // foreground mutations on this activation.
-        var rows = new List<LeafSnapshotRow>(Cache.Count);
-        foreach (var kv in Cache.EnumerateRows())
+        // Single-flight guard. A second capture invocation that arrives
+        // while a previous SaveAsync is still in flight is dropped on
+        // the floor: the in-flight capture will land soon and any
+        // subsequent advisory (activation re-entry or the periodic
+        // recheck) will re-evaluate. This prevents an unbounded queue
+        // of capture awaits when the snapshot storage provider is
+        // slow.
+        if (_snapshotCaptureInFlight)
         {
-            rows.Add(new LeafSnapshotRow(kv.Key, kv.Value));
+            return;
+        }
+        _snapshotCaptureInFlight = true;
+        try
+        {
+            // Single-threaded copy of the cache rows under the grain
+            // turn. EnumerateRows yields the SortedDictionary's
+            // key-ordered KeyValuePair sequence; the resulting list is
+            // a self-contained value snapshot that survives subsequent
+            // foreground mutations on this activation.
+            var rows = new List<LeafSnapshotRow>(Cache.Count);
+            foreach (var kv in Cache.EnumerateRows())
+            {
+                rows.Add(new LeafSnapshotRow(kv.Key, kv.Value));
+            }
+
+            var blob = new LeafSnapshotBlob
+            {
+                SnapshotOffset = checkpoint,
+                Rows = rows,
+                CapturedAtTicks = DateTime.UtcNow.Ticks,
+            };
+
+            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
+                context.GrainId.GetGuidKey());
+            await snapshotGrain.SaveAsync(blob, CancellationToken.None);
+        }
+        finally
+        {
+            _snapshotCaptureInFlight = false;
+        }
+    }
+
+    /// <summary>
+    /// Activation-side advisory handler. Wraps
+    /// <see cref="CaptureSnapshotAsync"/> in a best-effort try/catch so
+    /// a transient snapshot-storage failure does not block the leaf
+    /// coming online. The next periodic recheck (or the next
+    /// reactivation's advisory) re-attempts the capture.
+    /// </summary>
+    private async Task TryCaptureSnapshotForAdvisoryAsync()
+    {
+        try
+        {
+            await CaptureSnapshotAsync();
+        }
+        catch (Exception ex)
+        {
+            var logger = context.ActivationServices?
+                .GetService<ILoggerFactory>()?
+                .CreateLogger<BPlusLeafGrain>();
+            logger?.LogWarning(
+                ex,
+                "Proactive snapshot capture for leaf {GrainId} failed; will retry on next periodic recheck or reactivation.",
+                context.GrainId);
+        }
+    }
+
+    /// <summary>
+    /// Periodic snapshot-recheck hook, called by
+    /// <see cref="FlushPendingCheckpointAsync"/> after every successful
+    /// checkpoint persist. Increments the per-activation persist
+    /// counter; when the counter reaches
+    /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
+    /// it resets, re-classifies the leaf's WAL gap, and (on
+    /// <see cref="FallOffLogDecision.SnapshotPending"/>) drives a
+    /// capture. Returns synchronously when the option is <c>0</c>
+    /// (disabled) or the threshold has not yet been reached.
+    /// </summary>
+    private async Task MaybeRunPeriodicSnapshotRecheckAsync()
+    {
+        if (state.State.TreeId is null)
+        {
+            return;
         }
 
-        var blob = new LeafSnapshotBlob
+        var resolved = await GetOptionsAsync();
+        var threshold = resolved.LeafSnapshotReClassifyEveryNCheckpoints;
+        if (threshold <= 0)
         {
-            SnapshotOffset = checkpoint,
-            Rows = rows,
-            CapturedAtTicks = DateTime.UtcNow.Ticks,
-        };
+            // Periodic recheck disabled. The activation-time advisory
+            // path is the only proactive-capture driver.
+            return;
+        }
 
-        var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
-            context.GrainId.GetGuidKey());
-        await snapshotGrain.SaveAsync(blob, CancellationToken.None);
+        _checkpointPersistCountSinceRecheck++;
+        if (_checkpointPersistCountSinceRecheck < threshold)
+        {
+            return;
+        }
+        _checkpointPersistCountSinceRecheck = 0;
+
+        if (_snapshotCaptureInFlight)
+        {
+            // A previous capture has not yet completed; skip this
+            // recheck. The next post-threshold persist will retry.
+            return;
+        }
+
+        var detector = context.ActivationServices?.GetService<ILatticeFallOffLogDetector>();
+        if (detector is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var decision = await detector.ClassifyAsync(
+                state.State.TreeId,
+                ReplayWalPartition,
+                state.State.ProjectionCheckpointOffset,
+                TimeSpan.Zero,
+                resolved,
+                CancellationToken.None);
+            if (decision == FallOffLogDecision.SnapshotPending)
+            {
+                await TryCaptureSnapshotForAdvisoryAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            var logger = context.ActivationServices?
+                .GetService<ILoggerFactory>()?
+                .CreateLogger<BPlusLeafGrain>();
+            logger?.LogWarning(
+                ex,
+                "Periodic snapshot recheck for leaf {GrainId} failed; will retry on next cadence.",
+                context.GrainId);
+        }
     }
 
     /// <summary>
