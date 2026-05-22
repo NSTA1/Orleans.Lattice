@@ -12,8 +12,8 @@ namespace Orleans.Lattice.BPlusTree.State;
 internal sealed class LeafNodeState
 {
     // [Id(0)] previously held a SortedDictionary<string, LwwValue<byte[]>>
-    // Entries per-key projection. R-120 step 6 collapsed the persisted leaf
-    // row: per-key data now lives in a per-activation in-memory cache
+    // Entries per-key projection. The persisted leaf row was collapsed:
+    // per-key data now lives in a per-activation in-memory cache
     // (LeafEntryCache) rehydrated from the WAL on every activation, and
     // ProjectionCheckpointOffset gates the replay scope. The Id(0) slot is
     // reserved - never reuse it, because doing so would silently shadow
@@ -68,20 +68,23 @@ internal sealed class LeafNodeState
     /// projection so a re-activation can resume replay from
     /// <c>ProjectionCheckpointOffset + 1</c> rather than scanning the
     /// full leaf state. Defaults to <c>0</c> on freshly persisted
-    /// state. The materialiser's activation gate
-    /// (<c>head &lt;= checkpoint</c>) short-circuits when the WAL is
-    /// empty (<c>head == -1</c>), so the default-0 value never causes
-    /// the activation path to skip offset 0 on a leaf whose
-    /// in-memory entry cache already covers it.
+    /// state to preserve the published empty-tree digest shape
+    /// (<c>digest.CheckpointOffset == 0</c> for an empty leaf).
     /// <para>
     /// The "nothing applied" sentinel is <c>-1</c>, matching
     /// <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>'s
-    /// empty-WAL convention. The operator-driven projection rebuild
-    /// path (<c>RebuildLeafProjectionAsync</c>) sets this slot to
-    /// <c>-1</c> after clearing the entry cache so the next
-    /// activation re-reads the WAL from offset <c>0</c> inclusive;
-    /// setting <c>0</c> would silently skip offset 0 because the
-    /// materialiser reads strictly past the checkpoint.
+    /// empty-WAL convention. The per-key entry cache is per-activation
+    /// only, so a freshly activated leaf
+    /// whose persisted checkpoint says "0" but whose cache is empty
+    /// would silently skip offset 0 in the WAL on restart. The
+    /// activation path
+    /// (<see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.<c>OnActivateAsync</c>)
+    /// therefore resets the persisted checkpoint to <c>-1</c>
+    /// whenever the cache starts empty and no snapshot rehydrate
+    /// occurred, ensuring the replay below covers the full readable
+    /// window. The operator-driven projection rebuild path
+    /// (<c>RebuildLeafProjectionAsync</c>) likewise sets this slot
+    /// to <c>-1</c> after clearing the entry cache.
     /// </para>
     /// </summary>
     [Id(11)] public long ProjectionCheckpointOffset { get; set; }

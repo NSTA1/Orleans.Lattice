@@ -9,8 +9,8 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for the activation-time snapshot rehydration seam
-/// added in R-120 step 7.4. On activation, the leaf consults the
+/// Unit tests for the activation-time snapshot rehydration seam.
+/// On activation, the leaf consults the
 /// dedicated snapshot storage grain; when a blob exists whose
 /// <c>SnapshotOffset</c> exceeds the persisted
 /// <c>ProjectionCheckpointOffset</c>, the leaf rebuilds the
@@ -120,8 +120,11 @@ public partial class BPlusLeafGrainTests
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
-        // Checkpoint unchanged (snapshot was older), and the cache must
-        // not have been hydrated from the blob's rows.
+        // The snapshot is older than the persisted checkpoint, so the
+        // rehydrate path declines and the cache stays empty. The
+        // persisted checkpoint is untouched (the activation-time
+        // coherence override drives replay from -1 locally without
+        // mutating the persisted slot).
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(20L));
         Assert.That(grain.EntriesForTest, Is.Empty);
     }
@@ -140,6 +143,10 @@ public partial class BPlusLeafGrainTests
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
+        // Snapshot is ignored AND the cache is empty - but the
+        // activation-time coherence reset is a local replay-start
+        // override only, not a persistent mutation, so the persisted
+        // checkpoint slot retains its pre-activation value.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(30L));
         Assert.That(grain.EntriesForTest, Is.Empty);
     }
@@ -154,6 +161,9 @@ public partial class BPlusLeafGrainTests
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
+        // No snapshot rehydrate and empty cache - the activation-time
+        // coherence override drives the WAL replay from -1 locally,
+        // but the persisted checkpoint slot is not mutated.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L));
     }
 
@@ -228,10 +238,96 @@ public partial class BPlusLeafGrainTests
             TestOriginClusterIdResolver.Default());
 
         // Must not throw - snapshot load failures are best-effort and
-        // the leaf falls through to the WAL tail-replay path.
+        // the leaf falls through to the WAL tail-replay path. The
+        // activation coherence override drives the replay from -1
+        // locally without mutating the persisted checkpoint slot.
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L));
         await coord.Received().GetHeadOffsetAsync(Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// REGRESSION: pins the cache/checkpoint coherence invariant
+    /// required because the leaf entry cache is per-activation only.
+    /// Concretely: <c>LeafNodeState.ProjectionCheckpointOffset</c>
+    /// is persisted and survives across activations, but the cache
+    /// is rebuilt from the WAL on every activation. If activation
+    /// trusted the persisted checkpoint when the cache is empty (no
+    /// snapshot rehydrated), the WAL replay would read only
+    /// <c>(checkpoint, head]</c> and silently drop every offset
+    /// <c>&lt;= checkpoint</c>. The contract is therefore: when no
+    /// snapshot populated the cache, activation MUST override the
+    /// replay-start offset to -1 locally so the entire readable
+    /// window is reapplied. The persisted slot is left untouched so
+    /// that observers of the checkpoint (digest, snapshot capture
+    /// guard, materialiser-lag math) continue to see the pre-restart
+    /// value until the replay's normal checkpoint-flush path
+    /// re-advances it.
+    /// <para>
+    /// This test guarantees that property at the activation seam by
+    /// observing the head-and-slice read pattern: the coordinator
+    /// must be asked for a slice starting from the -1 sentinel
+    /// (i.e. fromExclusive=-1, covering offsets [0, head]), not
+    /// from the stale persisted checkpoint of 42.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task Activation_replays_from_minus_one_when_cache_starts_empty_and_no_snapshot_rehydrated()
+    {
+        // Pre-condition: persisted checkpoint claims many offsets
+        // have been applied, but the per-activation cache is empty
+        // (the post-restart steady state for a leaf with no snapshot).
+        var (grain, state, _, coord) = CreateGrainWithSnapshotAndCoordinator(
+            preloadedSnapshot: null,
+            persistedCheckpoint: 42,
+            walHead: 42);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        // The persisted slot is NOT mutated by activation - only the
+        // local replay-start is overridden. External observers of the
+        // checkpoint still see the pre-restart value.
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(42L),
+            "activation must not mutate the persisted checkpoint - the override is local to the replay loop only");
+
+        // The replay loop must have asked the coordinator for a slice
+        // starting from the -1 sentinel, covering the full (-1, 42]
+        // window. If activation had trusted the persisted checkpoint
+        // of 42, the slice request would have been (42, 42] = empty
+        // and dropped silently.
+        await coord.Received().ReadSliceAsync(
+            -1L,
+            Arg.Any<long>(),
+            Arg.Any<int>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// COMPANION INVARIANT: the coherence reset must NOT clobber the
+    /// checkpoint when the snapshot rehydrate populated the cache.
+    /// In that case the cache and the checkpoint are by construction
+    /// in sync at the snapshot offset, and the WAL replay should
+    /// cover only the (snapshot, head] suffix.
+    /// </summary>
+    [Test]
+    public async Task Activation_preserves_snapshot_anchored_checkpoint_when_rehydrate_populated_cache()
+    {
+        var blob = NewSnapshotBlob(
+            offset: 50,
+            ("a", new byte[] { 1 }),
+            ("b", new byte[] { 2 }));
+        var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+            preloadedSnapshot: blob,
+            persistedCheckpoint: 10,
+            walHead: 80);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        // The snapshot anchored the checkpoint at 50; the coherence
+        // reset must respect that anchor rather than wiping it back
+        // to -1.
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(50L));
+        Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "a", "b" }));
     }
 }

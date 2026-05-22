@@ -271,11 +271,11 @@ internal sealed partial class BPlusLeafGrain
     /// to a from-zero replay.
     /// </para>
     /// </summary>
-    internal async Task TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
+    internal async Task<bool> TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
     {
         if (state.State.TreeId is null)
         {
-            return;
+            return false;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -294,12 +294,12 @@ internal sealed partial class BPlusLeafGrain
             // path falls through to the existing WAL-tail replay,
             // which can still recover the projection as long as the
             // WAL has not trimmed past the checkpoint.
-            return;
+            return false;
         }
 
         if (blob is null)
         {
-            return;
+            return false;
         }
 
         var checkpoint = state.State.ProjectionCheckpointOffset;
@@ -308,7 +308,7 @@ internal sealed partial class BPlusLeafGrain
             // Snapshot is older than the persisted checkpoint; the
             // leaf has already applied past the snapshot via the
             // foreground path. Ignore the blob.
-            return;
+            return false;
         }
 
         // Bulk-load the canonical byte rows. We bypass StoreEntry
@@ -349,6 +349,8 @@ internal sealed partial class BPlusLeafGrain
         // BPlusLeafGrain.ProjectionAdmin.cs - keeps the rehydrated
         // activation indistinguishable from a fresh activation.
         DisposeProjectionHasher();
+
+        return true;
     }
 
     /// <inheritdoc />

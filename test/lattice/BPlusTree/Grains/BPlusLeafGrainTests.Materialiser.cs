@@ -162,8 +162,19 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Materialiser_no_op_when_head_at_or_below_checkpoint()
     {
+        // Seed the cache so the activation-time coherence override
+        // does NOT fire (the override only triggers when the cache
+        // is empty AND no snapshot rehydrated, on the post-restart
+        // path). With a populated cache, the persisted checkpoint
+        // is by construction coherent with the cache and replay
+        // must short-circuit when head <= checkpoint.
         var coord = BuildCoordinator(head: 7);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, persistedCheckpoint: 7);
+        grain.EntriesForTest["seed"] = new LwwValue<byte[]>
+        {
+            Value = new byte[] { 1 },
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1 },
+        };
 
         await ActivateAsync(grain);
 
@@ -662,7 +673,7 @@ public partial class BPlusLeafGrainTests
         await detector.Received(1).ClassifyAsync(
             MaterialiserTreeId,
             0,
-            0L,
+            -1L,
             Arg.Any<TimeSpan>(),
             Arg.Any<ResolvedLatticeOptions>(),
             Arg.Any<CancellationToken>());

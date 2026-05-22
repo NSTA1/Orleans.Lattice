@@ -110,7 +110,34 @@ internal sealed partial class BPlusLeafGrain
         // (snapshot, head] suffix. When no snapshot is present (or it
         // is older than the persisted checkpoint), this step is a
         // no-op and the existing WAL-tail-replay path runs unchanged.
-        await TryRehydrateFromSnapshotAsync(cancellationToken);
+        var rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+
+        // Step 0.5 - cache/checkpoint coherence reset. The entry
+        // cache is per-activation only; it is rebuilt
+        // from the WAL on every activation and never persisted. The
+        // persisted ProjectionCheckpointOffset, in contrast, survives
+        // across activations. When the leaf reactivates after a silo
+        // restart (or any cold start) without a snapshot, the cache
+        // starts empty but the persisted checkpoint still claims that
+        // every offset through N has been applied. Replaying only
+        // (N, head] would silently drop offsets 0..N from the rebuilt
+        // cache. Compute a local replay-start sentinel (-1) so the WAL
+        // replay below covers the entire readable window. We pass this
+        // as an override rather than mutating the persisted slot, so
+        // every external observer of the checkpoint (digest, snapshot
+        // capture guard, materialiser-lag math, fall-off-log detector)
+        // continues to see the pre-activation value until the replay's
+        // own SetCheckpointOffsetAsync advances it through the normal
+        // flush path. The reset is gated on (a) the snapshot rehydrate
+        // not having populated the cache (it already advanced the
+        // checkpoint to the snapshot offset and that anchor is
+        // honoured), and (b) the cache being empty - if some upstream
+        // seam (e.g. a future hot-restart path, a sibling-at-birth
+        // attach, or a test seeding the cache for unit-test purposes)
+        // has already populated the cache, the checkpoint is by
+        // definition coherent with it and must not be overridden.
+        long? replayCheckpointOverride =
+            (!rehydratedFromSnapshot && Cache.Count == 0) ? -1L : null;
 
         // Step 1 - drive the dormant ILeafProjection.Apply seam over
         // the WAL slice between the persisted checkpoint and the
@@ -119,7 +146,7 @@ internal sealed partial class BPlusLeafGrain
         // reader-isolation contract, and the host's grain activation
         // pipeline will retry the activation rather than serve reads
         // from a half-applied state.
-        var advanced = await ReplayWalSinceCheckpointAsync(cancellationToken);
+        var advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
 
         // Step 1.5 - if the fall-off-log detector raised the
         // SnapshotPending advisory while classifying the replay path,
@@ -215,13 +242,13 @@ internal sealed partial class BPlusLeafGrain
     /// unconditionally; unknown <see cref="MutationKind"/> values are
     /// dropped (defensive forward-compat).
     /// </remarks>
-    private async Task<bool> ReplayWalSinceCheckpointAsync(CancellationToken cancellationToken)
+    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
             return false;
 
-        var checkpoint = state.State.ProjectionCheckpointOffset;
+        var checkpoint = checkpointOverride ?? state.State.ProjectionCheckpointOffset;
 
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG replay-enter] gid={context.GrainId} treeId={treeId} shardIndex={state.State.ShardIndex} " +
