@@ -66,7 +66,10 @@ public readonly record struct OrSetAccessor
         return MutateAsync(set =>
         {
             var counter = NextCounter(set, replicaId);
-            set.Add(element, replicaId, counter);
+            // Do not mutate the local snapshot - the leaf grain folds
+            // the typed delta authoritatively, and any local mutation
+            // here would be discarded after the ApplyCrdtDeltaAsync
+            // round trip.
             return new OrSetDelta
             {
                 Adds = new[] { new OrSetDeltaDot { Element = element, ReplicaId = replicaId, Counter = counter } },
@@ -105,7 +108,8 @@ public readonly record struct OrSetAccessor
             {
                 observed = Array.Empty<OrSetDeltaDot>();
             }
-            set.Remove(element);
+            // Do not mutate the local snapshot - the leaf grain folds
+            // the typed delta authoritatively.
             return new OrSetDelta
             {
                 Adds = Array.Empty<OrSetDeltaDot>(),
@@ -135,7 +139,8 @@ public readonly record struct OrSetAccessor
         EnsureInitialised();
         return MutateAsync(set =>
         {
-            set.MergeFrom(other);
+            // Do not mutate the local snapshot - the leaf grain folds
+            // the typed delta authoritatively.
             return new OrSetDelta
             {
                 Adds = FlattenDots(other.Adds),
@@ -189,23 +194,24 @@ public readonly record struct OrSetAccessor
         int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
-            var current = Decode(versioned.Value);
-            var delta = mutate(current);
-            var bytes = JsonLatticeSerializer<OrSet>.Default.Serialize(current);
-            var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaBytes))
-            {
-                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-                if (ok) return;
-            }
-        }
-        throw new InvalidOperationException(
-            $"OrSet CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
-            "Increase maxAttempts or reduce contention.");
+        // Producer-side delta apply: replaced the read-merge-write CAS
+        // loop with a single read (to compute the next dot counter /
+        // observed-dot set the delta needs) plus one
+        // ApplyCrdtDeltaAsync call. The leaf grain is the single
+        // writer authority per key, so the CAS retry budget is no
+        // longer required for convergence; two concurrent adds against
+        // the same replica id are still the caller's responsibility to
+        // avoid (the OR-Set per-replica monotonicity contract was
+        // identical under the old loop). The maxAttempts parameter is
+        // preserved on the public surface for binary compatibility and
+        // validated for an early-failure signal on misconfiguration,
+        // but no longer drives an inner retry loop.
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrSet, deltaBytes, cancellationToken).ConfigureAwait(false);
     }
 
     private static OrSet Decode(byte[]? bytes) =>

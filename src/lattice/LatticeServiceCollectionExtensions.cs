@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -67,6 +68,11 @@ public static class LatticeServiceCollectionExtensions
         // scoped so the underlying codec stays hot.
         builder.Services.TryAddSingleton<IWalRecordEncoder, OrleansBinaryWalRecordEncoder>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
+        // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
+        // VersionVector / MvRegister) are pre-populated on construction
+        // so no host registration is required for them. Generic OrMap
+        // descriptors are installed per tree via AddOrMapShape.
+        builder.Services.TryAddSingleton<CrdtShapeRegistry>();
         // Single-cluster default for the per-tree origin-cluster-id resolver.
         // Returns string.Empty for every tree so the WAL writer stamps an
         // empty OriginClusterId on locally-authored records. The replication
@@ -275,5 +281,85 @@ public static class LatticeServiceCollectionExtensions
         var policy = new BoundedExponentialRetryPolicy(options);
         builder.Services.ConfigureAll<LatticeOptions>(o => o.RetryPolicy = policy);
         return builder;
+    }
+
+    /// <summary>
+    /// Registers a typed OR-Map shape for the tree identified by
+    /// <paramref name="treeName"/>. Required whenever a tree is configured
+    /// for <see cref="LatticeMergeMode.OrMap"/>: the producer-side accessor
+    /// and the receiver-side applier both look the descriptor up at runtime
+    /// so they can deserialise the generic
+    /// <see cref="OrMap{TKey, TValue}"/> state and the matching
+    /// <see cref="OrMapDelta{TKey, TValue}"/> wire payload, and fold the
+    /// delta in via
+    /// <see cref="OrMap{TKey, TValue}.MergeDelta(OrMapDelta{TKey, TValue})"/>
+    /// through a single type-erased seam. The closed-shape CRDT modes
+    /// (<see cref="LatticeMergeMode.OrSet"/>, <see cref="LatticeMergeMode.PnCounter"/>,
+    /// <see cref="LatticeMergeMode.VersionVector"/>, <see cref="LatticeMergeMode.MvRegister"/>)
+    /// do not require host registration because their descriptors are
+    /// unambiguous; the <see cref="CrdtShapeRegistry"/> pre-populates the
+    /// per-mode global defaults on construction. Registering a different
+    /// <c>(TKey, TValue)</c> pair for the same tree is a configuration
+    /// error and throws at registration time.
+    /// </summary>
+    public static ISiloBuilder AddOrMapShape<TKey, TValue>(
+        this ISiloBuilder builder,
+        string treeName)
+        where TKey : notnull
+        where TValue : ICrdt<TValue>, new()
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+        builder.Services.TryAddSingleton<CrdtShapeRegistry>();
+        builder.Services.AddSingleton<IConfigureOptions<CrdtShapeRegistryStartupMarker>>(
+            new ConfigureCrdtShape(treeName, CrdtShape.ForOrMap<TKey, TValue>()));
+        // Eager registration via a hosted-startup hook so the descriptor is
+        // installed before the first producer emission or WAL apply runs.
+        builder.Services.AddSingleton<IHostedService, CrdtShapeStartup>();
+        return builder;
+    }
+
+    /// <summary>Internal hosted-service marker; registered once per silo.</summary>
+    internal sealed class CrdtShapeRegistryStartupMarker { }
+
+    /// <summary>Internal <see cref="IConfigureOptions{TOptions}"/> carrying one shape registration.</summary>
+    internal sealed class ConfigureCrdtShape(string treeId, CrdtShape shape)
+        : IConfigureOptions<CrdtShapeRegistryStartupMarker>
+    {
+        /// <summary>The tree id this shape is bound to.</summary>
+        public string TreeId { get; } = treeId;
+
+        /// <summary>The shape descriptor.</summary>
+        public CrdtShape Shape { get; } = shape;
+
+        /// <inheritdoc />
+        public void Configure(CrdtShapeRegistryStartupMarker options) { }
+    }
+
+    /// <summary>
+    /// Hosted service that drains every registered
+    /// <see cref="ConfigureCrdtShape"/> into the singleton
+    /// <see cref="CrdtShapeRegistry"/> at silo start, before any
+    /// producer-side accessor or receiver-side applier accepts an entry.
+    /// </summary>
+    internal sealed class CrdtShapeStartup(
+        CrdtShapeRegistry registry,
+        IEnumerable<IConfigureOptions<CrdtShapeRegistryStartupMarker>> registrations) : IHostedService
+    {
+        /// <inheritdoc />
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            foreach (var entry in registrations)
+            {
+                if (entry is ConfigureCrdtShape c)
+                {
+                    registry.Register(c.TreeId, c.Shape);
+                }
+            }
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc />
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

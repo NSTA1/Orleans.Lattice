@@ -81,6 +81,15 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
 
     /// <summary>
+    /// Routes a typed CRDT delta apply for <paramref name="key"/> to the
+    /// owning leaf. Returns the <see cref="HybridLogicalClock"/> stamped
+    /// on the committed entry. See
+    /// <see cref="Grains.IBPlusLeafGrain.ApplyCrdtDeltaAsync"/> for the
+    /// full apply contract.
+    /// </summary>
+    Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes);
+
+    /// <summary>
     /// Inserts or updates multiple key-value pairs in a single traversal batch.
     /// </summary>
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);

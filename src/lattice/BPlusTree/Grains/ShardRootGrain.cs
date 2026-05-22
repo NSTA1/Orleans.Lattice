@@ -371,6 +371,34 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
+    public async Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(deltaBytes);
+        await PrepareForOperationAsync();
+        ThrowIfRejectedForKey(key);
+        RecordWrite();
+
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var result = await TraverseForCrdtApplyAsync(key, mode, deltaBytes);
+
+                var splitResult = result.Split;
+                while (splitResult is not null)
+                {
+                    splitResult = await PromoteRootAsync(splitResult);
+                }
+
+                return result.Version;
+            }
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            {
+            }
+        }
+    }
+
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         await PrepareForOperationAsync();

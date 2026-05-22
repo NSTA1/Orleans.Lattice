@@ -67,7 +67,7 @@ public partial class BPlusLeafGrainTests
         var result = await grain.MergeManyAsync(entries);
 
         Assert.That(result, Is.Null);
-        Assert.That(state.State.Entries, Contains.Key("key-a"));
+        Assert.That(grain.EntriesForTest, Contains.Key("key-a"));
     }
 
     [Test]
@@ -93,7 +93,7 @@ public partial class BPlusLeafGrainTests
         };
         await grain.MergeManyAsync(newer);
 
-        Assert.That(state.State.Entries["key"].Timestamp, Is.EqualTo(newClock));
+        Assert.That(grain.EntriesForTest["key"].Timestamp, Is.EqualTo(newClock));
     }
 
     [Test]
@@ -119,7 +119,7 @@ public partial class BPlusLeafGrainTests
         };
         await grain.MergeManyAsync(older);
 
-        Assert.That(state.State.Entries["key"].Timestamp, Is.EqualTo(newClock));
+        Assert.That(grain.EntriesForTest["key"].Timestamp, Is.EqualTo(newClock));
     }
 
     [Test]
@@ -133,7 +133,7 @@ public partial class BPlusLeafGrainTests
         for (int i = 0; i < 127; i++)
         {
             clock = HybridLogicalClock.Tick(clock);
-            state.State.Entries[$"key-{i:D4}"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes($"v-{i}"), clock);
+            grain.EntriesForTest[$"key-{i:D4}"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes($"v-{i}"), clock);
         }
 
         // Simulate that a split was triggered during a previous MergeMany and
@@ -189,7 +189,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(result, Is.Null);
         Assert.That(state.WriteCount, Is.EqualTo(writeCountBefore), "Empty merge should not write state");
-        Assert.That(state.State.Entries, Is.Empty);
+        Assert.That(grain.EntriesForTest, Is.Empty);
     }
 
     [Test]
@@ -207,8 +207,8 @@ public partial class BPlusLeafGrainTests
         var result = await grain.MergeManyAsync(entries);
 
         Assert.That(result, Is.Null);
-        Assert.That(state.State.Entries, Contains.Key("dead-key"));
-        Assert.That(state.State.Entries["dead-key"].IsTombstone, Is.True);
+        Assert.That(grain.EntriesForTest, Contains.Key("dead-key"));
+        Assert.That(grain.EntriesForTest["dead-key"].IsTombstone, Is.True);
     }
 
     [Test]
@@ -271,7 +271,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(commitLog.AppendCount, Is.EqualTo(foregroundAppends),
             "the asymmetric migration guard must short-circuit before the WAL append fires");
-        Assert.That(Encoding.UTF8.GetString(state.State.Entries["k"].Value!), Is.EqualTo("foreground"));
+        Assert.That(Encoding.UTF8.GetString(grain.EntriesForTest["k"].Value!), Is.EqualTo("foreground"));
     }
 
     [Test]
@@ -385,9 +385,9 @@ public partial class BPlusLeafGrainTests
             Assert.That(commitLog.Appended.Any(m => m.Key == "a" && m.IsMerge), Is.False,
                 "the guard-rejected keys must not appear in the WAL append record");
         });
-        Assert.That(Encoding.UTF8.GetString(state.State.Entries["a"].Value!), Is.EqualTo("foreground-a"));
-        Assert.That(Encoding.UTF8.GetString(state.State.Entries["b"].Value!), Is.EqualTo("foreground-b"));
-        Assert.That(Encoding.UTF8.GetString(state.State.Entries["c"].Value!), Is.EqualTo("migrated-c"));
+        Assert.That(Encoding.UTF8.GetString(grain.EntriesForTest["a"].Value!), Is.EqualTo("foreground-a"));
+        Assert.That(Encoding.UTF8.GetString(grain.EntriesForTest["b"].Value!), Is.EqualTo("foreground-b"));
+        Assert.That(Encoding.UTF8.GetString(grain.EntriesForTest["c"].Value!), Is.EqualTo("migrated-c"));
     }
 
     [Test]
@@ -438,12 +438,12 @@ public partial class BPlusLeafGrainTests
                 "non-migration MergeManyAsync must still dispatch as a single batched call");
             Assert.That(commitLog.AppendCount, Is.EqualTo(9),
                 "every incoming entry must be captured in the WAL append record");
-            Assert.That(state.State.Entries, Has.Count.EqualTo(9));
-            Assert.That(state.State.Entries["dead"].IsTombstone, Is.True);
+            Assert.That(grain.EntriesForTest, Has.Count.EqualTo(9));
+            Assert.That(grain.EntriesForTest["dead"].IsTombstone, Is.True);
             for (var i = 0; i < 8; i++)
             {
                 var key = $"live-{i:D2}";
-                Assert.That(Encoding.UTF8.GetString(state.State.Entries[key].Value!), Is.EqualTo($"v{i}"));
+                Assert.That(Encoding.UTF8.GetString(grain.EntriesForTest[key].Value!), Is.EqualTo($"v{i}"));
             }
         });
     }

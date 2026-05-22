@@ -2,9 +2,12 @@
 
 Orleans.Lattice's per-shard write-ahead log (WAL) is, in a fully replicated
 deployment, the canonical durable record of every leaf mutation. Each leaf
-grain materialises that log into an in-memory + persisted projection
-(its `Entries` dictionary) and advances a per-leaf checkpoint offset as the
-WAL grows. Two operational concerns naturally arise:
+grain materialises that log into a per-activation in-memory projection
+(the entry cache - a sorted dictionary owned by the leaf grain for the
+after the leaf-state collapse)
+persisted leaf state row carries only topology, the checkpoint offset, and a
+16-byte projection-digest XOR fold; the cache is rebuilt from the WAL strictly
+after that offset on every activation. Two operational concerns naturally arise:
 
 1. **Drift detection.** If a silo's leaf projection diverges from the
    WAL prefix it claims to have applied - a cosmic-ray bit flip, a
@@ -348,6 +351,70 @@ siloBuilder.ConfigureLattice(o =>
 });
 ```
 
+## Snapshot-on-fall-off safety net
+
+The three activation-time triggers above react to a fall-off-log
+condition *after* it has already happened. The snapshot-on-fall-off
+path is the preventative safety net: while a leaf is still healthy,
+it captures a canonical-row image of its in-memory cache to a
+dedicated snapshot grain whenever the WAL tail approaches the leaf's
+persisted checkpoint. On the next activation, if the snapshot's
+offset is strictly newer than the persisted `ProjectionCheckpointOffset`,
+the leaf rehydrates its cache from the blob rows and tail-replays
+the WAL forward from the snapshot offset. The activation thus
+proceeds without ever needing to fail back into
+`SnapshotThenWal` / `FullRebuildFromWal` / `Fail` recovery, even
+when the WAL has been trimmed past the original checkpoint.
+
+The capture path is **leaf-driven**, not maintenance-driven:
+
+- At activation, the leaf runs the fall-off-log detector. When no
+  hard trigger has fired but the gap `walHead - checkpoint` is
+  within `LeafSnapshotMargin` (default `0.30`) of the WAL tail, the
+  detector returns the non-fatal `SnapshotPending` advisory. The
+  leaf latches the advisory, finishes its tail replay, and then
+  fires a single `CaptureSnapshotAsync` call before yielding the
+  activation turn.
+- While the leaf remains hot, every
+  `LeafSnapshotReClassifyEveryNCheckpoints` (default `64`)
+  successful checkpoint persist re-runs the classifier and drives
+  another capture on advisory. Pass `0` to disable the periodic
+  recheck entirely.
+- A single-flight guard suppresses overlapping captures: a slow
+  `SaveAsync` does not pin a follow-on capture behind it; the
+  follow-on is dropped and the next cadence tick re-evaluates.
+
+Each capture overwrites the previous blob; only the most recent
+snapshot is retained per leaf. The WAL remains the long-term audit
+trail.
+
+### Cold-leaf limitation
+
+A leaf that never activates while drifting below the WAL retention
+window will not be captured by this path. Such a leaf also holds no
+in-memory state to lose; the next activation runs the classifier
+and falls into the standard recovery path (`SnapshotThenWal` /
+`FullRebuildFromWal` / `Fail`) per the configured
+`ProjectionRebuildPolicy` if a hard trigger fires. The snapshot-on-
+fall-off path is a safety net for **active** leaves.
+
+### Configuration
+
+```csharp verify
+siloBuilder.ConfigureLattice(o =>
+{
+    // Trigger a proactive snapshot capture when the leaf's
+    // persisted checkpoint is within 30% of the WAL tail. Lower
+    // values reduce snapshot frequency; raise to capture earlier.
+    o.LeafSnapshotMargin = 0.30;
+
+    // While a leaf stays hot, re-run the fall-off classifier every
+    // N successful checkpoint persists and re-capture on advisory.
+    // Set to 0 to disable the periodic recheck entirely.
+    o.LeafSnapshotReClassifyEveryNCheckpoints = 64;
+});
+```
+
 ## Related surfaces
 
 - `ILattice.GetLeafProjectionDigestAsync` - the public surface.
@@ -358,7 +425,9 @@ siloBuilder.ConfigureLattice(o =>
 - `ProjectionRebuildPolicy` - the activation-time recovery policy.
 - `LatticeOptions.MaxLeafReplayEntries`, `LatticeOptions.LeafProjectionRetention`,
   `LatticeOptions.MaterialiserCheckpointInterval`,
-  `LatticeOptions.MaterialiserCheckpointEntries` - see [Configuration](configuration.md).
+  `LatticeOptions.MaterialiserCheckpointEntries`,
+  `LatticeOptions.LeafSnapshotMargin`,
+  `LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints` - see [Configuration](configuration.md).
 - `LeafProjectionStaleException` - thrown by `ProjectionRebuildPolicy.Fail`
   and by `ProjectionRebuildPolicy.FullRebuildFromWal` when the WAL has
   been trimmed.

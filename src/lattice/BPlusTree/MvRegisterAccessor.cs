@@ -142,23 +142,20 @@ public readonly record struct MvRegisterAccessor<T>
         int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
-            var current = Decode(versioned.Value);
-            var delta = mutate(current);
-            var bytes = JsonLatticeSerializer<MvRegister>.Default.Serialize(current);
-            var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaBytes))
-            {
-                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-                if (ok) return;
-            }
-        }
-        throw new InvalidOperationException(
-            $"MvRegister CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
-            "Increase maxAttempts or reduce contention.");
+        // CAS-free producer-side delta apply: see
+        // PnCounterAccessor.MutateAsync for the single-read +
+        // ApplyCrdtDeltaAsync rationale. The Set path still needs one
+        // local read to mint the next dot counter (MvRegister.Set
+        // advances Context[replicaId] from the local snapshot's view);
+        // concurrent writers minting the same dot is the caller's
+        // responsibility, identical to the OR-Set per-replica
+        // monotonicity contract.
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.MvRegister, deltaBytes, cancellationToken).ConfigureAwait(false);
     }
 
     private static MvRegister Decode(byte[]? bytes) =>

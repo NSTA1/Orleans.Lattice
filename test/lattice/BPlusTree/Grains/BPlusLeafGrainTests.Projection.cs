@@ -375,7 +375,7 @@ public partial class BPlusLeafGrainTests
         // Re-asserting the same checkpoint flushes pending in-memory work.
         await projection.SetCheckpointOffsetAsync(10);
         Assert.That(state.WriteCount, Is.EqualTo(firstWriteCount + 1));
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
     }
 
     // --- Materialiser checkpoint coalescing predicate ---
@@ -383,7 +383,7 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task SetCheckpointOffset_coalesces_under_default_options_and_does_not_persist_immediately()
     {
-        // Default MaterialiserCheckpointEntries=1000, Interval=1s.
+        // Default MaterialiserCheckpointEntries=5000, Interval=5s.
         // A single small advance hits neither threshold and must not
         // touch durable storage on the hot path.
         var state = new FakePersistentState<LeafNodeState>();

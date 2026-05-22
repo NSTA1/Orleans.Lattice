@@ -531,6 +531,68 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    private async Task<CrdtApplyResult> TraverseForCrdtApplyAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
+    {
+        if (state.State.RootIsLeaf)
+        {
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
+                ? existing
+                : ResolveLeafGrainSlow(rootLeafId);
+            return await leaf.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
+        }
+
+        var path = StackPool.Get();
+        try
+        {
+            var currentId = state.State.RootNodeId!.Value;
+
+            while (true)
+            {
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var (childId, childrenAreLeaves) = snapshot.Route(key);
+
+                if (childrenAreLeaves)
+                {
+                    path.Push(currentId);
+                    path.Push(childId);
+                    break;
+                }
+
+                path.Push(currentId);
+                currentId = childId;
+            }
+
+            var leafId = path.Pop();
+            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
+                ? existingLeaf
+                : ResolveLeafGrainSlow(leafId);
+            var result = await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
+
+            // Propagate splits up the tree.
+            var splitResult = result.Split;
+            while (splitResult is not null && path.Count > 0)
+            {
+                var parentId = path.Pop();
+                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
+                    ? existingParent
+                    : ResolveInternalGrainSlow(parentId);
+                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                InvalidateRoutingTable(parentId);
+            }
+
+            return new CrdtApplyResult
+            {
+                Version = result.Version,
+                Split = splitResult,
+            };
+        }
+        finally
+        {
+            StackPool.Return(path);
+        }
+    }
+
     private ValueTask<GrainId> TraverseToLeafAsync(string key)
     {
         // Sync fast path: every internal hop's routing snapshot is served

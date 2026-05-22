@@ -73,6 +73,28 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
 
         if (!walTrimmedPastCheckpoint && !budgetExceeded && !ageExceeded)
         {
+            // No hard trigger fired. Evaluate the SnapshotPending
+            // advisory: when the leaf's checkpoint sits within the
+            // trailing LeafSnapshotMargin fraction of the readable WAL
+            // window, signal the maintenance grain to capture a
+            // snapshot before the WAL trims past the checkpoint.
+            // Activation-time behaviour is identical to TailReplay -
+            // the advisory only steers the maintenance probe.
+            if (options.LeafSnapshotMargin > 0.0
+                && checkpointOffset >= 0
+                && head > 0
+                && head > tail
+                && checkpointOffset >= tail
+                && checkpointOffset <= head)
+            {
+                var window = (double)(head - tail);
+                var proximity = (checkpointOffset - tail) / window;
+                if (proximity <= options.LeafSnapshotMargin)
+                {
+                    return FallOffLogDecision.SnapshotPending;
+                }
+            }
+
             return FallOffLogDecision.TailReplay;
         }
 

@@ -213,7 +213,7 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+        if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
             // Migration-window shadow guard. A migrated entry on this
             // destination leaf carries the source's pre-saga snapshot
@@ -308,7 +308,7 @@ internal sealed partial class BPlusLeafGrain(
                 // which a strictly-later saga has since overwritten).
                 if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
                 {
-                    if (state.State.Entries.TryGetValue(key, out var entriesLww)
+                    if (Cache.TryGetRow(key, out var entriesLww)
                         && !entriesLww.IsTombstone
                         && !entriesLww.IsExpired(nowTicks))
                         return entriesLww.Value;
@@ -326,7 +326,7 @@ internal sealed partial class BPlusLeafGrain(
                 // started. Hiding the key on InFlight would create a
                 // split observation across leaves whose prepares
                 // arrive at different wall-clock moments.
-                if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+                if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
                     return lww.Value;
                 return null;
         }
@@ -346,7 +346,7 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+        if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
             return Task.FromResult(new VersionedValue { Value = lww.Value, Version = lww.Timestamp });
         }
@@ -368,7 +368,7 @@ internal sealed partial class BPlusLeafGrain(
                 // value.
                 if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
                 {
-                    if (state.State.Entries.TryGetValue(key, out var entriesLww)
+                    if (Cache.TryGetRow(key, out var entriesLww)
                         && !entriesLww.IsTombstone
                         && !entriesLww.IsExpired(nowTicks))
                         return new VersionedValue { Value = entriesLww.Value, Version = entriesLww.Timestamp };
@@ -380,7 +380,7 @@ internal sealed partial class BPlusLeafGrain(
             default:
                 // InFlight or Aborted - surface the pre-saga value.
                 // See GetWithPendingAsync for the rationale.
-                if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+                if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
                     return new VersionedValue { Value = lww.Value, Version = lww.Timestamp };
                 return new VersionedValue();
         }
@@ -401,7 +401,7 @@ internal sealed partial class BPlusLeafGrain(
 
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         return Task.FromResult(
-            state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks));
+            Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks));
     }
 
     private async Task<bool> ExistsWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
@@ -415,7 +415,7 @@ internal sealed partial class BPlusLeafGrain(
                 // full rationale.
                 if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
                 {
-                    return state.State.Entries.TryGetValue(key, out var entriesLww)
+                    return Cache.TryGetRow(key, out var entriesLww)
                         && !entriesLww.IsTombstone
                         && !entriesLww.IsExpired(nowTicks);
                 }
@@ -423,7 +423,7 @@ internal sealed partial class BPlusLeafGrain(
             default:
                 // InFlight or Aborted - fall through to Entries.
                 // See GetWithPendingAsync for the rationale.
-                return state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks);
+                return Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks);
         }
     }
 
@@ -435,7 +435,7 @@ internal sealed partial class BPlusLeafGrain(
         // A pending mutation makes the key invisible, so we must fall through
         // to the write path to record the caller's intent.
         if (!IsKeyPending(key)
-            && state.State.Entries.TryGetValue(key, out var existing)
+            && Cache.TryGetRow(key, out var existing)
             && !existing.IsTombstone
             && !existing.IsExpired(nowTicks))
         {
@@ -465,7 +465,7 @@ internal sealed partial class BPlusLeafGrain(
         // for CAS purposes (same as tombstones) so a fresh write with
         // expectedVersion == Zero succeeds after expiry.
         if (!pending
-            && state.State.Entries.TryGetValue(key, out var existing)
+            && Cache.TryGetRow(key, out var existing)
             && !existing.IsTombstone
             && !existing.IsExpired(nowTicks))
         {
@@ -499,7 +499,7 @@ internal sealed partial class BPlusLeafGrain(
     {
         var splitResult = await SetAsync(key, value);
         // After SetAsync, the entry has a new timestamp.
-        var newVersion = state.State.Entries[key].Timestamp;
+        var newVersion = Cache.TryGetRow(key, out var committed) ? committed.Timestamp : default;
         return new CasResult
         {
             Success = true,
@@ -561,7 +561,7 @@ internal sealed partial class BPlusLeafGrain(
                 // Entries value (or a strictly-later saga's value).
             }
 
-            if (state.State.Entries.TryGetValue(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+            if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
             {
                 // Migration-window shadow guard. See GetAsync for the
                 // full rationale: when the surfacing entry is a
@@ -603,7 +603,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<LwwEntry?> GetRawEntryAsync(string key)
     {
-        if (state.State.Entries.TryGetValue(key, out var lww))
+        if (Cache.TryGetRow(key, out var lww))
             return Task.FromResult<LwwEntry?>(new LwwEntry(key, lww));
         return Task.FromResult<LwwEntry?>(null);
     }
@@ -617,11 +617,11 @@ internal sealed partial class BPlusLeafGrain(
         // method body is synchronous, so the cost per batch is one
         // Task allocation regardless of key count - which is exactly
         // the win the saga's PrepareAsync capture loop targets.
-        var entries = state.State.Entries;
+        var cache = Cache;
         var result = new List<LwwEntry?>(keys.Count);
         foreach (var key in keys)
         {
-            if (entries.TryGetValue(key, out var lww))
+            if (cache.TryGetRow(key, out var lww))
                 result.Add(new LwwEntry(key, lww));
             else
                 result.Add(null);
@@ -751,7 +751,7 @@ internal sealed partial class BPlusLeafGrain(
             // any stale migration provenance from a prior migrated
             // entry on the same key automatically - the flag rides
             // with the value, not in a side-channel map.
-            if (state.State.Entries.Count > options.MaxLeafKeys)
+            if (Cache.Count > options.MaxLeafKeys)
             {
                 splitResult = await SplitAsync();
             }
@@ -778,7 +778,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             else
             {
-                published = state.State.Entries.TryGetValue(key, out var committed) ? committed : newEntry;
+                published = Cache.TryGetRow(key, out var committed) ? committed : newEntry;
             }
             using (LatticeCommitLogContext.BeginScope())
             {
@@ -948,7 +948,7 @@ internal sealed partial class BPlusLeafGrain(
         {
             StoreEntry(entries[i].Key, values[i]);
         }
-        if (state.State.Entries.Count > options.MaxLeafKeys)
+        if (Cache.Count > options.MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
@@ -967,7 +967,7 @@ internal sealed partial class BPlusLeafGrain(
                 for (var i = 0; i < count; i++)
                 {
                     var key = entries[i].Key;
-                    var published = state.State.Entries.TryGetValue(key, out var committed) ? committed : values[i];
+                    var published = Cache.TryGetRow(key, out var committed) ? committed : values[i];
                     await PublishSetAsync(key, published);
                 }
             }
@@ -995,7 +995,7 @@ internal sealed partial class BPlusLeafGrain(
         // tombstone into the pending bucket - committing the saga must
         // make the absence durable (the caller's pre-saga value is
         // captured separately by the saga coordinator).
-        if (!isPrepared && (!state.State.Entries.TryGetValue(key, out var existing) || existing.IsTombstone))
+        if (!isPrepared && (!Cache.TryGetRow(key, out var existing) || existing.IsTombstone))
         {
             return false;
         }
@@ -1110,7 +1110,7 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         List<string>? keysToDelete = null;
         var pastRange = false;
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
             {
@@ -1218,7 +1218,7 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var count = 0;
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (pendingKeys.TryGetValue(key, out var pending))
             {
@@ -1239,7 +1239,7 @@ internal sealed partial class BPlusLeafGrain(
         // (saga inserted a brand-new key) must also be counted.
         foreach (var (key, pending) in pendingKeys)
         {
-            if (state.State.Entries.ContainsKey(key)) continue;
+            if (Cache.ContainsKey(key)) continue;
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
@@ -1255,7 +1255,7 @@ internal sealed partial class BPlusLeafGrain(
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var live = 0;
         var tombstones = 0;
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (pendingKeys.TryGetValue(key, out var pending))
             {
@@ -1276,7 +1276,7 @@ internal sealed partial class BPlusLeafGrain(
         // Fresh committed pending keys not yet in Entries.
         foreach (var (key, pending) in pendingKeys)
         {
-            if (state.State.Entries.ContainsKey(key)) continue;
+            if (Cache.ContainsKey(key)) continue;
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
@@ -1455,7 +1455,7 @@ internal sealed partial class BPlusLeafGrain(
         var tombstonesRemoved = 0;
         var expiredRemoved = 0;
 
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (lww.IsTombstone)
             {
@@ -1653,7 +1653,7 @@ internal sealed partial class BPlusLeafGrain(
         var callerClock = sinceVersion.GetClock(ReplicaId);
         var changed = new Dictionary<string, LwwValue<byte[]>>();
 
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (lww.Timestamp > callerClock)
             {
@@ -1684,7 +1684,7 @@ internal sealed partial class BPlusLeafGrain(
         var callerClock = sinceVersion.GetClock(ReplicaId);
         var changed = new Dictionary<string, LwwValue<byte[]>>();
 
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (lww.Timestamp <= callerClock) continue;
             var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
@@ -1872,8 +1872,8 @@ internal sealed partial class BPlusLeafGrain(
         // default 512 / typical fanout 2-4 cursors = ~128-256 keys
         // per leaf per page) so it sized the initial array to the
         // expected emission, not the worst-case.
-        var keys = new List<string>(capacity: Math.Min(state.State.Entries.Count, 256));
-        foreach (var (key, lww) in state.State.Entries)
+        var keys = new List<string>(capacity: Math.Min(Cache.Count, 256));
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
                 break;
@@ -1918,7 +1918,7 @@ internal sealed partial class BPlusLeafGrain(
         // Fresh committed pending keys not yet in Entries, respecting range filters.
         foreach (var (key, pending) in pendingKeys)
         {
-            if (state.State.Entries.ContainsKey(key)) continue;
+            if (Cache.ContainsKey(key)) continue;
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0) continue;
             if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0) continue;
             if (splitInProgress && splitKey is not null && string.Compare(key, splitKey, StringComparison.Ordinal) >= 0) continue;
@@ -1947,7 +1947,7 @@ internal sealed partial class BPlusLeafGrain(
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
                 break;
@@ -1987,7 +1987,7 @@ internal sealed partial class BPlusLeafGrain(
         // Fresh committed pending keys not yet in Entries, respecting range filters.
         foreach (var (key, pending) in pendingKeys)
         {
-            if (state.State.Entries.ContainsKey(key)) continue;
+            if (Cache.ContainsKey(key)) continue;
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0) continue;
             if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0) continue;
             if (splitInProgress && splitKey is not null && string.Compare(key, splitKey, StringComparison.Ordinal) >= 0) continue;
@@ -2012,7 +2012,7 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new Dictionary<string, byte[]>();
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (pendingKeys.TryGetValue(key, out var pending))
             {
@@ -2031,7 +2031,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         foreach (var (key, pending) in pendingKeys)
         {
-            if (state.State.Entries.ContainsKey(key)) continue;
+            if (Cache.ContainsKey(key)) continue;
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
@@ -2045,8 +2045,8 @@ internal sealed partial class BPlusLeafGrain(
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
-        var result = new List<LwwEntry>(state.State.Entries.Count);
-        foreach (var (key, lww) in state.State.Entries)
+        var result = new List<LwwEntry>(Cache.Count);
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (pendingKeys.TryGetValue(key, out var pending))
             {
@@ -2065,7 +2065,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         foreach (var (key, pending) in pendingKeys)
         {
-            if (state.State.Entries.ContainsKey(key)) continue;
+            if (Cache.ContainsKey(key)) continue;
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
@@ -2083,7 +2083,7 @@ internal sealed partial class BPlusLeafGrain(
     internal Task<Dictionary<string, LwwValue<byte[]>>> GetAllRawEntriesAsync()
     {
         return Task.FromResult(
-            new Dictionary<string, LwwValue<byte[]>>(state.State.Entries));
+            new Dictionary<string, LwwValue<byte[]>>(Cache.UnderlyingRows));
     }
 
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
@@ -2136,7 +2136,7 @@ internal sealed partial class BPlusLeafGrain(
         await MergeIntoStateAsync(entries, isCrossShardMigration);
 
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > (await GetOptionsAsync()).MaxLeafKeys)
+        if (Cache.Count > (await GetOptionsAsync()).MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
@@ -2230,7 +2230,7 @@ internal sealed partial class BPlusLeafGrain(
             // (terminal-FIRST on a fresh leaf, migration-SECOND with
             // an inverted HLC).
             if (isCrossShardMigration
-                && state.State.Entries.TryGetValue(key, out var existing)
+                && Cache.TryGetRow(key, out var existing)
                 && !existing.IsMigrated)
             {
                 continue;

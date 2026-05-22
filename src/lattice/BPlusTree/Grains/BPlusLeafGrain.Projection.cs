@@ -190,6 +190,7 @@ internal sealed partial class BPlusLeafGrain
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
             await ReportCursorIfActiveAsync();
             await PublishDigestUpwardAsync();
+            await MaybeRunPeriodicSnapshotRecheckAsync();
             return;
         }
 
@@ -201,6 +202,7 @@ internal sealed partial class BPlusLeafGrain
             // Apply work may have updated ProjectionHash since the
             // previous publish; flush any pending dirt.
             await PublishDigestUpwardAsync();
+            await MaybeRunPeriodicSnapshotRecheckAsync();
         }
     }
 
@@ -299,7 +301,7 @@ internal sealed partial class BPlusLeafGrain
         // because the tombstone's timestamp dominates any earlier write
         // and is dominated by any later write.
         List<string>? toRewrite = null;
-        foreach (var (key, _) in state.State.Entries)
+        foreach (var (key, _) in Cache.EnumerateRows())
         {
             if (string.CompareOrdinal(key, startInclusive) < 0)
                 continue;
@@ -356,7 +358,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void ApplyTombstoneReap(in LatticeMutation mutation)
     {
-        if (!state.State.Entries.TryGetValue(mutation.Key, out var existing))
+        if (!Cache.TryGetRow(mutation.Key, out var existing))
             return;
         if (existing.Timestamp > mutation.Timestamp)
             return;

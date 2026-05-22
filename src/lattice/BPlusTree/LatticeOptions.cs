@@ -624,8 +624,8 @@ public class LatticeOptions
     /// </summary>
     public TimeSpan MaterialiserCheckpointInterval { get; set; } = DefaultMaterialiserCheckpointInterval;
 
-    /// <summary>Default value for <see cref="MaterialiserCheckpointInterval"/> (1 second).</summary>
-    public static readonly TimeSpan DefaultMaterialiserCheckpointInterval = TimeSpan.FromSeconds(1);
+    /// <summary>Default value for <see cref="MaterialiserCheckpointInterval"/> (5 seconds).</summary>
+    public static readonly TimeSpan DefaultMaterialiserCheckpointInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Maximum number of pending checkpoint advances (measured as the
@@ -639,8 +639,8 @@ public class LatticeOptions
     /// </summary>
     public int MaterialiserCheckpointEntries { get; set; } = DefaultMaterialiserCheckpointEntries;
 
-    /// <summary>Default value for <see cref="MaterialiserCheckpointEntries"/> (1 000).</summary>
-    public const int DefaultMaterialiserCheckpointEntries = 1_000;
+    /// <summary>Default value for <see cref="MaterialiserCheckpointEntries"/> (5 000).</summary>
+    public const int DefaultMaterialiserCheckpointEntries = 5_000;
 
     /// <summary>
     /// Maximum age beyond which a leaf grain's persisted projection
@@ -662,6 +662,55 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="LeafProjectionRetention"/> (7 days).</summary>
     public static readonly TimeSpan DefaultLeafProjectionRetention = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Proximity threshold, expressed as a fraction in <c>[0.0, 1.0]</c>,
+    /// at which a leaf's persisted projection checkpoint is considered
+    /// close enough to the WAL tail that a snapshot capture should be
+    /// proactively scheduled. The fall-off-log detector evaluates
+    /// <c>(checkpoint - tail) / (head - tail) &lt;= LeafSnapshotMargin</c>
+    /// after the three hard triggers have been ruled out; when the
+    /// inequality holds the detector returns the
+    /// <see cref="FallOffLogDecision.SnapshotPending"/> advisory and
+    /// the leaf grain itself captures a snapshot of its cache (at
+    /// activation, and periodically thereafter while it stays active -
+    /// see <see cref="LeafSnapshotReClassifyEveryNCheckpoints"/>). The
+    /// advisory is non-fatal: the leaf's own activation path treats it
+    /// as a tail replay, so reactivation behaviour is unchanged.
+    /// <para>
+    /// Set to <c>0.0</c> to disable the proactive-capture advisory
+    /// (the hard fall-off triggers continue to apply). Values closer
+    /// to <c>1.0</c> drive more aggressive capture; <c>0.30</c> (the
+    /// default) keeps capture confined to leaves whose checkpoint is
+    /// within the trailing 30% of the readable WAL window.
+    /// </para>
+    /// </summary>
+    public double LeafSnapshotMargin { get; set; } = DefaultLeafSnapshotMargin;
+
+    /// <summary>Default value for <see cref="LeafSnapshotMargin"/> (<c>0.30</c>).</summary>
+    public const double DefaultLeafSnapshotMargin = 0.30;
+
+    /// <summary>
+    /// Cadence at which an active leaf grain re-classifies its WAL
+    /// gap and, on the
+    /// <see cref="FallOffLogDecision.SnapshotPending"/> advisory,
+    /// drives a proactive snapshot capture. Expressed as the number
+    /// of successful checkpoint persists between re-classifications;
+    /// the default <c>64</c> means a leaf that has just persisted its
+    /// 64th, 128th, 192nd ... checkpoint since activation re-runs the
+    /// detector and captures a snapshot if its checkpoint is now
+    /// within <see cref="LeafSnapshotMargin"/> of the WAL tail.
+    /// <para>
+    /// Set to <c>0</c> to disable the periodic re-classification
+    /// entirely; only the once-per-activation capture (driven by the
+    /// activation-time advisory) will fire. The activation-time
+    /// capture itself is not affected by this option.
+    /// </para>
+    /// </summary>
+    public int LeafSnapshotReClassifyEveryNCheckpoints { get; set; } = DefaultLeafSnapshotReClassifyEveryNCheckpoints;
+
+    /// <summary>Default value for <see cref="LeafSnapshotReClassifyEveryNCheckpoints"/> (<c>64</c>).</summary>
+    public const int DefaultLeafSnapshotReClassifyEveryNCheckpoints = 64;
 
     /// <summary>
     /// Selects the recovery strategy a leaf grain takes when one of

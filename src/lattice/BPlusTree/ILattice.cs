@@ -67,6 +67,34 @@ public interface ILattice : IGrainWithStringKey
     Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Applies a producer-side typed CRDT delta to <paramref name="key"/>
+    /// under the declared <paramref name="mode"/>. The owning leaf
+    /// resolves the matching <see cref="CrdtShape"/> from the registered
+    /// <see cref="CrdtShapeRegistry"/>, decodes the current state, folds
+    /// the delta into the state via the shape's <c>MergeDelta</c>, and
+    /// appends a single WAL record whose <see cref="WalRecord.Delta"/>
+    /// slot carries the producer's typed delta bytes verbatim. Returns
+    /// the <see cref="HybridLogicalClock"/> stamped on the committed
+    /// entry. CRDT delta merges are convergent under any interleaving,
+    /// so this surface deliberately omits the optimistic-CAS guard that
+    /// <see cref="SetIfVersionAsync"/> carries. Hosts using OR-Map at
+    /// this tree must register the matching <c>(TKey, TValue)</c> via
+    /// <c>ISiloBuilder.AddOrMapShape</c>; closed-shape modes
+    /// (<see cref="LatticeMergeMode.OrSet"/>,
+    /// <see cref="LatticeMergeMode.PnCounter"/>,
+    /// <see cref="LatticeMergeMode.VersionVector"/>,
+    /// <see cref="LatticeMergeMode.MvRegister"/>) resolve through the
+    /// registry's global fallback without per-tree registration.
+    /// <see cref="LatticeMergeMode.LwwRegister"/> is rejected with
+    /// <see cref="ArgumentException"/>.
+    /// </summary>
+    /// <param name="key">The key to apply the delta against.</param>
+    /// <param name="mode">The CRDT merge mode declaring the delta's typed shape.</param>
+    /// <param name="deltaBytes">The Orleans-serialised typed delta DTO bytes.</param>
+    /// <param name="cancellationToken">Cancels the per-key dispatch.</param>
+    Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns the existing value when the key is
     /// already live, or <c>null</c> when the value was newly written.

@@ -51,7 +51,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.RebuildProjectionFromWalAsync();
 
-        Assert.That(state.State.Entries, Is.Empty);
+        Assert.That(grain.EntriesForTest, Is.Empty);
         // Rebuild persists the "nothing applied" sentinel (-1), NOT 0,
         // because the materialiser reads strictly past the checkpoint
         // and would otherwise skip WAL offset 0 on the next activation.
@@ -109,7 +109,7 @@ public partial class BPlusLeafGrainTests
         // (0) to the "nothing applied" sentinel (-1) so the next
         // activation replays from WAL offset 0 inclusive.
         Assert.That(async () => await grain.RebuildProjectionFromWalAsync(), Throws.Nothing);
-        Assert.That(state.State.Entries, Is.Empty);
+        Assert.That(grain.EntriesForTest, Is.Empty);
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(-1L));
     }
 }

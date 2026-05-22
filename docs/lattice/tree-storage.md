@@ -4,7 +4,9 @@ This document explains how Lattice grain state is persisted, how structural sizi
 
 For the *mechanics* of changing sizing on an existing tree, see [Tree Sizing](tree-sizing.md). For the registry entry that pins these values per tree, see [Tree Registry](tree-registry.md).
 
-> **WAL-first storage.** Every foreground commit (set / delete / range-delete / saga prepare / saga terminal / cross-migration backstop / merge / tombstone reap) is durably written to the per-shard write-ahead log *before* it touches in-memory state. The WAL append is the durability boundary; the leaf grain's persisted state row is a *projection snapshot* (the in-memory `Entries` map plus a `ProjectionCheckpointOffset` pointing into the WAL) flushed at commit-log scope boundaries, plus topology / lifecycle metadata (sibling pointers, split lifecycle, key range, parent reference, last-compaction version) that the WAL does not replay. Sizing the leaf state row therefore caps the *projection* the leaf has to read on activation - not the per-mutation commit-log row, which lives in the WAL provider's storage and is governed by `LatticeOptions.WalMaxBatchBytes` and the WAL provider's own per-row limit. See [Write-Ahead Log](wal.md) and [WAL Storage Providers](wal-storage-providers.md) for the WAL-side sizing model.
+> **WAL-first storage.** Every foreground commit (set / delete / range-delete / saga prepare / saga terminal / cross-migration backstop / merge / tombstone reap) is durably written to the per-shard write-ahead log *before* it touches in-memory state. The WAL append is the durability boundary; the leaf grain's persisted state row is a *small, fixed-shape* row carrying topology / lifecycle metadata (sibling pointers, split lifecycle, key range, parent reference, last-compaction version), a 16-byte projection-digest XOR fold (`ProjectionHash`), and the `ProjectionCheckpointOffset` pointing into the WAL. Per-key LWW entries are **not** persisted: activation rebuilds the per-activation runtime cache by replaying the WAL strictly after `ProjectionCheckpointOffset`. Sizing the leaf state row therefore caps the *topology + checkpoint + digest* surface, **not** the per-key projection - which means the leaf state row no longer grows linearly in `MaxLeafKeys`. The per-mutation commit-log row lives in the WAL provider's storage and is governed by `LatticeOptions.WalMaxBatchBytes` and the WAL provider's own per-row limit. See [Write-Ahead Log](wal.md) and [WAL Storage Providers](wal-storage-providers.md) for the WAL-side sizing model.
+>
+**Sizing tables in this document are historical.** The per-`MaxLeafKeys` storage-provider sizing tables below were written when the leaf state row carried the per-key `Entries` dictionary. After the leaf-state collapse, the persisted leaf row
 
 > **Structural sizing is registry-pinned, not option-configured.**
 
@@ -16,8 +18,11 @@ Every Lattice grain persists its state as a single serialized blob. The two grai
 |---|---|---|
 | `BPlusLeafGrain` | `LeafNodeState` | `MaxLeafKeys` entries, each a `string` key + `LwwValue<byte[]>` (value bytes, HLC timestamp, tombstone flag) + version vector + sibling pointers |
 | `BPlusInternalGrain` | `InternalNodeState` | `MaxInternalChildren` child entries, each a `string?` separator key + `GrainId` |
+| `LeafSnapshotStorageGrain` | `LeafSnapshotBlob` | Live entry count * canonical row size (one row per live key in the source leaf); written by the snapshot-on-fall-off capture path |
 
 `ShardRootGrain` state is small and constant-sized - it is not a concern.
+
+> **The snapshot grain is sized separately from the leaf state row.** It carries one `LeafSnapshotRow` per live key (`string` key + `LwwValue<byte[]>`), stamped with the captured `ProjectionCheckpointOffset` and the wall-clock tick of capture. Worst-case sizing follows the same per-entry overhead table as a pre-collapse leaf row (≈ 45-250 bytes overhead + key + value per row), but the blob is **separate** from the leaf state row - so growing it does not push the leaf row past the storage provider's per-row limit. Pick a provider that can carry multi-MB rows (Azure Blob via the blob-backed lattice storage provider, or any provider whose per-row ceiling exceeds `LiveEntries * AverageRowBytes`). See [Snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) for the capture trigger and cadence.
 
 ### Leaf node: per-entry overhead
 

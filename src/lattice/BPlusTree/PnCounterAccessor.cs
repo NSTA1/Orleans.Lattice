@@ -129,49 +129,24 @@ public readonly record struct PnCounterAccessor
         int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-
-        // Hoist the ambient idempotency-key read out of the CAS loop:
-        // the AsyncLocal-backed RequestContext.Get on every iteration is
-        // a small but visible cost on contended paths, and the key is
-        // invariant across the call.
-        var idemKey = LatticeIdempotencyContext.Current;
-
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
-
-            // Idempotency dedup guard: when an ambient
-            // LatticeIdempotencyContext scope is active, the foreground
-            // write below stamps versioned.Version with the supplied
-            // key's HLC. A retry of the same logical operation observes
-            // that HLC on the first GetWithVersionAsync read - which
-            // means the prior attempt's per-replica advance already
-            // landed and the retry must drop rather than advance the
-            // counter a second time. Without the scope the check is a
-            // no-op (versioned.Version is whatever the previous
-            // unrelated write stamped) and the counter advances on
-            // every call - which is the negative-control behaviour.
-            if (idemKey is { } key
-                && versioned.Version == key.Timestamp
-                && versioned.Value is not null)
-            {
-                return;
-            }
-
-            var current = Decode(versioned.Value);
-            var delta = mutate(current);
-            var bytes = JsonLatticeSerializer<PnCounter>.Default.Serialize(current);
-            var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-            using (LatticeDeltaContext.With(deltaBytes))
-            {
-                var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-                if (ok) return;
-            }
-        }
-        throw new InvalidOperationException(
-            $"PnCounter CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
-            "Increase maxAttempts or reduce contention.");
+        // Producer-side delta apply: replaced the read-modify-write
+        // CAS loop with a single read (to compute the next per-replica
+        // counter the delta carries) plus one ApplyCrdtDeltaAsync
+        // call. The leaf grain is the single writer authority per key,
+        // so CAS retries are no longer needed for convergence. The
+        // LatticeIdempotencyContext dedup guard now lives in
+        // LatticeGrain.ApplyCrdtDeltaAsync (it routes through
+        // RunMutationAsync when an idempotency scope is active), so
+        // the accessor no longer needs to read the ambient key. The
+        // maxAttempts parameter is preserved on the public surface
+        // for binary compatibility but no longer drives an inner
+        // retry loop.
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.PnCounter, deltaBytes, cancellationToken).ConfigureAwait(false);
     }
 
     private static PnCounter Decode(byte[]? bytes) =>

@@ -252,20 +252,23 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task ProjectionHash_lazily_backfills_on_legacy_state()
     {
-        // A grain activated against state that pre-dates the new persisted
+        // A grain activated against state that pre-dates the persisted
         // hash slot must produce the same digest as a freshly-written
         // grain. The lazy backfill happens on first mutation or first
-        // digest read.
+        // digest read. The per-key data lives in the
+        // per-activation cache (no longer persisted), so we seed the
+        // cache directly via the EntriesForTest backdoor rather than
+        // through the removed LeafNodeState.Entries slot.
         var legacyState = new FakePersistentState<LeafNodeState>();
-        legacyState.State.Entries["a"] = new LwwValue<byte[]>
+        legacyState.State.ProjectionHash = null; // simulates pre-slot state
+
+        var grain = CreateGrain(legacyState);
+        grain.EntriesForTest["a"] = new LwwValue<byte[]>
         {
             Value = Encoding.UTF8.GetBytes("legacy"),
             Timestamp = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 },
             IsTombstone = false,
         };
-        legacyState.State.ProjectionHash = null; // simulates pre-slot state
-
-        var grain = CreateGrain(legacyState);
 
         var digest = await grain.GetProjectionDigestAsync();
 

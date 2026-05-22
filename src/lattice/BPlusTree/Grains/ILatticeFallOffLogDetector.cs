@@ -43,6 +43,18 @@ internal enum FallOffLogDecision
     /// requires an operator-driven rebuild.
     /// </summary>
     Fail = 3,
+
+    /// <summary>
+    /// Non-fatal advisory: no hard trigger fired, but the leaf's
+    /// persisted checkpoint is within
+    /// <see cref="LatticeOptions.LeafSnapshotMargin"/> of the WAL tail.
+    /// The leaf treats this exactly as <see cref="TailReplay"/> at
+    /// activation time (no behaviour change); the maintenance grain
+    /// interprets the advisory as "schedule a snapshot capture" so
+    /// the leaf-cache projection is durably copied into the snapshot
+    /// storage grain before the WAL trims past the checkpoint.
+    /// </summary>
+    SnapshotPending = 4,
 }
 
 /// <summary>

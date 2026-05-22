@@ -34,7 +34,7 @@ public partial class BPlusLeafGrainTests
             await grain.SetAsync("k", [1]);
         }
 
-        Assert.That(state.State.Entries["k"].OriginClusterId, Is.EqualTo("cluster-east"));
+        Assert.That(grain.EntriesForTest["k"].OriginClusterId, Is.EqualTo("cluster-east"));
     }
 
     [Test]
@@ -45,7 +45,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("k", [1]);
 
-        Assert.That(state.State.Entries["k"].OriginClusterId, Is.Null);
+        Assert.That(grain.EntriesForTest["k"].OriginClusterId, Is.Null);
     }
 
     [Test]
@@ -60,7 +60,7 @@ public partial class BPlusLeafGrainTests
             await grain.SetAsync("k", [1], expiresAt);
         }
 
-        var entry = state.State.Entries["k"];
+        var entry = grain.EntriesForTest["k"];
         Assert.That(entry.OriginClusterId, Is.EqualTo("cluster-west"));
         Assert.That(entry.ExpiresAtTicks, Is.EqualTo(expiresAt));
     }
@@ -77,7 +77,7 @@ public partial class BPlusLeafGrainTests
             await grain.DeleteAsync("k");
         }
 
-        var tomb = state.State.Entries["k"];
+        var tomb = grain.EntriesForTest["k"];
         Assert.That(tomb.IsTombstone, Is.True);
         Assert.That(tomb.OriginClusterId, Is.EqualTo("peer-a"));
     }
@@ -98,8 +98,8 @@ public partial class BPlusLeafGrainTests
 
         foreach (var k in new[] { "a1", "a2", "a3" })
         {
-            Assert.That(state.State.Entries[k].IsTombstone, Is.True, k);
-            Assert.That(state.State.Entries[k].OriginClusterId, Is.EqualTo("peer-b"), k);
+            Assert.That(grain.EntriesForTest[k].IsTombstone, Is.True, k);
+            Assert.That(grain.EntriesForTest[k].OriginClusterId, Is.EqualTo("peer-b"), k);
         }
     }
 

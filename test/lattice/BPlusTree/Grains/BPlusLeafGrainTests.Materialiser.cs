@@ -30,6 +30,7 @@ public partial class BPlusLeafGrainTests
         string? treeId = MaterialiserTreeId,
         long persistedCheckpoint = 0,
         Action<LeafNodeState>? seedState = null,
+        Action<SortedDictionary<string, LwwValue<byte[]>>>? seedEntries = null,
         ILatticeFallOffLogDetector? detector = null,
         ILeafCursorReporter? reporter = null)
     {
@@ -66,6 +67,7 @@ public partial class BPlusLeafGrainTests
             shardCount: 1,
             factory: grainFactory);
         var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
+        seedEntries?.Invoke(grain.EntriesForTest);
         return (grain, state, coordinator, reporter);
     }
 
@@ -160,8 +162,19 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Materialiser_no_op_when_head_at_or_below_checkpoint()
     {
+        // Seed the cache so the activation-time coherence override
+        // does NOT fire (the override only triggers when the cache
+        // is empty AND no snapshot rehydrated, on the post-restart
+        // path). With a populated cache, the persisted checkpoint
+        // is by construction coherent with the cache and replay
+        // must short-circuit when head <= checkpoint.
         var coord = BuildCoordinator(head: 7);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(coord, persistedCheckpoint: 7);
+        grain.EntriesForTest["seed"] = new LwwValue<byte[]>
+        {
+            Value = new byte[] { 1 },
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1 },
+        };
 
         await ActivateAsync(grain);
 
@@ -188,7 +201,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
         var read = await grain.GetAsync("k1");
         Assert.That(read, Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString(read!), Is.EqualTo("v1"));
@@ -208,8 +221,8 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
-        var entryValue = state.State.Entries["k1"];
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
+        var entryValue = grain.EntriesForTest["k1"];
         Assert.That(entryValue.IsTombstone, Is.True);
         Assert.That(await grain.GetAsync("k1"), Is.Null);
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
@@ -224,7 +237,7 @@ public partial class BPlusLeafGrainTests
         var coord = BuildCoordinator(head: 1, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
-            seedState: s => s.Entries["k1"] = new LwwValue<byte[]>
+            seedEntries: e => e["k1"] = new LwwValue<byte[]>
             {
                 Value = Encoding.UTF8.GetBytes("stale"),
                 Timestamp = new HybridLogicalClock { WallClockTicks = 100 },
@@ -248,11 +261,11 @@ public partial class BPlusLeafGrainTests
         var coord = BuildCoordinator(head: 1, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
-            seedState: s =>
+            seedEntries: e =>
             {
                 foreach (var k in new[] { "k1", "k2", "k3", "k4" })
                 {
-                    s.Entries[k] = new LwwValue<byte[]>
+                    e[k] = new LwwValue<byte[]>
                     {
                         Value = Encoding.UTF8.GetBytes(k),
                         Timestamp = new HybridLogicalClock { WallClockTicks = 100 },
@@ -413,13 +426,13 @@ public partial class BPlusLeafGrainTests
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             persistedCheckpoint: 1,
-            seedState: s =>
+            seedEntries: e =>
             {
                 // k1 already persisted -> seed a value newer than entry1
                 // so a redundant replay would be detectable. The
                 // materialiser must NOT replay entry1, so the seeded
                 // value survives.
-                s.Entries["k1"] = new LwwValue<byte[]>
+                e["k1"] = new LwwValue<byte[]>
                 {
                     Value = Encoding.UTF8.GetBytes("seeded"),
                     Timestamp = new HybridLogicalClock { WallClockTicks = 1_000 },
@@ -499,11 +512,11 @@ public partial class BPlusLeafGrainTests
 
         // Spot-check first / boundary / last to confirm every slice was
         // applied (not just the first).
-        Assert.That(state.State.Entries.ContainsKey("k0000"), Is.True);
-        Assert.That(state.State.Entries.ContainsKey("k0255"), Is.True); // end of slice 1
-        Assert.That(state.State.Entries.ContainsKey("k0256"), Is.True); // start of slice 2
-        Assert.That(state.State.Entries.ContainsKey("k0511"), Is.True); // end of slice 2
-        Assert.That(state.State.Entries.ContainsKey("k0599"), Is.True); // last entry
+        Assert.That(grain.EntriesForTest.ContainsKey("k0000"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k0255"), Is.True); // end of slice 1
+        Assert.That(grain.EntriesForTest.ContainsKey("k0256"), Is.True); // start of slice 2
+        Assert.That(grain.EntriesForTest.ContainsKey("k0511"), Is.True); // end of slice 2
+        Assert.That(grain.EntriesForTest.ContainsKey("k0599"), Is.True); // last entry
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(totalEntries));
     }
 
@@ -660,7 +673,7 @@ public partial class BPlusLeafGrainTests
         await detector.Received(1).ClassifyAsync(
             MaterialiserTreeId,
             0,
-            0L,
+            -1L,
             Arg.Any<TimeSpan>(),
             Arg.Any<ResolvedLatticeOptions>(),
             Arg.Any<CancellationToken>());
@@ -931,7 +944,7 @@ public partial class BPlusLeafGrainTests
         await ActivateAsync(grain);
 
         // Filtered out: the entry never lands in this leaf's projection.
-        Assert.That(state.State.Entries.ContainsKey("k-foreign"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-foreign"), Is.False);
         Assert.That(await grain.GetAsync("k-foreign"), Is.Null);
         // Checkpoint still advances - the filter is per-entry, not a slice abort.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
@@ -950,7 +963,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-mine"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-mine"), Is.True);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k-mine"))!), Is.EqualTo("v"));
     }
 
@@ -977,7 +990,7 @@ public partial class BPlusLeafGrainTests
         await ActivateAsync(grain);
 
         // The owned Set landed; the foreign Delete was filtered.
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
         Assert.That(await grain.GetAsync("k1"), Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k1"))!), Is.EqualTo("alive"));
     }
@@ -1001,7 +1014,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k"))!), Is.EqualTo("v"));
     }
 
@@ -1029,10 +1042,10 @@ public partial class BPlusLeafGrainTests
         var coord = BuildCoordinator(head: 1, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
-            seedState: s =>
+            seedState: s => s.ShardIndex = 1,
+            seedEntries: e =>
             {
-                s.ShardIndex = 1;
-                s.Entries["k1"] = new LwwValue<byte[]>
+                e["k1"] = new LwwValue<byte[]>
                 {
                     Value = Encoding.UTF8.GetBytes("v1"),
                     Timestamp = new HybridLogicalClock { WallClockTicks = 100 },
@@ -1131,7 +1144,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("z-foreign"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("z-foreign"), Is.False);
         Assert.That(await grain.GetAsync("z-foreign"), Is.Null);
         // Checkpoint still advances - the filter is per-entry, not a slice abort.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
@@ -1161,7 +1174,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-mine"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-mine"), Is.True);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k-mine"))!), Is.EqualTo("v"));
     }
 
@@ -1187,7 +1200,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-legacy"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-legacy"), Is.True);
     }
 
     [Test]
@@ -1223,6 +1236,43 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-inherited"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-inherited"), Is.True);
+    }
+
+    [Test]
+    public async Task Materialiser_replay_projection_hash_matches_full_walk_of_rebuilt_cache()
+    {
+        // Digest-equivalence gate for the leaf-state collapse: the cache
+        // backing dictionary is rebuilt from WAL on activation (no per-key
+        // persisted state). The incrementally-maintained ProjectionHash
+        // (XOR fold over per-entry XxHash128 contributions, updated by
+        // StoreEntry/RemoveEntry) must equal a from-scratch full walk of
+        // the rebuilt cache after WAL replay. Divergence here would mean
+        // the cache cutover broke the digest fold and cross-replica
+        // digest comparison would silently disagree.
+        var k1Mut = BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 1);
+        var k2Mut = BuildCommittedSet("k2", Encoding.UTF8.GetBytes("v2"), hlcPhysical: 2);
+        var k3Mut = BuildCommittedSet("k3", Encoding.UTF8.GetBytes("v3"), hlcPhysical: 3);
+        var coord = BuildCoordinator(
+            head: 3,
+            new CommitLogSliceEntry(1, k1Mut),
+            new CommitLogSliceEntry(2, k2Mut),
+            new CommitLogSliceEntry(3, k3Mut));
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+
+        await ActivateAsync(grain);
+
+        Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(new[] { "k1", "k2", "k3" }),
+            "WAL replay must rebuild the cache to contain every committed Set in the slice");
+        Assert.That(state.State.ProjectionHash, Is.Not.Null,
+            "WAL replay must have advanced the incremental ProjectionHash");
+
+        // The incremental hash maintained by StoreEntry must equal the
+        // full-walk hash computed from scratch over the rebuilt cache.
+        // ComputeFullProjectionHashFromState is the regression-oracle
+        // for the incremental fold.
+        var fullWalkHash = grain.ComputeFullProjectionHashFromState();
+        Assert.That(state.State.ProjectionHash, Is.EqualTo(fullWalkHash),
+            "incrementally-maintained ProjectionHash must equal a from-scratch full walk after WAL replay");
     }
 }

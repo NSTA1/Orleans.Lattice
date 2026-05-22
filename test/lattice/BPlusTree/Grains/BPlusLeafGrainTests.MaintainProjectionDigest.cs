@@ -77,10 +77,10 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(await grain.GetAsync("k1"), Is.Not.Null);
         Assert.That(await grain.GetAsync("k2"), Is.Not.Null);
-        Assert.That(state.State.Entries.Count, Is.EqualTo(2));
+        Assert.That(grain.EntriesForTest.Count, Is.EqualTo(2));
 
         await grain.DeleteAsync("k1");
-        Assert.That(state.State.Entries["k1"].IsTombstone, Is.True);
+        Assert.That(grain.EntriesForTest["k1"].IsTombstone, Is.True);
     }
 
     [Test]

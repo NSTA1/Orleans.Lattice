@@ -36,6 +36,8 @@ internal static class TypeAliases
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";
     internal const string LeafNodeState = "ol.lns";
+    internal const string LeafSnapshotBlob = "ol.lsb";
+    internal const string LeafSnapshotRow = "ol.lsr";
     internal const string ShardRootState = "ol.srs";
     internal const string DirtyLeavesSnapshot = "ol.dls";
     internal const string PendingBulkGraft = "ol.pbg";
@@ -58,6 +60,7 @@ internal static class TypeAliases
     internal const string GetOrSetResult = "ol.gsr";
     internal const string EntriesPage = "ol.ep";
     internal const string CasResult = "ol.cas";
+    internal const string CrdtApplyResult = "ol.cap";
     internal const string Versioned = "ol.ver";
     internal const string VersionedValue = "ol.vvl";
     internal const string ShardHotness = "ol.sh";
@@ -174,6 +177,7 @@ internal static class TypeAliases
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
     internal const string ITxRegistryGrain = "ol.gxr";
+    internal const string ILeafSnapshotStorageGrain = "ol.gsx";
 
     // Replication apply DTO (batch path)
     internal const string ApplyMergeItem = "ol.ami";

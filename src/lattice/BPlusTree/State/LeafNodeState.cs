@@ -11,8 +11,13 @@ namespace Orleans.Lattice.BPlusTree.State;
 [Alias(TypeAliases.LeafNodeState)]
 internal sealed class LeafNodeState
 {
-    /// <summary>Sorted entries: key → LWW-wrapped value.</summary>
-    [Id(0)] public SortedDictionary<string, LwwValue<byte[]>> Entries { get; set; } = new(StringComparer.Ordinal);
+    // [Id(0)] previously held a SortedDictionary<string, LwwValue<byte[]>>
+    // Entries per-key projection. The persisted leaf row was collapsed:
+    // per-key data now lives in a per-activation in-memory cache
+    // (LeafEntryCache) rehydrated from the WAL on every activation, and
+    // ProjectionCheckpointOffset gates the replay scope. The Id(0) slot is
+    // reserved - never reuse it, because doing so would silently shadow
+    // pre-step-6 persisted state during a rolling upgrade.
 
     /// <summary>Grain identity of the right sibling leaf (for range scans), or <c>null</c>.</summary>
     [Id(1)] public GrainId? NextSibling { get; set; }
@@ -63,20 +68,23 @@ internal sealed class LeafNodeState
     /// projection so a re-activation can resume replay from
     /// <c>ProjectionCheckpointOffset + 1</c> rather than scanning the
     /// full leaf state. Defaults to <c>0</c> on freshly persisted
-    /// state. The materialiser's activation gate
-    /// (<c>head &lt;= checkpoint</c>) short-circuits when the WAL is
-    /// empty (<c>head == -1</c>), so the default-0 value never causes
-    /// the activation path to skip offset 0 on a leaf whose
-    /// in-memory <see cref="Entries"/> already covers it.
+    /// state to preserve the published empty-tree digest shape
+    /// (<c>digest.CheckpointOffset == 0</c> for an empty leaf).
     /// <para>
     /// The "nothing applied" sentinel is <c>-1</c>, matching
     /// <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>'s
-    /// empty-WAL convention. The operator-driven projection rebuild
-    /// path (<c>RebuildLeafProjectionAsync</c>) sets this slot to
-    /// <c>-1</c> after clearing <see cref="Entries"/> so the next
-    /// activation re-reads the WAL from offset <c>0</c> inclusive;
-    /// setting <c>0</c> would silently skip offset 0 because the
-    /// materialiser reads strictly past the checkpoint.
+    /// empty-WAL convention. The per-key entry cache is per-activation
+    /// only, so a freshly activated leaf
+    /// whose persisted checkpoint says "0" but whose cache is empty
+    /// would silently skip offset 0 in the WAL on restart. The
+    /// activation path
+    /// (<see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.<c>OnActivateAsync</c>)
+    /// therefore resets the persisted checkpoint to <c>-1</c>
+    /// whenever the cache starts empty and no snapshot rehydrate
+    /// occurred, ensuring the replay below covers the full readable
+    /// window. The operator-driven projection rebuild path
+    /// (<c>RebuildLeafProjectionAsync</c>) likewise sets this slot
+    /// to <c>-1</c> after clearing the entry cache.
     /// </para>
     /// </summary>
     [Id(11)] public long ProjectionCheckpointOffset { get; set; }
@@ -84,12 +92,12 @@ internal sealed class LeafNodeState
     /// <summary>
     /// Incremental XOR-fold projection fingerprint: a 16-byte buffer that holds
     /// the running XxHash128 XOR over per-key contributions of every entry in
-    /// <see cref="Entries"/>. Each entry contributes a deterministic 16-byte
+    /// the leaf's entry cache. Each entry contributes a deterministic 16-byte
     /// XxHash128 hash (over key, HLC, tombstone flag, expiry, origin, vector
     /// clock, and value); insertions XOR the contribution in, deletions XOR it
     /// out, and updates XOR out the old contribution and XOR in the new. The
     /// XOR fold is commutative and self-inverse, so the field is mathematically
-    /// identical to a fresh walk over <see cref="Entries"/> at every commit
+    /// identical to a fresh walk over the entry cache at every commit
     /// boundary, regardless of the order writes arrived in.
     /// <para>
     /// The public <c>GetProjectionDigestAsync</c> surface chains this field
@@ -207,19 +215,4 @@ internal sealed class LeafNodeState
     /// behind the public <see cref="LeafProjectionDigest"/> surface).
     /// </summary>
     [Id(18)] public GrainId? ParentId { get; set; }
-
-    /// <summary>Returns the number of live (non-tombstoned) entries.</summary>
-    public int LiveCount
-    {
-        get
-        {
-            int count = 0;
-            foreach (var e in Entries)
-            {
-                if (!e.Value.IsTombstone)
-                    count++;
-            }
-            return count;
-        }
-    }
 }

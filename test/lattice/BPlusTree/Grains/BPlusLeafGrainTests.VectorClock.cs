@@ -39,7 +39,7 @@ public partial class BPlusLeafGrainTests
             await grain.SetAsync("k", [1]);
         }
 
-        Assert.That(state.State.Entries["k"].VectorClock, Is.SameAs(vc));
+        Assert.That(grain.EntriesForTest["k"].VectorClock, Is.SameAs(vc));
     }
 
     [Test]
@@ -50,7 +50,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("k", [1]);
 
-        Assert.That(state.State.Entries["k"].VectorClock, Is.Null);
+        Assert.That(grain.EntriesForTest["k"].VectorClock, Is.Null);
     }
 
     [Test]
@@ -66,7 +66,7 @@ public partial class BPlusLeafGrainTests
             await grain.SetAsync("k", [1], expiresAt);
         }
 
-        var entry = state.State.Entries["k"];
+        var entry = grain.EntriesForTest["k"];
         Assert.That(entry.VectorClock, Is.SameAs(vc));
         Assert.That(entry.ExpiresAtTicks, Is.EqualTo(expiresAt));
     }
@@ -84,7 +84,7 @@ public partial class BPlusLeafGrainTests
             await grain.DeleteAsync("k");
         }
 
-        var tomb = state.State.Entries["k"];
+        var tomb = grain.EntriesForTest["k"];
         Assert.That(tomb.IsTombstone, Is.True);
         Assert.That(tomb.VectorClock, Is.SameAs(vc));
     }
@@ -106,8 +106,8 @@ public partial class BPlusLeafGrainTests
 
         foreach (var k in new[] { "a1", "a2", "a3" })
         {
-            Assert.That(state.State.Entries[k].IsTombstone, Is.True, k);
-            Assert.That(state.State.Entries[k].VectorClock, Is.SameAs(vc), k);
+            Assert.That(grain.EntriesForTest[k].IsTombstone, Is.True, k);
+            Assert.That(grain.EntriesForTest[k].VectorClock, Is.SameAs(vc), k);
         }
     }
 
@@ -167,7 +167,7 @@ public partial class BPlusLeafGrainTests
             ["k"] = incoming,
         });
 
-        var stored = state.State.Entries["k"];
+        var stored = grain.EntriesForTest["k"];
         Assert.That(stored.VectorClock, Is.SameAs(vc),
             "merge must not strip or re-capture the incoming VectorClock");
         Assert.That(stored.Value, Is.EqualTo(new byte[] { 42 }));
@@ -190,7 +190,7 @@ public partial class BPlusLeafGrainTests
             ["k"] = incoming,
         });
 
-        var stored = state.State.Entries["k"];
+        var stored = grain.EntriesForTest["k"];
         Assert.That(stored.VectorClock, Is.SameAs(vc));
         Assert.That(stored.Value, Is.EqualTo(new byte[] { 7, 8 }));
     }

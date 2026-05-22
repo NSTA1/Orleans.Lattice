@@ -108,7 +108,7 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
 
         await grain.SetAsync("k", [99]);
-        var entriesTimestamp = state.State.Entries["k"].Timestamp;
+        var entriesTimestamp = grain.EntriesForTest["k"].Timestamp;
 
         await MarkRecentlyTerminalAsync(grain, txid);
         await PreparedSetAsync(grain, txid, "k", [11]);
