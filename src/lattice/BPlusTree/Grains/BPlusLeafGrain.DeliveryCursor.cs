@@ -118,9 +118,9 @@ internal sealed partial class BPlusLeafGrain
         if (sinceCursor.Epoch != current.Epoch)
         {
             var snapshot = new Dictionary<string, LwwValue<byte[]>>(
-                state.State.Entries.Count,
+                Cache.Count,
                 StringComparer.Ordinal);
-            foreach (var (key, lww) in state.State.Entries)
+            foreach (var (key, lww) in Cache.EnumerateRows())
             {
                 snapshot[key] = lww;
             }
@@ -172,7 +172,7 @@ internal sealed partial class BPlusLeafGrain
                 // from Entries; the cache's existing tombstone-merge
                 // path is fed by the foreground tombstone-write, not
                 // by the post-remove sequence bump.
-                if (state.State.Entries.TryGetValue(key, out var lww))
+                if (Cache.TryGetRow(key, out var lww))
                 {
                     changed[key] = lww;
                 }

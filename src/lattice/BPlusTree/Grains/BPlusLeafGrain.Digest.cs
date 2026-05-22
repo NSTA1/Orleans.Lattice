@@ -79,23 +79,23 @@ internal sealed partial class BPlusLeafGrain
             // both the per-entry XOR fold and the upward ChildDigestSnapshot
             // publish. The persisted ProjectionHash is left untouched so
             // it remains a valid prefix of a previous-enabled state.
-            if (state.State.Entries.TryGetValue(key, out var existingNoDigest))
+            if (Cache.TryGetRow(key, out var existingNoDigest))
             {
                 var mergedNoDigest = LwwValue<byte[]>.Merge(existingNoDigest, incoming);
-                state.State.Entries[key] = mergedNoDigest;
+                Cache.StoreRow(key, mergedNoDigest);
                 BumpDeliverySequenceFor(key);
                 return mergedNoDigest;
             }
-            state.State.Entries[key] = incoming;
+            Cache.StoreRow(key, incoming);
             BumpDeliverySequenceFor(key);
             return incoming;
         }
 
         EnsureProjectionHashInitialized();
-        if (state.State.Entries.TryGetValue(key, out var existing))
+        if (Cache.TryGetRow(key, out var existing))
         {
             var merged = LwwValue<byte[]>.Merge(existing, incoming);
-            state.State.Entries[key] = merged;
+            Cache.StoreRow(key, merged);
             // No-op merges (incoming dominated by existing) leave the
             // entry's contribution bytes unchanged; the equality check
             // inside UpdateProjectionHash skips both XORs and avoids
@@ -108,7 +108,7 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
-            state.State.Entries[key] = incoming;
+            Cache.StoreRow(key, incoming);
             UpdateProjectionHash(key, oldValue: null, incoming);
             BumpDeliverySequenceFor(key);
             return incoming;
@@ -123,7 +123,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool RemoveEntry(string key)
     {
-        if (!state.State.Entries.TryGetValue(key, out var existing))
+        if (!Cache.TryGetRow(key, out var existing))
         {
             return false;
         }
@@ -131,12 +131,12 @@ internal sealed partial class BPlusLeafGrain
         {
             // Maintenance disabled - drop the entry and skip both the
             // XOR-out of its contribution and the upward publish.
-            state.State.Entries.Remove(key);
+            Cache.Remove(key);
             BumpDeliverySequenceFor(key);
             return true;
         }
         EnsureProjectionHashInitialized();
-        state.State.Entries.Remove(key);
+        Cache.Remove(key);
         UpdateProjectionHash(key, existing, newValue: null);
         BumpDeliverySequenceFor(key);
         return true;
@@ -179,7 +179,7 @@ internal sealed partial class BPlusLeafGrain
         // applied-prefix positions report distinct digests.
         hasher.Append(state.State.ProjectionHash!);
 
-        var entryCount = (long)state.State.Entries.Count;
+        var entryCount = (long)Cache.Count;
         var checkpointOffset = state.State.ProjectionCheckpointOffset;
 
         BinaryPrimitives.WriteInt64LittleEndian(scratch, entryCount);
@@ -282,7 +282,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var hash = new byte[ProjectionHashSize];
         Span<byte> contribution = stackalloc byte[ProjectionHashSize];
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             ComputeEntryContribution(key, in lww, contribution);
             for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];

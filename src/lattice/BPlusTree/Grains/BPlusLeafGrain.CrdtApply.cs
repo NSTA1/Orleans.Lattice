@@ -75,7 +75,7 @@ internal sealed partial class BPlusLeafGrain
         // GetAsync continues to return the canonical post-merge bytes.
         var typedDelta = shape.DeserializeDelta(deltaBytes);
         object typedState;
-        if (state.State.Entries.TryGetValue(key, out var existing)
+        if (Cache.TryGetRow(key, out var existing)
             && !existing.IsTombstone
             && existing.Value is { Length: > 0 } existingBytes)
         {
@@ -125,7 +125,7 @@ internal sealed partial class BPlusLeafGrain
         var options = await GetOptionsAsync();
         StoreEntry(key, postMergeEntry);
         SplitResult? splitResult = null;
-        if (state.State.Entries.Count > options.MaxLeafKeys)
+        if (Cache.Count > options.MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
@@ -140,7 +140,7 @@ internal sealed partial class BPlusLeafGrain
         // LatticeDeltaContext scope).
         if (mutationObservers.HasObservers)
         {
-            var published = state.State.Entries.TryGetValue(key, out var committed) ? committed : postMergeEntry;
+            var published = Cache.TryGetRow(key, out var committed) ? committed : postMergeEntry;
             using (LatticeCommitLogContext.BeginScope())
             using (LatticeDeltaContext.With(deltaBytes))
             {

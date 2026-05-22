@@ -88,7 +88,7 @@ internal sealed partial class BPlusLeafGrain
             // cannot retroactively mutate the bytes the caller has
             // captured.
             Hash = (byte[])state.State.ProjectionHash!.Clone(),
-            EntryCount = state.State.Entries.Count,
+            EntryCount = Cache.Count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
         });
     }
@@ -185,7 +185,7 @@ internal sealed partial class BPlusLeafGrain
             // state.State.ProjectionHash does not retroactively mutate
             // the bytes the parent's table has captured.
             Hash = (byte[])state.State.ProjectionHash!.Clone(),
-            EntryCount = state.State.Entries.Count,
+            EntryCount = Cache.Count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
         };
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);

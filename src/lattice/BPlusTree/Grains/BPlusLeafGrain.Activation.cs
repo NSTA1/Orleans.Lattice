@@ -198,7 +198,7 @@ internal sealed partial class BPlusLeafGrain
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG replay-enter] gid={context.GrainId} treeId={treeId} shardIndex={state.State.ShardIndex} " +
             $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +
-            $"checkpoint={checkpoint} entryCount={state.State.Entries.Count}");
+            $"checkpoint={checkpoint} entryCount={Cache.Count}");
 #endif
 
         // Fall-off-log gate: classify the gap before reading any

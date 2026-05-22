@@ -34,7 +34,7 @@ internal sealed partial class BPlusLeafGrain
 
         var liveCount = 0;
         var tombstoneCount = 0;
-        foreach (var (_, lww) in state.State.Entries)
+        foreach (var (_, lww) in Cache.EnumerateRows())
         {
             if (lww.IsTombstone) tombstoneCount++;
             else liveCount++;
@@ -92,7 +92,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var liveCount = 0;
         var tombstoneCount = 0;
-        foreach (var (_, lww) in state.State.Entries)
+        foreach (var (_, lww) in Cache.EnumerateRows())
         {
             if (lww.IsTombstone) tombstoneCount++;
             else liveCount++;

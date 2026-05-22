@@ -310,7 +310,7 @@ internal sealed partial class BPlusLeafGrain
             DiagSink.Write($"[DIAG commit] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} bucket=[{keys}] clock={state.State.Clock}");
             foreach (var kvp in bucket)
             {
-                var hasExisting = state.State.Entries.TryGetValue(kvp.Key, out var existing);
+                var hasExisting = Cache.TryGetRow(kvp.Key, out var existing);
                 DiagSink.Write($"[DIAG commit-key] silo={DiagSiloTag} gid={context.GrainId} tx={transactionId} key={kvp.Key} " +
                     $"prepared.Hlc={kvp.Value.Timestamp} " +
                     $"existing={(hasExisting ? $"hlc={existing.Timestamp},isMig={existing.IsMigrated}" : "(none)")}");
@@ -383,9 +383,9 @@ internal sealed partial class BPlusLeafGrain
             var baseTerminalStamp = state.State.Clock;
             foreach (var kvp in bucket)
             {
-                if (state.State.Entries.TryGetValue(kvp.Key, out var preExisting))
+                if (Cache.TryGetRow(kvp.Key, out var preExisting))
                 {
-                    // Mirror the orphan-drain skip condition below: a key
+                    // Mirror the orphan-drain skip condition below:
                     // whose existing HLC dominates the prepared HLC will
                     // NOT be written, so its existing.Timestamp must not
                     // pull terminalStamp past where we need it for the
@@ -500,7 +500,7 @@ internal sealed partial class BPlusLeafGrain
                 // strictly-later sibling-saga drain (IsMigrated=false),
                 // the drain is correctly skipped. See LwwValue.IsMigrated
                 // for the discriminator's full semantics.
-                if (state.State.Entries.TryGetValue(kvp.Key, out var existing)
+                if (Cache.TryGetRow(kvp.Key, out var existing)
                     && existing.Timestamp.CompareTo(kvp.Value.Timestamp) > 0
                     && !existing.IsMigrated)
                 {
@@ -1108,7 +1108,7 @@ internal sealed partial class BPlusLeafGrain
             var baseClock = state.State.Clock;
             foreach (var kvp in missingKeys)
             {
-                if (state.State.Entries.TryGetValue(kvp.Key, out var preExisting)
+                if (Cache.TryGetRow(kvp.Key, out var preExisting)
                     && preExisting.Timestamp.CompareTo(baseClock) > 0)
                 {
                     baseClock = preExisting.Timestamp;

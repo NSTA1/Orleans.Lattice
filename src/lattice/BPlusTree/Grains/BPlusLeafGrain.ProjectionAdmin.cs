@@ -34,7 +34,7 @@ internal sealed partial class BPlusLeafGrain
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG rebuild-enter] gid={context.GrainId} treeId={state.State.TreeId} shardIndex={state.State.ShardIndex} " +
             $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +
-            $"entryCount={state.State.Entries.Count} entries=[{string.Join(',', state.State.Entries.Keys)}] " +
+            $"entryCount={Cache.Count} entries=[{string.Join(',', Cache.Keys)}] " +
             $"checkpoint={state.State.ProjectionCheckpointOffset} clock={state.State.Clock} " +
             $"movedSlots=[{(state.State.MovedAwaySlots is null ? "" : string.Join(',', state.State.MovedAwaySlots))}] " +
             $"movedVsc={state.State.MovedAwayVirtualShardCount?.ToString() ?? "(none)"}");
@@ -50,7 +50,7 @@ internal sealed partial class BPlusLeafGrain
         // monotonically from replayed entries, and a fresh-from-zero
         // clock would silently re-accept stale entries that the
         // pre-rebuild leaf had already merged past.
-        state.State.Entries.Clear();
+        Cache.Clear();
         state.State.ProjectionHash = null;
 
         // ProjectionCheckpointOffset uses "applied through offset N"
@@ -94,7 +94,7 @@ internal sealed partial class BPlusLeafGrain
         await PersistAsync();
 
 #if LATTICE_DIAG
-        DiagSink.Write($"[DIAG rebuild-persisted] gid={context.GrainId} entryCount={state.State.Entries.Count} checkpoint={state.State.ProjectionCheckpointOffset}");
+        DiagSink.Write($"[DIAG rebuild-persisted] gid={context.GrainId} entryCount={Cache.Count} checkpoint={state.State.ProjectionCheckpointOffset}");
 #endif
 
         // Step 3 - deactivate the grain. The next activation's

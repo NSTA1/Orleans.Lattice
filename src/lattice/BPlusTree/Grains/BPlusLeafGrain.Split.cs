@@ -9,7 +9,7 @@ internal sealed partial class BPlusLeafGrain
 {
     private async Task<SplitResult> SplitAsync()
     {
-        var keys = state.State.Entries.Keys.ToList();
+        var keys = Cache.Keys.ToList();
         int mid = keys.Count / 2;
         var splitKey = keys[mid];
 
@@ -101,7 +101,7 @@ internal sealed partial class BPlusLeafGrain
         await newLeaf.SetKeyRangeAsync(splitKey, donorPreSplitHigh);
 
         var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
-        foreach (var (key, lww) in state.State.Entries)
+        foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
             {
