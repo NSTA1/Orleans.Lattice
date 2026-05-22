@@ -114,6 +114,8 @@ For internals (the "how"):
 
 ## Releases
 
+See [CHANGELOG.md](CHANGELOG.md) for the per-version notes and [docs/RELEASING.md](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
 Each publishable package is released by pushing a Git tag whose prefix is the literal folder name under `src/`, joined to the version with `-v`. The publish workflow auto-discovers the matching csproj and test project - adding a new package only requires creating `src/<name>/` and (optionally) `test/<name>/`, no workflow edits.
 
 | Source folder | Tag pattern | NuGet package id |
