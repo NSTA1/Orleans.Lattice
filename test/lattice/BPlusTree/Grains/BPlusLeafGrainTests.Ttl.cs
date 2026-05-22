@@ -21,7 +21,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("k", Encoding.UTF8.GetBytes("v"), expiresAt);
 
-        Assert.That(state.State.Entries["k"].ExpiresAtTicks, Is.EqualTo(expiresAt));
+        Assert.That(grain.EntriesForTest["k"].ExpiresAtTicks, Is.EqualTo(expiresAt));
     }
 
     [Test]
@@ -32,7 +32,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("k", Encoding.UTF8.GetBytes("v"), expiresAtTicks: 0L);
 
-        Assert.That(state.State.Entries["k"].ExpiresAtTicks, Is.EqualTo(0L));
+        Assert.That(grain.EntriesForTest["k"].ExpiresAtTicks, Is.EqualTo(0L));
         Assert.That(await grain.GetAsync("k"), Is.Not.Null);
     }
 
@@ -195,7 +195,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state);
 
         var expiredTicks = PastTicks(TimeSpan.FromHours(1));
-        state.State.Entries["dead"] = LwwValue<byte[]>.CreateWithExpiry(
+        grain.EntriesForTest["dead"] = LwwValue<byte[]>.CreateWithExpiry(
             Encoding.UTF8.GetBytes("v"),
             new HybridLogicalClock { WallClockTicks = expiredTicks, Counter = 0 },
             expiredTicks);
@@ -204,7 +204,7 @@ public partial class BPlusLeafGrainTests
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromMinutes(1));
 
         Assert.That(removed, Is.EqualTo(1));
-        Assert.That(state.State.Entries.ContainsKey("dead"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("dead"), Is.False);
     }
 
     [Test]
@@ -214,7 +214,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state);
 
         var expiredTicks = PastTicks(TimeSpan.FromSeconds(10));
-        state.State.Entries["recent"] = LwwValue<byte[]>.CreateWithExpiry(
+        grain.EntriesForTest["recent"] = LwwValue<byte[]>.CreateWithExpiry(
             Encoding.UTF8.GetBytes("v"),
             new HybridLogicalClock { WallClockTicks = expiredTicks, Counter = 0 },
             expiredTicks);
@@ -223,7 +223,7 @@ public partial class BPlusLeafGrainTests
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
         Assert.That(removed, Is.EqualTo(0));
-        Assert.That(state.State.Entries.ContainsKey("recent"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("recent"), Is.True);
     }
 
     [Test]
@@ -237,6 +237,6 @@ public partial class BPlusLeafGrainTests
         var removed = await grain.CompactTombstonesAsync(TimeSpan.Zero);
 
         Assert.That(removed, Is.EqualTo(0));
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True);
     }
 }

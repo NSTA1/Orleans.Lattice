@@ -102,10 +102,10 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("x", Encoding.UTF8.GetBytes("5"));
 
         // After recovery, entries >= "m" should be removed from the original leaf.
-        Assert.That(state.State.Entries.ContainsKey("a"), Is.True);
-        Assert.That(state.State.Entries.ContainsKey("b"), Is.True);
-        Assert.That(state.State.Entries.ContainsKey("m"), Is.False);
-        Assert.That(state.State.Entries.ContainsKey("z"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("a"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("b"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("m"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("z"), Is.False);
     }
 
     [Test]
@@ -149,7 +149,7 @@ public partial class BPlusLeafGrainTests
         // The tombstone should be removed from the original leaf.
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
 
-        Assert.That(state.State.Entries.ContainsKey("m"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("m"), Is.False);
     }
 
     // --- Recovery applies write ---
@@ -173,8 +173,8 @@ public partial class BPlusLeafGrainTests
         var result = await grain.SetAsync("b", Encoding.UTF8.GetBytes("local"));
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(state.State.Entries.ContainsKey("b"), Is.True);
-        Assert.That(Encoding.UTF8.GetString(state.State.Entries["b"].Value!), Is.EqualTo("local"));
+        Assert.That(grain.EntriesForTest.ContainsKey("b"), Is.True);
+        Assert.That(Encoding.UTF8.GetString(grain.EntriesForTest["b"].Value!), Is.EqualTo("local"));
     }
 
     [Test]
@@ -208,7 +208,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(result, Is.Not.Null);
         // The write was NOT applied to this leaf.
-        Assert.That(state.State.Entries.ContainsKey("z"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("z"), Is.False);
         // The sibling's SetAsync was called.
         await siblingMock.Received(1).SetAsync("z", Arg.Any<byte[]>(), 0L);
     }
@@ -422,7 +422,7 @@ public partial class BPlusLeafGrainTests
         // the sibling). If the source's trim was never flushed, those
         // keys would still appear here.
         var splitKey = result!.PromotedKey;
-        foreach (var key in state.State.Entries.Keys)
+        foreach (var key in grain.EntriesForTest.Keys)
         {
             Assert.That(string.Compare(key, splitKey, StringComparison.Ordinal), Is.LessThan(0),
                 $"source still holds {key} which should have moved to the sibling");

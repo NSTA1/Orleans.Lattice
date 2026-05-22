@@ -188,7 +188,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
         var read = await grain.GetAsync("k1");
         Assert.That(read, Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString(read!), Is.EqualTo("v1"));
@@ -208,8 +208,8 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
-        var entryValue = state.State.Entries["k1"];
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
+        var entryValue = grain.EntriesForTest["k1"];
         Assert.That(entryValue.IsTombstone, Is.True);
         Assert.That(await grain.GetAsync("k1"), Is.Null);
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
@@ -499,11 +499,11 @@ public partial class BPlusLeafGrainTests
 
         // Spot-check first / boundary / last to confirm every slice was
         // applied (not just the first).
-        Assert.That(state.State.Entries.ContainsKey("k0000"), Is.True);
-        Assert.That(state.State.Entries.ContainsKey("k0255"), Is.True); // end of slice 1
-        Assert.That(state.State.Entries.ContainsKey("k0256"), Is.True); // start of slice 2
-        Assert.That(state.State.Entries.ContainsKey("k0511"), Is.True); // end of slice 2
-        Assert.That(state.State.Entries.ContainsKey("k0599"), Is.True); // last entry
+        Assert.That(grain.EntriesForTest.ContainsKey("k0000"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k0255"), Is.True); // end of slice 1
+        Assert.That(grain.EntriesForTest.ContainsKey("k0256"), Is.True); // start of slice 2
+        Assert.That(grain.EntriesForTest.ContainsKey("k0511"), Is.True); // end of slice 2
+        Assert.That(grain.EntriesForTest.ContainsKey("k0599"), Is.True); // last entry
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(totalEntries));
     }
 
@@ -931,7 +931,7 @@ public partial class BPlusLeafGrainTests
         await ActivateAsync(grain);
 
         // Filtered out: the entry never lands in this leaf's projection.
-        Assert.That(state.State.Entries.ContainsKey("k-foreign"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-foreign"), Is.False);
         Assert.That(await grain.GetAsync("k-foreign"), Is.Null);
         // Checkpoint still advances - the filter is per-entry, not a slice abort.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
@@ -950,7 +950,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-mine"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-mine"), Is.True);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k-mine"))!), Is.EqualTo("v"));
     }
 
@@ -977,7 +977,7 @@ public partial class BPlusLeafGrainTests
         await ActivateAsync(grain);
 
         // The owned Set landed; the foreign Delete was filtered.
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
         Assert.That(await grain.GetAsync("k1"), Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k1"))!), Is.EqualTo("alive"));
     }
@@ -1001,7 +1001,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k"))!), Is.EqualTo("v"));
     }
 
@@ -1131,7 +1131,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("z-foreign"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("z-foreign"), Is.False);
         Assert.That(await grain.GetAsync("z-foreign"), Is.Null);
         // Checkpoint still advances - the filter is per-entry, not a slice abort.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(1));
@@ -1161,7 +1161,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-mine"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-mine"), Is.True);
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k-mine"))!), Is.EqualTo("v"));
     }
 
@@ -1187,7 +1187,7 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-legacy"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-legacy"), Is.True);
     }
 
     [Test]
@@ -1223,6 +1223,6 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        Assert.That(state.State.Entries.ContainsKey("k-inherited"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k-inherited"), Is.True);
     }
 }

@@ -137,7 +137,7 @@ public partial class BPlusLeafGrainTests
         // the activation guard is reset so a later mutation can retry.
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
     }
 }
 

@@ -375,7 +375,7 @@ public partial class BPlusLeafGrainTests
         // Re-asserting the same checkpoint flushes pending in-memory work.
         await projection.SetCheckpointOffsetAsync(10);
         Assert.That(state.WriteCount, Is.EqualTo(firstWriteCount + 1));
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
     }
 
     // --- Materialiser checkpoint coalescing predicate ---

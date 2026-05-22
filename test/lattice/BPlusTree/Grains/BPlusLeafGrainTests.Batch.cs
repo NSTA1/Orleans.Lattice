@@ -64,7 +64,7 @@ public partial class BPlusLeafGrainTests
         var result = await grain.SetManyAsync([]);
 
         Assert.That(result, Is.Null);
-        Assert.That(state.State.Entries, Has.Count.EqualTo(1));
+        Assert.That(grain.EntriesForTest, Has.Count.EqualTo(1));
     }
 
     // --- DeleteRangeAsync ---

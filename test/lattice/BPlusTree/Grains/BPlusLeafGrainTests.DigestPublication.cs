@@ -128,7 +128,7 @@ public partial class BPlusLeafGrainTests
 
         var snapshot = await grain.GetChildDigestSnapshotAsync();
 
-        Assert.That(snapshot.EntryCount, Is.EqualTo(state.State.Entries.Count));
+        Assert.That(snapshot.EntryCount, Is.EqualTo(grain.EntriesForTest.Count));
         Assert.That(snapshot.Hash, Is.EqualTo(state.State.ProjectionHash));
         Assert.That(snapshot.CheckpointOffset, Is.EqualTo(state.State.ProjectionCheckpointOffset));
     }

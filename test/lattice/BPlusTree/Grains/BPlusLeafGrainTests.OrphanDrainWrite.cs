@@ -64,7 +64,7 @@ public partial class BPlusLeafGrainTests
         // orphan's duplicate terminal arrives.
         var laterHlc = new HybridLogicalClock { WallClockTicks = 5_000_000, Counter = 0 };
         var laterValue = LwwValue<byte[]>.Create(new byte[] { 99 }, laterHlc);
-        state.State.Entries["k"] = laterValue;
+        grain.EntriesForTest["k"] = laterValue;
 
         // Step 3: duplicate terminal arrives - drains the orphan bucket
         // via the pending-flip path. The orphan-drain guard must skip
@@ -73,9 +73,9 @@ public partial class BPlusLeafGrainTests
 
         // Assert: Entries[k] is unchanged - the strictly-later value
         // survives the orphan drain.
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 99 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 99 }),
             "Orphan drain must NOT overwrite a strictly-later saga's value.");
-        Assert.That(state.State.Entries["k"].Timestamp, Is.EqualTo(laterHlc),
+        Assert.That(grain.EntriesForTest["k"].Timestamp, Is.EqualTo(laterHlc),
             "Orphan drain must NOT re-stamp the strictly-later value.");
     }
 
@@ -99,11 +99,11 @@ public partial class BPlusLeafGrainTests
 
         // Plant a pre-saga value in Entries with a LOWER HLC.
         var preSagaHlc = new HybridLogicalClock { WallClockTicks = 1_000_000, Counter = 0 };
-        state.State.Entries["k"] = LwwValue<byte[]>.Create(new byte[] { 99 }, preSagaHlc);
+        grain.EntriesForTest["k"] = LwwValue<byte[]>.Create(new byte[] { 99 }, preSagaHlc);
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
 
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }),
             "Drain must overwrite a strictly-earlier value when prepared HLC dominates.");
     }
 
@@ -117,13 +117,13 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
 
         await PreparedSetAsync(grain, txid, "k", [11]);
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.False,
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.False,
             "Prepared write must not be visible in Entries pre-drain.");
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
 
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True);
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }));
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True);
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }));
     }
 
     [Test]
@@ -148,13 +148,13 @@ public partial class BPlusLeafGrainTests
         // via the HLC override merge - we operate on the post-prepare
         // state for the dominating-entry plant.
         var dominatingHlc = new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 };
-        state.State.Entries["skip-me"] = LwwValue<byte[]>.Create(new byte[] { 99 }, dominatingHlc);
+        grain.EntriesForTest["skip-me"] = LwwValue<byte[]>.Create(new byte[] { 99 }, dominatingHlc);
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
 
-        Assert.That(state.State.Entries["skip-me"].Value, Is.EqualTo(new byte[] { 99 }),
+        Assert.That(grain.EntriesForTest["skip-me"].Value, Is.EqualTo(new byte[] { 99 }),
             "Dominated drain key must be skipped.");
-        Assert.That(state.State.Entries["write-me"].Value, Is.EqualTo(new byte[] { 22 }),
+        Assert.That(grain.EntriesForTest["write-me"].Value, Is.EqualTo(new byte[] { 22 }),
             "Non-dominated drain key must be written.");
     }
 }

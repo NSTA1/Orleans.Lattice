@@ -69,7 +69,7 @@ public partial class BPlusLeafGrainTests
         //   * greater than the destination's Clock (so Fix M's
         //     pre-advance IS required for the drain to win LWW).
         var migratedHlc = new HybridLogicalClock { WallClockTicks = 3_000_000, Counter = 0 };
-        state.State.Entries["k"] = LwwValue<byte[]>.Create(new byte[] { 99 }, migratedHlc);
+        grain.EntriesForTest["k"] = LwwValue<byte[]>.Create(new byte[] { 99 }, migratedHlc);
 
         // Step 3: reset the destination leaf's Clock to a LOW value,
         // simulating the freshly-created destination shard root. The
@@ -85,9 +85,9 @@ public partial class BPlusLeafGrainTests
         // stamped the drained value with state.Clock = 1_000_000, and
         // LwwValue.Merge would have picked the migrated 3_000_000 HLC -
         // leaving Entries["k"] at the migrated [99].
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }),
             "Drained value must win LWW against the migrated entry's higher HLC.");
-        Assert.That(state.State.Entries["k"].Timestamp.CompareTo(migratedHlc) > 0, Is.True,
+        Assert.That(grain.EntriesForTest["k"].Timestamp.CompareTo(migratedHlc) > 0, Is.True,
             "Fix M must Tick terminalStamp past the migrated entry's HLC.");
     }
 
@@ -106,7 +106,7 @@ public partial class BPlusLeafGrainTests
         // Plant the migrated Entries entry with a high HLC; pin the
         // destination's Clock low.
         var migratedHlc = new HybridLogicalClock { WallClockTicks = 3_000_000, Counter = 0 };
-        state.State.Entries["k"] = LwwValue<byte[]>.Create(new byte[] { 99 }, migratedHlc);
+        grain.EntriesForTest["k"] = LwwValue<byte[]>.Create(new byte[] { 99 }, migratedHlc);
         state.State.Clock = new HybridLogicalClock { WallClockTicks = 1_000_000, Counter = 0 };
 
         var committedValues = new Dictionary<string, byte[]>(StringComparer.Ordinal)
@@ -116,9 +116,9 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues);
 
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }),
             "Backstop value must win LWW against the migrated entry's higher HLC.");
-        Assert.That(state.State.Entries["k"].Timestamp.CompareTo(migratedHlc) > 0, Is.True,
+        Assert.That(grain.EntriesForTest["k"].Timestamp.CompareTo(migratedHlc) > 0, Is.True,
             "Fix M backstop variant must Tick stamp past the migrated entry's HLC.");
     }
 
@@ -148,7 +148,7 @@ public partial class BPlusLeafGrainTests
         // Fix J skips its drain. Its existing.Timestamp must NOT pull
         // terminalStamp up.
         var dominatingHlc = new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 };
-        state.State.Entries["skipped"] = LwwValue<byte[]>.Create(new byte[] { 99 }, dominatingHlc);
+        grain.EntriesForTest["skipped"] = LwwValue<byte[]>.Create(new byte[] { 99 }, dominatingHlc);
 
         // Reset destination Clock low so the test is sensitive to
         // whether the dominating HLC leaks into terminalStamp.
@@ -157,13 +157,13 @@ public partial class BPlusLeafGrainTests
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
 
         // "skipped" is unchanged.
-        Assert.That(state.State.Entries["skipped"].Value, Is.EqualTo(new byte[] { 99 }));
+        Assert.That(grain.EntriesForTest["skipped"].Value, Is.EqualTo(new byte[] { 99 }));
         // "written" lands with a stamp at or above its prepared HLC.
         // It must NOT be stamped at or above the dominating HLC of
         // "skipped" - if it were, that would prove the pre-scan picked
         // up "skipped"'s existing HLC despite the skip condition.
-        Assert.That(state.State.Entries["written"].Value, Is.EqualTo(new byte[] { 22 }));
-        Assert.That(state.State.Entries["written"].Timestamp.CompareTo(dominatingHlc) < 0, Is.True,
+        Assert.That(grain.EntriesForTest["written"].Value, Is.EqualTo(new byte[] { 22 }));
+        Assert.That(grain.EntriesForTest["written"].Timestamp.CompareTo(dominatingHlc) < 0, Is.True,
             "terminalStamp must NOT have been pulled up by the dominated 'skipped' key.");
     }
 
@@ -193,7 +193,7 @@ public partial class BPlusLeafGrainTests
 
         // Existing entry's HLC is BELOW state.State.Clock - the
         // steady-state foreground shape.
-        state.State.Entries["k"] = LwwValue<byte[]>.Create(new byte[] { 99 },
+        grain.EntriesForTest["k"] = LwwValue<byte[]>.Create(new byte[] { 99 },
             new HybridLogicalClock { WallClockTicks = 2_000_000, Counter = 0 });
         // state.Clock is currently preparedHlc (5_000_000) post-prepare;
         // both existing.Timestamp and baseTerminalStamp are below it.
@@ -204,8 +204,8 @@ public partial class BPlusLeafGrainTests
         // Drained value wins (its restamp dominates existing).
         // terminalStamp == { WallClockTicks: clockBefore.WallClockTicks,
         //                    Counter:        clockBefore.Counter + 1 }.
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }));
-        var stamp = state.State.Entries["k"].Timestamp;
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }));
+        var stamp = grain.EntriesForTest["k"].Timestamp;
         Assert.That(stamp.WallClockTicks, Is.EqualTo(clockBefore.WallClockTicks),
             "Counter-only bump must preserve WallClockTicks (deterministic for replay).");
         Assert.That(stamp.Counter, Is.EqualTo(clockBefore.Counter + 1),
@@ -228,11 +228,11 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues);
 
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }));
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }));
         // Stamp must dominate state.Clock_before (Tick is strictly
         // greater) but not be artificially advanced - test the
         // strict-greater-than invariant only.
-        Assert.That(state.State.Entries["k"].Timestamp.CompareTo(clockBefore) > 0, Is.True,
+        Assert.That(grain.EntriesForTest["k"].Timestamp.CompareTo(clockBefore) > 0, Is.True,
             "Backstop stamp must be Tick(baseClock) and strictly dominate the pre-call Clock.");
     }
 
@@ -301,11 +301,11 @@ public partial class BPlusLeafGrainTests
         // value [99].
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
 
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }),
             "Drain must win when the dominating Entries entry came from a cross-shard migration (not a strictly-later saga drain).");
-        Assert.That(state.State.Entries["k"].Timestamp.CompareTo(migratedHlc) > 0, Is.True,
+        Assert.That(grain.EntriesForTest["k"].Timestamp.CompareTo(migratedHlc) > 0, Is.True,
             "Post-drain stamp must strictly dominate the migrated HLC so subsequent LWW merges resolve the saga's value as latest.");
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.False,
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.False,
             "Post-drain entry is a foreground commit; its IsMigrated must be false so a subsequent saga's drain guard does not mistake it for a migration import.");
     }
 
@@ -328,9 +328,9 @@ public partial class BPlusLeafGrainTests
             ["k"] = LwwValue<byte[]>.Create(new byte[] { 42 }, migratedHlc),
         }, isCrossShardMigration: true);
 
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True);
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 42 }));
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.True,
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True);
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 42 }));
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.True,
             "Migration imports must stamp IsMigrated=true even when the incoming caller-side LwwValue was constructed with the default false (the destination leaf is the authority on provenance).");
     }
 
@@ -348,8 +348,8 @@ public partial class BPlusLeafGrainTests
 
         // Plant a HIGH-HLC local (non-migration) entry directly into state.
         var localHigh = new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 };
-        state.State.Entries["k"] = LwwValue<byte[]>.Create(new byte[] { 77 }, localHigh);
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.False);
+        grain.EntriesForTest["k"] = LwwValue<byte[]>.Create(new byte[] { 77 }, localHigh);
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.False);
 
         // Migration import at a LOWER HLC - loses the merge.
         var migratedLow = new HybridLogicalClock { WallClockTicks = 1_000_000, Counter = 0 };
@@ -358,9 +358,9 @@ public partial class BPlusLeafGrainTests
             ["k"] = LwwValue<byte[]>.Create(new byte[] { 11 }, migratedLow),
         }, isCrossShardMigration: true);
 
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 77 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 77 }),
             "Higher-HLC local entry must win the merge.");
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.False,
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.False,
             "Losing migration import must not flip the surviving local entry's IsMigrated flag.");
     }
 
@@ -381,15 +381,15 @@ public partial class BPlusLeafGrainTests
         {
             ["k"] = LwwValue<byte[]>.Create(new byte[] { 1 }, migratedHlc),
         }, isCrossShardMigration: true);
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.True);
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.True);
 
         // Step 2: a foreground commit that strictly dominates the migrated
         // HLC. SetAsync internally Ticks the leaf clock past the migrated
         // HLC (since MergeMany advanced state.State.Clock).
         await grain.SetAsync("k", [2]);
 
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 2 }));
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.False,
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 2 }));
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.False,
             "Foreground SetAsync must clear the stale migration marker so a subsequent saga drain on this key is not misclassified.");
     }
 
@@ -429,11 +429,11 @@ public partial class BPlusLeafGrainTests
         var committedValues = new Dictionary<string, byte[]>(StringComparer.Ordinal) { ["k"] = [11] };
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues);
 
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }),
             "Pre-condition: backstop lands its authoritative value.");
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.False,
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.False,
             "Pre-condition: backstop never stamps IsMigrated=true.");
-        var backstopStamp = state.State.Entries["k"].Timestamp;
+        var backstopStamp = grain.EntriesForTest["k"].Timestamp;
 
         // Step 2: the migration import arrives SECOND. The source
         // leaf's pre-saga value for this key was stamped at a high
@@ -457,9 +457,9 @@ public partial class BPlusLeafGrainTests
 
         // Assert: foreground backstop must persist against stale
         // migration import, regardless of HLC inversion.
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 11 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 11 }),
             "Saga's authoritative backstop must persist against migration's pre-saga value, regardless of HLC inversion.");
-        Assert.That(state.State.Entries["k"].IsMigrated, Is.False,
+        Assert.That(grain.EntriesForTest["k"].IsMigrated, Is.False,
             "Foreground IsMigrated=false marker must be preserved - the orphan-pending guard relies on it to discriminate authoritative writes from raw migration imports.");
     }
 }

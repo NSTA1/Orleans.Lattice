@@ -131,7 +131,7 @@ public partial class BPlusLeafGrainTests
         // First pass: grace not yet elapsed - nothing removed.
         var removed1 = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
         Assert.That(removed1, Is.EqualTo(0));
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True,
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True,
             "Tombstone should still be present after an in-grace pass.");
 
         // Second pass with zero grace: the tombstone is now eligible.
@@ -140,6 +140,6 @@ public partial class BPlusLeafGrainTests
         var removed2 = await grain.CompactTombstonesAsync(TimeSpan.Zero);
         Assert.That(removed2, Is.EqualTo(1),
             "An eligible tombstone must be swept even if a prior in-grace pass ran.");
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.False);
     }
 }

@@ -119,7 +119,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
-        Assert.That(state.State.Entries.ContainsKey("k1"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
     }
 
     [Test]
@@ -290,6 +290,6 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
         await grain.DeleteAsync("k1");
 
-        Assert.That(state.State.Entries["k1"].IsTombstone, Is.True);
+        Assert.That(grain.EntriesForTest["k1"].IsTombstone, Is.True);
     }
 }

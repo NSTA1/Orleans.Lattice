@@ -97,7 +97,7 @@ public partial class BPlusLeafGrainTests
         // value [11] must NOT have been drained into Entries - a drain
         // would re-stamp [11] with a fresh state.State.Clock tick and
         // win LWW against the original backstop write.
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 99 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 99 }),
             "Duplicate terminal must NOT drain the orphan bucket into Entries.");
     }
 
@@ -129,9 +129,9 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(0),
             "Multi-key orphan bucket must be discarded whole.");
-        Assert.That(state.State.Entries["a"].Value, Is.EqualTo(new byte[] { 10 }),
+        Assert.That(grain.EntriesForTest["a"].Value, Is.EqualTo(new byte[] { 10 }),
             "Orphan discard must not touch key 'a'.");
-        Assert.That(state.State.Entries["b"].Value, Is.EqualTo(new byte[] { 20 }),
+        Assert.That(grain.EntriesForTest["b"].Value, Is.EqualTo(new byte[] { 20 }),
             "Orphan discard must not touch key 'b'.");
     }
 
@@ -160,7 +160,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(0),
             "Repeated orphan-discard must remain a no-op.");
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 99 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 99 }),
             "Entries must remain at the authoritative post-saga value.");
     }
 
@@ -185,6 +185,6 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(0),
             "Orphan-discard must fire for aborted-outcome duplicate terminals too.");
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 99 }));
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 99 }));
     }
 }

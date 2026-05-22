@@ -43,10 +43,10 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        Assert.That(state.State.Entries["k1"].Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
-        Assert.That(state.State.Entries["k2"].Value, Is.EqualTo(new byte[] { 4, 5, 6 }));
-        Assert.That(state.State.Entries["k1"].IsTombstone, Is.False);
-        Assert.That(state.State.Entries["k2"].IsTombstone, Is.False);
+        Assert.That(grain.EntriesForTest["k1"].Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
+        Assert.That(grain.EntriesForTest["k2"].Value, Is.EqualTo(new byte[] { 4, 5, 6 }));
+        Assert.That(grain.EntriesForTest["k1"].IsTombstone, Is.False);
+        Assert.That(grain.EntriesForTest["k2"].IsTombstone, Is.False);
     }
 
     [Test]
@@ -81,7 +81,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(appended.Value, Is.EqualTo(new byte[] { 1 }));
         Assert.That(appended.TransactionId, Is.EqualTo(txid),
             "backstop WAL append must carry the saga's TransactionId so downstream observers correlate");
-        Assert.That(appended.Timestamp, Is.EqualTo(state.State.Entries["k"].Timestamp),
+        Assert.That(appended.Timestamp, Is.EqualTo(grain.EntriesForTest["k"].Timestamp),
             "WAL-stamped HLC must match the in-memory entry's Timestamp (shared per-terminal stamp)");
     }
 
@@ -102,7 +102,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        var entry = state.State.Entries["k"];
+        var entry = grain.EntriesForTest["k"];
         // The backstop stamps every value with HybridLogicalClock.Tick
         // of the leaf's current Clock. Tick is a wall-clock-driven
         // monotonic operation, so we cannot assert exact equality
@@ -133,7 +133,7 @@ public partial class BPlusLeafGrainTests
         // AdvanceProjectionClock(stamp) must have lifted the leaf's
         // Clock to at least the backstop stamp so subsequent reads
         // observe a monotonic clock.
-        Assert.That(state.State.Clock >= state.State.Entries["k"].Timestamp, Is.True);
+        Assert.That(state.State.Clock >= grain.EntriesForTest["k"].Timestamp, Is.True);
     }
 
     [Test]
@@ -152,7 +152,7 @@ public partial class BPlusLeafGrainTests
             await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
         }
 
-        Assert.That(state.State.Entries["k"].OriginClusterId, Is.EqualTo("cluster-east"));
+        Assert.That(grain.EntriesForTest["k"].OriginClusterId, Is.EqualTo("cluster-east"));
     }
 
     [Test]
@@ -168,7 +168,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        Assert.That(state.State.Entries["k"].OriginClusterId, Is.Null);
+        Assert.That(grain.EntriesForTest["k"].OriginClusterId, Is.Null);
     }
 
     [Test]
@@ -189,7 +189,7 @@ public partial class BPlusLeafGrainTests
             await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
         }
 
-        Assert.That(state.State.Entries["k"].VectorClock, Is.SameAs(vc));
+        Assert.That(grain.EntriesForTest["k"].VectorClock, Is.SameAs(vc));
     }
 
     [Test]
@@ -202,7 +202,7 @@ public partial class BPlusLeafGrainTests
         // lands with a real HLC. The backstop's Tick-based stamp must
         // strictly dominate this value on LWW.Merge.
         await grain.SetAsync("k", [9, 9, 9]);
-        var stalePreSaga = state.State.Entries["k"];
+        var stalePreSaga = grain.EntriesForTest["k"];
 
         var txid = Guid.NewGuid();
         var committed = new Dictionary<string, byte[]>(StringComparer.Ordinal)
@@ -212,7 +212,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        var entry = state.State.Entries["k"];
+        var entry = grain.EntriesForTest["k"];
         Assert.That(entry.Value, Is.EqualTo(new byte[] { 1, 2, 3 }),
             "backstop must overwrite stale pre-saga value");
         Assert.That(entry.Timestamp > stalePreSaga.Timestamp, Is.True,
@@ -226,7 +226,7 @@ public partial class BPlusLeafGrainTests
         var commitLog = new FakeCommitLogWriter();
         var grain = CreateGrain(state, commitLog: commitLog);
         await grain.SetAsync("k", [9]);
-        var snapshot = state.State.Entries["k"];
+        var snapshot = grain.EntriesForTest["k"];
 
         var txid = Guid.NewGuid();
         var appendCountBefore = commitLog.AppendCount;
@@ -237,7 +237,7 @@ public partial class BPlusLeafGrainTests
         // backstop dict means the only side-effect is recording the
         // terminal id; Entries must be untouched and no WAL append
         // must fire (the backstop persists via the WAL).
-        Assert.That(state.State.Entries["k"], Is.EqualTo(snapshot));
+        Assert.That(grain.EntriesForTest["k"], Is.EqualTo(snapshot));
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
@@ -257,7 +257,7 @@ public partial class BPlusLeafGrainTests
         // The backstop branch is gated on Count > 0, so an empty dict
         // is observationally identical to null: no Entries mutation
         // and no WAL append.
-        Assert.That(state.State.Entries, Is.Empty);
+        Assert.That(grain.EntriesForTest, Is.Empty);
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
@@ -280,7 +280,7 @@ public partial class BPlusLeafGrainTests
         // Abort path must drop the backstop values without writing
         // them - by definition the values are not committed. No WAL
         // append must fire because no durable write was authored.
-        Assert.That(state.State.Entries, Is.Empty);
+        Assert.That(grain.EntriesForTest, Is.Empty);
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
@@ -297,7 +297,7 @@ public partial class BPlusLeafGrainTests
         };
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
-        var firstStamp = state.State.Entries["k"].Timestamp;
+        var firstStamp = grain.EntriesForTest["k"].Timestamp;
         var appendCountAfterFirst = commitLog.AppendCount;
 
         // Re-broadcast under the same transaction id (e.g. coordinator
@@ -306,7 +306,7 @@ public partial class BPlusLeafGrainTests
         // and produce no further WAL appends.
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        Assert.That(state.State.Entries["k"].Timestamp, Is.EqualTo(firstStamp),
+        Assert.That(grain.EntriesForTest["k"].Timestamp, Is.EqualTo(firstStamp),
             "idempotent re-broadcast must not re-stamp the entry");
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountAfterFirst),
             "idempotent re-broadcast must not append to the WAL again");
@@ -332,7 +332,7 @@ public partial class BPlusLeafGrainTests
 
         // The leaf has no visible value for "k" yet (it's in the
         // pending bucket, not Entries).
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.False,
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.False,
             "prepare-phase write must not be visible in Entries");
 
         var committedDict = new Dictionary<string, byte[]>(StringComparer.Ordinal)
@@ -345,7 +345,7 @@ public partial class BPlusLeafGrainTests
         // The prepared bucket value (7, 7, 7) wins - NOT the backstop
         // value (1, 2, 3) - because hadPending=true short-circuits the
         // backstop branch.
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 7, 7, 7 }),
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 7, 7, 7 }),
             "pending bucket must win over backstop when both are present");
     }
 
@@ -367,7 +367,7 @@ public partial class BPlusLeafGrainTests
         // Guid.Empty short-circuits at the top of the method; no
         // matter what else the caller passes, the backstop must not
         // fire because there is no saga to attribute the values to.
-        Assert.That(state.State.Entries, Is.Empty);
+        Assert.That(grain.EntriesForTest, Is.Empty);
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountBefore));
     }
 
@@ -391,11 +391,11 @@ public partial class BPlusLeafGrainTests
         // backstop's single shared HLC stamp (saga linearization
         // point), so a continuous reader observes all-or-nothing on
         // the same revision tick.
-        Assert.That(state.State.Entries.Count, Is.EqualTo(4));
-        var sharedStamp = state.State.Entries["alpha"].Timestamp;
+        Assert.That(grain.EntriesForTest.Count, Is.EqualTo(4));
+        var sharedStamp = grain.EntriesForTest["alpha"].Timestamp;
         foreach (var key in new[] { "alpha", "bravo", "charlie", "delta" })
         {
-            Assert.That(state.State.Entries[key].Timestamp, Is.EqualTo(sharedStamp),
+            Assert.That(grain.EntriesForTest[key].Timestamp, Is.EqualTo(sharedStamp),
                 $"key {key} must share the backstop's single Tick stamp");
         }
     }
@@ -429,7 +429,7 @@ public partial class BPlusLeafGrainTests
         }
         LatticeTransactionContext.Set(Guid.Empty);
 
-        Assert.That(state.State.Entries.ContainsKey("in-bucket"), Is.False,
+        Assert.That(grain.EntriesForTest.ContainsKey("in-bucket"), Is.False,
             "prepare-phase write must remain hidden in the pending bucket");
 
         // Terminal carries BOTH the bucket key AND a migrated key
@@ -446,16 +446,16 @@ public partial class BPlusLeafGrainTests
         // Bucket key: flipped from pending into Entries with the
         // prepare's value (NOT the backstop's value - the bucket wins
         // for keys the leaf actually prepared).
-        Assert.That(state.State.Entries["in-bucket"].Value, Is.EqualTo(new byte[] { 7, 7, 7 }),
+        Assert.That(grain.EntriesForTest["in-bucket"].Value, Is.EqualTo(new byte[] { 7, 7, 7 }),
             "pending bucket must win over backstop for keys present in both");
 
         // Migrated key: backstopped via LWW because the bucket has no
         // entry for it - the prior per-saga dedup would have skipped
         // this entirely, leaving Entries.ContainsKey("migrated")
         // false.
-        Assert.That(state.State.Entries.ContainsKey("migrated"), Is.True,
+        Assert.That(grain.EntriesForTest.ContainsKey("migrated"), Is.True,
             "missing key (in committedValues but not bucket) must be backstopped");
-        Assert.That(state.State.Entries["migrated"].Value, Is.EqualTo(new byte[] { 9, 9, 9 }));
+        Assert.That(grain.EntriesForTest["migrated"].Value, Is.EqualTo(new byte[] { 9, 9, 9 }));
     }
 
     /// <summary>
@@ -484,7 +484,7 @@ public partial class BPlusLeafGrainTests
         // Delivery 1: flip-dedup channel marks _recentlyTerminal[txid]
         // but does no backstop (no payload).
         await grain.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
-        Assert.That(state.State.Entries, Is.Empty,
+        Assert.That(grain.EntriesForTest, Is.Empty,
             "first delivery with no payload must not write any Entries");
         var appendCountAfterFirst = commitLog.AppendCount;
 
@@ -497,9 +497,9 @@ public partial class BPlusLeafGrainTests
         };
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True,
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True,
             "second delivery's backstop must fire even though alreadyFlipped=true");
-        Assert.That(state.State.Entries["k"].Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
+        Assert.That(grain.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
         Assert.That(commitLog.AppendCount, Is.GreaterThan(appendCountAfterFirst),
             "backstop write must append to the WAL (WAL is the sole commit point)");
         var appended = commitLog.Appended[^1];
@@ -536,10 +536,10 @@ public partial class BPlusLeafGrainTests
             ["b"] = [2],
         };
         await grain.ApplyTxTerminalAsync(txid, committed: true, subsetA);
-        Assert.That(state.State.Entries["a"].Value, Is.EqualTo(new byte[] { 1 }));
-        Assert.That(state.State.Entries["b"].Value, Is.EqualTo(new byte[] { 2 }));
-        Assert.That(state.State.Entries.ContainsKey("c"), Is.False);
-        Assert.That(state.State.Entries.ContainsKey("d"), Is.False);
+        Assert.That(grain.EntriesForTest["a"].Value, Is.EqualTo(new byte[] { 1 }));
+        Assert.That(grain.EntriesForTest["b"].Value, Is.EqualTo(new byte[] { 2 }));
+        Assert.That(grain.EntriesForTest.ContainsKey("c"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("d"), Is.False);
         var appendCountAfterFirst = commitLog.AppendCount;
         Assert.That(appendCountAfterFirst, Is.EqualTo(2),
             "delivery 1 must append exactly one WAL entry per missing key (a, b)");
@@ -554,13 +554,13 @@ public partial class BPlusLeafGrainTests
             ["d"] = [4],
         };
         await grain.ApplyTxTerminalAsync(txid, committed: true, subsetB);
-        Assert.That(state.State.Entries["c"].Value, Is.EqualTo(new byte[] { 3 }),
+        Assert.That(grain.EntriesForTest["c"].Value, Is.EqualTo(new byte[] { 3 }),
             "disjoint subset's keys must each backstop independently of subset 1");
-        Assert.That(state.State.Entries["d"].Value, Is.EqualTo(new byte[] { 4 }));
+        Assert.That(grain.EntriesForTest["d"].Value, Is.EqualTo(new byte[] { 4 }));
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountAfterFirst + 2),
             "delivery 2 must append exactly one WAL entry per new missing key (c, d)");
         var appendCountAfterSecond = commitLog.AppendCount;
-        var aStampAfterSecond = state.State.Entries["a"].Timestamp;
+        var aStampAfterSecond = grain.EntriesForTest["a"].Timestamp;
 
         // Delivery 3: replays an already-backstopped key. The
         // per-(txid, key) dedup must short-circuit so no WAL append
@@ -572,7 +572,7 @@ public partial class BPlusLeafGrainTests
         await grain.ApplyTxTerminalAsync(txid, committed: true, subsetReplay);
         Assert.That(commitLog.AppendCount, Is.EqualTo(appendCountAfterSecond),
             "replay of already-backstopped key must not append to the WAL again");
-        Assert.That(state.State.Entries["a"].Timestamp, Is.EqualTo(aStampAfterSecond),
+        Assert.That(grain.EntriesForTest["a"].Timestamp, Is.EqualTo(aStampAfterSecond),
             "replay of already-backstopped key must not re-stamp the entry");
     }
 
@@ -622,8 +622,8 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        var stamp1 = state.State.Entries["k1"].Timestamp;
-        var stamp2 = state.State.Entries["k2"].Timestamp;
+        var stamp1 = grain.EntriesForTest["k1"].Timestamp;
+        var stamp2 = grain.EntriesForTest["k2"].Timestamp;
         var versionAfter = state.State.Version;
 
         // Primary invariant: the leaf's Version strictly dominates its
@@ -678,14 +678,14 @@ public partial class BPlusLeafGrainTests
         // First delivery stamps k1 and publishes Version.
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
         var versionAfterFirst = state.State.Version.Clone();
-        var stampAfterFirst = state.State.Entries["k1"].Timestamp;
+        var stampAfterFirst = grain.EntriesForTest["k1"].Timestamp;
 
         // Second delivery for the same (txid, key) pair: dedup
         // short-circuits, no missing keys, no stamp change, no Version
         // change.
         await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
 
-        Assert.That(state.State.Entries["k1"].Timestamp, Is.EqualTo(stampAfterFirst),
+        Assert.That(grain.EntriesForTest["k1"].Timestamp, Is.EqualTo(stampAfterFirst),
             "dedup-shortcircuited delivery must not re-stamp the entry");
         Assert.That(state.State.Version.DominatesOrEquals(versionAfterFirst), Is.True,
             "Version must remain monotone across the no-op delivery");

@@ -1,3 +1,5 @@
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 internal sealed partial class BPlusLeafGrain
@@ -19,4 +21,15 @@ internal sealed partial class BPlusLeafGrain
     private LeafEntryCache? _entryCache;
 
     private LeafEntryCache Cache => _entryCache ??= new LeafEntryCache(state.State.Entries);
+
+    /// <summary>
+    /// Test-only window onto the per-activation entry cache's canonical byte
+    /// rows. Exposed because direct inspection of <c>state.State.Entries</c> is
+    /// no longer the source of truth post-step 6.4 - the cache owns the runtime
+    /// dictionary while persisted state holds only topology + checkpoint + the
+    /// digest fold. Returns the live backing dictionary; tests may both inspect
+    /// and seed it. Callers that mutate the cache mid-enumeration must
+    /// materialise first.
+    /// </summary>
+    internal SortedDictionary<string, LwwValue<byte[]>> EntriesForTest => Cache.UnderlyingRows;
 }

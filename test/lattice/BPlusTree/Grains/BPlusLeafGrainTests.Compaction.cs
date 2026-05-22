@@ -17,13 +17,13 @@ public partial class BPlusLeafGrainTests
 
         // Insert a tombstone with a very old timestamp.
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
         state.State.Version.Tick("test"); // ensure version advances past LastCompactionVersion
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
         Assert.That(removed, Is.EqualTo(1));
-        Assert.That(state.State.Entries.ContainsKey("dead"), Is.False);
+        Assert.That(grain.EntriesForTest.ContainsKey("dead"), Is.False);
     }
 
     [Test]
@@ -38,12 +38,12 @@ public partial class BPlusLeafGrainTests
             WallClockTicks = DateTimeOffset.UtcNow.Ticks,
             Counter = 0
         };
-        state.State.Entries["recent"] = LwwValue<byte[]>.Tombstone(recentClock);
+        grain.EntriesForTest["recent"] = LwwValue<byte[]>.Tombstone(recentClock);
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
         Assert.That(removed, Is.EqualTo(0));
-        Assert.That(state.State.Entries.ContainsKey("recent"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("recent"), Is.True);
     }
 
     [Test]
@@ -53,13 +53,13 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state);
 
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["alive"] = LwwValue<byte[]>.Create(
+        grain.EntriesForTest["alive"] = LwwValue<byte[]>.Create(
             Encoding.UTF8.GetBytes("value"), oldClock);
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
 
         Assert.That(removed, Is.EqualTo(0));
-        Assert.That(state.State.Entries.ContainsKey("alive"), Is.True);
+        Assert.That(grain.EntriesForTest.ContainsKey("alive"), Is.True);
     }
 
     [Test]
@@ -105,7 +105,7 @@ public partial class BPlusLeafGrainTests
 
         // Seed a live entry with an already-elapsed expiry in the far past.
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["ttl-key"] = LwwValue<byte[]>.CreateWithExpiry(
+        grain.EntriesForTest["ttl-key"] = LwwValue<byte[]>.CreateWithExpiry(
             Encoding.UTF8.GetBytes("v"), oldClock, expiresAtTicks: 2);
         state.State.Version.Tick("test"); // bump version past LastCompactionVersion.
 
@@ -145,8 +145,8 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state);
 
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
-        state.State.Entries["expired"] = LwwValue<byte[]>.CreateWithExpiry(
+        grain.EntriesForTest["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["expired"] = LwwValue<byte[]>.CreateWithExpiry(
             Encoding.UTF8.GetBytes("v"), oldClock, expiresAtTicks: 2);
         state.State.Version.Tick("test");
 
@@ -190,9 +190,9 @@ public partial class BPlusLeafGrainTests
         // Seed two old tombstones and one expired live entry, all
         // beyond the grace cutoff.
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["dead-a"] = LwwValue<byte[]>.Tombstone(oldClock);
-        state.State.Entries["dead-b"] = LwwValue<byte[]>.Tombstone(oldClock);
-        state.State.Entries["expired"] = LwwValue<byte[]>.CreateWithExpiry(
+        grain.EntriesForTest["dead-a"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["dead-b"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["expired"] = LwwValue<byte[]>.CreateWithExpiry(
             Encoding.UTF8.GetBytes("v"), oldClock, expiresAtTicks: 2);
         state.State.Version.Tick("test");
 
@@ -217,7 +217,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state, commitLog: commitLog);
 
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
         state.State.Version.Tick("test");
         var writeCountBefore = state.WriteCount;
 
@@ -241,7 +241,7 @@ public partial class BPlusLeafGrainTests
             WallClockTicks = DateTimeOffset.UtcNow.Ticks,
             Counter = 0,
         };
-        state.State.Entries["recent"] = LwwValue<byte[]>.Tombstone(recentClock);
+        grain.EntriesForTest["recent"] = LwwValue<byte[]>.Tombstone(recentClock);
         state.State.Version.Tick("test");
 
         var removed = await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
@@ -266,8 +266,8 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state, commitLog: commitLog);
 
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["dead-a"] = LwwValue<byte[]>.Tombstone(oldClock);
-        state.State.Entries["dead-b"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["dead-a"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["dead-b"] = LwwValue<byte[]>.Tombstone(oldClock);
         state.State.Version.Tick("test");
 
         await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));
@@ -292,7 +292,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state, commitLog: commitLog);
 
         var oldClock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        state.State.Entries["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
+        grain.EntriesForTest["dead"] = LwwValue<byte[]>.Tombstone(oldClock);
         state.State.Version.Tick("test");
 
         await grain.CompactTombstonesAsync(TimeSpan.FromHours(1));

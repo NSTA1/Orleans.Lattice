@@ -96,8 +96,8 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(result.Version, Is.Not.EqualTo(HybridLogicalClock.Zero));
         Assert.That(result.Split, Is.Null);
-        Assert.That(state.State.Entries.ContainsKey("k"), Is.True);
-        var row = state.State.Entries["k"];
+        Assert.That(grain.EntriesForTest.ContainsKey("k"), Is.True);
+        var row = grain.EntriesForTest["k"];
         Assert.That(row.IsTombstone, Is.False);
         var observed = JsonLatticeSerializer<OrSet>.Default.Deserialize(row.Value!);
         Assert.That(observed.Contains(Encoding.UTF8.GetBytes("apple")), Is.True);
@@ -122,7 +122,7 @@ public partial class BPlusLeafGrainTests
         await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, JsonLatticeSerializer<OrSetDelta>.Default.Serialize(d1));
         await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, JsonLatticeSerializer<OrSetDelta>.Default.Serialize(d2));
 
-        var observed = JsonLatticeSerializer<OrSet>.Default.Deserialize(state.State.Entries["k"].Value!);
+        var observed = JsonLatticeSerializer<OrSet>.Default.Deserialize(grain.EntriesForTest["k"].Value!);
         Assert.That(observed.Contains(Encoding.UTF8.GetBytes("a")), Is.True);
         Assert.That(observed.Contains(Encoding.UTF8.GetBytes("b")), Is.True);
     }
@@ -135,7 +135,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("k", Encoding.UTF8.GetBytes("legacy"));
         await grain.DeleteAsync("k");
-        Assert.That(state.State.Entries["k"].IsTombstone, Is.True);
+        Assert.That(grain.EntriesForTest["k"].IsTombstone, Is.True);
 
         var delta = new PnCounterDelta
         {
@@ -144,9 +144,9 @@ public partial class BPlusLeafGrainTests
         };
         await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.PnCounter, JsonLatticeSerializer<PnCounterDelta>.Default.Serialize(delta));
 
-        var observed = JsonLatticeSerializer<PnCounter>.Default.Deserialize(state.State.Entries["k"].Value!);
+        var observed = JsonLatticeSerializer<PnCounter>.Default.Deserialize(grain.EntriesForTest["k"].Value!);
         Assert.That(observed.Value, Is.EqualTo(7));
-        Assert.That(state.State.Entries["k"].IsTombstone, Is.False);
+        Assert.That(grain.EntriesForTest["k"].IsTombstone, Is.False);
     }
 
     [Test]
@@ -213,7 +213,7 @@ public partial class BPlusLeafGrainTests
         var result = await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, JsonLatticeSerializer<OrSetDelta>.Default.Serialize(delta));
 
         Assert.That(result.Version, Is.Not.EqualTo(HybridLogicalClock.Zero));
-        var observed = JsonLatticeSerializer<OrSet>.Default.Deserialize(state.State.Entries["k"].Value!);
+        var observed = JsonLatticeSerializer<OrSet>.Default.Deserialize(grain.EntriesForTest["k"].Value!);
         Assert.That(observed.Contains(Encoding.UTF8.GetBytes("x")), Is.True);
     }
 
@@ -233,7 +233,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.ApplyCrdtDeltaAsync("m", LatticeMergeMode.MvRegister, JsonLatticeSerializer<MvRegisterDelta>.Default.Serialize(delta));
 
-        var observed = JsonLatticeSerializer<MvRegister>.Default.Deserialize(state.State.Entries["m"].Value!);
+        var observed = JsonLatticeSerializer<MvRegister>.Default.Deserialize(grain.EntriesForTest["m"].Value!);
         Assert.That(observed.Entries, Has.Count.EqualTo(1));
         Assert.That(observed.Entries[0].ReplicaId, Is.EqualTo("r1"));
         Assert.That(observed.Entries[0].Value, Is.EqualTo(Encoding.UTF8.GetBytes("hello")));
