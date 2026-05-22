@@ -266,4 +266,76 @@ public partial class BPlusLeafGrainTests
         Assert.That(m.Kind, Is.EqualTo(MutationKind.Set));
         Assert.That(m.Delta, Is.EqualTo(deltaBytes), "leaf must publish the producer's typed delta payload, not the post-merge state row");
     }
+
+    [Test]
+    public async Task CrdtApply_populates_typed_shadow_on_commit()
+    {
+        // After a successful CRDT apply, the leaf cache should hold a
+        // post-merge typed instance under the same key so the next
+        // mutation can skip the DeserializeState pass.
+        var grain = CreateCrdtGrain();
+        var delta = new OrSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = Encoding.UTF8.GetBytes("a"), ReplicaId = "r1", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, JsonLatticeSerializer<OrSetDelta>.Default.Serialize(delta));
+
+        Assert.That(grain.TryGetTypedShadowForTest<OrSet>("k", out var typed), Is.True);
+        Assert.That(typed.Adds, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task CrdtApply_consecutive_writes_reuse_typed_shadow()
+    {
+        // The hot-path win: on a second CrdtApply against the same key
+        // the leaf must see the typed shadow stored by the first apply
+        // and skip re-decoding from the byte row. We can observe this
+        // through state correctness end-to-end (both deltas merged) and
+        // by confirming the shadow is updated with the post-merge state
+        // after each apply rather than being evicted.
+        var grain = CreateCrdtGrain();
+        var d1 = new OrSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = Encoding.UTF8.GetBytes("a"), ReplicaId = "r1", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+        var d2 = new OrSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = Encoding.UTF8.GetBytes("b"), ReplicaId = "r1", Counter = 2 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, JsonLatticeSerializer<OrSetDelta>.Default.Serialize(d1));
+        Assert.That(grain.TryGetTypedShadowForTest<OrSet>("k", out var afterFirst), Is.True);
+        Assert.That(afterFirst.Adds, Has.Count.EqualTo(1));
+
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, JsonLatticeSerializer<OrSetDelta>.Default.Serialize(d2));
+        Assert.That(grain.TryGetTypedShadowForTest<OrSet>("k", out var afterSecond), Is.True);
+        Assert.That(afterSecond.Adds, Has.Count.EqualTo(2));
+
+        // End-to-end correctness: the post-merge byte row contains both elements.
+        var observed = JsonLatticeSerializer<OrSet>.Default.Deserialize(grain.EntriesForTest["k"].Value!);
+        Assert.That(observed.Adds, Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task CrdtApply_byte_overwrite_via_SetAsync_evicts_typed_shadow()
+    {
+        // Invariant: byte-level writes through the StoreRow funnel must
+        // evict the typed shadow so the next typed consumer cannot
+        // observe a stale instance against fresh bytes. SetAsync routes
+        // through StoreEntry -> Cache.StoreRow, which evicts.
+        var grain = CreateCrdtGrain();
+        var delta = new OrSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = Encoding.UTF8.GetBytes("a"), ReplicaId = "r1", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, JsonLatticeSerializer<OrSetDelta>.Default.Serialize(delta));
+        Assert.That(grain.TryGetTypedShadowForTest<OrSet>("k", out _), Is.True);
+
+        await grain.SetAsync("k", new byte[] { 0x00 });
+        Assert.That(grain.TryGetTypedShadowForTest<OrSet>("k", out _), Is.False, "byte-level SetAsync must evict the typed shadow");
+    }
 }

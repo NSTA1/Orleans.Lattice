@@ -156,4 +156,126 @@ public sealed class LeafEntryCacheTests
 
         Assert.That(cache.UnderlyingRows, Is.SameAs(backing));
     }
+
+    private sealed class FakeTypedState
+    {
+        public int Counter;
+    }
+
+    private sealed class OtherTypedState
+    {
+        public string Label = string.Empty;
+    }
+
+    [Test]
+    public void StoreTyped_throws_on_null_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(() => cache.StoreTyped<FakeTypedState>(null!, new FakeTypedState()), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void StoreTyped_throws_on_null_typed_instance()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(() => cache.StoreTyped<FakeTypedState>("k", null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void TryGetTyped_throws_on_null_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(() => cache.TryGetTyped<FakeTypedState>(null!, out _), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void TryGetTyped_returns_false_when_no_shadow_has_been_stored()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(cache.TryGetTyped<FakeTypedState>("missing", out var typed), Is.False);
+        Assert.That(typed, Is.Null);
+    }
+
+    [Test]
+    public void StoreTyped_then_TryGetTyped_round_trips_the_same_instance()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        var typed = new FakeTypedState { Counter = 7 };
+        cache.StoreTyped("k", typed);
+
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k", out var actual), Is.True);
+        Assert.That(actual, Is.SameAs(typed));
+    }
+
+    [Test]
+    public void StoreTyped_replaces_existing_shadow_for_the_same_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        var first = new FakeTypedState { Counter = 1 };
+        var second = new FakeTypedState { Counter = 2 };
+
+        cache.StoreTyped("k", first);
+        cache.StoreTyped("k", second);
+
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k", out var actual), Is.True);
+        Assert.That(actual, Is.SameAs(second));
+    }
+
+    [Test]
+    public void TryGetTyped_returns_false_when_stored_type_is_not_assignable_to_requested_type()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreTyped("k", new FakeTypedState());
+
+        Assert.That(cache.TryGetTyped<OtherTypedState>("k", out var actual), Is.False);
+        Assert.That(actual, Is.Null);
+    }
+
+    [Test]
+    public void StoreRow_evicts_the_typed_shadow_for_the_same_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreTyped("k", new FakeTypedState { Counter = 1 });
+        cache.StoreRow("k", Row([1]));
+
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k", out _), Is.False);
+    }
+
+    [Test]
+    public void StoreRow_does_not_evict_typed_shadows_for_other_keys()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreTyped("k1", new FakeTypedState { Counter = 1 });
+        cache.StoreTyped("k2", new FakeTypedState { Counter = 2 });
+
+        cache.StoreRow("k1", Row([1]));
+
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k1", out _), Is.False);
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k2", out var k2), Is.True);
+        Assert.That(k2.Counter, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void Remove_evicts_the_typed_shadow_for_the_same_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("k", Row([1]));
+        cache.StoreTyped("k", new FakeTypedState { Counter = 1 });
+
+        Assert.That(cache.Remove("k"), Is.True);
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k", out _), Is.False);
+    }
+
+    [Test]
+    public void Clear_evicts_every_typed_shadow()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreTyped("k1", new FakeTypedState { Counter = 1 });
+        cache.StoreTyped("k2", new FakeTypedState { Counter = 2 });
+
+        cache.Clear();
+
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k1", out _), Is.False);
+        Assert.That(cache.TryGetTyped<FakeTypedState>("k2", out _), Is.False);
+    }
 }

@@ -73,13 +73,24 @@ internal sealed partial class BPlusLeafGrain
         // typed delta, re-serialise the post-merge state. The
         // re-serialisation keeps the legacy byte[] row consistent so
         // GetAsync continues to return the canonical post-merge bytes.
+        // The typed shadow short-circuits the existing-state decode on
+        // the consecutive-mutations-to-the-same-key hot path: when a
+        // post-merge typed instance is already in the cache (stored by
+        // the previous ApplyCrdtDeltaAsync commit under the matching
+        // shape's state type), re-use it instead of paying the
+        // DeserializeState pass.
         var typedDelta = shape.DeserializeDelta(deltaBytes);
-        object typedState;
-        if (Cache.TryGetRow(key, out var existing)
+        var hasExistingRow = Cache.TryGetRow(key, out var existing)
             && !existing.IsTombstone
-            && existing.Value is { Length: > 0 } existingBytes)
+            && existing.Value is { Length: > 0 };
+        object typedState;
+        if (hasExistingRow && Cache.TryGetTyped<object>(key, out var shadowed))
         {
-            typedState = shape.DeserializeState(existingBytes);
+            typedState = shadowed;
+        }
+        else if (hasExistingRow)
+        {
+            typedState = shape.DeserializeState(existing.Value!);
         }
         else
         {
@@ -121,9 +132,13 @@ internal sealed partial class BPlusLeafGrain
         // step 4 (apply) - merge the post-merge state into the leaf
         // projection through the standard StoreEntry funnel so the
         // projection-digest XOR and per-key delivery sequence advance
-        // exactly as they would for an LWW Set.
+        // exactly as they would for an LWW Set. StoreEntry's byte
+        // write evicts any prior typed shadow for the key, so we
+        // re-store the freshly merged typed instance immediately
+        // afterwards to keep the shadow consistent with the row.
         var options = await GetOptionsAsync();
         StoreEntry(key, postMergeEntry);
+        Cache.StoreTyped(key, typedState);
         SplitResult? splitResult = null;
         if (Cache.Count > options.MaxLeafKeys)
         {

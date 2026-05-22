@@ -27,4 +27,15 @@ internal sealed partial class BPlusLeafGrain
     /// the cache mid-enumeration must materialise first.
     /// </summary>
     internal SortedDictionary<string, LwwValue<byte[]>> EntriesForTest => Cache.UnderlyingRows;
+
+    /// <summary>
+    /// Test-only probe for the per-activation typed CRDT shadow. Returns
+    /// <c>true</c> when a typed instance assignable to <typeparamref name="T"/>
+    /// has been cached for <paramref name="key"/>. Used by tests that verify
+    /// the CRDT delta-apply hot path populates the shadow on commit and that
+    /// byte-level writes evict it.
+    /// </summary>
+    internal bool TryGetTypedShadowForTest<T>(string key, out T typed)
+        where T : notnull
+        => Cache.TryGetTyped(key, out typed);
 }
