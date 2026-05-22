@@ -132,11 +132,17 @@ internal sealed partial class BPlusLeafGrain
 
         // step 5 (observer) - publish under a commit-log scope so a
         // replication-aware observer detects the source and avoids
-        // re-appending its own input back into the WAL.
+        // re-appending its own input back into the WAL. Also wraps the
+        // observer publish in a LatticeDeltaContext.With(deltaBytes)
+        // scope so mutation observers see LatticeMutation.Delta
+        // populated with the typed delta payload (same contract the
+        // legacy accessor's CAS-loop path provided via its outer
+        // LatticeDeltaContext scope).
         if (mutationObservers.HasObservers)
         {
             var published = state.State.Entries.TryGetValue(key, out var committed) ? committed : postMergeEntry;
             using (LatticeCommitLogContext.BeginScope())
+            using (LatticeDeltaContext.With(deltaBytes))
             {
                 await PublishSetAsync(key, published);
             }

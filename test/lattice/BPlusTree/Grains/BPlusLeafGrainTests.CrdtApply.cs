@@ -238,4 +238,32 @@ public partial class BPlusLeafGrainTests
         Assert.That(observed.Entries[0].ReplicaId, Is.EqualTo("r1"));
         Assert.That(observed.Entries[0].Value, Is.EqualTo(Encoding.UTF8.GetBytes("hello")));
     }
+
+    [Test]
+    public async Task CrdtApply_publishes_mutation_with_typed_delta_payload_on_observers()
+    {
+        // The accessor migration relies on the leaf grain stamping
+        // LatticeMutation.Delta with the typed delta bytes so mutation
+        // observers (and the change-feed adapter that builds on top of
+        // them) keep seeing the producer's typed delta rather than the
+        // post-merge byte[] state.
+        var observer = new RecordingMutationObserver();
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "tree-crdt-delta";
+        var grain = CreateGrainWithObserver(observer, state, "tree-crdt-delta");
+
+        var delta = new OrSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = Encoding.UTF8.GetBytes("z"), ReplicaId = "r1", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+        var deltaBytes = JsonLatticeSerializer<OrSetDelta>.Default.Serialize(delta);
+
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, deltaBytes);
+
+        Assert.That(observer.Mutations, Has.Count.EqualTo(1));
+        var m = observer.Mutations[0];
+        Assert.That(m.Kind, Is.EqualTo(MutationKind.Set));
+        Assert.That(m.Delta, Is.EqualTo(deltaBytes), "leaf must publish the producer's typed delta payload, not the post-merge state row");
+    }
 }
