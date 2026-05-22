@@ -50,7 +50,7 @@ If your workload allows concurrent writes from multiple clusters to the same key
 
 ## How typed CRDT modes apply on the receiver
 
-For every typed CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMap`) the producer-side accessor authors a public typed delta DTO (`OrSetDelta`, `PnCounterDelta`, `VersionVectorDelta`, `MvRegisterDelta`, `OrMapDelta<TKey, TValue>`) into the single `WalRecord.Delta` slot at commit time. The full post-merge state is still serialised into `WalRecord.Value` for change-feed back-compat, but the receiver-side applier reads the typed delta from `Delta`, deserialises it through the matching DTO, reads the locally-stored primitive under optimistic concurrency, calls the primitive's instance `MergeDelta(delta)` operation, and writes the merged state back. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the receiver's commit-time observer publishes the foreign origin and the producer-side ship loop filters the resulting entry out - the same cycle-break semantics as LWW.
+For every typed CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMap`) the producer-side accessor authors a public typed delta DTO (`OrSetDelta`, `PnCounterDelta`, `VersionVectorDelta`, `MvRegisterDelta`, `OrMapDelta<TKey, TValue>`) into the single `WalRecord.Delta` slot at commit time. The `WalRecord.Value` slot is omitted on the wire for CRDT modes - the canonical payload travels only as the typed delta, not as a serialised post-merge snapshot. The receiver-side applier reads the typed delta from `Delta`, deserialises it through the matching DTO, reads the locally-stored primitive under optimistic concurrency, calls the primitive's instance `MergeDelta(delta)` operation, and writes the merged state back. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the receiver's commit-time observer publishes the foreign origin and the producer-side ship loop filters the resulting entry out - the same cycle-break semantics as LWW. Change-feed consumers that historically read `Value` directly on CRDT-mode entries must migrate to either reading `Delta` and folding it against their own prior observed state, or reading the post-merge state through the public lattice surface (`ILattice.GetAsync` / typed accessors).
 
 Typed-delta merge is commutative, associative, and idempotent: late or duplicate delivery converges to the same set / counter / vector / map regardless of arrival order. The per-origin high-water-mark still gates re-delivery to short-circuit redundant work, but correctness does not depend on it for typed CRDT modes.
 
@@ -64,7 +64,7 @@ using Orleans.Lattice.Primitives;
 siloBuilder.AddOrMapShape<string, OrSet>("tags-by-user");
 ```
 
-The registration installs a deserialiser / merger descriptor into the `OrMapShapeRegistry` singleton before silo activation; an apply against a tree configured for `LatticeMergeMode.OrMap` with no matching registration faults the apply with a clear configuration-error message rather than silently dropping the entry.
+The registration installs a deserialiser / merger descriptor into the `CrdtShapeRegistry` singleton before silo activation; an apply against a tree configured for `LatticeMergeMode.OrMap` with no matching registration faults the apply with a clear configuration-error message rather than silently dropping the entry.
 
 ## How the mode is resolved at commit time
 
