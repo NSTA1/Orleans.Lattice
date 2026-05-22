@@ -101,6 +101,17 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        // Step 0 - try to rehydrate the in-memory entry cache from a
+        // persisted leaf snapshot. The snapshot is the safety net for
+        // WAL retention fall-off: if a previous maintenance tick wrote
+        // a snapshot whose offset exceeds this leaf's persisted
+        // ProjectionCheckpointOffset, we hydrate the cache from the
+        // snapshot and let the tail replay below cover only the
+        // (snapshot, head] suffix. When no snapshot is present (or it
+        // is older than the persisted checkpoint), this step is a
+        // no-op and the existing WAL-tail-replay path runs unchanged.
+        await TryRehydrateFromSnapshotAsync(cancellationToken);
+
         // Step 1 - drive the dormant ILeafProjection.Apply seam over
         // the WAL slice between the persisted checkpoint and the
         // current head. Failures propagate: a leaf that comes online
@@ -228,6 +239,14 @@ internal sealed partial class BPlusLeafGrain
             switch (decision)
             {
                 case FallOffLogDecision.TailReplay:
+                case FallOffLogDecision.SnapshotPending:
+                    // SnapshotPending is a non-fatal advisory consumed by
+                    // the maintenance grain, which schedules a capture
+                    // on the next probe tick. At activation time the
+                    // leaf treats it exactly as TailReplay - the
+                    // persisted checkpoint is still inside the readable
+                    // WAL window, just close enough to the tail that a
+                    // proactive snapshot is warranted.
                     break;
                 case FallOffLogDecision.SnapshotThenWal:
                 case FallOffLogDecision.FullRebuildFromWal:

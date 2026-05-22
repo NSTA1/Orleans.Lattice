@@ -63,4 +63,99 @@ internal sealed partial class BPlusLeafGrain
             context.GrainId.GetGuidKey());
         await snapshotGrain.SaveAsync(blob, CancellationToken.None);
     }
+
+    /// <summary>
+    /// Activation-time rehydration seam. Consults the dedicated
+    /// snapshot storage grain for a persisted blob and, when the blob
+    /// is newer than the leaf's persisted
+    /// <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>,
+    /// repopulates the in-memory entry cache from the canonical byte
+    /// rows and advances the persisted checkpoint to the snapshot's
+    /// offset. The projection digest is invalidated (set to <c>null</c>)
+    /// so the next read or fold lazily rebuilds it via the existing
+    /// <c>EnsureProjectionHashInitialized</c> path; this preserves the
+    /// canonical-full-walk hash invariant the chained internal-node
+    /// fold depends on.
+    /// <para>
+    /// No-op preconditions: tree id unset (uninitialised leaf); no
+    /// snapshot present; snapshot offset not strictly greater than the
+    /// persisted checkpoint (a stale snapshot whose offset the leaf
+    /// has already run past). After a successful rehydrate the caller
+    /// (the activation hook) drives the WAL tail-replay from the new
+    /// checkpoint forward, so a snapshot that covers a prefix of the
+    /// WAL plus tail-replayed suffix produces a projection identical
+    /// to a from-zero replay.
+    /// </para>
+    /// </summary>
+    internal async Task TryRehydrateFromSnapshotAsync(CancellationToken cancellationToken)
+    {
+        if (state.State.TreeId is null)
+        {
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        LeafSnapshotBlob? blob;
+        try
+        {
+            var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
+                context.GrainId.GetGuidKey());
+            blob = await snapshotGrain.LoadAsync(cancellationToken);
+        }
+        catch
+        {
+            // Snapshot load is best-effort: a transient storage failure
+            // must not block the leaf coming online. The activation
+            // path falls through to the existing WAL-tail replay,
+            // which can still recover the projection as long as the
+            // WAL has not trimmed past the checkpoint.
+            return;
+        }
+
+        if (blob is null)
+        {
+            return;
+        }
+
+        var checkpoint = state.State.ProjectionCheckpointOffset;
+        if (blob.SnapshotOffset <= checkpoint)
+        {
+            // Snapshot is older than the persisted checkpoint; the
+            // leaf has already applied past the snapshot via the
+            // foreground path. Ignore the blob.
+            return;
+        }
+
+        // Bulk-load the canonical byte rows. We bypass StoreEntry
+        // (the per-mutation LWW funnel) because the snapshot rows
+        // are themselves a point-in-time projection; running them
+        // through LWW would be a no-op against an empty cache but
+        // would also re-fold the digest incrementally on every row.
+        // We instead invalidate the digest below and let the lazy
+        // full-walk recompute it.
+        Cache.Clear();
+        foreach (var row in blob.Rows)
+        {
+            Cache.StoreRow(row.Key, row.Value);
+        }
+
+        // Advance the persisted checkpoint to match the snapshot.
+        // The WAL tail replay below picks up at (SnapshotOffset, head].
+        state.State.ProjectionCheckpointOffset = blob.SnapshotOffset;
+
+        // Invalidate the digest so EnsureProjectionHashInitialized's
+        // lazy backfill path recomputes the canonical full-walk hash
+        // over the rehydrated cache. The chained internal-node fold
+        // depends on this hash matching the canonical full-walk hash
+        // bit-for-bit; recomputing from scratch is the only way to
+        // guarantee equivalence with a from-zero replay.
+        state.State.ProjectionHash = null;
+
+        // Drop the cached XxHash128 hasher so the next contribution
+        // allocates a fresh instance. Mirrors the rebuild seam in
+        // BPlusLeafGrain.ProjectionAdmin.cs - keeps the rehydrated
+        // activation indistinguishable from a fresh activation.
+        DisposeProjectionHasher();
+    }
 }
