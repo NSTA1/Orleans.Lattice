@@ -44,7 +44,7 @@ internal sealed partial class BPlusLeafGrain
     /// -&gt; the prepared <see cref="LwwValue{T}"/>. Entries here are
     /// invisible to readers until a matching terminal mark surfaces; on
     /// <see cref="MutationKind.TxCommit"/> every value is merged into
-    /// <c>state.State.Entries</c> via
+    /// the per-activation runtime entry cache via
     /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>; on
     /// <see cref="MutationKind.TxAbort"/> every value is dropped.
     /// <para>
@@ -654,8 +654,8 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ITxRegistryGrain"/>. This is the read-path dial-back
     /// that lets a leaf serving a key with a pending-tx entry decide
     /// whether to surface the prepared (post-saga) value, hide the
-    /// key, or fall through to the pre-saga value in
-    /// <c>state.State.Entries</c>.
+    /// key, or fall through to the pre-saga value in the runtime
+    /// entry cache.
     /// <para>
     /// Returns <see cref="TxStatus.InFlight"/> on degenerate inputs
     /// (empty txid or unknown tree id) - the strict-isolation default,
@@ -700,12 +700,12 @@ internal sealed partial class BPlusLeafGrain
     /// On the saga-active path, makes exactly one RPC per scan
     /// regardless of how many keys the scan visits - the batched
     /// registry call collapses N per-key dial-backs into one round
-    /// trip. Callers iterate <c>state.State.Entries</c> as usual and,
+    /// trip. Callers iterate the runtime entry cache as usual and,
     /// for each key found in <paramref name="pendingKeys"/>, branch on
     /// the resolved outcome: <see cref="TxStatus.Committed"/> surfaces
     /// the prepared value, <see cref="TxStatus.InFlight"/> hides the
     /// key, and <see cref="TxStatus.Aborted"/> falls through to the
-    /// pre-saga <c>Entries</c> value.
+    /// pre-saga cache value.
     /// </para>
     /// </summary>
     private async ValueTask<(
@@ -1059,8 +1059,8 @@ internal sealed partial class BPlusLeafGrain
         // hadPending=false branch on the theory that "the cache is not
         // tracking this leaf as a pending source for this saga." That
         // reasoning was incorrect: the same-tree LeafCacheGrain is the
-        // primary read path for every key in state.State.Entries, and
-        // its RefreshAsync fast path (GetDeltaSinceAsync ->
+        // primary read path for every key in the runtime entry cache,
+        // and its RefreshAsync fast path (GetDeltaSinceAsync ->
         // DominatesOrEquals) short-circuits when the cache's saved
         // _version equals Version[ReplicaId]. If the backstop write
         // does not lift Version[ReplicaId], the cache continues

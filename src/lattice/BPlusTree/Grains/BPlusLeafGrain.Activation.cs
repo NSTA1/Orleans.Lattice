@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Activation-hook partial for <see cref="BPlusLeafGrain"/>. Runs the
 /// activation-time WAL materialiser that rebuilds the in-memory
-/// projection (the visible <c>state.State.Entries</c> map and the
+/// projection (the per-activation runtime entry cache and the
 /// per-leaf saga pending-tx machinery) from the durable per-shard
 /// write-ahead log, then publishes the leaf's projection cursor so the
 /// per-shard WAL GC sees the leaf the moment activation completes.
@@ -93,8 +93,8 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Activation hook. Runs the WAL materialiser to bring the
-    /// in-memory projection (<c>state.State.Entries</c> plus the
-    /// per-leaf saga pending-tx map) up to the WAL head, then
+    /// in-memory projection (the per-activation runtime entry cache
+    /// plus the per-leaf saga pending-tx map) up to the WAL head, then
     /// publishes the leaf's projection cursor so the per-shard WAL
     /// GC observes the leaf eagerly. No-op when the leaf has not been
     /// seeded with a tree id.

@@ -1562,21 +1562,21 @@ internal sealed partial class LatticeGrain(
     /// check is asymmetric: every <see cref="TxStatus.Committed"/>
     /// entry in snap2 must already be Committed in snap1.
     /// <para>
-    /// The asymmetry is the whole point. Per-leaf drain into
-    /// <c>state.State.Entries</c> on
+    /// The asymmetry is the whole point. Per-leaf drain into the
+    /// runtime entry cache on
     /// <see cref="MutationKind.TxCommit"/> is irreversible - once a
-    /// leaf has flipped a saga's prepared keys into Entries it has no
-    /// record they came from a saga, so a stale
+    /// leaf has flipped a saga's prepared keys into the cache it has
+    /// no record they came from a saga, so a stale
     /// <see cref="TxStatus.InFlight"/> snapshot can no longer gate
     /// visibility on that leaf. A reader whose snap1 was taken before
     /// <c>MarkCommittedAsync</c> but whose fan-out reaches some leaves
     /// after their drain therefore observes drained leaves serving
-    /// post-saga Entries while sibling undrained leaves consult
-    /// snap1.InFlight and fall through to pre-saga Entries - split
+    /// post-saga entries while sibling undrained leaves consult
+    /// snap1.InFlight and fall through to pre-saga entries - split
     /// observation. snap2.Committed reveals the transition; the
     /// caller retries with the fresh snapshot in scope so the next
     /// fan-out observes the saga as Committed everywhere (drained
-    /// leaves return Entries=post AND undrained leaves surface
+    /// leaves return cached-post AND undrained leaves surface
     /// pending.value=post via <see cref="TxStatus.Committed"/>).
     /// </para>
     /// <para>

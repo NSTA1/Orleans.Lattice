@@ -15,8 +15,8 @@ internal sealed partial class BPlusLeafGrain
 
         // Snapshot the WAL head for this shard's partition before the
         // split's intent is persisted. The donor's foreground commits
-        // up to this offset have already been applied to
-        // state.State.Entries, so on a future activation the
+        // up to this offset have already been applied to the runtime
+        // entry cache, so on a future activation the
         // materialiser can skip replaying them. This is correctness-
         // safe even without the snapshot (the per-key-range filter
         // drops foreign-range entries and LWW makes own-range
@@ -152,8 +152,8 @@ internal sealed partial class BPlusLeafGrain
 
         // Advance the donor's projection checkpoint to the WAL head
         // captured at split time so the donor's first post-split
-        // activation skips replaying entries already reflected in
-        // state.State.Entries. Routes through the projection seam so
+        // activation skips replaying entries already reflected in the
+        // runtime entry cache. Routes through the projection seam so
         // the unresolved-prepare clamp is honoured. No-op when no WAL
         // writer is configured.
         if (resolvedWalHead is { } donorHead && donorHead > 0)
