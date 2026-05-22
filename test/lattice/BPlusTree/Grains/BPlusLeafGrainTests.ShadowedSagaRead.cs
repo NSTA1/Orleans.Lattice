@@ -79,11 +79,12 @@ public partial class BPlusLeafGrainTests
     /// </summary>
     private static void SeedMigratedEntry(
         FakePersistentState<LeafNodeState> state,
+        BPlusLeafGrain grain,
         string key,
         byte[] value)
     {
         var migratedHlc = new HybridLogicalClock { WallClockTicks = 5_000_000, Counter = 0 };
-        state.State.Entries[key] = LwwValue<byte[]>.Create(value, migratedHlc) with { IsMigrated = true };
+        grain.EntriesForTest[key] = LwwValue<byte[]>.Create(value, migratedHlc) with { IsMigrated = true };
         state.State.Clock = new HybridLogicalClock { WallClockTicks = 1_000_000, Counter = 0 };
     }
 
@@ -95,7 +96,7 @@ public partial class BPlusLeafGrainTests
         // owner of "k". Registry says the saga is still InFlight.
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
-        SeedMigratedEntry(state, "k", [99]);
+        SeedMigratedEntry(state, grain, "k", [99]);
 
         var txid = Guid.NewGuid();
         await grain.MarkSagaShadowAsync(txid, new[] { "k" });
@@ -116,7 +117,7 @@ public partial class BPlusLeafGrainTests
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
-        SeedMigratedEntry(state, "k", [99]);
+        SeedMigratedEntry(state, grain, "k", [99]);
 
         var txid = Guid.NewGuid();
         await grain.MarkSagaShadowAsync(txid, new[] { "k" });
@@ -139,7 +140,7 @@ public partial class BPlusLeafGrainTests
         // sibling leaf whose backstop has already landed.
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
-        SeedMigratedEntry(state, "k", [99]);
+        SeedMigratedEntry(state, grain, "k", [99]);
 
         var txid = Guid.NewGuid();
         grain.MarkSagaShadowAsync(txid, new[] { "k" }).GetAwaiter().GetResult();
@@ -166,7 +167,7 @@ public partial class BPlusLeafGrainTests
         // ApplyTxTerminalAsync, so the read serves Entries directly.
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
-        SeedMigratedEntry(state, "k", [99]);
+        SeedMigratedEntry(state, grain, "k", [99]);
 
         var txid = Guid.NewGuid();
         await grain.MarkSagaShadowAsync(txid, new[] { "k" });
@@ -201,8 +202,8 @@ public partial class BPlusLeafGrainTests
         // that silently omits or stalely serves the key.
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
-        SeedMigratedEntry(state, "k1", [99]);
-        SeedMigratedEntry(state, "k2", [100]);
+        SeedMigratedEntry(state, grain, "k1", [99]);
+        SeedMigratedEntry(state, grain, "k2", [100]);
 
         var txid = Guid.NewGuid();
         grain.MarkSagaShadowAsync(txid, new[] { "k1" }).GetAwaiter().GetResult();
@@ -250,7 +251,7 @@ public partial class BPlusLeafGrainTests
         // install a marker that would shadow unrelated reads.
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
-        SeedMigratedEntry(state, "k", [99]);
+        SeedMigratedEntry(state, grain, "k", [99]);
         var txid = Guid.NewGuid();
 
         await grain.MarkSagaShadowAsync(txid, Array.Empty<string>());

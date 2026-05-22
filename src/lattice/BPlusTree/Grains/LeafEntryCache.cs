@@ -9,18 +9,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// host a lazily-materialised typed CRDT shadow keyed by entry type to short-circuit
 /// the deserialize-then-merge-then-reserialize round-trip on accessor reads.
 /// <para>
-/// The cache is **not** persisted. It is rebuilt on activation from the WAL replay
-/// path strictly after <c>ProjectionCheckpointOffset</c>. The leaf grain is the sole
-/// writer authority, so the cache lives inside a single activation's lifetime and
-/// has no cross-activation sharing.
-/// </para>
-/// <para>
-/// In sub-step 6.1 (this commit) the cache delegates all storage to an externally
-/// supplied <see cref="SortedDictionary{TKey, TValue}"/> - typically the legacy
-/// <c>state.State.Entries</c> instance - so no behavioural change is introduced.
-/// Subsequent sub-steps route the leaf grain's read and write call sites through
-/// this surface, then flip ownership of the backing store from persisted state to
-/// a private field, then drop the persisted dictionary entirely.
+/// The cache is **not** persisted. As of R-120 step 6 the persisted leaf state
+/// no longer carries a per-key dictionary; activation rebuilds the cache from
+/// the WAL replay path strictly after <c>ProjectionCheckpointOffset</c>. The
+/// leaf grain is the sole writer authority, so the cache lives inside a single
+/// activation's lifetime and has no cross-activation sharing.
 /// </para>
 /// </summary>
 internal sealed class LeafEntryCache

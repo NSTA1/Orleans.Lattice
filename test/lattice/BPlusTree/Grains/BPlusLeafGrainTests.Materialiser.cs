@@ -30,6 +30,7 @@ public partial class BPlusLeafGrainTests
         string? treeId = MaterialiserTreeId,
         long persistedCheckpoint = 0,
         Action<LeafNodeState>? seedState = null,
+        Action<SortedDictionary<string, LwwValue<byte[]>>>? seedEntries = null,
         ILatticeFallOffLogDetector? detector = null,
         ILeafCursorReporter? reporter = null)
     {
@@ -66,6 +67,7 @@ public partial class BPlusLeafGrainTests
             shardCount: 1,
             factory: grainFactory);
         var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
+        seedEntries?.Invoke(grain.EntriesForTest);
         return (grain, state, coordinator, reporter);
     }
 
@@ -224,7 +226,7 @@ public partial class BPlusLeafGrainTests
         var coord = BuildCoordinator(head: 1, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
-            seedState: s => s.Entries["k1"] = new LwwValue<byte[]>
+            seedEntries: e => e["k1"] = new LwwValue<byte[]>
             {
                 Value = Encoding.UTF8.GetBytes("stale"),
                 Timestamp = new HybridLogicalClock { WallClockTicks = 100 },
@@ -248,11 +250,11 @@ public partial class BPlusLeafGrainTests
         var coord = BuildCoordinator(head: 1, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
-            seedState: s =>
+            seedEntries: e =>
             {
                 foreach (var k in new[] { "k1", "k2", "k3", "k4" })
                 {
-                    s.Entries[k] = new LwwValue<byte[]>
+                    e[k] = new LwwValue<byte[]>
                     {
                         Value = Encoding.UTF8.GetBytes(k),
                         Timestamp = new HybridLogicalClock { WallClockTicks = 100 },
@@ -413,13 +415,13 @@ public partial class BPlusLeafGrainTests
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
             persistedCheckpoint: 1,
-            seedState: s =>
+            seedEntries: e =>
             {
                 // k1 already persisted -> seed a value newer than entry1
                 // so a redundant replay would be detectable. The
                 // materialiser must NOT replay entry1, so the seeded
                 // value survives.
-                s.Entries["k1"] = new LwwValue<byte[]>
+                e["k1"] = new LwwValue<byte[]>
                 {
                     Value = Encoding.UTF8.GetBytes("seeded"),
                     Timestamp = new HybridLogicalClock { WallClockTicks = 1_000 },
@@ -1029,10 +1031,10 @@ public partial class BPlusLeafGrainTests
         var coord = BuildCoordinator(head: 1, entry);
         var (grain, state, _, _) = CreateGrainWithMaterialiser(
             coord,
-            seedState: s =>
+            seedState: s => s.ShardIndex = 1,
+            seedEntries: e =>
             {
-                s.ShardIndex = 1;
-                s.Entries["k1"] = new LwwValue<byte[]>
+                e["k1"] = new LwwValue<byte[]>
                 {
                     Value = Encoding.UTF8.GetBytes("v1"),
                     Timestamp = new HybridLogicalClock { WallClockTicks = 100 },
