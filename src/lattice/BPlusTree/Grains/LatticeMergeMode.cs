@@ -86,10 +86,11 @@ public enum LatticeMergeMode
     /// own <see cref="Primitives.ICrdt{TSelf}.MergeFrom(TSelf)"/> for
     /// concurrent same-key writes. Because the wire shape is generic, the
     /// host must register the <c>(TKey, TValue)</c> pair through
-    /// <c>AddOrMapReplicationShape&lt;TKey, TValue&gt;()</c> on the
-    /// service collection before the silo starts; the receiver-side
-    /// applier looks the pair up by tree id and routes the deserialise
-    /// + merge through the matching descriptor. Trees configured for
+    /// <c>AddOrMapShape&lt;TKey, TValue&gt;()</c> on the
+    /// service collection before the silo starts; the producer-side
+    /// accessor and receiver-side applier both look the pair up by
+    /// tree id and route the deserialise + merge through the matching
+    /// descriptor. Trees configured for
     /// <see cref="OrMap"/> with no registered shape descriptor fault
     /// the apply path so the misconfiguration is surfaced rather than
     /// silently dropping the entry.

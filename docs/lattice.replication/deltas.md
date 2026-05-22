@@ -35,7 +35,7 @@ Every record is a `readonly record struct`, marked `[GenerateSerializer]` and `[
 | `PnCounterDelta` | Pointwise-max each `(replica, value)` against the local positive and negative components. Never subtract - values are cumulative counts, not deltas. |
 | `VersionVectorDelta` | Pointwise-max each `(replica, clock)` against the local vector. Late or duplicate delivery is a no-op. |
 | `MvRegisterDelta` | Union the incoming `Entries` into the local register, dropping any entry whose `(replicaId, counter)` dot is dominated by the **other** side's context, then pointwise-max the two contexts. The merge is order-independent and idempotent. |
-| `OrMapDelta<TKey, TValue>` | For each entry in `Adds`, fold the inner `Value` into the local per-key value via `ICrdt<TValue>.MergeFrom`; for each `Tombstones` dot, drop the matching local dot. Order-independent and idempotent. Receivers must register the concrete `(TKey, TValue)` pair once at startup via `siloBuilder.AddOrMapReplicationShape<TKey, TValue>(treeName)`. |
+| `OrMapDelta<TKey, TValue>` | For each entry in `Adds`, fold the inner `Value` into the local per-key value via `ICrdt<TValue>.MergeFrom`; for each `Tombstones` dot, drop the matching local dot. Order-independent and idempotent. Receivers must register the concrete `(TKey, TValue)` pair once at startup via `siloBuilder.AddOrMapShape<TKey, TValue>(treeName)`. |
 
 ## Equality caveats
 

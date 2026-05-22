@@ -2,31 +2,30 @@ using System.Collections.Concurrent;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
-/// Receiver-side registry of typed OR-Map shapes. Hosts that
-/// configure a tree for <see cref="LatticeMergeMode.OrMap"/> must
-/// register the concrete <c>(TKey, TValue)</c> pair on the silo
-/// service collection via
-/// <see cref="LatticeReplicationServiceCollectionExtensions.AddOrMapReplicationShape{TKey, TValue}(ISiloBuilder, string)"/>
-/// so the <see cref="ReplicationApplier"/> can deserialise the
-/// generic <see cref="OrMapDelta{TKey, TValue}"/> carried in
-/// <see cref="WalRecord.Delta"/> and route it through the matching
-/// <see cref="OrMap{TKey, TValue}.MergeDelta(OrMapDelta{TKey, TValue})"/>
-/// call.
+/// Registry of typed OR-Map shapes. Hosts that configure a tree for
+/// <see cref="LatticeMergeMode.OrMap"/> must register the concrete
+/// <c>(TKey, TValue)</c> pair on the silo service collection via
+/// <see cref="LatticeServiceCollectionExtensions.AddOrMapShape{TKey, TValue}(ISiloBuilder, string)"/>
+/// so producer-side accessors and receiver-side appliers can both
+/// deserialise the generic <see cref="OrMap{TKey, TValue}"/> state
+/// and the matching <see cref="OrMapDelta{TKey, TValue}"/> wire payload,
+/// and call <see cref="OrMap{TKey, TValue}.MergeDelta(OrMapDelta{TKey, TValue})"/>
+/// through a single type-erased seam.
 /// </summary>
-public sealed class OrMapReplicationShapeRegistry
+public sealed class OrMapShapeRegistry
 {
-    private readonly ConcurrentDictionary<string, OrMapReplicationShape> _shapes =
+    private readonly ConcurrentDictionary<string, OrMapShape> _shapes =
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Registers <paramref name="shape"/> as the apply descriptor for
-    /// the tree identified by <paramref name="treeId"/>. Throws when
-    /// a different shape is already registered for the same tree.
+    /// Registers <paramref name="shape"/> as the descriptor for the tree
+    /// identified by <paramref name="treeId"/>. Throws when a different
+    /// shape is already registered for the same tree.
     /// </summary>
-    public void Register(string treeId, OrMapReplicationShape shape)
+    public void Register(string treeId, OrMapShape shape)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(shape);
@@ -36,19 +35,19 @@ public sealed class OrMapReplicationShapeRegistry
             if (!ReferenceEquals(existing, shape))
             {
                 throw new InvalidOperationException(
-                    $"An OrMapReplicationShape is already registered for tree '{treeId}'. " +
+                    $"An OrMapShape is already registered for tree '{treeId}'. " +
                     "Each tree may carry at most one (TKey, TValue) shape; remove the duplicate registration.");
             }
         }
     }
 
     /// <summary>
-    /// Resolves the apply descriptor for <paramref name="treeId"/>, or
+    /// Resolves the descriptor for <paramref name="treeId"/>, or
     /// <c>null</c> when none has been registered. Callers fault the
-    /// apply path on <c>null</c> so the misconfiguration surfaces
-    /// rather than silently dropping the entry.
+    /// apply / producer path on <c>null</c> so the misconfiguration
+    /// surfaces rather than silently dropping the entry.
     /// </summary>
-    public OrMapReplicationShape? TryGet(string treeId)
+    public OrMapShape? TryGet(string treeId)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         return _shapes.TryGetValue(treeId, out var shape) ? shape : null;
@@ -56,14 +55,13 @@ public sealed class OrMapReplicationShapeRegistry
 }
 
 /// <summary>
-/// Receiver-side apply descriptor for one concrete
-/// <c>(TKey, TValue)</c> OR-Map shape. Carries the bytes-to-state
-/// and bytes-to-delta deserialisers plus a merge action that folds
-/// the typed delta into the loaded state. Constructed by the
-/// <c>AddOrMapReplicationShape&lt;TKey, TValue&gt;</c> extension; not
-/// intended for direct host construction.
+/// Type-erased descriptor for one concrete <c>(TKey, TValue)</c> OR-Map
+/// shape. Carries the bytes-to-state and bytes-to-delta deserialisers
+/// plus a merge action that folds the typed delta into the loaded state.
+/// Constructed by the <c>AddOrMapShape&lt;TKey, TValue&gt;</c> extension;
+/// not intended for direct host construction.
 /// </summary>
-public sealed class OrMapReplicationShape
+public sealed class OrMapShape
 {
     /// <summary>Deserialises the full-state bytes into a typed primitive instance.</summary>
     public Func<byte[], object> DeserializeState { get; }
@@ -80,8 +78,8 @@ public sealed class OrMapReplicationShape
     /// <summary>Serialises a typed state instance back to bytes for CAS write-back.</summary>
     public Func<object, byte[]> SerializeState { get; }
 
-    /// <summary>Initialises a new <see cref="OrMapReplicationShape"/>.</summary>
-    public OrMapReplicationShape(
+    /// <summary>Initialises a new <see cref="OrMapShape"/>.</summary>
+    public OrMapShape(
         Func<byte[], object> deserializeState,
         Func<byte[], object> deserializeDelta,
         Action<object, object> mergeDelta,
@@ -108,13 +106,13 @@ public sealed class OrMapReplicationShape
     /// <see cref="OrMap{TKey, TValue}.MergeDelta(OrMapDelta{TKey, TValue})"/>
     /// method.
     /// </summary>
-    public static OrMapReplicationShape For<TKey, TValue>()
+    public static OrMapShape For<TKey, TValue>()
         where TKey : notnull
         where TValue : Primitives.ICrdt<TValue>, new()
     {
         var stateSerializer = JsonLatticeSerializer<OrMap<TKey, TValue>>.Default;
         var deltaSerializer = JsonLatticeSerializer<OrMapDelta<TKey, TValue>>.Default;
-        return new OrMapReplicationShape(
+        return new OrMapShape(
             deserializeState: bytes => stateSerializer.Deserialize(bytes),
             deserializeDelta: bytes => deltaSerializer.Deserialize(bytes),
             mergeDelta: (state, delta) => ((OrMap<TKey, TValue>)state).MergeDelta((OrMapDelta<TKey, TValue>)delta),

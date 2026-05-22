@@ -38,7 +38,7 @@ commit-time observer short-circuits before any sink call.
 | `PnCounter` | **Available** | Positive-negative counter. Pointwise-max merge on each replica's positive and negative components - concurrent increments and decrements from multiple clusters sum correctly. |
 | `VersionVector` | **Available** | Version vector. Pointwise-max merge on each replica's `HybridLogicalClock` entry. Late or duplicate delivery is a no-op. |
 | `MvRegister` | **Available** | Multi-value register. Dot-tagged state-based merge - concurrent writes from different clusters survive convergence as a conflict set the application resolves via `MvRegisterAccessor<T>.ValuesAsync()`. |
-| `OrMap` | **Available** | Observed-remove map of `(TKey, TValue)` where `TValue` is itself a CRDT. Per-key values converge recursively through `ICrdt<TValue>.MergeFrom`. Requires a one-time `siloBuilder.AddOrMapReplicationShape<TKey, TValue>(treeName)` registration on each receiving silo so the applier can resolve the generic shape; an unregistered shape faults the apply rather than silently dropping the entry. |
+| `OrMap` | **Available** | Observed-remove map of `(TKey, TValue)` where `TValue` is itself a CRDT. Per-key values converge recursively through `ICrdt<TValue>.MergeFrom`. Requires a one-time `siloBuilder.AddOrMapShape<TKey, TValue>(treeName)` registration on each receiving silo so the applier can resolve the generic shape; an unregistered shape faults the apply rather than silently dropping the entry. |
 
 The validator accepts every defined `LatticeMergeMode` value; only undefined integer values fail validation.
 
@@ -61,10 +61,10 @@ Typed-delta merge is commutative, associative, and idempotent: late or duplicate
 ```csharp verify
 using Orleans.Lattice.Primitives;
 
-siloBuilder.AddOrMapReplicationShape<string, OrSet>("tags-by-user");
+siloBuilder.AddOrMapShape<string, OrSet>("tags-by-user");
 ```
 
-The registration installs a deserialiser / merger descriptor into the `OrMapReplicationShapeRegistry` singleton before silo activation; an apply against a tree configured for `LatticeMergeMode.OrMap` with no matching registration faults the apply with a clear configuration-error message rather than silently dropping the entry.
+The registration installs a deserialiser / merger descriptor into the `OrMapShapeRegistry` singleton before silo activation; an apply against a tree configured for `LatticeMergeMode.OrMap` with no matching registration faults the apply with a clear configuration-error message rather than silently dropping the entry.
 
 ## How the mode is resolved at commit time
 

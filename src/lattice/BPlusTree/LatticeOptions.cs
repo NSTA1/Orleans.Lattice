@@ -624,8 +624,8 @@ public class LatticeOptions
     /// </summary>
     public TimeSpan MaterialiserCheckpointInterval { get; set; } = DefaultMaterialiserCheckpointInterval;
 
-    /// <summary>Default value for <see cref="MaterialiserCheckpointInterval"/> (1 second).</summary>
-    public static readonly TimeSpan DefaultMaterialiserCheckpointInterval = TimeSpan.FromSeconds(1);
+    /// <summary>Default value for <see cref="MaterialiserCheckpointInterval"/> (5 seconds).</summary>
+    public static readonly TimeSpan DefaultMaterialiserCheckpointInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Maximum number of pending checkpoint advances (measured as the
@@ -639,8 +639,8 @@ public class LatticeOptions
     /// </summary>
     public int MaterialiserCheckpointEntries { get; set; } = DefaultMaterialiserCheckpointEntries;
 
-    /// <summary>Default value for <see cref="MaterialiserCheckpointEntries"/> (1 000).</summary>
-    public const int DefaultMaterialiserCheckpointEntries = 1_000;
+    /// <summary>Default value for <see cref="MaterialiserCheckpointEntries"/> (5 000).</summary>
+    public const int DefaultMaterialiserCheckpointEntries = 5_000;
 
     /// <summary>
     /// Maximum age beyond which a leaf grain's persisted projection

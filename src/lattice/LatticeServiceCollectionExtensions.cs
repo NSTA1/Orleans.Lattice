@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -275,5 +276,80 @@ public static class LatticeServiceCollectionExtensions
         var policy = new BoundedExponentialRetryPolicy(options);
         builder.Services.ConfigureAll<LatticeOptions>(o => o.RetryPolicy = policy);
         return builder;
+    }
+
+    /// <summary>
+    /// Registers a typed OR-Map shape for the tree identified by
+    /// <paramref name="treeName"/>. Required whenever a tree is configured
+    /// for <see cref="LatticeMergeMode.OrMap"/>: the producer-side accessor
+    /// and the receiver-side applier both look the descriptor up at runtime
+    /// so they can deserialise the generic
+    /// <see cref="OrMap{TKey, TValue}"/> state and the matching
+    /// <see cref="OrMapDelta{TKey, TValue}"/> wire payload, and fold the
+    /// delta in via
+    /// <see cref="OrMap{TKey, TValue}.MergeDelta(OrMapDelta{TKey, TValue})"/>
+    /// through a single type-erased seam. Registering a different
+    /// <c>(TKey, TValue)</c> pair for the same tree is a configuration
+    /// error and throws at registration time.
+    /// </summary>
+    public static ISiloBuilder AddOrMapShape<TKey, TValue>(
+        this ISiloBuilder builder,
+        string treeName)
+        where TKey : notnull
+        where TValue : ICrdt<TValue>, new()
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+        builder.Services.TryAddSingleton<OrMapShapeRegistry>();
+        builder.Services.AddSingleton<IConfigureOptions<OrMapShapeRegistryStartupMarker>>(
+            new ConfigureOrMapShape(treeName, OrMapShape.For<TKey, TValue>()));
+        // Eager registration via a hosted-startup hook so the descriptor is
+        // installed before the first producer emission or WAL apply runs.
+        builder.Services.AddSingleton<IHostedService, OrMapShapeStartup>();
+        return builder;
+    }
+
+    /// <summary>Internal hosted-service marker; registered once per silo.</summary>
+    internal sealed class OrMapShapeRegistryStartupMarker { }
+
+    /// <summary>Internal <see cref="IConfigureOptions{TOptions}"/> carrying one shape registration.</summary>
+    internal sealed class ConfigureOrMapShape(string treeId, OrMapShape shape)
+        : IConfigureOptions<OrMapShapeRegistryStartupMarker>
+    {
+        /// <summary>The tree id this shape is bound to.</summary>
+        public string TreeId { get; } = treeId;
+
+        /// <summary>The shape descriptor.</summary>
+        public OrMapShape Shape { get; } = shape;
+
+        /// <inheritdoc />
+        public void Configure(OrMapShapeRegistryStartupMarker options) { }
+    }
+
+    /// <summary>
+    /// Hosted service that drains every registered
+    /// <see cref="ConfigureOrMapShape"/> into the singleton
+    /// <see cref="OrMapShapeRegistry"/> at silo start, before any
+    /// producer-side accessor or receiver-side applier accepts an entry.
+    /// </summary>
+    internal sealed class OrMapShapeStartup(
+        OrMapShapeRegistry registry,
+        IEnumerable<IConfigureOptions<OrMapShapeRegistryStartupMarker>> registrations) : IHostedService
+    {
+        /// <inheritdoc />
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            foreach (var entry in registrations)
+            {
+                if (entry is ConfigureOrMapShape c)
+                {
+                    registry.Register(c.TreeId, c.Shape);
+                }
+            }
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc />
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
