@@ -60,6 +60,19 @@ internal sealed partial class BPlusLeafGrain
     /// drives a capture.
     /// </summary>
     private int _checkpointPersistCountSinceRecheck;
+
+    /// <summary>
+    /// Checkpoint offset at the moment the most recent proactive
+    /// capture landed. The periodic recheck uses this as a cheap
+    /// "we already snapshotted this projection" filter: when the
+    /// post-flush checkpoint equals the last-captured checkpoint, the
+    /// recheck short-circuits before the classifier RPCs (which would
+    /// re-fetch the WAL head and tail, then re-classify, and at best
+    /// drive a redundant capture of an identical projection). Set to
+    /// the snapshot's offset on a successful capture; never reset
+    /// across the activation lifetime.
+    /// </summary>
+    private long _lastCapturedCheckpointOffset = long.MinValue;
     /// <inheritdoc />
     public async Task CaptureSnapshotAsync()
     {
@@ -118,6 +131,7 @@ internal sealed partial class BPlusLeafGrain
             var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
                 context.GrainId.GetGuidKey());
             await snapshotGrain.SaveAsync(blob, CancellationToken.None);
+            _lastCapturedCheckpointOffset = checkpoint;
         }
         finally
         {
@@ -188,6 +202,17 @@ internal sealed partial class BPlusLeafGrain
         {
             // A previous capture has not yet completed; skip this
             // recheck. The next post-threshold persist will retry.
+            return;
+        }
+
+        // Cheap short-circuit: if the persisted checkpoint has not
+        // advanced since the most recent successful capture, the
+        // classifier would just re-derive an identical (or strictly
+        // weaker) decision and any follow-on capture would write a
+        // byte-identical blob. Skip the classifier RPCs and the
+        // potential redundant SaveAsync.
+        if (state.State.ProjectionCheckpointOffset == _lastCapturedCheckpointOffset)
+        {
             return;
         }
 
@@ -294,9 +319,17 @@ internal sealed partial class BPlusLeafGrain
         // We instead invalidate the digest below and let the lazy
         // full-walk recompute it.
         Cache.Clear();
-        foreach (var row in blob.Rows)
+        // Defensive: LeafSnapshotBlob.Rows is documented "never null"
+        // and defaults to Array.Empty, but the setter is public and a
+        // partially-deserialised blob could surface null. Treat null
+        // as an empty row set rather than NPE-ing on the foreach.
+        var rows = blob.Rows;
+        if (rows is not null)
         {
-            Cache.StoreRow(row.Key, row.Value);
+            foreach (var row in rows)
+            {
+                Cache.StoreRow(row.Key, row.Value);
+            }
         }
 
         // Advance the persisted checkpoint to match the snapshot.

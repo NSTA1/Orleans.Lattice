@@ -369,4 +369,56 @@ public partial class BPlusLeafGrainTests
             Throws.Nothing,
             "A best-effort proactive snapshot capture must not block activation.");
     }
+
+    [Test]
+    public async Task Periodic_recheck_skips_classifier_when_checkpoint_unchanged_since_last_capture()
+    {
+        // After an activation-time capture lands, the periodic recheck
+        // path must short-circuit before invoking the classifier
+        // whenever state.State.ProjectionCheckpointOffset has not moved
+        // since the last capture: a fresh classify would re-derive an
+        // identical decision and any follow-on capture would write a
+        // byte-identical blob. The short-circuit avoids the classifier
+        // RPC pair (head + tail) and the redundant SaveAsync.
+        const int threshold = 1;
+        var (grain, _, snapshotStub, detector) = CreateGrainForProactiveCapture(
+            activationDecision: FallOffLogDecision.SnapshotPending,
+            persistedCheckpoint: 7,
+            walHead: 7,
+            reClassifyEveryN: threshold,
+            periodicDecision: FallOffLogDecision.SnapshotPending);
+
+        grain.EntriesForTest["k"] = new LwwValue<byte[]>
+        {
+            Value = Encoding.UTF8.GetBytes("v"),
+            Timestamp = HybridLogicalClock.Zero,
+        };
+
+        // Activation drives the first capture; this also stamps the
+        // last-captured checkpoint at 7.
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+        await snapshotStub.Received(1).SaveAsync(
+            Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+
+        // One classify call so far - the activation-time pre-replay
+        // classification.
+        var classifiesAfterActivation = detector.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(ILatticeFallOffLogDetector.ClassifyAsync));
+
+        // Re-advance the checkpoint to the same value the snapshot was
+        // stamped at. The materialiser still flushes (which increments
+        // the persist counter to threshold) but the recheck must
+        // short-circuit because the checkpoint matches the last-
+        // captured offset.
+        var projection = (ILeafProjection)grain;
+        await projection.SetCheckpointOffsetAsync(7, CancellationToken.None);
+
+        // No additional classify, and no additional capture.
+        var classifiesAfterPersist = detector.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(ILatticeFallOffLogDetector.ClassifyAsync));
+        Assert.That(classifiesAfterPersist, Is.EqualTo(classifiesAfterActivation),
+            "Periodic recheck must short-circuit before the classifier when checkpoint == last-captured offset.");
+        await snapshotStub.Received(1).SaveAsync(
+            Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+    }
 }

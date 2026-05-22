@@ -123,4 +123,47 @@ public class CrdtShapeRegistryTests
         var state = (OrMap<string, PnCounter>)shape.CreateEmpty();
         Assert.That(state.IsBottom, Is.True);
     }
+
+    [Test]
+    public void ForVersionVector_descriptor_roundtrips_state_and_merges_delta()
+    {
+        var shape = CrdtShape.ForVersionVector();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.VersionVector));
+
+        var state = (VersionVector)shape.CreateEmpty();
+        state.Tick("A");
+        var delta = new VersionVectorDelta
+        {
+            Entries = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["B"] = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 },
+            },
+        };
+        var deltaBytes = JsonLatticeSerializer<VersionVectorDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+
+        // Re-serialise / re-hydrate the post-merge state and confirm both
+        // entries survived the round trip.
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (VersionVector)shape.DeserializeState(stateBytes);
+        Assert.That(roundtripped.Entries.ContainsKey("A"), Is.True);
+        Assert.That(roundtripped.Entries.ContainsKey("B"), Is.True);
+    }
+
+    [Test]
+    public void ForMvRegister_descriptor_roundtrips_state_and_merges_other_state()
+    {
+        var shape = CrdtShape.ForMvRegister();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.MvRegister));
+
+        var a = (MvRegister)shape.CreateEmpty();
+        a.Set("A", new byte[] { 1 });
+        var b = (MvRegister)shape.CreateEmpty();
+        b.Set("B", new byte[] { 2 });
+        shape.MergeStates(a, b);
+
+        // After merging two concurrent writes from distinct replicas the
+        // MV register must hold both values.
+        Assert.That(a.Values().Count, Is.EqualTo(2));
+    }
 }

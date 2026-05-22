@@ -158,6 +158,35 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task Activation_handles_blob_with_null_rows_collection_defensively()
+    {
+        // LeafSnapshotBlob.Rows is documented as never-null and
+        // defaults to Array.Empty, but the setter is public and a
+        // partially-deserialised blob (or a future format-rev) could
+        // surface null. The rehydrate path must treat null Rows as
+        // an empty row set rather than NPE-ing on the foreach.
+        var blob = new LeafSnapshotBlob
+        {
+            SnapshotOffset = 25,
+            Rows = null!,
+            CapturedAtTicks = 1L,
+        };
+        var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+            preloadedSnapshot: blob,
+            persistedCheckpoint: 10,
+            walHead: 25);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        // Checkpoint still advances to the snapshot offset; the cache
+        // is empty (no rows were carried) and the digest is invalidated
+        // so the lazy backfill recomputes from the empty cache.
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(25L));
+        Assert.That(grain.EntriesForTest, Is.Empty);
+        Assert.That(state.State.ProjectionHash, Is.Null);
+    }
+
+    [Test]
     public async Task Activation_snapshot_load_failure_falls_through_to_WAL_replay()
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
