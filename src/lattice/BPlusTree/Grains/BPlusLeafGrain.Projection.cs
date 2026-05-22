@@ -190,6 +190,7 @@ internal sealed partial class BPlusLeafGrain
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
             await ReportCursorIfActiveAsync();
             await PublishDigestUpwardAsync();
+            await MaybeRunPeriodicSnapshotRecheckAsync();
             return;
         }
 
@@ -201,6 +202,7 @@ internal sealed partial class BPlusLeafGrain
             // Apply work may have updated ProjectionHash since the
             // previous publish; flush any pending dirt.
             await PublishDigestUpwardAsync();
+            await MaybeRunPeriodicSnapshotRecheckAsync();
         }
     }
 

@@ -635,4 +635,43 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// be <c>null</c>.
     /// </param>
     Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys);
+
+    /// <summary>
+    /// Captures a point-in-time snapshot of this leaf's per-activation
+    /// entry cache and persists it into the dedicated
+    /// <see cref="Grains.ILeafSnapshotStorageGrain"/> keyed by this
+    /// leaf's grain id. The captured snapshot carries the leaf's
+    /// already-persisted <c>ProjectionCheckpointOffset</c> as its
+    /// <c>SnapshotOffset</c>; subsequent activations that find a
+    /// snapshot whose offset exceeds the persisted checkpoint may
+    /// rehydrate the cache from the snapshot instead of replaying
+    /// the WAL from the checkpoint forward.
+    /// <para>
+    /// Driven by the leaf itself: the activation hook captures once
+    /// after tail replay when the fall-off-log detector raises the
+    /// <see cref="Grains.FallOffLogDecision.SnapshotPending"/> advisory,
+    /// and every <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
+    /// successful checkpoint persist re-classifies and (on advisory)
+    /// re-captures. The call is a no-op when the leaf has not yet
+    /// applied any WAL entry (the persisted checkpoint is the
+    /// "nothing applied" sentinel <c>-1</c>) or when the leaf has no
+    /// resolved tree id (uninitialised activation). The snapshot grain
+    /// holds at most one blob per leaf; a successful capture overwrites
+    /// any previous snapshot.
+    /// </para>
+    /// </summary>
+    Task CaptureSnapshotAsync();
+
+    /// <summary>
+    /// Test-only seam: requests that the grain runtime collect this
+    /// activation by calling <c>DeactivateOnIdle</c> from inside the
+    /// grain. Integration tests use this to exercise activation-time
+    /// snapshot rehydration end-to-end: capture a snapshot, force the
+    /// activation to deactivate, then re-acquire the grain and observe
+    /// that the rehydrate path restored the cache without replaying
+    /// the full WAL. Production callers must not invoke this; the
+    /// silo's idle-collection scheduler is the canonical driver of
+    /// activation lifetime.
+    /// </summary>
+    Task ForceDeactivateAsync();
 }

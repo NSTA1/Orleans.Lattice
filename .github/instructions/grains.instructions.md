@@ -30,6 +30,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `BPlusLeafGrain` | Opaque grain-assigned ID | - |
 | `BPlusInternalGrain` | Opaque grain-assigned ID | - |
 | `LeafCacheGrain` | `{leafGrainId}` | `"leaf/abc"` |
+| `LeafSnapshotStorageGrain` | Guid key matching the source leaf's grain id | - |
 | `LatticeRegistryGrain` | Singleton (`_lattice_trees`) | `"_lattice_trees"` |
 | `TombstoneCompactionGrain` | `{treeId}` | `"my-tree"` |
 | `TreeDeletionGrain` | `{treeId}` | `"my-tree"` |

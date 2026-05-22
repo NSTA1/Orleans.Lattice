@@ -54,4 +54,23 @@ public class LatticeOptionsValidatorTests
         var result = Validate(o => o.MaxLeafReplayEntries = 1);
         Assert.That(result.Succeeded, Is.True);
     }
+
+    [TestCase(-1)]
+    [TestCase(-100)]
+    public void LeafSnapshotReClassifyEveryNCheckpoints_must_be_non_negative(int value)
+    {
+        var result = Validate(o => o.LeafSnapshotReClassifyEveryNCheckpoints = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage,
+            Does.Contain(nameof(LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints)));
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(64)]
+    public void LeafSnapshotReClassifyEveryNCheckpoints_non_negative_passes(int value)
+    {
+        var result = Validate(o => o.LeafSnapshotReClassifyEveryNCheckpoints = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
 }

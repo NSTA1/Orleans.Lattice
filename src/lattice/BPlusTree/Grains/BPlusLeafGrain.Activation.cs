@@ -101,6 +101,17 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        // Step 0 - try to rehydrate the in-memory entry cache from a
+        // persisted leaf snapshot. The snapshot is the safety net for
+        // WAL retention fall-off: if a previous maintenance tick wrote
+        // a snapshot whose offset exceeds this leaf's persisted
+        // ProjectionCheckpointOffset, we hydrate the cache from the
+        // snapshot and let the tail replay below cover only the
+        // (snapshot, head] suffix. When no snapshot is present (or it
+        // is older than the persisted checkpoint), this step is a
+        // no-op and the existing WAL-tail-replay path runs unchanged.
+        await TryRehydrateFromSnapshotAsync(cancellationToken);
+
         // Step 1 - drive the dormant ILeafProjection.Apply seam over
         // the WAL slice between the persisted checkpoint and the
         // current head. Failures propagate: a leaf that comes online
@@ -109,6 +120,23 @@ internal sealed partial class BPlusLeafGrain
         // pipeline will retry the activation rather than serve reads
         // from a half-applied state.
         var advanced = await ReplayWalSinceCheckpointAsync(cancellationToken);
+
+        // Step 1.5 - if the fall-off-log detector raised the
+        // SnapshotPending advisory while classifying the replay path,
+        // proactively capture the leaf's projection into the dedicated
+        // snapshot grain now. Doing this once per (advisory-firing)
+        // activation amortises capture cost over the whole activation
+        // cycle and ensures that an active leaf whose checkpoint sits
+        // close to the WAL tail is durably snapshotted before any
+        // subsequent WAL trim can fall through the gap. Capture errors
+        // are best-effort and must not block the leaf coming online -
+        // the next periodic recheck (FlushPendingCheckpointAsync) or
+        // the next reactivation will retry.
+        if (_activationSnapshotPending)
+        {
+            _activationSnapshotPending = false;
+            await TryCaptureSnapshotForAdvisoryAsync();
+        }
 
         // Step 2 - eagerly publish the cursor IFF the materialiser did
         // not already advance the checkpoint. SetCheckpointOffsetAsync
@@ -228,6 +256,17 @@ internal sealed partial class BPlusLeafGrain
             switch (decision)
             {
                 case FallOffLogDecision.TailReplay:
+                    break;
+                case FallOffLogDecision.SnapshotPending:
+                    // SnapshotPending is a non-fatal advisory. At
+                    // activation time the leaf treats it exactly as
+                    // TailReplay for the replay loop below - the
+                    // persisted checkpoint is still inside the readable
+                    // WAL window. We latch the advisory so the
+                    // activation hook (OnActivateAsync) can drive a
+                    // proactive snapshot capture once the tail replay
+                    // has completed.
+                    _activationSnapshotPending = true;
                     break;
                 case FallOffLogDecision.SnapshotThenWal:
                 case FallOffLogDecision.FullRebuildFromWal:

@@ -18,8 +18,11 @@ Every Lattice grain persists its state as a single serialized blob. The two grai
 |---|---|---|
 | `BPlusLeafGrain` | `LeafNodeState` | `MaxLeafKeys` entries, each a `string` key + `LwwValue<byte[]>` (value bytes, HLC timestamp, tombstone flag) + version vector + sibling pointers |
 | `BPlusInternalGrain` | `InternalNodeState` | `MaxInternalChildren` child entries, each a `string?` separator key + `GrainId` |
+| `LeafSnapshotStorageGrain` | `LeafSnapshotBlob` | Live entry count * canonical row size (one row per live key in the source leaf); written by the snapshot-on-fall-off capture path |
 
 `ShardRootGrain` state is small and constant-sized - it is not a concern.
+
+> **The snapshot grain is sized separately from the leaf state row.** It carries one `LeafSnapshotRow` per live key (`string` key + `LwwValue<byte[]>`), stamped with the captured `ProjectionCheckpointOffset` and the wall-clock tick of capture. Worst-case sizing follows the same per-entry overhead table as a pre-collapse leaf row (≈ 45-250 bytes overhead + key + value per row), but the blob is **separate** from the leaf state row - so growing it does not push the leaf row past the storage provider's per-row limit. Pick a provider that can carry multi-MB rows (Azure Blob via the blob-backed lattice storage provider, or any provider whose per-row ceiling exceeds `LiveEntries * AverageRowBytes`). See [Snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) for the capture trigger and cadence.
 
 ### Leaf node: per-entry overhead
 
