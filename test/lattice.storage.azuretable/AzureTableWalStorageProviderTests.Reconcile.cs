@@ -212,4 +212,60 @@ public partial class AzureTableWalStorageProviderTests
 
         Assert.That(plan.ResultingTail, Is.EqualTo(109L));
     }
+
+    [Test]
+    public void OrphanBatch_carries_HasCandidateRow_flag()
+    {
+        // The flag is the discriminator the rollforward / rollback
+        // paths read to decide whether to emit a C-row delete. Pin
+        // both shapes so a future refactor that drops or repurposes
+        // the field surfaces here.
+        var legacy = new AzureTableWalStorageProvider.OrphanBatch(0L, 4L, "_b_|t|0|S0", HasCandidateRow: true);
+        var dmode = new AzureTableWalStorageProvider.OrphanBatch(5L, 9L, "_b_|t|0|S5", HasCandidateRow: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(legacy.HasCandidateRow, Is.True);
+            Assert.That(dmode.HasCandidateRow, Is.False);
+            // Other fields untouched by the new flag.
+            Assert.That(legacy.StartOffset, Is.EqualTo(0L));
+            Assert.That(legacy.EndOffsetInclusive, Is.EqualTo(4L));
+            Assert.That(dmode.StartOffset, Is.EqualTo(5L));
+            Assert.That(dmode.EndOffsetInclusive, Is.EqualTo(9L));
+        });
+    }
+
+    [Test]
+    public void PlanReconciliation_decision_is_independent_of_HasCandidateRow_flag()
+    {
+        // The contiguity test must not branch on HasCandidateRow:
+        // discovery mechanism (C-row scan vs partition scan) is
+        // orthogonal to the rollforward-vs-rollback decision. A
+        // D-mode orphan that is contiguous with TAIL must still
+        // roll forward; a legacy orphan that has a gap must still
+        // roll back.
+        var orphans = new[]
+        {
+            new AzureTableWalStorageProvider.OrphanBatch(0L, 2L, "_b_|t|0|S0", HasCandidateRow: false),
+            new AzureTableWalStorageProvider.OrphanBatch(3L, 5L, "_b_|t|0|S3", HasCandidateRow: true),
+            new AzureTableWalStorageProvider.OrphanBatch(20L, 22L, "_b_|t|0|S20", HasCandidateRow: false),
+        };
+
+        var plan = AzureTableWalStorageProvider.PlanReconciliation(currentTail: -1L, orphansAscending: orphans);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.RollForward.Select(o => o.StartOffset), Is.EqualTo(new[] { 0L, 3L }));
+            Assert.That(plan.RollBack.Select(o => o.StartOffset), Is.EqualTo(new[] { 20L }));
+            Assert.That(plan.ResultingTail, Is.EqualTo(5L));
+
+            // The flag round-trips through the plan untouched - the
+            // planner copies the orphan into the rollforward /
+            // rollback list verbatim so the executor can decide
+            // whether to emit a C-row delete per orphan.
+            Assert.That(plan.RollForward[0].HasCandidateRow, Is.False);
+            Assert.That(plan.RollForward[1].HasCandidateRow, Is.True);
+            Assert.That(plan.RollBack[0].HasCandidateRow, Is.False);
+        });
+    }
 }

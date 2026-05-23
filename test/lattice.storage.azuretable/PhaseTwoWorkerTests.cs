@@ -512,6 +512,111 @@ public class PhaseTwoWorkerTests
         Assert.That(((AzureTableWalEntity)cRow.Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.BuildCandidateRowKey(42L)));
     }
 
+    [Test]
+    public async Task EnqueueAsync_with_hasCandidateRow_false_emits_only_manifest_row_and_tail()
+    {
+        // Variant D contract: when the originating AppendBatchAsync
+        // ran with EliminateCandidateRowOnHotPath = true, no C-row
+        // was ever written, so the worker MUST NOT emit a Delete for
+        // a non-existent row (which would fail the whole transaction
+        // with HTTP 404). The transaction shrinks to M-add + TAIL.
+        var submitter = new RecordingSubmitter();
+        await using var worker = NewWorker(submitter);
+
+        await worker.EnqueueAsync(0L, 4L, hasCandidateRow: false).ConfigureAwait(false);
+
+        Assert.That(submitter.Calls.Count, Is.EqualTo(1));
+        var actions = submitter.Calls[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actions.Length, Is.EqualTo(2), "D-mode commit: 1 manifest row add + 1 TAIL upsert, no C-row delete");
+            Assert.That(actions.Any(a => a.ActionType == TableTransactionActionType.Delete), Is.False,
+                "C-row delete must be elided when hasCandidateRow=false");
+            Assert.That(actions[0].ActionType, Is.EqualTo(TableTransactionActionType.Add));
+            Assert.That(((AzureTableWalEntity)actions[0].Entity).RowKey,
+                Is.EqualTo(AzureTableWalStorageProvider.BuildManifestRowKey(0L)));
+            Assert.That(((AzureTableWalEntity)actions[0].Entity).Offset, Is.EqualTo(4L));
+            Assert.That(actions[1].ActionType, Is.EqualTo(TableTransactionActionType.UpsertReplace));
+            Assert.That(((AzureTableWalEntity)actions[1].Entity).RowKey, Is.EqualTo(AzureTableWalStorageProvider.TailRowKey));
+            Assert.That(((AzureTableWalEntity)actions[1].Entity).Offset, Is.EqualTo(4L));
+        });
+    }
+
+    [Test]
+    public async Task EnqueueAsync_coalesces_mixed_candidate_row_flags_within_one_submit()
+    {
+        // Heterogeneity contract: a coalesced phase-2 transaction
+        // may carry both legacy (HasCandidateRow=true) and D-mode
+        // (HasCandidateRow=false) commits - e.g. during a rolling
+        // toggle of the option, or when reconciliation rolls a
+        // legacy orphan forward in the same window as a fresh
+        // D-mode append. The worker must emit a C-delete ONLY for
+        // the legacy commits and an M-add for every commit.
+        var gate = new TaskCompletionSource();
+        var primed = 0;
+        var submitter = new RecordingSubmitter((_, _) =>
+        {
+            if (Interlocked.Increment(ref primed) == 1)
+            {
+                return gate.Task;
+            }
+            return Task.CompletedTask;
+        });
+        await using var worker = NewWorker(submitter);
+
+        // Prime the first submit so subsequent enqueues coalesce.
+        var priming = worker.EnqueueAsync(0L, 0L, hasCandidateRow: true);
+        await WaitForCallsAsync(submitter, 1).ConfigureAwait(false);
+
+        // Three commits behind the gate: mixed flags.
+        var t1 = worker.EnqueueAsync(1L, 1L, hasCandidateRow: false);
+        var t2 = worker.EnqueueAsync(2L, 2L, hasCandidateRow: true);
+        var t3 = worker.EnqueueAsync(3L, 3L, hasCandidateRow: false);
+
+        gate.SetResult();
+        await Task.WhenAll(priming, t1, t2, t3).ConfigureAwait(false);
+
+        // The priming call's submit had exactly one commit; the
+        // coalesced submit has three.
+        Assert.That(submitter.Calls.Count, Is.EqualTo(2));
+        var coalesced = submitter.Calls[1];
+
+        var deletes = coalesced
+            .Where(a => a.ActionType == TableTransactionActionType.Delete)
+            .Select(a => ((AzureTableWalEntity)a.Entity).RowKey)
+            .ToArray();
+        var adds = coalesced
+            .Where(a => a.ActionType == TableTransactionActionType.Add)
+            .Select(a => ((AzureTableWalEntity)a.Entity).RowKey)
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            // Only offset 2L had hasCandidateRow=true, so exactly one
+            // C-row delete is expected.
+            Assert.That(deletes, Is.EqualTo(new[]
+            {
+                AzureTableWalStorageProvider.BuildCandidateRowKey(2L),
+            }), "C-delete must be emitted only for HasCandidateRow=true commits");
+
+            // M-add fires for every commit in ascending start-offset.
+            Assert.That(adds, Is.EqualTo(new[]
+            {
+                AzureTableWalStorageProvider.BuildManifestRowKey(1L),
+                AzureTableWalStorageProvider.BuildManifestRowKey(2L),
+                AzureTableWalStorageProvider.BuildManifestRowKey(3L),
+            }));
+
+            // TAIL of the coalesced submit upserts to the highest
+            // endOffsetInclusive across the group.
+            var tailRow = coalesced.Single(a =>
+                a.ActionType == TableTransactionActionType.UpsertReplace &&
+                ((AzureTableWalEntity)a.Entity).RowKey == AzureTableWalStorageProvider.TailRowKey);
+            Assert.That(((AzureTableWalEntity)tailRow.Entity).Offset, Is.EqualTo(3L));
+        });
+    }
+
     /// <summary>
     /// Awaits <paramref name="task"/> and asserts it faults with
     /// <paramref name="expected"/>. Accepts either reference-equality

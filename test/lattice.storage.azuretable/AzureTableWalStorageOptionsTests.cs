@@ -304,6 +304,45 @@ public class AzureTableWalStorageOptionsTests
         Assert.That(options.ServiceClient, Is.Null);
     }
 
+    [Test]
+    public void EliminateCandidateRowOnHotPath_defaults_to_false()
+    {
+        // Pin the default so callers continue to receive the legacy
+        // two-phase WAL contract (C-row written inline; reconciliation
+        // discovers orphans via the manifest-partition C-row scan).
+        // Variant D is opt-in only - existing deployments must change
+        // nothing to keep their current crash-recovery semantics.
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.That(options.EliminateCandidateRowOnHotPath, Is.False);
+    }
+
+    [Test]
+    public void EliminateCandidateRowOnHotPath_round_trips_when_set_to_true()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            EliminateCandidateRowOnHotPath = true,
+        };
+
+        Assert.That(options.EliminateCandidateRowOnHotPath, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_EliminateCandidateRowOnHotPath_is_set()
+    {
+        // The flag is orthogonal to the auth-mode + table-name
+        // validation; flipping it on with a valid base configuration
+        // must not introduce a new failure mode.
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            EliminateCandidateRowOnHotPath = true,
+        };
+
+        Assert.That(options.Validate, Throws.Nothing);
+    }
+
     /// <summary>
     /// Minimal Azure.Core <see cref="Azure.Core.TokenCredential"/>
     /// stand-in for tests that need a non-null credential reference

@@ -168,6 +168,8 @@ A silo crash between phase 0/1 and phase 2 leaves an **orphan**: a batch partiti
 
 Reconciliation is idempotent: a second pass with no intervening writes is a no-op because no candidate-rows remain (phase 2 or rollback already deleted them). The work is also bounded by `WalMaxPendingBatches`, which is typically 0 in steady state, so the activation cost is O(in-flight batches at the moment of the crash) rather than O(live batches in the shard).
 
+When the optional `EliminateCandidateRowOnHotPath` mode is enabled (see [below](#eliminating-the-phase-0-candidate-row)), the phase-0 candidate-row write is skipped on the hot path and the reconciler additionally enumerates batch partitions sitting above `TAIL` to discover orphans without a candidate-row.
+
 The activation seam itself - `IWalStorageProvider.ReconcileAsync` - ships with a default no-op implementation, so providers that do not need recovery (the in-memory provider, file-backed providers that commit atomically) inherit the no-op without code.
 
 #### Operational characteristics
@@ -229,6 +231,26 @@ Two practical rules follow:
 
 - Enable pipelining only on backends that scale write concurrency (e.g. real Azure Tables with multiple WAL shards spreading across partitions). On a single-writer backend - Azurite, a single-shard configuration, or any WAL whose effective write width is one - pipelining can amplify saturation rather than relieve it.
 - Treat `PipelinePhaseTwoCommits` as a per-deployment knob, not a default. Validate it with the workload's actual sustained offered rate against the actual backend; the win regime is bounded both above and below.
+
+#### Eliminating the phase-0 candidate row
+
+Setting `AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath = true` opts the provider into a hot-path shape that **skips the phase-0 candidate-row write entirely** and shrinks the phase-2 transaction from three actions (`{delete C, insert M, upsert TAIL}`) to two (`{insert M, upsert TAIL}`). Orphans are still recovered, but recovery now discovers them by enumerating batch partitions whose start offset sits above `TAIL` instead of by scanning candidate-rows in the manifest partition.
+
+The mode is off by default. It is a throughput knob that trades the per-batch C-row round-trip for a different recovery-scan shape:
+
+| Property | Default (legacy) | `EliminateCandidateRowOnHotPath = true` |
+|---|---|---|
+| Hot-path Azure Tables round-trips per append | phase-0 C-row write + phase-1 entry transaction + phase-2 transaction | phase-1 entry transaction + phase-2 transaction |
+| Phase-2 transaction shape | `{delete C, insert M, upsert TAIL}` per coalesced commit, plus one TAIL | `{insert M}` per coalesced commit, plus one TAIL |
+| In-flight orphan signal | C-row in manifest partition (`RowKey ge 'C' and RowKey lt 'D'`) | batch partition above TAIL (`PartitionKey ge '_b_\|...\|S{TAIL+1:D19}' and PartitionKey lt '_b_\|...\|T'`) |
+| Recovery discovery cost | O(in-flight batches at the moment of the crash) | O(in-flight batches at the moment of the crash), but coupled to batch-partition GC hygiene |
+| Atomicity, ordering, idempotence | unchanged | unchanged |
+
+The reconciler always performs both scans when the flag is on, so a silo started with the flag enabled recovers **both** legacy orphans (left by a previous flag-off activation) and D-mode orphans (left by a previous flag-on activation) - upgrading from flag-off to flag-on is safe and lossless.
+
+**Downgrade is not symmetric.** A silo started with the flag *off* runs the legacy C-row scan only; D-mode orphans (which by construction carry no C-row) are invisible to it and remain on disk above `TAIL` until a future flag-on activation observes them. The orphan entry rows are not lost - a subsequent flag-on activation rolls them forward or rolls them back as appropriate - but the downgraded silo will not advance `TAIL` past them, and any `AppendBatchAsync` from `TAIL + 1` will start writing at an offset already occupied by an unreconciled orphan. **Always drain pending appends and let `ReconcileAsync` complete on a flag-on silo before flipping the flag back to off.** This is the load-bearing reason the legacy code path is retained even when the flag defaults on in a future release.
+
+The mode is opt-in for the same reason as `PipelinePhaseTwoCommits`: it is a change in the recovery contract, not just a perf tweak. Bake it into a representative workload before defaulting it on per deployment.
 
 ## Testing
 
