@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 public partial class AzureTableWalStorageProviderTests
 {
     private static AzureTableWalStorageProvider.OrphanBatch Orphan(long startOffset, long endOffsetInclusive) =>
-        new(startOffset, endOffsetInclusive, $"_b_|t|0|S{startOffset:D19}");
+        new(startOffset, endOffsetInclusive, $"_b_|t|0|S{startOffset:D19}", HasCandidateRow: true);
 
     [Test]
     public void PlanReconciliation_no_orphans_returns_unchanged_tail()
@@ -177,7 +177,7 @@ public partial class AzureTableWalStorageProviderTests
         // contiguity for every subsequent orphan.
         var orphans = new[]
         {
-            new AzureTableWalStorageProvider.OrphanBatch(10L, 5L, "_b_|t|0|S0000000000000000010"),
+            new AzureTableWalStorageProvider.OrphanBatch(10L, 5L, "_b_|t|0|S0000000000000000010", HasCandidateRow: true),
             Orphan(15L, 19L),
         };
 

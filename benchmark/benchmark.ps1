@@ -1150,6 +1150,14 @@ Write-Host "============================================================" -Foreg
 
 $envMap = Read-EnvFile -Path $scenarioFile
 
+# Track provenance for keys that can be overridden after the .env load, so the
+# banner can show *where* each effective value came from instead of silently
+# substituting (the .fleet-size.config override has, in the past, caused
+# "scenario said 2000 but the run reported 3500" confusion - the banner now
+# annotates the source so the operator can spot a mismatch at a glance).
+$envSource = @{}
+foreach ($k in $envMap.Keys) { $envSource[$k] = 'scenario .env' }
+
 # ── Fleet-size calibration: .fleet-size.config wins over the .env default ──────
 #
 # benchmark/initialise.ps1 runs a saturation ladder against the host and writes
@@ -1188,16 +1196,23 @@ if (-not $isMicrobench -and -not $SkipFleetSizeCheck.IsPresent -and $FleetSizeOv
     $configMap = Read-EnvFile -Path $fleetSizeConfigPath
     if ($configMap.Contains('BENCH_FLEET_SIZE')) {
         $envMap['BENCH_FLEET_SIZE'] = $configMap['BENCH_FLEET_SIZE']
+        $envSource['BENCH_FLEET_SIZE'] = '.fleet-size.config (host-calibrated; overrides .env)'
     }
 }
 
 # -FleetSizeOverride beats both the .env default and the .fleet-size.config.
 if ($FleetSizeOverride -gt 0) {
     $envMap['BENCH_FLEET_SIZE'] = "$FleetSizeOverride"
+    $envSource['BENCH_FLEET_SIZE'] = '-FleetSizeOverride CLI arg (overrides .env and .fleet-size.config)'
 }
 
 foreach ($k in $envMap.Keys) {
-    Write-Host (" {0,-30}= {1}" -f $k, $envMap[$k]) -ForegroundColor DarkGray
+    $src = $envSource[$k]
+    if ([string]::IsNullOrEmpty($src)) {
+        Write-Host (" {0,-30}= {1}" -f $k, $envMap[$k]) -ForegroundColor DarkGray
+    } else {
+        Write-Host (" {0,-30}= {1}   # from {2}" -f $k, $envMap[$k], $src) -ForegroundColor DarkGray
+    }
 }
 
 # Ensure the .run scratch root exists for both flow branches (microbench writes

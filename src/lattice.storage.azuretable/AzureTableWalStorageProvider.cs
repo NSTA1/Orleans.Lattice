@@ -315,6 +315,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var endOffsetInclusive = firstOffset + entries.Count - 1;
+        var eliminateCandidateRow = _options.EliminateCandidateRowOnHotPath;
 
         // Phase 0 (parallel with phase 1): stamp a candidate-row in
         // the shard's manifest partition so reconciliation can
@@ -322,9 +323,18 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // query if the silo crashes before phase 2 runs. Phase 2
         // deletes the C-row atomically with its M-row insert, so the
         // C-row's presence post-restart is the orphan signal.
+        //
+        // When EliminateCandidateRowOnHotPath is on, the C-row write
+        // is skipped entirely and activation-time reconciliation
+        // falls back to a cross-partition discovery scan that
+        // enumerates batch partitions above TAIL. See
+        // AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath
+        // for the soundness argument.
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
-        var candidateTask = WriteCandidateRowAsync(
-            table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
+        var candidateTask = eliminateCandidateRow
+            ? Task.CompletedTask
+            : WriteCandidateRowAsync(
+                table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
 
         // Phase 1: write the entry rows into the batch's own partition
         // in a single transaction. Each batch hits a distinct Azure
@@ -348,7 +358,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // Azure Tables transaction cap) into one manifest-partition
         // transaction in strict ascending start-offset order, then
         // upserts TAIL to the group's highest endOffsetInclusive.
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken).ConfigureAwait(false);
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -400,13 +410,16 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // see the comments there for the parallelism, candidate-row,
         // and monotonic-TAIL rationale.
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
-        var candidateTask = WriteCandidateRowAsync(
-            table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
+        var eliminateCandidateRow = _options.EliminateCandidateRowOnHotPath;
+        var candidateTask = eliminateCandidateRow
+            ? Task.CompletedTask
+            : WriteCandidateRowAsync(
+                table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
         var phaseOneTask = table.SubmitTransactionAsync(phaseOneActions, cancellationToken);
         await candidateTask.ConfigureAwait(false);
         await phaseOneTask.ConfigureAwait(false);
 
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken).ConfigureAwait(false);
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -453,10 +466,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         int shardIndex,
         long firstOffset,
         long endOffsetInclusive,
+        bool hasCandidateRow,
         CancellationToken cancellationToken)
     {
         var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
-        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive);
+        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive, hasCandidateRow);
 
         if (!_options.PipelinePhaseTwoCommits)
         {

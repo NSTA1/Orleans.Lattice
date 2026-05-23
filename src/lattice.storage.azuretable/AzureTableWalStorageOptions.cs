@@ -165,6 +165,58 @@ public sealed class AzureTableWalStorageOptions
     public bool PipelinePhaseTwoCommits { get; set; }
 
     /// <summary>
+    /// When <see langword="true"/>, <c>AppendBatchAsync</c> and
+    /// <c>AppendEncodedBatchAsync</c> skip the phase-0 candidate-row
+    /// (C-row) <c>UpsertEntityAsync</c> against the shard's manifest
+    /// partition entirely. Activation-time
+    /// <see cref="IWalStorageProvider.ReconcileAsync"/> falls back to
+    /// a cross-partition discovery scan that enumerates batch
+    /// partitions for the shard with a partition-key range filter
+    /// anchored at <c>TAIL + 1</c>; the C-row scan still runs first so
+    /// any pre-upgrade orphans stamped while the option was off are
+    /// still reconciled. Default is <see langword="false"/>.
+    /// <para>
+    /// <b>Why elide.</b> The C-row sits in the per-shard manifest
+    /// partition, which is the same partition the per-shard
+    /// <c>PhaseTwoWorker</c> commits against. Azure Tables (and
+    /// Azurite) serialise writes within a PartitionKey server-side, so
+    /// the phase-0 upsert contends with the worker's draining queue
+    /// and adds a server-side-serialised round-trip to every batch's
+    /// inline critical path. v5.1.0's single-transaction equivalent
+    /// did not have this contention and ran ~180x faster on the same
+    /// Azurite. Eliding phase-0 removes the contended round-trip from
+    /// the hot path; the cost is paid at activation time as a single
+    /// cross-partition discovery query (bounded below by
+    /// <c>TAIL + 1</c>, typically empty in steady state).
+    /// </para>
+    /// <para>
+    /// <b>Soundness.</b> A batch partition whose encoded
+    /// <c>startOffset</c> is greater than the persisted <c>TAIL</c>
+    /// is necessarily an orphan: phase-2 advances <c>TAIL</c>
+    /// atomically with the manifest row, so any
+    /// <c>startOffset &gt; TAIL</c> batch partition has phase-1
+    /// rows but no phase-2 commit. <c>TrimAsync</c> only deletes
+    /// rows below the trim watermark (which never exceeds
+    /// <c>TAIL</c>), so committed batches that have not yet been
+    /// trimmed do not appear in the discovery scan. The orphan's
+    /// <c>endOffsetInclusive</c> is recovered as
+    /// <c>max(RowKey)</c> over the orphan's entry rows.
+    /// </para>
+    /// <para>
+    /// <b>Activation-time cost.</b> One cross-partition query against
+    /// the WAL table, filtered to partition keys of the form
+    /// <c>{BatchPartitionPrefix}|{encoded-treeId}|{shardIndex}|S*</c>
+    /// with row-key bound anchored at <c>TAIL + 1</c>. In steady
+    /// state with no orphans this returns immediately. The discovery
+    /// scan replaces the legacy C-row scan only on shards where every
+    /// in-flight batch was appended with the option on; the legacy
+    /// scan still runs first so a silo upgraded mid-life finds both
+    /// pre- and post-upgrade orphans.
+    /// </para>
+    /// </summary>
+    public bool EliminateCandidateRowOnHotPath { get; set; }
+
+    /// <summary>
     /// Optional observer invoked when a pipelined phase-2 task faults.
     /// <para>
     /// In pipelined mode (<see cref="PipelinePhaseTwoCommits"/> =
