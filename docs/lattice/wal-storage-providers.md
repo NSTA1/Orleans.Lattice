@@ -252,6 +252,8 @@ The reconciler always performs both scans when the flag is on, so a silo started
 
 The mode is opt-in for the same reason as `PipelinePhaseTwoCommits`: it is a change in the recovery contract, not just a perf tweak. Bake it into a representative workload before defaulting it on per deployment.
 
+The `benchmark/azure-throughput/` harness exposes this flag via the `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` environment variable so the same single-silo, real-Azure-Tables deployment can drive both arms of an A/B run with no code change. See `benchmark/azure-throughput/README.md` for the A/B runbook.
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.
