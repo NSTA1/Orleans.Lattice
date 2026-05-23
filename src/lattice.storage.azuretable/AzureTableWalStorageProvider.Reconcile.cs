@@ -80,24 +80,54 @@ public sealed partial class AzureTableWalStorageProvider
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
 
-        // Step 1: discover orphans with a single anchored range query
-        // against the manifest partition's candidate-row band
-        // (RowKey ge 'C' and RowKey lt 'D'). Each remaining C-row is
-        // by definition a phase-0/phase-1 batch whose phase-2 never
-        // landed; the row's Offset column carries endOffsetInclusive
-        // so we do not need to read the orphan's entry rows.
+        // Step 1: discover orphans. The C-row scan is always run
+        // first so a silo upgraded from the legacy mode (where every
+        // in-flight batch stamped a C-row) finds and reconciles every
+        // pre-upgrade orphan. When
+        // EliminateCandidateRowOnHotPath is on, the C-row scan
+        // returns nothing for batches appended in the new mode, and
+        // the supplementary discovery scan below enumerates batch
+        // partitions above TAIL to find them. The two scans are
+        // unioned and sorted by start offset before planning so the
+        // planner sees a single ascending sequence.
         var orphans = await ReadOutstandingCandidatesAsync(
             table, manifestPartitionKey, treeId, shardIndex, cancellationToken).ConfigureAwait(false);
+
+        // Read TAIL early so the D-mode discovery scan can anchor its
+        // PartitionKey lower bound; -1 means "no manifest yet".
+        var currentTail = await ReadTailAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
+
+        if (_options.EliminateCandidateRowOnHotPath)
+        {
+            var partitionScanOrphans = await ReadOutstandingBatchPartitionsAboveTailAsync(
+                table, treeId, shardIndex, currentTail, cancellationToken).ConfigureAwait(false);
+            if (partitionScanOrphans.Count > 0)
+            {
+                // Merge while filtering duplicates by StartOffset: a
+                // pre-upgrade orphan can have *both* a C-row and a
+                // batch partition, in which case the C-row form wins
+                // (its HasCandidateRow = true triggers the C-delete in
+                // CommitRollForwardAsync / RollBackOrphanAsync).
+                var existingStarts = new HashSet<long>(orphans.Count);
+                for (var i = 0; i < orphans.Count; i++)
+                {
+                    existingStarts.Add(orphans[i].StartOffset);
+                }
+                for (var i = 0; i < partitionScanOrphans.Count; i++)
+                {
+                    if (existingStarts.Add(partitionScanOrphans[i].StartOffset))
+                    {
+                        orphans.Add(partitionScanOrphans[i]);
+                    }
+                }
+                orphans.Sort(static (a, b) => a.StartOffset.CompareTo(b.StartOffset));
+            }
+        }
 
         if (orphans.Count == 0)
         {
             return;
         }
-
-        // Step 2: read TAIL. -1 means "no manifest yet"; a fresh shard
-        // post-activation starts from 0 so contiguity below means
-        // startOffset == 0.
-        var currentTail = await ReadTailAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
 
         // Step 3: plan rollforward vs rollback. The rollforward set
         // is the prefix of orphans whose start offsets are contiguous
@@ -134,7 +164,8 @@ public sealed partial class AzureTableWalStorageProvider
     internal readonly record struct OrphanBatch(
         long StartOffset,
         long EndOffsetInclusive,
-        string BatchPartitionKey);
+        string BatchPartitionKey,
+        bool HasCandidateRow);
 
     /// <summary>
     /// The decision the reconciliation algorithm renders for a shard.
@@ -285,7 +316,107 @@ public sealed partial class AzureTableWalStorageProvider
             }
 
             var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
-            orphans.Add(new OrphanBatch(startOffset, endOffsetInclusive, batchPartitionKey));
+            orphans.Add(new OrphanBatch(startOffset, endOffsetInclusive, batchPartitionKey, HasCandidateRow: true));
+        }
+        return orphans;
+    }
+
+    /// <summary>
+    /// D-mode discovery scan: enumerates batch partitions whose
+    /// <c>startOffset</c> is strictly greater than the persisted
+    /// <c>TAIL</c>. Used when
+    /// <see cref="AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath"/>
+    /// is on - the hot path no longer writes a C-row, so the C-row
+    /// scan returns nothing for batches appended in that mode and the
+    /// reconciler discovers orphans by their batch partition keys
+    /// instead. <c>startOffset</c> is parsed from the partition-key
+    /// suffix; <c>endOffsetInclusive</c> is recovered by reading the
+    /// max entry row-key in the orphan's batch partition.
+    /// <para>
+    /// Soundness: phase-2 advances <c>TAIL</c> atomically with the
+    /// manifest row, so any batch partition with
+    /// <c>startOffset &gt; TAIL</c> is by definition a phase-1
+    /// commit whose phase-2 never landed (or a freshly appended batch
+    /// whose phase-2 will land momentarily - which is impossible
+    /// during reconciliation because the WAL grain is quiescent in
+    /// <c>OnActivateAsync</c>). <c>TrimAsync</c> only deletes rows
+    /// strictly below <c>TAIL</c>, so committed-but-untrimmed
+    /// batches never appear in this scan.
+    /// </para>
+    /// </summary>
+    private async Task<List<OrphanBatch>> ReadOutstandingBatchPartitionsAboveTailAsync(
+        TableClient table,
+        string treeId,
+        int shardIndex,
+        long currentTail,
+        CancellationToken cancellationToken)
+    {
+        // Build the partition-key range that covers every possible
+        // batch partition for this shard whose startOffset > TAIL.
+        // Batch partition keys have shape
+        //   {BatchPartitionPrefix}|{encoded}|{shardIndex}|S{startOffset:D19}
+        // Lexicographic order on the D19-padded suffix matches
+        // numeric order on startOffset.
+        var lowerStart = currentTail + 1L;
+        var shardPrefix = BuildBatchPartitionKey(treeId, shardIndex, 0L);
+        // shardPrefix ends with "S{0:D19}"; strip the offset suffix to
+        // get the shard-scoped prefix `_b_|{encoded}|{shardIndex}|`.
+        var sIndex = shardPrefix.LastIndexOf('S');
+        var shardPartitionPrefix = shardPrefix.Substring(0, sIndex);
+        var lowerInclusive = shardPartitionPrefix + "S" + lowerStart.ToString("D19", CultureInfo.InvariantCulture);
+        // 'T' sorts immediately after 'S'; this is the canonical
+        // exclusive upper bound for every "S..." partition under the
+        // shard prefix.
+        var upperExclusive = shardPartitionPrefix + "T";
+
+        // First pass: project (PartitionKey, RowKey) for every entry
+        // row in every matching batch partition. Steady state returns
+        // zero rows. The reconciler groups by partition key and takes
+        // max(RowKey) to recover endOffsetInclusive without a
+        // per-partition follow-up query.
+        var filter =
+            $"PartitionKey ge '{Escape(lowerInclusive)}' and PartitionKey lt '{Escape(upperExclusive)}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey lt 'F'";
+        var perPartitionMaxRowKey = new Dictionary<string, string>(StringComparer.Ordinal);
+        await foreach (var row in table
+            .QueryAsync<AzureTableWalEntity>(filter, select: new[] { "PartitionKey", "RowKey" }, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (!perPartitionMaxRowKey.TryGetValue(row.PartitionKey, out var existing)
+                || string.CompareOrdinal(row.RowKey, existing) > 0)
+            {
+                perPartitionMaxRowKey[row.PartitionKey] = row.RowKey;
+            }
+        }
+
+        var orphans = new List<OrphanBatch>(perPartitionMaxRowKey.Count);
+        foreach (var kv in perPartitionMaxRowKey)
+        {
+            // PartitionKey shape: `{shardPartitionPrefix}S{startOffset:D19}`.
+            // Slice past the prefix and the single 'S' marker.
+            var pk = kv.Key;
+            var sPos = pk.LastIndexOf('S');
+            if (sPos < 0 || sPos + 1 + 19 > pk.Length)
+            {
+                continue;
+            }
+            var startOffset = long.Parse(
+                pk.AsSpan(sPos + 1, 19),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture);
+
+            // RowKey shape: `{EntryRowKeyPrefix}{offset:D19}`. Slice
+            // past the prefix to recover endOffsetInclusive.
+            var rowKey = kv.Value;
+            if (rowKey.Length < EntryRowKeyPrefix.Length + 19)
+            {
+                continue;
+            }
+            var endOffsetInclusive = long.Parse(
+                rowKey.AsSpan(EntryRowKeyPrefix.Length, 19),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture);
+
+            orphans.Add(new OrphanBatch(startOffset, endOffsetInclusive, pk, HasCandidateRow: false));
         }
         return orphans;
     }
@@ -307,10 +438,12 @@ public sealed partial class AzureTableWalStorageProvider
         IReadOnlyList<OrphanBatch> rollForward,
         CancellationToken cancellationToken)
     {
-        // Each orphan contributes 2 actions (C-delete + M-add); the
-        // last chunk also carries the shared TAIL upsert. The cap is
-        // therefore (100 - 1) / 2 = 49 orphans per transaction,
-        // matching the PhaseTwoWorker's coalescing cap.
+        // Each orphan contributes 1 or 2 actions (M-add always;
+        // C-delete only when the orphan was discovered via its
+        // C-row, i.e. HasCandidateRow == true); the last chunk also
+        // carries the shared TAIL upsert. Worst-case action count per
+        // transaction stays at 2 * 49 + 1 = 99 under the 100-action
+        // cap.
         const int chunkSize = 49;
         var resultingTail = rollForward[^1].EndOffsetInclusive;
 
@@ -320,16 +453,19 @@ public sealed partial class AzureTableWalStorageProvider
             var actions = new List<TableTransactionAction>(((end - i) * 2) + 1);
             for (var j = i; j < end; j++)
             {
-                actions.Add(new TableTransactionAction(
-                    TableTransactionActionType.Delete,
-                    new AzureTableWalEntity
-                    {
-                        PartitionKey = manifestPartitionKey,
-                        RowKey = BuildCandidateRowKey(rollForward[j].StartOffset),
-                        Offset = rollForward[j].EndOffsetInclusive,
-                        Payload = null,
-                    },
-                    ETag.All));
+                if (rollForward[j].HasCandidateRow)
+                {
+                    actions.Add(new TableTransactionAction(
+                        TableTransactionActionType.Delete,
+                        new AzureTableWalEntity
+                        {
+                            PartitionKey = manifestPartitionKey,
+                            RowKey = BuildCandidateRowKey(rollForward[j].StartOffset),
+                            Offset = rollForward[j].EndOffsetInclusive,
+                            Payload = null,
+                        },
+                        ETag.All));
+                }
                 actions.Add(new TableTransactionAction(
                     TableTransactionActionType.Add,
                     new AzureTableWalEntity
@@ -385,6 +521,14 @@ public sealed partial class AzureTableWalStorageProvider
         var entryFilter =
             $"PartitionKey eq '{Escape(orphan.BatchPartitionKey)}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey lt 'F'";
         await DeletePartitionInChunksAsync(table, entryFilter, cancellationToken).ConfigureAwait(false);
+
+        if (!orphan.HasCandidateRow)
+        {
+            // D-mode orphan: no C-row was ever written, so there is
+            // nothing to delete in the manifest partition. The batch
+            // partition entry rows have already been wiped above.
+            return;
+        }
 
         // Delete the candidate-row unconditionally. ETag.All matches
         // any version; a 404 (already deleted by a concurrent

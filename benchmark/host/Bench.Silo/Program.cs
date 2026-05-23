@@ -243,11 +243,22 @@ builder.Host.UseOrleans(silo =>
                 builder.Configuration["Lattice:Wal:PipelinePhaseTwo"]?.Trim(),
                 "true",
                 StringComparison.OrdinalIgnoreCase);
+            // Lattice:Wal:EliminateCandidateRowOnHotPath opts the Azure Table WAL
+            // provider into D-mode: AppendBatchAsync skips the phase-0 candidate
+            // row (C-row) upsert on the shard's manifest partition entirely.
+            // Recovery falls back to a cross-partition scan above TAIL at
+            // activation time. Used as the candidate cohort for the
+            // perf/wal-elide-phase0-candidate-row hypothesis.
+            var walEliminateCRow = string.Equals(
+                builder.Configuration["Lattice:Wal:EliminateCandidateRowOnHotPath"]?.Trim(),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
             silo.AddAzureTableWalStorage(o =>
             {
                 o.ConnectionString = azuriteConnection;
                 o.TableName = walTableName;
                 o.PipelinePhaseTwoCommits = walPipelinePhaseTwo;
+                o.EliminateCandidateRowOnHotPath = walEliminateCRow;
             });
         }
     }

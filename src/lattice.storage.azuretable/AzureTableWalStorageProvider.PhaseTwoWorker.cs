@@ -118,10 +118,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// pointer. The task faults with the underlying
     /// <see cref="Exception"/> on transaction failure.
     /// </summary>
-    public Task EnqueueAsync(long startOffset, long endOffsetInclusive)
+    public Task EnqueueAsync(long startOffset, long endOffsetInclusive, bool hasCandidateRow = true)
     {
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, tcs);
+        var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, hasCandidateRow, tcs);
         if (!_arrivals.Writer.TryWrite(commit))
         {
             // Unbounded channel - this is only reachable if the
@@ -246,24 +246,31 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             var actions = new List<TableTransactionAction>((commits.Count * 2) + 1);
             for (var i = 0; i < commits.Count; i++)
             {
-                // Delete the candidate-row stamped by phase 0. Atomic
-                // with the M-row insert below: either both land (the
-                // committed-batch invariant holds) or neither does
-                // (the C-row remains, reconciliation re-discovers the
-                // batch as an orphan). The C-row's ETag is unknown
-                // here because the worker did not write it; "*" is
-                // the documented sentinel for an unconditional
-                // delete inside a transaction.
-                actions.Add(new TableTransactionAction(
-                    TableTransactionActionType.Delete,
-                    new AzureTableWalEntity
-                    {
-                        PartitionKey = _manifestPartitionKey,
-                        RowKey = AzureTableWalStorageProvider.BuildCandidateRowKey(commits[i].StartOffset),
-                        Offset = commits[i].EndOffsetInclusive,
-                        Payload = null,
-                    },
-                    ETag.All));
+                if (commits[i].HasCandidateRow)
+                {
+                    // Delete the candidate-row stamped by phase 0. Atomic
+                    // with the M-row insert below: either both land (the
+                    // committed-batch invariant holds) or neither does
+                    // (the C-row remains, reconciliation re-discovers the
+                    // batch as an orphan). The C-row's ETag is unknown
+                    // here because the worker did not write it; "*" is
+                    // the documented sentinel for an unconditional
+                    // delete inside a transaction. Skipped entirely when
+                    // the originating AppendBatchAsync ran with
+                    // EliminateCandidateRowOnHotPath = true - there is
+                    // no C-row to delete in that mode and including the
+                    // delete would fail the whole transaction with 404.
+                    actions.Add(new TableTransactionAction(
+                        TableTransactionActionType.Delete,
+                        new AzureTableWalEntity
+                        {
+                            PartitionKey = _manifestPartitionKey,
+                            RowKey = AzureTableWalStorageProvider.BuildCandidateRowKey(commits[i].StartOffset),
+                            Offset = commits[i].EndOffsetInclusive,
+                            Payload = null,
+                        },
+                        ETag.All));
+                }
 
                 actions.Add(new TableTransactionAction(
                     TableTransactionActionType.Add,
@@ -351,6 +358,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     internal readonly record struct PhaseTwoCommit(
         long StartOffset,
         long EndOffsetInclusive,
+        bool HasCandidateRow,
         TaskCompletionSource Completion);
 
     /// <summary>
