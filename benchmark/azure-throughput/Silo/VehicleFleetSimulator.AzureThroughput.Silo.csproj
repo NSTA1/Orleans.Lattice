@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>VehicleFleetSimulator.AzureThroughput.Silo</RootNamespace>
+    <AssemblyName>VehicleFleetSimulator.AzureThroughput.Silo</AssemblyName>
+    <!--
+      Azure throughput benchmark harness (real Azure Storage). Built
+      directly via `dotnet publish` from the Dockerfile.
+    -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
+    <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.1.0" />
+    <PackageReference Include="Azure.Identity" Version="1.13.1" />
+  </ItemGroup>
+
+</Project>

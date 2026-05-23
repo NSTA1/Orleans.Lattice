@@ -1,0 +1,11 @@
+# Per-deployment context written by 10-provision.ps1; contains the
+# operator's Azure subscription ID and other resource IDs.
+.context.json
+# Regenerated ACI deployment file written by 20-build-and-deploy.ps1;
+# contains live ACR credentials, never commit.
+.aci-deploy.yaml
+# Local-only state written by 40-ladder.ps1 / 21-reconfigure.ps1.
+.fleet-size.config
+# Per-operator BENCH_PREFIX persisted by 10-provision.ps1. Random per machine,
+# used to keep storage-account / ACR names globally unique. Never commit.
+.prefix

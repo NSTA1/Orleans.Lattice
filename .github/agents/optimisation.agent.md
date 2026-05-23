@@ -148,8 +148,9 @@ Pick the cheapest tier that still exercises the suspected hot path. Tiers are ch
 |---|---|---|---|---|
 | **In-process microbench** (BDN `InProcessEmitToolchain`, single silo, no docker) | Grain-call latency, allocation-per-entry, codec round-trip, serialiser cost, hash distribution | ~7-9 min wall (full suite at `quick`); ~5-10 sec wall (scoped subset at `dry`) | ~25-30 min (`quick`); ~30 sec (`dry`) | `microbench` |
 | **Docker-compose end-to-end** (one or more silos, real network, dashboard-grade metrics) | Ship/apply, cross-silo gRPC, multi-cluster replication, fleet-level latency tails | 1-2 minutes wall + ~30s warmup | 5-10 minutes | `bidirectional-replication` |
+| **Real-Azure WAL throughput** (single silo + producer in ACI, real Azure Tables storage) | WAL hot-path optimisations whose effect depends on real Azure Tables RTT, partition-server behaviour, or throttling that Azurite does not model | ~2 minutes wall (bounded by `BENCH_TOTAL_DURATION_SEC=120`) + initial `az acr build` ~3-5 min on first run | ~6-10 minutes (n=3, `-SkipBuild` on rungs 2-3) | `azure-throughput` |
 
-State which **tier shape** you are using and why in the chat reply. Name the specific scenario you ran. **If the hypothesis is about ship/apply or anything cross-cluster, the in-process microbench tier is wrong** - state the rejection explicitly so it is clear you considered it. Conversely, if the hypothesis is about a code path that an in-process tier can exercise honestly, do not pay for a docker-compose cohort just because that scenario is the most familiar one.
+State which **tier shape** you are using and why in the chat reply. Name the specific scenario you ran. **If the hypothesis is about ship/apply or anything cross-cluster, the in-process microbench tier is wrong** - state the rejection explicitly so it is clear you considered it. Conversely, if the hypothesis is about a code path that an in-process tier can exercise honestly, do not pay for a docker-compose cohort just because that scenario is the most familiar one. **If the hypothesis is about a WAL hot-path optimisation whose effect is bounded by real Azure Tables RTT (phase-0/1/2 round-trip count, transaction shape, partition contention), the docker-compose tier is wrong** - Azurite collapses network RTT, runs a single partition server, and does not model Azure throttling, so a docker-compose A/B can both miss a real regression and manufacture a phantom win. State the tier-2 rejection explicitly and use the real-Azure tier instead.
 
 #### Workload scoping and fidelity (microbench tier)
 
@@ -238,6 +239,76 @@ blob for post-mortem inspection in [PerfView](https://github.com/microsoft/perfv
 or [dotnet-trace](https://learn.microsoft.com/dotnet/core/diagnostics/dotnet-trace).
 Rarely needed during normal optimisation cycles; the aggregated
 `profile.json` is the primary artefact.
+
+#### Real-Azure WAL throughput tier
+
+The `benchmark/azure-throughput/` harness is the only tier in the suite that runs against **real Azure Storage** rather than Azurite or in-process state. It is a two-container Azure Container Instances deployment (producer + single-silo lattice host) that drives sustained synthetic vehicle telemetry through `ILattice.SetManyAsync` and reports `Entries written per second` to stdout.
+
+**Use this tier when the hypothesis is about the Azure Tables WAL hot path** and the effect depends on something Azurite does not model:
+
+- Number of Azure Tables round-trips per `AppendBatchAsync` (phase-0 candidate row, phase-1 entry transaction, phase-2 commit transaction).
+- Phase-2 transaction shape and entity-group transaction (EGT) action count.
+- Partition-server contention across WAL shards.
+- Throttling regimes (429 responses with `x-ms-server-request-id`-keyed back-off).
+- Managed-identity or auth-path overhead on the first write after activation.
+
+Do not use this tier for anything else - the cohort cost dominates (~2 min per run plus ~3-5 min for the first `az acr build`), and any non-WAL-path hypothesis is exercised more honestly by the in-process microbench or docker-compose tiers.
+
+**One-time setup** (per workstation, before the first cycle that uses this tier):
+
+```powershell
+$env:BENCH_PREFIX = 'lat' + (Get-Random -Maximum 9999)
+./benchmark/azure-throughput/scripts/00-login.ps1
+./benchmark/azure-throughput/scripts/10-provision.ps1
+```
+
+`10-provision.ps1` is idempotent and creates a resource group, an ACR, a storage account, a user-assigned managed identity, and the role assignment that lets the silo write to the WAL table. It writes `scripts/.context.json` with the resource ids; that file is gitignored and contains the operator's subscription id, so never commit it.
+
+**Per-run invocation (baseline and candidate cohorts both)**:
+
+```powershell
+# Baseline arm.
+$env:BENCH_TREE_ID = 'azure-throughput-baseline'
+$env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'false'   # whatever the hypothesis is A/B-ing
+./benchmark/azure-throughput/scripts/20-build-and-deploy.ps1
+# -> blocks up to BENCH_TOTAL_DURATION_SEC (default 120) for the run to complete,
+#    az container stops the group on the deadline, then writes:
+#       benchmark/azure-throughput/.run/silo-{utc}.log
+#       benchmark/azure-throughput/.run/producer-{utc}.log
+#    and prints the [silo] FINAL line to stdout.
+
+# Candidate arm. The script will rebuild the silo image with the new bits.
+$env:BENCH_TREE_ID = 'azure-throughput-candidate'
+$env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'true'
+./benchmark/azure-throughput/scripts/20-build-and-deploy.ps1
+```
+
+**Keep every variable identical between arms except the option under test.** That includes `BENCH_VEHICLE_COUNT`, `BENCH_TICK_HZ`, `BENCH_DURATION_SEC`, `BENCH_TOTAL_DURATION_SEC`, `BENCH_BATCH_SIZE`, `BENCH_FLUSH_MS`, `BENCH_FLUSH_CONCURRENCY`, `BENCH_WAL_PARTITIONS`, `BENCH_WAL_MAX_PENDING_BATCHES`, and `BENCH_PIPELINE_PHASE2`. `BENCH_TREE_ID` is the one exception: `20-build-and-deploy.ps1` defaults it to a per-run UTC-stamped id (`azure-throughput-{utc}`) so every run gets a fresh manifest-key namespace and the first ~10s of throughput samples are not biased by manifest replay of a previous run. Setting `BENCH_TREE_ID` explicitly per arm (as in the example above) is useful for tagging the cohort sample in the silo log, but is not required for correctness - the default rotation is what guarantees a fresh tree. **Never** pin `BENCH_TREE_ID` to the same value across arms or across runs of the same arm: that re-introduces stale manifest history into the cohort and the per-run variance becomes a function of "which run inherited the largest replay" rather than of the option under test.
+
+**Reading the result.** The cohort sample is the `[silo] FINAL` line emitted by the silo on graceful shutdown:
+
+```text
+[silo] FINAL written=12,360,000 failed=0 elapsed=120.0s Entries written per second (avg)=103,000
+```
+
+The deploy script writes the full silo stdout to `benchmark/azure-throughput/.run/silo-{utc}.log` and prints the FINAL line to stdout. An agent consumes it directly from the local file - no further `az` calls are required after the deploy script returns:
+
+```powershell
+$rate = (Get-Content .\benchmark\azure-throughput\.run\silo-<utc>.log |
+         Select-String '^\[silo\] FINAL' | Select-Object -Last 1).Line
+```
+
+The same file contains per-second samples (`[silo] t=  12.0s ... Entries written per second=...`) so steady-state min/avg/max can be computed without going back to Azure. Skip the first ~10 seconds of samples (silo activation + first phase-2 commit) when computing steady-state stats; `40-ladder.ps1` already uses a `t >= 10` filter and is the reference implementation.
+
+**Force-stop fallback.** When the wall-clock deadline fires before the silo emits FINAL, the script falls back to printing the last 10 silo log lines and warns. Treat that as a degraded sample, not a result: re-run with a higher `BENCH_TOTAL_DURATION_SEC` (and `BENCH_DURATION_SEC` accordingly) before averaging it into the cohort.
+
+**n=3 cohort discipline.** Run each arm three times back-to-back (six runs total). The deploy script's bounded-wait + auto-stop means a cohort of three is ~6 minutes wall-clock per arm after the first `az acr build`. Record the FINAL average and the per-run variance in the Phase 3 / Phase 5 cohort tables exactly like the other tiers. If variance is wide (CoV > 10 %), increase `BENCH_DURATION_SEC` (and `BENCH_TOTAL_DURATION_SEC` correspondingly) before re-running.
+
+**No history-stack push.** This tier does not write to the local VictoriaMetrics history stack - the result lives in `.run/silo-*.log` only. That is intentional: a one-off real-Azure cohort is not directly comparable to docker-compose or microbench rows in the persona-trend dashboards. If you need cross-cycle continuity for this tier, copy the FINAL line and per-second samples into the Phase 7 post-mortem.
+
+**Teardown discipline.** `20-build-and-deploy.ps1` always issues `az container stop` at the end of a run, so the ACI compute is not left charging. Resource-group teardown is separate - run `./benchmark/azure-throughput/scripts/90-teardown.ps1` at the end of the cycle (or leave the RG in place if the next cycle will also use this tier). The compute meter only runs while a container is in the `Running` state; an idle (stopped) container group bills only for the storage account, which is negligible.
+
+**Ladder sweep variant.** When the hypothesis is about scaling behaviour rather than a single-rung A/B (for example, "does the candidate's win regime hold as offered rate climbs?"), use `scripts/40-ladder.ps1` instead of two single-shot calls. It re-deploys the container group for each `(vehicles, tickHz)` rung, waits for the producer to terminate, parses the silo log for the per-rung FINAL line, and writes `.run/.ladder-results.csv`. The ladder is a sweep, not a cohort, so it does not replace the n=3 cohort discipline on the chosen rung.
 
 #### Authoring a new scenario
 

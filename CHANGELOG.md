@@ -13,6 +13,7 @@ Items merged into `main` after the v6.0.0 cut accumulate here under the `### Add
 ### Added
 
 - `AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath` - opt-in WAL throughput optimisation that skips the phase-0 candidate-row write on every `AppendBatchAsync` and shrinks the phase-2 transaction by one action. Off by default; orphan recovery is preserved by an additional batch-partition scan above `TAIL` in `ReconcileAsync`. See `docs/lattice/wal-storage-providers.md` for the downgrade-safety note.
+- `benchmark/azure-throughput/` - real-Azure Storage WAL throughput harness (two-container ACI deployment) brought into the benchmark family. Exposes `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` so the same single-silo harness can A/B the candidate-row elision optimisation against a real Azure Tables account. See `benchmark/azure-throughput/README.md` for the A/B runbook.
 
 ### Candidate themes for a future major
 
