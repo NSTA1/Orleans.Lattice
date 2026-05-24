@@ -116,6 +116,50 @@ public static class LatticeMetrics
     public const string TagLeaf = "leaf";
 
     /// <summary>
+    /// Tag key for the storage-provider commit phase
+    /// (e.g. <c>phase1</c> = per-batch partition transaction,
+    /// <c>phase2</c> = manifest partition transaction). Emitted on
+    /// <see cref="ProviderCommitDuration"/> and
+    /// <see cref="ProviderRetryExhausted"/>.
+    /// </summary>
+    public const string TagPhase = "phase";
+
+    /// <summary>
+    /// Tag key for an Azure Tables HTTP status string on
+    /// <see cref="ProviderRetryExhausted"/>. Cardinality is bounded by
+    /// the small set of HTTP status codes the SDK surfaces on the WAL
+    /// hot path; an unmapped status reports as <c>unknown</c>.
+    /// </summary>
+    public const string TagStatus = "status";
+
+    /// <summary>
+    /// Tag key for the activation's effective <c>WalPartitions</c>
+    /// setting. Emitted on the Phase A WAL / saga instruments so a
+    /// single Prometheus / dashboard query can pivot the same metric
+    /// stream across the diagnostic attribution sweep
+    /// (<c>WalPartitions in {1, 4, 16}</c>). Captured once on grain
+    /// activation and reused per record - no per-call allocation.
+    /// </summary>
+    public const string TagWalPartitions = "wal_partitions";
+
+    /// <summary>
+    /// Tag key for the activation's effective <c>WalMaxPendingBatches</c>
+    /// setting. Same allocation-free, activation-cached pattern as
+    /// <see cref="TagWalPartitions"/>; lets the attribution sweep
+    /// distinguish runs that vary the in-flight-flush ceiling.
+    /// </summary>
+    public const string TagWalMaxPendingBatches = "wal_max_pending_batches";
+
+    /// <summary>
+    /// Tag key for the Azure Tables provider's effective
+    /// <c>PipelinePhaseTwoCommits</c> setting (the values <c>true</c>
+    /// / <c>false</c>). Emitted by the Azure Tables WAL provider on
+    /// the Phase A provider instruments so dashboards can pivot the
+    /// same series between synchronous and pipelined phase-2 modes.
+    /// </summary>
+    public const string TagPipelinePhaseTwo = "pipeline_phase2";
+
+    /// <summary>
     /// The meter that owns every Lattice instrument. Exposed publicly so integration
     /// tests and custom OpenTelemetry exporters can subscribe by reference rather
     /// than by name.
@@ -418,6 +462,179 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
             description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
 
+    // --- WAL append diagnostic instruments (WalShardGrain) ------------------
+    //
+    // Phase A horizontal-scaling diagnostics. These instruments are *only*
+    // emitted on the WAL append hot path; they attribute caller-visible
+    // append latency to grain-side queueing (turn wait), batching depth
+    // (batch entries / bytes), and storage-provider time (provider
+    // duration). They are intentionally split from the leaf-level
+    // <see cref="LeafCommitDuration"/> histogram because the leaf grain
+    // measures total commit duration *including* the cross-grain RPC to
+    // the WAL shard - this set isolates the WAL grain's own contribution.
+
+    /// <summary>
+    /// Histogram of per-flush batch entry counts, observed at the point
+    /// <c>WalShardGrain</c> hands a pending batch to the storage
+    /// provider. Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// A flat distribution near <see cref="LatticeOptions.WalMaxBatchEntries"/>
+    /// indicates the WAL is batching effectively; a distribution
+    /// concentrated near 1 indicates the per-batch caps are never
+    /// reached and the in-flight cap is the actual throughput limit.
+    /// </summary>
+    public static readonly Histogram<int> WalAppendBatchEntries =
+        Meter.CreateHistogram<int>("orleans.lattice.wal.append.batch_entries", unit: "{entry}",
+            description: "Entry count per WAL grain flush, observed at provider hand-off.");
+
+    /// <summary>
+    /// Histogram of per-flush batch payload bytes, observed at the
+    /// point <c>WalShardGrain</c> hands a pending batch to the storage
+    /// provider. Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// </summary>
+    public static readonly Histogram<long> WalAppendBatchBytes =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.append.batch_bytes", unit: "By",
+            description: "Encoded-payload bytes per WAL grain flush, observed at provider hand-off.");
+
+    /// <summary>
+    /// Histogram of the in-flight flush count snapshot taken at the
+    /// moment <c>WalShardGrain</c> starts a new flush. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>. A distribution
+    /// pinned at <c>0</c> means the WAL is fully serialised under the
+    /// configured <see cref="LatticeOptions.WalMaxPendingBatches"/>;
+    /// non-zero values prove pipelined provider calls.
+    /// </summary>
+    public static readonly Histogram<int> WalAppendInFlight =
+        Meter.CreateHistogram<int>("orleans.lattice.wal.append.in_flight", unit: "{flush}",
+            description: "In-flight flush count snapshot taken at the start of a new WAL flush.");
+
+    /// <summary>
+    /// Histogram of <see cref="IWalStorageProvider.AppendEncodedBatchAsync"/>
+    /// wall-clock duration, observed by <c>WalShardGrain</c>. Tagged
+    /// with <see cref="TagTree"/> and <see cref="TagShard"/>. This is
+    /// the storage-provider's contribution to caller-visible append
+    /// latency; subtracting it from <see cref="WalAppendTurnWait"/>
+    /// gives the grain-side queueing tax.
+    /// </summary>
+    public static readonly Histogram<double> WalAppendProviderDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.append.provider.duration", unit: "ms",
+            description: "Wall-clock duration of IWalStorageProvider.AppendEncodedBatchAsync, observed by WalShardGrain.");
+
+    /// <summary>
+    /// Histogram of caller-visible WAL append latency, measured from
+    /// the moment <c>AppendAsync</c> / <c>AppendBatchAsync</c> admits
+    /// an entry to the moment the corresponding ack TCS completes.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Includes time spent waiting for the in-flight cap to drain,
+    /// time spent in the pending batch before cutover, the
+    /// provider's <see cref="WalAppendProviderDuration"/>, and any
+    /// grain-turn dispatch overhead.
+    /// </summary>
+    public static readonly Histogram<double> WalAppendTurnWait =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.append.turn_wait", unit: "ms",
+            description: "Caller-visible WAL append duration (entry admission to ack), observed by WalShardGrain.");
+
+    /// <summary>
+    /// Histogram of the pending-segments queue depth observed at the
+    /// moment a per-entry <c>AppendAsync</c> call enqueues its
+    /// segment. Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagShard"/>. The value is <c>_pendingSegments.Count</c>
+    /// *after* the new segment has been added, so a value of 1 means
+    /// the entry arrived to an empty pending batch.
+    /// </summary>
+    public static readonly Histogram<int> WalAppendQueueDepth =
+        Meter.CreateHistogram<int>("orleans.lattice.wal.append.queue_depth", unit: "{entry}",
+            description: "Pending-batch depth observed at the moment a WAL append enqueues its segment.");
+
+    // --- Storage-provider commit instruments --------------------------------
+
+    /// <summary>
+    /// Histogram of storage-provider commit phase duration. Tagged
+    /// with <see cref="TagPhase"/> = <c>phase1</c> (per-batch
+    /// partition transaction) or <c>phase2</c> (manifest partition
+    /// transaction). Emitted by the Azure Table WAL provider; other
+    /// providers may emit it too. The phase-2 measurement covers a
+    /// single coalesced commit transaction, not the per-shard
+    /// worker's whole drain loop.
+    /// </summary>
+    public static readonly Histogram<double> ProviderCommitDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.provider.commit.duration", unit: "ms",
+            description: "Storage-provider commit-transaction wall-clock duration, tagged by phase.");
+
+    /// <summary>
+    /// Histogram of the number of coalesced phase-2 commits the
+    /// per-shard provider worker bundled into a single transaction.
+    /// A distribution concentrated near 1 means the worker is never
+    /// catching up against backed-up arrivals; values closer to the
+    /// 49-commit per-transaction cap indicate the worker is the
+    /// shard's effective rate limiter.
+    /// </summary>
+    public static readonly Histogram<int> ProviderPhase2BatchSize =
+        Meter.CreateHistogram<int>("orleans.lattice.provider.phase2.batch_size", unit: "{commit}",
+            description: "Coalesced phase-2 commits per provider-worker transaction.");
+
+    /// <summary>
+    /// Counter incremented once per provider call whose retry budget
+    /// was exhausted and surfaced an exception. Tagged with
+    /// <see cref="TagPhase"/> and <see cref="TagStatus"/> (the HTTP
+    /// status string the SDK observed, or <c>unknown</c>). A non-zero
+    /// rate signals the storage backend is throttling the shard at
+    /// its ceiling.
+    /// </summary>
+    public static readonly Counter<long> ProviderRetryExhausted =
+        Meter.CreateCounter<long>("orleans.lattice.provider.retry.exhausted", unit: "{call}",
+            description: "Provider commit calls that exhausted the SDK retry budget and surfaced an exception.");
+
+    // --- Saga fan-out diagnostic instruments (AtomicWriteGrain) -------------
+
+    /// <summary>
+    /// Histogram of <c>SetManyAtomicAsync</c> saga entry counts
+    /// observed at the moment the saga enters its execute phase
+    /// (i.e. once per saga activation, not once per retry). Tagged
+    /// with <see cref="TagTree"/>. Distinct from
+    /// <see cref="AtomicWriteBatchSize"/>, which is emitted at
+    /// terminal transition: this one is emitted at execute-phase
+    /// entry so a diagnostic dashboard can correlate fan-out size
+    /// with the per-key duration histogram below regardless of
+    /// terminal outcome.
+    /// </summary>
+    public static readonly Histogram<int> SagaFanoutSize =
+        Meter.CreateHistogram<int>("orleans.lattice.saga.fanout.size", unit: "{entry}",
+            description: "Entry count per atomic-write saga, observed at execute-phase entry.");
+
+    /// <summary>
+    /// Histogram of per-key <c>lattice.SetAsync</c> wall-clock
+    /// duration inside an atomic-write saga's execute loop. Tagged
+    /// with <see cref="TagTree"/>. One observation per successful
+    /// or failing key-level await, regardless of whether the saga
+    /// later compensates. The 99th-percentile of this histogram is
+    /// the dominant signal for whether the saga's serial fan-out
+    /// pattern is the throughput limit: it must be added across
+    /// all keys to recover the saga's end-to-end duration, so a
+    /// 10-entry saga's duration is bounded below by 10 x p50 of
+    /// this histogram.
+    /// </summary>
+    public static readonly Histogram<double> SagaPerKeyDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.perkey.duration", unit: "ms",
+            description: "Per-key SetAsync duration inside an atomic-write saga execute loop.");
+
+    /// <summary>
+    /// Histogram of the wall-clock gap between consecutive per-key
+    /// awaits inside an atomic-write saga's execute loop, i.e. the
+    /// time the saga spends between one successful key-level commit
+    /// and the next key-level await. Tagged with <see cref="TagTree"/>.
+    /// Captures the saga-side per-iteration overhead
+    /// (<c>WriteStateAsync</c> of the saga checkpoint plus loop
+    /// bookkeeping) that the per-key duration histogram does *not*
+    /// see. A non-trivial value at p50 here indicates the saga
+    /// checkpoint persist is contributing as much to end-to-end
+    /// latency as the data writes themselves; near-zero values mean
+    /// the saga's overhead is negligible and the per-key duration
+    /// is the dominant cost.
+    /// </summary>
+    public static readonly Histogram<double> SagaWaitSerialGap =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.wait.serial_gap", unit: "ms",
+            description: "Wall-clock gap between consecutive per-key awaits inside an atomic-write saga.");
+
     // --- Retroactive shard-split sweep instruments ----------------
 
     /// <summary>
@@ -570,4 +787,10 @@ public static class LatticeMetrics
 
     /// <summary>String label for the shard-root dirty-leaves fast path.</summary>
     public const string PathDirtySet = "dirty-set";
+
+    /// <summary><see cref="TagPhase"/> = <c>phase1</c>.</summary>
+    public static readonly KeyValuePair<string, object?> PhasePhase1Tag = new(TagPhase, "phase1");
+
+    /// <summary><see cref="TagPhase"/> = <c>phase2</c>.</summary>
+    public static readonly KeyValuePair<string, object?> PhasePhase2Tag = new(TagPhase, "phase2");
 }

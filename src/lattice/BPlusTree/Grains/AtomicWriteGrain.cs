@@ -1369,6 +1369,39 @@ internal sealed class AtomicWriteGrain(
         DiagSink.Write($"[DIAG saga-execute-phase-enter] op={OperationKey} tree={state.State.TreeId} nextIndex={state.State.NextIndex} totalEntries={state.State.Entries.Count} retriesOnCurrentStep={state.State.RetriesOnCurrentStep}");
 #endif
 
+        // Phase A horizontal-scaling diagnostic: publish the saga's
+        // fan-out size once per execute-phase entry (regardless of
+        // whether the activation later compensates or completes),
+        // tagged by tree only. SagaFanoutSize is intentionally
+        // separate from the terminal AtomicWriteBatchSize: this
+        // histogram lets dashboards correlate per-key duration with
+        // fan-out size even when a saga faults mid-loop.
+        var sagaTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId);
+        // Phase A attribution: pivot saga metrics by the tree's
+        // effective WalPartitions so the matrix sweep can correlate
+        // fan-out cost with WAL fan-out. WalMaxPendingBatches is
+        // deliberately omitted at the saga layer - the saga's
+        // serialisation is on the per-key loop, not on per-shard
+        // pending-flush capacity. Resolved once per execute-phase
+        // entry; option toggles between iterations are rare and the
+        // saga executes for at most a handful of seconds.
+        var sagaWalPartitionsTag = new KeyValuePair<string, object?>(
+            LatticeMetrics.TagWalPartitions,
+            optionsMonitor.Get(state.State.TreeId).WalPartitions);
+        LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag);
+
+        // Per-key timing scaffolding: capture the wall-clock instant
+        // immediately before each per-key SetAsync await (for the
+        // per-key duration histogram) and the wall-clock instant
+        // immediately after each successful loop iteration (for the
+        // serial-gap histogram - the time the saga spends between
+        // a successful commit and the next per-key await, which
+        // includes the saga checkpoint's WriteStateAsync). The
+        // first iteration has no predecessor so its serial-gap
+        // observation is skipped.
+        var hasLastIterationCompletion = false;
+        long lastIterationCompletionTicks = 0L;
+
         // Stamp the prepare-phase ambient once for the entire saga prepare
         // loop rather than per-key. The leaf grain's commit pipeline reads
         // LatticePreparedContext.Current at LatticeMutation emit time, so the
@@ -1409,7 +1442,28 @@ internal sealed class AtomicWriteGrain(
                     var swKey = System.Diagnostics.Stopwatch.StartNew();
                     DiagSink.Write($"[DIAG saga-execute-key-enter] op={OperationKey} tree={state.State.TreeId} idx={state.State.NextIndex} key={entry.Key} round=r{DiagSink.DecodeRound(entry.Value)} retries={state.State.RetriesOnCurrentStep}");
 #endif
-                    await lattice.SetAsync(entry.Key, entry.Value);
+                    // Phase A diagnostic: serial-gap is the wall-clock
+                    // delay between the previous successful iteration's
+                    // completion and this iteration's per-key await
+                    // entry. Captures the saga checkpoint's
+                    // WriteStateAsync overhead plus loop bookkeeping;
+                    // sums per-key durations and serial gaps reconstruct
+                    // total execute-phase wall-clock time.
+                    var perKeyStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                    if (hasLastIterationCompletion)
+                    {
+                        var gapMs = System.Diagnostics.Stopwatch.GetElapsedTime(lastIterationCompletionTicks, perKeyStartTicks).TotalMilliseconds;
+                        LatticeMetrics.SagaWaitSerialGap.Record(gapMs, sagaTreeTag, sagaWalPartitionsTag);
+                    }
+                    try
+                    {
+                        await lattice.SetAsync(entry.Key, entry.Value);
+                    }
+                    finally
+                    {
+                        var perKeyMs = System.Diagnostics.Stopwatch.GetElapsedTime(perKeyStartTicks).TotalMilliseconds;
+                        LatticeMetrics.SagaPerKeyDuration.Record(perKeyMs, sagaTreeTag, sagaWalPartitionsTag);
+                    }
 #if LATTICE_DIAG
                     DiagSink.Write($"[DIAG saga-execute-key-exit] op={OperationKey} tree={state.State.TreeId} idx={state.State.NextIndex} key={entry.Key} elapsedMs={swKey.Elapsed.TotalMilliseconds:F0}");
 #endif
@@ -1434,6 +1488,13 @@ internal sealed class AtomicWriteGrain(
                         state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
                         throw;
                     }
+
+                    // Stamp the iteration-completion timestamp after the
+                    // success checkpoint lands. The next iteration's
+                    // perKeyStartTicks - lastIterationCompletionTicks is
+                    // the serial gap measurement.
+                    lastIterationCompletionTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                    hasLastIterationCompletion = true;
                 }
                 catch (Exception ex)
                 {

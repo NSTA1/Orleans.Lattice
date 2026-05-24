@@ -56,6 +56,17 @@
 //                           off to preserve the existing wire-compat shape where every
 //                           AppendBatchAsync awaits its own phase 2.
 //   BENCH_REPORT_SEC        stdout report interval in seconds (default 1)
+//   BENCH_PHASEA_REPORT_SEC stdout cadence for the Phase A diagnostic
+//                           reporter (default 10). Set to 0 to disable
+//                           the reporter entirely. Emits one
+//                           [phaseA] line per (instrument, tree, shard,
+//                           phase, status) tuple per cadence tick,
+//                           carrying p50/p90/p99/count/min/max over the
+//                           preceding window. The ladder script
+//                           (40-ladder.ps1) scrapes these lines to
+//                           attribute caller-visible append latency to
+//                           grain-side queueing vs storage-provider
+//                           commit time.
 //   BENCH_TOTAL_DURATION_SEC
 //                           Server-side watchdog. After this many seconds the silo
 //                           triggers a graceful host shutdown so the ACI container
@@ -155,6 +166,7 @@ builder.Logging.AddFilter("Orleans.Messaging", LogLevel.Error);
 builder.Logging.AddFilter("Orleans.Runtime.Placement.PlacementService", LogLevel.Error);
 
 builder.Services.AddHostedService<TcpIngestService>();
+builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.PhaseADiagnosticReporter>();
 builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride));
 
 builder.UseOrleans(silo =>

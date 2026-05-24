@@ -6,6 +6,10 @@
 .aci-deploy.yaml
 # Local-only state written by 40-ladder.ps1 / 21-reconfigure.ps1.
 .fleet-size.config
+# Per-rung sweep results written by 40-ladder.ps1. Local-only,
+# possibly contains throughput numbers from cost-sensitive runs.
+.ladder-results.csv
+.ladder-phaseA.csv
 # Per-operator BENCH_PREFIX persisted by 10-provision.ps1. Random per machine,
 # used to keep storage-account / ACR names globally unique. Never commit.
 .prefix

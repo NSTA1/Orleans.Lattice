@@ -53,9 +53,12 @@ $containerGroup = "$($ctx.Prefix)-bench"
 
 $results = New-Object System.Collections.Generic.List[object]
 $resultsCsv = Join-Path $PSScriptRoot '.ladder-results.csv'
+$phaseAResults = New-Object System.Collections.Generic.List[object]
+$phaseACsv = Join-Path $PSScriptRoot '.ladder-phaseA.csv'
 
 Write-Host "[ladder] rungs=$($Rungs.Count) durationPerRung=${DurationSec}s cooldown=${CooldownSec}s" -ForegroundColor Cyan
 Write-Host "[ladder] results -> $resultsCsv" -ForegroundColor DarkGray
+Write-Host "[ladder] phaseA  -> $phaseACsv" -ForegroundColor DarkGray
 
 $deployScript = Join-Path $PSScriptRoot '20-build-and-deploy.ps1'
 
@@ -160,6 +163,74 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
     # Persist incrementally so a crash mid-ladder doesn't lose earlier rungs.
     $results | Export-Csv -Path $resultsCsv -NoTypeInformation -Encoding utf8
 
+    # Phase A diagnostic scrape. The silo emits one [phaseA] line per
+    # (instrument, tree, shard, phase, status) tuple per cadence tick
+    # (BENCH_PHASEA_REPORT_SEC, default 10). We keep only the LAST line
+    # per tuple in the rung as the steady-state representative; that
+    # last line covers the final cadence window before the producer
+    # exited, which is the closest to steady-state the run produces.
+    # Both histogram-shape and counter-shape lines are parsed; counter
+    # lines have no p50/p90/p99/min/max/sum fields, which the regex
+    # makes optional.
+    $phaseALines = ($siloLog -split "`n") |
+        Select-String -Pattern '\[phaseA\] t=\s*([\d.]+)s\s+instrument=(\S+)\s+tree=(\S+)\s+shard=(\S+)\s+phase=(\S+)\s+status=(\S+)\s+count=(\d+)(?:\s+sum=([\d.\-]+)\s+min=([\d.\-]+)\s+p50=([\d.\-]+)\s+p90=([\d.\-]+)\s+p99=([\d.\-]+)\s+max=([\d.\-]+))?' |
+        ForEach-Object {
+            $m = $_.Matches[0]
+            [pscustomobject]@{
+                T          = [double] $m.Groups[1].Value
+                Instrument = $m.Groups[2].Value
+                Tree       = $m.Groups[3].Value
+                Shard      = $m.Groups[4].Value
+                Phase      = $m.Groups[5].Value
+                Status     = $m.Groups[6].Value
+                Count      = [long]   $m.Groups[7].Value
+                Sum        = if ($m.Groups[8].Success) { [double] $m.Groups[8].Value } else { 0.0 }
+                Min        = if ($m.Groups[9].Success) { [double] $m.Groups[9].Value } else { 0.0 }
+                P50        = if ($m.Groups[10].Success) { [double] $m.Groups[10].Value } else { 0.0 }
+                P90        = if ($m.Groups[11].Success) { [double] $m.Groups[11].Value } else { 0.0 }
+                P99        = if ($m.Groups[12].Success) { [double] $m.Groups[12].Value } else { 0.0 }
+                Max        = if ($m.Groups[13].Success) { [double] $m.Groups[13].Value } else { 0.0 }
+            }
+        }
+
+    if ($phaseALines) {
+        # Group by tuple, keep the row with the highest T (latest cadence
+        # window observed during the rung). Hashtable keyed by the tuple
+        # string keeps this O(N) without LINQ overhead.
+        $latestByTuple = @{}
+        foreach ($row in $phaseALines) {
+            $tupleKey = '{0}|{1}|{2}|{3}|{4}' -f $row.Instrument, $row.Tree, $row.Shard, $row.Phase, $row.Status
+            if (-not $latestByTuple.ContainsKey($tupleKey) -or $latestByTuple[$tupleKey].T -lt $row.T) {
+                $latestByTuple[$tupleKey] = $row
+            }
+        }
+        foreach ($row in $latestByTuple.Values) {
+            $phaseAResults.Add([pscustomobject]@{
+                Rung       = $i + 1
+                Vehicles   = $vehicles
+                TickHz     = $hz
+                TargetRate = $target
+                T          = $row.T
+                Instrument = $row.Instrument
+                Tree       = $row.Tree
+                Shard      = $row.Shard
+                Phase      = $row.Phase
+                Status     = $row.Status
+                Count      = $row.Count
+                Sum        = $row.Sum
+                Min        = $row.Min
+                P50        = $row.P50
+                P90        = $row.P90
+                P99        = $row.P99
+                Max        = $row.Max
+            })
+        }
+        $phaseAResults | Export-Csv -Path $phaseACsv -NoTypeInformation -Encoding utf8
+        Write-Host ("[ladder] phaseA  : {0} tuples observed (latest window per tuple)" -f $latestByTuple.Count) -ForegroundColor DarkGray
+    } else {
+        Write-Host "[ladder] phaseA  : no [phaseA] lines in silo log (reporter disabled or BENCH_PHASEA_REPORT_SEC > rung duration?)" -ForegroundColor DarkYellow
+    }
+
     if ($i -lt $Rungs.Count - 1) {
         Write-Host "[ladder] cooldown ${CooldownSec}s ..." -ForegroundColor DarkGray
         Start-Sleep -Seconds $CooldownSec
@@ -172,3 +243,8 @@ Write-Host "[ladder] complete. results table:" -ForegroundColor Green
 Write-Host ("=" * 78) -ForegroundColor Green
 $results | Format-Table -AutoSize
 Write-Host "[ladder] csv: $resultsCsv" -ForegroundColor Cyan
+if ($phaseAResults.Count -gt 0) {
+    Write-Host "[ladder] phaseA csv: $phaseACsv ($($phaseAResults.Count) rows across $($Rungs.Count) rungs)" -ForegroundColor Cyan
+} else {
+    Write-Host "[ladder] phaseA csv: no rows captured (silo did not emit [phaseA] lines)" -ForegroundColor DarkYellow
+}

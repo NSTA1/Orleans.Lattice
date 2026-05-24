@@ -76,8 +76,14 @@ $tag          = if ($PSBoundParameters.ContainsKey('Tag'))          { $Tag }
 # the optimisation against a real Azure Tables account.
 $walElimCRow  = if ($env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW) { $env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW }
                 else { 'false' }
+# Phase A diagnostic reporter cadence in the silo. Forward whatever the
+# operator (or 40-ladder.ps1) put on the host env; default to 10s so a
+# 60s rung captures ~5 windows of attribution data without burying the
+# main throughput log in noise. Set 0 to disable.
+$phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
+                   else { '10' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walElimCRow=$walElimCRow skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -227,6 +233,8 @@ properties:
             value: '$walElimCRow'
           - name: BENCH_REPORT_SEC
             value: '1'
+          - name: BENCH_PHASEA_REPORT_SEC
+            value: '$phaseAReportSec'
           - name: BENCH_TOTAL_DURATION_SEC
             value: '$totalDuration'
           - name: AZURE_CLIENT_ID

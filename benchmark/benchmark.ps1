@@ -291,6 +291,37 @@ $ScalarPanelExtra = [ordered]@{
     # ── Label-filtered counter (auto-discovery treats the whole metric as one series) ──
     'dotnet_gc_gen2_collections_increase' =
         'sum(increase(dotnet_gc_collections_total{gc_heap_generation="gen2"}[{Ws}s]))'
+
+    # ── Silo process CPU utilisation (Phase A attribution column) ──
+    # The OpenTelemetry.Instrumentation.Runtime package publishes process CPU
+    # consumption via the `process.cpu.time` instrument (Counter<double>,
+    # CPU-seconds), which the Prometheus AspNetCore exporter renders as
+    # `dotnet_process_cpu_time_seconds_total`. It is emitted with a
+    # `cpu_mode` label split across {user, system}, so a sum() collapses the
+    # two modes into wall-CPU-seconds consumed by the silo process. A
+    # companion gauge `dotnet_process_cpu_count` carries the host core count
+    # (16 on the current bench host) so the percent can be normalised to
+    # "0-100% of total host CPU" rather than "cores * 100" - the latter
+    # would saturate at 1600 on a 16-core box and be unreadable in the
+    # attribution column. Auto-discovery is restricted to the
+    # `orleans_lattice_*` / `vehicle_fleet_simulator_*` prefixes plus a
+    # curated GC allow-list, so the dotnet runtime CPU counters are
+    # otherwise dropped from results.json. The two entries below synthesise
+    # the CPU-percent surface that the Phase A attribution report's
+    # `CpuPct` column resolves against (`process_cpu_percent_avg`,
+    # `process_cpu_percent_max`).
+    #
+    # avg = window-wide rate (rate over [Ws] already collapses to the
+    #       window mean, so no subquery is needed).
+    # max = peak of the per-30s rate sampled at 10s intervals across the
+    #       window, which captures the worst CPU stretch rather than the
+    #       smoothed average.
+    # Both are scalar-divided by the host core count (taken at the most
+    # recent scrape - the value is host-constant for any single run).
+    'process_cpu_percent_avg' =
+        '100 * sum(rate(dotnet_process_cpu_time_seconds_total[{Ws}s])) / scalar(max(dotnet_process_cpu_count))'
+    'process_cpu_percent_max' =
+        '100 * max_over_time((sum(rate(dotnet_process_cpu_time_seconds_total[30s])))[{Ws}s:10s]) / scalar(max(dotnet_process_cpu_count))'
 }
 
 # ── Curated KPI aliases (post-process; no PromQL queries issued) ────────────
@@ -1204,6 +1235,32 @@ if (-not $isMicrobench -and -not $SkipFleetSizeCheck.IsPresent -and $FleetSizeOv
 if ($FleetSizeOverride -gt 0) {
     $envMap['BENCH_FLEET_SIZE'] = "$FleetSizeOverride"
     $envSource['BENCH_FLEET_SIZE'] = '-FleetSizeOverride CLI arg (overrides .env and .fleet-size.config)'
+}
+
+# ── Phase A attribution-driver pass-through ────────────────────────────────────
+#
+# The Phase A diagnostic driver (benchmark-attribution.ps1) sweeps a matrix
+# of WAL knobs by stamping BENCH_LATTICE_WAL_* / BENCH_WAL_PIPELINE_PHASE_TWO
+# into the process env. docker-compose's `${VAR:-}` interpolation picks them
+# up at compose-up time, but those vars are NOT in any scenario .env, so
+# Read-EnvFile never sees them and they never landed in results.json's
+# `config` block - which meant a later results.json could not be mapped back
+# to the cell that produced it.
+#
+# Promote any matrix-driver process-env knobs into $envMap so they are
+# persisted in results.json. This is a no-op for regular (non-attribution)
+# runs because those env vars are absent.
+$matrixDriverPassthrough = @(
+    'BENCH_LATTICE_WAL_PARTITIONS',
+    'BENCH_LATTICE_WAL_MAX_PENDING_BATCHES',
+    'BENCH_WAL_PIPELINE_PHASE_TWO'
+)
+foreach ($k in $matrixDriverPassthrough) {
+    $v = [Environment]::GetEnvironmentVariable($k)
+    if (-not [string]::IsNullOrEmpty($v)) {
+        $envMap[$k] = $v
+        $envSource[$k] = 'process env (attribution driver)'
+    }
 }
 
 foreach ($k in $envMap.Keys) {

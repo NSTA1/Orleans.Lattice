@@ -210,6 +210,44 @@ builder.Host.UseOrleans(silo =>
     {
         silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name));
 
+        // ─── Lattice horizontal-scaling knobs (Phase A attribution sweep) ────
+        //
+        // The horizontal-scaling diagnostic plan sweeps two LatticeOptions
+        // knobs across the local docker-compose scenarios: WalPartitions
+        // (per-tree WAL shard count) and WalMaxPendingBatches (per-shard
+        // in-flight flush ceiling). Without this ConfigureLattice block
+        // the scenarios all run at the library defaults (1, 1) and the
+        // sweep has nothing to observe.
+        //
+        // Both keys are optional and fall through to the LatticeOptions
+        // defaults when unset. The env-var spelling matches what
+        // benchmark-attribution.ps1 emits when it invokes benchmark.ps1
+        // through docker-compose:
+        //
+        //   Lattice:WalPartitions=4
+        //   Lattice:WalMaxPendingBatches=8
+        //
+        // Parsing is tolerant - a missing or unparseable value leaves
+        // the default in place so a malformed override does not silently
+        // disable the silo.
+        var walPartitionsRaw = builder.Configuration["Lattice:WalPartitions"];
+        var walMaxPendingBatchesRaw = builder.Configuration["Lattice:WalMaxPendingBatches"];
+        if (!string.IsNullOrWhiteSpace(walPartitionsRaw)
+            || !string.IsNullOrWhiteSpace(walMaxPendingBatchesRaw))
+        {
+            silo.ConfigureLattice(o =>
+            {
+                if (int.TryParse(walPartitionsRaw, out var p) && p >= 1)
+                {
+                    o.WalPartitions = p;
+                }
+                if (int.TryParse(walMaxPendingBatchesRaw, out var b) && b >= 1)
+                {
+                    o.WalMaxPendingBatches = b;
+                }
+            });
+        }
+
         // ─── WAL storage provider switch (Lattice:Wal:Provider) ────────────────
         //
         //   "memory"      → default. The library falls through to InMemoryWalStorageProvider;
