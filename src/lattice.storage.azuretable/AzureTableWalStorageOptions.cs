@@ -1,4 +1,5 @@
 using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Data.Tables;
 
 namespace Orleans.Lattice.Storage.AzureTable;
@@ -329,6 +330,16 @@ public sealed class AzureTableWalStorageOptions
 
         var clientOptions = new TableClientOptions();
         ConfigureClientOptions?.Invoke(clientOptions);
+
+        // Layered AFTER the user's ConfigureClientOptions callback so
+        // hosts cannot accidentally drop our per-retry observability
+        // (e.g. by replacing clientOptions.Transport or rebuilding the
+        // policy list). Purely additive: never replaces clientOptions.Retry.
+        // Skipped in pre-built ServiceClient mode (the early return
+        // above) - hosts using that path attach
+        // RetryAttemptTrackingPolicy.Instance themselves if they want
+        // the counter populated.
+        clientOptions.AddPolicy(RetryAttemptTrackingPolicy.Instance, HttpPipelinePosition.PerRetry);
 
         if (!string.IsNullOrWhiteSpace(ConnectionString))
         {

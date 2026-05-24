@@ -584,6 +584,33 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.provider.retry.exhausted", unit: "{call}",
             description: "Provider commit calls that exhausted the SDK retry budget and surfaced an exception.");
 
+    /// <summary>
+    /// Counter incremented once per individual retry attempt the
+    /// storage SDK performs on a provider call, regardless of whether
+    /// the retry ultimately succeeds. Tagged with <see cref="TagStatus"/>
+    /// (the HTTP status string of the response that triggered the
+    /// retry, e.g. <c>503</c>, <c>429</c>; <c>0</c> when the trigger
+    /// was a transport-level exception with no HTTP status). Phase A
+    /// (see <c>scaling.md</c>) discovered a 5-100x gap between wall
+    /// p99 (700-1,700 ms) and Azure Tables server-timing p99
+    /// (10-130 ms) on the WAL hot path - the canonical signature of
+    /// retry storms whose retries ultimately succeed and therefore
+    /// never increment <see cref="ProviderRetryExhausted"/>. This
+    /// instrument is the counterpart that captures *attempted*
+    /// retries so dashboards can attribute wall-time inflation to
+    /// SDK backoff without inferring it from the gap.
+    /// <para>
+    /// Cardinality is intentionally bounded: only the status tag is
+    /// emitted (small bounded set of HTTP status codes), not
+    /// <see cref="TagTree"/> / <see cref="TagShard"/>. Per-tree /
+    /// per-shard attribution is covered by
+    /// <see cref="ProviderRetryExhausted"/>, which fires rarely.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ProviderRetryAttempts =
+        Meter.CreateCounter<long>("orleans.lattice.provider.retry.attempts", unit: "{attempt}",
+            description: "Individual retry attempts performed by the storage SDK on provider calls, tagged by the HTTP status that triggered each retry.");
+
     // --- Saga fan-out diagnostic instruments (AtomicWriteGrain) -------------
 
     /// <summary>

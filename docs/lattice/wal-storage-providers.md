@@ -254,6 +254,17 @@ The mode is opt-in for the same reason as `PipelinePhaseTwoCommits`: it is a cha
 
 The `benchmark/azure-throughput/` harness exposes this flag via the `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` environment variable so the same single-silo, real-Azure-Tables deployment can drive both arms of an A/B run with no code change. See `benchmark/azure-throughput/README.md` for the A/B runbook.
 
+#### Retry-attempt observability
+
+The provider attaches a per-retry pipeline policy (`RetryAttemptTrackingPolicy`) to every `TableServiceClient` it constructs from `ConnectionString`, `ServiceUri` + credential, or `ServiceUri` + shared-key. The policy increments the counter `orleans.lattice.provider.retry.attempts` exactly once per retry attempt the Azure SDK performs, tagged with the HTTP status code that triggered the retry (or `0` for a transport-level failure with no HTTP exchange). The counter is purely additive - it sits alongside the existing `orleans.lattice.provider.retry.exhausted` counter, which only fires when the SDK gives up. Together the two counters separate two distinct failure shapes:
+
+| Counter | Fires when | Hot-path attribution |
+|---|---|---|
+| `orleans.lattice.provider.retry.exhausted` | The SDK has burned its retry budget and is about to surface an exception. | Sustained throttling at the partition / account ceiling. |
+| `orleans.lattice.provider.retry.attempts` | The SDK has decided to retry an attempt, regardless of the eventual outcome. | Transient throttling / 503 / 429 storms whose retries ultimately succeed - the canonical fingerprint of wall-time inflation while server-timing stays low. |
+
+The policy is registered at `HttpPipelinePosition.PerRetry` **after** the host's `ConfigureClientOptions` callback runs, so a host that customises the retry policy cannot accidentally drop the observability hook. In pre-built `ServiceClient` mode the provider returns the host-supplied client verbatim and does not attach the policy; hosts using that path can opt in by calling `clientOptions.AddPolicy(RetryAttemptTrackingPolicy.Instance, HttpPipelinePosition.PerRetry)` themselves before constructing the client they hand to the provider. The counter's cardinality is intentionally bounded to the small set of HTTP status codes the SDK surfaces on the WAL hot path; it deliberately omits tree / shard tags, because per-shard failure attribution is already covered by `orleans.lattice.provider.retry.exhausted`.
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.
