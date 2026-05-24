@@ -265,6 +265,22 @@ The provider attaches a per-retry pipeline policy (`RetryAttemptTrackingPolicy`)
 
 The policy is registered at `HttpPipelinePosition.PerRetry` **after** the host's `ConfigureClientOptions` callback runs, so a host that customises the retry policy cannot accidentally drop the observability hook. In pre-built `ServiceClient` mode the provider returns the host-supplied client verbatim and does not attach the policy; hosts using that path can opt in by calling `clientOptions.AddPolicy(RetryAttemptTrackingPolicy.Instance, HttpPipelinePosition.PerRetry)` themselves before constructing the client they hand to the provider. The counter's cardinality is intentionally bounded to the small set of HTTP status codes the SDK surfaces on the WAL hot path; it deliberately omits tree / shard tags, because per-shard failure attribution is already covered by `orleans.lattice.provider.retry.exhausted`.
 
+#### Retry-budget tuning
+
+The provider surfaces five nullable knobs on `AzureTableWalStorageOptions` that map straight onto `TableClientOptions.Retry`. All default to `null`, which leaves the Azure SDK defaults in place (4 attempts, 0.8 s base delay, 60 s cap, 100 s per-attempt deadline, exponential backoff); set any subset of them to bound the WAL hot path's per-call retry budget without surrendering the SDK's transient-fault classification.
+
+| Option | Maps to | SDK default | Typical Phase-C value |
+|---|---|---|---|
+| `RetryMaxAttempts` | `Retry.MaxRetries` (retries after the initial attempt) | `3` | `1` or `2` to clip long backoff trains |
+| `RetryDelay` | `Retry.Delay` (base backoff) | `0.8 s` | `40 ms` – `100 ms` to keep the first retry inside a single Orleans turn |
+| `RetryMaxDelay` | `Retry.MaxDelay` (per-attempt cap) | `60 s` | `400 ms` – `1 s` to bound the worst-case backoff |
+| `RetryNetworkTimeout` | `Retry.NetworkTimeout` (per-attempt deadline) | `100 s` | `2 s` – `10 s` so a stuck request cannot park a WAL slot indefinitely |
+| `RetryMode` | `Retry.Mode` | `Exponential` | usually unchanged |
+
+The knobs are applied to `clientOptions.Retry` **before** the host's `ConfigureClientOptions` callback runs, so a host that wants final say can override any of them inside that callback (or replace `clientOptions.Retry` wholesale). The provider's `Validate()` rejects negative values, `RetryDelay > RetryMaxDelay`, and a non-positive `RetryNetworkTimeout`. In pre-built `ServiceClient` mode the knobs are ignored: the host already owns the `TableClientOptions.Retry` on the client it constructed.
+
+The motivation is Phase A's finding (see `scaling.md`) that the WAL hot path's wall-time p99 sat 5–100x above Azure Tables' server-timing p99 — the canonical signature of a retry storm whose retries ultimately succeed. The `orleans.lattice.provider.retry.attempts` counter from the observability section above is the diagnostic that tells operators whether to reach for these knobs, and `RetryNetworkTimeout` in particular is the per-attempt deadline budget that prevents a single stuck request from holding a WAL slot for the full SDK default of 100 s.
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.

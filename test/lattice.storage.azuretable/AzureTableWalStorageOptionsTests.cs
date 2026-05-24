@@ -343,6 +343,245 @@ public class AzureTableWalStorageOptionsTests
         Assert.That(options.Validate, Throws.Nothing);
     }
 
+    // ---------------------------------------------------------------
+    // C4 retry-budget tuning knobs
+    // ---------------------------------------------------------------
+    //
+    // The five new options (RetryMaxAttempts, RetryDelay, RetryMaxDelay,
+    // RetryNetworkTimeout, RetryMode) are intentionally additive: null
+    // on each leaves the Azure.Data.Tables SDK default in place, so
+    // existing deployments see no behaviour change. When set, they are
+    // applied to TableClientOptions.Retry BEFORE the host's
+    // ConfigureClientOptions callback so the host wins any conflict.
+    // The tests below exercise both halves of that ordering by reading
+    // the resulting TableClientOptions inside a probe callback.
+
+    [Test]
+    public void RetryKnobs_default_to_null()
+    {
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.RetryMaxAttempts, Is.Null);
+            Assert.That(options.RetryDelay, Is.Null);
+            Assert.That(options.RetryMaxDelay, Is.Null);
+            Assert.That(options.RetryNetworkTimeout, Is.Null);
+            Assert.That(options.RetryMode, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Validate_throws_when_RetryMaxAttempts_is_negative()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryMaxAttempts = -1,
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_RetryDelay_is_negative()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryDelay = TimeSpan.FromMilliseconds(-1),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_RetryMaxDelay_is_negative()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryMaxDelay = TimeSpan.FromMilliseconds(-1),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_RetryDelay_exceeds_RetryMaxDelay()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryDelay = TimeSpan.FromSeconds(5),
+            RetryMaxDelay = TimeSpan.FromSeconds(1),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_RetryNetworkTimeout_is_zero()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryNetworkTimeout = TimeSpan.Zero,
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_succeeds_with_all_retry_knobs_set_and_internally_consistent()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryMaxAttempts = 2,
+            RetryDelay = TimeSpan.FromMilliseconds(50),
+            RetryMaxDelay = TimeSpan.FromMilliseconds(500),
+            RetryNetworkTimeout = TimeSpan.FromSeconds(5),
+            RetryMode = Azure.Core.RetryMode.Exponential,
+        };
+
+        Assert.That(options.Validate, Throws.Nothing);
+    }
+
+    [Test]
+    public void BuildServiceClient_applies_RetryMaxAttempts_when_set()
+    {
+        TableClientOptions? observed = null;
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryMaxAttempts = 1,
+            ConfigureClientOptions = co => observed = co,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.That(observed, Is.Not.Null);
+        Assert.That(observed!.Retry.MaxRetries, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void BuildServiceClient_applies_RetryDelay_and_RetryMaxDelay_when_set()
+    {
+        TableClientOptions? observed = null;
+        var delay = TimeSpan.FromMilliseconds(40);
+        var maxDelay = TimeSpan.FromMilliseconds(400);
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryDelay = delay,
+            RetryMaxDelay = maxDelay,
+            ConfigureClientOptions = co => observed = co,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.Not.Null);
+            Assert.That(observed!.Retry.Delay, Is.EqualTo(delay));
+            Assert.That(observed.Retry.MaxDelay, Is.EqualTo(maxDelay));
+        });
+    }
+
+    [Test]
+    public void BuildServiceClient_applies_RetryNetworkTimeout_when_set()
+    {
+        TableClientOptions? observed = null;
+        var networkTimeout = TimeSpan.FromSeconds(7);
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryNetworkTimeout = networkTimeout,
+            ConfigureClientOptions = co => observed = co,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.That(observed, Is.Not.Null);
+        Assert.That(observed!.Retry.NetworkTimeout, Is.EqualTo(networkTimeout));
+    }
+
+    [Test]
+    public void BuildServiceClient_applies_RetryMode_when_set()
+    {
+        TableClientOptions? observed = null;
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryMode = Azure.Core.RetryMode.Fixed,
+            ConfigureClientOptions = co => observed = co,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.That(observed, Is.Not.Null);
+        Assert.That(observed!.Retry.Mode, Is.EqualTo(Azure.Core.RetryMode.Fixed));
+    }
+
+    [Test]
+    public void BuildServiceClient_lets_host_ConfigureClientOptions_override_retry_knobs()
+    {
+        // Ordering contract: knobs are applied first, then the host
+        // callback runs and can clobber any of them. Host wins.
+        TableClientOptions? observed = null;
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryMaxAttempts = 1,
+            RetryDelay = TimeSpan.FromMilliseconds(10),
+            ConfigureClientOptions = co =>
+            {
+                co.Retry.MaxRetries = 9;
+                co.Retry.Delay = TimeSpan.FromMilliseconds(999);
+                observed = co;
+            },
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.Not.Null);
+            Assert.That(observed!.Retry.MaxRetries, Is.EqualTo(9));
+            Assert.That(observed.Retry.Delay, Is.EqualTo(TimeSpan.FromMilliseconds(999)));
+        });
+    }
+
+    [Test]
+    public void BuildServiceClient_leaves_sdk_defaults_when_no_retry_knob_is_set()
+    {
+        // Additive contract: with all knobs null and no host callback
+        // touching Retry, the constructed TableClientOptions.Retry
+        // surface matches a fresh TableClientOptions — i.e. the SDK
+        // defaults. We snapshot a fresh instance and compare.
+        var defaults = new TableClientOptions();
+
+        TableClientOptions? observed = null;
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            ConfigureClientOptions = co => observed = co,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.That(observed, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed!.Retry.MaxRetries, Is.EqualTo(defaults.Retry.MaxRetries));
+            Assert.That(observed.Retry.Delay, Is.EqualTo(defaults.Retry.Delay));
+            Assert.That(observed.Retry.MaxDelay, Is.EqualTo(defaults.Retry.MaxDelay));
+            Assert.That(observed.Retry.NetworkTimeout, Is.EqualTo(defaults.Retry.NetworkTimeout));
+            Assert.That(observed.Retry.Mode, Is.EqualTo(defaults.Retry.Mode));
+        });
+    }
+
     /// <summary>
     /// Minimal Azure.Core <see cref="Azure.Core.TokenCredential"/>
     /// stand-in for tests that need a non-null credential reference

@@ -98,8 +98,96 @@ public sealed class AzureTableWalStorageOptions
     /// retry policies, diagnostics, or transport without the provider
     /// having to surface a pass-through option per setting. The default
     /// (null) leaves the options at <c>Azure.Data.Tables</c> defaults.
+    /// <para>
+    /// Invoked <i>after</i> the provider applies any of the
+    /// <see cref="RetryMaxAttempts"/> / <see cref="RetryDelay"/> /
+    /// <see cref="RetryMaxDelay"/> / <see cref="RetryNetworkTimeout"/>
+    /// / <see cref="RetryMode"/> knobs to
+    /// <see cref="TableClientOptions.Retry"/>, so anything the host
+    /// does inside this callback wins. To attach an additional
+    /// per-retry policy without dropping the provider's bundled
+    /// <see cref="RetryAttemptTrackingPolicy"/>, call
+    /// <see cref="ClientOptions.AddPolicy"/> rather than replacing
+    /// <see cref="TableClientOptions.Retry"/> wholesale.
+    /// </para>
     /// </summary>
     public Action<TableClientOptions>? ConfigureClientOptions { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.MaxRetries"/> on
+    /// the constructed <see cref="TableClientOptions.Retry"/>. The
+    /// value is the number of <i>retries</i> after the initial
+    /// attempt (so <c>RetryMaxAttempts = 3</c> yields up to four total
+    /// attempts), matching the Azure.Core convention. <c>null</c>
+    /// leaves the SDK default (3 retries) in place; <c>0</c>
+    /// disables retries entirely. Must be non-negative.
+    /// <para>
+    /// Phase A (see <c>scaling.md</c>) observed a 5–100x gap between
+    /// wall p99 (700–1,700 ms) and Azure Tables server-timing p99
+    /// (10–130 ms) on the WAL hot path, which is consistent with the
+    /// SDK's default 4-attempt × 0.8 s base-delay exponential backoff
+    /// dominating wall latency. This knob, together with
+    /// <see cref="RetryDelay"/> / <see cref="RetryMaxDelay"/> /
+    /// <see cref="RetryNetworkTimeout"/>, lets operators tune the
+    /// per-call retry budget without surrendering the SDK's transient
+    /// fault classification or having to provide a full
+    /// <see cref="ConfigureClientOptions"/> delegate.
+    /// </para>
+    /// <para>
+    /// Ignored when <see cref="ServiceClient"/> is set: in pre-built
+    /// client mode the host owns the retry policy on the
+    /// <see cref="TableClientOptions"/> it constructed.
+    /// </para>
+    /// </summary>
+    public int? RetryMaxAttempts { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.Delay"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/> — the base
+    /// delay used by the exponential / fixed backoff strategy.
+    /// <c>null</c> leaves the SDK default (0.8 s) in place. Must be
+    /// non-negative and not exceed <see cref="RetryMaxDelay"/> when
+    /// both are set.
+    /// <para>
+    /// Ignored when <see cref="ServiceClient"/> is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? RetryDelay { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.MaxDelay"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/> — the
+    /// per-attempt upper bound on backoff. <c>null</c> leaves the SDK
+    /// default (60 s) in place. Must be non-negative and at least as
+    /// large as <see cref="RetryDelay"/> when both are set.
+    /// <para>
+    /// Ignored when <see cref="ServiceClient"/> is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? RetryMaxDelay { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.NetworkTimeout"/>
+    /// on the constructed <see cref="TableClientOptions.Retry"/> — the
+    /// per-attempt deadline applied at the transport layer. <c>null</c>
+    /// leaves the SDK default (100 s) in place. Must be positive.
+    /// <para>
+    /// Functions as a per-attempt deadline budget: a stuck request
+    /// cannot keep a WAL slot occupied longer than this value before
+    /// being cancelled and either retried (if attempts remain) or
+    /// surfacing a <see cref="ProviderRetryExhausted"/>-tagged failure
+    /// to the caller. Ignored when <see cref="ServiceClient"/> is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? RetryNetworkTimeout { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.Mode"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/>. Defaults to
+    /// <c>null</c>, which leaves the SDK default (<see cref="Azure.Core.RetryMode.Exponential"/>)
+    /// in place. Ignored when <see cref="ServiceClient"/> is set.
+    /// </summary>
+    public RetryMode? RetryMode { get; set; }
 
     /// <summary>
     /// When <see langword="true"/>, an <c>AppendBatchAsync</c> call
@@ -307,6 +395,36 @@ public sealed class AzureTableWalStorageOptions
             throw new InvalidOperationException(
                 $"{nameof(AzureTableWalStorageOptions)}.{nameof(ServiceUri)} requires either {nameof(TokenCredential)} or {nameof(SharedKeyCredential)} to be configured.");
         }
+
+        if (RetryMaxAttempts is { } maxAttempts && maxAttempts < 0)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryMaxAttempts)} must be non-negative when set.");
+        }
+
+        if (RetryDelay is { } delay && delay < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryDelay)} must be non-negative when set.");
+        }
+
+        if (RetryMaxDelay is { } maxDelay && maxDelay < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryMaxDelay)} must be non-negative when set.");
+        }
+
+        if (RetryDelay is { } d && RetryMaxDelay is { } md && d > md)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryDelay)} must not exceed {nameof(RetryMaxDelay)} when both are set.");
+        }
+
+        if (RetryNetworkTimeout is { } networkTimeout && networkTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryNetworkTimeout)} must be positive when set.");
+        }
     }
 
     /// <summary>
@@ -329,6 +447,36 @@ public sealed class AzureTableWalStorageOptions
         }
 
         var clientOptions = new TableClientOptions();
+
+        // Tuning knobs: apply BEFORE the host's ConfigureClientOptions
+        // callback so the host has the final word and can override any
+        // value (or replace clientOptions.Retry wholesale) if needed.
+        // null on a knob means "leave the SDK default in place".
+        if (RetryMaxAttempts is { } maxAttempts)
+        {
+            clientOptions.Retry.MaxRetries = maxAttempts;
+        }
+
+        if (RetryDelay is { } delay)
+        {
+            clientOptions.Retry.Delay = delay;
+        }
+
+        if (RetryMaxDelay is { } maxDelay)
+        {
+            clientOptions.Retry.MaxDelay = maxDelay;
+        }
+
+        if (RetryNetworkTimeout is { } networkTimeout)
+        {
+            clientOptions.Retry.NetworkTimeout = networkTimeout;
+        }
+
+        if (RetryMode is { } retryMode)
+        {
+            clientOptions.Retry.Mode = retryMode;
+        }
+
         ConfigureClientOptions?.Invoke(clientOptions);
 
         // Layered AFTER the user's ConfigureClientOptions callback so
