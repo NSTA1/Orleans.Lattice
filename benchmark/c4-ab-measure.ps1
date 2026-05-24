@@ -50,7 +50,8 @@ param(
 	[string] $ReportPath = '',
 	[switch] $SkipBaseline,
 	[switch] $SkipTuned,
-	[switch] $DryRun
+	[switch] $DryRun,
+	[switch] $ReportOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -127,7 +128,8 @@ if (-not (Test-Path $reportRoot)) {
 function Invoke-Cell {
 	param(
 		[Parameter(Mandatory)] $Cell,
-		[Parameter(Mandatory)] [hashtable] $BaseEnv
+		[Parameter(Mandatory)] [hashtable] $BaseEnv,
+		[switch] $ReportOnly
 	)
 
 	if ($Cell.Skip) {
@@ -135,60 +137,97 @@ function Invoke-Cell {
 		return $null
 	}
 
-	Write-Host ""
-	Write-Host "[$($Cell.Id)] $($Cell.Label)" -ForegroundColor Green
-
-	# Snapshot existing env so we can restore afterwards.
-	$allKeys = @($BaseEnv.Keys) + @($Cell.Env.Keys) | Select-Object -Unique
-	$saved = @{}
-	foreach ($k in $allKeys) {
-		$saved[$k] = [Environment]::GetEnvironmentVariable($k)
+	$scenarioRun = Join-Path $runRoot $scenario
+	$beforeLatest = $null
+	if (Test-Path $scenarioRun) {
+		$beforeLatest = Get-ChildItem -Path $scenarioRun -Recurse -Filter results.json |
+		Sort-Object LastWriteTime -Descending |
+		Select-Object -First 1
 	}
 
-	try {
-		# Apply base env first, then the cell-specific overlay.
-		foreach ($k in $BaseEnv.Keys) {
-			[Environment]::SetEnvironmentVariable($k, [string] $BaseEnv[$k])
-		}
-		foreach ($k in $Cell.Env.Keys) {
-			[Environment]::SetEnvironmentVariable($k, [string] $Cell.Env[$k])
+	if ($ReportOnly) {
+		Write-Host ""
+		Write-Host "[$($Cell.Id)] $($Cell.Label) (report-only)" -ForegroundColor Yellow
+	}
+	else {
+		Write-Host ""
+		Write-Host "[$($Cell.Id)] $($Cell.Label)" -ForegroundColor Green
+
+		# Snapshot existing env so we can restore afterwards.
+		$allKeys = @($BaseEnv.Keys) + @($Cell.Env.Keys) | Select-Object -Unique
+		$saved = @{}
+		foreach ($k in $allKeys) {
+			$saved[$k] = [Environment]::GetEnvironmentVariable($k)
 		}
 
-		# Clear any C4 vars that are NOT in the cell, so a previous arm
-		# cannot leak into the next one through process env.
-		$allC4Keys = @(
-			'BENCH_WAL_RETRY_MAX_ATTEMPTS',
-			'BENCH_WAL_RETRY_DELAY_MS',
-			'BENCH_WAL_RETRY_MAX_DELAY_MS',
-			'BENCH_WAL_RETRY_NETWORK_TIMEOUT_MS'
-		)
-		foreach ($k in $allC4Keys) {
-			if (-not $Cell.Env.ContainsKey($k)) {
-				[Environment]::SetEnvironmentVariable($k, $null)
-				$saved[$k] = $saved[$k]  # keep the snapshot entry
+		try {
+			# Apply base env first, then the cell-specific overlay.
+			foreach ($k in $BaseEnv.Keys) {
+				[Environment]::SetEnvironmentVariable($k, [string] $BaseEnv[$k])
+			}
+			foreach ($k in $Cell.Env.Keys) {
+				[Environment]::SetEnvironmentVariable($k, [string] $Cell.Env[$k])
+			}
+
+			# Clear any C4 vars that are NOT in the cell, so a previous arm
+			# cannot leak into the next one through process env.
+			$allC4Keys = @(
+				'BENCH_WAL_RETRY_MAX_ATTEMPTS',
+				'BENCH_WAL_RETRY_DELAY_MS',
+				'BENCH_WAL_RETRY_MAX_DELAY_MS',
+				'BENCH_WAL_RETRY_NETWORK_TIMEOUT_MS'
+			)
+			foreach ($k in $allC4Keys) {
+				if (-not $Cell.Env.ContainsKey($k)) {
+					if (-not $saved.ContainsKey($k)) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+					[Environment]::SetEnvironmentVariable($k, $null)
+				}
+			}
+
+			# Pipe benchmark.ps1's object output to Out-Default so it
+			# does NOT contaminate Invoke-Cell's return value (everything
+			# left on the success stream from an invoked script becomes
+			# part of the caller's return). The script writes via
+			# Write-Host today, but defensive piping keeps the contract.
+			& (Join-Path $benchRoot 'benchmark.ps1') -Scenario $scenario | Out-Default
+		}
+		finally {
+			# Restore the snapshot so subsequent arms / scripts are not polluted.
+			foreach ($k in $saved.Keys) {
+				[Environment]::SetEnvironmentVariable($k, $saved[$k])
 			}
 		}
-
-		& (Join-Path $benchRoot 'benchmark.ps1') -Scenario $scenario
-	}
-	finally {
-		# Restore the snapshot so subsequent arms / scripts are not polluted.
-		foreach ($k in $saved.Keys) {
-			[Environment]::SetEnvironmentVariable($k, $saved[$k])
-		}
 	}
 
-	# Locate the most recent results.json for this scenario.
-	$scenarioRun = Join-Path $runRoot $scenario
+	# Locate the newest results.json that DID NOT exist before this arm
+	# ran. In ReportOnly mode the cell-to-file mapping was pre-bound by
+	# the caller so we just look it up; in run mode we explicitly need
+	# the file the arm produced, so we ignore the pre-existing newest
+	# entry.
 	if (-not (Test-Path $scenarioRun)) {
-		Write-Warning "[$($Cell.Id)] no results.json under $scenarioRun"
+		Write-Warning "[$($Cell.Id)] no results directory under $scenarioRun"
 		return $null
 	}
-	$latest = Get-ChildItem -Path $scenarioRun -Recurse -Filter results.json |
-			  Sort-Object LastWriteTime -Descending |
-			  Select-Object -First 1
+	if ($ReportOnly) {
+		$path = $null
+		if ($null -ne $script:reportOnlyAssignments -and $script:reportOnlyAssignments.ContainsKey($Cell.Id)) {
+			$path = $script:reportOnlyAssignments[$Cell.Id]
+		}
+		if ([string]::IsNullOrEmpty($path) -or -not (Test-Path $path)) {
+			Write-Warning "[$($Cell.Id)] no results.json assignment in ReportOnly mode"
+			return $null
+		}
+		$latest = Get-Item $path
+	}
+ else {
+		$candidates = Get-ChildItem -Path $scenarioRun -Recurse -Filter results.json |
+		Sort-Object LastWriteTime -Descending
+		$latest = $candidates | Where-Object {
+			$null -eq $beforeLatest -or $_.FullName -ne $beforeLatest.FullName
+		} | Select-Object -First 1
+	}
 	if (-not $latest) {
-		Write-Warning "[$($Cell.Id)] no results.json discovered after run"
+		Write-Warning "[$($Cell.Id)] no results.json discovered for this arm"
 		return $null
 	}
 
@@ -201,8 +240,29 @@ function Invoke-Cell {
 }
 
 $collected = @()
+$script:claimedReportOnly = @()
+
+# In ReportOnly mode, pre-bind the N most recent results.json files to
+# the N non-skipped cells in plan order (oldest -> first cell, newest ->
+# last cell). This avoids scanning unrelated legacy runs and keeps the
+# cell-to-file mapping deterministic.
+if ($ReportOnly) {
+	$nonSkipped = $cells | Where-Object { -not $_.Skip }
+	$scenarioRun = Join-Path $runRoot $scenario
+	if (Test-Path $scenarioRun) {
+		$recent = Get-ChildItem -Path $scenarioRun -Recurse -Filter results.json |
+		Sort-Object LastWriteTime -Descending |
+		Select-Object -First $nonSkipped.Count |
+		Sort-Object LastWriteTime
+		$script:reportOnlyAssignments = @{}
+		for ($i = 0; $i -lt $nonSkipped.Count -and $i -lt $recent.Count; $i++) {
+			$script:reportOnlyAssignments[$nonSkipped[$i].Id] = $recent[$i].FullName
+		}
+	}
+}
+
 foreach ($cell in $cells) {
-	$r = Invoke-Cell -Cell $cell -BaseEnv $baseEnv
+	$r = Invoke-Cell -Cell $cell -BaseEnv $baseEnv -ReportOnly:$ReportOnly
 	if ($null -ne $r) { $collected += $r }
 }
 
@@ -213,14 +273,31 @@ if ($collected.Count -eq 0) {
 
 # ─── Report ─────────────────────────────────────────────────────────────────────
 function Get-Metric {
-	param($Results, [string] $Key, $Default = $null)
+	param($Results, [string] $Key, $Default = '-')
 	$node = $Results
 	foreach ($segment in ($Key -split '\.')) {
 		if ($null -eq $node) { return $Default }
-		$node = $node.$segment
+		try {
+			$node = $node.$segment
+		}
+		catch {
+			return $Default
+		}
 	}
 	if ($null -eq $node) { return $Default }
+	if ($node -is [double] -or $node -is [single] -or $node -is [decimal]) {
+		return [string]::Format('{0:0.##}', $node)
+	}
 	return $node
+}
+
+# Snapshot of the env-vars each cell stamped, for the report header.
+function Format-CellEnv {
+	param($Cell)
+	if ($Cell.Env.Count -eq 0) { return '_(none — Azure SDK defaults)_' }
+	($Cell.Env.GetEnumerator() | Sort-Object Key | ForEach-Object {
+			"``{0}={1}``" -f $_.Key, $_.Value
+		}) -join ', '
 }
 
 $sb = [System.Text.StringBuilder]::new()
@@ -233,28 +310,42 @@ $null = $sb.AppendLine("Phase A (see ``benchmark/diagnostic-reports/diagnostic-r
 $null = $sb.AppendLine("")
 $null = $sb.AppendLine("## Cells")
 $null = $sb.AppendLine("")
-$null = $sb.AppendLine("| Cell | Description |")
-$null = $sb.AppendLine("|---|---|")
+$null = $sb.AppendLine("| Cell | Description | Stamped env |")
+$null = $sb.AppendLine("|---|---|---|")
 foreach ($r in $collected) {
-	$null = $sb.AppendLine("| ``$($r.Cell.Id)`` | $($r.Cell.Label) |")
+	$envStr = Format-CellEnv $r.Cell
+	$null = $sb.AppendLine("| ``$($r.Cell.Id)`` | $($r.Cell.Label) | $envStr |")
 }
 $null = $sb.AppendLine("")
 
 $null = $sb.AppendLine("## Headline metrics")
 $null = $sb.AppendLine("")
-$null = $sb.AppendLine("| Cell | Throughput (ops/s) | Commit p50 (ms) | Commit p99 (ms) | Server-timing p99 (ms) | Retry attempts | Retry exhausted |")
+$null = $sb.AppendLine("| Cell | Commits/s | Commit p99 (ms) | WAL appends/s | WAL append p99 (ms) | Provider commit p99 (ms) | Provider phase-2 batch p50 |")
 $null = $sb.AppendLine("|---|---:|---:|---:|---:|---:|---:|")
 foreach ($r in $collected) {
-	$tp     = Get-Metric $r.Results 'metrics.throughput_ops_per_sec' '-'
-	$p50    = Get-Metric $r.Results 'metrics.commit_p50_ms'          '-'
-	$p99    = Get-Metric $r.Results 'metrics.commit_p99_ms'          '-'
-	$serv99 = Get-Metric $r.Results 'metrics.azure_table_server_p99_ms' '-'
-	$rAtt   = Get-Metric $r.Results 'metrics.provider_retry_attempts' '-'
-	$rEx    = Get-Metric $r.Results 'metrics.provider_retry_exhausted' '-'
-	$null = $sb.AppendLine("| ``$($r.Cell.Id)`` | $tp | $p50 | $p99 | $serv99 | $rAtt | $rEx |")
+	$cps     = Get-Metric $r.Results 'metrics.lattice_commits_per_second'
+	$cp99    = Get-Metric $r.Results 'metrics.lattice_commit_p99_ms'
+	$waps    = Get-Metric $r.Results 'metrics.lattice_wal_appends_per_second'
+	$wap99   = Get-Metric $r.Results 'metrics.lattice_wal_append_p99_ms'
+	$pcp99   = Get-Metric $r.Results 'metrics.orleans_lattice_provider_commit_duration_milliseconds_p99'
+	$pp2p50  = Get-Metric $r.Results 'metrics.orleans_lattice_provider_phase2_batch_size_p50'
+	$null = $sb.AppendLine("| ``$($r.Cell.Id)`` | $cps | $cp99 | $waps | $wap99 | $pcp99 | $pp2p50 |")
 }
 $null = $sb.AppendLine("")
-$null = $sb.AppendLine("> The retry-attempts / retry-exhausted columns are sourced from the ``orleans.lattice.provider.retry.attempts`` and ``orleans.lattice.provider.retry.exhausted`` counters. A dash means the metric was not exposed in this run (legacy exporter or absent results.json key).")
+
+$null = $sb.AppendLine("## WAL hot-path detail (p50 / p95 / p99)")
+$null = $sb.AppendLine("")
+$null = $sb.AppendLine("| Cell | WAL append provider p50 | p95 | p99 | Turn-wait p99 | Queue-depth p99 | In-flight p99 |")
+$null = $sb.AppendLine("|---|---:|---:|---:|---:|---:|---:|")
+foreach ($r in $collected) {
+	$pp50  = Get-Metric $r.Results 'metrics.orleans_lattice_wal_append_provider_duration_milliseconds_p50'
+	$pp95  = Get-Metric $r.Results 'metrics.orleans_lattice_wal_append_provider_duration_milliseconds_p95'
+	$pp99  = Get-Metric $r.Results 'metrics.orleans_lattice_wal_append_provider_duration_milliseconds_p99'
+	$twp99 = Get-Metric $r.Results 'metrics.orleans_lattice_wal_append_turn_wait_milliseconds_p99'
+	$qdp99 = Get-Metric $r.Results 'metrics.orleans_lattice_wal_append_queue_depth_p99'
+	$ifp99 = Get-Metric $r.Results 'metrics.orleans_lattice_wal_append_in_flight_p99'
+	$null = $sb.AppendLine("| ``$($r.Cell.Id)`` | $pp50 | $pp95 | $pp99 | $twp99 | $qdp99 | $ifp99 |")
+}
 $null = $sb.AppendLine("")
 
 $null = $sb.AppendLine("## Raw results.json paths")
@@ -266,9 +357,9 @@ $null = $sb.AppendLine("")
 
 $null = $sb.AppendLine("## Interpretation guide")
 $null = $sb.AppendLine("")
-$null = $sb.AppendLine("- If ``c4-tuned`` shows lower commit p99 with similar or higher throughput, C4's bounded retry budget is doing its job: long retry trains are being cut short and the per-call deadline budget (``RetryNetworkTimeout=5 s``) is preventing a stuck request from parking a WAL slot for the full SDK default of 100 s.")
-$null = $sb.AppendLine("- If ``c4-tuned`` shows higher ``provider_retry_exhausted`` than ``sdk-default``, the retry budget is too tight for the cluster's transient-fault rate. Loosen ``RetryMaxAttempts`` or ``RetryMaxDelay`` and re-measure.")
-$null = $sb.AppendLine("- If throughput collapses, the C4 cohort is starving genuine 503/429 retries; widen the budget.")
+$null = $sb.AppendLine("- If ``c4-tuned`` shows lower WAL append p99 / commit p99 at similar or higher throughput, C4's bounded retry budget is working: long retry trains are being cut short and ``RetryNetworkTimeout`` is preventing stuck requests from parking WAL slots.")
+$null = $sb.AppendLine("- If the two arms are statistically indistinguishable, the test environment (e.g. Azurite) is not reproducing the SDK-side retry storm that Phase A inferred from real Azure timing data. The C4 knobs are still load-bearing for production deployments where Azure Tables surfaces real throttling.")
+$null = $sb.AppendLine("- The ``orleans.lattice.provider.retry.attempts`` and ``orleans.lattice.provider.retry.exhausted`` counters are the canonical diagnostics for tuning these knobs in production; they are not yet surfaced in ``results.json`` for this scenario, so the headline table above is the next-best proxy.")
 
 $dir = Split-Path -Parent $ReportPath
 if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
