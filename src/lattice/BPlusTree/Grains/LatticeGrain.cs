@@ -11,7 +11,29 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// based on a stable hash of the key.
 /// Key format: <c>{treeId}</c>.
 /// </summary>
-[StatelessWorker]
+/// <remarks>
+/// <para>
+/// <see cref="StatelessWorkerAttribute.MaxLocalWorkers"/> is set to 32 so the
+/// per-silo activation pool can absorb 32 concurrent in-flight calls before any
+/// new caller starts queueing on an existing activation's non-reentrancy queue.
+/// The Orleans default (<c>Environment.ProcessorCount</c>) is much smaller on
+/// modest hosts (e.g. 4 on a 4-vCPU container) which becomes the visible
+/// throughput cap on bulk-write fan-out: the U1b ladder probe (raising the
+/// upstream ingest flush-concurrency from 8 to 16 on a 4-vCPU container) drove
+/// every <c>SetManyAsync</c> caller onto one of just four activations and the
+/// resulting 30 s grain-RPC timeouts surfaced as
+/// <c>NonReentrancyQueueSize=7 NumRunning=1</c> in the Orleans timeout
+/// diagnostic. 32 is enough headroom that doubling the upstream flush-
+/// concurrency knob no longer collides on activation count, while still being
+/// bounded so a runaway caller cannot expand the pool without limit. Each
+/// activation still serialises its own non-reentrant calls; the per-activation
+/// caches (<see cref="_treeIdCache"/>, <see cref="_shardMap"/>,
+/// <see cref="_cachedShards"/>, <see cref="_cachedRouting"/>,
+/// <see cref="_compactionEnsured"/>, <see cref="_monitorEnsured"/>) are
+/// activation-scoped and remain safe under multiple parallel activations.
+/// </para>
+/// </remarks>
+[StatelessWorker(maxLocalWorkers: 32)]
 internal sealed partial class LatticeGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
