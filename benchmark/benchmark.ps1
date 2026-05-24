@@ -350,6 +350,18 @@ $ScalarAliases = [ordered]@{
     'replication_apply_lag_p99_ms'                = 'orleans_lattice_replication_apply_lag_milliseconds_p99'
     'replication_wal_entries_appended_per_second' = 'orleans_lattice_replication_wal_entries_appended_per_second'
     'replication_wal_entries_shipped_per_second'  = 'orleans_lattice_replication_wal_entries_shipped_per_second'
+
+    # Phase A / A2 cross-grain dispatch attribution. WalCommitLogWriter
+    # clocks the awaited IWalShardGrain.AppendAsync / AppendBatchAsync RPC
+    # so the Orleans turn-queue wait at the target WAL activation becomes
+    # visible. Subtracting wal.append.turn_wait (the WAL grain's own
+    # self-clock) from this dispatch histogram isolates the scheduling
+    # tax on the single WAL activation per partition - the dominant cost
+    # under the default WalPartitions = 1. Auto-discovery already emits
+    # the long mangled name; these aliases give the diagnostic reports
+    # short, stable names to bind to without re-issuing duplicate PromQL.
+    'lattice_wal_shard_dispatch_p95_ms'           = 'orleans_lattice_wal_shard_dispatch_duration_milliseconds_p95'
+    'lattice_wal_shard_dispatch_p99_ms'           = 'orleans_lattice_wal_shard_dispatch_duration_milliseconds_p99'
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────

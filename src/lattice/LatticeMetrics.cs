@@ -545,6 +545,32 @@ public static class LatticeMetrics
         Meter.CreateHistogram<int>("orleans.lattice.wal.append.queue_depth", unit: "{entry}",
             description: "Pending-batch depth observed at the moment a WAL append enqueues its segment.");
 
+    /// <summary>
+    /// Histogram of the cross-grain dispatch duration into
+    /// <c>IWalShardGrain.AppendAsync</c> / <c>AppendBatchAsync</c>,
+    /// observed by <c>WalCommitLogWriter</c>. Clocked around the
+    /// awaited grain RPC on the caller side, so the value includes the
+    /// Orleans turn-queue wait on the target <c>WalShardGrain</c>
+    /// activation, the RPC serialisation overhead, and the WAL grain's
+    /// own body time. Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagShard"/> (the WAL partition index, identical to
+    /// the <c>WalShardGrain</c>'s own shard tag) plus the Phase A
+    /// attribution tags <see cref="TagWalPartitions"/> and
+    /// <see cref="TagWalMaxPendingBatches"/>.
+    /// <para>
+    /// Subtracting <see cref="WalAppendTurnWait"/> (the WAL grain's
+    /// own self-clock) from this histogram isolates the Orleans
+    /// scheduling tax on the single WAL activation per partition: the
+    /// time spent in the activation's turn queue plus the RPC
+    /// dispatch overhead. Under <c>WalPartitions = 1</c> every leaf
+    /// commit funnels through one activation and any commit-path
+    /// throughput regression is expected to show up here first.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalShardDispatchDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.shard.dispatch.duration", unit: "ms",
+            description: "Wall-clock duration of the cross-grain IWalShardGrain.AppendAsync / AppendBatchAsync RPC, observed by WalCommitLogWriter.");
+
     // --- Storage-provider commit instruments --------------------------------
 
     /// <summary>
