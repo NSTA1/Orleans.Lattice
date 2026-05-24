@@ -279,7 +279,7 @@ The provider surfaces five nullable knobs on `AzureTableWalStorageOptions` that 
 
 The knobs are applied to `clientOptions.Retry` **before** the host's `ConfigureClientOptions` callback runs, so a host that wants final say can override any of them inside that callback (or replace `clientOptions.Retry` wholesale). The provider's `Validate()` rejects negative values, `RetryDelay > RetryMaxDelay`, and a non-positive `RetryNetworkTimeout`. In pre-built `ServiceClient` mode the knobs are ignored: the host already owns the `TableClientOptions.Retry` on the client it constructed.
 
-The motivation is Phase A's finding (see `scaling.md`) that the WAL hot path's wall-time p99 sat 5–100x above Azure Tables' server-timing p99 — the canonical signature of a retry storm whose retries ultimately succeed. The `orleans.lattice.provider.retry.attempts` counter from the observability section above is the diagnostic that tells operators whether to reach for these knobs, and `RetryNetworkTimeout` in particular is the per-attempt deadline budget that prevents a single stuck request from holding a WAL slot for the full SDK default of 100 s.
+The motivation is Phase A's finding (see `scaling.md`) that the WAL hot path's wall-time p99 sat 5–100x above Azure Tables' server-timing p99 - the canonical signature of a retry storm whose retries ultimately succeed. The `orleans.lattice.provider.retry.attempts` counter from the observability section above is the diagnostic that tells operators whether to reach for these knobs, and `RetryNetworkTimeout` in particular is the per-attempt deadline budget that prevents a single stuck request from holding a WAL slot for the full SDK default of 100 s.
 
 ## Testing
 

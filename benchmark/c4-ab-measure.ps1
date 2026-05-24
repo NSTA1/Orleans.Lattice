@@ -294,7 +294,7 @@ function Get-Metric {
 # Snapshot of the env-vars each cell stamped, for the report header.
 function Format-CellEnv {
 	param($Cell)
-	if ($Cell.Env.Count -eq 0) { return '_(none — Azure SDK defaults)_' }
+	if ($Cell.Env.Count -eq 0) { return '_(none - Azure SDK defaults)_' }
 	($Cell.Env.GetEnumerator() | Sort-Object Key | ForEach-Object {
 			"``{0}={1}``" -f $_.Key, $_.Value
 		}) -join ', '

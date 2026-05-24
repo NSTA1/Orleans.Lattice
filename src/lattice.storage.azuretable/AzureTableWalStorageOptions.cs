@@ -143,7 +143,7 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.Delay"/> on the
-    /// constructed <see cref="TableClientOptions.Retry"/> — the base
+    /// constructed <see cref="TableClientOptions.Retry"/> - the base
     /// delay used by the exponential / fixed backoff strategy.
     /// <c>null</c> leaves the SDK default (0.8 s) in place. Must be
     /// non-negative and not exceed <see cref="RetryMaxDelay"/> when
@@ -156,7 +156,7 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.MaxDelay"/> on the
-    /// constructed <see cref="TableClientOptions.Retry"/> — the
+    /// constructed <see cref="TableClientOptions.Retry"/> - the
     /// per-attempt upper bound on backoff. <c>null</c> leaves the SDK
     /// default (60 s) in place. Must be non-negative and at least as
     /// large as <see cref="RetryDelay"/> when both are set.
@@ -168,7 +168,7 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.NetworkTimeout"/>
-    /// on the constructed <see cref="TableClientOptions.Retry"/> — the
+    /// on the constructed <see cref="TableClientOptions.Retry"/> - the
     /// per-attempt deadline applied at the transport layer. <c>null</c>
     /// leaves the SDK default (100 s) in place. Must be positive.
     /// <para>

@@ -558,7 +558,7 @@ public class AzureTableWalStorageOptionsTests
     {
         // Additive contract: with all knobs null and no host callback
         // touching Retry, the constructed TableClientOptions.Retry
-        // surface matches a fresh TableClientOptions — i.e. the SDK
+        // surface matches a fresh TableClientOptions - i.e. the SDK
         // defaults. We snapshot a fresh instance and compare.
         var defaults = new TableClientOptions();
 
