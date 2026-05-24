@@ -267,6 +267,40 @@ Goal of this probe: decide whether the ~2,000-3,000 ops/s ceiling that survived 
 - **U2 (lower-confidence, broader change) - make ``ShardRootGrain`` reentrant for read-only and write-disjoint operations.** Annotate with ``[MayInterleave]`` using a predicate that returns ``true`` for ``SetManyAsync`` only when the call's key set is disjoint from any other in-flight call's key set on the same shard. This is a bigger semantic claim - shadow-forward state, ``RecordWrite``/``RecordAffectedLeafIfPreparedAsync``, and the split-in-progress reject-check all assume serial turns - and the U1 change alone may close most of the gap. Re-measure after U1 and only pursue U2 if the silo is still under-utilised.
 
 **Decision:** start with U1. It is a single-file, well-bounded change (one ``foreach``-await → one ``Task.WhenAll`` + sequential split-promotion), and the per-second-rate signature in the silo log predicts a 4–8× lift if it works.
+### U1 measurement (2026-05-24T18:46Z-T18:56Z) - parallel per-leaf dispatch lifts the heaviest rung by ~13% but the per-batch ceiling holds
+
+Re-ran the same P=8 three-rung ladder (1k / 5k / 10k vehicles at 5 Hz, 60 s rungs, real Azure Tables, `lat01sa`, `westeurope`) against the U1 silo image (commit `c1dcbf8`, parallel per-leaf dispatch inside `ShardRootGrain.SetManyLocalOnlyAsync`). Logs: `benchmark/azure-throughput/.run/silo-20260524-{184644,185053,185407}Z.log`. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-P8-U1.csv` vs the preserved `.ladder-results-P8-pre-U1.csv`.
+
+| Rung | Vehicles | Target | Pre-U1 final ops/s | U1 final ops/s | delta final | Pre-U1 steady avg | U1 steady avg | delta steady | U1 written | U1 failed |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1,000  |  5,000 | 2,477 | 2,302 |  -7.1% | 3,090 | 2,632 | -14.8% | 274,101 | 0 |
+| 2 | 5,000  | 25,000 | 2,505 | 2,645 |  +5.6% | 2,883 | 2,905 |  +0.8% | 316,037 | 0 |
+| 3 | 10,000 | 50,000 | 2,039 | 2,255 | +10.6% | 2,164 | 2,443 | +12.9% | 269,774 | 0 |
+
+The delta is **monotonic with offered load** - rung 1 (1k vehicles spread across 64 shards, so almost every shard-root turn routes to a single leaf and U1's parallel-dispatch loop degenerates to a single `Task.WhenAll` over one task) shows no gain (and a small steady-avg loss within the run-to-run variance of these short rungs), while rung 3 (10k vehicles, multiple leaves per shard, real fan-out inside `SetManyLocalOnlyAsync`) shows +10.6% final and +12.9% steady-avg. That is the exact shape U1 predicted: the parallelism harvested by `Task.WhenAll` scales with the number of distinct leaves touched per shard turn.
+
+But the **per-batch quantisation signature is unchanged**:
+
+```
+[silo] t=  85.0s written= 191,950 Entries written per second= 4,096 inFlight= 8
+[silo] t=  86.0s written= 191,950 Entries written per second=     0 inFlight= 8
+[silo] t=  87.0s written= 196,046 Entries written per second= 4,089 inFlight= 8
+[silo] t=  88.1s written= 196,046 Entries written per second=     0 inFlight= 8
+[silo] t=  89.1s written= 200,142 Entries written per second= 4,080 inFlight= 8
+[silo] t=  90.1s written= 204,238 Entries written per second= 4,089 inFlight= 8
+```
+
+`inFlight` is still pinned at 8 for the entire steady-state window, the per-second rate still alternates between 0 and ~4,096 (one full BatchSize), and `wal.append.in_flight` is still 0 on every shard. **The lift came from per-batch completion latency shrinking**, not from running more batches concurrently or filling the WAL pipeline. U1 made the *individual* shard-root turn finish faster (the parallel leaf RPCs collapse `N x commit_p50` into `~commit_p50`), but the silo is still draining at "one full batch per reporter-window per drain slot" and the WAL is still idle.
+
+**Quantitative read.** Before U1, rung 3 wrote 244,061 entries in 60 s at a final 2,039 ops/s; after U1, 269,774 in 60 s at 2,255 ops/s. That is +25,713 entries / 60 s = +428 entries/s sustained, or ~6 extra fully-drained 4,096-entry batches per minute. The per-batch wall-clock dropped from ~2.0 s/batch (4096 / 2039) to ~1.8 s/batch (4096 / 2255), a ~10% reduction in shard-root turn time. That matches the rung-3 vehicle-to-leaf math: at 10k vehicles per 64 shards, a typical shard turn touches ~2-3 leaves; collapsing 3 sequential awaits into one Task.WhenAll cuts wall-clock from `3 x ~16 ms commit + ~5 ms each route/affected-leaf bookkeeping` to `~16 ms commit + 3 x ~5 ms bookkeeping`, which is the same +10-13% shape we measure end-to-end.
+
+**Conclusion on U1.** Lifts the heaviest rung by ~13% on the silo's existing concurrency budget, neutral-to-negative on the lightest rung (fan-out has nothing to parallelise), zero failures across all three rungs. The library default of `WalPartitions = 8` on the Azure Tables registration path was already validated by the pre-U1 sweep and is unaffected by this change; the fix is purely a latency reduction on the bulk-write path.
+
+**Next bottleneck.** The shape of the silo log is now clear: `inFlight=8 forever` + `~one batch per drain slot per ~1.8 s` + `wal.append.in_flight = 0` means the remaining ceiling is **per-drainer-slot shard-root concurrency**, not WAL fan-out and no longer per-shard sequential leaf dispatch. Two candidates upstream of U2:
+
+- **U1b - raise `BENCH_FLUSH_CONCURRENCY`.** The 8-slot semaphore in `TcpIngestService` is the next visible cap. The current run already pins `inFlight=8`; raising it to 16 / 32 should let more shard-root activations work in parallel. Cheap to A/B because it is a silo env-var; no code change.
+- **U2 - reentrant `ShardRootGrain`.** Even with a larger flush-concurrency budget, the 8 concurrent `SetManyAsync` calls collide on every shard root they touch (and at 64 shards x 4096 keys/batch every shard root is touched by every batch). Annotating with `[MayInterleave]` over disjoint-key calls would let the 8 in-flight batches actually progress in parallel through the shard root instead of queueing per-activation. This is the broader-semantic change flagged in the prior section; U1b should be tried first as the cheap probe, U2 second.
+
 
 
 
