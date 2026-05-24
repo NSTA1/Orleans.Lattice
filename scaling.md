@@ -184,6 +184,29 @@ Two facts that overturn B2 as written:
 **Phase B2 (raise default `WalPartitions` from 1) is RETRACTED** on the Azurite arm and **rejected on the memory arm** (neutral for throughput because the system is bottlenecked downstream of the WAL — leaf-side apply / observer / scheduling — not at dispatch). The library default of `WalPartitions = 1` is correct as shipped.
 
 **Phase C is re-elevated.** The dominant cost on Azurite is provider-bound (`provider_duration` rises 24→99 ms across the sweep as concurrency grows). The retry-storm framing of C is still retracted, but the *provider-throughput-scaling* framing (batching, pipelining, parallel partition keys against a real Azure Tables account) is exactly what the measured evidence supports. The Azurite single-process serialisation is a measurement artifact that masks the real-Azure scaling shape; the next probe must move to `benchmark/azure-throughput`.
+### Real-Azure validation (2026-05-24T16:07Z–T16:14Z) — B2 REINSTATED on real-Azure evidence
+
+Re-ran the same `WalPartitions ∈ {1, 8}` A/B on **real Azure Tables** via `benchmark/azure-throughput` (account `lat01sa`, container group `lat01-bench`, `westeurope`, 120 s runs, identical scenario fields), driven by the now-env-aware `20-build-and-deploy.ps1`:
+
+| Arm | `WalPartitions` | `written` | `failed` | `provider P99` (per shard) | ops/s |
+|---|---:|---:|---:|---|---:|
+| **real Azure, P=1** | 1 | 55,039 | **57,344** (30 s Orleans `TimeoutException` on every flush) | n/a (capacity exceeded) | **465** |
+| **real Azure, P=8** | 8 | 376,508 | **0** | 18–72 ms across 8 shards | **3,145** |
+
+Logs: `silo-20260524-160754Z.log` (P=1) and `silo-20260524-161201Z.log` (P=8). The P=1 arm collapsed within ~30 s of steady-state: with one `WalShardGrain` activation, the per-grain backlog grew past Orleans' 30 s default grain RPC deadline and `TcpIngestService` started returning `flush of 4096 failed System.TimeoutException` every flush. The P=8 arm stayed healthy throughout (`wal.append.in_flight` ≈ 0 between flushes, `provider.commit.duration` P99 stable at 50–110 ms phase-1 / 10–25 ms phase-2 per shard).
+
+**This is the inverse of the Azurite shape and the expected real-Azure shape.** Azure Tables partitions are independent server-side; spreading commits across 8 partition keys gives 8× provider concurrency against an account that supports it. The local arms (memory + Azurite) cannot validate this because:
+
+- Memory-WAL has no provider latency to fan out against, so partitions add no value (and the bench is leaf-side / harness-bound at ~4.3k ops/s).
+- Azurite serialises all transactions through one backend process, so adding partitions multiplies in-flight contention against the same lock.
+
+**Phase B2 is REINSTATED on real-Azure evidence, restricted to deployments that use a real Azure Tables (or equivalent partition-scalable) WAL provider.** The library default of `WalPartitions = 1` is correct for the in-memory provider (Azurite/dev) but is the wrong default for a real production Azure Tables silo at sustained write load. Two paths forward:
+
+1. **Conservative** — keep `WalPartitions = 1` default, document the operational guidance. Update `docs/lattice/wal.md` and `docs/lattice/wal-storage-providers.md` to call out that real-Azure deployments at sustained write load should set `WalPartitions = 8` (or higher, gated by leaf fan-out). Zero risk to existing tests and existing trees.
+2. **Aggressive** — raise the default to a small power of two (e.g. 8) on the Azure Tables registration path (`LatticeAzureTableServiceCollectionExtensions`), so the in-memory provider keeps the conservative default but real-Azure silos opt into fan-out by virtue of choosing the provider. Requires a chaos pass and a docs migration note.
+
+Picking between them is the next concrete decision.
+
 
 ### What stays in place
 
@@ -196,7 +219,7 @@ Two facts that overturn B2 as written:
 
 **Progress**: 0% [░░░░░░░░░░]
 
-**Last Updated**: 2026-05-24 15:50:00
+**Last Updated**: 2026-05-24 16:15:00
 
 ## 📝 Plan Steps
 -  **Read `src/lattice/BPlusTree/Grains/WalShardGrain.cs` end-to-end, `src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs` (foreground commit path, especially `CommitSetAsync` and `PublishDigestUpwardAsync`), `src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs`, `src/lattice.storage.azuretable/AzureTableWalStorageProvider.cs` (and `PhaseTwoWorker`), and `src/lattice/BPlusTree/Options/LatticeOptions.cs` — confirm every choke point listed in *Architectural context*; record any deviation from the plan's assumptions before writing code.**
