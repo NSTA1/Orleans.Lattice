@@ -206,6 +206,69 @@ Logs: `silo-20260524-160754Z.log` (P=1) and `silo-20260524-161201Z.log` (P=8). T
 2. **Aggressive** — raise the default to a small power of two (e.g. 8) on the Azure Tables registration path (`LatticeAzureTableServiceCollectionExtensions`), so the in-memory provider keeps the conservative default but real-Azure silos opt into fan-out by virtue of choosing the provider. Requires a chaos pass and a docs migration note.
 
 Picking between them is the next concrete decision.
+### Shard-count scaling sweep (2026-05-24T16:28Z–T17:05Z) — P=8 is the recommended default
+
+Re-ran the ``benchmark/azure-throughput`` ladder at ``WalPartitions ∈ {8, 16}`` across three fleet sizes (driving 5k / 25k / 50k events per second target rates), 60 s per rung, identical scenario otherwise. Logs under ``benchmark/azure-throughput/.run/silo-20260524-16{29,42,46,51,57,59}*Z.log`` and ``17{00,02}*Z.log``; per-rung CSVs at ``benchmark/azure-throughput/scripts/.ladder-results-P8.csv`` and ``.ladder-results-P16.csv``.
+
+| Rung | Vehicles | TickHz | Target | P=8 final ops/s | P=8 written | P=16 final ops/s | P=16 written |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1,000  | 5 |  5,000 | **2,477** | 296,031 | 2,021 | 241,340 |
+| 2 | 5,000  | 5 | 25,000 | **2,505** | 299,189 | 2,480 | 296,132 |
+| 3 | 10,000 | 5 | 50,000 | **2,039** | 244,061 | 1,265 | 153,285 |
+
+**P=16 is worse than P=8 at every rung** (−18% / −1% / −38% on rungs 1/2/3). Two diagnostic facts from the per-shard PhaseA roll-up explain why:
+
+1. **Shards are idle, not busy.** ``wal.append.in_flight`` p99 is **0 on every shard** at both P=8 and P=16 across every rung. The WAL grains are never doing concurrent work when a new flush arrives — the in-flight queue is always empty. There is nothing for additional shards to absorb.
+2. **P=16 is bucket-imbalanced under the bench's key distribution.** On rung 3 (10k vehicles), P=16 routes ~300 batches each to shards 0/7/9 and 1–4 batches each to the other 13 shards over 60 s. The lightly-loaded shards then incur cold-activation tails (``provider.commit.duration`` p99 spikes to 550 ms vs ~90 ms on the busy shards) because they activate just to handle one or two batches. P=8 distributes the same load evenly (~400–460 batches per shard, balanced per-shard p99 ~50–60 ms).
+
+The producer's deterministic Guid key set hashes evenly mod-8 and unevenly mod-16. That specific imbalance is a bench-key artifact, but the underlying point is general: **fanning out further than the workload can saturate just adds cold-activation tax to under-used shards.** Both P=8 and P=16 leave the per-shard pipeline (``wal.append.in_flight = 0``) empty under sustained load, so the next bottleneck is upstream of the WAL — the leaf-commit pipeline and/or the silo's producer-ingress pipeline, not the WAL fan-out.
+
+**Recommended default: ``WalPartitions = 8`` on the Azure Tables registration path.** Going from P=1 (silo collapses at sustained 5k/s offered load, 465 ops/s with 30 s Orleans grain timeouts) to P=8 (silo holds 2,000–3,000 ops/s steady with zero failures) is the only step that lifts a hard cap. Going from P=8 to P=16 strictly regresses throughput and adds cold-activation tail latency on under-used shards. Going below 8 invites the P=1 collapse mode for any deployment whose sustained offered load exceeds the single-grain serial drain rate.
+
+Concrete recommendation:
+
+- **In-memory provider:** keep ``LatticeOptions.WalPartitions = 1`` default. Memory-WAL is leaf-side / harness-bound, no per-shard provider latency, no benefit from fan-out.
+- **Azure Tables provider:** raise the effective default to **``WalPartitions = 8``** by setting it inside ``LatticeAzureTableServiceCollectionExtensions`` (so the choice of provider implies the right default). Operators with abnormally skewed key distributions can override down (or up, after measuring); operators who do nothing get the right number for sustained write load.
+- **Do not raise the global default past 8** without first lifting the upstream bottleneck. The 2x increase to 16 already costs throughput on this bench because shards 8–15 stay cold under any workload that doesn't produce evenly-distributed mod-16 keys.
+
+### Next bottleneck (upstream of WAL)
+
+With WAL fan-out demonstrably no longer the limiter (``wal.append.in_flight`` = 0 everywhere), the next probe must move upstream. Candidate suspects, in order of likely contribution:
+
+1. **Leaf-commit serialization.** A single ``BPlusLeafGrain`` activation processes one ``CommitSetAsync`` at a time. If per-leaf load exceeds (1 / commit-latency), the leaf grain itself queues. Probe by measuring ``leaf.commit.duration`` against ``leaf.commit.queue_depth`` per leaf at the bench's steady state.
+2. **Producer-ingress pipeline (``TcpIngestService``).** ``flushConcurrency=8`` and ``BatchSize=4096`` may be the cap. The bench's steady max bursts to ~8,100/s (rung 3) but averages ~2,000/s — that gap is the ingress pipeline, not WAL.
+3. **Shard-root / digest fan-in.** ``BPlusLeafGrain.PublishDigestUpwardAsync`` issues per-commit digests upward; even at ``digest`` P99 = 0.10 ms the synchronous up-chain may be the real serializer once WAL is no longer the limit.
+### Upstream root-cause: ``ShardRootGrain`` and ``BPlusLeafGrain`` are turn-serial, the silo's ``FlushConcurrency`` is an illusion (2026-05-24T17:30Z)
+
+Goal of this probe: decide whether the ~2,000-3,000 ops/s ceiling that survived the shard-fan-out fix is the **producer** under-offering load, the **harness** (bench-side ingestion / batching), or **lattice itself** (silo-internal serialization upstream of the WAL).
+
+**Evidence collected** (no new runs; all from the saved P=8 rung-3 artifacts):
+
+1. **Producer is rate-limited by the silo, not by itself.** The producer log ``.run/producer-20260524-164613Z.log`` shows it offers **56,837 msg/s for the first second and 50,549 msg/s in the second**, hits the full target (10,000 vehicles × 5 Hz = 50,000 msg/s), and then collapses to ~1–4k msg/s as ``writer.Write`` on the BufferedStream/TCP socket starts blocking against silo back-pressure. This is the producer's natural blocking-write semantics — it sends as fast as the silo will read.
+2. **Silo drainer is permanently saturated.** The silo log ``.run/silo-20260524-164613Z.log`` shows ``inFlight=8`` (the full ``BENCH_FLUSH_CONCURRENCY=8``) for the entire 119.7s run. The drain loop is constantly waiting on the semaphore because the lattice cannot drain a batch faster than a new one arrives. → the bottleneck is in the silo, not in TCP/JSON ingestion.
+3. **The drainer's per-second rate quantises to multiples of ``BatchSize=4096``.** Concretely the rate oscillates between ``0`` and ``4,096`` and occasionally ``8,184``, never anything else. That is the signature of **one whole batch (or rarely two) completing per second-aligned reporter window**, which means **at most ~1 batch of 4,096 entries per ~250 ms** is actually leaving the drain loop, regardless of 8 in-flight ``SetManyAsync`` calls.
+4. **WAL shards are idle the entire time.** ``wal.append.in_flight`` p99 = 0 on every shard at every rung. So the work is queued somewhere **between** the drainer entering ``ILattice.SetManyAsync`` and the WAL grain accepting a batch.
+
+**Root cause** (read by inspection of ``src/lattice/BPlusTree/Grains/``):
+
+- ``LatticeGrain`` is ``[StatelessWorker]`` — the 8 concurrent ``SetManyAsync`` callers do NOT queue at the tree-grain level. Good.
+- ``LatticeGrain.SetManyAsyncCore`` (``src/lattice/BPlusTree/Grains/LatticeGrain.cs``) groups the batch by physical shard and fires ``Task.WhenAll`` across shards. Good.
+- **``ShardRootGrain`` has NO ``[Reentrant]``, NO ``[StatelessWorker]``, NO ``[MayInterleave]``.** Single activation per shard, strict per-turn execution. So the 8 concurrent batches all collide on each shard root they touch, and with 10k vehicles spread across 64 shards every shard root sees collisions.
+- **``ShardRootGrain.SetManyLocalOnlyAsync`` dispatches its leaves sequentially**, not in parallel (``src/lattice/BPlusTree/Grains/ShardRootGrain.cs`` lines 512–542): ``foreach (var (leafId, bucket) in buckets) { await DispatchLeafBatchWithRetryAsync(leaf, bucket.Slice); }``. The original justification (line 172–179, on the read path) was that *"each leaf grain serialises its incoming calls anyway, and the saga's microbench has all keys in a single leaf"*. That argument is correct on the read path with all keys in one leaf, but it's **wrong on the bulk-write path** where keys span multiple leaves per shard and the sequential ``await`` collapses N leaves of useful concurrency into 1.
+- **``BPlusLeafGrain`` also has NO ``[Reentrant]``** — so even if the shard fanned out to leaves in parallel, each leaf still serializes its own callers; that's the per-leaf turn-queue C2 territory and not on the critical path here.
+
+**So the answer is: it is lattice itself, specifically ``ShardRootGrain``.** The producer is fine. The harness is fine. The WAL is fine. The serializer is the **single-activation, single-threaded ``ShardRootGrain``**, made worse by **sequential leaf dispatch** inside its turn.
+
+**Quantitative check** — is the math consistent? With ``BatchSize=4096``, 10k vehicles, 64 shards: each batch fans out to all 64 shards, putting ~64 keys per shard into a single shard-root turn. The leaves under a 64-shard tree at 10k keys total are small (typically the root-is-leaf flat-tree fast-path), so each shard root's turn is ~one ``leaf.SetManyAsync(64 keys)`` call against its WAL grain. Provider commit p50 ~16 ms. With ``inFlight=8`` batches all waiting on the same shard roots, a shard root that takes 16 ms per turn drains 1 batch (one slot of inFlight) every ~16 ms × (64 turn-slots in flight from the 8 producer batches against ~64 shards). The achievable drain at 4096 entries / batch is ``4096 / (16 ms) ≈ 256 k/s`` *per shard root*, but with **8-way oversubscription against the same shard** and ``foreach`` serial leaf dispatch, observed effective per-batch latency dilates to ~500-1000 ms, matching the ``inFlight=8`` steady-state and the ~4,096 entries per second-bucket quantisation.
+
+**Next probe — two concrete candidates, in order of expected impact:**
+
+- **U1 (high-confidence) — parallelise per-leaf dispatch inside ``ShardRootGrain.SetManyLocalOnlyAsync``.** Replace the ``foreach (var (leafId, bucket) in buckets) { await ... }`` loop with a ``Task.WhenAll`` over the buckets, mirroring the shape ``LatticeGrain.SetManyAsyncCore`` already uses across shards. The only complication is split-promotion: the current loop also walks the captured parent path on each leaf's split result, and parent ``AcceptSplitAsync`` calls mutate the shared shard-root state. The clean fix is to do the leaf RPCs in parallel, collect the ``SplitResult?`` per leaf, then drive the parent-path promotion **sequentially** on the joined results (split promotion is already inherently serial because it rewrites the root). The flat-tree fast-path at line 479 is unaffected (it's the single-leaf case).
+- **U2 (lower-confidence, broader change) — make ``ShardRootGrain`` reentrant for read-only and write-disjoint operations.** Annotate with ``[MayInterleave]`` using a predicate that returns ``true`` for ``SetManyAsync`` only when the call's key set is disjoint from any other in-flight call's key set on the same shard. This is a bigger semantic claim — shadow-forward state, ``RecordWrite``/``RecordAffectedLeafIfPreparedAsync``, and the split-in-progress reject-check all assume serial turns — and the U1 change alone may close most of the gap. Re-measure after U1 and only pursue U2 if the silo is still under-utilised.
+
+**Decision:** start with U1. It is a single-file, well-bounded change (one ``foreach``-await → one ``Task.WhenAll`` + sequential split-promotion), and the per-second-rate signature in the silo log predicts a 4–8× lift if it works.
+
+
 
 
 ### What stays in place
@@ -219,7 +282,7 @@ Picking between them is the next concrete decision.
 
 **Progress**: 0% [░░░░░░░░░░]
 
-**Last Updated**: 2026-05-24 16:15:00
+**Last Updated**: 2026-05-24 17:30:00
 
 ## 📝 Plan Steps
 -  **Read `src/lattice/BPlusTree/Grains/WalShardGrain.cs` end-to-end, `src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs` (foreground commit path, especially `CommitSetAsync` and `PublishDigestUpwardAsync`), `src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs`, `src/lattice.storage.azuretable/AzureTableWalStorageProvider.cs` (and `PhaseTwoWorker`), and `src/lattice/BPlusTree/Options/LatticeOptions.cs` — confirm every choke point listed in *Architectural context*; record any deviation from the plan's assumptions before writing code.**
