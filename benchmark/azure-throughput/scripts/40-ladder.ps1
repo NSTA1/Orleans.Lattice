@@ -100,11 +100,24 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
         Write-Warning "[ladder] producer did not terminate within $($DurationSec + 90)s (last state='$producerState'); reading partial log anyway."
     }
 
-    # Pull the silo log and grep for the FINAL line.
-    $siloLog = & az container logs --resource-group $ctx.ResourceGroup --name $containerGroup --container-name silo 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $siloLog) {
-        Write-Warning "[ladder] could not read silo log for rung $rung; skipping."
-        continue
+    # Prefer the local streamed silo log written by 20-build-and-deploy.ps1 (full transcript;
+    # `az container logs` truncates and may race the force-stop). Find the most-recent
+    # silo-*.log under benchmark/azure-throughput/.run/.
+    $runDir   = Join-Path $PSScriptRoot '..' '.run'
+    $localLog = Get-ChildItem -Path $runDir -Filter 'silo-*.log' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notlike '*.err.log' } |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+    if ($localLog) {
+        $siloLog = Get-Content -LiteralPath $localLog.FullName -Raw
+        Write-Host "[ladder] silo log: $($localLog.Name) ($([math]::Round($localLog.Length/1MB,2)) MiB)" -ForegroundColor DarkGray
+    } else {
+        # Fallback: live container logs (truncated, but better than nothing).
+        $siloLog = & az container logs --resource-group $ctx.ResourceGroup --name $containerGroup --container-name silo 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $siloLog) {
+            Write-Warning "[ladder] could not read silo log for rung $rung; skipping."
+            continue
+        }
     }
 
     # Steady-state: avg of per-second lines from t=10s onward (skip producer warm-up).
@@ -156,7 +169,7 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
     Write-Host "[ladder] rung $($i+1) summary:" -ForegroundColor Cyan
     Write-Host ("  target          : {0,12:N0}/s" -f $target)
     Write-Host ("  steady-state avg: {0,12:N0}/s" -f $steadyAvg)
-    Write-Host ("  steady min/max  : {0,12:N0} .. {1,:N0}" -f $steadyMin, $steadyMax)
+    Write-Host ("  steady min/max  : {0,12:N0} .. {1,12:N0}" -f $steadyMin, $steadyMax)
     Write-Host ("  total written   : {0,12:N0}" -f $finalWritten)
     Write-Host ("  total failed    : {0,12:N0}" -f $finalFailed)
 
