@@ -301,6 +301,28 @@ But the **per-batch quantisation signature is unchanged**:
 - **U1b - raise `BENCH_FLUSH_CONCURRENCY`.** The 8-slot semaphore in `TcpIngestService` is the next visible cap. The current run already pins `inFlight=8`; raising it to 16 / 32 should let more shard-root activations work in parallel. Cheap to A/B because it is a silo env-var; no code change.
 - **U2 - reentrant `ShardRootGrain`.** Even with a larger flush-concurrency budget, the 8 concurrent `SetManyAsync` calls collide on every shard root they touch (and at 64 shards x 4096 keys/batch every shard root is touched by every batch). Annotating with `[MayInterleave]` over disjoint-key calls would let the 8 in-flight batches actually progress in parallel through the shard root instead of queueing per-activation. This is the broader-semantic change flagged in the prior section; U1b should be tried first as the cheap probe, U2 second.
 
+### U1b measurement (2026-05-24T19:12Z-T19:23Z) - raising the drainer cap from 8 to 16 collapses rung 3; ceiling is grain-queue, not the semaphore
+
+Re-ran the same P=8 three-rung ladder against the U1 silo image, this time with `BENCH_FLUSH_CONCURRENCY=16` (default 8) plumbed through the deploy YAML (commit `451c3b7`). Logs archived under `benchmark/azure-throughput/.run/20260524-201500-U1b-flush16-archive/silo-20260524-19{1216,1524,1831}Z.log`. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-P8-U1b-flush16.csv` vs the preserved `.ladder-results-P8-U1.csv`.
+
+| Rung | Vehicles | Target | U1 final | U1b/16 final | delta | U1b/16 written | U1b/16 **failed** |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1,000  |  5,000 | 2,302 | 2,474 |  **+7.5%** | 295,433 |      0 |
+| 2 | 5,000  | 25,000 | 2,645 | 2,616 |  **-1.1%** | 312,570 |      0 |
+| 3 | 10,000 | 50,000 | 2,255 | **1,342** | **-40.5%** | 160,517 | **84,631** |
+
+Rung 1 modestly benefits from doubling the drainer cap (the lightest rung's shard-root turns finish fastest, so 16 in-flight callers actually progress); rung 2 is flat within noise; rung 3 collapses identically to the pre-U1 P=1 failure mode, with 84,631 `SetManyAsync` calls timing out at Orleans' default 30 s grain RPC deadline. Live `inFlight` distribution on rung 1 confirms the drainer used the new headroom (82% of one-second windows reported `inFlight=16`).
+
+The silo's own timeout diagnostic prints the cause directly. On rung 3 the `LatticeGrain` activation diagnostic reads `Placement=StatelessWorkerPlacement State=Valid NonReentrancyQueueSize=7 NumRunning=1`. So even the `[StatelessWorker]` `LatticeGrain` is now back-pressured: Orleans only spun up a handful of activations, each was serving one `SetManyAsync` at a time, and the remaining 16 concurrent drainer callers queued behind them - on top of the per-`ShardRootGrain` queue that U1 already showed was the real serialiser. Quoting the silo log:
+
+```
+flush of 4096 failed System.TimeoutException: Response did not arrive on time in 00:00:30 ...
+... NonReentrancyQueueSize=7 NumRunning=1 ... has been enqueued on the target grain for 00:00:28.79 ...
+```
+
+**Conclusion on U1b.** Raising `BENCH_FLUSH_CONCURRENCY` is the **wrong layer** to push on. The 8-slot semaphore was not the cap; it was the *back-pressure* that kept `LatticeGrain` and `ShardRootGrain` queues from overflowing into 30 s grain RPC timeouts. Adding more in-flight callers does not add more in-flight *work*: the work serialises one turn down (`LatticeGrain` stateless-worker activation count, then `ShardRootGrain` single-activation turn queue), and the only effect of more concurrent callers is to grow each downstream grain's enqueue wait until it crosses the deadline. The default `BENCH_FLUSH_CONCURRENCY=8` is correct.
+
+The hypothesis is now confirmed in the inverse direction: **the next ceiling is `ShardRootGrain` turn-serialisation, not the drainer semaphore.** Skipping `BENCH_FLUSH_CONCURRENCY=32` (it would collapse harder for the same reason) and proceeding directly to **U2** - annotate `ShardRootGrain` with `[MayInterleave]` over a disjoint-key predicate so the 8 concurrent `SetManyAsync` calls per shard can actually progress in parallel through the same activation instead of queueing behind each other. The split-promotion path remains the load-bearing constraint (shadow-forward state, `RecordAffectedLeafIfPreparedAsync`, and the split-in-progress reject check all assume serial turns), so the predicate must return `false` for any call that overlaps with a current split, and must serialise on the affected-key set, not just on disjoint key sets in general.
 
 
 
