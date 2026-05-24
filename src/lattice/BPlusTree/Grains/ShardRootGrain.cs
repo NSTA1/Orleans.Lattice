@@ -461,6 +461,18 @@ internal sealed partial class ShardRootGrain(
     /// split at the top of the path is promoted to a new root via
     /// <see cref="PromoteRootAsync"/>.
     /// <para>
+    /// Per-leaf dispatch runs in parallel via <see cref="Task.WhenAll{TResult}(Task{TResult}[])"/>
+    /// (mirroring the per-shard fan-out <c>LatticeGrain.SetManyAsyncCore</c>
+    /// already does across shards). The shard-root grain is
+    /// single-activation so the parallel awaits all resume on the same
+    /// grain turn; the leaf-grain and routing caches are only mutated
+    /// in the sequential resolve and split-promotion passes bracketing
+    /// the <c>Task.WhenAll</c>. Split promotion is walked sequentially
+    /// per leaf because <see cref="IBPlusInternalGrain.AcceptSplitAsync"/>
+    /// and <see cref="PromoteRootAsync"/> mutate shared routing tables
+    /// and this shard's root respectively.
+    /// </para>
+    /// <para>
     /// After the batched leaf apply completes, every input key is fed
     /// through <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>. This
     /// is the per-key adaptive-split shadow-forward path (distinct from
@@ -496,31 +508,68 @@ internal sealed partial class ShardRootGrain(
         // root-to-immediate-parent path the first time each leaf is
         // seen so split promotion has the same shape as the
         // single-key TraverseForWriteAsync path-pop loop.
-        var buckets = new Dictionary<GrainId, (List<KeyValuePair<string, byte[]>> Slice, List<GrainId> Parents)>(capacity: 4);
+        var buckets = new Dictionary<GrainId, LeafBucket>(capacity: 4);
         foreach (var entry in entries)
         {
             var leafId = await TraverseToLeafAsync(entry.Key);
             if (!buckets.TryGetValue(leafId, out var bucket))
             {
                 var parents = await CaptureLeafParentPathAsync(entry.Key);
-                bucket = (new List<KeyValuePair<string, byte[]>>(), parents);
+                bucket = new LeafBucket(new List<KeyValuePair<string, byte[]>>(), parents);
                 buckets[leafId] = bucket;
             }
             bucket.Slice.Add(entry);
         }
 
+        // Resolve each leaf grain reference and (when the saga's prepared
+        // context is active) register the affected leaf with the per-tree
+        // tx registry. Done in one sequential pass so the single-slot
+        // _cachedLeaf LRU updates and the per-tx dedup gate inside
+        // RecordAffectedLeafIfPreparedAsync are observed in deterministic
+        // order before any concurrent leaf dispatch begins. The bucket
+        // order is also frozen here so the parallel-dispatch index and
+        // the split-promotion index agree on which parent path belongs
+        // to which leaf result.
+        var orderedBuckets = new List<(GrainId LeafId, LeafBucket Bucket)>(buckets.Count);
         foreach (var (leafId, bucket) in buckets)
         {
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(leafId))
+            bucket.Leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(leafId))
                 ? existing
                 : ResolveLeafGrainSlow(leafId);
             await RecordAffectedLeafIfPreparedAsync(leafId);
-            var split = await DispatchLeafBatchWithRetryAsync(leaf, bucket.Slice);
+            orderedBuckets.Add((leafId, bucket));
+        }
 
-            // Walk the captured parent path bottom-up exactly like the
-            // single-key TraverseForWriteAsync split-pop loop. The path
-            // is ordered root-to-parent so we iterate in reverse.
-            var parents = bucket.Parents;
+        // Dispatch the per-leaf batched RPCs in parallel. The shard-root
+        // turn is single-threaded, so concurrent leaf RPCs cannot race
+        // the _cachedLeaf / _cachedInternal single-slot LRUs - those
+        // were updated serially in the resolve loop above, and the
+        // split-promotion loop below also runs serially in this turn.
+        // The original shape awaited each leaf sequentially, which
+        // collapsed N leaves of useful concurrency per shard turn into
+        // one. Provider commit p50 ~16 ms means that with B buckets
+        // per shard, the wall-clock cost drops from B x commit_p50 to
+        // ~commit_p50, multiplying effective shard-root throughput by
+        // B on the bulk-write path.
+        var leafDispatchTasks = new Task<SplitResult?>[orderedBuckets.Count];
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var bucket = orderedBuckets[i].Bucket;
+            leafDispatchTasks[i] = DispatchLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice);
+        }
+        var splitResults = await Task.WhenAll(leafDispatchTasks);
+
+        // Walk split promotion sequentially per leaf. Parent
+        // AcceptSplitAsync calls mutate shared internal-node routing
+        // tables (and PromoteRootAsync rewrites this shard's root),
+        // both of which must be serialised. Each leaf's parent path
+        // was captured before dispatch, so the order is well-defined.
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var split = splitResults[i];
+            if (split is null) continue;
+
+            var parents = orderedBuckets[i].Bucket.Parents;
             var parentCursor = parents.Count;
             while (split is not null && parentCursor > 0)
             {
@@ -542,6 +591,21 @@ internal sealed partial class ShardRootGrain(
         }
 
         await ForwardLocalWritesToShadowIfNeededAsync(entries);
+    }
+
+    /// <summary>
+    /// Mutable per-leaf record used by <see cref="SetManyLocalOnlyAsync"/>
+    /// to group routed entries, the captured parent path for split
+    /// promotion, and the resolved leaf grain reference. Reference type
+    /// (not <c>struct</c>) because <see cref="Leaf"/> is filled in by a
+    /// second pass after the dictionary is populated, and a value-type
+    /// dictionary value would require a get-modify-set update per entry.
+    /// </summary>
+    private sealed class LeafBucket(List<KeyValuePair<string, byte[]>> slice, List<GrainId> parents)
+    {
+        public List<KeyValuePair<string, byte[]>> Slice { get; } = slice;
+        public List<GrainId> Parents { get; } = parents;
+        public IBPlusLeafGrain? Leaf { get; set; }
     }
 
     /// <summary>
