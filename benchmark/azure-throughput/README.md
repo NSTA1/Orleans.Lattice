@@ -148,8 +148,8 @@ When `producer rate` >> `silo Entries written per second`, the silo is the bottl
 | `BENCH_BATCH_SIZE` | silo | `4096` | `SetManyAsync` batch size. |
 | `BENCH_FLUSH_MS` | silo | `50` | Max flush latency. |
 | `BENCH_FLUSH_CONCURRENCY` | silo | `8` | Max in-flight `SetManyAsync` calls. |
-| `BENCH_WAL_PARTITIONS` | silo | `8` | WAL partitions per tree. |
-| `BENCH_WAL_MAX_PENDING_BATCHES` | silo | `8` | Per-WalShardGrain pipeline depth. |
+| `BENCH_WAL_PARTITIONS` | silo + scripts | `8` | WAL partitions per tree. Honoured by both `20-build-and-deploy.ps1` (passed through to the ACI YAML) and `Silo/Program.cs` (read at startup). Set to `1` for a single-partition arm of an A/B run. |
+| `BENCH_WAL_MAX_PENDING_BATCHES` | silo + scripts | `8` | Per-WalShardGrain pipeline depth. Honoured by both the deploy script and the silo. |
 | `BENCH_PIPELINE_PHASE2` | silo | `1` | Overlap phase-2 commit with the next batch (`AzureTableWalStorageOptions.PipelinePhaseTwoCommits`). |
 | `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` | silo | `false` | Opt in to the phase-0 candidate-row elision optimisation (`AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath`). Set to `true` for the optimised arm of an A/B run. |
 | `BENCH_TREE_ID` | silo | `azure-throughput-{utc}` | Pin to re-use an existing WAL partition; default rotates per run. |
