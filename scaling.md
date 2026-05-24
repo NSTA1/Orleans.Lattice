@@ -327,6 +327,40 @@ The hypothesis is now confirmed in the inverse direction: **the next ceiling is 
 
 
 
+### U2 measurement (2026-05-24T20:53Z-T21:05Z) - lifting the `LatticeGrain` worker cap clears the light/mid rungs but exposes `ShardRootGrain` per-shard serialisation on rung 3
+
+The actual U1b diagnostic - reread after the run - named `Orleans.Lattice.BPlusTree.Grains.LatticeGrain` (placement `StatelessWorkerPlacement`) as the queued activation, *not* `ShardRootGrain` directly. The stateless-worker layer defaults to `Environment.ProcessorCount` local activations per silo, which on the 4-vCPU ACI host is too low for 8 concurrent drainer flushes. Smallest change for U2: leave behaviour identical otherwise but raise the cap. Annotated `LatticeGrain` with `[StatelessWorker(maxLocalWorkers: 32)]` (commit `e8e6854`). Same P=8 three-rung ladder, same default `BENCH_FLUSH_CONCURRENCY=8`. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-P8-U2-workers32.csv`.
+
+| Rung | Vehicles | Target | U1 final | U1b/16 final | **U2/w32 final** | delta vs U1 | U2 written | U2 **failed** |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 |  1,000 |  5,000 | 2,302 | 2,474 | **3,077** | **+33.7%** | 296,704 |      0 |
+| 2 |  5,000 | 25,000 | 2,645 | 2,616 | **3,247** | **+22.8%** | 323,085 |      0 |
+| 3 | 10,000 | 50,000 | 2,255 | 1,342 |   **275** | **-87.8%** |  45,094 | **54,730** |
+
+Light and mid rungs improved substantially (no failures, +20-34% over U1). The diagnostic also confirms the previous bottleneck moved: the `LatticeGrain` activation now reports `NonReentrancyQueueSize=0 NumRunning=1` - it's no longer the queueing point.
+
+Rung 3 collapsed harder than U1b. The silo's timeout diagnostic now names `ShardRootGrain` directly:
+
+```
+Response did not arrive on time in '00:00:30' for message:
+  lattice/azure-throughput-...->shardroot/azure-throughput-.../56
+  Orleans.Lattice.BPlusTree.IShardRootGrain.SetManyAsync(...)
+... GrainType=Orleans.Lattice.BPlusTree.Grains.ShardRootGrain
+... NonReentrancyQueueSize=9 NumRunning=1
+... has been enqueued on the target grain for 00:00:29.03 ...
+Total Enqueued=27; Total processed=27
+```
+
+So `ShardRootGrain/56` processed exactly 27 `SetManyAsync` turns in a 30 s window (~0.9 calls/sec) while 9 more were queued behind it. With the default 64 physical shards and 10,000 vehicles producing 50,000 keys/s, each shard sees ~780 keys/s of new writes - well within budget for the leaf fan-out and WAL append (rung-3 WAL `provider.duration` p99 ~70-90 ms, `in_flight=0` at end), but **not** within budget for one serialised `ShardRootGrain` turn per batch. The U1 fan-out parallelism inside a single `SetManyAsync` is no longer the limit; the limit is *how many `SetManyAsync` calls the shard root can chair per second*. So the next probe is shard-count, not interleaving:
+
+- **U3 (next):** Plumb `BENCH_SHARD_COUNT` through `20-build-and-deploy.ps1` (done; default 0 = keep library default 64) and rerun the same ladder with `BENCH_SHARD_COUNT=128` (then 256 if 128 lifts rung 3). The silo already supports startup `ReshardAsync` against an empty tree, so this is a configuration change, not a code change. The cost is roughly linear in shard count - twice the shards halves the per-shard turn rate, doubling the headroom before the next ceiling.
+- **U2-followup (deferred):** `[MayInterleave]` on `ShardRootGrain` over a disjoint-key predicate is still the eventual win, but it touches split-promotion state, the saga-participant set, the routing cache, and `RecordAffectedLeafIfPreparedAsync` - all activation-scoped. Shard-count is a cheaper falsifiability probe and tells us whether per-shard serialisation is the real ceiling before we pay the interleaving design cost.
+
+**Conclusion on U2.** The `maxLocalWorkers: 32` change is kept: it's a one-line attribute, it has no wire-format or behavioural cost (stateless workers remain non-reentrant), it doubled rung 2 throughput against U1's serial drainer, and it confirms the bottleneck shifted from the stateless-worker layer to the per-shard root activation. The next lever is shard count.
+
+
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).

@@ -89,6 +89,12 @@ $walMaxPending = if ($env:BENCH_WAL_MAX_PENDING_BATCHES) { $env:BENCH_WAL_MAX_PE
 # A/B (e.g. 8 vs 16 vs 32) can be driven from the host without editing YAML.
 $flushConcurrency = if ($env:BENCH_FLUSH_CONCURRENCY) { $env:BENCH_FLUSH_CONCURRENCY }
                     else { '8' }
+# Optional ShardRoot fan-out override. 0 (default) means "use the library
+# default shard count baked into LatticeOptions". A positive value triggers
+# the silo's startup ReshardAsync(N) call so a U3 A/B (e.g. 64 vs 256
+# shards) can be driven from the host without editing YAML.
+$shardCount = if ($env:BENCH_SHARD_COUNT) { $env:BENCH_SHARD_COUNT }
+              else { '0' }
 # Phase A diagnostic reporter cadence in the silo. Forward whatever the
 # operator (or 40-ladder.ps1) put on the host env; default to 10s so a
 # 60s rung captures ~5 windows of attribution data without burying the
@@ -96,7 +102,7 @@ $flushConcurrency = if ($env:BENCH_FLUSH_CONCURRENCY) { $env:BENCH_FLUSH_CONCURR
 $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
                    else { '10' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending flushConcurrency=$flushConcurrency walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending flushConcurrency=$flushConcurrency shardCount=$shardCount walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -236,6 +242,8 @@ properties:
             value: '50'
           - name: BENCH_FLUSH_CONCURRENCY
             value: '$flushConcurrency'
+          - name: BENCH_SHARD_COUNT
+            value: '$shardCount'
           - name: BENCH_WAL_PARTITIONS
             value: '$walPartitions'
           - name: BENCH_WAL_MAX_PENDING_BATCHES
