@@ -1253,7 +1253,11 @@ if ($FleetSizeOverride -gt 0) {
 $matrixDriverPassthrough = @(
     'BENCH_LATTICE_WAL_PARTITIONS',
     'BENCH_LATTICE_WAL_MAX_PENDING_BATCHES',
-    'BENCH_WAL_PIPELINE_PHASE_TWO'
+    'BENCH_WAL_PIPELINE_PHASE_TWO',
+    'BENCH_WAL_RETRY_MAX_ATTEMPTS',
+    'BENCH_WAL_RETRY_DELAY_MS',
+    'BENCH_WAL_RETRY_MAX_DELAY_MS',
+    'BENCH_WAL_RETRY_NETWORK_TIMEOUT_MS'
 )
 foreach ($k in $matrixDriverPassthrough) {
     $v = [Environment]::GetEnvironmentVariable($k)
