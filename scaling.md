@@ -697,6 +697,47 @@ The same arithmetic explains why U8 and U9 also showed `batch_size = 1`: in *all
 - **U9e (was U9d, reentrant `ShardRootGrain` with `[MayInterleave]`).** Remains deferred behind U9d. Only revisit if U9d demonstrably lifts batching but reveals an upstream ceiling at the shard-root turn queue.
 
 
+#### U9d - the next probe (`BENCH_FLUSH_CONCURRENCY=32 + coalesceWindow=5 ms` smoke, 2026-05-25). RESULT: FALSIFIED for the simple "lift `FlushConcurrency` in isolation" form, but the failure mode is itself the strongest evidence yet for where the producer-side ceiling actually lives.
+
+| Configuration                                       | Value                              |
+|-----------------------------------------------------|------------------------------------|
+| Rung                                                | `1000:5` (1 000 vehicles × 5 Hz)  |
+| `BENCH_SHARD_COUNT`                                 | 16                                 |
+| `BENCH_BATCH_SIZE`                                  | 4 096                              |
+| `BENCH_FLUSH_CONCURRENCY`                           | **32** (was 8 in U9b/U9c)          |
+| `BENCH_WAL_PARTITIONS`                              | 4                                  |
+| `BENCH_WAL_MAX_PENDING_BATCHES`                     | 8                                  |
+| `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS`             | 5 (kept from U9c)                  |
+| Duration                                            | 60 s steady + warm-up              |
+
+**Outcome.** Catastrophic regression. `FinalAvgRate = 278/s` (versus U9c at 2 089/s, a 7.5× regression), `FinalFailed = 262 426` (versus U9c at 0), `SteadyAvg = 339/s` with `SteadyMin = 0/s`. Phase-2 batching is *still* `1.00` on every shard — but that single fact is no longer interesting because the run never reached steady producer rate.
+
+| Instrument (rung-1 final window)                | Shard 0 | Shard 1 | Shard 2 | Shard 3 | Samples (s0/s1/s2/s3) |
+|-------------------------------------------------|---------|---------|---------|---------|------------------------|
+| `provider.phase2.batch_size` P50                | 1.00    | 1.00    | 1.00    | 1.00    | 38 / 41 / 54 / 45      |
+| `wal.append.batch_entries` P50                  | 16      | 12      | 16      | 16      | 36 / 40 / 53 / 44      |
+| `wal.append.provider.duration` (ms) P50         | 25.12   | 23.06   | 24.10   | 24.63   | 37 / 41 / 54 / 45      |
+| `wal.append.in_flight`                          | 0       | 0       | 0       | 0       | 36 / 40 / 53 / 44      |
+
+**Why the rate collapsed (silo log `silo-20260525-091015Z.log`, 85.4 MiB).** The silo per-second reporter shows `written` frozen at 29 143 from `t ≈ 37 s` to `t ≈ 100 s` with `inFlight = 32` and a steady stream of `failed += 800–4 000` per second. The relevant log signals are:
+
+1. **`ShardRootGrain.SetManyAsync` queue is full.** Stack traces report `Activation: ... shardroot/.../1 ... NonReentrancyQueueSize = 8 NumRunning = 1 ... CurrentlyExecuting = SetManyAsync(...)` — the grain is single-threaded, executing one `SetManyAsync` at a time, with 8 more queued.
+2. **`HotShardMonitor.GetHotnessAsync` is enqueued behind the producer.** Same stack trace shows `Message Request hotshardmonitor/.../GetHotnessAsync() ... has been enqueued on the target grain for 00:00:29.7900000 and is currently position 1 in queue for processing.` — the monitor's sampling RPC waits 29.8 s for the grain to free up.
+3. **The monitor times out and fires a reshard.** 15 lines logged as `Hot-shard sampling pass FAILED` (timeout) followed by 17 `[silo] reshard treeId=...FAILED: OrleansMessageRejectionException: Forwarding failed: ... "Unable to create local activation" ... ForwardCount=2 ... Rejecting now.` Five upstream reshard *submits* targeting `shardCount = 16` precede the failures; the new shard activations cannot be created while the in-flight set is at its ceiling.
+4. **The producer side gives up on the failing reshard request and the harness records 262 426 failed entries.**
+
+**What this tells us about the ceiling.** Raising `FlushConcurrency` from 8 to 32 did *not* multiply phase-1 throughput, because `ShardRootGrain` is **per-shard single-activation, non-reentrant by default**. At `shardCount = 16` the producer side can offer at most 16 concurrent `SetManyAsync` calls before they queue, and the queue depth is bounded by `NonReentrancyQueueSize = 8`. With 32 flush slots fanning out into 16 shards, the over-supply hits the queue ceiling almost immediately and the monitor's housekeeping RPCs are starved out. **The producer-side hypothesis is not falsified — it is sharpened**: the lever is `ShardRootGrain` reentrancy (U9e), not bare `FlushConcurrency`.
+
+This also retroactively explains why U9c's 5 ms coalescing window saw `provider.phase2.batch_size = 1.00`: even with the channel given 5 ms to accumulate arrivals, the **upstream phase-1 path on a single shard root cannot overlap two transactions in the first place**, so the channel can never receive >1 element per phase-1 cycle. The phase-2 worker is correctly diagnosing the input it gets.
+
+**Re-ranked probe order (third revision, the shard-root activation is the binding constraint).**
+
+- **U9 (config, `walMaxPending=32`) - FALSIFIED** (commit `672f1aa`).
+- **U9b (config, `walPartitions=4`) - FALSIFIED** (commit `2e38c0d`).
+- **U9c (code, 5 ms coalescing window) - FALSIFIED** (commit `198d026` + smoke). Option kept as opt-in.
+- **U9d (config, `flushConcurrency=32`) - FALSIFIED *with diagnostic value*** (this smoke, commit `40e40d3`). The failure mode exposes `ShardRootGrain` non-reentrancy + `HotShardMonitor` starvation as the actual ceiling. Roll back to `flushConcurrency = 8` for any subsequent smoke that is not specifically testing the shard-root path. The current evidence does *not* implicate `HotShardMonitor` itself as a defect; it correctly times out when its target grain is saturated. A defensive follow-up is to make the monitor's reshard trigger idempotent against in-flight reshards (so 17 retried reshards do not amplify the failure), but that is a robustness fix, not a throughput lever.
+- **U9e (code, reentrant `ShardRootGrain.SetManyAsync` via `[MayInterleave]`).** Promoted to the next probe. Falsifiable: with `flushConcurrency = 16` (one slot per shard, conservative) and the shard-root made reentrant for `SetManyAsync`, look for `wal.append.in_flight` rising above 0 on at least one shard *and* `provider.phase2.batch_size` P50 ≥ 2. If only `in_flight` lifts, the next downstream constraint is the WAL provider partition (already at 4); if neither lifts, the constraint is below the WAL provider and U9c's window can be revisited under a faster storage backend.
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
