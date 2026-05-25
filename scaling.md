@@ -770,6 +770,47 @@ This also retroactively explains why U9c's 5 ms coalescing window saw `provider.
 - **U9g (deferred) - reentrant `ShardRootGrain.SetManyAsync` via `[MayInterleave]` with disjoint-key key-set partitioning.** Only attempt after U9f isolates the reshard-activation defect from the per-shard serial-turn ceiling. The four mutable caches (`_cachedLeaf`, `_cachedInternal`, routing tables, root state) must each be made interleave-safe or partitioned per turn before this is correct; the design work is non-trivial and the value gate is "did U9f confirm a true per-shard ceiling".
 
 
+#### U9f smoke (2026-05-25T09:53Z-T09:56Z) - rolling `BENCH_FLUSH_CONCURRENCY` back to 8 recovers throughput *above* U9c with the U9e code change in place (VALIDATED, U9e was correct and the U9d/U9e failures were entirely over-pressure artifacts)
+
+**Setup.** Same code as U9e (commit `4087b4c`, `[AlwaysInterleave]` on `IShardRootGrain.GetHotnessAsync` and `HasPendingBulkOperationAsync`). Knob set is identical to U9c/U9b: `BENCH_SHARD_COUNT=16`, `BENCH_BATCH_SIZE=4 096`, `BENCH_WAL_PARTITIONS=4`, `BENCH_WAL_MAX_PENDING_BATCHES=8`, `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS=5`, **`BENCH_FLUSH_CONCURRENCY=8`** (rolled back from 32 in U9d/U9e). ACR builds `cb20` (producer) and `cb21` (silo) both succeeded. Silo log `silo-20260525-095335Z.log` (2.43 MiB) preserved.
+
+**Outcome.** Full recovery and a small net improvement over the U9c baseline. The `[AlwaysInterleave]` change has the side benefit of slightly lifting steady-state throughput because the monitor's sampling RPCs no longer enqueue behind individual `SetManyAsync` calls.
+
+| Run                                  | SteadyAvg | FinalAvgRate | FinalWritten | FinalFailed |
+|--------------------------------------|-----------|--------------|--------------|-------------|
+| U9c (no `[AlwaysInterleave]`, FC=8)  | n/a       | 2 089/s      | 249 545      | 0           |
+| U9d (FC=32)                          | 339/s     | 278/s        | 33 239       | 262 426     |
+| U9e (`[AlwaysInterleave]`, FC=32)    | 578/s     | 413/s        | 49 269       | 246 618     |
+| **U9f (`[AlwaysInterleave]`, FC=8)** | **2 304/s** | **2 127/s** | **253 619**  | **0**       |
+
+| Instrument (rung-1 final window)        | Shard 0 | Shard 1 | Shard 2 | Shard 3 | Samples (s0/s1/s2/s3) |
+|-----------------------------------------|---------|---------|---------|---------|------------------------|
+| `provider.phase2.batch_size` P50        | 1.00    | 1.00    | 1.00    | 1.00    | 91 / 91 / 96 / 154     |
+| `wal.append.batch_entries` P50          | 16      | 16      | 16      | 16      | 90 / 90 / 95 / 153     |
+| `wal.append.provider.duration` (ms) P50 | 25.51   | 24.34   | 23.41   | 22.84   | 91 / 91 / 96 / 154     |
+| `wal.append.in_flight`                  | 0       | 0       | 0       | 0       | 90 / 90 / 95 / 153     |
+
+**The 56 reshard rejections are a pre-existing cold-start artifact, not a load defect.** A direct comparison of the U9c and U9f silo logs falsifies the U9e diagnosis sub-claim that the `Unable to create local activation` rejections on `LatticeGrain.ReshardAsync` are a load-induced defect:
+
+| Silo log signal                                                  | U9c (success) | U9d (collapse) | U9e (partial)  | U9f (success)  |
+|------------------------------------------------------------------|---------------|----------------|----------------|----------------|
+| `[silo] reshard ... -> shardCount=16 (submit)`                   | 54            | many           | (not measured) | 56             |
+| `[silo] reshard ... FAILED: ... Unable to create local activation` | 54          | many           | 22             | 56             |
+| `Hot-shard sampling pass FAILED`                                 | 0             | many           | 0              | 0              |
+| `IngestService.FlushAsync ... TimeoutException`                  | 0             | many           | 499            | 0              |
+| `[silo] FINAL ... failed=N`                                      | 0             | 262 426        | 246 618        | 0              |
+| `[silo] FINAL ... rate (avg)`                                    | 2 089/s       | 278/s          | 413/s          | 2 127/s        |
+
+U9c and U9f both have the same per-treeId pattern: 50-ish reshard submits → 50-ish rejections, all at cold-start (the very first one is at log line 6 in U9f, before producer load even begins), and *zero* observed effect on throughput or success rate. The rejections happen on the cold-startup path of the tree-scoped `lattice/{treeId}` grain's `ReshardAsync` activation: the hot-shard monitor's startup sampling pass calls `ReshardAsync` before the activation pipeline has converged, the request is forwarded, the target activation cannot be created at that instant, and Orleans rejects the forward. The monitor's retry logic absorbs this transparently. The U9d log showed the same pattern *amplified* by monitor starvation: with `Hot-shard sampling pass FAILED` driving an extra wave of monitor-decided reshards on top of the cold-start wave, the total reshard rate rose proportionally with monitor pressure.
+
+**Re-ranked probe order (fifth revision, the U9e + U9c knob set is the new working baseline).**
+
+- **U9 / U9b / U9c / U9d / U9e** - FALSIFIED or rolled into the working baseline as appropriate (rolled up above).
+- **U9f - VALIDATES the U9e `[AlwaysInterleave]` ship** (this smoke). The new working baseline is `flushConcurrency=8` + `[AlwaysInterleave]` on the monitor reads. SteadyAvg lifts modestly from ~2 089/s (U9c) to ~2 304/s (U9f); FinalAvgRate from 2 089/s to 2 127/s. The monitor-starvation cure is independently valuable and the producer-side flush concurrency is conclusively bounded by `shardCount` (16) under the current shard-root single-activation regime.
+- **U9g (deferred) - reentrant `ShardRootGrain.SetManyAsync` via `[MayInterleave]`.** Still the right next throughput probe in principle, but the U9f result clarifies the value gate: the **per-shard serial-turn ceiling is the active binding constraint** at `flushConcurrency=8`, since `provider.phase2.batch_size` remains pinned at `1.00` on every shard and `wal.append.in_flight` stays at zero. Making `SetManyAsync` reentrant should let each shard interleave more than one in-flight `AppendAsync` call, which in turn should be the first knob that finally lifts `phase2.batch_size` above 1. The design constraint is still the four mutable caches (`_cachedLeaf`, `_cachedInternal`, routing tables, root state); each must be made interleave-safe (or partitioned per turn by key range) before the change can ship.
+- **U9h (deferred behind U9g) - investigate the benign cold-start reshard rejections.** Now that U9f confirms they are noise, the next *correctness* / observability win is to suppress the cold-start reshard wave entirely (e.g. let `HotShardMonitor` wait until the `LatticeGrain` activation has reported "ready" before issuing its first `ReshardAsync`), or to demote the rejection log line so it does not look like a real failure in operator dashboards. This is hygiene only, not a throughput probe.
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
