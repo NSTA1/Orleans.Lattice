@@ -665,6 +665,38 @@ The same arithmetic explains why U8 and U9 also showed `batch_size = 1`: in *all
 
 **Validation.** `dotnet test` of the storage-azuretable project completed with 147 / 147 non-chaos tests passing (including the 3 new `PhaseTwoWorkerTests` and 3 new options tests). Benchmark silo and provider projects both build cleanly. No fresh ladder run has been performed yet; the next falsification step is to drive the benchmark with `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS=5` (about half the observed `commit.duration.phase2` P50 from U9b) at the U9b baseline (`shardCount=16`, `batchSize=4096`, `flushConcurrency=8`, `walPartitions=4`, `walMaxPending=8`) and look at `provider.phase2.batch_size`. The hypothesis is falsified if `batch_size` stays at `1.00` after the change; that would mean even with a deliberate in-process debounce the producer-side arrival pattern is not coalescible and the next layer to investigate is the LatticeGrain `SetManyAsync` flush pattern (U9d).
 
+### U9c smoke (2026-05-25T08:51Z-T08:53Z) - 5 ms coalescing window did not lift `phase2.batch_size` (FALSIFIED, U9d is next)
+
+**Setup.** Rung 1 only (vehicles=1000, tickHz=5, target 5,000/s, duration=60s) at the U9b baseline (`shardCount=16`, `batchSize=4096`, `flushConcurrency=8`, `walPartitions=4`, `walMaxPending=8`). The single change vs U9b is `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS=5`. Image commit: `198d026`. Tree id: `azure-throughput-20260525-084825`. Sources: `benchmark/azure-throughput/scripts/.ladder-results-U9c-coalesce5ms.csv`, `.ladder-phaseA-U9c-coalesce5ms.csv`, `.ladder-U9c-coalesce5ms-rung1-silo.log` (truncated to ~8 KB; phase-A evidence below comes from the streamed cadence lines preserved in the run stdout).
+
+**Result.** `FINAL written=249,545 failed=0 elapsed=119.4s Entries written per second (avg)=2,089`. Steady avg 2,199/s (U9b rung 1: 2,123/s). Throughput is within run-to-run noise of U9b - **the 5 ms in-process delay neither helped nor hurt the headline number**.
+
+**Phase-A evidence (last cadence window per shard, 4 shards, all 4 WAL partitions).**
+
+| metric | shard 0 | shard 1 | shard 2 | shard 3 | samples / shard |
+|---|---:|---:|---:|---:|---:|
+| `provider.phase2.batch_size` P50 | **1.00** | **1.00** | **1.00** | **1.00** | 117 / 176 / 123 / 149 |
+| `provider.phase2.batch_size` P90 | **1.00** | **1.00** | **1.00** | **1.00** | - |
+| `provider.phase2.batch_size` Max | **1.00** | **1.00** | **1.00** | **1.00** | - |
+| `wal.append.batch_entries` P50 | 16 | 16 | 16 | 16 | 116 / 174 / 122 / 148 |
+| `wal.append.batch_entries` Max | 38 | 42 | 51 | 45 | - |
+| `wal.append.provider.duration` (ms) P50 | 23.03 | 22.85 | 23.02 | 22.52 | 117 / 175 / 123 / 149 |
+| `wal.append.provider.duration` (ms) P99 | 81.00 | 64.19 | 92.80 | 74.31 | - |
+| `wal.append.in_flight` | 0 | 0 | 0 | 0 | 116 / 174 / 122 / 148 |
+
+**This is the strongest disproof yet.** Across all **565 phase-2 samples in the rung's final cadence window**, every single `provider.phase2.batch_size` reading is exactly 1.00, max included. The `PhaseTwoWorker` now contains code that *deliberately delays* the first commit for 5 ms - and the channel still has zero or one element when the post-delay re-drain runs. The producer side is not just *not bursty enough*; it is *fundamentally not coalescible at this load shape* even when given a free wait window. (Cross-check: 5 ms is ~22% of `wal.append.provider.duration` P50 ≈ 22.9 ms, well within the per-Azure-commit envelope; if any coalescing were possible it would have shown up.)
+
+**What the result says about the system.** The phase-2 worker is invoked by a per-shard pipeline whose phase-1 path (`wal.append.batch_entries` P50 = 16, P99 ≈ 45) is itself already coalescing aggressively. The shape that arrives at the channel is therefore "one phase-2 manifest commit per phase-1 transaction" - and phase-1 transactions happen at intervals of ~23 ms (the provider duration P50), which is much longer than the 5 ms window. The window expires, the channel is still empty, the worker commits the single pending row, and the cycle repeats. **Phase 2 is producer-rate-limited by phase 1, not coalescing-limited within phase 2.** There is no in-process debounce that helps here: to land >1 commit per phase-2 transaction the upstream LatticeGrain `SetManyAsync` flush would have to overlap *two distinct phase-1 transactions* on the same shard inside a single coalescing window, which the current `_options.FlushConcurrency`-gated drainer does not produce.
+
+**Re-ranked probe order (revised yet again, the producer side is the next lever).**
+
+- **U9 (config, `walMaxPending=32`) - FALSIFIED** (commit `672f1aa`).
+- **U9b (config, `walPartitions=4`) - FALSIFIED** (commit `2e38c0d`).
+- **U9c (code, 5 ms coalescing window) - FALSIFIED** (commit `198d026` + this run). The `PhaseTwoCoalescingWindow` option is **kept** in the codebase because the wire-compat default is zero, the option/worker/test surface is clean, and there may exist a future workload shape (e.g. extremely high per-shard fan-in with sub-millisecond phase-1 transactions on a faster storage backend) where it does help. There is no benefit at the current Azure-Tables-backed shape.
+- **U9d (producer side, `LatticeGrain.SetManyAsync` flush pattern).** The new candidate. The drainer that turns producer batches into `WalShardGrain.AppendAsync` calls is gated by `BENCH_FLUSH_CONCURRENCY=8`. If we raised that, the per-shard phase-1 batch arrival rate could exceed `1 / commit.duration.phase2`, which is the threshold above which an arrival-coalescing window can actually trap >1 element. Falsifiable: at `flushConcurrency=32` (or `64`) with `coalesceWindow=5ms`, look for `provider.phase2.batch_size` P50 ≥ 2 *and* `wal.append.in_flight` rising above 0. If both move together, the lever is producer-side concurrency; if only `in_flight` moves, the Azure Tables partition is the binding constraint and the next step is `walPartitions=8 + flushConcurrency=32` (i.e. fatten the producer side under a fixed per-partition envelope).
+- **U9e (was U9d, reentrant `ShardRootGrain` with `[MayInterleave]`).** Remains deferred behind U9d. Only revisit if U9d demonstrably lifts batching but reveals an upstream ceiling at the shard-root turn queue.
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
