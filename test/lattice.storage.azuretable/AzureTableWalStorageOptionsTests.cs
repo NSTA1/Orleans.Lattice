@@ -582,6 +582,48 @@ public class AzureTableWalStorageOptionsTests
         });
     }
 
+    [Test]
+    public void PhaseTwoCoalescingWindow_defaults_to_Zero()
+    {
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.That(options.PhaseTwoCoalescingWindow, Is.EqualTo(TimeSpan.Zero));
+    }
+
+    [Test]
+    public void Validate_throws_when_PhaseTwoCoalescingWindow_is_negative()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(-1),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_PhaseTwoCoalescingWindow_is_zero_or_positive()
+    {
+        var zero = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            PhaseTwoCoalescingWindow = TimeSpan.Zero,
+        };
+
+        var positive = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(5),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(zero.Validate, Throws.Nothing);
+            Assert.That(positive.Validate, Throws.Nothing);
+        });
+    }
+
     /// <summary>
     /// Minimal Azure.Core <see cref="Azure.Core.TokenCredential"/>
     /// stand-in for tests that need a non-null credential reference

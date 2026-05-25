@@ -343,6 +343,54 @@ public sealed class AzureTableWalStorageOptions
     public Action<Exception>? PipelinedPhaseTwoFaultHandler { get; set; }
 
     /// <summary>
+    /// Maximum wall-time the per-shard
+    /// <c>PhaseTwoWorker</c> drain loop deliberately waits, after the
+    /// first arrival but before submitting the coalesced phase-2
+    /// transaction, so additional pending commits can accumulate.
+    /// Default <see cref="TimeSpan.Zero"/> preserves the historical
+    /// drain-on-first-signal behaviour (one phase-2 commit per
+    /// transaction whenever per-shard arrival inter-spacing exceeds
+    /// the commit's own duration).
+    /// <para>
+    /// <b>Why a coalescing window.</b> Phase A observations (see
+    /// <c>scaling.md</c>) showed <c>provider.phase2.batch_size</c>
+    /// pinned at exactly <c>1.00</c> across hundreds of thousands of
+    /// samples even when producer-side knobs
+    /// (<c>WalMaxPendingBatches</c>, <c>WalPartitions</c>) were swept
+    /// to widen the inbound stream. Root cause: under a steady-state
+    /// per-partition arrival rate slower than the phase-2 commit's
+    /// own latency, the channel is empty at the moment the previous
+    /// commit returns, so the next <c>WaitToReadAsync</c> wakes on
+    /// the very first arrival and commits a one-item batch. A small,
+    /// opt-in window between the first arrival and the commit gives
+    /// the worker an opportunity to coalesce additional arrivals
+    /// into the same Azure Tables transaction without weakening the
+    /// strict offset-FIFO invariant.
+    /// </para>
+    /// <para>
+    /// <b>Soundness.</b> The window only delays the first commit
+    /// after a quiet period; the SortedSet ordering primitive is
+    /// unchanged, every committed group is still drained in
+    /// ascending <c>startOffset</c> order, and the per-transaction
+    /// ceiling of 49 coalesced batches still applies. The window is
+    /// short-circuited the moment the worker already has 49 pending
+    /// commits buffered - there is no point waiting once the
+    /// transaction is full.
+    /// </para>
+    /// <para>
+    /// <b>Cost.</b> The window adds up to this much wall-time to the
+    /// inline phase-2 latency of an isolated batch (one arrival, no
+    /// follow-up). Under burst load the cost is amortised because
+    /// multiple commits collapse into one round-trip; under steady
+    /// load with no follow-up arrivals the cost is paid every batch.
+    /// Pick a value smaller than the observed phase-2 commit
+    /// duration p50 so the steady-state-loss case stays bounded.
+    /// Must be non-negative.
+    /// </para>
+    /// </summary>
+    public TimeSpan PhaseTwoCoalescingWindow { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
     /// Validates that exactly one authentication mode is configured and
     /// that <see cref="TableName"/> is non-empty. Called by the provider
     /// at first use.
@@ -424,6 +472,12 @@ public sealed class AzureTableWalStorageOptions
         {
             throw new InvalidOperationException(
                 $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryNetworkTimeout)} must be positive when set.");
+        }
+
+        if (PhaseTwoCoalescingWindow < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(PhaseTwoCoalescingWindow)} must be non-negative.");
         }
     }
 

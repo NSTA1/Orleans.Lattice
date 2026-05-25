@@ -84,6 +84,11 @@ $walPartitions = if ($env:BENCH_WAL_PARTITIONS) { $env:BENCH_WAL_PARTITIONS }
 # Per-WalShardGrain pipeline depth. Default 8 (matches Silo/Program.cs default).
 $walMaxPending = if ($env:BENCH_WAL_MAX_PENDING_BATCHES) { $env:BENCH_WAL_MAX_PENDING_BATCHES }
                  else { '8' }
+# PhaseTwoWorker coalescing window in ms. Default 0 (drain-on-first-signal, matches
+# the library default and Silo/Program.cs default). Surfaced as an env-var override so
+# a U9c sweep (e.g. 0 vs 5 vs 10 ms) can be driven from the host without editing YAML.
+$phase2CoalescingMs = if ($env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS) { $env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS }
+                      else { '0' }
 # In-silo SetManyAsync flush concurrency cap (drainer semaphore size). Default 8
 # (matches Silo/Program.cs default). Surfaced as an env-var override so a U1b
 # A/B (e.g. 8 vs 16 vs 32) can be driven from the host without editing YAML.
@@ -108,7 +113,7 @@ $batchSize = if ($env:BENCH_BATCH_SIZE) { $env:BENCH_BATCH_SIZE }
 $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
                    else { '10' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending flushConcurrency=$flushConcurrency shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -254,6 +259,8 @@ properties:
             value: '$walPartitions'
           - name: BENCH_WAL_MAX_PENDING_BATCHES
             value: '$walMaxPending'
+          - name: BENCH_WAL_PHASE2_COALESCING_WINDOW_MS
+            value: '$phase2CoalescingMs'
           - name: BENCH_PIPELINE_PHASE2
             value: '1'
           - name: BENCH_WAL_ELIMINATE_CANDIDATE_ROW

@@ -55,6 +55,14 @@
 //                           Default 1 (on) for the bench; the library default remains
 //                           off to preserve the existing wire-compat shape where every
 //                           AppendBatchAsync awaits its own phase 2.
+//   BENCH_WAL_PHASE2_COALESCING_WINDOW_MS
+//                           AzureTableWalStorageOptions.PhaseTwoCoalescingWindow in ms
+//                           (default 0 - drain-on-first-signal, matches the library
+//                           default). Set to a small positive value (e.g. 5-10 ms,
+//                           below the observed phase-2 commit duration p50) to let the
+//                           per-shard PhaseTwoWorker wait briefly after the first arrival
+//                           so additional commits coalesce into the same Azure Tables
+//                           transaction. Probe lever for U9c.
 //   BENCH_REPORT_SEC        stdout report interval in seconds (default 1)
 //   BENCH_PHASEA_REPORT_SEC stdout cadence for the Phase A diagnostic
 //                           reporter (default 10). Set to 0 to disable
@@ -126,6 +134,7 @@ var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", 8);
 var shardCountOverride = ReadIntAllowZero("BENCH_SHARD_COUNT", 0);
 var pipelinePhase2 = ReadBool("BENCH_PIPELINE_PHASE2", true);
 var eliminateCandidateRow = ReadBool("BENCH_WAL_ELIMINATE_CANDIDATE_ROW", false);
+var phaseTwoCoalescingMs = ReadIntAllowZero("BENCH_WAL_PHASE2_COALESCING_WINDOW_MS", 0);
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
 
@@ -136,7 +145,7 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
     return;
 }
 
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} totalDurationSec={totalDurationSec}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -224,6 +233,13 @@ builder.UseOrleans(silo =>
         // default is off for wire-compat; enabling here lets the benchmark A/B
         // the hot-path candidate-row write against real Azure Tables.
         o.EliminateCandidateRowOnHotPath = eliminateCandidateRow;
+        // U9c probe lever. Default 0 = drain-on-first-signal (library default).
+        // A small positive window lets the per-shard PhaseTwoWorker wait briefly
+        // after the first arrival so additional commits coalesce into the same
+        // Azure Tables transaction; without this, provider.phase2.batch_size
+        // stays pinned at 1.00 whenever per-partition arrival inter-spacing
+        // exceeds the commit's own duration.
+        o.PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(phaseTwoCoalescingMs);
     });
 });
 

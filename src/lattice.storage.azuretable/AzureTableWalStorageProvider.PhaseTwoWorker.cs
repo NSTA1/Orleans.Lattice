@@ -86,6 +86,17 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     private readonly KeyValuePair<string, object?> _pipelinePhaseTwoTag;
 
     /// <summary>
+    /// Wall-time window the drain loop deliberately waits after the
+    /// first arrival but before submitting, so additional commits can
+    /// coalesce into the same Azure Tables transaction. Captured from
+    /// <see cref="AzureTableWalStorageOptions.PhaseTwoCoalescingWindow"/>
+    /// at construction time. <see cref="TimeSpan.Zero"/> preserves the
+    /// historical drain-on-first-signal behaviour (no delay). Always
+    /// non-negative (validated upstream).
+    /// </summary>
+    private readonly TimeSpan _coalescingWindow;
+
+    /// <summary>
     /// Production constructor. Captures the provider's table-client
     /// lookup and adapts it to the worker's narrower transaction-submit
     /// seam so the worker has no <see cref="TableClient"/> dependency
@@ -96,7 +107,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         string manifestPartitionKey,
         string treeId,
         int shardIndex,
-        KeyValuePair<string, object?> pipelinePhaseTwoTag)
+        KeyValuePair<string, object?> pipelinePhaseTwoTag,
+        TimeSpan coalescingWindow)
         : this(
             async (actions, cancellationToken) =>
             {
@@ -106,7 +118,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             manifestPartitionKey,
             treeId,
             shardIndex,
-            pipelinePhaseTwoTag)
+            pipelinePhaseTwoTag,
+            coalescingWindow)
     {
     }
 
@@ -117,11 +130,24 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// <see cref="TableTransactionAction"/> sequence the worker would
     /// have sent to Azure Tables; its returned <see cref="Task"/>
     /// stand-in determines whether the worker treats the commit as
-    /// durable (completed) or faulted (faulted).
+    /// durable (completed) or faulted (faulted). Coalescing window
+    /// defaults to <see cref="TimeSpan.Zero"/>.
     /// </summary>
     internal PhaseTwoWorker(
         Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
         string manifestPartitionKey)
+        : this(submit, manifestPartitionKey, TimeSpan.Zero)
+    {
+    }
+
+    /// <summary>
+    /// Test-only constructor that lets a unit test choose an explicit
+    /// coalescing window in addition to substituting the submit seam.
+    /// </summary>
+    internal PhaseTwoWorker(
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
+        string manifestPartitionKey,
+        TimeSpan coalescingWindow)
         : this(
             submit,
             manifestPartitionKey,
@@ -131,7 +157,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // emitted records still carry a stable, observable value.
             // Production callers thread the provider's actual setting.
             pipelinePhaseTwoTag: new KeyValuePair<string, object?>(
-                LatticeMetrics.TagPipelinePhaseTwo, false))
+                LatticeMetrics.TagPipelinePhaseTwo, false),
+            coalescingWindow)
     {
     }
 
@@ -140,13 +167,15 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         string manifestPartitionKey,
         string treeId,
         int shardIndex,
-        KeyValuePair<string, object?> pipelinePhaseTwoTag)
+        KeyValuePair<string, object?> pipelinePhaseTwoTag,
+        TimeSpan coalescingWindow)
     {
         _submit = submit;
         _manifestPartitionKey = manifestPartitionKey;
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex);
         _pipelinePhaseTwoTag = pipelinePhaseTwoTag;
+        _coalescingWindow = coalescingWindow;
         _arrivals = Channel.CreateUnbounded<PhaseTwoCommit>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -245,6 +274,27 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 while (_arrivals.Reader.TryRead(out var arriving))
                 {
                     _pending.Add(arriving);
+                }
+
+                // Coalescing window: when configured, wait a short
+                // bounded interval after the first arrival so any
+                // additional phase-2 commits queued during the
+                // window collapse into the same Azure Tables
+                // transaction. Gated on the buffer being below the
+                // per-transaction ceiling (no point waiting once 49
+                // commits are already queued) and on the window
+                // being positive (default Zero short-circuits to the
+                // historical drain-on-first-signal behaviour). The
+                // post-delay TryRead loop folds in arrivals that
+                // landed during the wait. OperationCanceledException
+                // from Task.Delay falls through to the outer catch.
+                if (_coalescingWindow > TimeSpan.Zero && _pending.Count < MaxBatchedManifestRows)
+                {
+                    await Task.Delay(_coalescingWindow, cancellationToken).ConfigureAwait(false);
+                    while (_arrivals.Reader.TryRead(out var late))
+                    {
+                        _pending.Add(late);
+                    }
                 }
 
                 while (_pending.Count > 0)
