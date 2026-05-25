@@ -12,7 +12,28 @@ namespace Orleans.Lattice.BPlusTree;
 [Alias(TypeAliases.IShardRootGrain)]
 internal interface IShardRootGrain : IGrainWithStringKey
 {
+    /// <summary>
+    /// Returns the value for <paramref name="key"/>, or <c>null</c> if absent or tombstoned.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so concurrent reads on the
+    /// same shard activation pipeline alongside in-flight interleaved
+    /// <see cref="SetManyAsync"/> turns. Safe because the method only reads
+    /// <c>state.State.RootNodeId</c> / <c>RootIsLeaf</c>, traverses via the
+    /// per-activation routing-snapshot caches (<c>ConcurrentDictionary</c>),
+    /// and never mutates shard-root state.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
     Task<byte[]?> GetAsync(string key);
+
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="key"/> exists and is live.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> on the same rationale as
+    /// <see cref="GetAsync"/>: read-only traversal, no shard-root state mutation.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
     Task<bool> ExistsAsync(string key);
 
     /// <summary>
@@ -26,7 +47,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Returns the values for the given <paramref name="keys"/>, performing a single
     /// tree traversal per distinct leaf and batching reads at each leaf.
     /// Keys that do not exist or are tombstoned are omitted from the result.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> on the same rationale as
+    /// <see cref="GetAsync"/>: read-only traversal, no shard-root state mutation.
+    /// The internal group-by-leaf bucketing is single-turn local state and is
+    /// not visible across interleaved calls.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
 
     /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>

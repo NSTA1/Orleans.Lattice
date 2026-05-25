@@ -73,8 +73,33 @@ public class ShardRootGrainDirtyLeavesTests
     }
 
     [Test]
+    public async Task DeleteAsync_does_not_persist_synchronously_under_coalescing()
+    {
+        // U9h-B: routed Deletes mutate the in-memory dirty-leaf dictionary
+        // and arm a coalescing flush timer; the storage write is performed
+        // off-path. In the test harness the grain-runtime timer cannot
+        // register against the substituted IGrainContext, so the helper
+        // logs and continues - the write count must remain zero across
+        // repeated Deletes within the dirty window, matching the
+        // production "one WriteStateAsync per coalescing window" contract.
+        var (grain, state, _, _) = CreateGrain();
+
+        var writesBefore = state.WriteCount;
+        await grain.DeleteAsync("k1");
+        await grain.DeleteAsync("k2");
+        await grain.DeleteAsync("k3");
+
+        Assert.That(state.WriteCount, Is.EqualTo(writesBefore));
+    }
+
+    [Test]
     public async Task DeleteAsync_dedups_repeated_marks_within_window()
     {
+        // U9h-B post-coalescing: the original "one-write-per-distinct-leaf-
+        // per-window" dedup is now subsumed by the stronger "no writes from
+        // DeleteAsync at all" guarantee. Repeated Deletes to the same leaf
+        // (and to different leaves) must still leave WriteCount unchanged
+        // because the flush is deferred to the timer / drain / deactivate.
         var (grain, state, _, _) = CreateGrain();
 
         await grain.DeleteAsync("k1");
@@ -83,8 +108,6 @@ public class ShardRootGrainDirtyLeavesTests
         await grain.DeleteAsync("k2");
         await grain.DeleteAsync("k3");
 
-        // Only the first delete should have persisted state; subsequent
-        // deletes to the same already-dirty leaf must short-circuit.
         Assert.That(state.WriteCount, Is.EqualTo(writesAfterFirst));
     }
 
@@ -130,5 +153,46 @@ public class ShardRootGrainDirtyLeavesTests
 
         Assert.That(state.State.DirtyLeavesSinceLastCompaction, Is.Empty);
         Assert.That(state.WriteCount, Is.EqualTo(writesBefore));
+    }
+
+    [Test]
+    public async Task ClearDirtyLeavesUpToAsync_persists_pending_marks_in_a_single_write()
+    {
+        // U9h-B: the admin-path Clear call carries any in-memory pending
+        // marks to storage on the same WriteStateAsync that records the
+        // new watermark. After three Deletes the dirty dict already
+        // contains the leaf; ClearDirtyLeavesUpToAsync must persist the
+        // trimmed state in exactly one storage write.
+        var (grain, state, _, _) = CreateGrain();
+
+        await grain.DeleteAsync("k1");
+        await grain.DeleteAsync("k2");
+        await grain.DeleteAsync("k3");
+        var writesBefore = state.WriteCount;
+        Assert.That(writesBefore, Is.Zero, "DeleteAsync must not persist synchronously under coalescing.");
+
+        var snapshot = await grain.GetDirtyLeavesSinceLastCompactionAsync();
+        await grain.ClearDirtyLeavesUpToAsync(snapshot.ObservedAdvance);
+
+        Assert.That(state.WriteCount, Is.EqualTo(writesBefore + 1));
+        Assert.That(state.State.DirtyLeavesSinceLastCompaction, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetDirtyLeavesSinceLastCompactionAsync_observes_unpersisted_marks()
+    {
+        // U9h-B: the compaction coordinator reads the in-memory state
+        // directly via the snapshot API, so a leaf that has been routed
+        // a Delete but whose mark has not yet been flushed to storage
+        // is still discoverable.
+        var (grain, state, _, leafId) = CreateGrain();
+
+        await grain.DeleteAsync("k1");
+        Assert.That(state.WriteCount, Is.Zero);
+
+        var snapshot = await grain.GetDirtyLeavesSinceLastCompactionAsync();
+
+        Assert.That(snapshot.DirtyLeaves, Has.Count.EqualTo(1));
+        Assert.That(snapshot.DirtyLeaves[0], Is.EqualTo(leafId));
     }
 }

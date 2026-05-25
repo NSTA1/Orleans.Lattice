@@ -228,6 +228,7 @@ internal sealed class LatticeOptionsResolver(
             CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,
             CompactionShardTickInterval = effectiveTickInterval,
             CompactionLeafBatchSize = effectiveLeafBatchSize,
+            DirtyLeafFlushIntervalMs = baseOptions.DirtyLeafFlushIntervalMs,
             MaintainProjectionDigest = maintainDigest,
         };
     }

@@ -883,8 +883,8 @@ U9c and U9f both have the same per-treeId pattern: 50-ish reshard submits → 50
 - **U9 / U9b / U9c / U9d / U9e / U9f / U9g-pre** - rolled up above; U9f remains the current shipping baseline.
 - **U9g - PARTIAL SUCCESS** (this entry). Interleaving `SetManyAsync` confirms the U9g (deferred) prediction at L810 - FC=16 throughput recovers - but introduces a state-write race on the shard-root `[PersistentState]` that the U9g XML doc already named as a hazard. Not shippable until U9h closes that race.
 - **U9h-A - SHIPPED.** Per-activation `SemaphoreSlim` around every shard-root `state.WriteStateAsync()` call (19 sites, 7 files; helper `WriteShardStateAsync()` in `ShardRootGrain.cs`). The gate serialises only the storage I/O, leaving the surrounding compute interleaved. Validated against real Azure Tables in the U9h-A ladder below: FC=16 etag mismatches 7 011 -> 0, throughput preserved.
-- **U9h-B (deferred behind U9h-A)** - replace `MarkLeafDirtyAsync` with a fire-and-forget LWW-Map (max-merge by HLC) that pumps a single coalesced `WriteStateAsync` on a timer, removing the hot path from the critical section entirely.
-- **U9h-C (deferred behind U9h-B)** - apply `[AlwaysInterleave]` to other hot reads if the U9h-B ladder still shows headroom.
+- **U9h-B - SHIPPED.** Replaced the synchronous `MarkLeafDirtyAsync` write with an in-memory max-merge into `state.State.DirtyLeavesSinceLastCompaction` plus a coalesced flush (timer cadence `DirtyLeafFlushIntervalMs`, default 50 ms; also drained by `ClearDirtyLeavesUpToAsync` and on deactivation). `DeleteAsync`/`DeleteRangeAsync` no longer touch storage on the hot path. Implementation in `src/lattice/BPlusTree/Grains/ShardRootGrain.DirtyLeaves.cs`; option plumbed through `LatticeOptions` and `LatticeOptionsResolver`; new regression tests in `ShardRootGrainDirtyLeavesTests.cs` assert zero synchronous writes from `DeleteAsync` and single-write flush semantics.
+- **U9h-C - SHIPPED.** Annotated the pure read methods `GetAsync`, `ExistsAsync`, and `GetManyAsync` on `IShardRootGrain` with `[AlwaysInterleave]` so they overlap with in-flight mutating turns on the same activation. The annotations are pinned by a reflection-based contract test (`ShardRootGrainInterleavedReadsTests.cs`). Mutating reads (`GetWithVersionAsync`, `GetRawEntryAsync`, `GetRawEntriesAsync`) remain serial.
 
 
 #### U9h-A result (2026-05-25T13:17Z-T13:23Z) - per-activation `SemaphoreSlim` around every shard-root `WriteStateAsync()` eliminates the etag race without regressing FC=16 throughput (VALIDATED, U9h-A shipped)
@@ -900,6 +900,19 @@ U9c and U9f both have the same per-treeId pattern: 50-ish reshard submits → 50
 | U9h-A FC=24    | n/a       | n/a          | 88 492       | 4 096       | 0              | `silo-20260525-132302Z.log`     |
 
 **Net result: shippable.** Tier A of the U9h plan (the storage-write gate) closes the race that U9g introduced. FC=16 throughput is preserved (2 152/s vs 2 047/s in U9g - same ladder, within noise) and the FC=16 etag mismatches that motivated U9h drop to zero. FC=24 still over-pressures, but that is a separate bound (per-shard turn pipeline depth, not storage I/O) and is the U9h-B/U9h-C scope.
+#### U9h-B / U9h-C result (2026-05-25T14:11Z) - coalesced dirty-leaf flush and AlwaysInterleave on pure reads preserve U9h-A throughput at zero races (VALIDATED, U9h-B and U9h-C shipped)
+
+**Setup.** Same probe shape as U9h-A FC=16 (1 000 vehicles * 5 Hz * 60 s, `BENCH_SHARD_COUNT=16`, `BENCH_BATCH_SIZE=4 096`, `BENCH_WAL_PARTITIONS=4`, `BENCH_WAL_MAX_PENDING_BATCHES=8`, `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS=5`, `BENCH_FLUSH_CONCURRENCY=16`), single rung (`-Rungs 1000:5 -DurationSec 60`). The silo image now also carries (a) the U9h-B coalesced dirty-leaf flush (`MarkLeafDirtyAsync` max-merges into shard-root state and a 50 ms timer / deactivation drain owns the storage write, `ClearDirtyLeavesUpToAsync` flushes opportunistically) and (b) the U9h-C `[AlwaysInterleave]` annotations on `IShardRootGrain.GetAsync` / `ExistsAsync` / `GetManyAsync`.
+
+**Outcome.** Producer drives 5 000/s, silo absorbs **2 121/s steady avg** (1 955/s final avg over 119.3 s), **233 245 entries written**, **0 failed**, **0 etag mismatches**, and zero `InconsistentStateException` in `silo-20260525-141151Z.log`. Throughput sits inside the U9h-A FC=16 noise band (U9h-A: 2 189/s steady / 2 152/s final; U9h-B+C: 2 121/s steady / 1 955/s final). Phase A instruments confirm WAL still dominates: per-shard `provider.commit.duration` phase1 p99 ~67-95 ms and `wal.append.in_flight` flat at 0 - i.e. the dirty-leaf write is no longer in the critical path and the shard root is not the rate-limiter on this rung.
+
+| Probe                       | SteadyAvg | FinalAvgRate | FinalWritten | FinalFailed | EtagMismatches | Silo log                          |
+|-----------------------------|-----------|--------------|--------------|-------------|----------------|-----------------------------------|
+| U9h-A FC=16 (reference)     | 2 189/s   | 2 152/s      | 256 806      | 0           | 0              | `silo-20260525-132004Z.log`     |
+| **U9h-B+C FC=16**           | **2 121/s** | **1 955/s** | **233 245**  | **0**       | **0**          | `silo-20260525-141151Z.log`     |
+
+**Net result: shippable.** U9h-B removes the hot-path dirty-leaf write entirely and U9h-C lets pure reads overlap with mutating turns on the same activation, both without regressing the U9h-A FC=16 ladder and without reintroducing the U9g etag race. The remaining FC=16 ceiling is now provider-side WAL commit latency (`provider.commit.duration` phase1 p99 ~95 ms on `azure-throughput-20260525-140643`), not shard-root I/O or turn-queue depth, which is the next probe target.
+
 
 
 ### What stays in place

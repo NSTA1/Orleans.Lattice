@@ -129,6 +129,27 @@ public class LatticeOptions
     public int CompactionLeafBatchSize { get; set; } = DefaultCompactionLeafBatchSize;
 
     /// <summary>
+    /// Coalescing window (in milliseconds) for shard-root dirty-leaf marks.
+    /// Every routed <c>Delete</c> stamps the destination leaf into an
+    /// in-memory pending-marks map; a grain timer on the shard root drains
+    /// the map and calls <c>WriteStateAsync</c> exactly once per interval,
+    /// regardless of how many distinct leaves were dirtied. Snapshot and
+    /// drain calls from the compaction coordinator
+    /// (<c>GetDirtyLeavesSinceLastCompactionAsync</c> /
+    /// <c>ClearDirtyLeavesUpToAsync</c>) and clean deactivation also flush
+    /// pending marks, so persistence is best-effort-coalesced rather than
+    /// best-effort-lost.
+    /// <para>
+    /// Default <c>50 ms</c> trades at most one flush-interval of dirty
+    /// signal against eliminating the per-Delete storage write from the
+    /// shard-root hot path. Set to <c>0</c> to disable coalescing (every
+    /// first-call-per-leaf-per-window persists synchronously, matching
+    /// pre-U9h-B behaviour).
+    /// </para>
+    /// </summary>
+    public int DirtyLeafFlushIntervalMs { get; set; } = DefaultDirtyLeafFlushIntervalMs;
+
+    /// <summary>
     /// How long a soft-deleted tree is retained before its grains are permanently
     /// purged. During this window the tree is inaccessible (reads and writes throw
     /// <see cref="InvalidOperationException"/>), but its data still exists in storage
@@ -180,6 +201,13 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="CompactionLeafBatchSize"/> (64 leaves).</summary>
     public const int DefaultCompactionLeafBatchSize = 64;
+
+    /// <summary>
+    /// Default value for <see cref="DirtyLeafFlushIntervalMs"/> (50 ms).
+    /// Coalesces shard-root dirty-leaf marks into one <c>WriteStateAsync</c>
+    /// per window, removing the per-Delete storage write from the hot path.
+    /// </summary>
+    public const int DefaultDirtyLeafFlushIntervalMs = 50;
 
     /// <summary>
     /// Minimum effective value for <see cref="CompactionLeafBatchSize"/>

@@ -17,8 +17,22 @@ internal sealed partial class ShardRootGrain(
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
     ILogger<ShardRootGrain> logger,
-    MutationObserverDispatcher mutationObservers) : IShardRootGrain
+    MutationObserverDispatcher mutationObservers) : IShardRootGrain, IGrainBase
 {
+    IGrainContext IGrainBase.GrainContext => context;
+
+    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    {
+        // Coalesced dirty-leaf flush on clean shutdown: ensure any pending
+        // in-memory marks reach storage so the next activation observes
+        // the same dirty-set the compaction coordinator already expects.
+        // Best-effort - a failure here is logged inside the helper and
+        // the next routed Delete will re-mark the leaf.
+        await FlushPendingDirtyMarksOnDeactivateAsync(cancellationToken);
+    }
+
     private string? _treeId;
     private string TreeId => _treeId ??= ComputeTreeId();
     private string ComputeTreeId()
