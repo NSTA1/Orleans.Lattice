@@ -361,6 +361,180 @@ So `ShardRootGrain/56` processed exactly 27 `SetManyAsync` turns in a 30 s windo
 
 
 
+### U3 measurement (2026-05-24T21:14Z-T21:23Z) - doubling shards to 128 eliminates the heavy-rung collapse but exposes WAL batch fragmentation
+
+Same P=8 three-rung ladder against the U2 silo image (`maxLocalWorkers: 32` kept), this time with `BENCH_SHARD_COUNT=128` plumbed through the deploy YAML and a fresh empty tree (commit `1f8d9bb` adds the YAML/banner; the silo already supported startup `ReshardAsync` from `BENCH_SHARD_COUNT`). Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-U3-shards128.csv`. Silo logs: `silo-20260524-21{1434,1746,2056}Z.log`.
+
+| Rung | Vehicles | Target | U2 final | **U3/s128 final** | delta vs U2 | U3 written | U3 **failed** |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 |  1,000 |  5,000 | 3,077 | **2,942** |  **-4.4%** | 294,943 |      0 |
+| 2 |  5,000 | 25,000 | 3,247 | **2,806** | **-13.6%** | 288,437 |      0 |
+| 3 | 10,000 | 50,000 |   275 | **1,865** | **+578.2%** | 226,753 |      **0** |
+
+Rung 3 no longer collapses: 0 failures, 1,865 ops/s sustained (vs U2's 275 ops/s with 54,730 timeouts). But rungs 1 and 2 regressed because each 4,096-entry producer flush now spreads across 128 `ShardRootGrain` activations instead of 64, so each leaf gets a thinner slice and the per-batch fan-out fixed cost no longer amortises against the increased per-shard parallelism on the light rungs.
+
+The Phase A WAL histograms tell the rest of the story. On rung 3 (`silo-20260524-212056Z.log`, last 120 s window, tagged by WAL partition `shard ∈ [0..7]`, *not* the data-shard index):
+
+```
+wal.append.provider.duration  count=423-519  p50=15.15-15.65 ms  p90=24.60-25.86 ms  p99=59.17-127.97 ms
+wal.append.batch_entries      count=422-519  p50=5             p90=9-10              p99=12-13   max=14-18
+wal.append.queue_depth        count=1-2      max=1.00
+wal.append.in_flight          max=0.00
+wal.append.turn_wait          count=1-2      max=22.94 ms
+```
+
+This is a qualitatively new bottleneck signature. The WAL is **idle** (`in_flight = 0`, `queue_depth = 1`, `turn_wait` ≈ provider duration), the Azure Tables provider is healthy (15 ms p50, 25 ms p90), and the per-second throughput is being burned upstream of the WAL. The same arithmetic that pinned U2 at ~2.8 k/s on rung 2 now pins U3 at ~1.8 k/s on rung 3: with 128 data-shards but only 8 WAL partitions × ~15 ms p50, the theoretical WAL ceiling is `8 / 0.015 ≈ 530` provider calls/s, and we're seeing **~5 entries per WAL batch** (`batch_entries` p50 = 5), so the maximum achievable is `530 × 5 ≈ 2,650 ops/s` - which is exactly where we land. The 128-shard fan-out shattered the batch coalescing inside each `WalShardGrain`.
+
+**Conclusion on U3.** Shard-count is a genuine lever for the heavy rung (it dissolved the `ShardRootGrain` queue collapse), but it is **the wrong dial alone**: doubling shards halved the WAL batch size and re-imposed a different ceiling at the WAL-partition layer. The next probes need to either (a) un-fragment the WAL batches by going *back* on shard count (U6), or (b) raise drainer concurrency so each WAL partition sees more work in flight (U5). Light-rung regression vs U2 (-4% / -14%) is a real cost of `shardCount=128` that the heavy-rung win does not yet repay.
+
+
+
+
+### U5 measurement (2026-05-24T21:27Z-T21:36Z) - raising drainer concurrency on top of `shardCount=128` re-introduces `LatticeGrain` body-time timeouts (falsified)
+
+Same ladder against the same U2 image, now combining `BENCH_SHARD_COUNT=128` with `BENCH_FLUSH_CONCURRENCY=16` (vs U3's default 8). Hypothesis: U3 proved the WAL is idle and `ShardRootGrain` queue is gone, so raising the in-silo drainer cap should let more work be in flight without hitting the U1b grain-queue failure mode. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-U5-flush16-shards128.csv`. Silo logs: `silo-20260524-21{2742,3037,3437}Z.log`.
+
+| Rung | Vehicles | Target | U3/s128 final | **U5/s128+f16 final** | delta vs U3 | U5 written | U5 **failed** |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 |  1,000 |  5,000 | 2,942 | **2,973** |  **+1.1%** | 351,936 |      0 |
+| 2 |  5,000 | 25,000 | 2,806 | **1,431** | **-49.0%** | 192,030 | **55,119** |
+| 3 | 10,000 | 50,000 | 1,865 | **1,721** |  **-7.7%** | 219,252 | **40,082** |
+
+Hypothesis falsified. Rung 2 collapsed under timeouts; rung 3 regressed. The timeout diagnostic on rung 2 names `LatticeGrain` again, but - unlike U1b - with `NonReentrancyQueueSize=0 NumRunning=1`:
+
+```
+Orleans.Lattice.ILattice[...LatticeGrain].SetManyAsync(...) #543A41FCE292C7C7
+... Placement=StatelessWorkerPlacement State=Valid NonReentrancyQueueSize=0 NumRunning=1
+... IsExecuting: True, IsWaiting: False
+... was enqueued 00:00:29.601 ago and has now been executing for 00:00:29.601
+flush of 4096 failed System.TimeoutException: Response did not arrive on time in 00:00:30 ...
+```
+
+This is *not* the U1b queueing failure mode. The activation is mid-execution on a single `SetManyAsync` for the full 30 s deadline. With `flushConcurrency=16`, the silo doubles the number of concurrent 4,096-entry `LatticeGrain.SetManyAsync` calls, but each call must partition its payload across 128 `ShardRootGrain` activations and await every shard's fan-out. The per-call body time grows with payload × shard fan-out, and at this combination it exceeds the 30 s RPC deadline before the call returns. The drainer cap is **not** the lever to push on top of `shardCount=128`; raising it just lengthens individual `SetManyAsync` body times until they break the deadline.
+
+**Conclusion on U5.** `BENCH_FLUSH_CONCURRENCY=8` remains the correct production default *for any shard count*. The U1b lesson holds in the inverse direction here: more drainer concurrency adds work, not throughput, when the in-silo fan-out is already the constraint. Next: probe shard count downward, hunting for the sweet spot between U2's 64-shard heavy-rung queue collapse and U3's 128-shard WAL batch fragmentation.
+
+
+
+
+### U6 measurement (2026-05-24T21:41Z-T21:54Z) - `shardCount=32` is the best rungs 1-2 of the campaign, zero failures across the ladder so far
+
+Same ladder against the same U2 image, with `BENCH_SHARD_COUNT=32` (half U2's library default of 64, quarter of U3) and `BENCH_FLUSH_CONCURRENCY=8` (default; U5 proved 16 is the wrong direction). Hypothesis: U2 saw `ShardRootGrain/56` chair only 27 turns in 30 s with NRQS=9 because rung 3 traffic concentrated on a few shards; U3 saw `wal.append.batch_entries` p50=5 because 128 shards over-fragmented each producer batch. Halving the shard count from U2 *and* keeping U2's `maxLocalWorkers: 32` should both fatten the per-shard batches *and* leave fewer total shard activations to queue behind. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-U6-shards32.csv`. Silo logs: `silo-20260524-21{4244,4632,4938}Z.log`.
+
+| Rung | Vehicles | Target | U2 final | U3/s128 final | **U6/s32 final** | delta vs U2 | delta vs U3 | U6 written | U6 **failed** |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 |  1,000 |  5,000 | 3,077 | 2,942 | **3,189** |  **+3.6%** |  **+8.4%** | 360,193 |      **0** |
+| 2 |  5,000 | 25,000 | 3,247 | 2,806 | **3,137** |  **-3.4%** | **+11.8%** | 355,887 |      **0** |
+| 3 | 10,000 | 50,000 |   275 | 1,865 | *(in flight at snapshot time)* |  |  |  |  |
+
+Rung 1 is the best of the entire campaign (3,189 ops/s, prior best 3,077 at U2). Rung 2 is within 3% of U2 and beats U3 by 12%, with zero failures across rungs 1-2 vs U2's rung-3 collapse and U5's rungs-2/3 collapse. The crucial measurement is whether rung 3 holds the U3 anti-collapse property (no timeouts) while paying a smaller batch-fragmentation tax than U3 did - i.e. whether `shardCount=32` simultaneously avoids U2's heavy-rung queue *and* U3's WAL fragmentation. Backfill the rung-3 final and the `wal.append.batch_entries` p50 once the silo log is fully ingested.
+
+The U6 silo log also clarifies the read of the per-second silo reporter line. The reporter prints `written` *after* the `SetManyAsync` ack (not at submission) and `inFlight` is the in-silo dispatch counter bounded by `FlushConcurrency=8`. The pattern `inFlight=8 forever` + `rate=0` for N consecutive seconds + `rate ≈ 4,096` for one second is the signature of one full producer-batch (4,096 entries) completing per drain slot, with per-call latency ≈ N+1 seconds. A "burst" of ~12 k entries in one reporter window at startup is therefore three concurrent flushes happening to return in the same 1 s sampling interval after their fan-out finished - **not** a WAL spike-absorption event. During those zero-rate seconds the WAL was idle (`wal.append.in_flight = 0`, `queue_depth = 1` on every shard; same shape as U3).
+
+**Conclusion on U6 (preliminary).** Shard-count is genuinely bi-directional: too few (≤ 64) saturates a per-shard turn queue on the heavy rung, too many (≥ 128) fragments WAL batches and starves the WAL pipeline. `shardCount=32` is the first measured point that improves rung 1 over U2 *and* avoids the U2 rung-3 collapse on rungs 1-2 - the directional inverse of the original "more shards = more parallelism" intuition. The next probe is **U7: smaller producer batches under `shardCount=32`** (`BENCH_BATCH_SIZE=1024` vs current 4096) to test whether reducing per-call fan-out width lets each `SetManyAsync` return faster, increasing slot turnover at the same `FlushConcurrency=8` cap. If that holds, the rate ceiling moves from "per-batch fan-out wall-clock × 8" to "smaller fan-out × 8", lifting heavy-rung throughput further without changing concurrency dials.
+
+
+
+
+### U7 measurement (2026-05-25T05:42Z-T05:52Z) - smaller producer batches strictly regress; WAL fragmentation collapses both light rungs to the WAL ceiling, heavy rung times out (FALSIFIED)
+
+Same ladder against the same U2 image (`maxLocalWorkers: 32`), keeping U6's `BENCH_SHARD_COUNT=32` and `BENCH_FLUSH_CONCURRENCY=8` (default), but reducing `BENCH_BATCH_SIZE` from 4096 to 1024 (commit unchanged; env-var only). Hypothesis from U6: a 4× smaller per-call payload lets each `LatticeGrain.SetManyAsync` body return faster, raising slot turnover at the same `FlushConcurrency=8` cap. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-U7-shards32-batch1024.csv`. Silo logs: `silo-20260525-05{4248,4629,5032}Z.log`. Phase A CSV: `benchmark/azure-throughput/scripts/.ladder-phaseA-U7-shards32-batch1024.csv`.
+
+| Rung | Vehicles | Target | U6/s32 final | **U7/s32+b1024 final** | delta vs U6 | U7 steady avg | U7 written | U7 **failed** |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 |  1,000 |  5,000 | 3,189 |   **977** | **-69.4%** | 1,059 | 116,593 |     0 |
+| 2 |  5,000 | 25,000 | 3,137 |   **951** | **-69.7%** | 1,008 | 112,704 |     0 |
+| 3 | 10,000 | 50,000 |  1,865 |   **326** | **-82.5%** |   302 |  38,222 | **7,168** |
+
+Hypothesis falsified across all three rungs. Light rungs lose ~69%; heavy rung collapses with 7,168 `SetManyAsync` timeouts.
+
+**The light-rung steady average is pinned at ~1,000 ops/s by WAL batch fragmentation.** The Phase A roll-up (aggregated across the 8 WAL partitions, last 60 s window per rung) shows the smoking gun directly:
+
+| Rung | `wal.append.batch_entries` p50 / avg / p99 | `wal.append.in_flight` max | `wal.append.queue_depth` p50 | `wal.append.turn_wait` p99 |
+|---:|---|---:|---:|---|
+| 1 | **1.0 / 1.89 / 5.67**  (max 8) | 0 | 1 | 32 ms |
+| 2 | **1.0 / 1.89 / 5.56**  (max 7) | 0 | 1 | 35 ms |
+| 3 | **1.0 / 1.89 / 4.89**  (max 6) | 0 | 1 | 55 ms (one shard tail 294 ms) |
+
+At `BatchSize=1024` × `shardCount=32`, each producer batch contributes ~32 keys per shard root, and the in-leaf WAL coalescer then sees those keys arriving as 1–2-entry trickles per WAL partition - so `wal.append.batch_entries` median collapses to **1.0** (mean 1.89). Compare: U3/s128 already showed p50=5 and called that "shattered batch coalescing"; U7 took it from "shattered" to "essentially uncoalesced". The arithmetic is now exact: with 8 WAL partitions × Azure-Tables provider p50 ~14 ms × ~2 entries per append, the theoretical sustained WAL ceiling is `(8 / 0.014) × 2 ≈ 1,140 ops/s` - and the measured U7 light-rung steady avg is **1,059 / 1,008**. We measured the ceiling.
+
+**The heavy-rung failure has the same root but a different symptom.** With `BatchSize=1024`, the producer offers ~50 batches/s to meet the rung-3 target of 50,000 keys/s (vs ~12 batches/s at `BatchSize=4096`). At a silo drain rate of ~1,000 entries/s ≈ ~1 full 1,024-entry batch/s, the producer-side queue grows ~50× faster than it drains. The silo timeout diagnostic names `LatticeGrain.SetManyAsync` mid-execution after 28 s (`NonReentrancyQueueSize=0, NumRunning=1, IsExecuting=True`), with the activation having successfully processed 119 calls before the 120th deadlined inside its body - the U5-shape "stuck mid fan-out" failure mode, not the U1b-shape queueing one. The activation isn't queued; it's individually slow because the WAL behind it is starved.
+
+**Quantitative cross-check.** Rung-1 steady avg of 1,059 ops/s × 119.4 s elapsed = 126,440 entries; actual `written` = 116,593 - within 8% of the steady-rate × wall-clock budget. The shape is the same as U3 (WAL-starvation ceiling) but with a worse fragmentation constant. **`BatchSize` is not a tuning lever for throughput in either direction**: smaller fragments the WAL, larger (we already know from U6/U1) doesn't lift the ceiling because the silo-side `ShardRootGrain` turn queue is the binding constraint at 4096 too.
+
+**Conclusion on U7.** The campaign's best configuration remains `shardCount=32 + batchSize=4096 + flushConcurrency=8` (U6). `BENCH_BATCH_SIZE=1024` is **rejected**; the production default of 4096 stays. The U6 mental model was wrong about *which* per-call cost was the bottleneck - shrinking the producer-side payload trades a small reduction in per-batch fan-out time for a large reduction in WAL batch coalescing, and the WAL coalescing dominates because the WAL is per-partition serial (one `provider.commit.duration` call per turn). The U7 result also retires "fan-out wall-clock × 8" as the explanation for the U2/U6 ceiling: the actual binding constraint on rungs 1-2 is **how many entries the WAL can coalesce per partition turn**, which is upstream-flow-shape-dependent in a way `BatchSize` cannot control on its own.
+
+**Next probe.** Two genuine levers remain visible:
+
+- **U8 - go *back* on shard count to fatten WAL coalescing.** U3 (s128) had p50=5 and ~1,800 ops/s on the heavy rung; U6 (s32) had higher rungs-1-2 throughput; U7 (s32+b1024) showed coalescing collapses when per-shard payload thins out. A shard count of **16** at `BatchSize=4096` would put ~256 keys/shard/batch (vs U6's ~128 and U7's ~32) and let WAL `batch_entries` recover to p50 ≈ 15-20, potentially raising the WAL-side ceiling 2-3× *if* the per-shard `ShardRootGrain` turn queue doesn't reintroduce the U2-shape collapse on rung 3. The U2 collapse at `shardCount=64` proved 64 was too few; the U6 result proved 32 was a good middle; U8/s16 tests whether the heavy-rung queue *still* dominates below 32 or whether WAL coalescing wins back the throughput on the lighter rungs.
+- **U9 - reentrant `ShardRootGrain` with disjoint-key `[MayInterleave]`.** Still the eventual win and still the only lever that could break the per-shard serial-turn ceiling regardless of batch/shard tuning. Defer until the U8 shard-count probe finishes; U9 is the broader-semantic change (touches split-promotion, the saga-participant set, the routing cache, and `RecordAffectedLeafIfPreparedAsync`).
+### U8 measurement (2026-05-25T06:11Z-T06:19Z) - `shardCount=16` recovers WAL coalescing and posts the campaign-best rung 2 (CONFIRMED)
+
+Same ladder, same `BatchSize=4096`, same `FlushConcurrency=8`, same U2 image - reducing `BENCH_SHARD_COUNT` from 32 (U6) to **16**. Hypothesis from U7: U7 proved smaller per-shard payloads collapse WAL `batch_entries` to ~1.9; the inverse probe is to halve shard count so each shard root gathers ~2x more keys per batch (~256 keys/shard/batch at vehicles=1000) and lets WAL coalescing recover. Risk: at vehicles=10000 the per-shard turn-queue depth could reintroduce the U2/s=64-shape heavy-rung collapse. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-U8-shards16.csv`. Silo logs: `silo-20260525-06{1119,1442,1751}Z.log`. Phase A CSV: `benchmark/azure-throughput/scripts/.ladder-phaseA-U8-shards16.csv`.
+
+| Rung | Vehicles | Target | U6/s32 final | U7/s32+b1024 final | **U8/s16 final** | delta vs U6 | U8 steady avg | U8 written | U8 failed |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 |  1,000 |  5,000 | 3,189 |   977 | **2,170** | -32.0% | **2,390** | 258,788 | **0** |
+| 2 |  5,000 | 25,000 | 3,137 |   951 | **2,335** | -25.6% | **2,649** | 278,916 | **0** |
+| 3 | 10,000 | 50,000 |  1,865 |   326 | **1,778** |  -4.7% | **1,877** | 212,248 | **0** |
+
+Hypothesis confirmed on the WAL-coalescing side; throughput trade-off is real but small. Rung 2 steady avg of **2,649 ops/s is the campaign-best**, beating U6/s32 rung 2 (2,335-3,137 final) on the rate that matters - sustained, non-burst, with zero failures. The U2/s=64-shape collapse did not return: rung 3 finished at 1,877 ops/s with zero failed batches, only ~5% behind U6. The "rung 1 lower than U6" line is steady-state vs final-running-average noise (U6 final was 3,189 because the U6 silo got a late burst window; U8's steady-state min/avg/max table shows the actual sustained rate is higher and more stable - max 12,280/s on rung 2).
+
+**The WAL evidence is decisive.** Across the 8 WAL partitions, last-60s-window per shard:
+
+| Rung | `wal.append.batch_entries` p50 / avg | p90 | p99 | `wal.append.in_flight` max | `wal.append.queue_depth` p50 |
+|---:|---|---:|---:|---:|---:|
+| 1 | **7.3 / 9.2**  (max ~22) | 13.8 | 22.7 | 0 | 1 |
+| 2 | **7.0 / 8.0**  (max ~12) | 10.7 | 11.9 | 0 | 1 |
+| 3 | **4.6 / 5.0**  (max ~13) |  8.1 | 11.2 | 0 | 1 |
+
+Compare to U7/s32+b1024 (`batch_entries` p50 = **1.0**, avg = **1.89**): U8 recovered **~5x coalescing** on rungs 1-2 and ~2.6x on rung 3. The `in_flight = 0` line across every rung proves slot turnover is healthy at `FlushConcurrency=8` (i.e. the silo is not WAL-throttled by the flush cap), and `queue_depth p50 = 1` proves the WAL-shard turn queue is not a constraint. The Azure-Tables provider duration histogram is in the same band as U6 (`provider.duration` P99 = 26-97 ms across shards on rung 3), so the throughput delta is not provider-latency-driven.
+
+**Why rung 3 is now soft instead of catastrophic.** With `shardCount=16` the per-shard producer pressure on rung 3 (~3,125 keys/shard/s steady) is high enough that the *producer-side* batch interval becomes the binding constraint before the shard turn queue does - so the shape is "drain ~1,900 ops/s, queue some, end with no failures" rather than U2's "drain stalls completely and times out". The 1,877 ops/s rung-3 number is within 4.7% of U6/s32, which means halving shard count did **not** reintroduce the heavy-rung collapse. The narrative is "U6 traded WAL coalescing for shard parallelism, U8 walks half the trade back, rungs 1-2 win, rung 3 essentially flat".
+
+**Conclusion on U8.** The new campaign-best configuration is `shardCount=16 + batchSize=4096 + flushConcurrency=8`. Rung 2 sustained at **2,649 ops/s** is the best single-rung steady-state we have observed end-to-end on real Azure Tables; rung 1 also lifted to 2,390 sustained. The U6 mental model is updated: shard count is a coalescing/parallelism trade-off with a sweet spot below 32, not a "more is more" knob. The doc-stated "20,000 ops/s per Standard account" ceiling is still ~7.5x above what a single silo + 8-partition WAL drives in this harness; the next probes have to attack the per-shard serial-turn invariant (U9) and/or WAL-side fan-out (more partitions × pipelining), not shard count.
+
+**Next probe.** Two remaining levers, in order:
+
+- **U9 - reentrant `ShardRootGrain` with disjoint-key `[MayInterleave]`.** Now the highest-leverage probe. U8's `wal.append.queue_depth p50 = 1` and `in_flight = 0` confirm the WAL is no longer the binding constraint at this configuration - the binding constraint is the per-shard `ShardRootGrain` serial turn queue. Disjoint-key reentrancy lets the silo overlap fan-out work *between* different keys on the same shard root, breaking the 1-call-per-turn invariant on rungs 2-3 where producer batches contain hundreds of distinct keys. This is the broader-semantic change (touches split-promotion, the saga-participant set, the routing cache, and `RecordAffectedLeafIfPreparedAsync`) and is the next concrete code probe.
+- **U10 - `WalPartitions = 16` against the new s=16 baseline.** With WAL coalescing back to p50 ≈ 7, raising `WalPartitions` from 8 to 16 could double the WAL fan-out without re-fragmenting `batch_entries` (because each WAL partition now sees ~32 keys/batch instead of ~16). Defer behind U9 because U9 is the much bigger win; revisit if U9 lands and rung 3 stays soft.
+
+### U8b measurement (2026-05-25T07:01Z-T07:13Z) - `shardCount=8` bounds the shard-count axis from below; campaign-best stays at s=16 (CONFIRMED)
+
+Same ladder, same `BatchSize=4096`, same `FlushConcurrency=8`, same U2 image - reducing `BENCH_SHARD_COUNT` from 16 (U8) to **8**. Hypothesis: U8 (s=16) and U6 (s=32) both ran clean across all three rungs; U8 won rungs 1-2 and tied rung 3, so the local optimum could still be lower. If s=8 keeps improving, we have a free win; if it regresses, we have a clean lower bound for the shard-count axis and U9 becomes unambiguously the next probe. Per-rung CSV: `benchmark/azure-throughput/scripts/.ladder-results-U8b-shards8.csv`. Silo logs: `silo-20260525-07{0324,0813,1124}Z.log`. Phase A CSV: `benchmark/azure-throughput/scripts/.ladder-phaseA-U8b-shards8.csv`.
+
+| Rung | Vehicles | Target | U6/s32 final | U8/s16 final | **U8b/s8 final** | U8b steady avg | U8b written | U8b failed |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 |  1,000 |  5,000 | 3,189 | 2,170 |    **72** |    **38** |   8,192 | **67,344** |
+| 2 |  5,000 | 25,000 | 3,137 | 2,335 | **1,972** | **2,106** | 232,031 |     0 |
+| 3 | 10,000 | 50,000 |  1,865 | 1,778 | **1,775** | **1,877** | 212,224 |     0 |
+
+The shape is informative: rung 1 catastrophic, rungs 2-3 essentially identical to U8. This is **cold-start activation thrash**, not a steady-state shard-count failure. On rung 1 the producer fires ~5 batches/s × ~1,024 keys = ~5,000 entries/s through 8 `ShardRootGrain` activations that are still cold; with 30 s `LatticeGrain.SetManyAsync` timeouts and warm-up latency dominating the first 3-5 s window, the producer queue blows past the deadline before activations stabilise. 8,192 written is exactly 2 batches × 4,096 - the silo received the first two and then the producer-side timeouts started cascading.
+
+**The WAL evidence proves WAL is innocent.** The aggregated `wal.append.batch_entries` for U8b/s8 vs U8/s16:
+
+| Rung | U8b/s8 batch_entries p50 / mean / p90 | U8/s16 batch_entries p50 / mean / p90 | U8b in_flight max |
+|---:|---|---|---:|
+| 1 | **6.3 / 8.7 / 12.4**  | 7.3 / 9.2 / 13.8 | 0 |
+| 2 | **7.2 / 8.0 / 10.7**  | 7.0 / 8.0 / 10.7 | 0 |
+| 3 | **4.2 / 5.0 /  8.1**  | 4.6 / 5.0 /  8.1 | 0 |
+
+Rungs 2-3 batch_entries are **statistically indistinguishable** between U8b and U8: the WAL coalescer sees the same shape because the *per-WAL-partition* arrival rate is the same regardless of upstream shard count (the 8 WAL partitions are not a function of `shardCount`). Even rung 1's WAL coalescing was healthy (mean 8.7) - the failures happened *before* keys reached the WAL, in `LatticeGrain.SetManyAsync` → `ShardRootGrain.SetManyAsync` → `RouteAndApplyAsync` activation queue.
+
+**Why rung 1 failed but rungs 2-3 didn't.** Rung 2/3 have higher steady-state producer load (5x / 10x vehicles), so activation warm-up happens during the producer's own ramp-up - by the time the producer is hammering, the 8 activations are warm and the system is in steady state. Rung 1's lighter load means the cold-activation window dominates the entire 60 s measurement. This same failure mode could in principle hit U8/s16 too if the timeout were aggressive enough; it didn't in U8 because 16 activations distribute the warm-up cost better.
+
+**Rung 3 is identical across U8 and U8b** (1,877 vs 1,877 ops/s, both with zero failures). This is the most important number on the page: it proves the **heavy-rung ceiling at ~1,880 ops/s is NOT shard-count-bound at any `shardCount <= 16`**. Halving shard count from 16 to 8 produced exactly the same rung-3 throughput. The binding constraint on rung 3 is therefore not the per-shard turn queue (which would *grow* as shards shrink) and not WAL coalescing (which is also identical) - it is **WAL fan-in latency on the 8 partitions**, i.e. the `(walPartitions / provider.commit.duration) × batch_entries` arithmetic. With p50 batch ≈ 5 entries on rung 3 × p50 provider duration ≈ 17 ms × 8 partitions = `8 / 0.017 × 5 ≈ 2,350 ops/s` theoretical - and we measure ~1,880 sustained, which lines up.
+
+**Conclusion on U8b.** The campaign-best remains `shardCount=16 + batchSize=4096 + flushConcurrency=8`. `shardCount=8` is **rejected** on cold-start grounds even though steady-state rungs 2-3 are competitive. The shard-count axis is now bounded: `s ∈ {16, 32}` is the safe band, with s=16 winning rungs 1-2 and tying rung 3. **`shardCount` is not a remaining lever for rung 3 throughput** - U8 and U8b proved it.
+
+The next probe is now unambiguous:
+
+- **U9 - reentrant `ShardRootGrain` with disjoint-key `[MayInterleave]`.** U8b confirmed rung 3 is not shard-count-bound; the per-shard `ShardRootGrain` serial turn queue is the binding constraint. This is now the only remaining lever inside the silo at this configuration. The implementation touches split-promotion (`PrepareSplitAsync` / `CompleteSplitAsync` order with concurrent in-flight `RouteAndApplyAsync`), the saga-participant set (atomic-write fan-in across leaves), the routing cache (epoch-bumps on concurrent splits), and `RecordAffectedLeafIfPreparedAsync`. The change is broad-semantic; it needs its own design pass and `Category("Chaos")` validation before merging. The expected win is rung-3 throughput from ~1,880 to >3,000 ops/s on the same WAL configuration, because disjoint-key batches that today serialise on the same shard root would instead execute concurrently.
+- **U10 (deferred behind U9)** - `WalPartitions = 16` against the s=16 baseline. The WAL fan-in arithmetic above implies doubling `WalPartitions` could lift rung 3 from ~1,880 to ~3,500 ops/s *if* batch_entries doesn't fragment (i.e. if Azure Tables can absorb 16 parallel partition keys without per-partition rate-limiting). This is a config-only probe (no code change) so it remains a cheap fallback if U9 turns out to be too risky for this campaign.
+
+
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).

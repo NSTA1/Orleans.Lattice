@@ -95,6 +95,12 @@ $flushConcurrency = if ($env:BENCH_FLUSH_CONCURRENCY) { $env:BENCH_FLUSH_CONCURR
 # shards) can be driven from the host without editing YAML.
 $shardCount = if ($env:BENCH_SHARD_COUNT) { $env:BENCH_SHARD_COUNT }
               else { '0' }
+# Producer batch size (entries per SetManyAsync). Default 4096 (matches
+# Silo/Program.cs default and sizes the 64-way shard fan-out so each shard
+# sees ~64 entries per batch). Surfaced as an env-var override so a U7 A/B
+# (e.g. 1024 vs 4096) can be driven from the host without editing YAML.
+$batchSize = if ($env:BENCH_BATCH_SIZE) { $env:BENCH_BATCH_SIZE }
+             else { '4096' }
 # Phase A diagnostic reporter cadence in the silo. Forward whatever the
 # operator (or 40-ladder.ps1) put on the host env; default to 10s so a
 # 60s rung captures ~5 windows of attribution data without burying the
@@ -102,7 +108,7 @@ $shardCount = if ($env:BENCH_SHARD_COUNT) { $env:BENCH_SHARD_COUNT }
 $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
                    else { '10' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending flushConcurrency=$flushConcurrency shardCount=$shardCount walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending flushConcurrency=$flushConcurrency shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -237,7 +243,7 @@ properties:
           - name: BENCH_TCP_PORT
             value: '7000'
           - name: BENCH_BATCH_SIZE
-            value: '4096'
+            value: '$batchSize'
           - name: BENCH_FLUSH_MS
             value: '50'
           - name: BENCH_FLUSH_CONCURRENCY
