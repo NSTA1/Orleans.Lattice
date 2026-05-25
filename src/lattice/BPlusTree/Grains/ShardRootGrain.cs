@@ -128,6 +128,24 @@ internal sealed partial class ShardRootGrain(
     private readonly SemaphoreSlim _stateWriteGate = new(1, 1);
 
     /// <summary>
+    /// Per-activation gate that serialises the full root-promotion
+    /// sequence (Phase 1 persist of <see cref="ShardRootState.PendingPromotion"/>
+    /// + cross-grain <c>InitializeAsync</c> on the new root + Phase 2
+    /// persist that clears the pending intent). Two interleaved
+    /// <see cref="IShardRootGrain.SetManyAsync"/> turns can both invoke
+    /// the promotion path on the same activation; without this gate,
+    /// turn B's assignment to <c>state.State.PendingPromotion</c> can
+    /// overwrite turn A's still-in-flight intent before A's
+    /// <c>CompletePromotionAsync</c> observes it, silently dropping
+    /// A's promotion and leaving a dangling sibling grain. The
+    /// existing <see cref="_stateWriteGate"/> only serialises
+    /// individual storage writes; promotion is a multi-await
+    /// sequence with cross-grain calls between two persistence
+    /// sites and so needs its own gate.
+    /// </summary>
+    private readonly SemaphoreSlim _promotionGate = new(1, 1);
+
+    /// <summary>
     /// Serialised replacement for <c>state.WriteStateAsync()</c>. All
     /// shard-root <see cref="IPersistentState{TState}.WriteStateAsync"/>
     /// call sites must route through this helper so the per-activation
@@ -1038,7 +1056,27 @@ internal sealed partial class ShardRootGrain(
     private async Task ResumePendingPromotionAsync()
     {
         if (state.State.PendingPromotion is null) return;
-        await CompletePromotionAsync();
+
+        // Re-check under the promotion gate. Two interleaved
+        // PrepareForOperationSlowAsync turns could both observe a
+        // non-null PendingPromotion on the unguarded peek above; the
+        // first one through the gate clears it and the second one
+        // would otherwise replay CompletePromotionAsync against a
+        // null pending intent (NRE) or, worse, against a fresh
+        // pending intent published by an unrelated mid-flight
+        // PromoteRootAsync sequence. The gate guarantees only one
+        // CompletePromotionAsync call observes any given pending
+        // intent.
+        await _promotionGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            if (state.State.PendingPromotion is null) return;
+            await CompletePromotionAsync();
+        }
+        finally
+        {
+            _promotionGate.Release();
+        }
     }
 
     /// <summary>

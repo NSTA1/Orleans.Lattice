@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -672,11 +673,81 @@ internal sealed partial class ShardRootGrain
 
     private async Task<SplitResult?> PromoteRootAsync(SplitResult splitResult)
     {
-        state.State.PendingPromotion = splitResult;
-        state.State.PendingPromotionRootWasLeaf = state.State.RootIsLeaf;
-        await WriteShardStateAsync();
+        // Serialise the entire promotion sequence (Phase 1 persist +
+        // Phase 2 complete) against other interleaved SetManyAsync turns
+        // on this activation. SetManyAsync is [AlwaysInterleave] for
+        // throughput, which means two concurrent turns can race here.
+        // Without the gate, turn A's `state.State.PendingPromotion = A;`
+        // can be overwritten by turn B before A's CompletePromotionAsync
+        // observes it, silently corrupting the tree topology - and even
+        // when A wins the assignment, turn B can read the stale
+        // RootIsLeaf flag (still `true` on disk while A's promotion is
+        // mid-flight) and seed the new internal root with the wrong
+        // childrenAreLeaves bit, which is exactly the
+        // InvalidCastException SeedChildParentAsync surfaced on the
+        // U9k step 2 ladder. The promotion gate is distinct from the
+        // _stateWriteGate (which only serialises individual storage
+        // writes) because promotion is a multi-await sequence that
+        // includes cross-grain Initialize / Seed calls between two
+        // shard-root persistence sites.
+        await _promotionGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            // Re-validate the current root shape under the gate. The
+            // caller computed `splitResult` from a TraverseForWrite /
+            // SetManyLocalOnly pass that observed the tree shape BEFORE
+            // the gate was entered. If an interleaved peer turn already
+            // promoted the root, our local bubble is now a level
+            // BELOW the current root rather than a same-level sibling
+            // of it, and wrapping a second new root above the existing
+            // one would seed it with the wrong `childrenAreLeaves`
+            // bit - the inverted-cast InvalidCastException observed in
+            // U9k step 2.
+            if (!state.State.RootIsLeaf && state.State.PendingPromotion is null)
+            {
+                var currentRootId = state.State.RootNodeId!.Value;
+                var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
+                if (rootSnapshot.ChildrenAreLeaves == splitResult.ChildIsLeaf)
+                {
+                    // The current root sits exactly one level above
+                    // our bubble's NewSiblingId, so feed the bubble
+                    // into the existing root via AcceptSplitAsync.
+                    // If the root itself splits in turn we return its
+                    // bubble so the caller's `while (split is not null)`
+                    // loop re-enters PromoteRootAsync for the next
+                    // level up.
+                    var currentRoot = ResolveInternalGrain(currentRootId);
+                    var rebubble = await currentRoot.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                    InvalidateRoutingTable(currentRootId);
+                    return rebubble;
+                }
+                // Level mismatch: bubble's child level disagrees with
+                // the current root's child level. This would mean a
+                // deeper race than the two-flat-tree-turns case we have
+                // observed under load; fall through to the legacy
+                // wrap-as-new-root shape using the immutable
+                // splitResult.ChildIsLeaf flag so the new root's
+                // `childrenAreLeaves` matches the level of
+                // splitResult.NewSiblingId. The legacy
+                // RootIsLeaf-derived bit on PendingPromotion is no
+                // longer trusted - see CompletePromotionAsync.
+                logger.LogWarning(
+                    "ShardRootGrain {ShardId} PromoteRootAsync observed a level mismatch under the promotion gate (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf={ChildIsLeaf}); falling back to wrap-as-new-root with bubble level.",
+                    context.GrainId,
+                    rootSnapshot.ChildrenAreLeaves,
+                    splitResult.ChildIsLeaf);
+            }
 
-        await CompletePromotionAsync();
+            state.State.PendingPromotion = splitResult;
+            state.State.PendingPromotionRootWasLeaf = state.State.RootIsLeaf;
+            await WriteShardStateAsync();
+
+            await CompletePromotionAsync();
+        }
+        finally
+        {
+            _promotionGate.Release();
+        }
         return null;
     }
 
@@ -686,17 +757,90 @@ internal sealed partial class ShardRootGrain
     private async Task CompletePromotionAsync()
     {
         var pending = state.State.PendingPromotion!;
-        var childrenAreLeaves = state.State.PendingPromotionRootWasLeaf;
+        var currentRootId = state.State.RootNodeId!.Value;
+
+        // Recovery shape check. The persisted `PendingPromotion` was
+        // written when some earlier turn decided to wrap a new root.
+        // If the activation died between Phase 1 (persist intent) and
+        // Phase 2 (create new root + clear intent) and a different
+        // code path - or, more commonly, the pre-fix builds where the
+        // promotion sequence was not gated and two interleaved turns
+        // could each persist their own bubble - has already advanced
+        // `RootNodeId` to an internal node whose ChildrenAreLeaves
+        // matches the pending bubble's ChildIsLeaf, then the bubble
+        // belongs INSIDE that current root rather than ABOVE it.
+        // Wrapping again would seed the new root with the wrong
+        // `childrenAreLeaves` bit and surface as the inverse
+        // InvalidCastException SeedChildParentAsync observed on the
+        // U9k step 2 ladder ("cast BPlusInternalGrain to
+        // IBPlusLeafGrain"). Route the bubble through AcceptSplitAsync
+        // instead. Note this branch is reached only when the live
+        // `state.State.RootIsLeaf` is false; the buggy
+        // `PendingPromotionRootWasLeaf` scalar is intentionally not
+        // consulted here because it could itself be stale.
+        if (!state.State.RootIsLeaf)
+        {
+            var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
+            if (rootSnapshot.ChildrenAreLeaves == pending.ChildIsLeaf)
+            {
+                var existingRoot = ResolveInternalGrain(currentRootId);
+                await existingRoot.AcceptSplitAsync(pending.PromotedKey, pending.NewSiblingId);
+                InvalidateRoutingTable(currentRootId);
+                state.State.PendingPromotion = null;
+                await WriteShardStateAsync();
+                return;
+            }
+
+            // Shape mismatch: the pending bubble does not align with
+            // either the current root level or one level below it.
+            // The bubble's NewSiblingId is at a level we cannot safely
+            // splice into the live topology - splitting either above
+            // or below the current root would create an unbalanced
+            // tree with mismatched child levels. The safest recovery
+            // is to drop the stale intent: in the buggy pre-fix
+            // shapes this happens when the bubble was already
+            // absorbed by a sibling promotion, so the NewSiblingId is
+            // already wired into the tree elsewhere; in the
+            // legitimately-unreachable shapes this state is corrupt
+            // and the surrounding write retry envelope will replay
+            // the user mutation against the current topology.
+            logger.LogWarning(
+                "ShardRootGrain {ShardId} CompletePromotionAsync observed a level mismatch between the persisted PendingPromotion (ChildIsLeaf={ChildIsLeaf}) and the current root (ChildrenAreLeaves={ChildrenAreLeaves}); dropping the stale promotion intent.",
+                context.GrainId,
+                pending.ChildIsLeaf,
+                rootSnapshot.ChildrenAreLeaves);
+            state.State.PendingPromotion = null;
+            await WriteShardStateAsync();
+            return;
+        }
+
+        // Prefer the self-describing ChildIsLeaf flag on the persisted
+        // SplitResult over the racy PendingPromotionRootWasLeaf scalar
+        // (which is filled in from the live `RootIsLeaf` field at
+        // PromoteRootAsync time and would have been clobbered if a
+        // previous interleaved turn already flipped `RootIsLeaf` to
+        // false). The ChildIsLeaf flag is stamped at split-construction
+        // time by the leaf or internal grain that produced the split,
+        // so it is immutable across any subsequent shard-root
+        // interleaving. PendingPromotionRootWasLeaf is retained on
+        // disk for backward compatibility with state persisted by a
+        // pre-fix activation: if such state is resumed, ChildIsLeaf
+        // would deserialise as its default `false`, and the older
+        // bool is the only surviving signal of whether the new
+        // sibling holds leaves.
+        var childrenAreLeaves = pending.ChildIsLeaf
+            ? true
+            : state.State.PendingPromotionRootWasLeaf;
 
         var shardKey = context.GrainId.Key.ToString()!;
         var deterministicId = DeterministicGuid(
-            shardKey + "/root-above/" + state.State.RootNodeId!.Value);
+            shardKey + "/root-above/" + currentRootId);
 
         var newRoot = grainFactory.GetGrain<IBPlusInternalGrain>(deterministicId);
         await newRoot.SetTreeIdAsync(TreeId);
         await newRoot.InitializeAsync(
             pending.PromotedKey,
-            state.State.RootNodeId!.Value,
+            currentRootId,
             pending.NewSiblingId,
             childrenAreLeaves);
 

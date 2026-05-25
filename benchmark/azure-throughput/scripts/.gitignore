@@ -20,3 +20,11 @@
 # not reusable tooling. The conventional `40-ladder.ps1` and friends
 # remain tracked.
 .run-*
+# Per-probe sweep directories written by 40-ladder.ps1 when copying a
+# rung's CSVs and logs aside for a single scaling.md probe (e.g.
+# `.u9h-d-sweep/`, `.u9j-rung-sweep/`). The directory contents - CSVs,
+# logs, and any other captured evidence - are intentionally local-only.
+# `*.log` is already covered by the top-level rule, but the CSVs inside
+# (renamed to `.results.csv` / `.phaseA.csv` per directory) are not,
+# so we ignore the whole directory shape here.
+.*-sweep/

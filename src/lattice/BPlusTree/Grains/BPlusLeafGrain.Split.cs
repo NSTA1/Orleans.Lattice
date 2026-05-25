@@ -177,7 +177,8 @@ internal sealed partial class BPlusLeafGrain
         return new SplitResult
         {
             PromotedKey = splitKey,
-            NewSiblingId = siblingId
+            NewSiblingId = siblingId,
+            ChildIsLeaf = true,
         };
     }
 }

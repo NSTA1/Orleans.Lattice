@@ -343,11 +343,72 @@ internal sealed class TcpIngestService(
         // synchronously already complete, so the poll is a no-op.
         if (settings.ShardCountOverride > 0)
         {
-            try
+            // The very first call into a freshly-activated LatticeGrain
+            // races the Orleans client directory cache and routinely fails
+            // with OrleansMessageRejectionException ("Unable to create
+            // local activation" / "to invalid activation. Rejecting
+            // now."). The directory recovers on its own within a few
+            // hundred milliseconds, but a single un-retried call here
+            // silently leaves the tree pinned at the library default
+            // shard count (64) instead of the configured override - the
+            // bench then measures the wrong configuration. Retry the
+            // submit a few times on rejection and emit a loud, greppable
+            // ERROR line if every attempt fails.
+            const int MaxReshardAttempts = 4;
+            var attempt = 0;
+            var reshardSubmitted = false;
+            Exception? lastReshardException = null;
+            while (attempt < MaxReshardAttempts && !reshardSubmitted && !stoppingToken.IsCancellationRequested)
             {
-                Console.WriteLine($"[silo] reshard treeId={settings.TreeId} -> shardCount={settings.ShardCountOverride} (submit)");
-                await lattice.ReshardAsync(settings.ShardCountOverride, stoppingToken).ConfigureAwait(false);
+                attempt++;
+                try
+                {
+                    Console.WriteLine($"[silo] reshard treeId={settings.TreeId} -> shardCount={settings.ShardCountOverride} (submit attempt={attempt}/{MaxReshardAttempts})");
+                    await lattice.ReshardAsync(settings.ShardCountOverride, stoppingToken).ConfigureAwait(false);
+                    reshardSubmitted = true;
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    // Grow-only violation (target <= current shard count on a
+                    // populated tree) or above the virtual-shard-space ceiling.
+                    // Not retriable - log and continue with the existing pinned
+                    // shard count.
+                    Console.WriteLine($"[silo] reshard treeId={settings.TreeId} rejected: {ex.Message}");
+                    lastReshardException = ex;
+                    break;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) when (IsOrleansMessageRejection(ex))
+                {
+                    lastReshardException = ex;
+                    var backoffMs = 100 * (1 << (attempt - 1));
+                    Console.WriteLine($"[silo] reshard treeId={settings.TreeId} attempt={attempt} REJECTED ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), stoppingToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[silo] reshard treeId={settings.TreeId} FAILED: {ex.GetType().Name}: {ex.Message}");
+                    lastReshardException = ex;
+                    break;
+                }
+            }
 
+            if (!reshardSubmitted)
+            {
+                // Loud, greppable failure line. The harness must see this
+                // and treat the run as misconfigured rather than silently
+                // measuring the default shard count.
+                var detail = lastReshardException is null
+                    ? "no exception captured"
+                    : $"{lastReshardException.GetType().Name}: {Truncate(lastReshardException.Message, 240)}";
+                Console.WriteLine($"[silo] ERROR reshard treeId={settings.TreeId} ABORTED after {attempt} attempt(s): {detail}. Tree remains at its previously-pinned shard count (likely the library default, NOT shardCount={settings.ShardCountOverride}).");
+            }
+            else
+            {
                 // Bound the wait so a stuck reshard logs and continues
                 // rather than wedging the silo permanently. 5 min is
                 // generous for the bench's tree sizes; production callers
@@ -355,7 +416,21 @@ internal sealed class TcpIngestService(
                 var deadline = DateTime.UtcNow.AddMinutes(5);
                 while (true)
                 {
-                    if (await lattice.IsReshardCompleteAsync(stoppingToken).ConfigureAwait(false))
+                    bool complete;
+                    try
+                    {
+                        complete = await lattice.IsReshardCompleteAsync(stoppingToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) when (IsOrleansMessageRejection(ex))
+                    {
+                        // Same directory-cache race can hit the very first
+                        // IsReshardCompleteAsync. Treat as "not yet
+                        // complete", wait, and try again on the next loop.
+                        Console.WriteLine($"[silo] reshard treeId={settings.TreeId} IsReshardCompleteAsync rejected ({ex.GetType().Name}); retrying");
+                        complete = false;
+                    }
+                    if (complete)
                     {
                         Console.WriteLine($"[silo] reshard treeId={settings.TreeId} complete");
                         break;
@@ -368,17 +443,6 @@ internal sealed class TcpIngestService(
                     Console.WriteLine($"[silo] reshard treeId={settings.TreeId} in progress, waiting...");
                     await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken).ConfigureAwait(false);
                 }
-            }
-            catch (ArgumentOutOfRangeException ex)
-            {
-                // Grow-only violation (target <= current shard count on a
-                // populated tree) or above the virtual-shard-space ceiling.
-                // Log and continue with the existing pinned shard count.
-                Console.WriteLine($"[silo] reshard treeId={settings.TreeId} rejected: {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[silo] reshard treeId={settings.TreeId} FAILED: {ex.GetType().Name}: {ex.Message}");
             }
         }
 
@@ -702,5 +766,24 @@ internal sealed class TcpIngestService(
         return msg.Contains("Unable to create local activation", StringComparison.Ordinal)
             || msg.Contains("silo is blocking application messages", StringComparison.Ordinal)
             || msg.Contains("to invalid activation", StringComparison.Ordinal);
+    }
+
+    // Type-name match for any Orleans message-rejection exception. Used
+    // by the startup reshard retry: a brand-new silo's first call to a
+    // never-activated grain races the client directory cache and lands
+    // here, but the directory recovers within a few hundred ms and a
+    // retry succeeds. Keeping this separate from IsShutdownRejection
+    // makes the retry safe to use before the silo is anywhere near
+    // shutdown.
+    private static bool IsOrleansMessageRejection(Exception ex)
+    {
+        var typeName = ex.GetType().FullName ?? string.Empty;
+        return typeName.Contains("OrleansMessageRejectionException", StringComparison.Ordinal);
+    }
+
+    private static string Truncate(string? s, int max)
+    {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
+        return s.Length <= max ? s : s.Substring(0, max) + "...";
     }
 }

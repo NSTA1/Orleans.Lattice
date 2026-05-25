@@ -394,7 +394,8 @@ internal sealed partial class BPlusInternalGrain(
         return new SplitResult
         {
             PromotedKey = promotedKey,
-            NewSiblingId = siblingId
+            NewSiblingId = siblingId,
+            ChildIsLeaf = false,
         };
     }
 
