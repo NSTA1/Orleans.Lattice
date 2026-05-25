@@ -532,8 +532,72 @@ The next probe is now unambiguous:
 - **U9 - reentrant `ShardRootGrain` with disjoint-key `[MayInterleave]`.** U8b confirmed rung 3 is not shard-count-bound; the per-shard `ShardRootGrain` serial turn queue is the binding constraint. This is now the only remaining lever inside the silo at this configuration. The implementation touches split-promotion (`PrepareSplitAsync` / `CompleteSplitAsync` order with concurrent in-flight `RouteAndApplyAsync`), the saga-participant set (atomic-write fan-in across leaves), the routing cache (epoch-bumps on concurrent splits), and `RecordAffectedLeafIfPreparedAsync`. The change is broad-semantic; it needs its own design pass and `Category("Chaos")` validation before merging. The expected win is rung-3 throughput from ~1,880 to >3,000 ops/s on the same WAL configuration, because disjoint-key batches that today serialise on the same shard root would instead execute concurrently.
 - **U10 (deferred behind U9)** - `WalPartitions = 16` against the s=16 baseline. The WAL fan-in arithmetic above implies doubling `WalPartitions` could lift rung 3 from ~1,880 to ~3,500 ops/s *if* batch_entries doesn't fragment (i.e. if Azure Tables can absorb 16 parallel partition keys without per-partition rate-limiting). This is a config-only probe (no code change) so it remains a cheap fallback if U9 turns out to be too risky for this campaign.
 
+### Re-examination of the U8 evidence (2026-05-25T07:30Z) - U9 deferred; phase-2 coalescing is the actual binding constraint (CORRECTION)
 
+A second-pass read of the U8 phase-A instrument set falsifies the U9 framing above. The original conclusion ("the per-shard `ShardRootGrain` serial turn queue is the binding constraint") was reached **without inspecting the `provider.phase2.batch_size` instrument**, which is the smoking gun.
 
+Aggregated U8 rung 3 instruments, mean of per-shard quantiles, sorted by mean P50:
+
+| Instrument | Samples | P50 mean | P90 mean | P99 mean | Max obs |
+|---|---:|---:|---:|---:|---:|
+| `wal.append.batch_bytes`       | 3,646 | 1,597.4 | 2,851.9 | 3,945.9 | 5,982 |
+| `wal.append.turn_wait`         |    16 |    29.4 |    35.5 |    35.5 |   148 |
+| `wal.append.provider.duration` | 3,654 |    28.1 |    39.6 |    80.9 |   184 |
+| `provider.commit.duration`     | 7,313 |    20.3 |    28.0 |    59.2 |   184 |
+| `wal.append.batch_entries`     | 3,646 |     4.6 |     8.1 |    11.2 |    17 |
+| **`provider.phase2.batch_size`** | **3,654** | **1.00** | **1.00** | **1.00** | **1.00** |
+| `wal.append.queue_depth`       |    16 |     1.00|     1.00|     1.00|     1 |
+| `wal.append.in_flight`         | 3,646 |     0.00|     0.00|     0.00|     0 |
+
+**`provider.phase2.batch_size = 1.0` (max 1) across 3,654 samples** is decisive. The `PhaseTwoWorker` (`src/lattice.storage.azuretable/AzureTableWalStorageProvider.PhaseTwoWorker.cs`) is *designed* to coalesce up to **49 phase-2 commits into a single Azure Tables transaction** (`MaxBatchedManifestRows = 49` at line 229; the per-transaction cap is 100 actions, each batch contributes 2 actions, 1 reserved for TAIL upsert ⇒ `(100 - 1) / 2 = 49`). Under U8 it is coalescing **exactly one commit per transaction across 100% of the sample window**. Coalescing is broken, not slow.
+
+**Why the original U9 conclusion was wrong.** I read `wal.append.in_flight = 0` as "WAL has headroom, so the bottleneck is upstream" and concluded the `ShardRootGrain` turn queue was binding. The correct reading is the opposite: `in_flight = 0` and `queue_depth p50 = 1` together mean the WAL-shard flush worker is **starved** - it commits one phase-1 batch, faults the channel back to 0, waits for the next phase-1 arrival, commits, drains to 0, etc. The arrival rate at each `PhaseTwoWorker` channel is too slow to ever hold >1 commit in the channel between drain cycles, so the coalescing loop (`while (_batchBuffer.Count < 49 && _pending.Count > 0)`) exits with exactly 1 element every time.
+
+**Structural cause.** With `WalPartitions=8` and `WalMaxPendingBatches=8`, each per-partition `PhaseTwoWorker` sees only its own partition's phase-1 stream. Per-partition phase-1 throughput at U8/rung-3 is ~`1,877 / 8 = 235 batches/s` ⇒ one arrival every 4.3 ms on average. `CommitBatchAsync` itself takes ~20 ms (`provider.commit.duration` P50). The arithmetic works out: 4.3 ms between arrivals × ~5 arrivals during one 20 ms commit window = ~5 elements should be pending when the next batch is drained. We see 1. Either the producer side is bursty (so arrivals cluster at sub-millisecond intervals followed by gaps >>20 ms) or `WalMaxPendingBatches=8` is itself capping per-partition phase-1 in-flight count too aggressively to bring the channel above zero between phase-2 cycles.
+
+**Silo-side per-call latency reconciled.** The U8 silo log shows `inFlight = 8` constant on rung 3 with the producer-side semaphore (`FlushConcurrency=8`, `SemaphoreSlim` in `benchmark/azure-throughput/Silo/Program.cs#DrainAsync` around line 470) saturated, and `written` increments by exactly 4,096 entries per ~1 s. Each `ILattice.SetManyAsync(4096)` therefore returns in ~1 s wall-clock. With `provider.commit.duration` P50 = 20 ms and **one commit per Azure transaction**, a 4,096-entry batch that fans out across 16 shards × on average ~3 leaves/shard × 1 commit per leaf-batch ≈ ~48 sequential commits per producer call (in fact parallelised across `WalPartitions=8`, so ~6 sequential commits per partition × 20 ms = ~120 ms theoretical minimum). The remaining ~880 ms per call is the *coalescing-loss tax*: every commit that should have ridden along on a coalesced transaction instead paid its own Azure round-trip.
+
+**Re-ranked probe order.** U9 (reentrant `ShardRootGrain` with `[MayInterleave]`) is **deferred indefinitely**, not because it's wrong on principle but because the bottleneck is downstream of `ShardRootGrain` in the WAL phase-2 coalescer. Shipping U9 against the current `phase2.batch_size = 1` configuration would broaden the silo-side fan-out semantics (touching split-promotion, the saga-participant set, the routing cache, and `RecordAffectedLeafIfPreparedAsync`) at substantial chaos-test risk, *and* it would not move the rung-3 ceiling because the phase-2 ceiling stays at one-Azure-RT-per-commit. Cheaper config-only probes have to fall first:
+
+- **U9 (renamed) - `BENCH_WAL_MAX_PENDING_BATCHES = 32` at s=16.** Config-only, no code. Directly targets the measured `phase2.batch_size = 1` gap by letting each partition hold more phase-1 transactions in flight, raising the arrival rate at the per-partition `PhaseTwoWorker` channel so the coalescing loop sees `pending.Count >> 1` when it drains. Expected: `phase2.batch_size` rises from 1 to 5-15, `provider.commit.duration` × commits-per-call drops 2-5x, rung-3 throughput multiplies. Falsifiable: if `phase2.batch_size` stays at 1, arrival shape (not in-flight cap) is the cause and U9b is next.
+- **U9b - `BENCH_WAL_PARTITIONS = 4` at s=16, `WalMaxPendingBatches=8`.** Halves the number of `PhaseTwoWorker` instances, concentrating phase-1 arrivals into each remaining worker so the per-partition rate doubles. Trades phase-1 parallelism for phase-2 coalescing density. Config-only. Use only if U9 does not lift `phase2.batch_size`.
+- **U9c - `BENCH_WAL_PARTITIONS = 16` at s=16, `WalMaxPendingBatches=8`.** The opposite direction: doubles phase-1 fan-out. Worth running only if U9 + U9b both keep `phase2.batch_size = 1` *and* `wal.append.in_flight` rises above 0 (i.e. the per-partition flush worker is no longer starved but the Azure Tables account is rate-limiting per-partition).
+- **U9d (was U9 proper) - reentrant `ShardRootGrain` with disjoint-key `[MayInterleave]`.** Deferred behind U9 / U9b / U9c. Re-evaluate only if all three config-only probes leave `phase2.batch_size` near 1 *and* the silo log shows the per-shard turn queue building up under `NonReentrancyQueueSize > 0` diagnostics (none observed in U8 rung 3). This is the broader-semantic change; it warrants its own design pass and a `Category("Chaos")` validation pass before merging, and it should only land if there is evidence it is the binding constraint - which there currently is not.
+
+**Note on which evidence retired which framing.** The U8 measurement section above (still accurate on what it measured) was concluded with "the binding constraint is the per-shard `ShardRootGrain` serial turn queue". That sentence is **superseded by this re-examination**: the binding constraint at the U8 configuration is the *per-partition phase-2 coalescing ratio*, which `[MayInterleave]` does not address. The U8 throughput numbers, WAL evidence, and shard-count axis bound stand; only the next-probe attribution changes.
+
+### U9 measurement (2026-05-25T07:39Z-T07:50Z) - raising `WalMaxPendingBatches` from 8 to 32 leaves `phase2.batch_size` pinned at 1 (FALSIFIED, U9b is next)
+
+**Setup.** Identical to U8 baseline (`shardCount=16`, `batchSize=4096`, `flushConcurrency=8`, `walPartitions=8`), with the single change `BENCH_WAL_MAX_PENDING_BATCHES=32`. Three rungs identical to U8/U8b for direct comparison.
+
+**Results.**
+
+| Rung | Vehicles | TargetRate | SteadyAvg | FinalWritten | FinalFailed | U8 SteadyAvg | U8 FinalWritten |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1,000 | 5,000/s | **2,894** | 290,496 | 0 | 2,390 | 258,788 |
+| 2 | 5,000 | 25,000/s | **2,867** | 302,019 | 0 | 2,649 | 278,916 |
+| 3 | 10,000 | 50,000/s | **1,513** | 208,293 | **8,192** | 1,877 | 212,248 |
+
+Sources: `benchmark/azure-throughput/scripts/.ladder-results-U9-walpending32.csv`, `.ladder-phaseA-U9-walpending32.csv` (243 phase-A rows across 3 rungs).
+
+**The falsifiability test fails decisively.** The U9 conclusion section above predicted that raising `WalMaxPendingBatches` to 32 should let each `PhaseTwoWorker` see `pending.Count >> 1` and push `provider.phase2.batch_size` from 1.0 up to the 5-15 range. The actual measurement, mean of per-shard quantiles:
+
+| Configuration | Rung | `phase2.batch_size` samples | P50 | P90 | Max |
+|---|---:|---:|---:|---:|---:|
+| **U8 (walMaxPending=8)** | 1 | 2,684 | 1.00 | 1.00 | 1.00 |
+| **U8 (walMaxPending=8)** | 2 | 234 | 1.00 | 1.00 | 1.00 |
+| **U8 (walMaxPending=8)** | 3 | 3,654 | 1.00 | 1.00 | 1.00 |
+| **U9 (walMaxPending=32)** | 1 | 2,600 | **1.00** | **1.00** | **1.00** |
+| **U9 (walMaxPending=32)** | 2 | 1,331 | **1.00** | **1.00** | **1.00** |
+| **U9 (walMaxPending=32)** | 3 | 3,192 | **1.00** | **1.00** | **1.00** |
+
+`phase2.batch_size` is *exactly* pinned at 1.0 across all 7,123 U9 samples and all 6,572 U8 samples. Quadrupling the in-flight cap moved nothing at the coalescer.
+
+**Throughput moved a little, but not from coalescing.** Rungs 1 and 2 gained +21% / +8% over U8, with zero failures. That gain has to come from the phase-1 path (more parallel Azure Tables submissions during the `wal.append` window), not from phase-2 coalescing - the `wal.append.batch_entries` profile is essentially identical to U8 (P50 ≈ 7.3 / 7.2 / 4.6 by rung). Rung 3 *regressed*: steady-avg dropped from 1,877 to 1,513 (-19%) and produced **8,192 failures** (vs U8's zero). The extra in-flight capacity at rung 3 is consumed by transactions that eventually time out or get rejected by Azure Tables under sustained pressure, not by the coalescer. The rung-3 phase-A also shows `provider.commit.duration` p99 reaching 106 ms (vs U8's ~54 ms) and `wal.append.turn_wait` appearing on two shards with P50 ≈ 105 ms - direct evidence that the per-shard append turn is now contended under the higher cap.
+
+**Conclusion.** `WalMaxPendingBatches` is **not the lever**. The coalescing failure is not caused by an in-flight cap on phase-1; it is caused by the **arrival shape** at each per-partition `PhaseTwoWorker` channel - phase-1 commits arrive in sub-millisecond bursts followed by long gaps, so the channel drains to zero between bursts no matter how high we let the in-flight count climb. The other suspect, "too many partitions starve each worker," remains alive and is now the next test.
+
+**Next probe (U9b - reduce partition count to concentrate arrival rate per worker).** Set `BENCH_WAL_PARTITIONS=4` at the U8 baseline (`shardCount=16`, `batchSize=4096`, `flushConcurrency=8`, `walMaxPending=8`). This halves the number of `PhaseTwoWorker` instances and concentrates phase-1 arrivals so each remaining worker sees ~2× its previous arrival rate. Expected if "arrival shape" is the right hypothesis: `phase2.batch_size` rises above 1 on at least the heavier rungs. Falsifiable: if `phase2.batch_size` stays at 1, the bursty arrival pattern is endogenous to the silo-side commit path (not partition fan-out), and the next probe is to look at *what* causes phase-1 commits to arrive in bursts - which points back to the producer-side `FlushConcurrency` cycle and possibly a deliberate batching delay inside the `PhaseTwoWorker` drain loop (currently no debounce; it drains immediately on the first signal).
 
 ### What stays in place
 
