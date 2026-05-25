@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -282,7 +283,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Returns volatile in-memory hotness counters for this shard. Counters
     /// track reads and writes since grain activation and reset on deactivation.
     /// Used by split coordinators to detect hot shards without persistence overhead.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> because the implementation is a
+    /// pure synchronous read of three private fields wrapped in
+    /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
+    /// state mutation - it cannot race any other in-flight turn. Allowing the
+    /// hot-shard monitor's sampling RPC to bypass the
+    /// <see cref="IShardRootGrain.SetManyAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}})"/>
+    /// reentrancy queue is required so the monitor does not time out (and fire
+    /// spurious reshards) when the shard is at sustained producer pressure
+    /// (see U9d in <c>scaling.md</c>).
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<ShardHotness> GetHotnessAsync();
 
     /// <summary>
@@ -401,7 +414,17 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Returns <c>true</c> if this shard has a pending bulk-load or bulk-append
     /// operation that has not yet been fully grafted into the tree. Used by the
     /// auto-split monitor to suppress splits while bulk operations are mid-flight.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> because the implementation is a
+    /// pure synchronous read of <c>state.State.PendingBulkGraft</c> wrapped in
+    /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
+    /// state mutation - it cannot race any other in-flight turn. Paired with
+    /// <see cref="GetHotnessAsync"/> so the hot-shard monitor's per-tick
+    /// fan-out (which awaits both) is not gated on producer
+    /// <see cref="SetManyAsync"/> work (see U9d in <c>scaling.md</c>).
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<bool> HasPendingBulkOperationAsync();
 
     /// <summary>
