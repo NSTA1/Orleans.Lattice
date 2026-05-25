@@ -599,6 +599,56 @@ Sources: `benchmark/azure-throughput/scripts/.ladder-results-U9-walpending32.csv
 
 **Next probe (U9b - reduce partition count to concentrate arrival rate per worker).** Set `BENCH_WAL_PARTITIONS=4` at the U8 baseline (`shardCount=16`, `batchSize=4096`, `flushConcurrency=8`, `walMaxPending=8`). This halves the number of `PhaseTwoWorker` instances and concentrates phase-1 arrivals so each remaining worker sees ~2× its previous arrival rate. Expected if "arrival shape" is the right hypothesis: `phase2.batch_size` rises above 1 on at least the heavier rungs. Falsifiable: if `phase2.batch_size` stays at 1, the bursty arrival pattern is endogenous to the silo-side commit path (not partition fan-out), and the next probe is to look at *what* causes phase-1 commits to arrive in bursts - which points back to the producer-side `FlushConcurrency` cycle and possibly a deliberate batching delay inside the `PhaseTwoWorker` drain loop (currently no debounce; it drains immediately on the first signal).
 
+### U9b measurement (2026-05-25T08:09Z) - halving `WalPartitions` exactly doubles per-partition phase-1 fill but leaves `phase2.batch_size` pinned at 1 (FALSIFIED, mechanism is now diagnosed)
+
+**Setup.** U8 baseline (`shardCount=16`, `batchSize=4096`, `flushConcurrency=8`, `walMaxPending=8`) with the single change `BENCH_WAL_PARTITIONS=4`. Three rungs planned; the local harness crashed between rungs (see "Harness instability" note below) so only **rung 1** completed cleanly. **The rung-1 sample size alone (556,566 `phase2.batch_size` samples) is decisive** - 1.55x the entire U9 3-rung total - and the supporting instruments paint a complete picture without needing rungs 2 and 3.
+
+**Rung-1 results.** `silo-20260525-080940Z.log` (preserved as `.ladder-U9b-walpartitions4-rung1-silo.log`): `FINAL written=253,619 failed=0 elapsed=119.5s Entries written per second (avg)=2,123`.
+
+**Phase-A side-by-side, rung 1, mean of per-shard quantiles:**
+
+| Instrument | Phase | U8 (P=8) P50 | U9b (P=4) P50 | Direction |
+|---|---|---:|---:|---|
+| `wal.append.batch_entries`     | -      | 7.33    | **13.87** | **+89%** (each phase-1 batch carries ~2x more entries - matches the halved-partition arithmetic) |
+| `wal.append.batch_bytes`       | -      | ~1,409  | **4,875** | **+246%** (size grew faster than entries because in-flight cap is no longer fragmenting) |
+| `provider.commit.duration`     | phase1 | 13.13ms | **22.95ms** | +75% (longer Azure transaction per phase-1 commit, expected) |
+| `provider.commit.duration`     | phase2 | 13.13ms | **11.52ms** | -12% (slightly faster phase-2 commit - smaller manifest churn) |
+| **`provider.phase2.batch_size`** | -    | **1.00** | **1.00** | **UNCHANGED** |
+| `wal.append.in_flight`         | -      | 0       | 0          | unchanged |
+| `wal.append.queue_depth`       | -      | 1.00    | 1.00       | unchanged |
+| `wal.append.turn_wait`         | -      | ~30ms   | 25ms       | -17% (less per-shard contention) |
+| Throughput (rung 1 avg)        | -      | 2,390/s | **2,123/s** | -11% |
+
+Source data: `benchmark/azure-throughput/scripts/.ladder-U9b-walpartitions4-rung1-silo.log` (2.57 MB raw silo log, with 1,552 `[phaseA]` lines for the `provider.phase2.batch_size` instrument summing to **556,566 individual samples**, every single one with `max=1.00`).
+
+**The arrival-rate hypothesis is exactly disproved.** U9b achieved precisely what the hypothesis demanded: per-partition phase-1 fill exactly doubled (`batch_entries` 7.33 → 13.87, `batch_bytes` ~3.5x). If the coalescer were starved by low per-worker arrival rate, this configuration would have lifted `phase2.batch_size`. It did not - not in one of 556,566 samples. The conclusion is that *no per-partition arrival rate that can be achieved by config tuning will produce coalescing on top of the current `PhaseTwoWorker` drain logic.*
+
+**The actual mechanism, diagnosed.** Inspecting `src/lattice.storage.azuretable/AzureTableWalStorageProvider.PhaseTwoWorker.cs#DrainLoopAsync` (lines 233-295):
+
+```
+while (WaitToReadAsync) {
+    while (TryRead) _pending.Add(...);            // single arrival
+    while (_pending.Count > 0) {
+        batch = take up to 49 from _pending;       // takes 1
+        await CommitBatchAsync(batch);             // ~11.5 ms Azure RT
+        while (TryRead) _pending.Add(...);         // re-drain after commit
+    }
+}
+```
+
+The drain loop **never deliberately waits for arrivals to accumulate.** `WaitToReadAsync` returns the instant the first `PhaseTwoCommit` lands in the channel; the loop then takes whatever is in the channel right now (always 1), commits, and only afterwards re-drains. With `commit.duration.phase2 = 11.5 ms` and per-partition inter-arrival time ≈ `1 / (2123/s × 13.87 entries-per-batch × (1/4) partitions) × 1000 ms = ~26 ms` per partition under U9b, the coalescing window per commit is `11.5 / 26 = 0.44` arrivals - the post-commit re-drain finds 0 or 1 element on average and the cycle repeats with `batch_size = 1`. This will hold for any per-partition rate at which `inter_arrival_time > commit_duration_phase2`, which - given Azure Tables' commit latency - covers essentially all production-realistic loads.
+
+The same arithmetic explains why U8 and U9 also showed `batch_size = 1`: in *all* three configurations the post-commit re-drain runs against a channel that is essentially empty because the producer side is not bursty enough relative to the commit RT.
+
+**Re-ranked probe order (revised again, code change required).**
+
+- **U9 (config, `walMaxPending=32`) - FALSIFIED** above. Phase-1 in-flight cap is not the lever.
+- **U9b (config, `walPartitions=4`) - FALSIFIED** here. Per-partition arrival rate is not the lever either.
+- **U9c (was config, now CODE) - add an arrival-coalescing window to `DrainLoopAsync`.** Insert a small bounded wait (e.g. `await Task.Delay(coalesceWindow, ct)` or a `WaitAsync(cts)` with a short timeout) between `WaitToReadAsync` returning and the `TryRead` drain, so that one Azure round-trip's worth of arrivals can accumulate before the first `CommitBatchAsync`. Initial value: 5-10 ms (about half the observed `commit.duration.phase2` P50). The window must be a per-`PhaseTwoWorker` option so a debug build can disable it for chaos tests that rely on strict per-commit ordering visibility, and so it can be tuned per-deployment. Falsifiable: if `phase2.batch_size` rises above ~3 on rung 3 with `coalesceWindow=5ms`, this is the lever; otherwise the bursty pattern is *also* not amenable to in-process debounce and the next layer (LatticeGrain SetManyAsync flush pattern) is the culprit. Risk vs U9d: contained - one file, no semantic change to ordering invariants (the post-commit re-drain still preserves ascending-offset commit order; coalescing is just a denser version of what already happens).
+- **U9d (was U9 proper) - reentrant `ShardRootGrain` with `[MayInterleave]`.** Remains deferred behind U9c. Re-evaluate only if U9c demonstrably lifts `phase2.batch_size` and reveals a new ceiling that is upstream of the WAL.
+
+**Harness instability note.** The local PowerShell harness around `40-ladder.ps1` failed to complete the U9b ladder twice. First attempt: stale parent-shell `BENCH_*` env-vars (`BENCH_WAL_MAX_PENDING_BATCHES=32` from U9) leaked into the deploy step despite explicit reassignment in the background launch body; observed deploy log line `walPartitions=8 walMaxPending=32` proved the leak and the run was aborted and the ACI stopped before completing. Second attempt: fresh `pwsh -NoProfile` subshell with all `BENCH_*` cleared and reassigned read `walPartitions=4 walMaxPending=8` correctly, completed rung 1 cleanly, then the background pwsh died silently between rungs (likely a `run_command_in_terminal` poller-side process-group kill on poller timeout). The rung-1 silo log was preserved before the harness state was reset. This points at a future harness-hardening task: `40-ladder.ps1` should write a marker file ("rung 1 complete") after each rung's CSV append so a re-launch can detect and resume; today there is no resume primitive.
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
