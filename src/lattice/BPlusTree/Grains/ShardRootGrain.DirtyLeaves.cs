@@ -85,7 +85,7 @@ internal sealed partial class ShardRootGrain
 
         try
         {
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
         }
         catch (Exception ex)
         {
@@ -171,7 +171,7 @@ internal sealed partial class ShardRootGrain
 
         try
         {
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
         }
         catch
         {

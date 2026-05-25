@@ -18,7 +18,7 @@ internal sealed partial class ShardRootGrain
         state.State.IsDeleted = true;
         try
         {
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
         }
         catch
         {
@@ -38,7 +38,7 @@ internal sealed partial class ShardRootGrain
         state.State.IsDeleted = false;
         try
         {
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
         }
         catch
         {

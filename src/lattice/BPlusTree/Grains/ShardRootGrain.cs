@@ -94,6 +94,45 @@ internal sealed partial class ShardRootGrain(
 
     private const int MaxRetries = 2;
 
+    /// <summary>
+    /// Per-activation gate that serialises every shard-root
+    /// <c>state.WriteStateAsync()</c> call. <see cref="IShardRootGrain.SetManyAsync"/>
+    /// is annotated <see cref="AlwaysInterleaveAttribute"/> for throughput, which
+    /// allows two concurrent <c>SetManyAsync</c> turns on the same activation to
+    /// race the underlying <see cref="IPersistentState{TState}.WriteStateAsync"/>
+    /// call. The second writer observes a stale etag and the storage provider
+    /// throws <see cref="Orleans.Storage.InconsistentStateException"/> -
+    /// the exact "Etag mismatch during Update" signal the U9g real-Azure
+    /// ladder captured against the shard-root state. The gate guards
+    /// storage only, not compute: callers continue to do their sort /
+    /// route / lookup work in parallel, only the single storage write
+    /// is serialised. Every shard-root persistence site routes through
+    /// <see cref="WriteShardStateAsync"/> so admin paths (split,
+    /// shadow-forward, bulk-load, lifecycle, dirty-leaves) cannot
+    /// collide with a concurrent <c>SetManyAsync</c> turn either.
+    /// </summary>
+    private readonly SemaphoreSlim _stateWriteGate = new(1, 1);
+
+    /// <summary>
+    /// Serialised replacement for <c>state.WriteStateAsync()</c>. All
+    /// shard-root <see cref="IPersistentState{TState}.WriteStateAsync"/>
+    /// call sites must route through this helper so the per-activation
+    /// <see cref="_stateWriteGate"/> serialises storage writes across
+    /// interleaved turns.
+    /// </summary>
+    private async Task WriteShardStateAsync()
+    {
+        await _stateWriteGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        finally
+        {
+            _stateWriteGate.Release();
+        }
+    }
+
     public async Task<byte[]?> GetAsync(string key)
     {
         await PrepareForOperationAsync();
@@ -491,9 +530,7 @@ internal sealed partial class ShardRootGrain(
         if (state.State.RootIsLeaf)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
-                ? existing
-                : ResolveLeafGrainSlow(rootLeafId);
+            var leaf = ResolveLeafGrain(rootLeafId);
             await RecordAffectedLeafIfPreparedAsync(rootLeafId);
             var split = await DispatchLeafBatchWithRetryAsync(leaf, entries);
             while (split is not null)
@@ -523,28 +560,28 @@ internal sealed partial class ShardRootGrain(
 
         // Resolve each leaf grain reference and (when the saga's prepared
         // context is active) register the affected leaf with the per-tree
-        // tx registry. Done in one sequential pass so the single-slot
-        // _cachedLeaf LRU updates and the per-tx dedup gate inside
-        // RecordAffectedLeafIfPreparedAsync are observed in deterministic
-        // order before any concurrent leaf dispatch begins. The bucket
-        // order is also frozen here so the parallel-dispatch index and
-        // the split-promotion index agree on which parent path belongs
-        // to which leaf result.
+        // tx registry. Done in one sequential pass so the per-tx dedup
+        // gate inside RecordAffectedLeafIfPreparedAsync is observed in
+        // deterministic order before any concurrent leaf dispatch begins.
+        // The bucket order is also frozen here so the parallel-dispatch
+        // index and the split-promotion index agree on which parent path
+        // belongs to which leaf result.
         var orderedBuckets = new List<(GrainId LeafId, LeafBucket Bucket)>(buckets.Count);
         foreach (var (leafId, bucket) in buckets)
         {
-            bucket.Leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(leafId))
-                ? existing
-                : ResolveLeafGrainSlow(leafId);
+            bucket.Leaf = ResolveLeafGrain(leafId);
             await RecordAffectedLeafIfPreparedAsync(leafId);
             orderedBuckets.Add((leafId, bucket));
         }
 
-        // Dispatch the per-leaf batched RPCs in parallel. The shard-root
-        // turn is single-threaded, so concurrent leaf RPCs cannot race
-        // the _cachedLeaf / _cachedInternal single-slot LRUs - those
-        // were updated serially in the resolve loop above, and the
-        // split-promotion loop below also runs serially in this turn.
+        // Dispatch the per-leaf batched RPCs in parallel. SetManyAsync is
+        // marked [AlwaysInterleave], so this shard-root activation can
+        // have multiple in-flight turns concurrently; the per-activation
+        // grain-reference caches are ConcurrentDictionary instances so
+        // those interleaved turns cannot corrupt them. Within a single
+        // turn, the cache is only written by the sequential resolve loop
+        // above and consulted (read-only) by the split-promotion loop
+        // below.
         // The original shape awaited each leaf sequentially, which
         // collapsed N leaves of useful concurrency per shard turn into
         // one. Provider commit p50 ~16 ms means that with B buckets
@@ -574,9 +611,7 @@ internal sealed partial class ShardRootGrain(
             while (split is not null && parentCursor > 0)
             {
                 var parentId = parents[--parentCursor];
-                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
-                    ? existingParent
-                    : ResolveInternalGrainSlow(parentId);
+                var parentGrain = ResolveInternalGrain(parentId);
                 split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
                 InvalidateRoutingTable(parentId);
             }
@@ -954,7 +989,7 @@ internal sealed partial class ShardRootGrain(
         state.State.RootIsLeaf = true;
         try
         {
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
         }
         catch
         {

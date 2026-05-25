@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Pins the per-activation routing-table-snapshot cache invariants in
 /// <c>ShardRootGrain.Traversal</c>. The cache holds a
-/// <see cref="System.Collections.Generic.Dictionary{TKey,TValue}"/>
+/// <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/>
 /// keyed by internal-node <see cref="GrainId"/>; on hit the descend loop
 /// performs key-to-child routing locally via
 /// <see cref="RoutingTableSnapshot.Route"/> and skips the cross-grain

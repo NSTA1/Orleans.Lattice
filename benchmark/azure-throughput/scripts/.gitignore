@@ -13,3 +13,10 @@
 # Per-operator BENCH_PREFIX persisted by 10-provision.ps1. Random per machine,
 # used to keep storage-account / ACR names globally unique. Never commit.
 .prefix
+# Ephemeral per-probe driver scripts, manifests, and run logs written by
+# the operator while iterating on a scaling.md probe series (e.g.
+# `.run-U9g-driver.ps1`, `.run-U9hA-manifest.csv`). The shape that
+# actually shipped is documented in scaling.md; the local drivers are
+# not reusable tooling. The conventional `40-ladder.ps1` and friends
+# remain tracked.
+.run-*

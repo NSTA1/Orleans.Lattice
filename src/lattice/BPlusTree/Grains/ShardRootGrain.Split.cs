@@ -95,7 +95,7 @@ internal sealed partial class ShardRootGrain
             MovedSlots = sorted,
             VirtualShardCount = virtualShardCount,
         };
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <inheritdoc />
@@ -108,7 +108,7 @@ internal sealed partial class ShardRootGrain
             return;
 
         state.State.SplitInProgress = sip with { Phase = ShardSplitPhase.Reject };
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <inheritdoc />
@@ -132,7 +132,7 @@ internal sealed partial class ShardRootGrain
         }
         state.State.MovedAwayVirtualShardCount = sip.VirtualShardCount;
         state.State.SplitInProgress = null;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <inheritdoc />

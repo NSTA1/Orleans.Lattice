@@ -9,22 +9,26 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Pins the per-activation single-slot <see cref="IBPlusInternalGrain"/>
-/// reference cache invariant in <c>ShardRootGrain.Traversal</c>. The cache
-/// stores the most-recently resolved <c>(GrainId, IBPlusInternalGrain)</c>
-/// pair on the activation. The invariants the tests lock are:
+/// Pins the per-activation <see cref="IBPlusInternalGrain"/> reference
+/// cache invariant in <c>ShardRootGrain.Traversal</c>. The cache stores
+/// resolved <c>(GrainId, IBPlusInternalGrain)</c> pairs on the activation
+/// in a concurrent dictionary so multiple interleaved turns can share it
+/// safely. The invariants the tests lock are:
 ///
 /// <list type="number">
 ///   <item>Repeat traversal against a tree whose root is invariant (e.g. a
 ///   stable depth-2 tree) resolves the internal grain reference exactly once
 ///   via <see cref="IGrainFactory"/>; subsequent calls hit the cache and
 ///   bypass the factory.</item>
-///   <item>Mutating the <c>RootNodeId</c> (e.g. a root split rotating the
-///   internal-root id) causes the next traversal to detect the mismatch and
-///   refresh the slot.</item>
+///   <item>Rotating the <c>RootNodeId</c> to a previously-unseen internal
+///   id (e.g. a root split installing a new internal root) materialises a
+///   fresh entry on the next traversal.</item>
+///   <item>Rotating back to a root that was already resolved earlier in
+///   the activation re-uses the cached reference - every previously-seen
+///   internal id is retained, not just the most-recent one.</item>
 ///   <item>Every traversal entry-point that walks through internal nodes
 ///   (writes, CAS, GetOrSet, GetWithVersion via <c>TraverseToLeafAsync</c>)
-///   shares the same single-slot cache.</item>
+///   shares the same cache.</item>
 /// </list>
 ///
 /// Without these tests a future refactor could silently re-introduce the
@@ -176,7 +180,7 @@ public class ShardRootGrainInternalGrainRefCacheTests
     }
 
     [Test]
-    public async Task Mixed_traversal_methods_share_the_single_slot_internal_cache()
+    public async Task Mixed_traversal_methods_share_the_internal_cache()
     {
         var h = CreateHarness();
 
@@ -208,15 +212,14 @@ public class ShardRootGrainInternalGrainRefCacheTests
     [Test]
     public async Task RootNodeId_rotation_back_to_previous_internal_resolves_each_root_once()
     {
-        // The per-activation routing-table cache (cycle-14) is keyed by the
+        // The per-activation internal-grain reference cache is keyed by the
         // internal grain id, so each unique root is resolved exactly once
         // across its lifetime in the activation. Round-tripping rootA -> rootB
         // -> rootA must therefore resolve rootA only once total: the second
-        // visit hits the cached snapshot and bypasses the factory entirely.
-        // This is a behaviour upgrade over the cycle-13 single-slot reference
-        // cache (which would have re-resolved rootA after the rootB visit
-        // evicted its slot); the routing-table cache subsumes the reference
-        // cache for the read path.
+        // visit hits the cached reference and bypasses the factory entirely.
+        // The routing-table cache (keyed the same way) reinforces this for
+        // the read path - both caches retain every previously-seen internal
+        // id rather than evicting on rotation.
         var rootA = GrainId.Create("internal", "internal-a");
         var rootB = GrainId.Create("internal", "internal-b");
         var h = CreateHarness(rootA);

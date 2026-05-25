@@ -9,27 +9,34 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Pins the per-activation single-slot <see cref="IBPlusLeafGrain"/>
-/// reference cache invariant in <c>ShardRootGrain.Traversal</c>. The cache
-/// stores the most-recently resolved <c>(GrainId, IBPlusLeafGrain)</c> pair
-/// on the activation. The invariants the tests lock are:
+/// Pins the per-activation <see cref="IBPlusLeafGrain"/> reference cache
+/// invariant in <c>ShardRootGrain.Traversal</c>. The cache stores resolved
+/// <c>(GrainId, IBPlusLeafGrain)</c> pairs on the activation in a
+/// concurrent dictionary so multiple interleaved turns can share it
+/// safely. The invariants the tests lock are:
 ///
 /// <list type="number">
 ///   <item>Repeat traversal against the same <c>RootNodeId</c> resolves the
 ///   leaf grain reference exactly once via <see cref="IGrainFactory"/>; subsequent
 ///   calls hit the cache and bypass the factory.</item>
-///   <item>Mutating the <c>RootNodeId</c> (e.g. a root split rotating the
-///   leaf id) causes the next traversal to detect the mismatch and refresh
-///   the slot, so reference resolution remains correct on rotation.</item>
+///   <item>Rotating the <c>RootNodeId</c> to a previously-unseen leaf
+///   (e.g. a root split installing a new leaf) materialises a fresh
+///   entry on the next traversal so reference resolution remains correct
+///   on rotation.</item>
+///   <item>Rotating back to a leaf that was already resolved earlier in
+///   the activation re-uses the cached reference rather than re-calling
+///   the factory - the cache retains every previously-seen leaf, not just
+///   the most-recent one.</item>
 ///   <item>Every traversal entry-point that goes via the leaf grain (writes,
-///   CAS, GetOrSet, GetWithVersion) shares the same single-slot cache -
-///   mixing methods against the same leaf id resolves the reference once,
-///   not once per method.</item>
+///   CAS, GetOrSet, GetWithVersion) shares the same cache - mixing methods
+///   against the same leaf id resolves the reference once, not once per
+///   method.</item>
 /// </list>
 ///
 /// Without these tests a future refactor could silently re-introduce the
 /// per-call <c>grainFactory.GetGrain&lt;IBPlusLeafGrain&gt;(leafId)</c>
-/// allocation (~744 B/op observed; see PR introducing the cache). The
+/// allocation (~744 B/op observed; see PR introducing the cache) or
+/// regress the round-trip-retention shape back to a single-slot LRU. The
 /// microbench is not part of CI gates, so the regression would ship invisibly.
 /// </summary>
 [TestFixture]
@@ -152,12 +159,12 @@ public class ShardRootGrainLeafGrainRefCacheTests
     }
 
     [Test]
-    public async Task Mixed_traversal_methods_share_the_single_slot_leaf_cache()
+    public async Task Mixed_traversal_methods_share_the_leaf_cache()
     {
-        // The cache slot is shared across every traversal helper that uses
-        // ResolveLeafGrainSlow - writes, CAS, GetOrSet, GetWithVersion. When
-        // the same RootNodeId is in play, mixing methods must still resolve
-        // the leaf reference exactly once.
+        // The leaf-ref cache is shared across every traversal helper that
+        // resolves an IBPlusLeafGrain - writes, CAS, GetOrSet,
+        // GetWithVersion. When the same RootNodeId is in play, mixing
+        // methods must still resolve the leaf reference exactly once.
         var h = CreateHarness();
 
         await h.Grain.SetAsync("a", [1]);
@@ -194,25 +201,27 @@ public class ShardRootGrainLeafGrainRefCacheTests
     }
 
     [Test]
-    public async Task RootNodeId_rotation_back_to_previous_leaf_re_resolves_after_eviction()
+    public async Task RootNodeId_rotation_back_to_previous_leaf_reuses_cached_reference()
     {
-        // The cache is single-slot: the slot is overwritten on every miss.
-        // Round-tripping leafA -> leafB -> leafA must therefore resolve leafA
-        // twice (initial materialisation, then again after the leafB miss
-        // evicted it). This pins the eviction shape: there is no LRU or
-        // multi-slot cache hiding behind the field, only the most-recent
-        // resolution is retained.
+        // The leaf-ref cache is a ConcurrentDictionary, not a single-slot
+        // LRU: every previously-resolved leaf reference is retained for
+        // the lifetime of the activation. Round-tripping leafA -> leafB ->
+        // leafA must therefore resolve each leaf exactly once - the second
+        // visit to leafA is a cache hit, not a re-resolution. This pins
+        // the no-eviction shape so a regression to a single-slot LRU
+        // (which would re-resolve leafA on the round-trip) fails the
+        // contract.
         var leafA = GrainId.Create("leaf", "leaf-a");
         var leafB = GrainId.Create("leaf", "leaf-b");
         var h = CreateHarness(leafA);
 
         await h.Grain.SetAsync("k1", [1]);    // miss -> resolve leafA
         h.State.State.RootNodeId = leafB;
-        await h.Grain.SetAsync("k2", [2]);    // miss -> resolve leafB (evicts leafA)
+        await h.Grain.SetAsync("k2", [2]);    // miss -> resolve leafB (leafA retained)
         h.State.State.RootNodeId = leafA;
-        await h.Grain.SetAsync("k3", [3]);    // miss -> resolve leafA again
+        await h.Grain.SetAsync("k3", [3]);    // hit -> leafA still cached
 
-        h.Factory.Received(2).GetGrain<IBPlusLeafGrain>(leafA);
+        h.Factory.Received(1).GetGrain<IBPlusLeafGrain>(leafA);
         h.Factory.Received(1).GetGrain<IBPlusLeafGrain>(leafB);
     }
 }

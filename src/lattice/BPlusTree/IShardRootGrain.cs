@@ -92,7 +92,53 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Inserts or updates multiple key-value pairs in a single traversal batch.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so multiple producer
+    /// flush slots aimed at the same per-shard activation can pipeline
+    /// concurrent batches instead of serialising behind a single in-flight
+    /// turn. Background: at <c>shardCount=16</c> and producer
+    /// <c>flushConcurrency&gt;8</c>, every flush slot independently routes
+    /// to the same <see cref="ShardRootGrain"/> activation; the
+    /// non-reentrant queue then grows to <c>NonReentrancyQueueSize=FC</c>
+    /// and the second-from-front call routinely exceeds Orleans' 30 s
+    /// response timeout. The bound is per-shard serial-turn pressure, not
+    /// upstream <see cref="LatticeGrain"/> work or provider commit p50
+    /// (see U9g in <c>scaling.md</c>).
+    /// </para>
+    /// <para>
+    /// Safety relies on three invariants that hold across interleaved
+    /// turns on the same activation:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>The per-activation grain-reference and routing-table caches
+    ///   in <see cref="ShardRootGrain"/>'s traversal partial are
+    ///   <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/>
+    ///   instances, so two turns can read/write them concurrently.</item>
+    ///   <item>The leaf apply path is LWW-convergent: two interleaved
+    ///   batches that touch the same key resolve via HLC at the owning
+    ///   leaf and converge regardless of arrival order.</item>
+    ///   <item>Every shard-root <c>state.WriteStateAsync()</c> call is
+    ///   routed through a single per-activation
+    ///   <see cref="System.Threading.SemaphoreSlim"/>
+    ///   (<c>WriteShardStateAsync()</c> in the main partial). This
+    ///   serialises the storage I/O - including the
+    ///   <c>PromoteRootAsync</c> / <c>CompletePromotionAsync</c> root
+    ///   rewrite and the hot <c>MarkLeafDirtyAsync</c> write - while
+    ///   leaving the surrounding compute interleaved. Closes the etag
+    ///   race that surfaced as <c>InconsistentStateException</c> /
+    ///   "Etag mismatch during Update" warnings on real Azure Tables when
+    ///   <c>[AlwaysInterleave]</c> first shipped (U9g result, U9h-A fix
+    ///   in <c>scaling.md</c>).</item>
+    /// </list>
+    /// <para>
+    /// The split-bubble loop in <c>SetManyLocalOnlyAsync</c> calls
+    /// <see cref="Grains.IBPlusInternalGrain.AcceptSplitAsync"/> against
+    /// parent internals (which remain non-reentrant), so the per-shard
+    /// split ordering is still serialised at the parent grain even under
+    /// interleaved shard-root turns.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>

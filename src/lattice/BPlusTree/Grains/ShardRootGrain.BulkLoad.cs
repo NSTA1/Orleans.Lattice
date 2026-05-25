@@ -143,7 +143,7 @@ internal sealed partial class ShardRootGrain
             state.State.RootNodeId = leafIds[0];
             state.State.RootIsLeaf = true;
             state.State.LastCompletedBulkOperationId = operationId;
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
             return;
         }
 
@@ -191,7 +191,7 @@ internal sealed partial class ShardRootGrain
         state.State.RootNodeId = currentLevel[0].id;
         state.State.RootIsLeaf = false;
         state.State.LastCompletedBulkOperationId = operationId;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     public async Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
@@ -244,7 +244,7 @@ internal sealed partial class ShardRootGrain
         if (idx >= sortedEntries.Count)
         {
             state.State.LastCompletedBulkOperationId = operationId;
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
             return;
         }
 
@@ -289,7 +289,7 @@ internal sealed partial class ShardRootGrain
             NewLeaves = graftEntries,
             RootWasLeaf = state.State.RootIsLeaf,
         };
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
 
         await CompleteBulkGraftAsync();
     }
@@ -384,7 +384,7 @@ internal sealed partial class ShardRootGrain
 
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <summary>
