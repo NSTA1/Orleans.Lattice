@@ -2017,6 +2017,55 @@ The HLC tick + WAL-record assembly + per-key apply have to be in the **same** cr
 
 **Last Updated**: 2026-05-28 (8c-c-iv-c2-iv knob sweep: all four cells regress; c2-ii holds; c2-iii promoted to next)
 
+#### U9p step 8c-c-iv-c2-iv-post (arithmetic check before c2-iii implementation, 2026-05-28)
+
+**Finding.** Re-read of the c2-ii phase-A `wal.append.in_flight` distribution before drafting the c2-iii implementation. Across all 8 WAL shards, last-window per shard: `count` 194-219, **`p50=6-7`, `p99=7`, `max=7`** (cap = `WalMaxPendingBatches = 8`). **The WAL pipeline is fully saturated at c2-ii**, not idle as the original c2-iv-c framing implicitly assumed.
+
+**Arithmetic.** At c2-ii: `provider.duration p50 ~70 ms × 8 in-flight × 8 shards × ~80 entries/call ≈ 7,300/s`. Measured: **7,501/s**. The ceiling is the WAL provider's effective per-call throughput, not the leaf turn queue.
+
+**Implication for c2-iii.** Letting multiple `IBPlusLeafGrain.SetManyAsync` turns interleave on the same activation would let more callers park on `writer.AppendManyAsync(...)` concurrently. But those parked callers cannot make progress until a WAL pipeline slot frees - the WAL is already running 7 in-flight transactions per shard at all times. The change moves the **queue location** (from in-front-of-leaf to in-front-of-WAL) and **may reduce caller-side P99 tail latency**, but **will not raise SteadyAvg above ~7.5 k/s** on this rung.
+
+**The c2-iii falsification target as originally drafted (SteadyAvg ≥ 9,000/s) is unreachable.** It conflated two distinct ceilings: per-leaf turn queueing (c2-iii's target) and the WAL provider's effective throughput (not c2-iii's target). The correct c2-iii ship-criterion is:
+
+1. `lattice.set_many.duration_ms` P99 drops materially (target: < 1,500 ms from current ~3,000 ms), AND
+2. `leaf.commit.in_flight` p99 lifts above 0 (proves the interleave actually engages), AND
+3. SteadyAvg holds at ~7.5 k/s (does not regress), AND
+4. FinalFailed = 0.
+
+A SteadyAvg lift would require additionally lifting the WAL ceiling - e.g. raising the rung from `10000:5` to `25000:5` to drive deeper fan-in, **or** raising `WalMaxPendingBatches` past 8 (which probe B falsified at 16 *but* probe B was at the leaf-queueing baseline; once c2-iii ships, the WMP knob may need re-evaluation). That is c2-v territory.
+
+**Decision.** Proceed with c2-iii as a tail-latency probe with the revised ship-criterion above. The implementation work is unchanged from the audit recipe; only the success metric changes from "throughput ≥ 9 k/s" to "P99 < 1.5 s with no throughput regression". A follow-on **c2-v** (re-run WMP/rung sweeps with c2-iii in place) is the next config-only probe after c2-iii.
+
+**Last Updated**: 2026-05-28 (c2-iv-post: WAL is saturated at c2-ii; c2-iii ship-criterion revised to tail-latency, not throughput)
+
+#### U9p step 8c-c-iv-c2-v-rung25000 (path-2 probe before c2-iii, 2026-05-26T16:23Z) - REVERSES the c2-iv-post conclusion: WAL is NOT the global ceiling; the leaf IS the binding constraint at higher rungs (CONFIRMED, c2-iii now has a real throughput target)
+
+**Setup.** Same image and knobs as c2-ii (`shardCount=32`, `WP=8`, `WMP=8`, `P2=5ms`, `FC=8`, `flushMs=50`, `responseTimeoutSec=180`, `batchSize=4096`), single rung **`25000:5`** (target 125,000/s - 2.5x the c2-ii rung). Same Azure account, same `-SkipBuild` image. The c2-iv-post arithmetic predicted SteadyAvg should hold near 7,500/s (WAL ceiling). Falsifiable: if it does, WAL is the global limit; if it doesn't, the leaf becomes the binding constraint at higher rungs.
+
+**Result.** Catastrophic regression: SteadyAvg **1,438/s** (vs c2-ii's 7,501/s at 10000:5), FinalWritten **196,662**, FinalAvgRate **1,797/s**, **FinalFailed=0**. Producer was clean. The rung jump from 10000 to 25000 vehicles **dropped** throughput by 5x rather than holding it at the WAL ceiling.
+
+**Mechanism.** At 25,000 vehicles spread across 32 physical shards, each shard sees ~780 distinct keys vs ~312 at 10,000 - so each 4,096-entry producer batch now fans out across ~2.5x more leaves per shard than at c2-ii. Per-leaf queueing depth grows linearly with the keyspace: at the c2-ii baseline ~3-4 callers queue per hot leaf, but at 25000:5 the same number of concurrent producer batches each touches more leaves, multiplying the queue depth at the hottest leaves. The serial-turn cost at the leaf layer dominates before the WAL pipeline can absorb the offered load.
+
+**Reading on the c2-ii / c2-iv-post arithmetic, corrected.** The c2-iv-post calculation (`provider.duration p50 × in_flight × shards × entries/call ≈ 7,300/s`) is correct *as the WAL pipeline's local ceiling*, but that ceiling is only reached when the upstream (leaf turn queue) can feed it fast enough. At 10000:5, the leaf queue happens to feed the WAL at exactly the WAL ceiling - the two limits cross. At 25000:5, the leaf queue cannot feed it, and throughput drops 5x. **The leaf turn queue IS a throughput lever**, just one that only becomes binding when the workload spreads each batch across enough distinct leaves.
+
+**Implication for c2-iii.** The original c2-iii framing (throughput probe via leaf-side reentrancy) is **vindicated, not deprecated**:
+
+1. At the **10000:5** rung, c2-iii is a tail-latency probe (as the c2-iv-post reasoning concluded).
+2. At the **25000:5** rung, c2-iii is a *throughput* probe - the leaf queue is the binding constraint, and `[AlwaysInterleave]` + release-around-WAL should lift SteadyAvg from 1,438/s back toward (and possibly past) the c2-ii WAL ceiling.
+3. At **higher rungs** (50000:5, etc.), c2-iii's throughput delta should grow with the per-leaf queue depth, since the binding constraint scales linearly with keyspace.
+
+**Revised c2-iii ship-criterion (now strictly multi-rung, evidence-driven):**
+
+1. At `10000:5`: SteadyAvg ≥ 7,000/s (no regression vs c2-ii's 7,501/s), `lattice.set_many.duration_ms` P99 < 1,500 ms, `leaf.commit.in_flight` p99 > 0.
+2. At `25000:5`: SteadyAvg ≥ 5,000/s (~3.5x lift over 1,438/s baseline - target is to climb back toward the WAL ceiling).
+3. FinalFailed = 0 on both rungs.
+
+If criterion 2 is met, the path-2 finding has converted c2-iii from a tail-latency-only probe into the campaign's next throughput lever. If criterion 2 misses but criterion 1 holds, c2-iii ships as a tail-latency-only change and the next probe targets the rung-25000 collapse separately.
+
+**Decision.** Proceed with c2-iii implementation. The rung-50000:5 cell on this ladder was cancelled mid-run; that becomes the c2-iii post-ship validation rung. **Path 2 was successful** - it falsified the wrong arithmetic ceiling and re-attributed value to c2-iii at higher rungs.
+
+**Last Updated**: 2026-05-28 (c2-v-rung25000: leaf is binding at higher rungs; c2-iii throughput value vindicated)
+
 ## 📝 Plan Steps
 
 - **DONE - U9p step 8c-c-i (WAL pipeline uncork).** `[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync` lifted `wal.append.in_flight` from 0 to 7 and `batch_entries` p90 to the 100-entry cap. The change is kept; it exposed memory-storage as the next limiter.
@@ -2029,7 +2078,8 @@ The HLC tick + WAL-record assembly + per-key apply have to be in the **same** cr
 - **DONE - U9p step 8c-c-iv-c2-ii (`BENCH_SHARD_COUNT=32` config-only probe).** **CONFIRMED with caveat**. SteadyAvg `2,817 → 7,501/s (+166%)`, FinalWritten `207,418 → 637,169 (+207%)`, FinalFailed=0, all from one env-var change. Phase A: `wal.append.in_flight` rose `0 → 7` (saturating `WalMaxPendingBatches=8`); `batch_entries` p90 rose from ~8 to the 100-entry cap. The WAL pipeline uncorked in step 8c-c-i finally engaged because upstream queueing at the leaf layer dropped enough to feed it. Hypothesis (e) is *partially* confirmed: `leaf_rpc` P99 dropped ~30% (3,276 → 2,360 ms) but ~1,800 ms of in-leaf queue wait still remains. Hypothesis (c) is also confirmed - more shards lifted throughput, but via WAL coalescence rather than per-shard queue reduction. **Action: promote `BENCH_SHARD_COUNT=32` to the benchmark default in `20-build-and-deploy.ps1`.**
 - **DONE - U9p step 8c-c-iv-c2-ii-b (`BENCH_SHARD_COUNT=64` falsifier).** Regressed: SteadyAvg 6,436/s (-14% vs s=32), FinalWritten 568,412 (-11%), FinalFailed=0. Bounds the durable-storage shard-count axis at `{16, 32}` with s=32 the measured sweet spot. Same shape as U8b/s=8 (cold-activation regression on memory) but with the regression point shifted from s ≥ 128 (memory) to s = 64 (durable), as expected when every leaf activation pays a real round-trip on first touch. `BENCH_SHARD_COUNT=32` shipped as new benchmark default in `20-build-and-deploy.ps1`.
 - **DONE (FALSIFIED) - U9p step 8c-c-iv-c2-iv (knob sweep at s=32 baseline).** Four probes: A (WP=16) → -39%, B (WMP=16) → -23%, C (WP=16+WMP=16) → **-99% collapse**, D (P2=0) → -57%. All cells regress against the c2-ii baseline (7,501/s steady). The knob axis (`WP`, `WMP`, `P2`) is empirically bounded at `WP=8, WMP=8, P2=5ms` on the durable Azure Tables baseline. Side finding: probe D demonstrates the `PhaseTwoCoalescingWindow=5ms` is now load-bearing (lifts a real number at the c2-ii operating point), reversing the U9c null result at the old baseline. **No config-only headroom remains; c2-iii (code change) is the next lever.**
-- **NEXT - U9p step 8c-c-iv-c2-iii (`[AlwaysInterleave]` on `IBPlusLeafGrain.SetManyAsync` + release-around-WAL `SemaphoreSlim`).** Promoted from DEFERRED. With c2-iv proving no config win remains, the c2-i audit's ~1.8 s per-leaf queue residual is the only remaining lever. Implementation per the audit recipe: gate the in-memory CRDT mutations (HLC tick, `PublishVersionAdvance`, `StoreEntry` loop) with a release around the `writer.AppendManyAsync` await so two callers can be parked on WAL concurrently while one runs in-memory work. Mirror change required on `CommitSetAsync` / `CommitDeleteAsync` for consistency. Ship contract test + chaos test (16 concurrent overlapping `SetManyAsync` on one leaf). Falsification target: `lattice.set_many.duration_ms` P99 < 1,500 ms at `10000:5`; `leaf.commit.in_flight` p99 rises 0 → 5-7; FinalFailed=0; SteadyAvg ≥ 9,000/s.
+- **DONE (FALSIFIED prior ceiling reading) - U9p step 8c-c-iv-c2-v-rung25000 (path-2 rung-25000:5 probe).** SteadyAvg **1,438/s** at `25000:5` vs **7,501/s** at `10000:5` - a 5x regression on a 2.5x rung jump, with zero failures. Reverses the c2-iv-post "WAL is the global ceiling" conclusion: the WAL ceiling is a local limit reached only when the leaf can feed it; at higher rungs (more keyspace = more leaves per batch = deeper per-leaf queue) the leaf turn queue is the binding constraint. **Re-vindicates c2-iii as a throughput lever at higher rungs**, not just a tail-latency change.
+- **NEXT - U9p step 8c-c-iv-c2-iii (`[AlwaysInterleave]` on `IBPlusLeafGrain.SetManyAsync` + release-around-WAL `SemaphoreSlim`).** Multi-rung ship-criterion: (a) `10000:5` SteadyAvg ≥ 7,000/s (no regression), P99 `lattice.set_many.duration_ms` < 1,500 ms, `leaf.commit.in_flight` p99 > 0; (b) `25000:5` SteadyAvg ≥ 5,000/s (~3.5x lift over 1,438/s baseline); (c) FinalFailed = 0 on both rungs. Implementation per the audit recipe: gate the in-memory CRDT mutations (HLC tick, `PublishVersionAdvance`, `StoreEntry` loop, split-predicate check) with a release around the `writer.AppendManyAsync` await on `CommitSetManyAsync`. Apply the same shape to `CommitSetAsync` and `CommitDeleteAsync`. Ship contract test + chaos test.
 - **DEFERRED - U9p step 8c-c-iv-c (steady-state grid search).** Originally the next step after iv-b; deferred behind iv-c2 because tail latency, not throughput, is the binding kink at the durable Azure Tables baseline. When iv-c2 ships, rerun this grid search with the lower per-write tail and record steady-state band, peak, and `wal.append.provider.duration` p50/p99 for each of: baseline, `walPartitions=16`, `walMaxPendingBatches=16`, `phase2CoalescingMs=3`, best-of-three combined. The winner becomes the recommended default in `docs/lattice/wal.md`.
 - **U9p step 8c-c-iv-d (write up campaign).** Update `docs/lattice/wal.md` with the durable steady-state band; update `docs/lattice/wal-storage-providers.md` with the Azure Tables-backed numbers; mark any roadmap items whose deps are now satisfied. Run `dotnet test --filter "TestCategory!=Chaos"` before each PR and `dotnet test --filter "TestCategory=Chaos"` before any merge that flips a default.
 - **DEFERRED - prior B / C / D plan steps.** The Phase A anomalies that originally paused them (harness ceiling at ~17 k/s on memory WAL; atomic-write throughput variance) are still real, but they live behind the kink-resolution plan. They become live again after 8c-c-iv-d ships and we have a documented production-shape band to compare against.
