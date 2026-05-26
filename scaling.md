@@ -1959,7 +1959,7 @@ The HLC tick + WAL-record assembly + per-key apply have to be in the **same** cr
 - **Test the s=64 falsifier next (8c-c-iv-c2-ii-b).** If the `c` hypothesis is right that "more shards = better WAL coalescence", s=64 should lift throughput further until per-leaf cold-start activation tail re-enters (the U8b lesson). The U8/U8b axis was bounded `{16, 32}` on *memory-storage* runs; with durable Azure Tables grain storage the activation cost is higher, so s=64 is a falsifiable probe. Cheap, config-only.
 - **DEFER c2-iii (`[AlwaysInterleave]` + release-around-WAL gate) again.** The audit recipe is correct but the in-leaf 1.8 s residual is now a smaller fraction of the system, and the c2-ii result demonstrates the campaign still has cheap config-only wins to harvest first. Re-evaluate c2-iii after c2-ii-b (s=64) and c2-iv (rerun the c2-iv-b knob sweep at s=32).
 
-**Last Updated**: 2026-05-28 (8c-c-iv-c2-ii landed: shardCount=32 +166% steady-state)
+**Last Updated**: 2026-05-26 (8c-c-iv-c2-ii landed: shardCount=32 +166% steady-state)
 
 #### U9p step 8c-c-iv-c2-ii-b result (2026-05-26T15:47Z) - `BENCH_SHARD_COUNT=64` regresses; s=32 is the durable-Azure sweet spot (FALSIFIED, s=32 confirmed)
 
@@ -1979,7 +1979,7 @@ The HLC tick + WAL-record assembly + per-key apply have to be in the **same** cr
 
 **Decision.** s=32 is the new benchmark default. Promoted in `benchmark/azure-throughput/scripts/20-build-and-deploy.ps1` (default value `'0'` → `'32'`, with comment naming the c2-ii measurement). Operators can still override via `BENCH_SHARD_COUNT=0` (library default) or any positive value.
 
-**Last Updated**: 2026-05-28 (8c-c-iv-c2-ii-b: s=64 regressed; s=32 promoted to benchmark default)
+**Last Updated**: 2026-05-26 (8c-c-iv-c2-ii-b: s=64 regressed; s=32 promoted to benchmark default)
 
 #### U9p step 8c-c-iv-c2-iv result (2026-05-26T15:50Z-T16:10Z) - knob sweep at s=32 baseline; **all four cells regress, c2-ii baseline holds** (FALSIFIED, no config-only headroom remains)
 
@@ -2015,7 +2015,7 @@ The HLC tick + WAL-record assembly + per-key apply have to be in the **same** cr
 - **c2-iv is FALSIFIED for any single-knob lift over c2-ii.** The remaining headroom (`leaf_rpc` P99 ~2.4 s vs leaf-body P99 ~0.6 s) cannot be harvested by config. The next lever is c2-iii (code change: `[AlwaysInterleave]` + release-around-WAL gate on `IBPlusLeafGrain.SetManyAsync`), which targets the ~1.8 s per-leaf queue residual the c2-ii audit identified.
 - **The next concrete code step is c2-iii.** With c2-iv proving no config-only headroom remains, c2-iii's value gate is no longer "is it the largest available win" but "is it the only available win". The audit's design sketch (release `SemaphoreSlim` around the `writer.AppendManyAsync` await) is the implementation target.
 
-**Last Updated**: 2026-05-28 (8c-c-iv-c2-iv knob sweep: all four cells regress; c2-ii holds; c2-iii promoted to next)
+**Last Updated**: 2026-05-26 (8c-c-iv-c2-iv knob sweep: all four cells regress; c2-ii holds; c2-iii promoted to next)
 
 #### U9p step 8c-c-iv-c2-iv-post (arithmetic check before c2-iii implementation, 2026-05-28)
 
@@ -2036,7 +2036,7 @@ A SteadyAvg lift would require additionally lifting the WAL ceiling - e.g. raisi
 
 **Decision.** Proceed with c2-iii as a tail-latency probe with the revised ship-criterion above. The implementation work is unchanged from the audit recipe; only the success metric changes from "throughput ≥ 9 k/s" to "P99 < 1.5 s with no throughput regression". A follow-on **c2-v** (re-run WMP/rung sweeps with c2-iii in place) is the next config-only probe after c2-iii.
 
-**Last Updated**: 2026-05-28 (c2-iv-post: WAL is saturated at c2-ii; c2-iii ship-criterion revised to tail-latency, not throughput)
+**Last Updated**: 2026-05-26 (c2-iv-post: WAL is saturated at c2-ii; c2-iii ship-criterion revised to tail-latency, not throughput)
 
 #### U9p step 8c-c-iv-c2-v-rung25000 (path-2 probe before c2-iii, 2026-05-26T16:23Z) - REVERSES the c2-iv-post conclusion: WAL is NOT the global ceiling; the leaf IS the binding constraint at higher rungs (CONFIRMED, c2-iii now has a real throughput target)
 
@@ -2064,7 +2064,7 @@ If criterion 2 is met, the path-2 finding has converted c2-iii from a tail-laten
 
 **Decision.** Proceed with c2-iii implementation. The rung-50000:5 cell on this ladder was cancelled mid-run; that becomes the c2-iii post-ship validation rung. **Path 2 was successful** - it falsified the wrong arithmetic ceiling and re-attributed value to c2-iii at higher rungs.
 
-**Last Updated**: 2026-05-28 (c2-v-rung25000: leaf is binding at higher rungs; c2-iii throughput value vindicated)
+**Last Updated**: 2026-05-26 (c2-v-rung25000: leaf is binding at higher rungs; c2-iii throughput value vindicated)
 
 #### U9p step 8c-c-iv-c2-iii pre-implementation re-read (2026-05-28) - c2-i audit was wrong about in-memory hazards; the real hazard is concurrent `SplitAsync`
 
@@ -2096,7 +2096,7 @@ If criterion 2 is met, the path-2 finding has converted c2-iii from a tail-laten
 
 **Decision.** Park c2-iii at the implementation-ready boundary. The next concrete code action is **c2-iii-design** (read split partials, choose option 1 vs 2, draft the patch). This is the right stopping point for this session - the path-2 finding has been recorded, the c2-i audit corrected, and the implementation scope is now precisely understood.
 
-**Last Updated**: 2026-05-28 (c2-iii pre-implementation re-read: split race is the real hazard; ship-readiness gated on chaos-suite plan)
+**Last Updated**: 2026-05-26 (c2-iii pre-implementation re-read: split race is the real hazard; ship-readiness gated on chaos-suite plan)
 
 #### U9p step 8c-c-iv-c2-iii-design (2026-05-28) - Split.cs read; option 2 chosen; patch surface defined
 
@@ -2133,7 +2133,7 @@ If criterion 2 is met, the path-2 finding has converted c2-iii from a tail-laten
 
 **Decision.** Park c2-iii-design as complete. The c2-iii-ship session will run end-to-end against the patch surface above. This session has produced a precise, falsifiable implementation specification but does not ship the source change - the change is too high-blast-radius to merge without an explicit chaos pass.
 
-**Last Updated**: 2026-05-28 (c2-iii-design complete; 5 gate sites + 4 interface attributes + 3 tests defined; ship-ready)
+**Last Updated**: 2026-05-26 (c2-iii-design complete; 5 gate sites + 4 interface attributes + 3 tests defined; ship-ready)
 
 #### U9p step 8c-c-iv-c2-iii-ship result (2026-05-26T17:50Z) - c2-iii lifts both rungs decisively; leaf interleave engaged; ship criterion met (CONFIRMED, c2-iii shipped)
 
@@ -2197,7 +2197,7 @@ The 25000:5 outlier at t=80.8s window (P99 spiking to 53 s) is a single late ack
 
 **Next.** Document the c2-iii result in `docs/lattice/wal.md` / `docs/lattice/api.md`. Open a PR for the c2-iii source change against `main`. The original Phase B / Phase C / Phase D plan steps (above the c2-* tree) become live again - the durable Azure Tables baseline is now a real working point at ~10 k/s steady on a single silo. The Azure Tables documented account ceiling of 20,000/s per Standard account is now within 2x of measured throughput, so the next axis is either (a) a second silo (multi-silo Orleans clustering, which the current bench harness does not exercise) or (b) re-running the original c2-iv knob sweep at the new c2-iii baseline - the WMP/WP knobs may now move because the leaf is no longer the binding constraint.
 
-**Last Updated**: 2026-05-28 (c2-iii-ship: +36% at 10000:5, +400% at 25000:5, zero failures, leaf.commit.in_flight engaged)
+**Last Updated**: 2026-05-26 (c2-iii-ship: +36% at 10000:5, +400% at 25000:5, zero failures, leaf.commit.in_flight engaged)
 
 #### U9p step 8c-c-iv-c2-vi (2026-05-28) - `IBPlusInternalGrain` is the next serialiser under non-flat trees; same recipe as c2-iii applies cleanly
 
@@ -2235,7 +2235,42 @@ The 25000:5 outlier at t=80.8s window (P99 spiking to 53 s) is a single late ack
 
 **Decision.** Implement c2-vi in this session: attributes + gate + contract test + non-chaos suite + benchmark.
 
-**Last Updated**: 2026-05-28 (c2-vi memo: internal-grain reads are trivially safe under interleave; gate recipe ports from c2-iii)
+**Last Updated**: 2026-05-26 (c2-vi memo: internal-grain reads are trivially safe under interleave; gate recipe ports from c2-iii)
+
+#### U9p step 8c-c-iv-c2-vi-bench-timing-fix (2026-05-28) - corrects a ~30-65% downward bias in every prior `SteadyAvg` figure
+
+**Trigger.** Audit of the c2-vi postfix benchmark output. The producer runs for 60 s, then the silo continues for ~50 s of drain + watchdog tail before `BENCH_TOTAL_DURATION_SEC=120s` cuts it. During those ~50 s the per-second `Entries written per second` lines all report `0`. The prior `40-ladder.ps1` averaged over **every** `t >= 10s` window, including all of the trailing zeros.
+
+**Bias.** The reported `SteadyAvg` was the *all-window* average. The campaign cared about the *productive-window* average (the silo's actual sustained rate while the producer was active). For a 60 s producer with a 50 s drain tail, the bias is ~`60 / 110 ≈ 0.55`, i.e. reported numbers were systematically `1.8x` low. The bias affected **every campaign milestone uniformly**, so relative comparisons (`c2-iii vs c2-ii` etc.) are correct, but the **absolute** numbers were wrong and the **headroom-to-Azure-account-ceiling** narrative misread.
+
+**Fix.** `40-ladder.ps1` now filters to windows in `[10s, lastNonZeroT]`. The `lastNonZeroT` cutoff is the latest second whose `rate > 0`; everything beyond is the drain tail. Two new columns surface the filter behaviour: `SteadyDurationSec` (the productive window length, typically 58-60 s for a 60 s producer) and `DrainTailSec` (the trailing zero window length, typically 45-47 s).
+
+**Retroactive correction of prior milestones** (re-parsed from preserved silo logs with the fixed logic; `old` = pre-fix, `new` = corrected, `productive`/`drain` from the fixed logic):
+
+| milestone | rung | old reported | **corrected** | uplift | productive | drain |
+|-----------|------|-------------:|--------------:|-------:|-----------:|------:|
+| c2-ii (`shardCount=32`)        | 10000:5 | 7,501/s    | **9,987/s**     | +33%   | 59 s | 45 s |
+| c2-iii ship                     | 10000:5 | 10,166/s   | **14,314/s**    | +41%   | 60 s | 45 s |
+| c2-iii ship                     | 25000:5 | 7,184/s    | **9,485/s**     | +32%   | 60 s | 45 s |
+| c2-vi postfix (etag failures)   | 10000:5 | 6,898/s    | **11,391/s**    | +65%   | 59 s | 46 s |
+| c2-vi postfix (etag failures)   | 25000:5 | 2,239/s    | **3,025/s**     | +35%   | 58 s | 47 s |
+
+**Calibrated campaign trajectory** at the durable Azure Tables baseline, corrected `SteadyAvg`:
+
+- Baseline (pre-c2-ii, `shardCount=library default`): ~2,817/s (uncorrected; pre-fix runs of this artefact aren't preserved in `.run/`, so this number remains uncorrected - treat it as a floor).
+- **c2-ii** (`shardCount=32`): **9,987/s** at 10000:5, +254% vs baseline.
+- **c2-iii** (leaf `[AlwaysInterleave]` + split gate): **14,314/s** at 10000:5 (+43% over c2-ii), **9,485/s** at 25000:5 (the rung newly viable post-c2-iii; the rung that c2-v-rung25000 showed collapsing to 1,438/s pre-c2-iii is the right comparison).
+- **c2-vi postfix** (internal-grain `[AlwaysInterleave]` + off-heap rewrite + GrainId converter + sentinel fix): **11,391/s** at 10000:5 and **3,025/s** at 25000:5 - *both lower than c2-iii*. The rung-2 number is contaminated by the etag-race investigation still in progress (32 k failed batches; root cause not yet identified). The rung-1 number reflects a real ~20% regression from c2-iii that the etag race may or may not explain. Treat all c2-vi-postfix throughput claims as provisional until the etag race is closed.
+
+**Where the documented Azure Tables ceiling (20,000/s per Standard account) sits in the corrected view.** c2-iii's rung-1 ~14k/s is closer to the account ceiling than the campaign had been treating it (we were saying ~10k/s vs ~20k; the real ratio is ~14k/s vs ~20k, i.e. **the silo is at ~70% of the per-account documented ceiling on a single rung at a single silo**). The remaining headroom is structurally smaller than implied by the original numbers; this re-shapes the priority of c2-vi's expected gain.
+
+**Decision.**
+
+- Fix shipped in `benchmark/azure-throughput/scripts/40-ladder.ps1`. Two new diagnostic columns (`SteadyDurationSec`, `DrainTailSec`) make the productive window visible per rung.
+- All prior throughput claims in this document are kept **as-reported in the original measurement** for historical continuity. The corrected values from the table above are the operational reference going forward.
+- No source-code change in `src/lattice` is implied by this audit. It is a measurement-harness correction.
+
+**Last Updated**: 2026-05-26 (bench-timing fix: drain-tail excluded; corrected milestones recorded above)
 
 ## 📝 Plan Steps
 

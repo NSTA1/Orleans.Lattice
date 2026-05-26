@@ -142,11 +142,31 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
             }
         }
 
-    $steady = $perSec | Where-Object { $_.T -ge 10 }
-    if (-not $steady) { $steady = $perSec }    # very short run: fall back to all samples.
+    # Steady-state: avg of per-second lines over the productive window.
+    # The productive window is from t >= 10s (skip producer warm-up) to
+    # the LAST second with a non-zero rate (skip trailing zero windows
+    # while the silo drains and the watchdog ticks down). The prior
+    # logic averaged over the full t >= 10s span including ~50s of
+    # post-producer zero windows from the BENCH_TOTAL_DURATION_SEC=120s
+    # watchdog tail, which dragged every "SteadyAvg" number across the
+    # campaign roughly 2x low against the actual sustained throughput
+    # during the producer's active window. See scaling.md U9p step
+    # 8c-c-iv-c2-vi for the audit.
+    $allSinceWarmup = $perSec | Where-Object { $_.T -ge 10 }
+    if (-not $allSinceWarmup) { $allSinceWarmup = $perSec }  # very short run: fall back.
+
+    # Find the last second with rate > 0; everything beyond is drain-tail.
+    $lastProductive = ($allSinceWarmup | Where-Object { $_.Rate -gt 0 } | Measure-Object T -Maximum).Maximum
+    $steady = if ($null -ne $lastProductive) {
+        $allSinceWarmup | Where-Object { $_.T -le $lastProductive }
+    } else {
+        $allSinceWarmup  # no non-zero samples; fall back to everything past warmup.
+    }
     $steadyAvg = if ($steady) { [long] (($steady | Measure-Object Rate -Average).Average) } else { 0 }
     $steadyMax = if ($steady) { ($steady | Measure-Object Rate -Maximum).Maximum } else { 0 }
     $steadyMin = if ($steady) { ($steady | Measure-Object Rate -Minimum).Minimum } else { 0 }
+    $steadyDurationSec = if ($lastProductive) { [int] ($lastProductive - 10) } else { 0 }
+    $drainTailSec      = if ($lastProductive) { [int] (($allSinceWarmup | Measure-Object T -Maximum).Maximum - $lastProductive) } else { 0 }
 
     # Final-line headline (if present).
     $finalMatch = ($siloLog -split "`n") |
@@ -161,23 +181,25 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
     }
 
     $row = [pscustomobject]@{
-        Rung            = $i + 1
-        Vehicles        = $vehicles
-        TickHz          = $hz
-        TargetRate      = $target
-        SteadyMin       = $steadyMin
-        SteadyAvg       = $steadyAvg
-        SteadyMax       = $steadyMax
-        FinalWritten    = $finalWritten
-        FinalFailed     = $finalFailed
-        FinalAvgRate    = $finalAvg
+        Rung               = $i + 1
+        Vehicles           = $vehicles
+        TickHz             = $hz
+        TargetRate         = $target
+        SteadyMin          = $steadyMin
+        SteadyAvg          = $steadyAvg
+        SteadyMax          = $steadyMax
+        SteadyDurationSec  = $steadyDurationSec
+        DrainTailSec       = $drainTailSec
+        FinalWritten       = $finalWritten
+        FinalFailed        = $finalFailed
+        FinalAvgRate       = $finalAvg
     }
     $results.Add($row)
 
     Write-Host ""
     Write-Host "[ladder] rung $($i+1) summary:" -ForegroundColor Cyan
     Write-Host ("  target          : {0,12:N0}/s" -f $target)
-    Write-Host ("  steady-state avg: {0,12:N0}/s" -f $steadyAvg)
+    Write-Host ("  steady-state avg: {0,12:N0}/s  (over {1}s productive window; {2}s drain tail excluded)" -f $steadyAvg, $steadyDurationSec, $drainTailSec)
     Write-Host ("  steady min/max  : {0,12:N0} .. {1,12:N0}" -f $steadyMin, $steadyMax)
     Write-Host ("  total written   : {0,12:N0}" -f $finalWritten)
     Write-Host ("  total failed    : {0,12:N0}" -f $finalFailed)
