@@ -140,6 +140,12 @@ $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_
 # ClientMessagingOptions.ResponseTimeout in Silo/Program.cs.
 $responseTimeoutSec = if ($env:BENCH_RESPONSE_TIMEOUT_SEC) { $env:BENCH_RESPONSE_TIMEOUT_SEC }
                       else { '30' }
+# Diagnostic gate (c2-vi etag-race probe). When '1' the silo emits one
+# stdout line per leaf/internal grain PersistAsync call with
+# state.RecordExists, state.Etag, and a caller tag. Default empty so
+# normal runs pay zero cost.
+$tracePersist = if ($env:LATTICE_BENCH_TRACE_PERSIST) { $env:LATTICE_BENCH_TRACE_PERSIST }
+                else { '' }
 # Leaf/internal/atomic grain checkpoint storage. BENCH_LEAF_STORAGE_KIND selects
 # the IGrainStorage backing the lattice's leaf/internal/atomic state:
 #   "azure" (default) - production-shape Azure Table grain storage. Reuses the
@@ -369,6 +375,8 @@ properties:
             value: '$phaseAReportSec'
           - name: BENCH_TOTAL_DURATION_SEC
             value: '$totalDuration'
+          - name: LATTICE_BENCH_TRACE_PERSIST
+            value: '$tracePersist'
           - name: BENCH_RESPONSE_TIMEOUT_SEC
             value: '$responseTimeoutSec'
           - name: BENCH_LEAF_STORAGE_KIND

@@ -51,6 +51,23 @@ internal sealed partial class BPlusInternalGrain(
     /// </summary>
     private readonly SemaphoreSlim _splitGate = new(1, 1);
 
+    // Diagnostic: when LATTICE_BENCH_TRACE_PERSIST=1 (or 'true'), emit a line
+    // before every state.WriteStateAsync so etag-failure investigations can
+    // correlate a failing write with the caller. Zero-cost when disabled
+    // (one Environment.GetEnvironmentVariable at type init, then a bool check).
+    private static readonly bool _tracePersist =
+        Environment.GetEnvironmentVariable("LATTICE_BENCH_TRACE_PERSIST") is { Length: > 0 } v
+        && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
+
+    private void TracePersist(string caller)
+    {
+        if (!_tracePersist) return;
+        var etag = state.Etag is null
+            ? "<null>"
+            : (state.Etag.Length > 32 ? state.Etag.Substring(0, 32) + ".." : state.Etag);
+        Console.WriteLine($"[diag persist] kind=internal caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' recordExists={state.RecordExists} etag={etag}");
+    }
+
     private ResolvedLatticeOptions? _options;
     private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
         _options is not null
@@ -83,6 +100,7 @@ internal sealed partial class BPlusInternalGrain(
 
         try
         {
+            TracePersist(nameof(InitializeAsync));
             await state.WriteStateAsync();
         }
         catch
@@ -119,6 +137,7 @@ internal sealed partial class BPlusInternalGrain(
 
         try
         {
+            TracePersist(nameof(InitializeWithChildrenAsync));
             await state.WriteStateAsync();
         }
         catch
@@ -257,6 +276,7 @@ internal sealed partial class BPlusInternalGrain(
             pendingRecovery = await CompleteSplitAsync();
             try
             {
+                TracePersist("AcceptSplitCoreAsync.recovery");
                 await state.WriteStateAsync();
             }
             catch
@@ -320,6 +340,7 @@ internal sealed partial class BPlusInternalGrain(
 
         try
         {
+            TracePersist("AcceptSplitCoreAsync.main");
             await state.WriteStateAsync();
         }
         catch
@@ -367,6 +388,7 @@ internal sealed partial class BPlusInternalGrain(
 
         try
         {
+            TracePersist(nameof(SetTreeIdAsync));
             await state.WriteStateAsync();
         }
         catch
@@ -394,6 +416,7 @@ internal sealed partial class BPlusInternalGrain(
 
         // Trim our children to the left half.
         state.State.Children.RemoveRange(mid, state.State.Children.Count - mid);
+        TracePersist(nameof(SplitAsync));
         await state.WriteStateAsync();
 
         // Phase 2: Execute cross-grain operations using the persisted identity.

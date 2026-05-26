@@ -83,8 +83,29 @@ internal sealed partial class BPlusLeafGrain
     /// when the tree has not yet been registered with this leaf
     /// (pre-<c>SetTreeIdAsync</c>).
     /// </summary>
-    private async Task PersistAsync()
+    /// <summary>
+    /// Diagnostic gate for the c2-vi etag-race probe. Set
+    /// <c>LATTICE_BENCH_TRACE_PERSIST=1</c> in the silo environment to
+    /// emit one stdout line per <see cref="PersistAsync"/> call with
+    /// the activation id, <see cref="IPersistentState{TState}.RecordExists"/>,
+    /// <see cref="IPersistentState{TState}.Etag"/>, and a short caller-
+    /// supplied tag. Read once at process start; flipping the env var
+    /// mid-run has no effect. Default <c>false</c> so production and
+    /// the unit-test harness pay zero cost.
+    /// </summary>
+    private static readonly bool _tracePersist =
+        Environment.GetEnvironmentVariable("LATTICE_BENCH_TRACE_PERSIST") is { Length: > 0 } v
+        && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
+
+    private async Task PersistAsync([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
+        if (_tracePersist)
+        {
+            var etag = state.Etag is null
+                ? "<null>"
+                : (state.Etag.Length > 32 ? state.Etag.Substring(0, 32) + ".." : state.Etag);
+            Console.WriteLine($"[diag persist] kind=leaf caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' shard={state.State.ShardIndex} recordExists={state.RecordExists} etag={etag}");
+        }
         var startTicks = Stopwatch.GetTimestamp();
         try
         {
