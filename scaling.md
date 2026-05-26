@@ -2199,6 +2199,44 @@ The 25000:5 outlier at t=80.8s window (P99 spiking to 53 s) is a single late ack
 
 **Last Updated**: 2026-05-28 (c2-iii-ship: +36% at 10000:5, +400% at 25000:5, zero failures, leaf.commit.in_flight engaged)
 
+#### U9p step 8c-c-iv-c2-vi (2026-05-28) - `IBPlusInternalGrain` is the next serialiser under non-flat trees; same recipe as c2-iii applies cleanly
+
+**Why look at internal grains now.** c2-iii uncorked the leaf turn queue. Every shard-root traversal that hits a non-flat tree still calls `IBPlusInternalGrain.GetRoutingTableAsync` once per internal node visited (cached via `ShardRootGrain.Traversal.cs::GetRoutingTableSnapshotAsync` ValueTask wrapper, but each cache miss still goes through the internal grain's turn queue). Under the c2-v-rung25000 keyspace (10k vehicles ⇒ ~780 keys/shard at `shardCount=32` ⇒ multi-level tree per shard), every concurrent producer batch fans out into multiple `GetRoutingTableAsync` calls on the same internal grain - which is non-reentrant by default. With shard-root and leaf both interleaved post-c2-iii, internal is the next obvious serialiser.
+
+**Audit of `IBPlusInternalGrain` (`src/lattice/BPlusTree/IBPlusInternalGrain.cs` + `Grains/BPlusInternalGrain.cs`).**
+
+| Method | Body shape | Hot path? | Interleave-safe under U9h-C lens? |
+|--------|-----------|-----------|------------------------------------|
+| `RouteWithMetadataAsync(key)` | `Task.FromResult((state.State.Route(key), state.State.ChildrenAreLeaves))` | **YES** (every shard-root write/read on non-flat) | **YES** - single synchronous tuple read |
+| `GetRoutingTableAsync()` | builds `RoutingTableSnapshot` in one synchronous block from `state.State.Children` | **YES** (cached traversal) | **YES** - synchronous projection |
+| `GetLeftmostChildAsync()` | `Task.FromResult(state.State.Children[0].ChildId)` | range scans | **YES** |
+| `GetRightmostChildAsync()` | `Task.FromResult(state.State.Children[^1].ChildId)` | range scans | **YES** |
+| `GetLeftmostChildWithMetadataAsync()` | tuple of two reads | range scans | **YES** |
+| `GetRightmostChildWithMetadataAsync()` | tuple of two reads | range scans | **YES** |
+| `AreChildrenLeavesAsync()` | `Task.FromResult(state.State.ChildrenAreLeaves)` | depth check | **YES** |
+| `GetChildIdsAsync()` | `Task.FromResult(state.State.Children.Select(c => c.ChildId).ToList())` (or similar) | admin / diagnostics | **YES** |
+| `AcceptSplitAsync(promotedKey, newChild)` | mutating; **`SplitState == SplitInProgress` recovery branch at L195, `state.WriteStateAsync()` at L215/L278** | **YES** (called by `ShardRootGrain` after every leaf split that bubbles up) | NO under naive interleave - **identical split-race shape as c2-iii** |
+| `InitializeAsync` / `InitializeWithChildrenAsync` / `SetTreeIdAsync` / `ClearGrainStateAsync` | lifecycle / admin | NO | irrelevant |
+| `BeginSplitAsync` / `CompleteSplitAsync` (when it's the internal node splitting) | mutating, admin | rare | needs gate (treated as `AcceptSplit` peer) |
+
+**Internal-grain reads have no such structure**: every read is a single `Task.FromResult(...)` expression - no awaits, no cross-state-field reads, no traversal. The synchronous projection runs atomically under any Orleans scheduling regardless of `[AlwaysInterleave]`. The U9h-C hazard does not apply.
+
+**Recipe.** Mirror c2-iii exactly at the internal-grain layer:
+
+1. `[AlwaysInterleave]` on 7 internal-grain read methods (all the ones above marked YES). Pure synchronous reads. No state required to serialise.
+2. `[AlwaysInterleave]` on `AcceptSplitAsync` so concurrent overflow propagations from different leaves don't queue.
+3. Per-activation `_splitGate` `SemaphoreSlim(1, 1)` field on `BPlusInternalGrain` (mirror of c2-iii on `BPlusLeafGrain.Metrics.cs`).
+4. Wrap `AcceptSplitAsync`'s recovery + main body in the gate with `state.State.SplitState == SplitInProgress` re-check inside the gate. The two `state.WriteStateAsync()` calls inside the method (L215 recovery, L278 main) are the etag-race sites; the gate serialises them.
+5. Add a contract test `IBPlusInternalGrainInterleavedReadsTests` pinning the attributes (mirror of `IBPlusLeafGrainInterleavedWritesTests`).
+
+**Expected throughput impact.** Highest at `25000:5` and deeper rungs where the tree height is ≥ 2 - every leaf-bound write traverses ≥ 1 internal node, currently paying one full activation turn per traversal. The c2-iii result at `25000:5` (7,184/s, vs `10000:5` 10,166/s) shows a ~30% deficit between rungs that c2-iii alone cannot close; if the deficit is the internal-grain queue, c2-vi should close it and bring `25000:5` SteadyAvg into the 9-10 k/s band.
+
+**Risk profile.** Lower than c2-iii. The internal grain's mutation surface is narrower (one method on the hot path: `AcceptSplitAsync`), and the reads are all literally single-line returns. The split state machine on internal grains is structurally identical to the leaf's, so the gate pattern from c2-iii ports directly with no new chaos surface. The chaos suite already exercises split-during-write paths; if c2-iii passed, c2-vi should pass under the same harness.
+
+**Decision.** Implement c2-vi in this session: attributes + gate + contract test + non-chaos suite + benchmark.
+
+**Last Updated**: 2026-05-28 (c2-vi memo: internal-grain reads are trivially safe under interleave; gate recipe ports from c2-iii)
+
 ## 📝 Plan Steps
 
 - **DONE - U9p step 8c-c-i (WAL pipeline uncork).** `[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync` lifted `wal.append.in_flight` from 0 to 7 and `batch_entries` p90 to the 100-entry cap. The change is kept; it exposed memory-storage as the next limiter.

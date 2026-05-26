@@ -28,6 +28,29 @@ internal sealed partial class BPlusInternalGrain(
     /// </summary>
     public IGrainContext GrainContext => context;
 
+    /// <summary>
+    /// Per-activation gate that serialises every mutating entry into
+    /// <see cref="AcceptSplitAsync"/> (and any future internal-node
+    /// mutation that touches the split state machine).
+    /// <para>
+    /// U9p step 8c-c-iv-c2-vi: <see cref="IBPlusInternalGrain.AcceptSplitAsync"/>
+    /// is marked <c>[AlwaysInterleave]</c> so concurrent overflow
+    /// propagations from different leaves do not queue on the internal
+    /// node's activation turn. The race window is the same shape as the
+    /// c2-iii leaf race: two interleaved callers both reach the
+    /// <see cref="Primitives.SplitState.SplitInProgress"/> recovery
+    /// branch or both observe the <c>Children.Count &gt; MaxInternalChildren</c>
+    /// predicate and both call <c>SplitAsync</c>, double-persisting
+    /// <c>state.State</c> and corrupting the child chain. This gate
+    /// serialises every <c>AcceptSplitAsync</c> body so the mutation /
+    /// persist sequence is atomic per activation; the surrounding
+    /// <c>[AlwaysInterleave]</c> still permits read-only RPCs
+    /// (<c>RouteWithMetadataAsync</c>, <c>GetRoutingTableAsync</c>,
+    /// etc.) to overlap, which is the actual throughput lever.
+    /// </para>
+    /// </summary>
+    private readonly SemaphoreSlim _splitGate = new(1, 1);
+
     private ResolvedLatticeOptions? _options;
     private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
         _options is not null
@@ -188,6 +211,28 @@ internal sealed partial class BPlusInternalGrain(
         Task.FromResult(state.State.ChildrenAreLeaves);
 
     public async Task<SplitResult?> AcceptSplitAsync(string promotedKey, GrainId newChild)
+    {
+        // U9p step 8c-c-iv-c2-vi: the interface is marked
+        // [AlwaysInterleave] so concurrent overflow propagations from
+        // different leaves do not queue on the activation turn. The
+        // body itself is non-reentrant - it mutates state.State and
+        // persists - so the per-activation _splitGate serialises every
+        // execution. The gate's contention is bounded by the number of
+        // concurrent overflows targeting THIS internal node (typically
+        // 1-2 in flight under steady load); the surrounding interleave
+        // lets all read traffic (Route*, GetRoutingTable*) overlap.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            return await AcceptSplitCoreAsync(promotedKey, newChild);
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
+    private async Task<SplitResult?> AcceptSplitCoreAsync(string promotedKey, GrainId newChild)
     {
         SplitResult? pendingRecovery = null;
 
