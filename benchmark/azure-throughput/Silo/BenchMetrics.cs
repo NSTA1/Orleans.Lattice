@@ -107,4 +107,20 @@ internal static class BenchMetrics
             name: "azure.throughput.bench.lattice.set_many.duration_ms",
             unit: "ms",
             description: "Wall-clock ms per ILattice.SetManyAsync call observed by the silo flusher.");
+
+    /// <summary>
+    /// Number of retry attempts the silo flusher performed against a
+    /// single <c>ILattice.SetManyAsync</c> call after a transient
+    /// <c>OrleansMessageRejectionException</c>. Recorded once per
+    /// terminal outcome (success, exhaustion, or shutdown-discard) with
+    /// the value being the *retry* count (0 on a first-try success).
+    /// Step 8c-c-iv-a uses this to read the density of cold-start
+    /// rejections off the phase-A scraper rather than inferring it from
+    /// the failed-batch counter alone.
+    /// </summary>
+    public static readonly Histogram<int> LatticeSetManyRetryAttempts =
+        Meter.CreateHistogram<int>(
+            name: "azure.throughput.bench.lattice.set_many.retry_attempts",
+            unit: "attempts",
+            description: "Retry attempts per SetManyAsync call after a transient OrleansMessageRejectionException (0 on first-try success).");
 }

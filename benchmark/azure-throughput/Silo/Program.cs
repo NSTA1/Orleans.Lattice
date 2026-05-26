@@ -857,38 +857,102 @@ internal sealed class TcpIngestService(
     // counted in either the written or the failed total.
     private const int ShutdownDiscarded = -1;
 
+    // Bounded retry policy for the silo-side SetManyAsync call. A
+    // freshly-started silo's first thousands of leaf-grain activations
+    // race the placement directory and surface as
+    // OrleansMessageRejectionException("Unable to create local
+    // activation" / "to invalid activation"); the directory recovers
+    // within a few hundred ms. The startup-reshard path (line ~497)
+    // already retries this exact class on the same rationale; the hot
+    // path needs the same treatment so the cold-start storm does not
+    // count an entire batch (up to FlushBatchSize) as failed.
+    //
+    // 5 attempts total, 50 ms base, exponential * 2 capped at 800 ms,
+    // with +/-25% jitter. With FlushBatchSize=4096 and the cold-start
+    // window measured at ~2 s on step 8c-c-iii, this gives each
+    // rejected batch up to ~4 s of grace before falling through to the
+    // failed-batch counter, which is comfortably inside the cold-start
+    // window without leaking into steady-state recovery.
+    private const int FlushMaxAttempts = 5;
+    private const int FlushRetryBaseMs = 50;
+    private const int FlushRetryMaxMs = 800;
+
     private async Task<int> FlushAsync(ILattice lattice, List<KeyValuePair<string, byte[]>> batch, CancellationToken ct)
     {
         var startTs = Stopwatch.GetTimestamp();
-        try
+        Exception? lastRejection = null;
+        for (var attempt = 1; attempt <= FlushMaxAttempts; attempt++)
         {
-            await lattice.SetManyAsync(batch, ct);
-            var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
-            BenchMetrics.LatticeSetManyDurationMs.Record(
-                elapsedMs,
-                new KeyValuePair<string, object?>("tree", settings.TreeId));
-            return batch.Count;
+            try
+            {
+                await lattice.SetManyAsync(batch, ct);
+                var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
+                BenchMetrics.LatticeSetManyDurationMs.Record(
+                    elapsedMs,
+                    new KeyValuePair<string, object?>("tree", settings.TreeId));
+                BenchMetrics.LatticeSetManyRetryAttempts.Record(
+                    attempt - 1,
+                    new KeyValuePair<string, object?>("tree", settings.TreeId));
+                return batch.Count;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) when (lifetime.ApplicationStopping.IsCancellationRequested && IsShutdownRejection(ex))
+            {
+                // Expected: producer closed the socket, the silo emitted its
+                // FINAL line, and the host is now draining grain activations.
+                // Any in-flight SetManyAsync that races the drain gets an
+                // OrleansMessageRejectionException ("Unable to create local
+                // activation" / "silo is blocking application messages"). The
+                // entries those batches carried were never accepted by the
+                // lattice so they are correctly not in `written`; they should
+                // also not be in `failed`, because they are not a real
+                // ingestion failure - they are shutdown back-pressure. Return
+                // the sentinel so the dispatcher skips both counters.
+                BenchMetrics.LatticeSetManyRetryAttempts.Record(
+                    attempt - 1,
+                    new KeyValuePair<string, object?>("tree", settings.TreeId));
+                return ShutdownDiscarded;
+            }
+            catch (Exception ex) when (!lifetime.ApplicationStopping.IsCancellationRequested && IsOrleansMessageRejection(ex))
+            {
+                // Transient: the placement directory rejected the forward
+                // because the target activation has not landed yet. The
+                // directory recovers on its own; back off and retry.
+                lastRejection = ex;
+                if (attempt >= FlushMaxAttempts)
+                {
+                    break;
+                }
+                var backoffMs = Math.Min(FlushRetryMaxMs, FlushRetryBaseMs * (1 << (attempt - 1)));
+                // +/-25% jitter so concurrent flushGate slots do not
+                // resynchronise on the same retry wave.
+                var jitter = Random.Shared.NextDouble() * 0.5 - 0.25;
+                var delayMs = (int)Math.Max(1, backoffMs * (1 + jitter));
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMs), ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { throw; }
+            }
+            catch (Exception ex)
+            {
+                BenchMetrics.LatticeSetManyRetryAttempts.Record(
+                    attempt - 1,
+                    new KeyValuePair<string, object?>("tree", settings.TreeId));
+                logger.LogWarning(ex, "[silo] flush of {Count} failed", batch.Count);
+                return 0;
+            }
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) when (lifetime.ApplicationStopping.IsCancellationRequested && IsShutdownRejection(ex))
-        {
-            // Expected: producer closed the socket, the silo emitted its
-            // FINAL line, and the host is now draining grain activations.
-            // Any in-flight SetManyAsync that races the drain gets an
-            // OrleansMessageRejectionException ("Unable to create local
-            // activation" / "silo is blocking application messages"). The
-            // entries those batches carried were never accepted by the
-            // lattice so they are correctly not in `written`; they should
-            // also not be in `failed`, because they are not a real
-            // ingestion failure - they are shutdown back-pressure. Return
-            // the sentinel so the dispatcher skips both counters.
-            return ShutdownDiscarded;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "[silo] flush of {Count} failed", batch.Count);
-            return 0;
-        }
+
+        BenchMetrics.LatticeSetManyRetryAttempts.Record(
+            FlushMaxAttempts - 1,
+            new KeyValuePair<string, object?>("tree", settings.TreeId));
+        logger.LogWarning(
+            lastRejection,
+            "[silo] flush of {Count} failed after {Attempts} retry attempts against transient OrleansMessageRejectionException",
+            batch.Count,
+            FlushMaxAttempts);
+        return 0;
     }
 
     private static bool IsShutdownRejection(Exception ex)
