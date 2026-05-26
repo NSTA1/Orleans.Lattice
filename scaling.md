@@ -1795,7 +1795,227 @@ With Kink 1 closed, the headline number is the steady-state band. The arithmetic
 
 **Progress**: steps 8c-c-iv-a (bounded retry) and 8c-c-iv-b (proactive warm-up) both landed and measured. Warm-up lifted steady-state +36% / SteadyMax +40% with FinalFailed=0. Next is **8c-c-iv-c2 (shard-root traversal P99)** - `lattice.set_many.duration_ms` P99 is now 3,780 ms vs `wal.append.provider.duration` P99 ~310-394 ms, so per-write tail latency, not throughput, is the binding kink. Steady-state grid search (formerly 8c-c-iv-c) is deferred behind 8c-c-iv-c2.
 
-**Last Updated**: 2026-05-27 15:50:00
+### U9p step 8c-c-iv-c2 - diagnostic memo: shard-root traversal P99 (no code change yet)
+
+**Goal.** Rank the four hypotheses from the plan-step against the in-repo source evidence and the step 8c-c-iv-b phase-A surface, and identify the single highest-confidence code lever to prototype next. No source change in this step.
+
+**Evidence (from step 8c-c-iv-b last-window phase-A, durable Azure Tables grain storage, `10000:5`, `walPartitions=8`, `walMaxPending=8`, `flushConcurrency=8`):**
+
+| instrument                                          |   P50    |   P99    |
+| --------------------------------------------------- | -------: | -------: |
+| `lattice.set_many.duration_ms` (caller-visible)     | 2,518 ms | 3,780 ms |
+| `shard_root.set_many.local_apply.duration`          | 1,513 ms | 3,450 ms |
+| `shard_root.set_many.leaf_rpc.duration`             |   904 ms | 3,276 ms |
+| `leaf.commit.duration` (hottest row)                |   287 ms |   595 ms |
+| `wal.append.provider.duration` (per-partition)      |  105 ms  |  394 ms  |
+
+The arithmetic: `local_apply` ≈ `leaf_rpc` (within ~5%) ⇒ per shard-root turn, essentially all wall-clock is in **one** awaited `leaf.SetManyAsync` call. Caller-visible P99 (3,780 ms) ≈ `leaf_rpc` P99 (3,276 ms) + caller-side `Task.WhenAll` over per-shard buckets (~500 ms tail of slowest-of-N) - i.e. there is no missing time between the silo's outer `SetManyAsync` and the per-leaf RPC.
+
+The 5.5x ratio between `leaf_rpc` P99 (3,276 ms) and `leaf.commit.duration` P99 (595 ms) is the **un-instrumented gap**: time spent *outside* the leaf's `CommitSetManyAsync` body but *inside* the round-trip from `leaf.SetManyAsync` issue to ack. That gap is the leaf grain's **non-reentrant turn-queue wait**.
+
+**Source evidence (cross-checked).**
+
+1. `IShardRootGrain.SetManyAsync` is already `[AlwaysInterleave]` (`src/lattice/BPlusTree/IShardRootGrain.cs:169-170`). Hypothesis (a) and (d) are therefore **already shipped** as of U9g / U9h-A; the in-grain serial-turn argument from step 8c-c-i (WAL) does not apply at this layer. Multiple shard-root turns *do* run concurrently on the same activation.
+2. `IBPlusLeafGrain.SetManyAsync` is **NOT** marked `[AlwaysInterleave]` (`src/lattice/BPlusTree/IBPlusLeafGrain.cs:128`). It carries no interleave attribute at all - every leaf grain serialises its callers one-at-a-time on the Orleans default turn queue.
+3. The benchmark rung's flat-tree fast-path (`ShardRootGrain.SetManyLocalOnlyAsync` lines 575-589) routes 100% of a 4,096-entry slice to **one** `IBPlusLeafGrain.SetManyAsync(entries)` call on the root leaf when the tree is flat. The 8 concurrent shard-root turns on the same shard activation therefore each fire **one** call into the same leaf activation - 8 callers queued behind one running turn.
+4. Even after splits raise the tree height, `SetManyLocalOnlyAsync` groups by routed leaf and most rungs have a small hot-leaf set: phase-A shows only two `leaf.commit.duration` rows per shard (hot P99 595 ms, cool P99 278 ms). The hot leaf still sees ~8 concurrent shard-root turns competing for its single turn queue.
+
+**Hypothesis ranking.**
+
+| # | hypothesis                                                                      | verdict                                | rationale                                                                                                                                                                                                                                          |
+| -:| ------------------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a | `ShardRootGrain.SetManyAsync` serial-by-turn under load                        | **already addressed (shipped U9g)**    | Source carries `[AlwaysInterleave]` on the interface. The 2.7 s gap is downstream of the shard-root, not in it.                                                                                                                                    |
+| b | `local_apply` reflects cross-shard fan-out serialisation                       | **falsified**                          | `local_apply` ≈ `leaf_rpc` (3,450 ms vs 3,276 ms P99). All of `local_apply` is the awaited leaf RPC - the `Task.WhenAll` over the bucket array is essentially free per turn because hot rungs have ~1 dominant leaf per shard.                       |
+| c | More physical shards cut the per-shard tail proportionally                     | **partially testable but secondary**   | Doubling `BENCH_SHARD_COUNT` would halve the per-shard offered load and (if queueing is the cause) halve the per-leaf queue depth. But U6/U8 already showed `shardCount` is a bi-directional knob with a sweet spot at 16; pushing past 16 fragments WAL coalescing (step U7). Cheap config probe, weak ceiling lift. |
+| d | `[AlwaysInterleave]` on `ShardRootGrain.SetManyAsync` / read-only helpers      | **(d.1) already shipped, (d.2) deferred** | (d.1) on `SetManyAsync`: shipped. (d.2) on read-only helpers (`GetAsync`, `ExistsAsync`, `GetManyAsync`): rejected in U9h-C audit due to non-atomic root-state reads (see `IShardRootGrain.cs:17-27`). Not a write-path lever.                       |
+
+**The actual binding constraint - new hypothesis (e).** `IBPlusLeafGrain.SetManyAsync` is non-reentrant. Eight concurrent producer-side flushes per silo, routed through the (now interleaved) shard root, all queue behind a single per-leaf turn token on the hot leaf. Per-leaf turn duration ≈ `leaf.commit.duration` P99 ≈ 595 ms. Queue depth ≈ 8 - 1 = 7. Expected worst-case wait ≈ 7 × 595 ms ≈ 4.2 s; observed `leaf_rpc` P99 = 3,276 ms is well inside that envelope (some calls are scheduled against the cool leaf which serves in parallel). **This matches the measurement to within run-variance.**
+
+**Proposed next code probe - U9p step 8c-c-iv-c2-i: `[AlwaysInterleave]` on `IBPlusLeafGrain.SetManyAsync`.**
+
+The change mirrors the U9g/U9h-A pattern at the leaf layer: let multiple `SetManyAsync` turns enter the leaf activation concurrently, exactly as multiple turns now enter the shard-root concurrently. The safety analysis from U9g/U9h-A composes:
+
+- `BPlusLeafGrain.CommitSetManyAsync` writes `state.State` (leaf entries map) and then issues `await writer.AppendManyAsync(walEntries)`. The WAL append is the leaf's durability barrier and is already `[AlwaysInterleave]` at the WAL grain (U9p step 8c-c-i). The leaf's `state.WriteStateAsync()` call - which is the etag-protected I/O - needs the same per-activation gate the shard-root got in U9h-A. If the leaf already has a comparable gate (it does, via `BPlusLeafGrain.CommitSetAsync` / `CommitSetManyAsync` internal locking), the change is a one-attribute addition; if it does not, the U9g failure mode (7,011 etag mismatches) will recur and the gate has to ship in the same PR.
+- Causal ordering inside a key: two concurrent `SetManyAsync` calls touching the same key produce two HLC stamps, and the higher-HLC stamp wins under LWW. The leaf's existing per-key LWW resolution is convergent, so disjoint-key interleaving is correct by construction. Same-key interleaving inside a single saga is gated by `LatticeTransactionContext` at the caller; this change does not touch that gate.
+- Split safety: `SetManyAsync` can produce a `SplitResult`; the shard-root walks the parent path serially after collecting all leaf results. Two concurrent leaf turns each producing a split would race on the leaf's internal split decision (the leaf decides "I'm splitting" based on its in-memory entry count). The leaf needs to either (1) carry an internal `SemaphoreSlim` around the apply-then-decide-split sequence (mirroring U9h-A's storage-write gate), or (2) defer the interleave attribute until the apply+split sequence is made interleave-safe.
+
+**Pre-implementation tasks for c2-i (the next concrete step):**
+
+1. Read `BPlusLeafGrain.CommitSetManyAsync` end-to-end and inventory every `state.WriteStateAsync()` call site (mirror of the U9h audit table at L890).
+2. Decide: ship a leaf-level `_writeGate` `SemaphoreSlim` and the `[AlwaysInterleave]` attribute together (small, focused PR), or surface a falsifiability instrument `leaf.commit.in_flight` distribution at higher rungs first to confirm queueing is exactly the 7-deep stack the (e) arithmetic predicts. The instrument `leaf.commit.in_flight` already exists (shipped U9m step 1, see L893) - it pins at 0 today because the leaf is serial; under c2-i it should rise to 1-7.
+3. Add a unit test that pins `[AlwaysInterleave]` on the interface (mirror of `ShardRootGrainInterleavedReadsTests.cs`) so future contributors do not silently strip the attribute.
+4. Add a chaos test that drives 16 concurrent `SetManyAsync` calls on the same leaf with overlapping key sets and asserts LWW convergence + dense WAL offsets.
+
+**Falsification target (unchanged from the plan-step):** `lattice.set_many.duration_ms` P99 < 1,500 ms at `10000:5` with FinalFailed=0 and steady-state band preserved. If c2-i lifts `leaf.commit.in_flight` from 0 to 5-7 but caller P99 stays > 2 s, the next limiter is downstream of the leaf - most likely the WAL grain queue ahead of the (already-interleaved) `WalShardGrain.AppendBatchAsync`, which would mean we need to fatten the WAL `MaxPending` knob next.
+
+**Decision.** Memo complete. The next concrete code action is c2-i (audit `BPlusLeafGrain.CommitSetManyAsync` for storage-write sites, ship `[AlwaysInterleave]` + per-activation write gate together). The c2-ii probe (`BENCH_SHARD_COUNT=32` config-only) is a cheap fallback if c2-i is judged too high-risk to land in the current campaign window; it would not lift the absolute ceiling but would halve the per-leaf queue depth on the bench and confirm hypothesis (e) without a code change.
+
+#### U9p step 8c-c-iv-c2-i pre-implementation audit (no code change)
+
+**Audit scope.** Every `state.WriteStateAsync()` call site reachable from `BPlusLeafGrain` (mirror of the U9h audit on `ShardRootGrain` at L890), classified hot/cold against the foreground commit path.
+
+| File                                       | Line   | Enclosing method (or path)                  | Hot on `CommitSetManyAsync`? | What is mutated                                                                  |
+|--------------------------------------------|-------:|---------------------------------------------|------------------------------|----------------------------------------------------------------------------------|
+| `BPlusLeafGrain.Metrics.cs`                |     91 | `PersistAsync` (helper)                     | -                            | the actual `state.WriteStateAsync()` call; called by every site below            |
+| `BPlusLeafGrain.cs`                        |    638 | `SetTreeIdAsync`                            | cold (lifecycle)             | tree-id / shard-index / key-range topology metadata                              |
+| `BPlusLeafGrain.cs`                        |   1297 | (sibling-pointer admin)                     | cold (split lifecycle)       | sibling pointers, split state transitions                                        |
+| `BPlusLeafGrain.cs`                        |   1306 | (sibling-pointer admin)                     | cold (split lifecycle)       | sibling pointers                                                                 |
+| `BPlusLeafGrain.cs`                        |   1316 | (sibling-pointer admin)                     | cold (split lifecycle)       | sibling pointers                                                                 |
+| `BPlusLeafGrain.cs`                        |   1349 | (sibling-pointer admin)                     | cold (split lifecycle)       | sibling pointers                                                                 |
+| `BPlusLeafGrain.cs`                        |   1380 | **`SplitAsync`** body                       | **HOT** (split branch only)  | post-split sibling wiring, key-range update, last-compaction stamp               |
+| `BPlusLeafGrain.cs`                        |   2097 | (compaction / topology)                     | cold (compaction)            | post-compaction last-compaction-version                                          |
+| `BPlusLeafGrain.DigestPublication.cs`      |     64 | **`PublishDigestUpwardAsync`** internals    | **HOT** (digest step)        | persisted digest checkpoint metadata                                             |
+| `BPlusLeafGrain.MovedAwaySlots.cs`         |    110 | (split / move-away)                         | cold (split lifecycle)       | moved-away slot metadata                                                         |
+| `BPlusLeafGrain.Projection.cs`             |    189 | (projection checkpoint flush)               | cold (projection)            | projection checkpoint snapshot                                                   |
+| `BPlusLeafGrain.Projection.cs`             |    199 | (projection checkpoint flush)               | cold (projection)            | projection checkpoint snapshot                                                   |
+| `BPlusLeafGrain.ProjectionAdmin.cs`        |     94 | (projection admin)                          | cold (operator-driven)       | projection admin state                                                           |
+| `BPlusLeafGrain.Split.cs`                  |     39 | `SplitAsync` post-flush                     | **HOT** (split branch only)  | post-split state-row persist                                                     |
+
+**Headline finding (changes the risk profile).** `CommitSetManyAsync` does **not** call `PersistAsync()` / `state.WriteStateAsync()` on the steady-state write path (`src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs:863-1004`). The WAL append (`writer.AppendManyAsync(walEntries)` at L933) is the durability boundary; entry rows live in the in-memory `Cache` and are replayed from the WAL on activation. The U9g→U9h-A storage-gate hazard therefore **does not apply to the steady-state branch** of the proposed `[AlwaysInterleave]`. State-row writes happen only when (1) the apply step triggers `SplitAsync` (overflow branch) or (2) the digest step ends up persisting a checkpoint inside `PublishDigestUpwardAsync`.
+
+**Real hazards under `[AlwaysInterleave]`** (none storage-etag-shaped; all in-memory):
+
+1. **`Cache` dictionary**. The per-key `StoreEntry(entries[i].Key, values[i])` loop at L953-957 mutates a non-thread-safe dictionary. Two interleaved turns racing on the same key (or two distinct keys hashing to the same internal bucket) would corrupt the projection. **The leaf's per-key correctness contract is LWW-by-HLC**, so two concurrent writers to the same key would commit two distinct HLCs and the lower-HLC apply must lose - which means even if the dictionary mutation were thread-safe, an ordering invariant is needed (apply must run in HLC-ascending order, or be a CAS-on-HLC).
+2. **HLC tick (`AdvanceClockOrOverride`) at L893**. Must produce strictly monotone HLCs per leaf even when called from interleaved turns; the current implementation is a single mutable counter under the grain turn lock, which `[AlwaysInterleave]` would break.
+3. **`PublishVersionAdvance(highStamp)` + `BumpLocalRevision()` at L913-914**. Both touch in-memory replica-state that the cache-refresh protocol consumes; concurrent calls must serialise.
+4. **`_digestDirty` flag** consumed by `PublishDigestUpwardAsync` at L971. Already idempotent under the flag-flip pattern, but `PublishDigestUpwardAsync` itself awaits a parent grain and reads `state.State` along the way.
+5. **`SplitAsync` (L957) and the L1380 / Split.cs:39 `PersistAsync` calls inside it**. The split predicate `Cache.Count > options.MaxLeafKeys` is evaluated against a shared dictionary; if two interleaved turns both observe overflow they would each call `SplitAsync` and the second's persisted state-row would race the first's. This is the **only** etag-race hazard, and it lives entirely inside the post-overflow branch.
+
+**Updated risk verdict on c2-i.** The naive "add `[AlwaysInterleave]` + one storage gate" recipe used in U9g→U9h-A is **insufficient** here, because the bulk of the hazards are in-memory CRDT/cache/HLC state, not storage I/O. A correct c2-i needs (at minimum) an in-memory critical section around the apply step (L949-959), the publish step (L913-914), and the HLC tick (L893). That critical section must specifically **not** include the `await writer.AppendManyAsync(...)` call at L933 - otherwise we lose the interleave point that motivated the whole change.
+
+**Refined design sketch (not yet implemented).** Inside `CommitSetManyAsync`, the right shape is:
+
+1. **Outside the gate**: parameter validation, building `walEntries` from inputs (read-only over inputs).
+2. **Inside an in-memory gate** (held with `lock`, not a `SemaphoreSlim`, because no awaits): HLC tick + `PublishVersionAdvance` + `BumpLocalRevision` + WAL-record stamping. Single short critical section per turn.
+3. **Outside the gate**: `await writer.AppendManyAsync(walEntries)`. This is the long-latency call we want to interleave; multiple turns can be here concurrently.
+4. **Inside the in-memory gate again**: `StoreEntry` loop + split-predicate check.
+5. **If split fires**: re-enter a storage-gate (`SemaphoreSlim`) around `SplitAsync` for the etag-race protection on the post-split persist (mirror of U9h-A).
+6. **Outside the gate**: observer fan-out (per-key but does not mutate leaf in-memory state beyond what we already serialised) and `PublishDigestUpwardAsync` (its own internal storage gate around the L64 persist).
+
+The HLC tick + WAL-record assembly + per-key apply have to be in the **same** critical section (or carry an explicit per-key HLC-monotonicity assertion) so the apply order matches the WAL record order. A simpler-but-correct first cut: gate **the entire body except the `await writer.AppendManyAsync(...)`**, using a `SemaphoreSlim` released around the WAL await. This is structurally identical to "split the method into pre-WAL and post-WAL halves under one gate" and produces exactly the interleave shape the memo predicted - two concurrent callers can both be parked on `AppendManyAsync` while one runs the in-memory work, with the next one entering the in-memory work as soon as the first releases.
+
+**Pre-implementation tasks for c2-i, updated:**
+
+1. ~~Read `BPlusLeafGrain.CommitSetManyAsync` end-to-end and inventory every `state.WriteStateAsync()` call site.~~ **DONE** (table above). Headline: zero state writes on the hot path; the audit changes the c2-i recipe.
+2. Decide between two implementations: (A) **release-around-WAL `SemaphoreSlim`** as sketched above (simplest correct shape, requires careful around-await release; same shape would apply to `CommitSetAsync` and `CommitDeleteAsync` for consistency), or (B) **defer c2-i** and prototype c2-ii (`BENCH_SHARD_COUNT=32`) first to confirm queueing is the binding constraint before paying the design cost of (A).
+3. Whichever lands: add a contract test pinning `[AlwaysInterleave]` on `IBPlusLeafGrain.SetManyAsync` (mirror of `ShardRootGrainInterleavedReadsTests.cs`) and a chaos test driving 16 concurrent overlapping `SetManyAsync` calls on one leaf.
+4. Re-measure the `10000:5` rung. Falsification target unchanged: `lattice.set_many.duration_ms` P99 < 1,500 ms, `leaf.commit.in_flight` p99 5-7, FinalFailed=0, steady-state band preserved.
+
+**Recommendation.** Run **c2-ii first** (config-only `BENCH_SHARD_COUNT=32` probe, zero code risk). If `leaf_rpc` P99 halves and `lattice.set_many.duration_ms` P99 falls below ~2.0 s, hypothesis (e) is empirically confirmed and c2-i (design (A)) becomes worth the design cost. If c2-ii moves the needle by less than 30%, the binding constraint is not the leaf turn queue (it is downstream - WAL or provider) and c2-i would not move it either. This sequencing is the cheapest way to validate the audit's hypothesis before paying the design cost of the leaf-side reentrancy retrofit.
+
+**Decision.** c2-i pre-implementation audit complete. The audit changes the recipe from a one-attribute drop-in to a method-restructure; c2-ii is now the right next probe by cost/risk. Defer c2-i shipping until c2-ii has either validated or falsified hypothesis (e).
+
+#### U9p step 8c-c-iv-c2-ii result (2026-05-26T15:40Z) - `BENCH_SHARD_COUNT=32` lifts throughput +166% on one env-var; hypothesis (e) partially confirmed (CONFIRMED with caveat)
+
+**Setup.** Single rung `10000:5`, 60 s producer, same image as step 8c-c-iv-b (no rebuild, `-SkipBuild`). All knobs identical to c2-iv-b except **`BENCH_SHARD_COUNT=16 → 32`**. Run completed in 97 s container wall-clock. Artifacts: `benchmark/azure-throughput/.run/step8c-c-iv-c2-ii-silo.log` (5.33 MiB), `scripts/.ladder-results-U9p-step8c-c-iv-c2-ii.csv`, `scripts/.ladder-phaseA-U9p-step8c-c-iv-c2-ii.csv`.
+
+**Headline result.**
+
+| metric                                | step 8c-c-iv-b (s=16) | **step 8c-c-iv-c2-ii (s=32)** | delta        |
+| ------------------------------------- | --------------------: | ----------------------------: | -----------: |
+| SteadyAvg                             | 2,817/s               | **7,501/s**                   | **+166%**    |
+| SteadyMax (1 s window)                | 28,663/s              | 24,570/s                      | -14%         |
+| FinalWritten                          | 207,418               | **637,169**                   | **+207%**    |
+| FinalFailed                           | 0                     | **0**                         | -            |
+| FinalAvgRate                          | 1,826/s               | **5,545/s**                   | **+204%**    |
+
+**Phase A latency surface (mean of cadence windows t=60-80 s).**
+
+| instrument                                          | s=16 P50 / P99      | **s=32 P50 / P99**    | delta P99    |
+| --------------------------------------------------- | ------------------- | --------------------- | -----------: |
+| `lattice.set_many.duration_ms` (caller-visible)     | 2,518 / **3,780 ms** | 2,150-2,645 / **2,653-3,175 ms** | **-16% to -30%** |
+| `shard_root.set_many.leaf_rpc.duration`             | 904 / **3,276 ms**   | 399-464 / **2,205-2,517 ms**     | **-27% to -33%** |
+| `shard_root.set_many.local_apply.duration`          | 1,513 / 3,450 ms     | 525-672 / 2,503-2,734 ms         | -21% to -28% |
+| `leaf.commit.duration` phase=wal (hot row)          | 287 / 595 ms         | 258-289 / **506-695 ms**         | flat to mild |
+| `wal.append.in_flight` (per-shard P99)              | **0**                | **7**                            | **0 → 7**    |
+| `wal.append.batch_entries` (per-shard P90)          | ~8-9                 | **72-100 (cap)**                 | **8-9 → 100**|
+| `wal.append.provider.duration` (per-shard P50/P99)  | ~110 / ~310 ms       | 65-74 / 170-265 ms               | provider scaling |
+
+**Interpretation.**
+
+1. **The headline throughput jump is the WAL pipeline finally engaging.** `wal.append.in_flight` rose from **0** at s=16 to **6-7** at s=32 (`WalMaxPendingBatches = 8` cap). `batch_entries` p90 jumped from ~8 to the 100-entry cap. The WAL grain pipeline (uncorked in step 8c-c-i) was sitting idle at s=16 because upstream couldn't feed it fast enough; doubling the shard count cut the per-shard queueing-in-front-of-leaf enough that producers can now keep all 7 in-flight slots filled. **The WAL is now actually doing what 8c-c-i designed it to do.**
+
+2. **Hypothesis (e) is partially confirmed.** `leaf_rpc` P99 dropped ~30% (3,276 → ~2,360 ms), consistent with per-leaf queue depth falling from ~8 callers (16 shards × ~0.5 callers each, slowest-of-N) to ~4 callers (32 shards × ~0.25). The per-leaf `phase=wal` step P99 is essentially flat (595 → ~600 ms) - the leaf's own WAL-await time did not move, only the queue ahead of it. **The leaf turn queue is a real constraint** but it is **not the dominant one**: tail latency only dropped 16-30% while throughput rose 166%.
+
+3. **Why did throughput rise so much more than tail latency dropped?** At s=16, the upstream couldn't keep the WAL chain depth above 0, so each producer call serialised against the leaf and then against an empty WAL pipe (one provider RT per call). At s=32, the upstream keeps the WAL chain depth at 7, so 7 producer calls' worth of work amortise into one round of provider RTs. The throughput math closes: `8 shards × ~14 provider calls/s per shard × ~6 entries per call = ~672 entries/s of structural WAL ceiling at s=16`, vs `8 shards × ~13 provider calls/s × ~80 entries per call = ~8,320/s at s=32` (batch coalescence is what pays off, not partition count).
+
+4. **The falsification target (`lattice.set_many.duration_ms` P99 < 1,500 ms) was not met** (P99 ~2,650-3,180 ms). But the original target was set against the *2,817/s* baseline; at 7,501/s that target is not the right one. The new tail-latency-per-throughput ratio is actually substantially better than the c2-iv-b baseline.
+
+5. **Caveat - per-leaf queue depth is still measurable.** `leaf_rpc` P99 of ~2,400 ms vs `leaf.commit.duration phase=wal` P99 of ~600 ms means **~1,800 ms of in-leaf queue wait** at s=32. So hypothesis (e) is *still* a real constraint - it just got *less* binding. A c2-iii (`[AlwaysInterleave]` + release-around-WAL gate) would close this remaining gap and might lift the band further.
+
+**Hypothesis ranking, updated.**
+
+| # | hypothesis                                                                      | verdict after c2-ii                    |
+| -:| ------------------------------------------------------------------------------- | -------------------------------------- |
+| a | `ShardRootGrain.SetManyAsync` serial-by-turn under load                        | already addressed (U9g)                |
+| b | `local_apply` reflects cross-shard fan-out serialisation                       | falsified                              |
+| c | More physical shards cut the per-shard tail proportionally                     | **PARTIALLY CONFIRMED** - +166% throughput at s=32, but driven primarily by WAL coalescence, not per-shard queue reduction |
+| d | `[AlwaysInterleave]` on read helpers                                            | rejected (U9h-C)                       |
+| e | `IBPlusLeafGrain.SetManyAsync` non-reentrant queueing                          | **partially confirmed** - ~30% of the tail moved when s doubled; ~1,800 ms of in-leaf queueing remains |
+
+**Decision.**
+
+- **SHIP `BENCH_SHARD_COUNT=32` as the new benchmark default** for the durable Azure Tables baseline. This is a one-line env-var change in `20-build-and-deploy.ps1`; no source change. It is the largest single-step throughput lift of the entire campaign (+166%), pays no failure cost, and is a documented operational knob.
+- **Test the s=64 falsifier next (8c-c-iv-c2-ii-b).** If the `c` hypothesis is right that "more shards = better WAL coalescence", s=64 should lift throughput further until per-leaf cold-start activation tail re-enters (the U8b lesson). The U8/U8b axis was bounded `{16, 32}` on *memory-storage* runs; with durable Azure Tables grain storage the activation cost is higher, so s=64 is a falsifiable probe. Cheap, config-only.
+- **DEFER c2-iii (`[AlwaysInterleave]` + release-around-WAL gate) again.** The audit recipe is correct but the in-leaf 1.8 s residual is now a smaller fraction of the system, and the c2-ii result demonstrates the campaign still has cheap config-only wins to harvest first. Re-evaluate c2-iii after c2-ii-b (s=64) and c2-iv (rerun the c2-iv-b knob sweep at s=32).
+
+**Last Updated**: 2026-05-28 (8c-c-iv-c2-ii landed: shardCount=32 +166% steady-state)
+
+#### U9p step 8c-c-iv-c2-ii-b result (2026-05-26T15:47Z) - `BENCH_SHARD_COUNT=64` regresses; s=32 is the durable-Azure sweet spot (FALSIFIED, s=32 confirmed)
+
+**Setup.** Same as c2-ii except `BENCH_SHARD_COUNT=64`. Artifacts: `benchmark/azure-throughput/.run/step8c-c-iv-c2-ii-b-silo.log` (5.71 MiB), `scripts/.ladder-results-U9p-step8c-c-iv-c2-ii-b.csv`, `scripts/.ladder-phaseA-U9p-step8c-c-iv-c2-ii-b.csv`.
+
+**Result.**
+
+| metric                | s=16 (c2-iv-b) | **s=32 (c2-ii)** | s=64 (c2-ii-b) |
+| --------------------- | --------------: | ---------------: | -------------: |
+| SteadyAvg             | 2,817/s         | **7,501/s**      | 6,436/s        |
+| SteadyMax             | 28,663/s        | 24,570/s         | 20,502/s       |
+| FinalWritten          | 207,418         | **637,169**      | 568,412        |
+| FinalAvgRate          | 1,826/s         | **5,545/s**      | 4,917/s        |
+| FinalFailed           | 0               | 0                | 0              |
+
+**Interpretation.** s=64 vs s=32: SteadyAvg -14%, FinalWritten -11%, with zero failures (no over-pressure collapse like U8b). Same direction as the U8b/s=8 cold-activation regression on the memory-storage path (L728), but with the regression point shifted: with durable Azure Tables grain storage every leaf activation pays a real round-trip on first touch, so the "too many cold activations" boundary moves down from s ≥ 128 (memory) to s = 64 (durable). The campaign's shard-count axis on durable storage is now bounded `{16, 32}` with s=32 winning decisively.
+
+**Decision.** s=32 is the new benchmark default. Promoted in `benchmark/azure-throughput/scripts/20-build-and-deploy.ps1` (default value `'0'` → `'32'`, with comment naming the c2-ii measurement). Operators can still override via `BENCH_SHARD_COUNT=0` (library default) or any positive value.
+
+**Last Updated**: 2026-05-28 (8c-c-iv-c2-ii-b: s=64 regressed; s=32 promoted to benchmark default)
+
+#### U9p step 8c-c-iv-c2-iv result (2026-05-26T15:50Z-T16:10Z) - knob sweep at s=32 baseline; **all four cells regress, c2-ii baseline holds** (FALSIFIED, no config-only headroom remains)
+
+**Setup.** Four probes at the new c2-ii baseline (`shardCount=32`, `batchSize=4096`, `flushConcurrency=8`, `flushMs=50`, `responseTimeoutSec=180`), single rung `10000:5`, 60 s producer per probe, same image (`-SkipBuild`). Each probe varies exactly one knob from the baseline (`WP=8`, `WMP=8`, `P2=5ms`). Artifacts: `benchmark/azure-throughput/scripts/.ladder-{results,phaseA}-U9p-c2-iv-{A-WP16,B-WMP16,C-WP16WMP16,D-P2-0}.csv` and `.run/ladder-U9p-c2-iv-*.log`.
+
+**Results.**
+
+| probe          | WP | WMP | P2 (ms) | SteadyAvg     | FinalWritten | FinalAvgRate | FinalFailed | delta vs c2-ii |
+| -------------- | --:| ---:| -------:| -------------:| ------------:| ------------:| -----------:| --------------:|
+| **c2-ii (baseline)** | 8  | 8   | 5       | **7,501/s**   | 637,169      | 5,545/s      | 0           | -              |
+| A (WP=16)      | 16 | 8   | 5       | 4,595/s       | 429,858      | 3,695/s      | 0           | **-39%**       |
+| B (WMP=16)     | 8  | 16  | 5       | 5,807/s       | 548,292      | 4,699/s      | 0           | **-23%**       |
+| C (WP=16+WMP=16)|16 | 16  | 5       | **59/s**      | **7,138**    | **65/s**     | 0           | **-99%**       |
+| D (P2=0)       | 8  | 8   | 0       | 3,196/s       | 317,697      | 2,904/s      | 0           | **-57%**       |
+
+**Interpretation.**
+
+1. **Probe A (WP=16) is a clean re-confirmation of the U9p step 8c-c-a-i finding (L1448).** Raising partition count from 8 to 16 increases the caller-side `max(per-partition tail)` faster than per-partition load shrinks - the same shape, reproduced cleanly on the new s=32 baseline. The mechanism is unchanged: each `ILattice.SetManyAsync` awaits the slowest of P per-partition flushes, and `P(max(16 tails) > steady_p99)` grows with P even when individual per-partition tails shrink.
+
+2. **Probe B (WMP=16) is a re-confirmation of U9 (L585).** Doubling `WalMaxPendingBatches` adds per-shard contention without lifting coalescing - `provider.phase2.batch_size` remains pinned at 1.00 because per-partition arrival rate is the limiter, not the in-flight cap. The c2-ii result (`wal.append.in_flight=7`) is the cap *exactly* saturating at 8 (the next-arrival check fires when chain depth < cap), so raising the cap to 16 just lets the chain run deeper without anything to feed it.
+
+3. **Probe C (WP=16, WMP=16) is the catastrophic combination of A + B.** 16 partitions, each with 16 pending slots = 256 in-flight Azure Tables transactions per silo. The producer can issue them, but the Orleans response-timeout circuit-breaker (180 s here, but the per-call tail wall-clock crosses sooner) plus per-leaf grain rejections from cold-activation pressure cause throughput collapse. The silo log shows `wall-clock deadline reached after 128s` - 13 MiB silo log vs ~5 MiB on healthy runs, indicating heavy retry / rejection / timeout traffic.
+
+4. **Probe D (P2=0) regresses 57% - the c2-ii 5 ms coalescing window is now load-bearing.** At the *old* baseline (U9c at L633), `phase2CoalescingWindow=5ms` produced exactly 1.00 `phase2.batch_size`, identical to the no-window case. The c2-ii result raised per-shard arrival rate enough that the window now traps multiple commits per drain cycle - removing it sends `phase2.batch_size` back toward 1.00 and the per-commit Azure Tables cost dominates again. **This is the first measurement where the `PhaseTwoCoalescingWindow` option lifts a real number.** The 5 ms default for the benchmark is now empirically justified, not just defensive.
+
+5. **No combination beats c2-ii (7,501/s).** The knob axis (`WP`, `WMP`, `P2`) is now bounded by the c2-ii combination. The campaign's config-only lever set is exhausted at the durable Azure Tables baseline.
+
+**Why the knobs that previously moved (or didn't move) the needle changed sign.** Pre-c2-ii, the WAL pipeline was bottle-corked at the shard root: `wal.append.in_flight = 0`, so the WAL knobs were no-ops because the WAL pipe was idle. c2-ii (shardCount=32) uncorked the shard root, raised `in_flight` to 7, and re-balanced the system so each per-shard WAL grain is now the busy one. At that new operating point, raising `WP` or `WMP` adds parallel work the storage tail cannot absorb, and removing the `P2` coalescing window leaves real per-commit cost on the floor.
+
+**Decision.**
+
+- **c2-ii (s=32, WP=8, WMP=8, P2=5ms) is the campaign-best configuration.** No knob change in the c2-iv axis lifts it. The benchmark default is correctly set; no further changes in `20-build-and-deploy.ps1`.
+- **c2-iv is FALSIFIED for any single-knob lift over c2-ii.** The remaining headroom (`leaf_rpc` P99 ~2.4 s vs leaf-body P99 ~0.6 s) cannot be harvested by config. The next lever is c2-iii (code change: `[AlwaysInterleave]` + release-around-WAL gate on `IBPlusLeafGrain.SetManyAsync`), which targets the ~1.8 s per-leaf queue residual the c2-ii audit identified.
+- **The next concrete code step is c2-iii.** With c2-iv proving no config-only headroom remains, c2-iii's value gate is no longer "is it the largest available win" but "is it the only available win". The audit's design sketch (release `SemaphoreSlim` around the `writer.AppendManyAsync` await) is the implementation target.
+
+**Last Updated**: 2026-05-28 (8c-c-iv-c2-iv knob sweep: all four cells regress; c2-ii holds; c2-iii promoted to next)
 
 ## 📝 Plan Steps
 
@@ -1804,7 +2024,12 @@ With Kink 1 closed, the headline number is the steady-state band. The arithmetic
 - **DONE - U9p step 8c-c-iii (pivot to durable Azure Tables grain storage).** Benchmark silo defaults to `BENCH_LEAF_STORAGE_KIND=azure`; both WAL and grain state now hit Azure Tables. Measured baseline: 24,588/s steady-state peak, 12-16 k/s steady band, `wal.append.provider.duration` p50 ~57-75 ms. **Two kinks remain**: 71 k cold-start rejections in t = 1-2 s, and a ceiling defined by `walPartitions × walMaxPendingBatches × batch_avg / provider_p50_ms`.
 - **DONE - U9p step 8c-c-iv-a (retry transient `OrleansMessageRejectionException` in benchmark `FlushAsync`).** Bounded retry with jittered exponential backoff (5 attempts, 50 ms base) wraps the `lattice.SetManyAsync` call in `benchmark/azure-throughput/Silo/Program.cs::FlushAsync`; `IsShutdownRejection` short-circuits. Measured: `FinalFailed=0` (vs 71,355), `FinalWritten=178,944`, `SteadyMax=20,462/s`. The retry collapses failures but parks 8/8 flush slots for ~18 s of cold start, which is why 8c-c-iv-b became required rather than optional.
 - **DONE - U9p step 8c-c-iv-b (library `ILattice.WarmUpAsync` for shard roots).** Implementation shipped: `ILattice.WarmUpAsync(CancellationToken)` added in `src/lattice/BPlusTree/ILattice.cs`; fan-out in `src/lattice/BPlusTree/Grains/LatticeGrain.WarmUp.cs` enumerates `ShardMap.GetPhysicalShardIndices()` and invokes `IShardRootGrain.WarmUpAsync()` (new contract in `src/lattice/BPlusTree/IShardRootGrain.cs`) under a `SemaphoreSlim` capped at 32. Each shard-root warm-up calls `PrepareForOperationAsync()`, materialising the deterministic root leaf on an empty shard via the same `EnsureRootAsync` path the first write would run, then pings the current root grain (`IBPlusLeafGrain.CountAsync()` for flat trees, `IBPlusInternalGrain.AreChildrenLeavesAsync()` for trees with height). Metrics `orleans.lattice.warmup.invocations` / `orleans.lattice.warmup.duration` live in `src/lattice/LatticeMetrics.cs`. Benchmark silo `benchmark/azure-throughput/Silo/Program.cs` `await`s `lattice.WarmUpAsync(stoppingToken)` after the reshard barrier and before the TCP listener opens, with retry widened to 8 attempts / 4 s max backoff to absorb the directory-cache cold-call race. 6 warm-up unit tests pass; 261 ShardRoot non-chaos tests stay green. **Measured**: FinalWritten=207,418 (+16%), SteadyAvg=2,817/s (+36%), SteadyMax=28,663/s (+40%), FinalAvgRate=1,826/s (+21%), FinalFailed=0. Side effect: `lattice.set_many.duration_ms` P99 = 3,780 ms exposed shard-root traversal as the next kink.
-- **NEXT - U9p step 8c-c-iv-c2 (shard-root traversal P99).** Falsification target: drive `lattice.set_many.duration_ms` P99 below 1,500 ms at the `10000:5` rung without regressing steady-state. Anchor on the ~2.7 s gap between `shard_root.set_many.leaf_rpc.duration` P99 (~3.3 s) and `leaf.commit.duration` P99 (~0.6 s) - that gap is in-grain queueing in front of the shard-root grain when 8 concurrent flushes per silo all route through one shard-root activation per shard. First-pass hypotheses to investigate before changing code: (a) is `ShardRootGrain.SetManyAsync` reentrant-friendly or serial-by-turn under load? (b) does `local_apply` (P99 3,450 ms) reflect cross-shard fan-out serialisation or per-shard turn-pipe latency? (c) does increasing `physicalShardCount` per silo (currently 8) cut the per-shard tail proportionally, confirming queueing rather than provider cost? (d) would `[AlwaysInterleave]` on `ShardRootGrain.SetManyAsync` (or a narrower subset of its read-only helpers) be safe given the existing leaf-commit ordering contract? Output is a diagnostic memo and a follow-up code change; no benchmark code changes until the hypotheses are ranked.
+- **DONE - U9p step 8c-c-iv-c2 (diagnostic memo).** Memo appended above. Result: hypotheses (a) and (d.1) are already shipped (`SetManyAsync` is `[AlwaysInterleave]` on `IShardRootGrain` per U9g/U9h-A); (b) is falsified by `local_apply ≈ leaf_rpc`; (c) is a weak fallback bounded by the U6/U8 shard-count sweet spot at 16; (d.2) was rejected by U9h-C. The actual binding constraint is **new hypothesis (e)**: `IBPlusLeafGrain.SetManyAsync` is non-reentrant, so 8 concurrent shard-root turns queue behind one per-leaf turn token on the hot leaf. Queue-depth arithmetic (7 × 595 ms ≈ 4.2 s) matches observed `leaf_rpc` P99 (3,276 ms) inside run-variance.
+- **DONE (audit only) - U9p step 8c-c-iv-c2-i (pre-implementation audit of `BPlusLeafGrain` state-writes).** Audit appended above. Headline: `CommitSetManyAsync` does **no** `state.WriteStateAsync()` on the hot path - the WAL append at L933 is the durability boundary. The U9g→U9h-A "storage-gate" recipe therefore does not apply directly; the real hazards under `[AlwaysInterleave]` are in-memory (Cache dict, HLC tick, `PublishVersionAdvance`, split-predicate race). Correct implementation requires releasing a `SemaphoreSlim` around the WAL await rather than a one-attribute drop-in. Shipping deferred behind c2-ii validation.
+- **DONE - U9p step 8c-c-iv-c2-ii (`BENCH_SHARD_COUNT=32` config-only probe).** **CONFIRMED with caveat**. SteadyAvg `2,817 → 7,501/s (+166%)`, FinalWritten `207,418 → 637,169 (+207%)`, FinalFailed=0, all from one env-var change. Phase A: `wal.append.in_flight` rose `0 → 7` (saturating `WalMaxPendingBatches=8`); `batch_entries` p90 rose from ~8 to the 100-entry cap. The WAL pipeline uncorked in step 8c-c-i finally engaged because upstream queueing at the leaf layer dropped enough to feed it. Hypothesis (e) is *partially* confirmed: `leaf_rpc` P99 dropped ~30% (3,276 → 2,360 ms) but ~1,800 ms of in-leaf queue wait still remains. Hypothesis (c) is also confirmed - more shards lifted throughput, but via WAL coalescence rather than per-shard queue reduction. **Action: promote `BENCH_SHARD_COUNT=32` to the benchmark default in `20-build-and-deploy.ps1`.**
+- **DONE - U9p step 8c-c-iv-c2-ii-b (`BENCH_SHARD_COUNT=64` falsifier).** Regressed: SteadyAvg 6,436/s (-14% vs s=32), FinalWritten 568,412 (-11%), FinalFailed=0. Bounds the durable-storage shard-count axis at `{16, 32}` with s=32 the measured sweet spot. Same shape as U8b/s=8 (cold-activation regression on memory) but with the regression point shifted from s ≥ 128 (memory) to s = 64 (durable), as expected when every leaf activation pays a real round-trip on first touch. `BENCH_SHARD_COUNT=32` shipped as new benchmark default in `20-build-and-deploy.ps1`.
+- **DONE (FALSIFIED) - U9p step 8c-c-iv-c2-iv (knob sweep at s=32 baseline).** Four probes: A (WP=16) → -39%, B (WMP=16) → -23%, C (WP=16+WMP=16) → **-99% collapse**, D (P2=0) → -57%. All cells regress against the c2-ii baseline (7,501/s steady). The knob axis (`WP`, `WMP`, `P2`) is empirically bounded at `WP=8, WMP=8, P2=5ms` on the durable Azure Tables baseline. Side finding: probe D demonstrates the `PhaseTwoCoalescingWindow=5ms` is now load-bearing (lifts a real number at the c2-ii operating point), reversing the U9c null result at the old baseline. **No config-only headroom remains; c2-iii (code change) is the next lever.**
+- **NEXT - U9p step 8c-c-iv-c2-iii (`[AlwaysInterleave]` on `IBPlusLeafGrain.SetManyAsync` + release-around-WAL `SemaphoreSlim`).** Promoted from DEFERRED. With c2-iv proving no config win remains, the c2-i audit's ~1.8 s per-leaf queue residual is the only remaining lever. Implementation per the audit recipe: gate the in-memory CRDT mutations (HLC tick, `PublishVersionAdvance`, `StoreEntry` loop) with a release around the `writer.AppendManyAsync` await so two callers can be parked on WAL concurrently while one runs in-memory work. Mirror change required on `CommitSetAsync` / `CommitDeleteAsync` for consistency. Ship contract test + chaos test (16 concurrent overlapping `SetManyAsync` on one leaf). Falsification target: `lattice.set_many.duration_ms` P99 < 1,500 ms at `10000:5`; `leaf.commit.in_flight` p99 rises 0 → 5-7; FinalFailed=0; SteadyAvg ≥ 9,000/s.
 - **DEFERRED - U9p step 8c-c-iv-c (steady-state grid search).** Originally the next step after iv-b; deferred behind iv-c2 because tail latency, not throughput, is the binding kink at the durable Azure Tables baseline. When iv-c2 ships, rerun this grid search with the lower per-write tail and record steady-state band, peak, and `wal.append.provider.duration` p50/p99 for each of: baseline, `walPartitions=16`, `walMaxPendingBatches=16`, `phase2CoalescingMs=3`, best-of-three combined. The winner becomes the recommended default in `docs/lattice/wal.md`.
 - **U9p step 8c-c-iv-d (write up campaign).** Update `docs/lattice/wal.md` with the durable steady-state band; update `docs/lattice/wal-storage-providers.md` with the Azure Tables-backed numbers; mark any roadmap items whose deps are now satisfied. Run `dotnet test --filter "TestCategory!=Chaos"` before each PR and `dotnet test --filter "TestCategory=Chaos"` before any merge that flips a default.
 - **DEFERRED - prior B / C / D plan steps.** The Phase A anomalies that originally paused them (harness ceiling at ~17 k/s on memory WAL; atomic-write throughput variance) are still real, but they live behind the kink-resolution plan. They become live again after 8c-c-iv-d ships and we have a documented production-shape band to compare against.

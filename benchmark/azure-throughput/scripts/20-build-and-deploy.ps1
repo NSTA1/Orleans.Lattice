@@ -112,12 +112,14 @@ $flushConcurrency = if ($env:BENCH_FLUSH_CONCURRENCY) { $env:BENCH_FLUSH_CONCURR
 # probe brackets it on both sides.
 $flushMs = if ($env:BENCH_FLUSH_MS) { $env:BENCH_FLUSH_MS }
            else { '50' }
-# Optional ShardRoot fan-out override. 0 (default) means "use the library
-# default shard count baked into LatticeOptions". A positive value triggers
-# the silo's startup ReshardAsync(N) call so a U3 A/B (e.g. 64 vs 256
-# shards) can be driven from the host without editing YAML.
+# Optional ShardRoot fan-out override. The benchmark default is 32, set by
+# U9p step 8c-c-iv-c2-ii: at the durable Azure Tables baseline, raising the
+# shard count from the library default lifts SteadyAvg +166% (2,817 -> 7,501/s
+# at 10000:5). s=64 regresses (-14%), so s=32 is the measured sweet spot.
+# Set BENCH_SHARD_COUNT=0 to fall back to the library default; any other
+# positive value triggers the silo's startup ReshardAsync(N) call.
 $shardCount = if ($env:BENCH_SHARD_COUNT) { $env:BENCH_SHARD_COUNT }
-              else { '0' }
+              else { '32' }
 # Producer batch size (entries per SetManyAsync). Default 4096 (matches
 # Silo/Program.cs default and sizes the 64-way shard fan-out so each shard
 # sees ~64 entries per batch). Surfaced as an env-var override so a U7 A/B
