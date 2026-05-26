@@ -15,25 +15,27 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <summary>
     /// Returns the value for <paramref name="key"/>, or <c>null</c> if absent or tombstoned.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so concurrent reads on the
-    /// same shard activation pipeline alongside in-flight interleaved
-    /// <see cref="SetManyAsync"/> turns. Safe because the method only reads
-    /// <c>state.State.RootNodeId</c> / <c>RootIsLeaf</c>, traverses via the
-    /// per-activation routing-snapshot caches (<c>ConcurrentDictionary</c>),
-    /// and never mutates shard-root state.
+    /// NOT marked <see cref="AlwaysInterleaveAttribute"/>: the original U9h-C
+    /// attempt to interleave pure reads against in-flight
+    /// <see cref="SetManyAsync"/> turns reintroduced a chaos-reshard mid-saga
+    /// invariant violation ("key missing mid-chaos"). The reader does multiple
+    /// non-atomic reads of <c>state.State.RootNodeId</c> /
+    /// <c>state.State.RootIsLeaf</c> / <c>state.State.MovedAwaySlots</c>
+    /// across awaits, and an interleaved promotion or move-away publish can
+    /// land between them, surfacing as a null return for a key the workload
+    /// invariant guarantees must be present.
     /// </para>
     /// </summary>
-    [AlwaysInterleave]
     Task<byte[]?> GetAsync(string key);
 
     /// <summary>
     /// Returns <c>true</c> if <paramref name="key"/> exists and is live.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> on the same rationale as
-    /// <see cref="GetAsync"/>: read-only traversal, no shard-root state mutation.
+    /// NOT marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// documented on <see cref="GetAsync"/>: read traversal is composed of
+    /// multiple non-atomic shard-root state reads across awaits.
     /// </para>
     /// </summary>
-    [AlwaysInterleave]
     Task<bool> ExistsAsync(string key);
 
     /// <summary>
@@ -48,13 +50,11 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// tree traversal per distinct leaf and batching reads at each leaf.
     /// Keys that do not exist or are tombstoned are omitted from the result.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> on the same rationale as
-    /// <see cref="GetAsync"/>: read-only traversal, no shard-root state mutation.
-    /// The internal group-by-leaf bucketing is single-turn local state and is
-    /// not visible across interleaved calls.
+    /// NOT marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// documented on <see cref="GetAsync"/>: batch read traversal performs
+    /// multiple non-atomic reads of shard-root routing state across awaits.
     /// </para>
     /// </summary>
-    [AlwaysInterleave]
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
 
     /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>

@@ -22,14 +22,24 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// branch then cast the wrong grain interface and crashed with
 /// <c>InvalidCastException</c>. The fix made <see cref="SplitResult"/>
 /// self-describing via <see cref="SplitResult.ChildIsLeaf"/> AND
-/// added a root-shape re-check inside <c>CompletePromotionAsync</c>:
-/// when the persisted bubble's child level matches the live root's
-/// <c>ChildrenAreLeaves</c>, the bubble is routed through the
-/// existing root via <c>AcceptSplitAsync</c> instead of wrapping a
-/// second new root above it; when the levels disagree, the stale
-/// intent is dropped and the surrounding write retry envelope
-/// re-routes the user mutation. This fixture pins all three legs of
-/// that behaviour against deterministic harness state.
+/// added an asymmetric root-shape re-check inside
+/// <c>CompletePromotionAsync</c> / <c>PromoteRootAsync</c>: only when
+/// the persisted bubble is leaf-level (<c>ChildIsLeaf == true</c>) AND
+/// the live root has been promoted (<c>RootIsLeaf == false</c>) AND
+/// the live root's <c>ChildrenAreLeaves</c> is <c>true</c> is the
+/// bubble routed through the existing root via
+/// <c>AcceptSplitAsync</c> instead of wrapping a second new root
+/// above it. Legitimate depth->=1 root splits
+/// (<c>ChildIsLeaf == false</c>) bypass the re-check entirely and
+/// keep their original wrap semantics; the symmetric
+/// <c>ChildrenAreLeaves == ChildIsLeaf</c> predicate the first U9k
+/// step 2 fix shipped false-positived those legitimate splits and
+/// silently corrupted any tree of depth >= 2 (caught by
+/// <c>ChaosReshardIntegrationTests</c>,
+/// <c>PublicApiContractTests.WalReactivation.Tree_with_split_leaves_survives_cluster_restart</c>,
+/// and
+/// <c>ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard</c>).
+/// This fixture pins all four legs deterministically.
 /// </summary>
 public sealed class ShardRootGrainPromotionChildTypeTests
 {
@@ -198,17 +208,17 @@ public sealed class ShardRootGrainPromotionChildTypeTests
     [Test]
     public async Task Resume_drops_stale_pending_when_root_level_mismatches_bubble()
     {
-        // Pathological resume case: the persisted bubble's child level
-        // (ChildIsLeaf = true) disagrees with the live root's
-        // ChildrenAreLeaves (false here - the live root's children
-        // are themselves internal nodes). The bubble cannot be
-        // safely spliced either above or below the current root
-        // without unbalancing it. The fix drops the stale intent so
-        // the caller's write retry envelope re-routes the
-        // user-visible mutation against the current topology, and
+        // Deeper-race resume case: the persisted bubble is leaf-level
+        // (ChildIsLeaf = true) but the live root's children are
+        // themselves internal nodes (ChildrenAreLeaves = false). The
+        // bubble's NewSiblingId belongs deeper in the tree than the
+        // resume path can safely splice from here. The fix drops the
+        // stale intent so the caller's write retry envelope re-routes
+        // the user-visible mutation against the current topology, and
         // does NOT call InitializeAsync (which would seed the new
         // root with the wrong childrenAreLeaves bit and reproduce
-        // the U9k step 2 InvalidCastException).
+        // the U9k step 2 InvalidCastException) nor AcceptSplitAsync
+        // (which would inject the leaf at the wrong tree level).
         var h = CreateHarness();
         h.State.State.RootNodeId = GrainId.Create("internal", "promoted-root");
         h.State.State.RootIsLeaf = false;
@@ -253,5 +263,73 @@ public sealed class ShardRootGrainPromotionChildTypeTests
             Arg.Any<GrainId>());
         Assert.That(h.State.State.PendingPromotion, Is.Null,
             "Stale pending promotion intent should have been dropped on shape mismatch.");
+    }
+
+    [Test]
+    public async Task Resume_wraps_new_root_for_legitimate_internal_root_split()
+    {
+        // Acceptance leg for the U9k step 2 follow-up: the first U9k
+        // step 2 fix used a symmetric `ChildrenAreLeaves == ChildIsLeaf`
+        // predicate, which silently false-positived every legitimate
+        // depth->=1 root split (where the splitting internal root
+        // emits a same-level bubble and the live root is, correctly,
+        // an internal node whose ChildrenAreLeaves matches the
+        // bubble's ChildIsLeaf = false). That symmetric predicate
+        // re-fed the bubble back into the splitter via
+        // AcceptSplitAsync and silently corrupted any depth >= 2
+        // tree, breaking Chaos/Reshard/WalReactivation suites.
+        //
+        // The corrected, asymmetric predicate fires only when
+        // ChildIsLeaf == true (leaf-level bubble). This test pins
+        // the legitimate depth->=1 case: ChildIsLeaf == false,
+        // RootIsLeaf == false. The recovery branch must be skipped
+        // entirely and the legacy wrap-as-new-root path must run -
+        // i.e. InitializeAsync(...) MUST be called with
+        // childrenAreLeaves = false to splice the new same-level
+        // sibling above the existing internal root, and
+        // AcceptSplitAsync MUST NOT be called (which would
+        // catastrophically re-feed the bubble into the splitter).
+        var h = CreateHarness();
+        h.State.State.RootNodeId = GrainId.Create("internal", "current-internal-root");
+        h.State.State.RootIsLeaf = false;
+        h.State.State.PendingPromotionRootWasLeaf = false;
+        h.State.State.PendingPromotion = new SplitResult
+        {
+            PromotedKey = "k-deep-split",
+            NewSiblingId = GrainId.Create("internal", "new-internal-sibling"),
+            ChildIsLeaf = false,
+        };
+        // Live root's children are themselves internals (depth >= 2),
+        // matching the same-level bubble. Under the broken symmetric
+        // predicate this would trigger the rebubble fast path; under
+        // the corrected asymmetric predicate it must NOT, because
+        // ChildIsLeaf is false.
+        h.Internal.GetRoutingTableAsync().Returns(new RoutingTableSnapshot
+        {
+            SeparatorKeys = [null],
+            ChildIds = [GrainId.Create("internal", "existing-inner")],
+            ChildrenAreLeaves = false,
+        });
+
+        try { await h.Grain.GetAsync("k-any"); } catch { }
+
+        // The critical pin is the childrenAreLeaves argument: it must
+        // be `false` to splice the new same-level internal sibling
+        // above the existing internal root. Under the broken symmetric
+        // predicate the recovery branch would short-circuit through
+        // AcceptSplitAsync instead, and InitializeAsync would never
+        // be invoked at all. (The subsequent `newRoot.GetGrainId()`
+        // call inside CompletePromotionAsync is not satisfiable on
+        // the auto-mock and throws past the try/catch above, so
+        // PendingPromotion clearance is not asserted here - matching
+        // the existing wrap-path test's coverage shape.)
+        await h.Internal.Received(1).InitializeAsync(
+            "k-deep-split",
+            Arg.Is<GrainId>(id => id == GrainId.Create("internal", "current-internal-root")),
+            Arg.Is<GrainId>(id => id == GrainId.Create("internal", "new-internal-sibling")),
+            false);
+        await h.Internal.DidNotReceive().AcceptSplitAsync(
+            Arg.Any<string>(),
+            Arg.Any<GrainId>());
     }
 }

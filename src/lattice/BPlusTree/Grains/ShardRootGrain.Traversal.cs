@@ -696,24 +696,37 @@ internal sealed partial class ShardRootGrain
             // Re-validate the current root shape under the gate. The
             // caller computed `splitResult` from a TraverseForWrite /
             // SetManyLocalOnly pass that observed the tree shape BEFORE
-            // the gate was entered. If an interleaved peer turn already
-            // promoted the root, our local bubble is now a level
-            // BELOW the current root rather than a same-level sibling
-            // of it, and wrapping a second new root above the existing
-            // one would seed it with the wrong `childrenAreLeaves`
-            // bit - the inverted-cast InvalidCastException observed in
-            // U9k step 2.
-            if (!state.State.RootIsLeaf && state.State.PendingPromotion is null)
+            // the gate was entered. The U9k step 2 race is asymmetric:
+            // turn A enters `SetManyLocalOnlyAsync` when the root is a
+            // leaf and computes a leaf-level bubble
+            // (`splitResult.ChildIsLeaf == true`); turn B then promotes
+            // the root, flipping `state.State.RootIsLeaf` to false.
+            // When turn A finally reaches the gate, wrapping a second
+            // new root above the just-promoted internal one would seed
+            // it with `childrenAreLeaves = true` against an internal
+            // child - the inverted-cast InvalidCastException observed
+            // on the U9k step 2 ladder. The non-race case has
+            // `splitResult.ChildIsLeaf == state.State.RootIsLeaf` by
+            // construction (the bubble was produced by the current
+            // root splitting), so the asymmetric predicate below
+            // fires only when an interleaved peer promotion has
+            // landed between the splitter and us. A symmetric
+            // `ChildrenAreLeaves == ChildIsLeaf` check would ALSO
+            // false-positive every legitimate depth->=1 root split
+            // (where the splitting root produced a same-level bubble
+            // and the live root is, correctly, internal), so this
+            // predicate is deliberately one-sided.
+            if (splitResult.ChildIsLeaf && !state.State.RootIsLeaf && state.State.PendingPromotion is null)
             {
                 var currentRootId = state.State.RootNodeId!.Value;
                 var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
-                if (rootSnapshot.ChildrenAreLeaves == splitResult.ChildIsLeaf)
+                if (rootSnapshot.ChildrenAreLeaves)
                 {
                     // The current root sits exactly one level above
-                    // our bubble's NewSiblingId, so feed the bubble
-                    // into the existing root via AcceptSplitAsync.
-                    // If the root itself splits in turn we return its
-                    // bubble so the caller's `while (split is not null)`
+                    // our leaf-level bubble, so feed the bubble into
+                    // the existing root via AcceptSplitAsync. If the
+                    // root itself splits in turn we return its bubble
+                    // so the caller's `while (split is not null)`
                     // loop re-enters PromoteRootAsync for the next
                     // level up.
                     var currentRoot = ResolveInternalGrain(currentRootId);
@@ -721,21 +734,20 @@ internal sealed partial class ShardRootGrain
                     InvalidateRoutingTable(currentRootId);
                     return rebubble;
                 }
-                // Level mismatch: bubble's child level disagrees with
-                // the current root's child level. This would mean a
-                // deeper race than the two-flat-tree-turns case we have
-                // observed under load; fall through to the legacy
-                // wrap-as-new-root shape using the immutable
-                // splitResult.ChildIsLeaf flag so the new root's
-                // `childrenAreLeaves` matches the level of
-                // splitResult.NewSiblingId. The legacy
-                // RootIsLeaf-derived bit on PendingPromotion is no
-                // longer trusted - see CompletePromotionAsync.
+                // Deeper race: the live root is at depth >= 2 (its
+                // children are themselves internal nodes) but our
+                // bubble is leaf-level. Routing the bubble safely
+                // would require traversing down to the correct
+                // internal parent; that path is not yet exercised in
+                // production. Log and fall through to the legacy
+                // wrap, which is still incorrect in this corner case
+                // but matches pre-fix behaviour rather than
+                // regressing the depth-1 path the U9k step 2 fix
+                // legitimately repaired.
                 logger.LogWarning(
-                    "ShardRootGrain {ShardId} PromoteRootAsync observed a level mismatch under the promotion gate (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf={ChildIsLeaf}); falling back to wrap-as-new-root with bubble level.",
+                    "ShardRootGrain {ShardId} PromoteRootAsync observed a depth->=2 race (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf=true); falling through to legacy wrap.",
                     context.GrainId,
-                    rootSnapshot.ChildrenAreLeaves,
-                    splitResult.ChildIsLeaf);
+                    rootSnapshot.ChildrenAreLeaves);
             }
 
             state.State.PendingPromotion = splitResult;
@@ -761,27 +773,34 @@ internal sealed partial class ShardRootGrain
 
         // Recovery shape check. The persisted `PendingPromotion` was
         // written when some earlier turn decided to wrap a new root.
-        // If the activation died between Phase 1 (persist intent) and
-        // Phase 2 (create new root + clear intent) and a different
-        // code path - or, more commonly, the pre-fix builds where the
-        // promotion sequence was not gated and two interleaved turns
-        // could each persist their own bubble - has already advanced
-        // `RootNodeId` to an internal node whose ChildrenAreLeaves
-        // matches the pending bubble's ChildIsLeaf, then the bubble
-        // belongs INSIDE that current root rather than ABOVE it.
+        // For a legitimate wrap-as-new-root that crashed between
+        // Phase 1 (persist intent) and Phase 2 (create new root + clear
+        // intent), `state.State.RootIsLeaf` is still on the pre-wrap
+        // value (true for the first-ever promotion, false for higher
+        // promotions) because Phase 2 is what flips it; the branch
+        // below is skipped and the legacy wrap reapplies idempotently
+        // via the deterministic new-root id.
+        //
+        // The branch fires only on the U9k step 2 race shape: turn A
+        // persisted a leaf-level `PendingPromotion`
+        // (`pending.ChildIsLeaf == true`) when `RootIsLeaf == true`,
+        // then turn B's interleaved promotion completed before our
+        // resume - leaving the live root as a fresh level-1 internal
+        // node with `ChildrenAreLeaves == true`. The pending bubble
+        // belongs INSIDE that promoted root rather than ABOVE it.
         // Wrapping again would seed the new root with the wrong
         // `childrenAreLeaves` bit and surface as the inverse
         // InvalidCastException SeedChildParentAsync observed on the
         // U9k step 2 ladder ("cast BPlusInternalGrain to
-        // IBPlusLeafGrain"). Route the bubble through AcceptSplitAsync
-        // instead. Note this branch is reached only when the live
-        // `state.State.RootIsLeaf` is false; the buggy
-        // `PendingPromotionRootWasLeaf` scalar is intentionally not
-        // consulted here because it could itself be stale.
-        if (!state.State.RootIsLeaf)
+        // IBPlusLeafGrain"). The predicate is deliberately asymmetric
+        // (only `ChildIsLeaf=true`); a symmetric
+        // `ChildrenAreLeaves == ChildIsLeaf` check would false-
+        // positive every legitimate depth->=1 root split whose
+        // persisted intent legitimately needs to wrap.
+        if (pending.ChildIsLeaf && !state.State.RootIsLeaf)
         {
             var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
-            if (rootSnapshot.ChildrenAreLeaves == pending.ChildIsLeaf)
+            if (rootSnapshot.ChildrenAreLeaves)
             {
                 var existingRoot = ResolveInternalGrain(currentRootId);
                 await existingRoot.AcceptSplitAsync(pending.PromotedKey, pending.NewSiblingId);
@@ -791,23 +810,20 @@ internal sealed partial class ShardRootGrain
                 return;
             }
 
-            // Shape mismatch: the pending bubble does not align with
-            // either the current root level or one level below it.
-            // The bubble's NewSiblingId is at a level we cannot safely
-            // splice into the live topology - splitting either above
-            // or below the current root would create an unbalanced
-            // tree with mismatched child levels. The safest recovery
-            // is to drop the stale intent: in the buggy pre-fix
-            // shapes this happens when the bubble was already
-            // absorbed by a sibling promotion, so the NewSiblingId is
-            // already wired into the tree elsewhere; in the
-            // legitimately-unreachable shapes this state is corrupt
-            // and the surrounding write retry envelope will replay
-            // the user mutation against the current topology.
+            // Deeper race on resume: leaf-level pending bubble against
+            // a root whose children are themselves internals. The
+            // bubble's NewSiblingId belongs deeper in the tree than
+            // we can safely splice from here; drop the stale intent
+            // and let the surrounding write retry envelope replay the
+            // user mutation against the current topology. In practice
+            // this only happens when the leaf-level bubble's
+            // NewSiblingId was already absorbed by a sibling
+            // promotion (so the leaf is reachable via the live
+            // topology) - dropping the intent simply releases the
+            // stuck recovery without re-wrapping.
             logger.LogWarning(
-                "ShardRootGrain {ShardId} CompletePromotionAsync observed a level mismatch between the persisted PendingPromotion (ChildIsLeaf={ChildIsLeaf}) and the current root (ChildrenAreLeaves={ChildrenAreLeaves}); dropping the stale promotion intent.",
+                "ShardRootGrain {ShardId} CompletePromotionAsync observed a depth->=2 race on resume (rootChildrenAreLeaves={RootChildrenAreLeaves}, pending.ChildIsLeaf=true); dropping the stale promotion intent.",
                 context.GrainId,
-                pending.ChildIsLeaf,
                 rootSnapshot.ChildrenAreLeaves);
             state.State.PendingPromotion = null;
             await WriteShardStateAsync();
