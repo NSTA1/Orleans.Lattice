@@ -430,8 +430,17 @@ internal sealed class WalShardGrain(
             _pendingAcks.Add(tcs);
 
             // Decide whether to start a flush right now. Three triggers:
-            //   1. _inFlight.Count == 0: a lone entry must not wait for a
-            //      future cutover to make progress (latency floor).
+            //   1. _inFlight.Count < maxPending: there is spare capacity
+            //      in the in-flight chain, so admitting this entry into
+            //      its own flush keeps the latency floor flat while
+            //      pipelining against any slots already in motion. The
+            //      original protocol used `== 0` here, which made the
+            //      pipelined cap unreachable under steady fan-in (every
+            //      caller arriving while one flush was in motion parked
+            //      on `acks[i].Task` and the chain depth never grew past
+            //      one). With cap = 1 (the wire-compat default)
+            //      `< maxPending` collapses back to `== 0`, so the
+            //      single-in-flight protocol is unchanged.
             //   2. pending is full (reached WalMaxBatchEntries): kick a
             //      flush to fan out under multi-batch caps; otherwise the
             //      next entry's cutover would block on the head.
@@ -439,11 +448,13 @@ internal sealed class WalShardGrain(
             //      byte limit. Compared with the cutover loop's check,
             //      this is the "exact-fit" boundary - the next entry would
             //      definitely cut over.
-            // Always honour the cap: never kick when at it.
-            kickFlush = _inFlight.Count < maxPending
-                && (_inFlight.Count == 0
-                    || _pendingSegments.Count >= maxEntries
-                    || _pendingBatchSizeBytes >= maxBytes);
+            // Always honour the cap: never kick when at it. Once we
+            // are under the cap the lone-entry latency floor (1) alone
+            // is sufficient to admit this caller's flush; the pack
+            // clauses (2) and (3) are subsumed by it. Keeping them out
+            // of the predicate avoids re-evaluating the same boolean
+            // twice on the hot path.
+            kickFlush = _inFlight.Count < maxPending;
             queueDepth = _pendingSegments.Count;
         }
         LatticeMetrics.WalAppendQueueDepth.Record(queueDepth, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
@@ -604,20 +615,24 @@ internal sealed class WalShardGrain(
                 _pendingAcks.Add(tcs);
 
                 // Only kick a flush mid-batch when the per-batch caps
-                // are saturated; deferring the "_inFlight.Count == 0"
-                // single-entry trigger to the final entry of the batch
-                // is what gives the batched path its win - the whole
-                // batch shares a single flush window when it fits under
-                // the caps.
+                // are saturated; deferring the latency-floor trigger to
+                // the final entry of the batch is what gives the batched
+                // path its win - the whole batch shares a single flush
+                // window when it fits under the caps.
                 // The final-entry branch reproduces the AppendAsync
                 // protocol's latency-floor guarantee (a lone entry must
                 // not wait for a future cutover) once the entire batch
-                // has been enqueued.
+                // has been enqueued, and now also opens a new flush when
+                // the chain has spare capacity below WalMaxPendingBatches
+                // so the cap is actually reachable under steady fan-in.
+                // With cap = 1 the outer `_inFlight.Count < maxPending`
+                // guard collapses to `_inFlight.Count == 0`, so the
+                // single-in-flight protocol is preserved bit-for-bit.
                 var isLast = i == count - 1;
                 kickFlush = _inFlight.Count < maxPending
                     && (_pendingSegments.Count >= maxEntries
                         || _pendingBatchSizeBytes >= maxBytes
-                        || (isLast && _inFlight.Count == 0));
+                        || isLast);
             }
             if (kickFlush)
             {
@@ -990,13 +1005,19 @@ internal sealed class WalShardGrain(
         // Drain a follow-on batch that accumulated while we were in
         // flight. Done outside the try/finally so a fresh flush failure
         // is observed cleanly by its own callers. Snapshot the relevant
-        // state under the gate to make the trigger decision; only kick
-        // a flush when the chain has fully drained and a pending batch
-        // is waiting.
+        // state under the gate to make the trigger decision; kick a
+        // flush whenever the chain has spare capacity below
+        // WalMaxPendingBatches and a pending batch is waiting. With
+        // cap = 1 `< maxPending` is identical to the previous
+        // "chain fully drained" predicate (the slot that just settled
+        // is already removed above, so _inFlight.Count == 0 holds at
+        // this point under cap = 1).
         bool kickFollowOn;
         lock (_stateGate)
         {
-            kickFollowOn = _stickyFailure is null && _pendingSegments.Count > 0 && _inFlight.Count == 0;
+            kickFollowOn = _stickyFailure is null
+                && _pendingSegments.Count > 0
+                && _inFlight.Count < Options.WalMaxPendingBatches;
         }
         if (kickFollowOn)
         {
