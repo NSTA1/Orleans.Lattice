@@ -94,6 +94,14 @@ $phase2CoalescingMs = if ($env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS) { $env:BEN
 # A/B (e.g. 8 vs 16 vs 32) can be driven from the host without editing YAML.
 $flushConcurrency = if ($env:BENCH_FLUSH_CONCURRENCY) { $env:BENCH_FLUSH_CONCURRENCY }
                     else { '8' }
+# In-silo TcpIngestService flush-window cadence in milliseconds. Default 50
+# (matches Silo/Program.cs default). Surfaced as an env-var override so a
+# U9l sweep (e.g. 50 vs 100 vs 200 vs 400 ms) over the flush-window vs
+# producer-inter-tick interaction can be driven from the host without
+# editing YAML. The producer's inter-tick at TickHz=5 is 200 ms, so this
+# probe brackets it on both sides.
+$flushMs = if ($env:BENCH_FLUSH_MS) { $env:BENCH_FLUSH_MS }
+           else { '50' }
 # Optional ShardRoot fan-out override. 0 (default) means "use the library
 # default shard count baked into LatticeOptions". A positive value triggers
 # the silo's startup ReshardAsync(N) call so a U3 A/B (e.g. 64 vs 256
@@ -113,7 +121,7 @@ $batchSize = if ($env:BENCH_BATCH_SIZE) { $env:BENCH_BATCH_SIZE }
 $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
                    else { '10' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -250,7 +258,7 @@ properties:
           - name: BENCH_BATCH_SIZE
             value: '$batchSize'
           - name: BENCH_FLUSH_MS
-            value: '50'
+            value: '$flushMs'
           - name: BENCH_FLUSH_CONCURRENCY
             value: '$flushConcurrency'
           - name: BENCH_SHARD_COUNT
