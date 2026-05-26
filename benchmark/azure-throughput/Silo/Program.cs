@@ -84,6 +84,17 @@
 //                           harness's nominal 120s run so a normal client-driven stop
 //                           still wins the race, while a runaway run cannot burn paid
 //                           Azure compute indefinitely.
+//   BENCH_RESPONSE_TIMEOUT_SEC
+//                           Orleans Silo+Client ResponseTimeout in seconds (default 30,
+//                           matches the Orleans default). U9p step 8c-b-i probe lever:
+//                           lifts the caller-side timeout on ILattice.SetManyAsync so a
+//                           slow worst-partition flush no longer triggers Orleans's
+//                           TimeoutException and the producer's reconnect/retransmit
+//                           storm. Disambiguates whether the post-timeout retry storm
+//                           is itself a throughput multiplier on top of provider-tail
+//                           latency. Applied to both SiloMessagingOptions and
+//                           ClientMessagingOptions so in-silo TcpIngestService callers
+//                           see the same lift.
 
 using System.Diagnostics;
 using System.Net;
@@ -138,6 +149,7 @@ var eliminateCandidateRow = ReadBool("BENCH_WAL_ELIMINATE_CANDIDATE_ROW", false)
 var phaseTwoCoalescingMs = ReadIntAllowZero("BENCH_WAL_PHASE2_COALESCING_WINDOW_MS", 0);
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
+var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
 
 if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageConn))
 {
@@ -146,7 +158,7 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
     return;
 }
 
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -185,6 +197,22 @@ builder.UseOrleans(silo =>
     {
         o.ClusterId = "azure-throughput";
         o.ServiceId = "azure-throughput";
+    });
+
+    // U9p step 8c-b-i probe lever. The Orleans default ResponseTimeout is 30 s,
+    // which is the immediate cause of the step-8b/8c-a-i caller-side TimeoutExceptions
+    // on ILattice.SetManyAsync when a worst-partition WAL flush stalls behind Azure
+    // Tables tail latency. Lifting it converts caller-side *timeouts* (which trigger
+    // a producer reconnect/retransmit storm) into caller-side *wall-clock slowdown*
+    // with no retry cost, isolating provider tail from retry-storm amplification.
+    // Both Silo and Client (StatelessWorker grains can call inward) get the same value.
+    silo.Configure<SiloMessagingOptions>(o =>
+    {
+        o.ResponseTimeout = TimeSpan.FromSeconds(responseTimeoutSec);
+    });
+    silo.Configure<ClientMessagingOptions>(o =>
+    {
+        o.ResponseTimeout = TimeSpan.FromSeconds(responseTimeoutSec);
     });
 
     // In-memory single-silo clustering: no Azure Storage clustering table, no peer discovery.

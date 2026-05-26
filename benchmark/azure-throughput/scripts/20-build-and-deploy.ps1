@@ -130,8 +130,16 @@ $batchSize = if ($env:BENCH_BATCH_SIZE) { $env:BENCH_BATCH_SIZE }
 # main throughput log in noise. Set 0 to disable.
 $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
                    else { '10' }
+# Orleans Silo+Client ResponseTimeout in seconds. Default 30 (matches the
+# Orleans default). U9p step 8c-b-i probe lever: lifts the caller-side
+# timeout on ILattice.SetManyAsync so a slow worst-partition WAL flush
+# does not surface as an Orleans TimeoutException + producer reconnect
+# storm. Forwarded into both SiloMessagingOptions.ResponseTimeout and
+# ClientMessagingOptions.ResponseTimeout in Silo/Program.cs.
+$responseTimeoutSec = if ($env:BENCH_RESPONSE_TIMEOUT_SEC) { $env:BENCH_RESPONSE_TIMEOUT_SEC }
+                      else { '30' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -335,6 +343,8 @@ properties:
             value: '$phaseAReportSec'
           - name: BENCH_TOTAL_DURATION_SEC
             value: '$totalDuration'
+          - name: BENCH_RESPONSE_TIMEOUT_SEC
+            value: '$responseTimeoutSec'
           - name: AZURE_CLIENT_ID
             value: $((az identity show --name $ctx.Identity --resource-group $ctx.ResourceGroup --query clientId --output tsv))
     - name: producer

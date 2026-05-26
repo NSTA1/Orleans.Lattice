@@ -1480,6 +1480,54 @@ Run (b-i) first because it is a one-line config change and disambiguates whether
 **Artifacts.** `benchmark/azure-throughput/.run/silo-U9p-step8c-a-i.log`, `producer-U9p-step8c-a-i.log`, `ladder-U9p-step8c-a-i.log`, `scripts/.ladder-results-U9p-step8c-a-i.csv`, `scripts/.ladder-phaseA-U9p-step8c-a-i.csv`. No code change in this step; the only deploy delta is `$env:BENCH_WAL_PARTITIONS='16'`.
 
 
+### U9p step 8c-b-i - falsifier: raise Orleans `ResponseTimeout` 30 s -> 180 s (10000:5)
+
+**Hypothesis.** Step 8c-a-i showed that raising `WalPartitions` from 8 to 16 collapsed throughput and exploded failures from ~4/s to ~28/s, with caller-side `TimeoutException` traces dominating the producer log. That is consistent with the Orleans 30 s `ResponseTimeout` firing on `ILattice.SetManyAsync` while the silo is still waiting on the slowest WAL partition - i.e. the 30 s timeout is itself an amplifier (timeout -> producer reconnect -> retransmit -> deeper queue -> more timeouts). The step-8b-listed lever (b-i) is the cheapest probe: bump `ResponseTimeout` to 180 s and re-run the same rung. Prediction: failures go to zero; steady-state throughput at most marginally moves; the actual WAL-side ceiling becomes visible without the retry storm distorting it.
+
+**Method.** New benchmark knob `BENCH_RESPONSE_TIMEOUT_SEC` (default 30 to preserve prior behaviour) plumbed through `benchmark/azure-throughput/Silo/Program.cs` and `benchmark/azure-throughput/scripts/20-build-and-deploy.ps1`, applied to both `SiloMessagingOptions.ResponseTimeout` and `ClientMessagingOptions.ResponseTimeout`. Rebuilt the silo image via `-LocalBuild`, deployed with `$env:BENCH_RESPONSE_TIMEOUT_SEC='180'` and **otherwise identical** step-8b knobs (`walPartitions=8`, `walMaxPending=8`, `flushConcurrency=8`, `batchSize=4096`, `phase2CoalescingMs=0`, `flushMs=50`). One rung `10000:5` for 120 s.
+
+**Result.** Failure storm eliminated, but the steady-state ceiling did not move materially:
+
+| metric                                            | step-8b (timeout=30 s) | step-8c-b-i (timeout=180 s) | change       |
+| ------------------------------------------------- | ---------------------- | --------------------------- | ------------ |
+| SteadyAvg                                         | 1,316/s                | 1,649/s                     | **+25%**     |
+| FinalWritten                                      | 158,888                | 187,636                     | +18%         |
+| FinalFailed                                       | 16,291                 | **0**                       | **-100%**    |
+| FinalAvgRate                                      | 1,324/s                | 1,575/s                     | +19%         |
+| `TimeoutException` occurrences in silo log        | thousands              | **0**                       | -            |
+| `wal.shard.dispatch.entries` p50 (typical shard)  | 4-5                    | 4                           | flat         |
+| `wal.shard.dispatch.duration` p50 (typical shard) | ~500-2,100 ms          | 510-2,138 ms                | flat         |
+| `wal.shard.dispatch.duration` p99 (worst shard)   | ~3.8 s                 | 3.17 s                      | flat         |
+| `wal.append.turn_wait` p50                        | ~12-32 ms              | ~11-13 ms                   | flat-to-down |
+
+The producer-side `NetworkStream.Write` exceptions in `producer.log` are now unrelated to the runs WAL path - they are the normal teardown-window EOF after the silo accepts the FINAL drain (producer keeps writing into the half-closed TCP socket until the host stops).
+
+**Mechanism.** The 30 s `ResponseTimeout` was a retry-storm amplifier, not the bottleneck:
+
+1. **Timeouts gone, retry cost gone, throughput moved by ~+25%.** At timeout=30 s the producer was reconnecting and retransmitting ~136 batches/s (16,291 failed / 120 s) - each retransmit re-traverses the whole pipeline (TCP -> ingest service -> `LatticeGrain.SetManyAsync` -> per-partition WAL append), so the silo was spending a meaningful fraction of its budget on duplicate work. Lifting the timeout converted those wall-clock-late completions into successful late completions; throughput moves by the amount of wasted retry work, not by the underlying limiter.
+
+2. **The WAL-dispatch numbers are unchanged.** `dispatch.entries` and `dispatch.duration` quantiles per shard are essentially identical to step 8b. Whatever sets the per-shard `~510-2,100 ms` `dispatch.duration` p50 is **upstream of the timeout knob**. The caller-visible ceiling (~1.6k/s aggregate) is set by `8 shards x (1 / dispatch.duration_per_dispatch_seconds) x dispatch.entries_per_dispatch`. With p50 dispatch_duration ~ 1 s and dispatch.entries p50 = 4, that's `8 x 1 x 4 = 32 entries/s/shard x 8 shards = 256/s if every dispatch took 1 s`, but the count column (`~520 per shard / 120 s ~ 4.3 dispatches/s/shard`) and the dispatch.entries sum (~2,300 / shard) gives `~19 entries/s/shard x 8 shards x dispatch_density_correction ~ 1.5-1.6k/s aggregate` - which matches the FINAL line exactly.
+
+3. **`SteadyMin = 0` and `SteadyMax = 15,179`.** Per-second throughput is now bursty: there are seconds with no completions and seconds with 15 k completions. That is the signature of caller-side `await ILattice.SetManyAsync` blocking on `max(8 per-shard tails)` and releasing the whole batch when the tail finally returns. With timeouts off, the producer holds the slow batches in flight instead of giving up, and they all complete together when the slowest dispatch lands.
+
+**Interpretation - lever (b-i) is confirmed as a *necessary* fix but not a *sufficient* fix.** The 30 s default `ResponseTimeout` was clearly amplifying failures and inflating the harm caused by step 8c-a-i; with it lifted, `FinalFailed = 0` and the throughput is now strictly higher in every steady-state metric. **But the underlying limiter is unchanged**: `wal.shard.dispatch.duration` p50 is still ~510-2,100 ms per shard, `dispatch.entries` p50 is still 4. To break above ~1.6k/s, one of two things has to happen:
+
+1. **`dispatch.entries` per dispatch has to go up.** The `WalCommitLogWriter` dispatch path currently fires per-partition slice ASAP; under the rung's per-batch arithmetic (`4096 / 8 partitions = 512 entries per slice`), the in-grain batch packer trims it to `WalMaxBatchEntries=8`, so each dispatch carries at most 8 entries (typical 4 on the heavy partitions). This is a config / packer choice, not a fundamental constraint.
+
+2. **`dispatch.duration` per dispatch has to go down.** This is set by the Azure Tables provider (`provider.duration` p50 ~ 15-20 ms, p99 ~ hundreds of ms) plus the grain-turn fan-in cost (`turn_wait` ~ 11-13 ms). p50 ~ 0.5-2 s per dispatch is much larger than provider.duration p50 ~ 20 ms, so most of the dispatch.duration is grain-turn / queueing on the WAL grain, not provider time. That points back at the `WalShardGrain` activation's per-turn cost - i.e. the same surface step 8b already identified as the limiter, but seen from the writer side of the seam.
+
+**Step-8c next - step into the WAL grain's own turn-queue and packing.** Two complementary levers, both still cheap:
+
+- **(c-i) Raise `WalMaxBatchEntries` so a single dispatch carries more entries.** Today's packer cap forces `dispatch.entries` p50 = 4 even though the per-partition slice is ~512 entries. Lifting that cap from 8 to e.g. 64 or 256 would let one Azure-Tables round-trip cover the whole slice, which collapses the per-entry overhead by the same factor. This is a per-tree `LatticeOptions` knob, no API change, no wire-format change. **This is the cheapest remaining probe.**
+- **(c-ii) Move `WalCommitLogWriter` packing off the WAL grain's turn.** Today the per-partition slice is built inside the WAL grain's turn before the storage call; pushing it earlier (in the caller-side fan-out) would let the WAL grain hand the packed batch to the provider without holding its turn during pack time. This is a code change inside `WalCommitLogWriter`, no wire-format change, no API change.
+
+Run (c-i) first because it is a one-line config change and disambiguates whether the per-dispatch overhead is dominated by the packer cap or by the grain-turn cost. If (c-i) lifts `dispatch.entries` p50 from 4 to >=32 and throughput rises to >=8k/s, the binding constraint is the packer cap. If (c-i) lifts `dispatch.entries` but throughput doesn't rise proportionally, the binding constraint is the grain-turn cost, and (c-ii) becomes the next implementation step.
+
+**Decision - lock in (b-i) as a default knob in the benchmark, not as a product change.** The benchmark silo now carries `BENCH_RESPONSE_TIMEOUT_SEC` (default 30 to preserve prior behaviour). The production `ResponseTimeout` stays at the Orleans default. The 30 s timeout is correct as a circuit-breaker against pathological grain stalls in production; what step 8c-b-i shows is that the benchmark rung's "pathological" workload is being correctly flagged by Orleans, not that the product setting is wrong. The fix path is to make the WAL faster (steps 8c-i / 8c-ii), not to weaken the timeout.
+
+**Artifacts.** `benchmark/azure-throughput/.run/step8c-b-i-silo.log` (silo, 11.3 MiB), `step8c-b-i-producer.log`, `step8c-b-i-results.csv`, `step8c-b-i-phaseA.csv`, `ladder-U9p-step8c-b-i.log`. Code change is benchmark-only (`benchmark/azure-throughput/Silo/Program.cs` and `benchmark/azure-throughput/scripts/20-build-and-deploy.ps1` carry the new `BENCH_RESPONSE_TIMEOUT_SEC` knob); deploy delta is `$env:BENCH_RESPONSE_TIMEOUT_SEC='180'`.
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
