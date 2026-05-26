@@ -314,11 +314,21 @@ not resume by tail-replay alone:
 
 1. **WAL trimmed past checkpoint.** The per-shard WAL has GC'd entries
    the leaf still considers unapplied. A tail replay would skip those
-   entries and converge to the wrong state.
+   entries and converge to the wrong state. Skipped when
+   `ProjectionCheckpointOffset` is the -1 "nothing applied" sentinel,
+   because a leaf with no in-memory state has nothing to lose to a
+   trimmed prefix.
 2. **Replay budget exceeded.** The gap `walHead - checkpoint` exceeds
    `LatticeOptions.MaxLeafReplayEntries` (default `10 000`). Replaying
    in the activation path would produce a long cold-start; the operator
-   has elected to take the snapshot-then-WAL path instead.
+   has elected to take the snapshot-then-WAL path instead. Also skipped
+   for the -1 sentinel: a fresh leaf has nothing in cache to recover,
+   and the per-leaf range filter inside the materialiser
+   (`ShouldApplyDuringReplay`) drops every WAL entry outside the leaf's
+   ownership range on iteration, so the effective work is bounded by
+   the leaf's own range rather than by the apparent gap. The
+   per-slice `ReplaySliceBudget` still bounds individual coordinator
+   reads on this path.
 3. **Cold past retention.** The persisted projection age exceeds
    `LatticeOptions.LeafProjectionRetention` (default 7 days) - long
    enough that even a healthy WAL has likely been trimmed beneath the

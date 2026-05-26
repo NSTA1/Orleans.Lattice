@@ -337,13 +337,23 @@ batch.
 
 
 When a leaf grain activates, it rebuilds its in-memory projection by replaying
-the WAL through `ILeafReplayCoordinatorGrain`. Two cases:
+the WAL through `ILeafReplayCoordinatorGrain`. Three cases:
 
 - **Tail replay.** The last persisted projection checkpoint is at offset *N*,
   the WAL head is at offset *M*, and `M - N` is bounded by the checkpoint
   interval. The coordinator streams entries `(N, M]` and applies each via
   `ILeafProjection.Apply`. Replay is in-process and typically completes in a
   few milliseconds.
+- **Fresh-leaf tail replay.** A leaf created mid-run by a split (or by the
+  first write to a virgin shard) carries the -1 "nothing applied" sentinel
+  in its `ProjectionCheckpointOffset`. The fall-off-log detector exempts the
+  sentinel from the replay-budget and trim triggers: the leaf has no
+  projection state to lose, and the per-leaf range filter inside the
+  materialiser (`ShouldApplyDuringReplay`) drops every WAL entry that falls
+  outside this leaf's `[LowKeyInclusive, HighKeyExclusive)` ownership range
+  on iteration, so the iteration cost is bounded by the leaf's own range
+  rather than by the WAL head. The replay still bounds the per-slice work
+  via `ReplaySliceBudget` on the read side.
 - **Fall-off-log rebuild.** The persisted checkpoint is older than the WAL trim
   watermark - the entries it would replay are no longer available. The
   coordinator falls back to `ILeafProjection.Rebuild`, which drains the leaf's
@@ -357,8 +367,9 @@ the WAL through `ILeafReplayCoordinatorGrain`. Two cases:
   split lifecycle, last-compaction-version) plus the projection checkpoint
   snapshot - it is never the source of truth for entry values.
 
-In both cases, the projection that a reader observes after activation is
-byte-equivalent to the projection at the moment the leaf last deactivated.
+In all three cases, the projection that a reader observes after activation is
+byte-equivalent to the projection at the moment the leaf last deactivated (or
+empty, for a freshly-created leaf).
 
 ## Projection checkpoint
 
@@ -553,7 +564,7 @@ suit most workloads.
 |---|---|---|
 | `MaterialiserCheckpointInterval` | 5 seconds | Time-driven flush of any pending projection-checkpoint advance. Set to `Timeout.InfiniteTimeSpan` to disable the time trigger and rely solely on the entry-count trigger. |
 | `MaterialiserCheckpointEntries` | `5_000` | Entry-count trigger: forces a checkpoint flush once this many advances are pending, regardless of `MaterialiserCheckpointInterval`. Bounds the worst-case replay cost when the steady-state apply rate is high. |
-| `MaxLeafReplayEntries` | `10_000` | Upper bound on the entries `ILeafReplayCoordinatorGrain` streams in a single tail replay. A leaf whose backlog exceeds this falls back to the rebuild path indicated by `ProjectionRebuildPolicy`. |
+| `MaxLeafReplayEntries` | `10_000` | Upper bound on the entries `ILeafReplayCoordinatorGrain` streams in a single tail replay. A leaf whose backlog exceeds this falls back to the rebuild path indicated by `ProjectionRebuildPolicy`. The budget is skipped for a freshly-created leaf whose persisted `ProjectionCheckpointOffset` is the -1 "nothing applied" sentinel: a fresh leaf has no projection state to lose, and the per-leaf range filter inside the materialiser bounds the actual work by the leaf's own range rather than by the WAL head. |
 | `LeafProjectionRetention` | 7 days | Age beyond which a persisted checkpoint is considered stale; the next activation falls off-log and rebuilds. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger. |
 | `ProjectionRebuildPolicy` | `SnapshotThenWal` | Recovery strategy when a fall-off-log trigger fires (snapshot + WAL tail, or full rebuild from the authoritative source). |
 

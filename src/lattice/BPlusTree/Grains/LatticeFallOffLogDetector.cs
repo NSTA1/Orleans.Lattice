@@ -64,8 +64,27 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         var walTrimmedPastCheckpoint = checkpointOffset > 0 && tail > checkpointOffset;
 
         // Trigger 2: replay budget exceeded.
+        //
+        // The "nothing applied" sentinel (-1) skips this trigger: a
+        // freshly-created leaf has no in-memory projection state to
+        // recover, so the apparent gap (head - -1) overstates the
+        // actual work by the full WAL contribution of every sibling
+        // leaf in the same shard partition. The per-leaf range filter
+        // inside the materialiser (see ShouldApplyDuringReplay) drops
+        // every WAL entry that does not fall in this leaf''s
+        // [LowKeyInclusive, HighKeyExclusive) range on iteration, so
+        // the cost of a tail-replay against a populated WAL is
+        // bounded by the leaf''s own range, not by the WAL head.
+        //
+        // Without this guard, a sibling created mid-run by a split
+        // (whose donor''s SetCheckpointOffsetHintAsync may race the
+        // sibling''s own OnActivateAsync) reads checkpoint = -1,
+        // computes gap = head + 1 against a sibling-populated WAL,
+        // trips the budget, and throws LeafProjectionStaleException
+        // even though there is nothing to recover. This is the c2-vi
+        // production scenario (silo log 20260526-201857Z).
         var gap = head - checkpointOffset;
-        var budgetExceeded = gap > options.MaxLeafReplayEntries;
+        var budgetExceeded = checkpointOffset >= 0 && gap > options.MaxLeafReplayEntries;
 
         // Trigger 3: projection age exceeds retention.
         var ageExceeded = options.LeafProjectionRetention != Timeout.InfiniteTimeSpan
