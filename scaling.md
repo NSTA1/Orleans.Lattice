@@ -1701,6 +1701,42 @@ With Kink 1 closed, the headline number is the steady-state band. The arithmetic
 **What the campaign will *not* try to do.** It will not chase Azure-Tables-side optimisations (no provider rewrite, no batching changes, no retry-policy changes inside `Orleans.Lattice.Storage.AzureTable`) - the WAL provider is already production-grade. It will not try to remove the foreground leaf-commit dependency on the WAL ack - that path is the durability contract.
 
 
+### U9p step 8c-c-iv-a - result: bounded retry closes the cold-start storm but parks throughput for the duration of the storm (10000:5)
+
+**Change shipped.** Wrap the `lattice.SetManyAsync` call in `benchmark/azure-throughput/Silo/Program.cs::FlushAsync` with bounded retry-with-jitter (5 attempts, 50 ms base, exponential x 2 capped at 800 ms, +/-25% jitter), gated on `IsOrleansMessageRejection(ex)` AND `!lifetime.ApplicationStopping.IsCancellationRequested`. Shutdown semantics unchanged (`IsShutdownRejection` still returns `ShutdownDiscarded`). Added `BenchMetrics.LatticeSetManyRetryAttempts` histogram (and allowlisted it in `PhaseADiagnosticReporter`) so the retry density is visible on phase A.
+
+**Result.** Same rung as step 8c-c-iii (`10000:5`, 30 s producer, durable Azure Tables grain storage):
+
+| metric                              | step 8c-c-iii (no retry)              | **step 8c-c-iv-a (bounded retry)**        |
+| ----------------------------------- | -------------------------------------- | ------------------------------------------ |
+| FinalWritten                        | 185,909                                | 178,944                                    |
+| FinalFailed                         | **71,355** (t = 1-2 s)                | **0**                                      |
+| Residual `OrleansMessageRejection` log mentions | 71,355                       | **0** across the entire silo log           |
+| Steady-state peak (1 s window)      | 24,588/s                               | 20,462/s                                   |
+| Time of first non-zero `Entries written per second` | t ~= 2 s            | **t ~= 19.4 s**                            |
+| Producer behaviour                  | DONE @ 30.6 s, slipMaxMs > 21 s        | DONE @ 32.9 s, slipMaxMs ~= 23.2 s         |
+
+**Interpretation.**
+
+1. **The retry policy did exactly what it was designed to do.** Zero residual `OrleansMessageRejectionException` mentions in 3.8 MiB of silo log; zero failed batches; the producer ran to DONE without a broken pipe. The cold-start storm is closed *at the symptom level*.
+
+2. **But the retry parked all 8 `FlushConcurrency` slots inside `Task.Delay` for ~18 s.** Phase-A windows show `inFlight = 8` and `Entries written per second = 0` for every cadence sample from t = 7 s through t = 18 s. Each of the 8 in-flight batches hit a rejection on its first try, then backed off 50 ms -> 100 ms -> 200 ms -> 400 ms -> 800 ms (sum ~= 1.55 s of pure delay per batch, before counting the rejected RPC's own wall-clock). Multiply by the cascade of leaves that needed first-touch activation, and the parallelism stayed parked until the placement directory drained.
+
+3. **The trade is wrong-shape for this workload.** Step 8c-c-iii lost ~12 s of throughput to a flood of failed batches that the producer's outer ring-buffer absorbed and resent; step 8c-c-iv-a loses ~18 s of throughput to a quiet retry stall where the producer's prebuffer also fills (`slipMaxMs ~= 23 s`). Both runs end up shipping ~180 k entries in a 30 s producer window; the bounded-retry version is *cleaner* (no failed counter, no broken pipe) but not *faster*.
+
+4. **8c-c-iv-b (proactive warm-up) is now strictly required, not optional.** The bounded retry is the *safety net*; the production fix is to never hit it. An `ILattice.WarmUpAsync(CancellationToken)` extension that issues a no-op call to each shard root before the producer connects will let the first ~thousands of leaf activations land while the silo is idle, so the first real `SetManyAsync` hits an already-warm placement directory. With warm-up, the retry should record p99 = 0 attempts in the phase-A scraper, and steady-state should start at t ~= 1 s instead of t ~= 19 s.
+
+**Decision.**
+
+- **KEEP the bounded retry.** It is a production-correctness fix - any caller hitting a freshly-started silo at high rate would also see transient `OrleansMessageRejectionException`, and *not* retrying it converts a self-healing condition into a hard failure. The retry is now part of the durable benchmark silo's contract; in production the equivalent guard belongs in any high-rate ingest gateway (`benchmark/azure-throughput/Silo/Program.cs::FlushAsync` is the closest analogue to such a gateway in this repo).
+
+- **Do not declare 8c-c-iv-a a throughput regression.** The headline rate dropped slightly (20.5 k/s peak vs 24.6 k/s) but both numbers are inside the same band the 8c-c-iii arithmetic predicts (~`8 x 7 x batch_avg / provider_p50_ms`). The cold-start window's length, not its rate, is the dominant cost on a 30 s producer; that is what 8c-c-iv-b will address.
+
+- **Proceed to 8c-c-iv-b.** Implement `ILattice.WarmUpAsync(CancellationToken)`, wire it into the benchmark silo *after* `host.RunAsync` returns ready but *before* `TcpIngestService` opens its listening port. Predicted observation: first non-zero `Entries written per second` line at t ~= 1 s; `bench.lattice.set_many.retry_attempts` p99 = 0; `FinalAvgRate` lifts substantially (the silo gets ~17 more seconds of throughput to amortise over the 119 s post-producer window).
+
+**Artifacts.** `benchmark/azure-throughput/.run/step8c-c-iv-a-azure-silo.log`, `step8c-c-iv-a-azure-producer.log`, `step8c-c-iv-a-azure-results.csv`, `step8c-c-iv-a-azure-phaseA.csv`. Code: `benchmark/azure-throughput/Silo/Program.cs` (`FlushAsync` retry loop), `benchmark/azure-throughput/Silo/BenchMetrics.cs` (`LatticeSetManyRetryAttempts` histogram), `benchmark/azure-throughput/Silo/PhaseADiagnosticReporter.cs` (allowlist entry). No `src/lattice` changes.
+
+
 ### What stays in place
 
 - **The WAL pipeline change (`[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync`) is kept.** It is the change that took `wal.append.in_flight` from 0 to 7 and `wal.append.batch_entries` p90 from ~8-9 to the 100-entry cap. Without it the WAL is the binding constraint.
