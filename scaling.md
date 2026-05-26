@@ -2272,6 +2272,36 @@ The 25000:5 outlier at t=80.8s window (P99 spiking to 53 s) is a single late ack
 
 **Last Updated**: 2026-05-26 (bench-timing fix: drain-tail excluded; corrected milestones recorded above)
 
+#### U9p step 8c-c-iv-c2-vi-followup (2026-05-26T22:00Z) - closes the c2-vi etag race; rung-1 throughput preserved (CONFIRMED, fix shipped)
+
+**Trigger.** c2-vi rung-2 (25000:5) recorded 5,610 internal-grain + 547 leaf-grain `InconsistentStateException` failures, all of shape `StoredETag: Unknown, CurrentETag: <real>`. The c2-vi ship took care of `AcceptSplitAsync` (`[AlwaysInterleave]` + per-activation `_splitGate`) but the same Orleans scheduling rule applies bidirectionally: when an `[AlwaysInterleave]` method awaits, other non-interleave methods CAN start on the activation. Two other public methods on `BPlusInternalGrain` also persist state (`OnChildDigestPublishedAsync` -> `ApplyChildSnapshotAsync` and `SetParentAsync`) and were not under the gate, so a turn-A `AcceptSplitCoreAsync` await on `state.WriteStateAsync` released the turn for a turn-B `OnChildDigestPublishedAsync` to start and issue a second `WriteStateAsync` against the same row; whichever completed second hit the etag CAS and failed.
+
+**Diagnosis path.** Added a `LATTICE_BENCH_TRACE_PERSIST` env-var gated trace line at every `state.WriteStateAsync` site in `BPlusInternalGrain` + `BPlusLeafGrain` (zero cost when disabled). Ran the bench with tracing on at 25000:5: every leaf-side failure correlated to a fresh-grain `SetTreeIdAsync` (expected `RecordExists=False`, narrow surface), but the bulk internal-grain failures had **no** trace lines - proving the failing writes were on call sites I hadn't instrumented yet. Added traces to `BPlusInternalGrain.Digest.cs` `SetParentAsync` and `ApplyChildSnapshotAsync`; the next trace run pinpointed those two as the racers.
+
+**Fix.** Wrap `OnChildDigestPublishedAsync` and `SetParentAsync` bodies in `_splitGate.WaitAsync()` / `Release()`. The gate is acquired at the public entry points only - **not** pushed into the shared `ApplyChildSnapshotAsync` helper, because that helper is also reached transitively from `AcceptSplitCoreAsync` via `SeedChildParentAsync` where `_splitGate` is already held; `SemaphoreSlim(1, 1)` is non-reentrant so pushing the gate down would self-deadlock. Cross-grain `SetParentAsync` calls (from `SeedChildParentAsync`) target a child activation with its own gate instance, so no self-recursive acquisition occurs there.
+
+**Failing-first regression.** `BPlusInternalGrainTests.EtagRace` (2 tests, one per public entry point) uses `FakePersistentState<T>.SimulateEtagChecks=true` which deterministically rendezvouses two concurrent writers on the same etag and surfaces `InconsistentStateException` on the loser. Verified the tests **fail without the gate** (stashed the fix, ran tests, both failed; restored the fix, both pass). Test was promoted into the targeted suite (260/260 pass).
+
+**Live validation.** Rung-1 (10000:5, 120 s) over the corrected Azure Tables baseline:
+
+| metric | value |
+|---|---|
+| Steady-state avg | **13,983/s** (97 s window, drain-tail excluded) |
+| Total written | 1,044,765 entries in 107 s |
+| `InconsistentStateException` | **0** |
+| `fail:` log lines | **0** |
+| p50 / p90 / max | 16,099 / 24,402 / 28,541 entries/sec |
+
+vs c2-iii baseline at the same rung (14,314/s): **-2.3%**, within run-to-run variance and well within the gate-cost null hypothesis. The gated paths fire at split frequency, not on `SetManyAsync`'s hot path, so this is the expected null-cost result.
+
+**Side finding - WAL drain is the next ceiling.** During rung-1's 120 s window, the silo hit periodic 30 s `AppendBatchAsync` callback-timeout warnings against `walshard/0` and `walshard/3` (per-activation `NumRunning=307` and `259` respectively, near-zero idleness). The per-second throughput oscillated 4 k - 24 k in the classic phase-2 coalescing discharge pattern. Throughput recovered after each stall and zero failures landed - these are *latency* stalls, not correctness regressions. **The c2-iii / c2-vi / c2-vi-followup chain has moved the ceiling from leaf-grain contention to WAL drain rate**; the next throughput lever is on the WAL side (more `walPartitions`, smaller `phase2CoalescingMs`, or higher `walMaxPendingBatches`).
+
+**Decision.** Etag race closed. Rung-2 (25000:5) not re-measured against this fix because the WAL-side stalls just diagnosed would dominate the result; rung-2 will be the next campaign axis after WAL knob tuning. The option-2 off-heap `Children` rewrite from the c2-vi working tree is **not** in this fix - it remains held for a future commit and a future chaos-suite validation pass.
+
+**Ship boundary.** Three small commits land this work: (1) the gate fix + 2 regression tests in `BPlusInternalGrain.Digest.cs` + `BPlusInternalGrainTests.EtagRace.cs`; (2) the `LATTICE_BENCH_TRACE_PERSIST` diagnostic scaffolding in `BPlusInternalGrain.cs` + `BPlusLeafGrain.Metrics.cs` + `20-build-and-deploy.ps1`; (3) this scaling.md entry.
+
+**Last Updated**: 2026-05-26 (c2-vi-followup: etag race fixed via _splitGate on Digest writes; rung-1 14k/s preserved; 0 failures)
+
 ## 📝 Plan Steps
 
 - **DONE - U9p step 8c-c-i (WAL pipeline uncork).** `[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync` lifted `wal.append.in_flight` from 0 to 7 and `batch_entries` p90 to the 100-entry cap. The change is kept; it exposed memory-storage as the next limiter.
