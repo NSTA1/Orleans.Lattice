@@ -70,12 +70,45 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.wal.append.in_flight",
         "orleans.lattice.wal.append.provider.duration",
         "orleans.lattice.wal.append.turn_wait",
+        "orleans.lattice.leaf.commit.in_flight",
+        "orleans.lattice.leaf.commit.duration",
         "orleans.lattice.provider.commit.duration",
         "orleans.lattice.provider.phase2.batch_size",
         "orleans.lattice.provider.retry.exhausted",
         "orleans.lattice.saga.fanout.size",
         "orleans.lattice.saga.perkey.duration",
         "orleans.lattice.saga.wait.serial_gap",
+        // U9p step 2: ShardRootGrain.SetManyAsync split into local-apply
+        // (per-leaf fan-out + WAL append + phase 2) and shadow-forward
+        // (online-resize tail wait). Lattice-internal histograms on the
+        // public LatticeMetrics surface, not bench-local - any caller
+        // that already subscribes to the orleans.lattice meter sees
+        // them automatically.
+        "orleans.lattice.shard_root.set_many.local_apply.duration",
+        "orleans.lattice.shard_root.set_many.shadow_forward.duration",
+        "orleans.lattice.shard_root.set_many.leaf_rpc.duration",
+        // U9p step 6: cross-grain dispatch view from `WalCommitLogWriter`
+        // around `await walGrain.AppendAsync(...)`. The leaf's
+        // `leaf.commit.duration phase=wal` measures the inside of
+        // `CommitSetManyAsync`; this measures the outside of the WAL
+        // grain call. The expected `dispatch.duration ≈ phase=wal`
+        // equality is the U9p step 5 cross-check that the seconds-long
+        // wait is on the WAL activation's turn-queue ahead of a
+        // millisecond-scale provider call.
+        "orleans.lattice.wal.shard.dispatch.duration",
+        // U9o step 2: benchmark-local TCP-receive / drain instruments.
+        // Live on the `azure.throughput.bench` meter so they cannot
+        // leak into the public lattice surface, but ride the same
+        // [phaseA] rendering path so the ladder script needs no
+        // parser change.
+        "azure.throughput.bench.tcp.read.line_bytes",
+        "azure.throughput.bench.tcp.read.channel_write_wait_ms",
+        "azure.throughput.bench.drain.flush_dispatch_size",
+        "azure.throughput.bench.drain.flush_dispatch_wait_ms",
+        // U9p step 1: outermost SetManyAsync call boundary observed by
+        // the silo flusher. Confirms the ~18 s/call inference from U9o
+        // step 2 directly rather than via gate-wait arithmetic.
+        "azure.throughput.bench.lattice.set_many.duration_ms",
     };
 
     /// <summary>
@@ -121,7 +154,15 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         {
             InstrumentPublished = (instrument, l) =>
             {
-                if (!ReferenceEquals(instrument.Meter, LatticeMetrics.Meter))
+                // Two meters are honoured: the public lattice meter
+                // (the historical Phase A signal) and the bench-local
+                // `azure.throughput.bench` meter (U9o step 2 ingest /
+                // drain probes). Anything else on the process is
+                // ignored.
+                var meterName = instrument.Meter.Name;
+                var isLattice = ReferenceEquals(instrument.Meter, LatticeMetrics.Meter);
+                var isBench = string.Equals(meterName, BenchMetrics.Meter.Name, StringComparison.Ordinal);
+                if (!isLattice && !isBench)
                 {
                     return;
                 }
@@ -184,8 +225,15 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
     {
         // Pull the four tags we know how to render. Anything else is
         // silently dropped so a future tag addition does not corrupt
-        // the dictionary key shape.
+        // the dictionary key shape. `LeafCommitDuration` tags with
+        // `TagStep` (wal/apply/observer/digest) where most other
+        // instruments use `TagPhase`; both are mutually exclusive in
+        // practice, so we fold a `TagStep` value into the `phase` slot
+        // when no `TagPhase` value is observed. This keeps the rendered
+        // [phaseA] schema fixed and lets the per-step breakdown surface
+        // without a public-surface tag rename.
         string tree = "-", shard = "-", phase = "-", status = "-";
+        string? step = null;
         for (var i = 0; i < tags.Length; i++)
         {
             var tagKey = tags[i].Key;
@@ -202,10 +250,18 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
             {
                 phase = value;
             }
+            else if (string.Equals(tagKey, LatticeMetrics.TagStep, StringComparison.Ordinal))
+            {
+                step = value;
+            }
             else if (string.Equals(tagKey, LatticeMetrics.TagStatus, StringComparison.Ordinal))
             {
                 status = value;
             }
+        }
+        if (phase == "-" && step is not null)
+        {
+            phase = step;
         }
 
         // Render the dictionary key. The same (instrument, tags) tuple
@@ -296,10 +352,18 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         }
     }
 
-    private static string StripPrefix(string name) =>
-        name.StartsWith("orleans.lattice.", StringComparison.Ordinal)
-            ? name.Substring("orleans.lattice.".Length)
-            : name;
+    private static string StripPrefix(string name)
+    {
+        if (name.StartsWith("orleans.lattice.", StringComparison.Ordinal))
+        {
+            return name.Substring("orleans.lattice.".Length);
+        }
+        if (name.StartsWith("azure.throughput.bench.", StringComparison.Ordinal))
+        {
+            return name.Substring("azure.throughput.bench.".Length);
+        }
+        return name;
+    }
 
     /// <summary>
     /// Per-(instrument, tag tuple) aggregator. Holds a fixed-capacity

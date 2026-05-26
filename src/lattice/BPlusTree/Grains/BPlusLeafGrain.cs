@@ -681,6 +681,7 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private async Task<SplitResult?> CommitSetAsync(string key, byte[] value, long expiresAtTicks)
     {
+        using var _commitScope = EnterCommitScope();
         // step 0 (build) - HLC tick (or override), build LwwValue. Version
         // vector is foreground-only; ILeafProjection.Apply does not advance it.
         // Prepared writes (saga prepare phase) skip the Version publication
@@ -861,6 +862,7 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        using var _commitScope = EnterCommitScope();
         var count = entries.Count;
         var walEntries = new List<WalRecord>(count);
         var stamps = new HybridLogicalClock[count];

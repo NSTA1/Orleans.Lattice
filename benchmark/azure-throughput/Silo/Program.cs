@@ -101,6 +101,7 @@ using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Storage.AzureTable;
 using VehicleFleetSimulator.Abstractions;
+using VehicleFleetSimulator.AzureThroughput.Silo;
 
 // Force autoflush on stdout/stderr. When the process is running inside
 // a Linux container (ACI, Docker) and stdout is redirected, .NET's
@@ -488,6 +489,7 @@ internal sealed class TcpIngestService(
     {
         var remote = client.Client.RemoteEndPoint?.ToString() ?? "?";
         Console.WriteLine($"[silo] accepted {remote}");
+        var treeTag = new KeyValuePair<string, object?>("tree", settings.TreeId);
         try
         {
             using (client)
@@ -512,7 +514,19 @@ internal sealed class TcpIngestService(
                     var key = ev.VehicleId.ToString("N");
                     var value = Encoding.UTF8.GetBytes(line);
 
+                    BenchMetrics.TcpReadLineBytes.Record(value.Length, treeTag);
+
+                    // Time the ChannelWriter.WriteAsync separately so we
+                    // can distinguish "TCP read loop is the bottleneck"
+                    // (write completes immediately) from "drain is the
+                    // bottleneck" (write blocks because the bounded
+                    // channel is full). This is the U9o step-2 probe:
+                    // it sits exactly between the TCP socket and the
+                    // lattice flush dispatcher.
+                    var startTs = Stopwatch.GetTimestamp();
                     await writer.WriteAsync(new KeyValuePair<string, byte[]>(key, value), ct);
+                    var waitMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
+                    BenchMetrics.TcpReadChannelWriteWaitMs.Record(waitMs, treeTag);
                 }
             }
         }
@@ -563,7 +577,12 @@ internal sealed class TcpIngestService(
         // `WaitAsync` unblocks at the right moment.
         async Task<Task> DispatchFlushAsync(List<KeyValuePair<string, byte[]>> batchToFlush)
         {
+            var gateWaitStart = Stopwatch.GetTimestamp();
             await flushGate.WaitAsync(ct).ConfigureAwait(false);
+            var gateWaitMs = Stopwatch.GetElapsedTime(gateWaitStart).TotalMilliseconds;
+            var treeTag = new KeyValuePair<string, object?>("tree", settings.TreeId);
+            BenchMetrics.DrainFlushDispatchWaitMs.Record(gateWaitMs, treeTag);
+            BenchMetrics.DrainFlushDispatchSize.Record(batchToFlush.Count, treeTag);
             Interlocked.Increment(ref inFlight);
             if (Interlocked.Exchange(ref firstDispatchLogged, 1) == 0)
             {
@@ -725,9 +744,14 @@ internal sealed class TcpIngestService(
 
     private async Task<int> FlushAsync(ILattice lattice, List<KeyValuePair<string, byte[]>> batch, CancellationToken ct)
     {
+        var startTs = Stopwatch.GetTimestamp();
         try
         {
             await lattice.SetManyAsync(batch, ct);
+            var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
+            BenchMetrics.LatticeSetManyDurationMs.Record(
+                elapsedMs,
+                new KeyValuePair<string, object?>("tree", settings.TreeId));
             return batch.Count;
         }
         catch (OperationCanceledException) { throw; }

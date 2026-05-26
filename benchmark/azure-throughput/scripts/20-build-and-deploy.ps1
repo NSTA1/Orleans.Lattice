@@ -16,6 +16,15 @@
                         (default 120; >= DurationSec + a small grace).
       -Tag              image tag (default 'latest')
       -SkipBuild        reuse the existing image; only redeploy the container group.
+      -LocalBuild       build images locally via `docker build` and `docker push` instead
+                        of `az acr build`. Requires Docker Desktop (or equivalent) on a
+                        linux/amd64 host. Trades remote build time (~1m45s for a clean
+                        ACI build with full source upload) for local incremental
+                        `docker build` + `docker push` (~15s when only Program.cs
+                        changed), which is the dominant speedup on code-change
+                        iteration. The remote `az acr build` path remains the default
+                        and the supported fallback for clean environments without
+                        Docker.
       -NoWait           submit the deployment and return immediately (legacy behaviour;
                         the script will not capture logs or stop the group).
 
@@ -33,6 +42,7 @@ param(
     [string] $Tag,
     [string] $TreeId,
     [switch] $SkipBuild,
+    [switch] $LocalBuild,
     [switch] $NoWait
 )
 
@@ -121,7 +131,7 @@ $batchSize = if ($env:BENCH_BATCH_SIZE) { $env:BENCH_BATCH_SIZE }
 $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
                    else { '10' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -174,13 +184,59 @@ Write-Host "[deploy] staged size:" (
 $producerImage = "$($ctx.AcrLoginServer)/azure-throughput-producer:$tag"
 $siloImage     = "$($ctx.AcrLoginServer)/azure-throughput-silo:$tag"
 
-Write-Host "[deploy] building producer image via 'az acr build' ..." -ForegroundColor Cyan
-# `az acr build --file` is resolved relative to the CURRENT working directory. Push-Location
-# into the staging tree so both the --file path and the source context path are unambiguous.
 if ($SkipBuild) {
     Write-Host "[deploy] -SkipBuild: reusing existing images in $($ctx.AcrLoginServer)" -ForegroundColor Yellow
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+} elseif ($LocalBuild) {
+    # Local docker build + push. Faster than `az acr build` for code-change
+    # iteration because:
+    #   (a) source upload to ACR is skipped (gigabytes of layers stay on the
+    #       local builder cache; only the changed layers are pushed),
+    #   (b) builds reuse the host's Docker layer cache across runs, so the
+    #       restore/publish steps don't re-execute when only Program.cs
+    #       changed.
+    # Requires Docker Desktop (or equivalent) on a linux/amd64 host so the
+    # produced image matches what ACI expects. The remote `az acr build`
+    # path remains the default and the supported fallback for clean
+    # environments without Docker.
+    Write-Host "[deploy] -LocalBuild: building images locally via 'docker build' ..." -ForegroundColor Cyan
+    Push-Location $stage
+    try {
+        Write-Host "[deploy] az acr login -n $($ctx.Acr) ..." -ForegroundColor DarkGray
+        & az acr login --name $ctx.Acr | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "az acr login failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker build (producer) -> $producerImage ..." -ForegroundColor Cyan
+        & docker build `
+            --platform linux/amd64 `
+            --file "benchmark/azure-throughput/Producer/Dockerfile" `
+            --tag $producerImage `
+            . | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker build (producer) failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker build (silo) -> $siloImage ..." -ForegroundColor Cyan
+        & docker build `
+            --platform linux/amd64 `
+            --file "benchmark/azure-throughput/Silo/Dockerfile" `
+            --tag $siloImage `
+            . | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker build (silo) failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker push $producerImage ..." -ForegroundColor Cyan
+        & docker push $producerImage | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker push (producer) failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker push $siloImage ..." -ForegroundColor Cyan
+        & docker push $siloImage | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker push (silo) failed with exit code $LASTEXITCODE." }
+    } finally {
+        Pop-Location
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
 } else {
+    Write-Host "[deploy] building producer image via 'az acr build' ..." -ForegroundColor Cyan
+    # `az acr build --file` is resolved relative to the CURRENT working directory. Push-Location
+    # into the staging tree so both the --file path and the source context path are unambiguous.
     Push-Location $stage
     try {
         & az acr build --registry $ctx.Acr `

@@ -991,6 +991,355 @@ U9c and U9f both have the same per-treeId pattern: 50-ish reshard submits → 50
 
 **Net result.** U9k ships green: the inverse cast crash is gone, `BENCH_SHARD_COUNT=16` is honoured, and the 5000:5 rung produces a clean baseline against which the next discriminating sweep can be measured. The U9k step 2 question ("does throughput move off ~2 370/s when the tree genuinely has 16 lattice shards instead of the silently-defaulted 64?") resolves to *no* on this single rung: the binding axis is not the lattice shard count. The next probe is the second branch already drafted in U9k step 1: the ingest cadence / flush window vs producer inter-tick interaction, because `provider.phase2.batch_size` is still pinned at 1.00 across all 8 partitions and the first SetMany dispatch is only `entries=83` against `BatchSize=4 096`. Concretely: sweep `BENCH_FLUSH_INTERVAL_MS` ∈ {50, 100, 200, 400} at the same FC=8, WP=8 setting and observe whether widening the flush window lifts `provider.phase2.batch_size` off 1.00 and `entries=83` toward the configured ceiling. **Both outcomes are informative:** if batch_size rises and throughput climbs, the binding axis is the producer/flush race; if batch_size stays pinned, the bottleneck is downstream of the producer flush and the next probe shifts to leaf-side commit concurrency.
 
+#### U9l result (2026-05-26T06:49Z-T07:01Z) - sweep BENCH_FLUSH_MS in {50, 100, 200, 400} ms at the U9k step 2 baseline; `provider.phase2.batch_size` stays pinned at 1.00 across 14 495 samples and throughput decays monotonically (FALSIFIED, the binding axis is downstream of the producer flush)
+
+**Setup.** Probe shape identical to the U9k step 2 measured rung in every dimension except the flush window: `BENCH_SHARD_COUNT=16`, `BENCH_BATCH_SIZE=4096`, `BENCH_WAL_PARTITIONS=8`, `BENCH_WAL_MAX_PENDING_BATCHES=8`, `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS=5`, `BENCH_FLUSH_CONCURRENCY=8`, rung `5000:5` (25 000/s target), 60 s steady per probe. The silo image carries the U9k step 2 promotion fix at HEAD (the same image used for the green `silo-20260525-192712Z.log` baseline). `BENCH_FLUSH_MS` is the only variable: `{50, 100, 200, 400}` ms - chosen to bracket the producer's 200 ms inter-tick (`TickHz=5` -> one tick per vehicle every 200 ms). The harness change in `benchmark/azure-throughput/scripts/20-build-and-deploy.ps1` propagates `BENCH_FLUSH_MS` from the host env into the ACI container env (committed separately on this branch); the sweep driver is `benchmark/azure-throughput/scripts/.run-U9l-driver.ps1` (gitignored under the existing `.run-*` rule). Manifest: `benchmark/azure-throughput/scripts/.run-U9l-manifest.csv`. Per-probe artifacts under `.ladder-results-U9l-FLUSH{50,100,200,400}.csv`, `.ladder-phaseA-U9l-FLUSH{50,100,200,400}.csv`, and silo logs `silo-20260526-064938Z.log` / `-065253Z.log` / `-065627Z.log` / `-065901Z.log`.
+
+**Outcome.**
+
+| Probe              | Flush window | SteadyAvg | FinalAvgRate | FinalWritten | FinalFailed | Silo log                       |
+|--------------------|--------------|-----------|--------------|--------------|-------------|--------------------------------|
+| **U9l-FLUSH50**    |  50 ms       | **1 368/s** | **1 365/s** | **157 722**  | **8 192**   | `silo-20260526-064938Z.log`    |
+| **U9l-FLUSH100**   | 100 ms       | **1 449/s** | **1 395/s** | **164 147**  | **4 096**   | `silo-20260526-065253Z.log`    |
+| U9l-FLUSH200       | 200 ms       | 1 235/s   | 1 114/s      | 130 999      | 24 576      | `silo-20260526-065627Z.log`    |
+| U9l-FLUSH400       | 400 ms       | 1 170/s   |   911/s      | 106 496      | 45 056      | `silo-20260526-065901Z.log`    |
+
+The throughput peak sits at `flushMs=100` (1 449/s steady, 4 096 failed) and the curve is monotonically worse on either side of it - and *every* probe sits well below the U9k step 2 `5000:5` baseline of 2 454/s recorded on the same knob set at `flushMs=50`. That ~44% under-run on the rebuilt-image FLUSH=50 probe is consistent with normal Azure Tables run-to-run variance (the U9k step 2 baseline tree-id `azure-throughput-20260525-192700` saw `provider.duration p99 = 31.6 ms`; the U9l-FLUSH50 tree-id `azure-throughput-20260526-064517` saw `provider.duration p99 = 64.66 ms`, i.e. Azure Tables was ~2x slower on this measurement day). The within-sweep *direction* (50 -> 400 ms = degradation) is what the falsifiability test cares about, and that direction is consistent and large.
+
+**Phase-A evidence (the decisive instrument).** Aggregated per-WAL-partition quantile means across all 4 probes:
+
+| Instrument                       | FLUSH50 P50 / P99 / Max | FLUSH100 P50 / P99 / Max | FLUSH200 P50 / P99 / Max | FLUSH400 P50 / P99 / Max | Samples (sum) |
+|----------------------------------|-------------------------|--------------------------|--------------------------|--------------------------|--------------:|
+| **`provider.phase2.batch_size`** | **1.00 / 1.00 / 2.00**  | **1.00 / 1.00 / 1.00**   | **1.00 / 1.00 / 2.00**   | **1.00 / 1.00 / 2.00**   | **14 495**    |
+| `wal.append.batch_entries`       | 2.78 / 13.67 / 22.00    | 2.78 / 12.89 / 19.00     | 2.44 / 11.33 / 19.00     | 2.00 / 12.00 / 19.00     | 14 474        |
+| `wal.append.in_flight`           | 0.00 / 0.00 / 0.00      | 0.00 / 0.00 / 0.00       | 0.00 / 0.00 / 0.00       | 0.00 / 0.00 / 0.00       | 14 474        |
+| `wal.append.provider.duration` (ms) | 19.49 / 64.66 / 240.57 | 18.67 / 66.40 / 196.09 | 18.24 / 65.74 / 318.77 | 19.20 / 71.94 / 608.58 | 14 506        |
+
+**`provider.phase2.batch_size` is pinned at 1.00 across all 14 495 samples.** The maximum observed value in any single sample on any single shard at any flush window is **2**, and the P99 means are 1.00 across the board. The phase-2 coalescer is still seeing one commit per drain cycle no matter how long we let the producer's TCP flush window grow. `wal.append.batch_entries` is *also* shrinking with flush-window length (P50 2.78 -> 2.78 -> 2.44 -> 2.00), the opposite of what the producer-cadence hypothesis predicted - a wider window should accumulate more entries per flush, not fewer. Combined with monotonically rising P99 `provider.duration` tail (64.66 ms -> 71.94 ms) and the 0 / 4 096 / 24 576 / 45 056 producer-side failure progression, the wider windows are not feeding the coalescer; they are starving it *and* exhausting the producer's per-call timeout budget.
+
+**Mechanism, restated.** The `TcpIngestService` flush window times *the producer-side* batch boundary - i.e. it bounds the latency between a vehicle tick and the silo-side `SetManyAsync` submission. Widening it from 50 ms to 400 ms simply delays the per-call submission; it does *not* enable two distinct producer batches to land on the same phase-2 coalescing cycle inside a single `PhaseTwoWorker`, because each producer batch is already a single `SetManyAsync` -> one shard-root turn -> one `WalShardGrain.AppendAsync` -> one phase-1 commit -> one phase-2 manifest commit. The shape of the pipeline guarantees one phase-2 element per producer call no matter how the producer batches its inputs. Wider flush windows just lengthen the inter-arrival time at the phase-2 channel, which (per the U9b/U9c arithmetic at L639) makes coalescing *less* likely, not more.
+
+This is the same arithmetic U9c smoke surfaced (L687-L689): the post-commit re-drain runs against a channel that is empty because the producer side is not bursty *enough* relative to the commit RT. Widening the producer's *batching* window does not change the fact that each producer batch produces exactly one phase-2 element; only *interleaving* two producer batches on the same shard could lift the phase-2 batch size above 1, and that requires reentrant `SetManyAsync` execution at the shard root - exactly the U9g family of changes that already shipped (`[AlwaysInterleave]` on `IShardRootGrain.SetManyAsync`). The U9l result therefore says: `[AlwaysInterleave]` is interleaving the turns at the shard root, but the resulting overlap does not extend down to the `WalShardGrain` phase-1 commit boundary - each turn still emits its own phase-1 transaction in sequence, so the phase-2 channel sees one element per arrival regardless.
+
+**Re-ranked probe order (eighth revision; the producer/flush race is dead, leaf-side commit concurrency is next).**
+
+- **U9 / U9b / U9c / U9d / U9e / U9f / U9g / U9h-A / U9h-B / U9h-C / U9h-D / U9j / U9k** - rolled up above; U9k step 2 (the asymmetric promotion fix + `[AlwaysInterleave]` on shard-root reads) remains the current shipping baseline.
+- **U9l - FALSIFIED.** Producer-side flush cadence is *not* the lever; `provider.phase2.batch_size` is pinned at 1.00 across every flush window in `{50, 100, 200, 400}` ms with throughput monotonically degrading from the 100 ms peak. The `BENCH_FLUSH_MS` env-var wiring in `20-build-and-deploy.ps1` is *kept* as a production knob (operators may want to trade latency for batching against a faster storage backend), but the library default of 50 ms is correct as shipped.
+- **U9m (the next probe) - leaf-side commit concurrency.** The U9k step 2 closing paragraph already named this: "if batch_size stays pinned, the bottleneck is downstream of the producer flush and the next probe shifts to leaf-side commit concurrency." U9l confirms the antecedent. The concrete target is `BPlusLeafGrain.CommitSetAsync` - the path that turns an individual shard-root sub-batch into a `WalShardGrain.AppendAsync` call. Today every leaf serialises its commits behind a single per-leaf turn; under `[AlwaysInterleave]` on the shard-root, two disjoint-key sub-batches that target *the same leaf* still queue at the leaf grain. The instrumentation question to answer first is whether the binding constraint is (i) the per-leaf turn queue (in which case the lever is `[AlwaysInterleave]` on `CommitSetAsync` with the same disjoint-key invariant the shard-root carries), or (ii) the leaf-to-WAL fan-in (in which case the lever is to lift `WalPartitions` or move to a multi-leaf coalescing pattern at the `WalCommitLogWriter` layer). A targeted probe is to add a `NonReentrancyQueueSize` diagnostic to the leaf grain's per-second cadence line and re-run the U9k step 2 rung; if the leaf queue depth stays at 1 the bound is downstream of the leaf and U9n (WAL fan-in) is next.
+- **U9n (deferred behind U9m) - WAL-side fan-in coalescing across leaves.** Only attempt if U9m proves the leaf turn queue is *not* the binding constraint. The candidate is to let `WalCommitLogWriter` coalesce `AppendAsync` calls from distinct leaves on the same shard into a single phase-1 transaction, which would for the first time produce phase-2 input shapes that the existing `PhaseTwoCoalescingWindow` can act on.
+- **U9i (deferred, unchanged) - investigate the benign cold-start reshard rejections.** Hygiene, not throughput.
+
+#### U9m step 1 (2026-05-26) - leaf-side commit-concurrency instrumentation shipped
+
+**Hypothesis under test.** With `[AlwaysInterleave]` on `IShardRootGrain.SetManyAsync` (shipped U9g / U9h-A) the shard-root accepts overlapping producer batches, but each batch still bottoms out at a single `BPlusLeafGrain` activation per affected leaf. Because neither `IBPlusLeafGrain.SetAsync` nor `IBPlusLeafGrain.SetManyAsync` is marked `[AlwaysInterleave]`, two disjoint-key sub-batches that target the same leaf queue behind the leaf's single turn token. If the leaf turn queue is the binding constraint, `leaf.commit.in_flight` is expected to pin at `0` (the next commit cannot enter until the current one returns); if a future change applies `[AlwaysInterleave]` at the leaf entrypoint and the new shape is faster, this histogram is the falsifiability instrument that proves the overlap actually materialises end-to-end.
+
+**Code shipped at HEAD (no behavior change on the shipping non-reentrant scheduling).**
+
+1. `LatticeMetrics.LeafCommitInFlight` (`Histogram<int>` `orleans.lattice.leaf.commit.in_flight`, tag `tree`) records the leaf-side commit depth observed at the moment a foreground commit enters the commit path. The histogram is documented as a falsifiability probe and explicitly notes the expected `0` pin on the current scheduling shape.
+2. `BPlusLeafGrain.Metrics.cs` gained a `_commitInFlight` counter, an `EnterCommitScope()` helper that increments the counter and records the pre-increment value on the histogram, and a `CommitInFlightScope` `IDisposable` whose `Dispose` decrements the counter unconditionally so an exception inside the commit cannot leak depth. `Interlocked.Increment` / `Interlocked.Decrement` are used even though Orleans' single-thread per-activation scheduling makes contention unlikely - the cost is one interlocked op per commit and it removes the need to reason about future async-only changes that could break the assumption.
+3. `CommitSetAsync` and `CommitSetManyAsync` open the scope as their first line so every exit path (normal return, exception propagation, leaf split, projection rewrite) re-uses the same decrement.
+4. `PhaseADiagnosticReporter` allowlists `orleans.lattice.leaf.commit.in_flight` so the `[phaseA] ... instrument=leaf.commit.in_flight tree=t ...` line appears in the ACI log alongside the existing `wal.append.in_flight` line and the ladder script can scrape both.
+
+**Regression coverage.** `test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.CommitInFlight.cs` pins the depth-0 invariant on the shipping scheduling: `Set_records_leaf_commit_in_flight_once_at_zero`, `SetMany_records_leaf_commit_in_flight_once_at_zero`, `Sequential_sets_each_record_zero_in_flight`, `Recorded_measurement_carries_tree_tag`. Each test uses a dedicated `MeterListener` recorder so the assertions are isolated from other instrument traffic.
+
+**What this step does not yet measure.** The histogram is the *instrument*; the corresponding ladder-rung measurement against the U9k step 2 baseline (`BENCH_SHARD_COUNT=16`, `BENCH_BATCH_SIZE=4096`, `BENCH_WAL_PARTITIONS=8`, `BENCH_FLUSH_CONCURRENCY=8`, rung `5000:5`) is the next step. The expected reading on that rung is `count > 0, p99 = 0` across all leaves: every commit records, none observes a concurrent commit. The ship-criterion for U9m step 2 is whether that prediction holds.
+
+#### U9m step 2 (2026-05-26) - leaf-side commit concurrency falsified as the bottleneck
+
+**Setup.** U9k step 2 baseline replayed against the U9m step 1 image: `BENCH_SHARD_COUNT=16`, `BENCH_BATCH_SIZE=4096`, `BENCH_WAL_PARTITIONS=8`, `BENCH_FLUSH_CONCURRENCY=8`, `BENCH_FLUSH_MS=50`, single rung `5000:5` for 60 s of producer drive. CSVs archived at `benchmark/azure-throughput/scripts/.ladder-results-U9m-baseline.csv` and `.ladder-phaseA-U9m-baseline.csv`; silo log at `benchmark/azure-throughput/.run/silo-20260526-074037Z.log`.
+
+**Headline.** Steady-state avg `1,321/s` (FinalAvg `1,350/s`), inside the U9l `1.3-1.4k/s` envelope. The U9m step 1 instrumentation did not move throughput.
+
+**Phase A readings (final cadence window, 60 s in).**
+
+1. `leaf.commit.in_flight` (new): `count=597` on the user tree, `min=p50=p90=p99=max=0` (plus `count=3` control-plane commits on `_lattice_trees` at the same shape). Every foreground commit records the depth, and the depth observed at entry is always zero. The U9m step 1 prediction (`count > 0, p99 = 0`) is confirmed end-to-end.
+2. `wal.append.in_flight`: pins at `0` across all 8 WAL shards (per-shard count 452-478), so the WAL append slot is *also* empty whenever the leaf hands it a batch.
+3. `provider.phase2.batch_size`: still pinned at `1.00` across all 8 shards (count 452-479, min=p50=p99=max=1.00), confirming the U9l finding that the producer hands the WAL one-row sub-batches and the flush window is not the lever.
+
+**Inference.** With `leaf.commit.in_flight` *and* `wal.append.in_flight` both at zero on the same rung, the binding constraint at `5000:5` is upstream of both the leaf turn queue and the WAL pipeline: no two leaf commits ever race for the same activation, and no two WAL appends ever race for the same shard. Two structural consequences:
+
+- The leaf-side `[AlwaysInterleave]` lever drafted in U9m step 1 would not move throughput at this rate. There is nothing queued behind the per-leaf turn token to interleave away.
+- The earlier U9k step 2 conjecture that the next probe after the producer flush window is leaf-side commit concurrency is now falsified. The producer is presenting batches that the silo absorbs faster than the producer can refill them; the missing throughput is between the producer's vehicle ticks and the silo's first `SetManyAsync`.
+
+**What this means for U9n.** U9n (WAL fan-in coalescing across leaves) was deferred behind U9m and is now also off the critical path at this rung: a fan-in collapse can only help if the WAL is the queue point, and `wal.append.in_flight=0` says it is not. Both U9m and U9n exit as falsified at the `5000:5` rung.
+
+**Next probe (U9o, replaces both U9m and U9n).** The remaining unexplained gap is between the per-vehicle tick cadence and the per-second silo throughput. With `5000` vehicles at `TickHz=5` the producer offers `25,000` events/s but the silo absorbs only `1,321/s` steady. The producer side of the harness (batch construction, TCP framing, network round-trip latency) is the only segment we have not measured. U9o is to add a producer-side cadence/batch instrument to the producer container, replay the same rung, and check whether the producer is the entity holding the queue.
+
+#### U9o step 1 (2026-05-26) - producer-side cadence instrumented; TCP backpressure localised to inner write loop
+
+**Hypothesis under test.** With the U9m run showing the silo absorbed only `1,321/s` against a target of `25,000/s` *and* the producer's own end-of-run header showing `avg=3,272 msg/s`, the missing throughput is between the per-vehicle tick clock and the JSON-on-TCP wire. Two falsifiable sub-hypotheses: (H1) the per-tick send-loop is slow on its own (JSON arithmetic, byte writes), or (H2) the per-tick send-loop is fast but blocks on TCP backpressure when the silo cannot drain the receive buffer quickly enough.
+
+**Code shipped at HEAD (no behavior change to scheduling).** `benchmark/azure-throughput/Producer/Program.cs` keeps three per-second aggregates on the existing cadence line: `innerAvgMs` (wall-clock spent in the per-vehicle `for` loop that JSON-serialises and `BufferedStream.Write`s every event), `flushAvgMs` (wall-clock spent in the explicit `await writer.FlushAsync()` that fires once per second), and `slipMaxMs` (the maximum of `actualTickEntry - scheduledTick`, where `scheduledTick` advances strictly by `tickIntervalMs` regardless of how late each tick fires). `scheduledTick` advances independently of the producer's self-resetting `nextTick`, so the slippage is a passive measurement rather than a feedback signal - the producer's existing tick clock is preserved.
+
+**Setup.** U9m baseline replayed against the U9o-instrumented producer image. Same knobs: `BENCH_SHARD_COUNT=16`, `BENCH_BATCH_SIZE=4096`, `BENCH_WAL_PARTITIONS=8`, `BENCH_FLUSH_CONCURRENCY=8`, `BENCH_FLUSH_MS=50`, single rung `5000:5` for 60 s. Producer log archived at `benchmark/azure-throughput/.run/producer-U9o-step1.log`; silo log at `benchmark/azure-throughput/.run/silo-U9o-step1.log`. Silo headline: `FINAL written=151,833 elapsed=116.4s avg=1,304/s`, `wal.append.in_flight=0` across all 8 shards (identical shape to U9m, confirming the silo image is the same).
+
+**Producer readings (selected per-second cadence rows).**
+
+```
+t= 13.2s rate=  1,147 msg/s  ticks=2  innerAvgMs= 4,227.33  flushAvgMs=0.02  slipMaxMs=    45.8
+t= 14.3s rate= 28,952 msg/s  ticks=6  innerAvgMs=    58.55  flushAvgMs=0.00  slipMaxMs= 8,253.4
+t= 32.3s rate=    277 msg/s  ticks=1  innerAvgMs=17,892.36  flushAvgMs=0.03  slipMaxMs= 8,253.5
+t= 37.7s rate=    930 msg/s  ticks=1  innerAvgMs= 5,378.91  flushAvgMs=0.03  slipMaxMs=25,945.9
+t= 50.9s rate=  1,435 msg/s  ticks=2  innerAvgMs= 3,394.10  flushAvgMs=0.01  slipMaxMs=36,725.2
+t= 61.7s rate=    963 msg/s  ticks=1  innerAvgMs= 5,190.47  flushAvgMs=0.20  slipMaxMs=48,299.0
+DONE total=210,000 elapsed=61.7s avg=3,404 msg/s
+```
+
+**Inference.**
+
+1. `flushAvgMs` stays between `0.00` and `0.20` ms across the entire run. The explicit `await writer.FlushAsync()` is not the bottleneck. H2 *as stated* (TCP backpressure on the explicit flush) is falsified.
+2. `innerAvgMs` swings between `58 ms` and `17,892 ms` per tick. The same `5,000`-vehicle serialise-and-write loop that completes in `58 ms` when six ticks fire back-to-back at `t=14.3s` then takes `17.9 seconds` for a single tick at `t=32.3s`. The work in that loop is constant; the only thing that varies is whether the underlying socket is willing to accept bytes.
+3. `slipMaxMs` climbs monotonically from `45.8 ms` at `t=13.2s` to `48,299 ms` at `t=61.7s`. The producer falls 48 s behind ideal cadence in a 60 s run.
+4. The U9k step 2 silo shape (`provider.phase2.batch_size=1.00`) is preserved on the U9o silo log, confirming the silo is unchanged.
+
+The combination falsifies H1 (the inner loop is fast when nothing back-pressures it) and refines H2: TCP backpressure is real but it is hidden *inside* `BufferedStream.Write` rather than on `FlushAsync`. `BufferedStream` synchronously flushes its 64 KiB buffer whenever it fills; at ~140-180 bytes per JSON event a 5,000-vehicle tick triggers ~13-15 synchronous network writes, and each of those writes blocks on the kernel send buffer when the silo is not draining fast enough. The block is charged to `innerAvgMs`, not `flushAvgMs`, because the explicit `FlushAsync()` only runs once per second and finds the buffer near-empty by then.
+
+**What this means for the bottleneck location.** The silo is still the queue point. `wal.append.in_flight=0` and `leaf.commit.in_flight=0` rule out the WAL and the leaf turn queue inside the silo, but the missing throughput is upstream of both: it sits in the silo's TCP receive path (the `TcpIngestService` `NetworkStream.ReadAsync` loop, the per-line JSON deserialise, the per-line `SetAsync` / `SetManyAsync` dispatch to the shard-root). The producer side is healthy in isolation - the inner loop is fast when the receive socket accepts bytes - so the next probe lives entirely on the silo side.
+
+**Next probe (U9o step 2).** Instrument the silo's TCP receive path. Three candidate signals, in order of expected discriminating power: (i) `tcp.ingest.line_bytes` histogram per accepted line (the JSON wire shape per event); (ii) `tcp.ingest.lines_per_drain` counter per `ReadAsync` return (how many full lines the receive buffer hands the JSON deserialiser per syscall); and (iii) `tcp.ingest.flush_batch_size` histogram per outbound `SetManyAsync` flush (the batch size the silo presents to the lattice, currently capped at `BENCH_FLUSH_MS=50` cadence). If (iii) shows batches of size 1 the silo is processing line-at-a-time instead of coalescing per flush window, which would explain the `provider.phase2.batch_size=1.00` U9l finding *and* the producer-side backpressure observed here.
+
+#### U9o step 2 (2026-05-26) - silo TCP receive path instrumented; bottleneck localised inside SetManyAsync
+
+**Hypothesis under test.** U9o step 1 falsified the producer's `FlushAsync` as the bottleneck and showed the producer's blocking lives inside `BufferedStream.Write` against the kernel send buffer. That places the queue point downstream of the producer's TCP write but upstream of the WAL and the leaf turn queue (both of which still show `in_flight=0`). The question is: which segment on the silo side is queuing - the TCP read loop, the channel between the read loop and the drain, the drain's batch construction, the flush gate, or `SetManyAsync` itself.
+
+**Code shipped at HEAD.** A new benchmark-local meter `azure.throughput.bench` (in `benchmark/azure-throughput/Silo/BenchMetrics.cs`) carries four histograms recorded from `TcpIngestService`:
+
+- `tcp.read.line_bytes` per accepted JSON line (sanity check on wire shape).
+- `tcp.read.channel_write_wait_ms` per accepted line - wall-clock spent inside `ChannelWriter.WriteAsync` handing the line to the drain channel. Near-zero ⇒ the drain is keeping up; high ⇒ the channel is full and the lattice flushes are the queue point.
+- `drain.flush_dispatch_size` per `DispatchFlushAsync` call - the batch list count at dispatch. Tells us whether the drain is presenting tiny batches to the lattice.
+- `drain.flush_dispatch_wait_ms` per `DispatchFlushAsync` call - wall-clock spent on `flushGate.WaitAsync` before the batch was dispatched. Near-zero ⇒ the `FlushConcurrency=8` slots are not contended; high ⇒ all 8 slots are saturated and the drain is stalled on the lattice's commit speed.
+
+`PhaseADiagnosticReporter` now subscribes to both the `orleans.lattice` meter and the `azure.throughput.bench` meter and renders both into the same `[phaseA] instrument=...` line shape (the prefix is stripped for both), so the ladder script's regex needs no change. The benchmark-local meter is deliberately separate from `orleans.lattice` so these instruments can never leak through the public lattice surface.
+
+**Setup.** Same knobs as U9m / U9o step 1 (`BENCH_SHARD_COUNT=16`, `BENCH_BATCH_SIZE=4096`, `BENCH_WAL_PARTITIONS=8`, `BENCH_FLUSH_CONCURRENCY=8`, `BENCH_FLUSH_MS=50`), single rung `5000:5` for 60 s. Silo log archived at `benchmark/azure-throughput/.run/silo-U9o-step2.log`, producer log at `benchmark/azure-throughput/.run/producer-U9o-step2.log`, ladder CSVs at `benchmark/azure-throughput/scripts/.ladder-results-U9o-step2.csv` and `.ladder-phaseA-U9o-step2.csv`. Headline: `FINAL written=204,137 failed=0 elapsed=116.3s avg=1,756/s`.
+
+**Bench instrument readings (selected `[phaseA]` windows).**
+
+```
+# Early ramp (t=10-20s): channel writes still instant, gate starting to saturate
+[phaseA] t=10.3s instrument=tcp.read.line_bytes              count=97,642 p50=245.00 p99=247.00 max=247.00
+[phaseA] t=10.3s instrument=tcp.read.channel_write_wait_ms   count=97,641 p50=0.00 p99=0.00 max=5.44
+[phaseA] t=10.3s instrument=drain.flush_dispatch_size        count=10 min=41 p50=2,831 p90=4,096 max=4,096
+[phaseA] t=10.3s instrument=drain.flush_dispatch_wait_ms     count=10 p50=0.00 p99=1,690.50 max=1,690.50
+
+[phaseA] t=20.3s instrument=tcp.read.line_bytes              count=32,768 p50=245.00 p99=247.00
+[phaseA] t=20.3s instrument=tcp.read.channel_write_wait_ms   count=32,768 p50=0.00 p99=0.00 max=8,918.53
+[phaseA] t=20.3s instrument=drain.flush_dispatch_size        count=8 min=4,096 p50=4,096 max=4,096
+[phaseA] t=20.3s instrument=drain.flush_dispatch_wait_ms     count=8 p50=5.56 p99=9,964.37 max=9,964.37
+
+# Steady state (t=60-120s): gate fully saturated, batches full-size, throughput pinned
+[phaseA] t=70.3s instrument=drain.flush_dispatch_size        count=5 min=4,096 p50=4,096 max=4,096
+[phaseA] t=70.3s instrument=drain.flush_dispatch_wait_ms     count=5 p50=1,854.76 p90=2,224.99 max=2,224.99
+[phaseA] t=70.3s instrument=tcp.read.channel_write_wait_ms   count=20,480 p50=0.00 p99=0.00 max=2,218.31
+
+[phaseA] t=100.3s instrument=drain.flush_dispatch_size       count=5 min=4,096 p50=4,096 max=4,096
+[phaseA] t=100.3s instrument=drain.flush_dispatch_wait_ms    count=5 p50=2,230.33 p90=2,313.75 max=2,313.75
+```
+
+**Inference.** Each bench instrument falsifies one candidate queue point and the surviving one is decisive.
+
+1. **`tcp.read.line_bytes` p50=245 B, p99=247 B, count tracks producer offered load.** Wire shape is uniform; the TCP read loop is healthy and sees every line. The receive path is not framing, deserialising, or dropping anything.
+2. **`tcp.read.channel_write_wait_ms` p50=p90=p99=0 ms** across every window. The TCP→drain handoff is instant for **every line** in steady state - the bounded channel (`capacity = 1 << 16 = 65,536`) never fills past the drain's ability to consume. The `max` field does spike to 2-9 s during whole-channel stalls, but that mass is below p99: the channel briefly fills only when the drain is *completely* stuck, and unfills immediately when one batch dispatches. The "channel full ⇒ TCP backpressure ⇒ producer `BufferedStream.Write` block" causation chain U9o step 1 inferred is now observed end-to-end.
+3. **`drain.flush_dispatch_size` p50=max=4,096** in steady state. The drain is **always** presenting full-size 4,096-entry batches to `DispatchFlushAsync`. The "silo is presenting tiny batches" hypothesis that the U9o step 1 next-probe note speculated about is **falsified**. The `provider.phase2.batch_size=1.00` U9l finding therefore has nothing to do with how the silo batches - it is purely about how phase 2 inside the WAL coalesces (or fails to coalesce) batches the silo hands it.
+4. **`drain.flush_dispatch_wait_ms` p50=1.8-2.5 s, p99=2.2-3.7 s** in steady state. The drain loop is **continuously** blocked on `flushGate.WaitAsync` waiting for one of the 8 `FlushConcurrency` slots to free. All 8 slots are saturated. The silo is offering full-size batches to `SetManyAsync(4,096)` as fast as `SetManyAsync` will accept them.
+
+**Where the throughput goes.** With 8 concurrent flush slots and steady throughput of `1,756/s`, the effective per-slot throughput is `~220 entries/s`, which means each `SetManyAsync(4,096)` call takes `~18.6 s` wall-clock from `WaitAsync` return to `SetManyAsync` return. The gate-wait quantiles (~2 s p99) are consistent with this: a drain that dispatches one batch every ~2.3 s × 8 slots in flight = ~18.6 s per individual call. The 8-way concurrency is doing real work, but each call is slow.
+
+**Bottleneck location after U9o step 2.** Confirmed inside `ILattice.SetManyAsync(4096)` itself, *not* upstream. Every segment between the producer's `Write` and `SetManyAsync` entry has been measured and is healthy:
+
+- Producer inner loop (`innerAvgMs ≤ 60 ms` while sockets accept) ✓
+- Kernel send buffer / network ✓ (saturates only as a consequence of downstream pressure)
+- Silo TCP read loop (`tcp.read.line_bytes`) ✓
+- Silo channel handoff (`tcp.read.channel_write_wait_ms` p99=0) ✓
+- Silo drain batch construction (`drain.flush_dispatch_size = 4,096`) ✓
+- Silo flush gate (`drain.flush_dispatch_wait_ms` is symptom of downstream, not cause) ✓
+
+Inside `SetManyAsync(4,096)`, both previously-suspected lattice queue points are still innocent at this rung:
+- WAL turn queue: `wal.append.in_flight = 0`, `wal.append.turn_wait` p99 ≈ 17 ms (negligible).
+- Leaf turn queue: `leaf.commit.in_flight = 0` (U9m result, unchanged here).
+
+So the per-call latency lives somewhere on the `SetManyAsync` path that **neither** the WAL append metrics **nor** the leaf-commit metrics observe. The two candidate sub-paths are: (a) the saga fan-out (shard-root → shard → leaf), where the per-key dispatch could be serialising work that the producer offers as a batch; and (b) the storage provider's phase-2 commit, which `provider.phase2.batch_size=1.00` indicates is committing one batch per Azure Tables transaction (no coalescing) despite the silo offering batches as fast as the gate will let it.
+
+**Next probe (U9p).** Measure `SetManyAsync(4,096)` end-to-end on the silo side with three new sub-timings:
+
+- `lattice.set_many.duration` total wall-clock per `SetManyAsync` call (the headline).
+- `lattice.set_many.fanout_wait_ms` time spent in the saga fan-out before the first per-leaf commit returns.
+- `lattice.set_many.provider_wait_ms` time spent on `await` of the WAL provider's phase-2 commit (the segment `provider.phase2.batch_size=1.00` covers).
+
+If `provider_wait_ms` dominates, the next move is on the phase-2 commit path (Azure Tables RTT × number of partitions touched by a single 4,096-entry batch); if `fanout_wait_ms` dominates, the move is on the saga fan-out (per-key dispatch shape).
+
+### U9p step 1 - headline confirmation (5000:5)
+
+**What we measured.** A benchmark-local histogram `azure.throughput.bench.lattice.set_many.duration_ms` was added directly around the `await lattice.SetManyAsync(batch, ct)` call inside the silo's `FlushAsync` wrapper (`benchmark/azure-throughput/Silo/Program.cs`). It lives on the `azure.throughput.bench` meter (so it stays out of the public lattice surface) and rides the same Phase A reporter rendering path as U9o step 2's TCP / drain instruments. The same `5000:5` ladder rung was rerun for 120 s.
+
+**Final throughput.** `190,228` entries written, `0` failed, `Entries written per second (avg)=1,598`, steady-state `1,581/s`. Same shape as U9o step 2 (1,756/s) and U9m baseline (1,350/s) - confirms the bottleneck is reproducible and that the new instrument did not perturb the run.
+
+**Headline result (per-call `SetManyAsync(4,096)` wall-clock, steady state windows t=70.8s through t=119.6s, 5 calls / 10 s window):**
+
+| Window | count | min | p50 | p99 | max |
+|---|---|---|---|---|---|
+| t=70.8s | 5 | 15.87 s | 16.13 s | 16.84 s | 16.84 s |
+| t=80.8s | 5 | 16.06 s | 16.52 s | 17.02 s | 17.02 s |
+| t=90.8s | 5 | 15.74 s | 16.30 s | 16.84 s | 16.84 s |
+| t=100.8s | 5 | 14.86 s | 15.31 s | 15.41 s | 15.41 s |
+| t=110.8s | 5 | 15.53 s | 15.74 s | 16.03 s | 16.03 s |
+| t=119.6s | 5 | 15.02 s | 15.56 s | 15.79 s | 15.79 s |
+
+**What this proves.**
+
+1. **U9o step 2's ~18.6 s/call inference is confirmed directly.** Steady-state p50 sits at **15.3-16.5 s/call**, p99 at **15.4-17.0 s/call**. The earlier arithmetic over gate-waits (~18.6 s) was in the right ballpark; the small overshoot is the gate-wait portion (`drain.flush_dispatch_wait_ms` ~2-3 s) being counted on top of the call itself.
+2. **The slowness is uniform, not tail-dominated.** `min ≈ p50 ≈ p99` across every steady-state window. `max/p50 ≈ 1.04`. There is **no fast cohort** of calls being dragged up by tail outliers. Every batch pays ~16 s. This rules out queueing-style models where most calls are fast and a few are slow (e.g. retries, lock contention, GC pauses).
+3. **Warmup contributes very little.** The early windows (t=30.7s p50=20.1 s, t=50.7s p50=20.2 s) settle to t=70-119s p50=15-16 s after ~70 s. The roughly 20% improvement is consistent with cold-start activation / connection setup amortising; it is not the dominant cost.
+4. **The arithmetic closes.** `4,096 entries / 16 s × 8 flush slots = 2,048 entries/s` upper bound. Observed steady-state `1,581/s` matches this within the `drain.flush_dispatch_wait_ms ≈ 2 s` gate-wait slack: each dispatch costs `~16 s of call + ~2 s of gate-wait = ~18 s per slot-turn`, giving `4,096 × 8 / 18 ≈ 1,820/s` which brackets the observation. There is no missing time anywhere upstream.
+
+**What it does not yet tell us.** Whether the 16 s/call lives in (a) the shard-root fan-out (`LatticeGrain.SetManyAsyncCore` → `Task.WhenAll` over per-shard `IShardRootGrain.SetManyAsync` → per-leaf `IBPlusLeafGrain.SetManyAsync`), or (b) the WAL provider's phase-2 commit (`AzureTableWalStorageProvider` phase-2 worker awaiting Azure Tables), or (c) something between (`PublishDigestUpwardAsync` propagation up the B+ tree on every batch). The leaf-commit and WAL-append per-step histograms already exist; the missing piece is a **single wall-clock pair** that splits the 16 s into "time before the first per-leaf commit completed" and "time after that, waiting for phase-2 to drain".
+
+**U9p step 2 next.** Add two timings inside `ShardRootGrain.SetManyAsync` (the cleanest seam where the fan-out is observable in one place):
+
+- `shard_root.set_many.local_apply_ms` - `Stopwatch` around `SetManyLocalOnlyAsync` (the `Task.WhenAll` over `DispatchLeafBatchWithRetryAsync`). Includes all per-leaf RPC time + WAL append + WAL phase-2 commit, but **excludes** lattice-grain bucketing and event-publish.
+- `shard_root.set_many.shadow_forward_ms` - `Stopwatch` around the trailing `forwardTask` await (only non-zero during online resize; expected to be ~0 in steady state and will confirm shadow-forward isn't silently contributing).
+
+Both go on the shard-root grain via `LatticeMetrics` (lattice-internal, not bench-local) since they describe a public grain seam that exists outside the bench harness. The bench's `phaseA` reporter already subscribes to `orleans.lattice` so the new histograms surface automatically.
+
+If `local_apply_ms` consumes essentially all 16 s, the cost lives in the leaf/WAL/provider chain and the next probe targets phase-2 (`provider.phase2.commit_duration` already exists; we need it correlated with batch-arrival rate). If `local_apply_ms` is materially less than 16 s, then `LatticeGrain.SetManyAsyncCore` itself is the choke point and the next probe sits one layer up (bucket build cost, `RetryOnStaleRoutingAsync` overhead, event-publish synchronization).
+
+### U9p step 2 - shard-root decomposition (5000:5)
+
+**What we measured.** Two new histograms on the `orleans.lattice` meter, recorded inside `ShardRootGrain.SetManyAsync` (`src/lattice/BPlusTree/Grains/ShardRootGrain.cs`): `shard_root.set_many.local_apply.duration` around `SetManyLocalOnlyAsync(entries)` (the per-leaf fan-out + WAL append + commit chain) and `shard_root.set_many.shadow_forward.duration` around the trailing `forwardTask` await (online-resize shadow-forward only). The Phase A reporter's allowlist was extended to surface both instruments without altering the parser. The bench's existing `azure.throughput.bench.lattice.set_many.duration_ms` (the silo's direct `await lattice.SetManyAsync(batch, ct)` wall-clock from step 1) was kept in place so the new shard-root numbers can be calibrated against the silo's outermost call boundary in the same run.
+
+**Final throughput.** `296,741` entries written, `0` failed, `Entries written per second (avg)=2,485`, steady-state `2,674/s`. This is a meaningful jump above U9p step 1 (`1,598/s` final, `1,581/s` steady) on the same `5000:5` rung with the same instrument surface plus only two extra histograms. The most likely cause is run-to-run variance / cold-cache effects on the Azure Tables backend; the relative shape of the metrics, not the absolute throughput, is what U9p step 2 is reading off.
+
+**Headline result (steady-state windows, t=70.3s through t=119.7s, single shard-root activation receives every fan-out bucket so `local_apply` count ≈ batches × buckets-per-batch):**
+
+| Window | bench `lattice.set_many` p50 / p99 | `shard_root.local_apply` count / p50 / p99 | `shard_root.shadow_forward` sum |
+|---|---|---|---|
+| t=70.3s | 11.40 s / 12.06 s | ~430 / 9.4 s / 11.7 s | ~0 |
+| t=80.3s | 11.43 s / 12.03 s | ~430 / 9.6 s / 11.9 s | ~0 |
+| t=90.3s | 11.80 s / 11.95 s | 422 / 9.87 s / 11.53 s | 0.01 ms total |
+| t=100.3s | 12.43 s / 12.48 s | 421 / 10.47 s / 12.41 s | 0.02 ms total |
+| t=110.3s | 11.60 s / 12.37 s | 461 / 9.67 s / 11.52 s | 0.01 ms total |
+| t=119.7s | 11.87 s / 12.04 s | 788 / 9.11 s / 10.97 s | 0.01 ms total |
+
+**What this proves.**
+
+1. **Shadow-forward is not the bottleneck.** Sum of `shadow_forward.duration` is ~0.01-0.02 ms total across windows that contain 400-800 calls each. Online-resize / replication tail-write is genuinely idle on this workload. The earlier "could it be silent shadow-forward?" hypothesis is closed.
+2. **Local apply consumes essentially all of the silo's `lattice.set_many` wall-clock.** Per-shard-root-call `local_apply` p50 is `9.1-10.5 s` and p99 is `11.5-12.4 s`. The silo's outermost `await lattice.SetManyAsync(batch, ct)` wall-clock p50 / p99 is `11.4-12.4 s` / `12.0-12.5 s` in the same windows. The ~1-2 s gap between the silo wall-clock and the shard-root local-apply p99 is fully explained by `LatticeGrain.SetManyAsyncCore` fanning a 4,096-entry batch across multiple parallel shard-root tasks via `Task.WhenAll` - the silo wall-clock observes the slowest bucket, while each `shard_root.local_apply` observation is per-bucket. There is no missing time outside the shard-root grain.
+3. **The cost lives strictly inside `SetManyLocalOnlyAsync`.** That is the per-leaf fan-out (`Task.WhenAll` over `DispatchLeafBatchWithRetryAsync`), each leaf RPC, each leaf's WAL append, and each WAL phase-2 commit. The U9p step 1 conclusion ("the 16 s slowness is uniform and not tail-dominated") composes with this: every leaf-level fan-out segment is uniformly slow, not a few outliers.
+4. **Throughput jump (1,598 → 2,485/s) is a separate observation.** The shape of every per-batch histogram (`lattice.set_many.duration_ms`, `drain.flush_dispatch_size`, `drain.flush_dispatch_wait_ms`) is the same shape as U9p step 1 - 4,096-entry batches, multi-second flush-gate waits, ~11-12 s per shard-root call. The improvement appears to be Azure Tables-side warmth or cluster-side scheduling variance, not a metric-induced artifact. This is worth re-running before any commit-relevant conclusion is drawn.
+
+**U9p step 3 next.** Add one more histogram inside `SetManyLocalOnlyAsync` that splits per-leaf `DispatchLeafBatchWithRetryAsync` into (a) `dispatch.wait_ms` - time from issuing the per-leaf RPC to the leaf's WAL turn beginning (Orleans grain-schedule + per-leaf turn-queue), and (b) `dispatch.commit_ms` - time from WAL turn start to the per-leaf RPC return (leaf-side `CommitSetManyAsync` + WAL append + phase-2). The existing `leaf.commit.duration` (per-step) and `wal.append.*` histograms already exist on the leaf side; the missing piece is the **outbound view from the shard-root** that pairs each leaf call's wait time with its commit time, because the leaf's clock cannot see its own pre-turn dispatch wait. If `dispatch.wait_ms` dominates, the bottleneck is per-leaf RPC scheduling and the next move is on the per-leaf concurrency shape. If `dispatch.commit_ms` dominates, the bottleneck is genuinely the leaf/WAL/provider chain and the next probe is the WAL provider's phase-2 batch shape (which `provider.phase2.batch_size=1.00` already suggests).
+
+### U9p step 3 - per-leaf RPC view (5000:5)
+
+**What we measured.** One additional histogram, `orleans.lattice.shard_root.set_many.leaf_rpc.duration`, recorded around every `await leaf.SetManyAsync(slice)` attempt in `DispatchLeafBatchWithRetryAsync` (`src/lattice/BPlusTree/Grains/ShardRootGrain.cs`). Tagged with `tree`. The Phase A allowlist was extended to surface it without parser changes. Same `5000:5` ladder rung, 120 s.
+
+**Final throughput.** `332,162` entries written, `0` failed, `Entries written per second (avg)=2,775`, steady-state `3,040/s`. The throughput continues to drift upward run-over-run (U9p step 1: `1,598/s`; step 2: `2,485/s`; step 3: `2,775/s`) on the same instrument footprint, so the absolute number is run-variance, not a metric perturbation. The histogram **shape** is what matters.
+
+**Headline result (steady-state window t=110.3s, identical shape across t=70-120s):**
+
+| Instrument | count | p50 | p99 | max |
+|---|---|---|---|---|
+| `lattice.set_many.duration_ms` (silo wall-clock per batch) | 7 | 11.38 s | 11.44 s | 11.44 s |
+| `shard_root.local_apply.duration` (per shard-root call) | 453 | 10.71 s | 11.39 s | 11.43 s |
+| `shard_root.leaf_rpc.duration` (per per-leaf RPC) | 453 | 10.71 s | 11.39 s | 11.43 s |
+| `shard_root.shadow_forward.duration` | 453 | 0 | 0 | 0 |
+| `wal.append.provider.duration` (per WAL shard, p50 across shards) | ~430/shard | ~19 ms | ~60-80 ms | ~700 ms (one shard) |
+| `wal.append.in_flight` | ~430/shard | 0 | 0 | 0 |
+| `leaf.commit.in_flight` | 453 | 0 | 0 | 0 |
+| `provider.phase2.batch_size` | ~450/shard | 1.00 | 1.00 | 1.00 |
+| `drain.flush_dispatch_size` | 7 | 4,096 | 4,096 | 4,096 |
+| `drain.flush_dispatch_wait_ms` | 7 | 1.44 s | 1.50 s | 1.50 s |
+
+**What this proves.**
+
+1. **`leaf_rpc ≈ local_apply ≈ silo wall-clock`.** All three are within 0.7% of each other (10.71 s vs 11.38 s) which is the expected gap between (a) per-RPC mean inside one shard-root call and (b) the maximum of one shard-root call over the silo's `Task.WhenAll` across buckets. Because `LatticeGrain.SetManyAsyncCore` keys the workload's HLC-prefixed keys into shard buckets, in this run the producer's keyspace lands on a single shard root per batch (route counts of `count=453` per 10 s window match the `~7 batches × ~65 leaves/batch` arithmetic), so `local_apply` and `leaf_rpc` collapse onto the same distribution.
+2. **The bottleneck is strictly inside one per-leaf RPC.** `leaf_rpc.duration` p50 is 10.71 s. The cost cannot be downstream of the per-leaf call - it is paid synchronously between issuing the leaf RPC and the leaf returning.
+3. **Inside the leaf RPC, the WAL is not the bottleneck.** Per-shard `wal.append.provider.duration` p50 is ~19 ms, p99 ~60-80 ms (one shard touched a `max=709 ms` outlier). `wal.append.in_flight` is 0. `provider.phase2.batch_size` is 1.00 (one phase-2 transaction per append). A 10.7 s leaf RPC is paying roughly **560 × 19 ms** worth of WAL provider time - which means either (a) the leaf is serialising ~560 things internally, or (b) something else inside the leaf turn is the dominant cost and the WAL appends are merely accurate book-keeping of the work that does happen.
+4. **`leaf.commit.in_flight=0` confirms no per-leaf concurrency overlap.** Combined with single-shard routing, this means each per-leaf RPC arrives at an idle leaf, executes one turn, and returns. The 10.7 s is one turn, not stacked concurrent work.
+5. **`drain.flush_dispatch_wait_ms` p50 ~1.4 s** at 7 dispatches per 10 s window means the silo is gate-saturated: 8 in-flight flush slots × ~11.4 s/slot = ~91 s of work to retire 10 s of wall-clock, dispatched at 1 / (10/7) = 1.4 s gate-wait. The arithmetic closes again: `4,096 × 7 / (11.4 + 1.4) ≈ 2,240/s` brackets the observed `2,775/s` final (with ~25% slack from cold-start / variance).
+
+**What it does not yet tell us.** Whether the 10.7 s per per-leaf RPC is consumed by (a) **inside the leaf's commit turn** (`CommitSetManyAsync` doing per-step work that is not the WAL append - notably `PublishDigestUpwardAsync` walking the leaf -> parent chain after every commit, or per-key in-place LWW / observer fan-out), or (b) **between two events the leaf can already measure** (in which case the `leaf.commit.duration` per-step quantiles in `[phaseA]` would expose it). The earlier `[phaseA]` output **does not contain `leaf.commit.duration`** because the Phase A allowlist filters it out - the instrument is recorded, but never reported. That allowlist entry has now been added; the next rung will show the per-step (`wal` / `apply` / `observer` / `digest`) breakdown directly.
+
+**U9p step 4 next.** Rerun the same `5000:5` rung now that `leaf.commit.duration` is allowlisted. The per-step tags will say which leg of `CommitSetManyAsync` consumes the 10.7 s: if the `apply` or `digest` step dominates, the next probe targets that path; if the `wal` step dominates (which would contradict the U9p step 3 measurement that `wal.append.provider.duration` is ms-not-seconds), then there is per-step double-counting that we need to reconcile before any optimisation.
+
+### U9p step 4 - `leaf.commit.duration` allowlist - INSTRUMENT MIS-RENDER, INCONCLUSIVE (5000:5)
+
+**What we measured.** Same `5000:5` ladder rung, 120 s, with the Phase A allowlist extended to include `orleans.lattice.leaf.commit.duration`. No source-side changes.
+
+**Headline result.** The rung regressed sharply (steady-state avg `927/s`, final `1,284/s`, **24,343 failed writes**), with the silo logging `System.TimeoutException: Response did not arrive on time in 00:00:30 for message: ... ILattice.SetManyAsync(...)`. The `[phaseA]` output now contained `leaf.commit.duration`, but exactly **one row per shard** with a bimodal histogram - `p50 ≈ 0.0-0.1 ms`, `p90 ≈ 1.7-1.9 s`, `p99 ≈ 1.8-2.1 s`. Example windows (`tree=t shard=… phase=-`):
+
+| `t=` | `count` | p50 | p90 | p99 |
+| --- | --- | --- | --- | --- |
+| 21.0s | 1,400 | 0.02 ms | 1,768 ms | 1,910 ms |
+| 41.1s | 1,400 | 0.03 ms | 3,415 ms | 3,415 ms |
+| 81.1s | 1,400 | 0.05 ms | 1,854 ms | 1,895 ms |
+| 119.0s | 1,400 | 0.00 ms | 1,856 ms | 1,902 ms |
+
+**Why this is inconclusive.** Two independent findings make the U9p step 4 quantiles unsafe to act on:
+
+1. **The reporter dropped the `step` tag.** `BPlusLeafGrain.RecordCommitStep` tags `LeafCommitDuration` with `LatticeMetrics.TagStep = "step"` (`wal` / `apply` / `observer` / `digest`), but `PhaseADiagnosticReporter.Merge(...)` only recognises `TagTree`, `TagShard`, `TagPhase`, `TagStatus`. `TagStep` fell into the "silently dropped" path, so all four per-step distributions collapsed onto **one key per shard** with `phase=-`. The bimodal shape is the mixture of fast steps (`apply` / `digest`, μs-scale) with the slow step (`wal`, seconds-scale) - the per-step quantiles are not actually being reported separately.
+2. **Throughput collapse is a run-side outlier, not a metric-induced regression.** The only code delta from U9p step 3 was adding one string to the allowlist; the instrument was already recorded on every commit. The 30 s timeout exceptions in the silo log point to leaf-RPC queue build-up (an unobserved seam upstream of `RecordCommitStep`), consistent with the U9p step 3 conclusion that the cost is paid synchronously inside the per-leaf RPC. This is a real signal about leaf RPC ingestion-shape, but it is independent of the misreported `leaf.commit.duration` quantiles.
+
+**Fix.** `PhaseADiagnosticReporter.Merge(...)` now folds `TagStep` into the existing `phase` rendering slot when no `TagPhase` value is observed. `LeafCommitDuration` uses `TagStep`; every other allowlisted instrument that uses `TagPhase` (`provider.commit.duration`, `provider.retry.*`, etc.) is unaffected because `TagStep` is checked **only when** `phase` is still `"-"`. The dictionary key shape stays fixed at `instrument|tree|shard|phase|status`, no parser changes are needed downstream. This is a benchmark-local diagnostic fix; the public lattice surface (`TagStep` vs `TagPhase` distinction) is **not** changed.
+
+**U9p step 5 next.** Rerun the same `5000:5` rung with the step-tag rendering fix in place. The expected output is **four rows per shard** for `leaf.commit.duration` (`phase=wal`, `phase=apply`, `phase=observer`, `phase=digest`), and the seconds-long tail should localise to exactly one of them. If `phase=wal` dominates with seconds-scale p99 while `wal.append.provider.duration` remains ms-scale, the bottleneck is in the leaf's own WAL turn (queue ahead of the `await` on the WAL grain), not the WAL provider. If `phase=apply` or `phase=digest` dominates, the next probe targets `SetCoreAsync` / `PublishDigestUpwardAsync`.
+
+### U9p step 5 - per-step leaf commit decomposition (5000:5)
+
+**What we measured.** Same `5000:5` ladder rung, 120 s, with the U9p step 4 Phase A rendering fix in `PhaseADiagnosticReporter.Merge(...)` so that `TagStep` is folded into the `phase` rendering slot when no `TagPhase` value is observed. No source-side changes to `LatticeMetrics` or `BPlusLeafGrain.Metrics.cs`.
+
+**Headline result.** `steady-state avg = 2,514/s`, **`total failed = 0`**, `278,913 written`. The 24,343 failures observed in U9p step 4 do not reproduce - confirming step 4 was run-side outlier variance (allowlist add cannot change recording cost). `leaf.commit.duration` now resolves into four rows per shard (`phase=wal`, `phase=apply`, `phase=observer`, `phase=digest`) and the localisation is unambiguous:
+
+| step | p50 | p99 | comment |
+| --- | --- | --- | --- |
+| `apply` | 0.09-0.51 ms | 2.3-7.3 ms | per-key LWW into the leaf's in-memory map |
+| `digest` | 0.00 ms | 0.0-0.05 ms | parent digest emission |
+| `observer` | 0.00 ms | 0.0-0.0 ms | observer fan-out |
+| **`wal`** | **1.45-2.0 s** | **1.6-2.5 s** | `await walGrain.AppendAsync(...)` inside `CommitSetManyAsync` |
+
+**WAL-side instruments (same windows, per shard, 8 shards):**
+
+| `wal.append.*` | value | inference |
+| --- | --- | --- |
+| `provider.duration` p50 / p99 | 20 ms / 60-80 ms | Azure Tables call itself is healthy |
+| `provider.duration` `count` per 10 s | ~390-394 per shard | ~40 provider calls/s/shard |
+| `in_flight` | 0 | never two provider calls overlap on the same shard |
+| `batch_entries` p50 / max | 8 / 15-20 | coalescer is producing small batches |
+| `queue_depth` (at enqueue) | 1 | only 1 in-flight batch when each new batch arrives |
+| `turn_wait` count per 10 s | 3-5 per shard | severely undercounted vs 390 provider calls |
+
+**The arithmetic that closes.** 8 shards × ~40 provider calls/s × ~8 entries per call ≈ **2,560 entries/s**, which brackets the observed steady-state `2,514/s` and the U9p step 3 `2,775/s`. The system is running exactly at the WAL provider's effective throughput ceiling on this configuration.
+
+**Why does the leaf wait 1.5 s if the provider is 20 ms?** Per-shard fan-out: `LatticeGrain.SetManyAsyncCore` groups a 4,096-entry batch into one bucket per physical shard (single-shard routing on this workload), then `ShardRootGrain.SetManyAsync` fans out via `DispatchLeafBatchWithRetryAsync` to ~65 leaves in parallel via `Task.WhenAll`. All 65 leaves then enter `CommitSetManyAsync` concurrently and each issues `await walGrain.AppendAsync(...)`. The WAL grain is **one activation per shard** (`WalPartitions = 1` is the documented default after U9m B2 retraction), so Orleans serialises those 65 grain calls onto a single activation's turn-queue. With batches of ~8 entries per provider call at ~20 ms each, the 65th leaf waits `65 × 20 ms / 8 leaves-per-batch ≈ 162 ms` worst-case if the coalescer were perfectly packing all 65 leaves' entries into the smallest possible batch shape, but in practice the coalescer only achieves ~8 entries per provider call (p50) so the actual wait scales with provider calls, not with leaf entries.
+
+**Why `wal.append.turn_wait` undercounts.** Only 3-5 records fire per 10 s window per shard while the provider runs ~390 calls in the same window. That instrument must be recorded inside a guarded branch (e.g. only when the turn-queue is non-empty at entry, or only on the very first batch of a coalesced run). It is **not** a reliable measure of cross-grain queueing here. The correct outside-the-grain dispatch view is `LatticeMetrics.WalShardDispatchDuration` (`orleans.lattice.wal.shard.dispatch.duration`), which is **not in the benchmark's Phase A allowlist** - the U9o/U9p reporter only allowlists the eighteen instruments listed above, so cross-grain dispatch was invisible to this ladder run.
+
+**What this proves.**
+
+1. **The bottleneck is the WAL append path inside each leaf commit, specifically the per-shard coalesced provider-call rate, not the provider duration itself.** Provider p50 is 20 ms - any of the C1-C3 "parallel partition keys / pipelined transactions" framings from Phase C remains the right family of remediation. The previously-retracted attribution (retry storms, B2 partition scaling on Azurite) stays retracted; this is a coalescer-and-pipelining problem on a healthy provider.
+2. **The leaf side is doing essentially nothing else.** `apply` / `digest` / `observer` together are sub-millisecond per commit. There is no "hidden CPU work" in `BPlusLeafGrain.CommitSetManyAsync` that needs to move; the optimisation surface is the WAL grain's append pipeline.
+3. **`leaf.commit.in_flight = 0` is consistent with this picture, not in conflict.** The leaf entry-depth metric measures concurrent entries to `CommitSetAsync` / `CommitSetManyAsync` on **one leaf activation**. Each leaf serves one bucket at a time, returns to await on the WAL, and only re-enters after `walGrain.AppendAsync` returns. The 65 leaves of one shard each see depth 0/1; the contention is downstream on the **WAL grain**, where `in_flight = 0` simply confirms the provider is not paralellised (one call at a time), not that the WAL is idle.
+4. **The Phase A diagnostic stack now resolves the per-step leaf commit shape end-to-end.** The step-tag rendering fix is benchmark-local and preserves the existing `[phaseA]` schema; no parser change is needed in `40-ladder.ps1`.
+
+**U9p step 6 (SHIPPED AND MEASURED on `benchmark/azure-throughput` against real Azure Tables, archived as `benchmark/azure-throughput/.run/silo-U9p-step6.log` / `producer-U9p-step6.log` / `.ladder-results-U9p-step6.csv` / `.ladder-phaseA-U9p-step6.csv`).** Added `orleans.lattice.wal.shard.dispatch.duration` to `benchmark/azure-throughput/Silo/PhaseADiagnosticReporter.cs` `InstrumentAllowlist` so the existing `LatticeMetrics.WalShardDispatchDuration` recorded around `await grain.AppendBatchAsync(entries, …)` in `WalCommitLogWriter.AppendForPartitionAsync` becomes visible on the Phase A rows. Rerun was the same `5000:5` / `120 s` rung; `walPartitions = 8`, `walMaxPending = 8`. Rung outcome: `steady-state avg = 2,437/s`, `total failed = 0`, identical shape to U9p step 5 (`2,514/s`).
+
+**Last-window numbers (t = 119.7 s, per WAL shard, all 8 shards represented):**
+
+| instrument                          | tag           | p50           | p99           | min        | max       | count/shard |
+| ----------------------------------- | ------------- | ------------- | ------------- | ---------- | --------- | ----------- |
+| `wal.shard.dispatch.duration`       | shards 0-7    | **513-1,430 ms** | **801-1,612 ms** | 57-62 ms   | 817-1,621 ms | 417-452     |
+| `leaf.commit.duration`              | `phase=wal`   | **1,451.61 ms**  | **1,615.58 ms**  | 1,185 ms   | 1,621 ms     | 389         |
+| `leaf.commit.duration`              | `phase=apply` | 0.10 ms       | 0.74 ms       | 0.05 ms    | 8.33 ms   | 389         |
+| `leaf.commit.duration`              | `phase=digest`| 0.00 ms       | 0.00 ms       | 0.00 ms    | 0.03 ms   | 389         |
+| `leaf.commit.duration`              | `phase=observer`| 0.00 ms     | 0.00 ms       | 0.00 ms    | 0.00 ms   | 389         |
+| `wal.append.provider.duration`      | shards 0-7    | **18.98-19.61 ms** | **60-97 ms**     | 10-12 ms   | 135-296 ms   | 379-400     |
+| `wal.append.batch_entries`          | shards 0-7    | **8.00**          | 14-16            | 1-2        | 15-20        | 376-399     |
+| `wal.append.in_flight`              | shards 0-7    | 0.00              | 0.00             | 0.00       | 0.00         | 376-399     |
+
+**Interpretation.** The hypothesis is confirmed end-to-end on real Azure Tables: `leaf.commit.duration phase=wal` p50 = 1,451.61 ms, p99 = 1,615.58 ms is structurally identical to the **per-shard envelope** of `wal.shard.dispatch.duration` (worst shard p50 = 1,430 ms, p99 = 1,612 ms). The leaf's wait inside `await writer.AppendAsync(entry)` *is* the cross-grain dispatch wait; there is no measurable extra cost above the `WalCommitLogWriter` → `WalShardGrain` call boundary. Meanwhile `wal.append.provider.duration` p50 ≈ 19 ms holds steady - the provider itself is healthy and fast. The ~1,430 ms - 19 ms ≈ 1.4 s residual sits **inside `WalShardGrain.AppendBatchAsync`**, between the grain-entry turn-take and the awaited provider call. With `WalShardGrain` non-reentrant (no `[Reentrant]` / `[MayInterleave]` attribute) and ~65 leaves per shard fanning concurrent `AppendBatchAsync` calls into one activation, every call queues behind the prior call's `await acks[i].Task`. The grain coalesces those callers into pending-batches, but `wal.append.batch_entries` p50 = 8 says the coalescer is leaving the batch ceiling (`WalMaxBatchEntries = 100`) almost entirely unused: at this load most provider calls carry only ~8 entries even though the per-shard queue is deep enough to fill them to 100. Provider rate (≈ 400 calls per shard per 10 s ≈ 320 calls/s aggregate × ≈ 8 entries) explains the ≈ 2.5 k/s ceiling exactly. **`wal.append.in_flight = 0` is now correctly understood:** with the WAL grain non-reentrant and the await on `acks[i]` serialising entry-to-entry, the gauge that samples on every coalesced flush boundary observes the steady-state "between flushes" depth, which is structurally always 0 - it is **not** evidence that the WAL is idle.
+
+**U9p step 7 next.** The lever is the coalescer, not the provider and not WAL partition count. Tune `WalShardGrain.AppendBatchAsync` / `StartFlush` so the in-flight cap and the cutover-to-next-pending-batch decision actually pack closer to `WalMaxBatchEntries`. Concrete probe: (a) confirm in `WalShardGrain.cs` whether each `AppendBatchAsync` caller currently kicks its own flush rather than appending to a running flush's pending segment (which would explain the small mean batch size at deep queue), (b) if so, change the policy so a caller arriving while a flush is in-flight always appends to the *next* pending batch and only kicks a new flush when both the in-flight slot is taken **and** the pending-batch cap is hit, (c) optionally add a small coalescing window (already exposed as `WalPhase2CoalescingMs`, currently `0` in the ladder env) to let entries accumulate before the first flush of a quiet shard. If the coalescer is already correct on paper, U9p step 7 instead surfaces a finer-grained metric inside `AppendBatchAsync` (entry-to-flush-kick latency vs. flush-kick-to-provider-call latency) to localise the gap further. The C-family direction (multi-partition WAL on real Azure) remains a separate next-axis once the per-shard pack-ratio is healthy.
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).

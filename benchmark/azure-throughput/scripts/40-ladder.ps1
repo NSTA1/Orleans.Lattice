@@ -26,6 +26,14 @@
 
 .PARAMETER SkipBuild
     Skip the initial image build. Use when images are already in ACR from a previous run.
+
+.PARAMETER LocalBuild
+    Build the producer and silo images locally via `docker build` and push them to
+    ACR, instead of using the remote `az acr build` path. Forwarded to
+    20-build-and-deploy.ps1. Requires Docker Desktop on a linux/amd64 host. Cuts
+    the per-code-change build step from ~1m45s (clean ACI build with full source
+    upload) to ~15s (local docker layer cache), which is the dominant speedup on
+    iterative diagnostic probes.
 #>
 
 [CmdletBinding()]
@@ -39,7 +47,8 @@ param(
     ),
     [int] $DurationSec = 60,
     [int] $CooldownSec = 10,
-    [switch] $SkipBuild
+    [switch] $SkipBuild,
+    [switch] $LocalBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,7 +87,7 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
     # Build only on the first rung (unless -SkipBuild for the whole ladder).
     $skipBuildForRung = $SkipBuild -or ($i -gt 0)
 
-    & $deployScript -VehicleCount $vehicles -TickHz $hz -DurationSec $DurationSec -SkipBuild:$skipBuildForRung
+    & $deployScript -VehicleCount $vehicles -TickHz $hz -DurationSec $DurationSec -SkipBuild:$skipBuildForRung -LocalBuild:$LocalBuild
     if ($LASTEXITCODE -ne 0) { throw "Deploy failed for rung $rung." }
 
     # Wait for the producer container to terminate (restartPolicy=Never makes that a

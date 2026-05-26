@@ -198,4 +198,58 @@ internal sealed partial class BPlusLeafGrain
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
             new KeyValuePair<string, object?>(LatticeMetrics.TagStep, step));
     }
+
+    /// <summary>
+    /// Per-activation count of foreground commits (<see cref="CommitSetAsync"/>
+    /// or <see cref="CommitSetManyAsync"/>) currently in flight on this
+    /// leaf. Snapshotted at the moment a new commit enters the commit
+    /// path, recorded on <see cref="LatticeMetrics.LeafCommitInFlight"/>,
+    /// then incremented for the duration of the commit. The decrement
+    /// runs unconditionally in the disposed scope so an exception
+    /// midway through the commit cannot leak depth.
+    /// <para>
+    /// Under the shipping non-reentrant scheduling of
+    /// <see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/> /
+    /// <see cref="IBPlusLeafGrain.SetManyAsync"/> the recorded value
+    /// is always <c>0</c>: Orleans serialises grain calls and the
+    /// next commit cannot enter until the current one returns. The
+    /// histogram is a falsifiability instrument for the U9m roadmap
+    /// probe in <c>scaling.md</c>: a steady pin at <c>0</c> proves
+    /// the leaf turn queue is not the binding constraint and routes
+    /// the next probe to WAL-side fan-in (U9n); a steady lift above
+    /// <c>0</c> identifies the leaf grain as the binding constraint.
+    /// </para>
+    /// </summary>
+    private int _commitInFlight;
+
+    /// <summary>
+    /// Opens a <see cref="CommitInFlightScope"/> that snapshots
+    /// <see cref="_commitInFlight"/> on the
+    /// <see cref="LatticeMetrics.LeafCommitInFlight"/> histogram and
+    /// increments the counter for the lifetime of the returned scope.
+    /// Callers must <see langword="using"/> the scope so the matching
+    /// decrement runs in every commit-path exit (return, exception,
+    /// or split).
+    /// </summary>
+    private CommitInFlightScope EnterCommitScope()
+    {
+        var depthBefore = Interlocked.Increment(ref _commitInFlight) - 1;
+        LatticeMetrics.LeafCommitInFlight.Record(depthBefore, LeafTreeTag());
+        return new CommitInFlightScope(this);
+    }
+
+    /// <summary>
+    /// Decrements the leaf's in-flight commit counter on
+    /// <see cref="IDisposable.Dispose"/>. The scope is paired with
+    /// <see cref="EnterCommitScope"/> via a <c>using</c> statement so
+    /// the decrement runs in the commit path's <c>finally</c>
+    /// regardless of how the commit body exits (normal return,
+    /// exception, or split-induced sibling promotion).
+    /// </summary>
+    private readonly struct CommitInFlightScope : IDisposable
+    {
+        private readonly BPlusLeafGrain _grain;
+        public CommitInFlightScope(BPlusLeafGrain grain) => _grain = grain;
+        public void Dispose() => Interlocked.Decrement(ref _grain._commitInFlight);
+    }
 }

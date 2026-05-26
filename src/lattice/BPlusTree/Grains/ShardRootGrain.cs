@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
@@ -494,6 +495,7 @@ internal sealed partial class ShardRootGrain(
         // so when the local loop throws we rethrow its exception and let
         // the continuation log the forward side separately.
         System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
+        var localApplyTs = Stopwatch.GetTimestamp();
         try
         {
             await SetManyLocalOnlyAsync(entries);
@@ -502,11 +504,24 @@ internal sealed partial class ShardRootGrain(
         {
             localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
         }
+        LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
+            Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
 
         if (localFailure is null)
         {
             // Local succeeded - surface any forward failure to the caller.
-            await forwardTask;
+            var forwardTs = Stopwatch.GetTimestamp();
+            try
+            {
+                await forwardTask;
+            }
+            finally
+            {
+                LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
+                    Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            }
             return;
         }
 
@@ -707,12 +722,20 @@ internal sealed partial class ShardRootGrain(
     {
         for (int attempt = 0; ; attempt++)
         {
+            var rpcTs = Stopwatch.GetTimestamp();
             try
             {
-                return await leaf.SetManyAsync(slice);
+                var result = await leaf.SetManyAsync(slice);
+                LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
+                    Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                return result;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
+                LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
+                    Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
             }
         }
     }

@@ -272,6 +272,39 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.leaf.commit.duration", unit: "ms",
             description: "Per-step latency on the BPlusLeafGrain commit path.");
 
+    /// <summary>
+    /// Histogram of the in-flight commit-count snapshot taken at the
+    /// moment a <c>BPlusLeafGrain</c> commit (either <c>CommitSetAsync</c>
+    /// or <c>CommitSetManyAsync</c>) enters the commit path. The
+    /// recorded value is the number of commits already in flight on the
+    /// same leaf activation at the entry instant (i.e. zero on the very
+    /// first concurrent commit, one on the second, and so on). Tagged
+    /// with <see cref="TagTree"/> so operators can plot leaf-side
+    /// commit concurrency per tree.
+    /// <para>
+    /// Under the default Orleans non-reentrant grain scheduling - the
+    /// shipping shape of <see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/> /
+    /// <see cref="IBPlusLeafGrain.SetManyAsync"/>, neither marked
+    /// <c>[AlwaysInterleave]</c> - this histogram pins at <c>0</c>: the
+    /// next commit cannot enter until the current one has returned. A
+    /// non-zero quantile therefore signals one of two things:
+    /// (i) a future change has applied <c>[AlwaysInterleave]</c> to the
+    /// leaf-side commit entrypoint and disjoint-key sub-batches now
+    /// overlap on the same leaf activation, or
+    /// (ii) a reentrant-by-design code path (saga terminal write under
+    /// commit-log scope) routed back through the commit-set path while
+    /// an outer commit was still awaiting a WAL append.
+    /// Either reading is informative for the U9m / leaf-side-commit-concurrency
+    /// probe in <c>scaling.md</c>: a steady pin at <c>0</c> falsifies
+    /// the leaf turn-queue hypothesis and routes the next probe to
+    /// WAL-side fan-in (U9n); a steady lift above <c>0</c> identifies
+    /// the leaf grain as the binding constraint.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> LeafCommitInFlight =
+        Meter.CreateHistogram<int>("orleans.lattice.leaf.commit.in_flight", unit: "{commit}",
+            description: "In-flight commit count snapshot at the moment a BPlusLeafGrain commit enters the commit path.");
+
     // --- Cache instruments (LeafCacheGrain) --------------------------------------
 
     /// <summary>
@@ -687,6 +720,56 @@ public static class LatticeMetrics
     public static readonly Histogram<double> SagaWaitSerialGap =
         Meter.CreateHistogram<double>("orleans.lattice.saga.wait.serial_gap", unit: "ms",
             description: "Wall-clock gap between consecutive per-key awaits inside an atomic-write saga.");
+
+    // --- Shard-root SetManyAsync split instruments ----------------
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside the local-apply path
+    /// of <c>ShardRootGrain.SetManyAsync</c>: from the moment the
+    /// shard-root receives a batch to the moment every per-leaf
+    /// <c>IBPlusLeafGrain.SetManyAsync</c> dispatched by
+    /// <c>SetManyLocalOnlyAsync</c> has returned. Tagged with
+    /// <see cref="TagTree"/>. Includes per-leaf RPC scheduling, leaf
+    /// turn-queue wait, leaf commit, WAL append, and the WAL provider's
+    /// phase-2 commit. Excludes the lattice-grain's per-shard bucket
+    /// build and event publish, and excludes the online-resize
+    /// shadow-forward task (measured separately by
+    /// <see cref="ShardRootSetManyShadowForwardDuration"/>).
+    /// </summary>
+    public static readonly Histogram<double> ShardRootSetManyLocalApplyDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.local_apply.duration", unit: "ms",
+            description: "Wall-clock ms inside ShardRootGrain.SetManyLocalOnlyAsync (per-leaf fan-out, leaf commit, WAL append + phase 2).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent awaiting the trailing
+    /// shadow-forward task in <c>ShardRootGrain.SetManyAsync</c>.
+    /// Tagged with <see cref="TagTree"/>. Expected to be near zero in
+    /// steady state (no active resize): the shadow-forward task
+    /// completes synchronously via <c>TrackShadowForward</c>'s
+    /// no-resize fast-path. Material values indicate either an active
+    /// online resize or an unexpected wait on the resize tracker.
+    /// </summary>
+    public static readonly Histogram<double> ShardRootSetManyShadowForwardDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.shadow_forward.duration", unit: "ms",
+            description: "Wall-clock ms awaiting the shadow-forward task at the tail of ShardRootGrain.SetManyAsync.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms for a single per-leaf
+    /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
+    /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via
+    /// <c>DispatchLeafBatchWithRetryAsync</c>. Recorded per attempt
+    /// (including retries) and per dispatched leaf, so for a single
+    /// shard-root <c>SetManyAsync(N)</c> there are up to one
+    /// observation per per-leaf bucket. Tagged with <see cref="TagTree"/>.
+    /// This is the outbound-call view from the shard-root: it includes
+    /// Orleans grain-schedule wait, per-leaf turn-queue wait, leaf
+    /// commit, WAL append, and WAL phase-2. Combined with the leaf-side
+    /// <c>leaf.commit.duration</c> aggregate, the residual gap localises
+    /// pre-turn scheduling cost.
+    /// </summary>
+    public static readonly Histogram<double> ShardRootSetManyLeafRpcDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.leaf_rpc.duration", unit: "ms",
+            description: "Wall-clock ms per per-leaf IBPlusLeafGrain.SetManyAsync RPC dispatched from ShardRootGrain.SetManyLocalOnlyAsync.");
 
     // --- Retroactive shard-split sweep instruments ----------------
 
