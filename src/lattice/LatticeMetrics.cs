@@ -604,6 +604,33 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.wal.shard.dispatch.duration", unit: "ms",
             description: "Wall-clock duration of the cross-grain IWalShardGrain.AppendAsync / AppendBatchAsync RPC, observed by WalCommitLogWriter.");
 
+    /// <summary>
+    /// Histogram of the per-dispatch entry count handed to
+    /// <c>IWalShardGrain.AppendAsync</c> / <c>AppendBatchAsync</c>,
+    /// observed by <c>WalCommitLogWriter</c> at the caller side.
+    /// Tagged with <see cref="TagTree"/>, <see cref="TagShard"/>
+    /// (the WAL partition index), and the Phase A attribution tags
+    /// <see cref="TagWalPartitions"/> and
+    /// <see cref="TagWalMaxPendingBatches"/>. The single-entry
+    /// overload records <c>1</c>; the batched overload records the
+    /// per-partition slice size that <c>AppendForPartitionAsync</c>
+    /// forwards as one <c>AppendBatchAsync</c> call.
+    /// <para>
+    /// Pair with <see cref="WalAppendBatchEntries"/> (the WAL grain's
+    /// observed per-flush packing) to detect a missing
+    /// cross-AppendBatchAsync coalescing window: if the writer-side
+    /// dispatch entry count equals the WAL grain's per-flush packing
+    /// under steady-state fan-in, each leaf's dispatch flushes as its
+    /// own batch and concurrent leaves never merge into a single
+    /// pending batch (the <c>WalShardGrain</c> kick predicate
+    /// <c>isLast == true</c> triggers a flush at the end of every
+    /// caller's batch).
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> WalShardDispatchEntries =
+        Meter.CreateHistogram<int>("orleans.lattice.wal.shard.dispatch.entries", unit: "{entry}",
+            description: "Per-dispatch entry count handed to IWalShardGrain.AppendAsync / AppendBatchAsync, observed by WalCommitLogWriter.");
+
     // --- Storage-provider commit instruments --------------------------------
 
     /// <summary>

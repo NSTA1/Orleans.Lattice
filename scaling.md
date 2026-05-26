@@ -1380,6 +1380,66 @@ So the bottleneck has localised one level above the WAL grain, on the **leaf-gra
 **Step-8b next.** Read `BPlusLeafGrain.CommitSetAsync` and `WalCommitLogWriter.AppendAsync` end-to-end to find the per-entry-await loop, decide whether the right lever is leaf-side batching (preferred: keeps the writer's contract narrow and lets each leaf coalesce its own commit window without cross-leaf cooperation) or writer-side coalescing (a per-shard caller-side queue with a bounded-await collapse), then surface a per-leaf-commit `wal.append.entries_per_commit` histogram to confirm the loop count is what we think it is before implementing.
 
 
+### U9p step 8b - writer-side dispatch-size falsifier (10000:5)
+
+**Hypothesis.** The step-8a interpretation claimed the regression was caused by a leaf-side per-entry await loop fragmenting WAL appends into single-entry calls. Before implementing leaf-side batching, falsify that claim by comparing the writer-side per-dispatch entry count to the WAL-grain per-flush entry count. If `wal.shard.dispatch.entries` matches `wal.append.batch_entries` in shape and count, the writer is already sending batches and the WAL grain is already packing them, so the step-8a hypothesis is wrong and the regression must come from somewhere else (per-partition skew, provider tail, or caller-side timeout shape).
+
+**Method.** Add a new histogram `orleans.lattice.wal.shard.dispatch.entries` on `WalCommitLogWriter` that records the slice size for every dispatch (1 for `AppendAsync`, `entries.Count` for each partition slice in `AppendManyAsync`), with the same `tree_id` + `wal_partition` tag tuple as `wal.shard.dispatch.duration`. Allowlist it in `PhaseADiagnosticReporter`. Build, run the full non-Chaos suite, redeploy the benchmark image locally, then re-run the ladder at one rung `10000:5` for 120 s with the same knobs as step 8a. Capture artifacts under `*-U9p-step8b.*`.
+
+**Source inspection result (before the rerun).** End-to-end read of the write path confirmed the benchmark already drives the batched API at every layer: `TcpIngestService.FlushAsync` -> `lattice.SetManyAsync(batch)` -> `LatticeGrain.SetManyAsync` (groups by shard, parallel fan-out) -> `IShardRootGrain.SetManyAsync` -> `leaf.SetManyAsync(slice)` -> `BPlusLeafGrain.CommitSetManyAsync` -> `writer.AppendManyAsync(walEntries)`. The step-8a "per-entry await loop" hypothesis was wrong by construction: that loop does not exist on this path. The only per-entry `await writer.AppendAsync(entry)` is in `BPlusLeafGrain.CommitSetAsync`, which the benchmark never calls.
+
+**Step-8b ladder result (real Azure Tables, single rung `10000:5`, 120 s).** Steady-state avg **1,591 -> 1,316/s (-17.3%)**; final avg **1,497 -> 1,324/s (-11.6%)**; total written **178,801 -> 158,888 (-11.1%)**; total failed **0 -> 16,291**. The new failure population is a clean signal: every failure is an Orleans `TimeoutException` after 30 s on `ILattice.SetManyAsync`, surfaced from `TcpIngestService.FlushAsync` (`Program.cs:line 750`). Run-to-run variance plus the new caller-side timeout pressure (16 k retransmits via the producer reconnect path) account for the small step-8a -> step-8b drift; the diagnosis below is unchanged whether we use the step-8a or step-8b sample.
+
+**Falsifier comparison (per WAL shard, 120 s window):**
+
+| instrument                          | shard | count  | p50 entries | p99 entries |
+| ----------------------------------- | ----- | ------ | ----------- | ----------- |
+| `wal.shard.dispatch.entries`        | 0     | 396    | 5           | 13          |
+| `wal.append.batch_entries`          | 0     | 376    | 5           | 13          |
+| `wal.shard.dispatch.entries`        | 1     | 488    | 4           | 13          |
+| `wal.append.batch_entries`          | 1     | 432    | 4           | 13          |
+| `wal.shard.dispatch.entries`        | 2     | 501    | 4           | 13          |
+| `wal.append.batch_entries`          | 2     | 421    | 4           | 13          |
+| `wal.shard.dispatch.entries`        | 3     | 472    | 4           | 13          |
+| `wal.append.batch_entries`          | 3     | 374    | 4           | 12          |
+| `wal.shard.dispatch.entries`        | 4     | 390    | 5           | 12          |
+| `wal.append.batch_entries`          | 4     | 361    | 5           | 12          |
+| `wal.shard.dispatch.entries`        | 5     | 433    | 4           | 12          |
+| `wal.append.batch_entries`          | 5     | 399    | 5           | 12          |
+| `wal.shard.dispatch.entries`        | 7     | 403    | 5           | 11          |
+| `wal.append.batch_entries`          | 7     | 380    | 5           | 11          |
+
+`dispatch.entries` and `append.batch_entries` are the **same distribution, same count (±10%)** on every shard. **The writer is not fragmenting and the WAL grain is not breaking up batches.** The step-8a "per-entry-await loop" hypothesis is falsified.
+
+**Where the time actually goes (last-window numbers, per WAL shard):**
+
+| instrument                          | tag        | p50              | p99              | p999              | count/shard |
+| ----------------------------------- | ---------- | ---------------- | ---------------- | ----------------- | ----------- |
+| `wal.shard.dispatch.duration`       | shards 0-7 | **230-2,873 ms** | **660-3,764 ms** | **820-4,199 ms**  | 390-530     |
+| `wal.append.provider.duration`      | shards 0-7 | **18-19 ms**     | **31-43 ms**     | **64-188 ms** (one shard 530 ms) | 362-433 |
+| `wal.append.queue_depth`            | shards 0-7 | **1**            | **1-2**          | 1-2               | 1-2 samples |
+| `wal.append.turn_wait`              | shards 0-7 | **11-17 ms**     | **17-31 ms**     | 17-33 ms          | 1-2 samples |
+| `wal.append.in_flight`              | shards 0-7 | **0**            | **0**            | 0                 | -           |
+
+**Interpretation - corrected.** Three signals localise the true limiter:
+
+1. **The WAL coalescer is healthy.** `dispatch.entries` ≈ `append.batch_entries` proves the leaf-side batched path is end-to-end intact and the WAL grain is packing what it receives. `WalMaxPendingBatches` and the `isLast`-driven flush kick are not the binding constraint; raising the cap or removing `isLast` would have no effect under this call shape.
+
+2. **The cap is structurally unreachable for a different reason than step-7 thought.** `wal.append.in_flight = 0` everywhere because `wal.append.queue_depth` p99 = 1-2 - there is rarely more than one batched dispatch waiting at a WAL grain at the same time. Each `LatticeGrain.SetManyAsync` shards its keys across 8 partitions, so 4,096 caller-side entries become ~512 entries per partition, which becomes one batched `AppendBatchAsync` per partition. With `FlushConcurrency=8` caller-side, the WAL grain sees ~one batch at a time per partition - exactly the queue_depth ≈ 1 signal. The cap can only engage if multiple concurrent caller batches arrive in the same grain turn, which the benchmark's per-partition serialisation prevents.
+
+3. **The real limiter is per-partition skew × Azure-Tables provider tail × 30 s caller timeout.** `wal.shard.dispatch.duration` p99 ranges from 660 ms (shards 0/4/7) to 3,764 ms (shard 6) - a **5.7x worst/best fan-out**. Per-partition dispatch *count* in 120 s is 390-530, also skewed ~1.35x. Inside the WAL grain, `wal.append.provider.duration` p99 ≈ 35 ms but p999 jumps to 100-530 ms on the worst shards - Azure Tables tail latency under bursty fan-in. Each leaf-side `await leaf.SetManyAsync(slice)` blocks until its slowest partition's provider call returns, so the caller-side `ILattice.SetManyAsync` latency is the **max** of 8 per-partition tails, not the mean. When the worst partition's flush queue stalls long enough for the caller-side `await` to cross 30 s, Orleans times out the `SetManyAsync` RPC and the producer counts that batch as failed. 16,291 / 4,096 ≈ 4 timed-out batches per second once the silo is saturated.
+
+**Step-8c next.** The remaining levers are call-shape and tail-hiding, not WAL coalescing. Ranked by expected impact and cost:
+
+- **(a) Cap or eliminate per-partition skew.** `LatticeGrain.SetManyAsync` currently fans out by `KeyHash mod WalPartitions`. Under a vehicle-id keyspace this is uniform in count but not in *commit weight* - some partitions cluster on hot shards/leaves. Either (i) raise `WalPartitions` from 8 to 16/32 to reduce per-partition variance, or (ii) measure `wal.append.provider.duration.count` per partition over a longer window to confirm the worst shard is structurally hot, not transiently hot.
+- **(b) Decouple caller timeout from worst-partition tail.** The 30 s Orleans default on `SetManyAsync` is the immediate cause of the 16 k failures. Either (i) raise `ResponseTimeout` for the lattice grain method, or (ii) make `LatticeGrain.SetManyAsync` partition-level fire-and-async-confirm so the caller-side RPC returns as soon as the lattice has accepted (durably acknowledged into the WAL queue) rather than after all per-partition flushes drain. The latter is the larger change but matches normal async-write semantics.
+- **(c) Add a `wal.shard.dispatch.duration` breakdown.** The big number to date is `dispatch.duration` (p99 3.8 s) minus `provider.duration` + `turn_wait` (~50 ms) ≈ 3.7 s unaccounted-for *inside* the WAL grain - the same gap that misled step-8a. Surface `wal.shard.dispatch.queue_wait` (time from caller-side dispatch to the grain accepting the call) separately from in-grain processing, to confirm whether the gap is per-partition queue contention on the grain front-door rather than provider tail.
+
+Option (a) is the cheapest probe and the right next step. Options (b) and (c) follow depending on what (a) shows. The C-family direction (multi-partition WAL on real Azure with bin-packed shards) remains a separate next-axis.
+
+**Artifacts.** `benchmark/azure-throughput/.run/silo-U9p-step8b.log`, `producer-U9p-step8b.log`, `deploy-U9p-step8b.log`, `scripts/.ladder-results-U9p-step8b.csv`, `scripts/.ladder-phaseA-U9p-step8b.csv`. New observability surface: `LatticeMetrics.WalShardDispatchEntries` histogram + `PhaseADiagnosticReporter` allowlist entry for `orleans.lattice.wal.shard.dispatch.entries`.
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
@@ -1391,7 +1451,7 @@ So the bottleneck has localised one level above the WAL grain, on the **leaf-gra
 
 **Progress**: 0% [░░░░░░░░░░]
 
-**Last Updated**: 2026-05-24 17:30:00
+**Last Updated**: 2026-05-26 11:20:00
 
 ## 📝 Plan Steps
 -  **Read `src/lattice/BPlusTree/Grains/WalShardGrain.cs` end-to-end, `src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs` (foreground commit path, especially `CommitSetAsync` and `PublishDigestUpwardAsync`), `src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs`, `src/lattice.storage.azuretable/AzureTableWalStorageProvider.cs` (and `PhaseTwoWorker`), and `src/lattice/BPlusTree/Options/LatticeOptions.cs` - confirm every choke point listed in *Architectural context*; record any deviation from the plan's assumptions before writing code.**

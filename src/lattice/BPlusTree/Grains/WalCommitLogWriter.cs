@@ -71,7 +71,7 @@ internal sealed class WalCommitLogWriter(
         }
         finally
         {
-            RecordDispatchDuration(stamped.TreeId, partition, perTree, dispatchStartTicks);
+            RecordDispatchOutcome(stamped.TreeId, partition, perTree, entryCount: 1, dispatchStartTicks);
         }
     }
 
@@ -172,19 +172,19 @@ internal sealed class WalCommitLogWriter(
         }
         finally
         {
-            RecordDispatchDuration(treeId, partition, perTree, dispatchStartTicks);
+            RecordDispatchOutcome(treeId, partition, perTree, entryCount: entries.Count, dispatchStartTicks);
         }
     }
 
-    private static void RecordDispatchDuration(string treeId, int partition, LatticeOptions perTree, long startTicks)
+    private static void RecordDispatchOutcome(string treeId, int partition, LatticeOptions perTree, int entryCount, long startTicks)
     {
         var elapsedMs = Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
-        LatticeMetrics.WalShardDispatchDuration.Record(
-            elapsedMs,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagWalPartitions, perTree.WalPartitions),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagWalMaxPendingBatches, perTree.WalMaxPendingBatches));
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition);
+        var walPartitionsTag = new KeyValuePair<string, object?>(LatticeMetrics.TagWalPartitions, perTree.WalPartitions);
+        var walMaxPendingTag = new KeyValuePair<string, object?>(LatticeMetrics.TagWalMaxPendingBatches, perTree.WalMaxPendingBatches);
+        LatticeMetrics.WalShardDispatchDuration.Record(elapsedMs, treeTag, shardTag, walPartitionsTag, walMaxPendingTag);
+        LatticeMetrics.WalShardDispatchEntries.Record(entryCount, treeTag, shardTag, walPartitionsTag, walMaxPendingTag);
     }
 
     /// <summary>

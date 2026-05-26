@@ -96,6 +96,18 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // wait is on the WAL activation's turn-queue ahead of a
         // millisecond-scale provider call.
         "orleans.lattice.wal.shard.dispatch.duration",
+        // U9p step 8b: per-dispatch entry count handed to
+        // `IWalShardGrain.AppendAsync` / `AppendBatchAsync`, recorded
+        // by `WalCommitLogWriter` co-located with
+        // `wal.shard.dispatch.duration`. Pair with
+        // `wal.append.batch_entries` to falsify the cross-leaf
+        // coalescing hypothesis: when the writer-side dispatch entry
+        // count equals the WAL grain's per-flush packing under
+        // steady-state fan-in, each leaf's slice flushes as its own
+        // batch and concurrent leaves never merge (the `isLast` kick
+        // predicate inside `WalShardGrain.AppendBatchAsync` triggers
+        // a flush at the end of every caller's batch).
+        "orleans.lattice.wal.shard.dispatch.entries",
         // U9o step 2: benchmark-local TCP-receive / drain instruments.
         // Live on the `azure.throughput.bench` meter so they cannot
         // leak into the public lattice surface, but ride the same
