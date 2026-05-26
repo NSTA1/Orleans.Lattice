@@ -1346,6 +1346,40 @@ If `local_apply_ms` consumes essentially all 16 s, the cost lives in the leaf/WA
 
 **U9p step 8 next.** To break past ~3 k/s on this rung the next lever is either (a) raise the rung from `5000:5` to `10000:5` / `20000:5` to push real concurrency at the WAL grain and re-measure - if `in_flight` rises and throughput climbs further, the step-7 change is doing exactly what was designed; if `in_flight` stays at 0 even under deeper fan-in, (b) the next probe surfaces a `wal.append.flush_kick_to_provider_call` finer-grained timer inside `WalShardGrain` to localise the residual per-flush overhead, or (c) coalesce the per-entry `acks[i].Task` awaits in `AppendBatchAsync` so the grain-turn dead-time between consecutive batches from the same caller collapses. Option (a) is the cheapest probe and is the right next step. The C-family direction (multi-partition WAL on real Azure) remains a separate next-axis once the per-shard pack-ratio is healthy.
 
+### U9p step 8a - demand-side probe (10000:5)
+
+**Hypothesis.** Step 7 made `WalMaxPendingBatches` reachable, but the step-7 ladder result kept `wal.append.in_flight` at 0 because the `5000:5` rung was provider-limited at ~50 flushes/s per shard, faster than per-shard inter-arrival - so the cap could not engage. Step 8a doubles the rung to `10000:5` (8 vehicles per leaf, ~65 leaves per shard) to drive deep fan-in into each `WalShardGrain` activation and falsify or confirm that the cap engages under real concurrency.
+
+**Method.** Reuse the step-7 image (`-SkipBuild`) and re-run the ladder at one rung `10000:5` for 120 s with the same knobs (`walPartitions=8`, `walMaxPending=8`, `flushConcurrency=8`, `batchSize=4096`, `phase2CoalescingMs=0`, `flushMs=50`). All other parameters identical to step 7. Capture silo log, producer log, and the structured Phase A CSV under `*-U9p-step8a.*`.
+
+**Step-8a ladder result (real Azure Tables, single rung `10000:5`, 120 s).** Steady-state avg **2,969 -> 1,591/s (-46%)**; final avg **2,732 -> 1,497/s (-45%)**; total written **327,129 -> 178,801**; total failed **0 -> 0** (clean overload, not error-driven). Steady min/max **0 .. 10,850/s**: throughput shape is a sawtooth - the silo produces ~4,096 entries in one 1-s window then 0/s for 1-2 s, then another ~4,096, indefinitely. The sawtooth period is exactly `batchSize=4096`; the producer is now feeding the silo faster than the silo can drain the batch, so the bench measures the silo's batch-drain interval directly.
+
+**Last-window numbers (t = 119.7 s, per WAL shard):**
+
+| instrument                          | tag           | p50              | p99              | min        | max       | count/shard |
+| ----------------------------------- | ------------- | ---------------- | ---------------- | ---------- | --------- | ----------- |
+| `wal.shard.dispatch.duration`       | shards 0-7    | **365-2,329 ms** | **777-3,055 ms** | 10-53 ms   | 777-3,055 ms | 504-625     |
+| `leaf.commit.duration`              | `phase=wal`   | **2,367 ms**     | **3,055 ms**     | 56 ms      | 3,055 ms     | 539         |
+| `leaf.commit.duration`              | `phase=apply` | 0.05 ms          | 0.30 ms          | 0 ms       | 2.19 ms   | 539         |
+| `leaf.commit.duration`              | `phase=digest`| 0.20 ms          | 1.75 ms          | 0 ms       | 6.93 ms   | 538         |
+| `leaf.commit.duration`              | `phase=observer`| 0.00 ms        | 0.00 ms          | 0 ms       | 0.02 ms   | 539         |
+| `wal.append.provider.duration`      | shards 0-7    | **16.19-16.63 ms** | **48-78 ms**   | 9-10 ms    | 121-270 ms   | 466-500     |
+| `wal.append.batch_entries`          | shards 0-7    | **4.00**         | 11-18            | 1          | 13-18        | 465-499     |
+| `wal.append.queue_depth`            | shards 0-7    | **1**            | 1-4              | 1          | 1-4       | 465-499     |
+| `wal.append.turn_wait`              | shards 0-7    | **12-14 ms**     | 13-78 ms         | 11-13 ms   | 13-78 ms  | 1-4         |
+| `wal.append.in_flight`              | shards 0-7    | **0**            | **0**            | 0          | 0         | 465-499     |
+
+**Interpretation.** Two clean signals fall out simultaneously:
+
+1. **`wal.append.in_flight = 0` everywhere, on every shard.** The step-7 admission predicate is now reachable in the unit test under synchronous fan-in but is **structurally unreachable in production** under the current call shape. The reason is `BPlusLeafGrain.CommitSetAsync` does `await writer.AppendAsync(entry)` synchronously per entry - a single leaf cannot have a second `AppendAsync` in flight to the same WAL grain at the same time. With `WalShardGrain` non-reentrant, the leaf's `await` serialises the call so the grain sees one caller, one entry, one flush at a time. The cap is moot under this call shape - `WalMaxPendingBatches > 1` is a no-op as long as each leaf awaits its own append before issuing the next one.
+
+2. **`wal.shard.dispatch.duration` p99 = 3 s while `wal.append.provider.duration` p99 = 70 ms.** The ~2,900 ms gap between dispatch (caller-side) and provider+turn_wait (~85 ms) sits *inside* the WAL grain's serial entry loop. `wal.append.batch_entries` p50 = **4** (down from p50 = 8 at the lighter rung) - the coalescer is packing *less* under deeper fan-in, not more, because each leaf's serial-await throttles the WAL grain to one-entry-per-flush. The grain is doing ~470 single-entry flushes per shard per 10 s window, each carrying p50 = 4 entries, for a per-shard rate of ~190 entries/s and an aggregate of ~1,500/s across 8 shards - which matches the measured 1,591/s steady-state exactly.
+
+So the bottleneck has localised one level above the WAL grain, on the **leaf-grain-to-WAL-grain per-entry await loop**: `for (var i = 0; i < entries.Count; i++) await writer.AppendAsync(entries[i])`. The step-7 fix was correct as a pre-condition (so that *if* a leaf ever sent two entries concurrently the cap could absorb them) but it cannot itself break the per-entry serial pattern. The next lever has to either (a) make `BPlusLeafGrain` batch its WAL appends into a single `AppendBatchAsync(IReadOnlyList<WalRecord>)` so the WAL grain receives one fan-in event per leaf-commit instead of N, or (b) coalesce on the writer side so consecutive `AppendAsync` calls from the same leaf-commit aggregate into one batched RPC under the hood.
+
+**Step-8b next.** Read `BPlusLeafGrain.CommitSetAsync` and `WalCommitLogWriter.AppendAsync` end-to-end to find the per-entry-await loop, decide whether the right lever is leaf-side batching (preferred: keeps the writer's contract narrow and lets each leaf coalesce its own commit window without cross-leaf cooperation) or writer-side coalescing (a per-shard caller-side queue with a bounded-await collapse), then surface a per-leaf-commit `wal.append.entries_per_commit` histogram to confirm the loop count is what we think it is before implementing.
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
