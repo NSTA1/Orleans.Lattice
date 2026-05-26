@@ -22,32 +22,71 @@ internal sealed partial class BPlusInternalGrain
     /// <inheritdoc />
     public async Task SetParentAsync(GrainId? parentId)
     {
-        if (state.State.ParentId == parentId) return;
-
-        var prev = state.State.ParentId;
-        state.State.ParentId = parentId;
+        // U9p c2-vi-followup: serialise against AcceptSplitCoreAsync's
+        // state writes through the same per-activation _splitGate. The
+        // hazard is that c2-vi's [AlwaysInterleave] on AcceptSplitAsync
+        // lets it run on the activation while other public methods are
+        // also live; this method writes state.State.ParentId and races
+        // a concurrent AcceptSplitCoreAsync's writes on Children /
+        // SplitState. The gate is non-reentrant; callers of
+        // SetParentAsync are cross-grain RPCs that target a child grain
+        // (different activation, different SemaphoreSlim), so this is
+        // not a self-recursive acquisition.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await state.WriteStateAsync();
-        }
-        catch
-        {
-            state.State.ParentId = prev;
-            throw;
-        }
+            if (state.State.ParentId == parentId) return;
 
-        // No reentrant callback into the new parent. The internal-node
-        // seeding path that owns this re-parent operation already
-        // dispatches a pull of GetChildDigestSnapshotAsync against this
-        // node (or the next OnChildDigestPublishedAsync drives the
-        // refresh), so a republish here would deadlock against the
-        // parent's still-running mutation frame.
+            var prev = state.State.ParentId;
+            state.State.ParentId = parentId;
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.ParentId = prev;
+                throw;
+            }
+
+            // No reentrant callback into the new parent. The internal-node
+            // seeding path that owns this re-parent operation already
+            // dispatches a pull of GetChildDigestSnapshotAsync against this
+            // node (or the next OnChildDigestPublishedAsync drives the
+            // refresh), so a republish here would deadlock against the
+            // parent's still-running mutation frame.
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
     }
 
     /// <inheritdoc />
     public async Task OnChildDigestPublishedAsync(GrainId childId, ChildDigestSnapshot newSnapshot)
     {
-        await ApplyChildSnapshotAsync(childId, newSnapshot);
+        // U9p c2-vi-followup: serialise against every other state-write
+        // path on this activation. ApplyChildSnapshotAsync mutates
+        // state.State.ChildDigests / SubtreeProjectionHash /
+        // SubtreeEntryCount / SubtreeHighestCheckpointOffset and then
+        // awaits state.WriteStateAsync(); without the gate, an
+        // interleaved AcceptSplitCoreAsync (marked [AlwaysInterleave])
+        // can have a pending WriteStateAsync against the same row in
+        // flight, and whichever returns second gets a stale-etag error.
+        // The same internal helper ApplyChildSnapshotAsync is also
+        // invoked from SeedChildParentAsync inside AcceptSplitCoreAsync
+        // (which already holds the gate), so we do NOT push the gate
+        // down into the helper - we acquire it here at the public entry
+        // point only.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await ApplyChildSnapshotAsync(childId, newSnapshot);
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
     }
 
     /// <summary>
