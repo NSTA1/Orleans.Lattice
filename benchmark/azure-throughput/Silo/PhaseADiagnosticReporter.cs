@@ -121,6 +121,13 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // the silo flusher. Confirms the ~18 s/call inference from U9o
         // step 2 directly rather than via gate-wait arithmetic.
         "azure.throughput.bench.lattice.set_many.duration_ms",
+        // U9p step 8c-c-iv-a: retry density per terminal SetManyAsync
+        // outcome (0 on first-try success). Reading this off the
+        // phase-A scraper is the direct way to size the cold-start
+        // OrleansMessageRejectionException storm without relying on
+        // the failed-batch counter (which is zero by design once the
+        // retry policy absorbs the transient class).
+        "azure.throughput.bench.lattice.set_many.retry_attempts",
     };
 
     /// <summary>
