@@ -138,8 +138,32 @@ $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_
 # ClientMessagingOptions.ResponseTimeout in Silo/Program.cs.
 $responseTimeoutSec = if ($env:BENCH_RESPONSE_TIMEOUT_SEC) { $env:BENCH_RESPONSE_TIMEOUT_SEC }
                       else { '30' }
+# Leaf/internal/atomic grain checkpoint storage. BENCH_LEAF_STORAGE_KIND selects
+# the IGrainStorage backing the lattice's leaf/internal/atomic state:
+#   "azure" (default) - production-shape Azure Table grain storage. Reuses the
+#                       same storage account + credential as the WAL provider
+#                       and writes to the table named by BENCH_LEAF_STORAGE_TABLE
+#                       (default "OrleansLatticeGrainState"). This is the
+#                       production-viable baseline.
+#   "memory"          - Orleans.Persistence.Memory. Diagnostic-only A/B lever
+#                       (step 8c-c-i exposed its NumStorageGrains=10 default
+#                       as a chokepoint once the WAL pipeline was uncorked).
+#   "null"            - benchmark-only NullGrainStorage. Removes persistence
+#                       from the measurement window to expose the WAL ceiling;
+#                       NOT production-shape.
+# BENCH_LEAF_STORAGE_TABLE selects the Azure Table name used when
+# leafStorageKind=azure (default "OrleansLatticeGrainState").
+# BENCH_LEAF_STORAGE_NUM_GRAINS overrides MemoryGrainStorageOptions
+# .NumStorageGrains when leafStorageKind=memory (0 = keep the Orleans
+# default of 10).
+$leafStorageKind = if ($env:BENCH_LEAF_STORAGE_KIND) { $env:BENCH_LEAF_STORAGE_KIND }
+                   else { 'azure' }
+$leafStorageTable = if ($env:BENCH_LEAF_STORAGE_TABLE) { $env:BENCH_LEAF_STORAGE_TABLE }
+                    else { 'OrleansLatticeGrainState' }
+$leafStorageNumGrains = if ($env:BENCH_LEAF_STORAGE_NUM_GRAINS) { $env:BENCH_LEAF_STORAGE_NUM_GRAINS }
+                        else { '0' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec leafStorageKind=$leafStorageKind leafStorageTable=$leafStorageTable leafStorageNumGrains=$leafStorageNumGrains skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -345,6 +369,12 @@ properties:
             value: '$totalDuration'
           - name: BENCH_RESPONSE_TIMEOUT_SEC
             value: '$responseTimeoutSec'
+          - name: BENCH_LEAF_STORAGE_KIND
+            value: '$leafStorageKind'
+          - name: BENCH_LEAF_STORAGE_TABLE
+            value: '$leafStorageTable'
+          - name: BENCH_LEAF_STORAGE_NUM_GRAINS
+            value: '$leafStorageNumGrains'
           - name: AZURE_CLIENT_ID
             value: $((az identity show --name $ctx.Identity --resource-group $ctx.ResourceGroup --query clientId --output tsv))
     - name: producer

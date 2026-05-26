@@ -19,6 +19,7 @@
     <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
     <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />
     <PackageReference Include="Microsoft.Orleans.Server" Version="10.1.0" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.1.0" />
     <PackageReference Include="Azure.Identity" Version="1.13.1" />
   </ItemGroup>
 

@@ -95,6 +95,39 @@
 //                           latency. Applied to both SiloMessagingOptions and
 //                           ClientMessagingOptions so in-silo TcpIngestService callers
 //                           see the same lift.
+//   BENCH_LEAF_STORAGE_KIND IGrainStorage implementation used for the lattice
+//                           leaf/internal/atomic grain checkpoints. Allowed values:
+//                             "azure" (default) - production-shape Azure Table grain
+//                                                 storage (Microsoft.Orleans.Persistence
+//                                                 .AzureStorage). Reuses BENCH_STORAGE_URI
+//                                                 / BENCH_STORAGE_CONN; writes to the
+//                                                 table named by BENCH_LEAF_STORAGE_TABLE
+//                                                 (default "OrleansLatticeGrainState").
+//                                                 This is what a real production host
+//                                                 would wire; the benchmark uses it as
+//                                                 the baseline so durable-storage cost
+//                                                 stays on the critical path.
+//                             "memory"          - Orleans.Persistence.Memory. Kept as a
+//                                                 diagnostic-only lever; ships with
+//                                                 NumStorageGrains=10 by default, which
+//                                                 became the chokepoint in step 8c-c-i
+//                                                 (2074 "Unable to create local
+//                                                 activation" rejections). Useful for
+//                                                 isolating in-process latency from
+//                                                 durable-IO latency in a controlled A/B.
+//                             "null"            - benchmark-only NullGrainStorage that
+//                                                 no-ops every WriteStateAsync /
+//                                                 ReadStateAsync. Diagnostic lever from
+//                                                 step 8c-c-ii Run B; removes persistence
+//                                                 entirely so the WAL's true ceiling
+//                                                 becomes visible. NOT production-shape.
+//   BENCH_LEAF_STORAGE_TABLE Azure Table name for the leaf/internal/atomic grain
+//                           checkpoints (default "OrleansLatticeGrainState"). Only
+//                           consulted when BENCH_LEAF_STORAGE_KIND=azure.
+//   BENCH_LEAF_STORAGE_NUM_GRAINS
+//                           Memory storage NumStorageGrains override (default 0 = keep
+//                           the Orleans library default of 10). Only consulted when
+//                           BENCH_LEAF_STORAGE_KIND=memory.
 
 using System.Diagnostics;
 using System.Net;
@@ -150,6 +183,15 @@ var phaseTwoCoalescingMs = ReadIntAllowZero("BENCH_WAL_PHASE2_COALESCING_WINDOW_
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
 var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
+var leafStorageKind = (Environment.GetEnvironmentVariable("BENCH_LEAF_STORAGE_KIND") ?? "azure").Trim().ToLowerInvariant();
+if (leafStorageKind is not ("azure" or "memory" or "null"))
+{
+    Console.Error.WriteLine($"[silo] FATAL: BENCH_LEAF_STORAGE_KIND='{leafStorageKind}' is invalid; expected 'azure', 'memory', or 'null'.");
+    Environment.Exit(2);
+    return;
+}
+var leafStorageTable = Environment.GetEnvironmentVariable("BENCH_LEAF_STORAGE_TABLE") ?? "OrleansLatticeGrainState";
+var leafStorageNumGrains = ReadIntAllowZero("BENCH_LEAF_STORAGE_NUM_GRAINS", 0);
 
 if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageConn))
 {
@@ -158,7 +200,7 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
     return;
 }
 
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -224,8 +266,53 @@ builder.UseOrleans(silo =>
     // compaction reminder is purely opportunistic.
     silo.UseInMemoryReminderService();
 
-    silo.AddMemoryGrainStorageAsDefault();
-    silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name));
+    // Leaf/internal/atomic grain checkpoint storage. The benchmark defaults to
+    // a production-shape Azure Table provider (Microsoft.Orleans.Persistence
+    // .AzureStorage) so the measured throughput keeps durable-IO latency on
+    // the critical path; "memory" and "null" remain as diagnostic-only A/B
+    // levers (see the BENCH_LEAF_STORAGE_KIND comment block at the top of
+    // this file for the rationale).
+    switch (leafStorageKind)
+    {
+        case "null":
+            silo.AddNullGrainStorageAsDefault();
+            silo.AddLattice((s, name) => s.AddNullGrainStorage(name));
+            break;
+
+        case "memory":
+            if (leafStorageNumGrains > 0)
+            {
+                silo.AddMemoryGrainStorageAsDefault(o => o.NumStorageGrains = leafStorageNumGrains);
+                silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name, o => o.NumStorageGrains = leafStorageNumGrains));
+            }
+            else
+            {
+                silo.AddMemoryGrainStorageAsDefault();
+                silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name));
+            }
+            break;
+
+        case "azure":
+        default:
+            // Reuse the same storage account and credential that the WAL
+            // provider uses below so a single ACI managed-identity grant
+            // covers both the WAL table and the grain-state table.
+            void ConfigureAzure(Orleans.Configuration.AzureTableStorageOptions o)
+            {
+                if (!string.IsNullOrWhiteSpace(storageConn))
+                {
+                    o.TableServiceClient = new TableServiceClient(storageConn);
+                }
+                else
+                {
+                    o.TableServiceClient = new TableServiceClient(new Uri(storageUri!), new DefaultAzureCredential());
+                }
+                o.TableName = leafStorageTable;
+            }
+            silo.AddAzureTableGrainStorageAsDefault(ConfigureAzure);
+            silo.AddLattice((s, name) => s.AddAzureTableGrainStorage(name, ConfigureAzure));
+            break;
+    }
 
     // Fan WAL throughput across N independent per-shard WalShardGrain
     // activations - each one hits its own Azure Tables manifest
