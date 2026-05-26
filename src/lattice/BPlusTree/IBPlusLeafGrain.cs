@@ -1,5 +1,6 @@
 namespace Orleans.Lattice.BPlusTree;
 
+using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
 
 /// <summary>
@@ -32,7 +33,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Inserts or updates a key-value pair.
     /// Returns a <see cref="SplitResult"/> if the leaf split as a consequence, otherwise <c>null</c>.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii
+    /// so multiple producer turns can run concurrently on the same
+    /// activation. Orleans serialises synchronous code between awaits,
+    /// so the per-key LWW merge, HLC tick, and projection-hash updates
+    /// are race-free; the split state machine is serialised separately
+    /// by the per-activation <c>_splitGate</c> documented on
+    /// <see cref="Grains.BPlusLeafGrain"/>.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<SplitResult?> SetAsync(string key, byte[] value);
 
     /// <summary>
@@ -43,7 +54,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// and reaped by background compaction after the configured grace
     /// period. Pass <c>0</c> to write a non-expiring entry (equivalent to
     /// <see cref="SetAsync(string, byte[])"/>).
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// as <see cref="SetAsync(string, byte[])"/> - see that overload's
+    /// summary for the interleave-safety argument.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<SplitResult?> SetAsync(string key, byte[] value, long expiresAtTicks);
 
     /// <summary>
@@ -124,13 +141,27 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Inserts or updates multiple key-value pairs.
     /// Returns the last <see cref="SplitResult"/> if any split occurred, otherwise <c>null</c>.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii.
+    /// See <see cref="SetAsync(string, byte[])"/> for the interleave-safety
+    /// argument that applies to every mutation-surface method on this
+    /// interface (the per-activation <c>_splitGate</c> serialises the
+    /// split state machine).
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
     /// Marks <paramref name="key"/> as deleted (tombstone).
     /// Returns <c>true</c> if the key was present and live.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii.
+    /// See <see cref="SetAsync(string, byte[])"/> for the interleave-safety
+    /// argument.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<bool> DeleteAsync(string key);
 
     /// <summary>

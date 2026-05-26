@@ -634,8 +634,7 @@ internal sealed partial class BPlusLeafGrain(
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
-            var recovered = await CompleteSplitAsync();
-            await PersistAsync();
+            var recovered = await CompleteRecoverySplitUnderGateAsync();
 
             // Apply the caller's write to the correct leaf so it isn't silently dropped.
             if (string.Compare(key, state.State.SplitKey!, StringComparison.Ordinal) >= 0)
@@ -754,7 +753,7 @@ internal sealed partial class BPlusLeafGrain(
             // with the value, not in a side-channel map.
             if (Cache.Count > options.MaxLeafKeys)
             {
-                splitResult = await SplitAsync();
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -952,7 +951,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         if (Cache.Count > options.MaxLeafKeys)
         {
-            splitResult = await SplitAsync();
+            splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2093,8 +2092,7 @@ internal sealed partial class BPlusLeafGrain(
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
-            var recovered = await CompleteSplitAsync();
-            await PersistAsync();
+            var recovered = await CompleteRecoverySplitUnderGateAsync();
 
             // Re-merge entries that belong to the new sibling.
             var siblingEntries = new Dictionary<string, LwwValue<byte[]>>();
@@ -2140,7 +2138,7 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? splitResult = null;
         if (Cache.Count > (await GetOptionsAsync()).MaxLeafKeys)
         {
-            splitResult = await SplitAsync();
+            splitResult = await SplitIfNeededUnderGateAsync((await GetOptionsAsync()).MaxLeafKeys);
         }
 
         return splitResult;

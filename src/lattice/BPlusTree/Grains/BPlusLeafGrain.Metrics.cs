@@ -200,6 +200,40 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Per-activation gate that serialises every entry into
+    /// <see cref="BPlusLeafGrain.SplitAsync"/> and
+    /// <see cref="BPlusLeafGrain.CompleteSplitAsync"/>.
+    /// <para>
+    /// The leaf's mutation surface
+    /// (<see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/>,
+    /// <see cref="IBPlusLeafGrain.SetManyAsync"/>,
+    /// <see cref="IBPlusLeafGrain.DeleteAsync"/>,
+    /// <see cref="IBPlusLeafGrain.MergeManyAsync"/>) is marked
+    /// <c>[AlwaysInterleave]</c> so multiple producer turns can run on
+    /// the same activation concurrently (U9p c2-iii). Orleans serialises
+    /// synchronous code between awaits, so the per-key LWW merge,
+    /// HLC tick, and projection-hash updates are race-free. The single
+    /// remaining hazard is concurrent entry into <c>SplitAsync</c>:
+    /// the split predicate (<c>Cache.Count &gt; MaxLeafKeys</c>) is
+    /// observed by the caller before <c>SplitAsync</c> sets
+    /// <see cref="Primitives.SplitState.SplitInProgress"/> at its first
+    /// post-await line, so two interleaved turns can both observe
+    /// overflow and both enter <c>SplitAsync</c>, double-flipping the
+    /// state row, allocating two siblings, and corrupting the chain.
+    /// </para>
+    /// <para>
+    /// This gate serialises every <c>SplitAsync</c> / <c>CompleteSplitAsync</c>
+    /// call site on the grain. The expected critical-section
+    /// occupancy is &lt;= 1 ms per turn under steady state (no split)
+    /// and ~tens-of-ms during an actual split, both of which are
+    /// dominated by the post-WAL await the caller is already paying
+    /// for; the gate adds no measurable latency to the steady-state
+    /// path.
+    /// </para>
+    /// </summary>
+    private readonly SemaphoreSlim _splitGate = new(1, 1);
+
+    /// <summary>
     /// Per-activation count of foreground commits (<see cref="CommitSetAsync"/>
     /// or <see cref="CommitSetManyAsync"/>) currently in flight on this
     /// leaf. Snapshotted at the moment a new commit enters the commit
