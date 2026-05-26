@@ -1440,6 +1440,46 @@ Option (a) is the cheapest probe and the right next step. Options (b) and (c) fo
 **Artifacts.** `benchmark/azure-throughput/.run/silo-U9p-step8b.log`, `producer-U9p-step8b.log`, `deploy-U9p-step8b.log`, `scripts/.ladder-results-U9p-step8b.csv`, `scripts/.ladder-phaseA-U9p-step8b.csv`. New observability surface: `LatticeMetrics.WalShardDispatchEntries` histogram + `PhaseADiagnosticReporter` allowlist entry for `orleans.lattice.wal.shard.dispatch.entries`.
 
 
+### U9p step 8c-a-i - falsifier: raise WalPartitions 8 -> 16 (10000:5)
+
+**Hypothesis.** Step 8b localised the limiter to per-partition Azure-Tables tail × caller-side max-of-P fan-in. The cheapest step-8c lever was (a-i): raise `WalPartitions` from 8 to 16 to halve per-partition load and (the prediction was) shrink the tail of the worst partition. No code change required - only the `BENCH_WAL_PARTITIONS` env knob on the deploy script.
+
+**Method.** Reuse the step-8b image (`-SkipBuild`), set `$env:BENCH_WAL_PARTITIONS='16'`, re-run the ladder at one rung `10000:5` for 120 s with all other knobs identical to step 8b (`walMaxPending=8`, `flushConcurrency=8`, `batchSize=4096`, `phase2CoalescingMs=0`, `flushMs=50`). Capture artifacts under `*-U9p-step8c-a-i.*`.
+
+**Result.** Throughput **collapsed 5x**, not improved:
+
+| metric                                         | step-8b (P=8) | step-8c-a-i (P=16) | change      |
+| ---------------------------------------------- | ------------- | ------------------ | ----------- |
+| SteadyAvg                                      | 1,316/s       | **237/s**          | **-82%**    |
+| FinalWritten                                   | 158,888       | 32,779             | -79%        |
+| FinalFailed                                    | 16,291        | **84,432**         | **+418%**   |
+| FinalAvgRate                                   | 1,324/s       | 274/s              | -79%        |
+| `wal.append.batch_entries` p50 (typical shard) | **4-5**       | **2**              | **-50%**    |
+| `wal.append.provider.duration` p50             | 18-19 ms      | 15 ms              | flat        |
+| `wal.append.provider.duration` p999            | 100-530 ms    | 100-330 ms         | flat        |
+| `wal.shard.dispatch.duration` p99 (per shard)  | 660-3,764 ms  | **1,033-3,335 ms** | **all shards >=1s** |
+| shards with `dispatch.duration` p99 >= 1 s     | ~5 of 8       | **~16 of 16**      | universal   |
+
+**Mechanism.** Three signals reinforce one explanation:
+
+1. **Halving the per-partition slice size cut `batch_entries` p50 from 4-5 to 2.** The slice arithmetic is `4096 / WalPartitions`, so P=8 -> ~512 entries per slice and P=16 -> ~256. After the in-grain batch packer trims with `WalMaxBatchEntries=8`, the typical packed flush goes from ~5 entries to ~2 entries. Each packed flush still costs one Azure-Tables round-trip (`provider.duration` p50 ~15 ms, unchanged), so **per-entry overhead doubled**.
+
+2. **Per-partition load skew did not shrink - it spread to every shard.** Under P=8 the worst-shard `dispatch.duration` p99 was 3.8 s and the best was 0.66 s (5.7x spread, ~5 of 8 shards >= 1 s). Under P=16 every shard's p99 is between 1.0 s and 3.3 s. The tail did not get smaller; it got more uniform. The caller's `await ILattice.SetManyAsync` blocks on the **max** of P per-partition tails, and `P(max(16 tails) > 30 s) > P(max(8 tails) > 30 s)` even when each individual partition's tail shrinks - which here it didn't.
+
+3. **Caller-side timeouts went from ~4/s to ~28/s.** `16,291 -> 84,432` failed batches in 120 s = `136 -> 703 timeouts/s`-batches (each holds 4,096 entries). At P=16 essentially every fourth `SetManyAsync` times out at the Orleans 30 s default. The producer reconnects and retransmits, so the silo is also paying retry-storm cost on top of the doubled per-entry overhead - which is why throughput collapsed by 5x, not just 2x.
+
+**Interpretation - lever (a) is falsified.** More WAL partitions is **counterproductive** under this rung and the current call shape. The per-partition Azure-Tables tail does not shrink linearly with more partitions because (i) the underlying account is the bottleneck, not per-partition contention, and (ii) `max(P tails)` grows with P faster than the per-partition tail shrinks. Lever (a-ii) - longer-window load-imbalance measurement - is also off the path: the data already shows the imbalance is not partition-count-driven.
+
+**Step-8c-b next - decouple caller timeout from worst-partition tail.** The remaining valid lever from step-8b is (b): change `ILattice.SetManyAsync` semantics so the caller-side RPC does not block on max-of-P per-partition flushes. Two shapes are available:
+
+- **(b-i) Raise `ResponseTimeout` for the `LatticeGrain.SetManyAsync` method.** Cheapest probe: bumps the 30 s default to something like 120 s, which converts caller-side *timeouts* into caller-side *wall-clock slowdown* but no longer into retry storms. This will not improve `SteadyAvg`, but it will eliminate the 84 k failed-batch retransmit cost and reveal what the steady-state would be if the producer never gave up. Run the ladder at `10000:5` with this single knob change and compare.
+- **(b-ii) Fire-and-async-confirm semantics.** The larger change: `LatticeGrain.SetManyAsync` returns as soon as all per-partition WAL appends are enqueued (i.e., they have a position in the WAL grain's `_pendingSegments` and an ack TCS) rather than after the storage round-trip completes. The caller now sees lattice-level acknowledgement latency (~ms) instead of provider-level latency (~50-3,800 ms p99). Durability is preserved because the WAL grain still flushes the batch asynchronously and the ack TCS still completes once the storage write returns; the caller just doesn't wait on it inline. This is the correct long-term shape but is a wire-API change to `ILattice.SetManyAsync` semantics (write-acknowledged vs write-confirmed) and needs an explicit decision on whether to ship as a method overload or a per-tree option.
+
+Run (b-i) first because it is a one-line config change and disambiguates whether the post-timeout retry storm is itself a multiplier on the throughput drop. If (b-i) gets throughput back into the 1-2k/s range and zeroes the failure count, (b-ii) becomes the next implementation step. If (b-i) does not move throughput, the actual bottleneck is on the provider, and the next direction is C-family (multi-account / partition-key-sharded Azure Tables on the storage layer, not the WAL grain layer).
+
+**Artifacts.** `benchmark/azure-throughput/.run/silo-U9p-step8c-a-i.log`, `producer-U9p-step8c-a-i.log`, `ladder-U9p-step8c-a-i.log`, `scripts/.ladder-results-U9p-step8c-a-i.csv`, `scripts/.ladder-phaseA-U9p-step8c-a-i.csv`. No code change in this step; the only deploy delta is `$env:BENCH_WAL_PARTITIONS='16'`.
+
+
 ### What stays in place
 
 - The Phase A diagnostic instruments (histograms + tag set) are **unchanged**; the data was right, the interpretation was wrong. The per-step `leaf.commit.duration` quantiles are already in `results.json` (the A1 probe was a no-op).
@@ -1451,7 +1491,7 @@ Option (a) is the cheapest probe and the right next step. Options (b) and (c) fo
 
 **Progress**: 0% [░░░░░░░░░░]
 
-**Last Updated**: 2026-05-26 11:20:00
+**Last Updated**: 2026-05-26 11:32:00
 
 ## 📝 Plan Steps
 -  **Read `src/lattice/BPlusTree/Grains/WalShardGrain.cs` end-to-end, `src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs` (foreground commit path, especially `CommitSetAsync` and `PublishDigestUpwardAsync`), `src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs`, `src/lattice.storage.azuretable/AzureTableWalStorageProvider.cs` (and `PhaseTwoWorker`), and `src/lattice/BPlusTree/Options/LatticeOptions.cs` - confirm every choke point listed in *Architectural context*; record any deviation from the plan's assumptions before writing code.**
