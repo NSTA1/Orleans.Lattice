@@ -2098,6 +2098,43 @@ If criterion 2 is met, the path-2 finding has converted c2-iii from a tail-laten
 
 **Last Updated**: 2026-05-28 (c2-iii pre-implementation re-read: split race is the real hazard; ship-readiness gated on chaos-suite plan)
 
+#### U9p step 8c-c-iv-c2-iii-design (2026-05-28) - Split.cs read; option 2 chosen; patch surface defined
+
+**Read of `src/lattice/BPlusTree/Grains/BPlusLeafGrain.Split.cs` (184 lines).** Confirms the race in concrete detail: `SplitAsync` awaits `coordinator.GetHeadOffsetAsync(...)` at L32 *before* setting `state.State.SplitState = SplitInProgress` at L34. Two concurrent turns both reach the `Cache.Count > options.MaxLeafKeys` check, both call `SplitAsync`, both reach the L32 await, both yield, both reach L34 and both flip the state to `SplitInProgress`, both pick `splitKey`, both create a `NewGuid()` sibling, and both go on to corrupt the sibling chain.
+
+**Option 1 (pre-`SplitAsync` guard on `state.State.SplitState == SplitInProgress`) is broken** because the flag is only flipped *inside* `SplitAsync`'s body, after its first await. A guard at the caller checks state before the flag is set.
+
+**Option 2 (per-activation `SemaphoreSlim`) is correct.** Pattern: `await _splitGate.WaitAsync(); try { if (Cache.Count > options.MaxLeafKeys) splitResult = await SplitAsync(); } finally { _splitGate.Release(); }`. The re-check inside the gate handles the cascade case: when turn B acquires the gate after turn A's split, B's overflow may already be absorbed (no split needed), or may have crossed the threshold again (one more split needed).
+
+**Call sites that need the gate (5 total):**
+
+| Site | File:Line | Operation | Notes |
+|------|-----------|-----------|-------|
+| 1 | `BPlusLeafGrain.cs:637` | `await CompleteSplitAsync()` (recovery in `SetCoreAsync`) | recovery path - race-able under interleave |
+| 2 | `BPlusLeafGrain.cs:757` | `await SplitAsync()` (single-key apply) | hot path |
+| 3 | `BPlusLeafGrain.cs:955` | `await SplitAsync()` (`CommitSetManyAsync` apply) | **most critical hot path** |
+| 4 | `BPlusLeafGrain.cs:2096` | `await CompleteSplitAsync()` (recovery in `MergeAsync`) | recovery path |
+| 5 | `BPlusLeafGrain.cs:2143` | `await SplitAsync()` (`MergeAsync` apply) | merge hot path |
+
+**Interface attributes to add (`src/lattice/BPlusTree/IBPlusLeafGrain.cs`):**
+- `[AlwaysInterleave]` on `SetAsync` (both overloads, lines ~36 and ~47)
+- `[AlwaysInterleave]` on `SetManyAsync` (line ~128)
+- `[AlwaysInterleave]` on `DeleteAsync` (line ~135)
+- Optionally: `MergeAsync` / `MergeManyAsync` for parity, but those have lower hot-path leverage
+
+**Test plan:**
+
+1. **Contract test** (`test/lattice/BPlusTree/Grains/IBPlusLeafGrainInterleavedWritesTests.cs`, new): reflection over `IBPlusLeafGrain` methods asserts `[AlwaysInterleave]` is present on each of the four target methods. Mirrors `ShardRootGrainInterleavedReadsTests.cs`.
+2. **Concurrent-split unit test** (new file, real `OrleansTestKit` or in-process cluster): spawn 8 concurrent overflowing `SetManyAsync` calls into one leaf grain; assert post-condition - exactly one sibling chain installed, all keys readable on either donor or sibling, no orphaned `SplitInProgress`.
+3. **Concurrent-split chaos test** (`test/lattice/Chaos/...`, new): same scenario under random commit-log fault injection; assert WAL replay reproduces durable state.
+4. **Existing test suites must pass unchanged:** `Orleans.Lattice.Tests` (3,439), `Orleans.Lattice.Storage.AzureTable.Tests` (147), `Orleans.Lattice.Replication.Tests` (1,660) - 5,246 non-chaos tests.
+
+**Estimated session cost:** patch (~30 min) + tests (~60 min) + non-chaos suite (~30-45 min build + run) + chaos suite (~variable, possibly 30+ min) + benchmark at both `10000:5` and `25000:5` (~10 min). Total: 2-4 hours of focused work, of which the chaos suite is the longest unknown.
+
+**Decision.** Park c2-iii-design as complete. The c2-iii-ship session will run end-to-end against the patch surface above. This session has produced a precise, falsifiable implementation specification but does not ship the source change - the change is too high-blast-radius to merge without an explicit chaos pass.
+
+**Last Updated**: 2026-05-28 (c2-iii-design complete; 5 gate sites + 4 interface attributes + 3 tests defined; ship-ready)
+
 ## 📝 Plan Steps
 
 - **DONE - U9p step 8c-c-i (WAL pipeline uncork).** `[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync` lifted `wal.append.in_flight` from 0 to 7 and `batch_entries` p90 to the 100-entry cap. The change is kept; it exposed memory-storage as the next limiter.
@@ -2111,8 +2148,8 @@ If criterion 2 is met, the path-2 finding has converted c2-iii from a tail-laten
 - **DONE - U9p step 8c-c-iv-c2-ii-b (`BENCH_SHARD_COUNT=64` falsifier).** Regressed: SteadyAvg 6,436/s (-14% vs s=32), FinalWritten 568,412 (-11%), FinalFailed=0. Bounds the durable-storage shard-count axis at `{16, 32}` with s=32 the measured sweet spot. Same shape as U8b/s=8 (cold-activation regression on memory) but with the regression point shifted from s ≥ 128 (memory) to s = 64 (durable), as expected when every leaf activation pays a real round-trip on first touch. `BENCH_SHARD_COUNT=32` shipped as new benchmark default in `20-build-and-deploy.ps1`.
 - **DONE (FALSIFIED) - U9p step 8c-c-iv-c2-iv (knob sweep at s=32 baseline).** Four probes: A (WP=16) → -39%, B (WMP=16) → -23%, C (WP=16+WMP=16) → **-99% collapse**, D (P2=0) → -57%. All cells regress against the c2-ii baseline (7,501/s steady). The knob axis (`WP`, `WMP`, `P2`) is empirically bounded at `WP=8, WMP=8, P2=5ms` on the durable Azure Tables baseline. Side finding: probe D demonstrates the `PhaseTwoCoalescingWindow=5ms` is now load-bearing (lifts a real number at the c2-ii operating point), reversing the U9c null result at the old baseline. **No config-only headroom remains; c2-iii (code change) is the next lever.**
 - **DONE (FALSIFIED prior ceiling reading) - U9p step 8c-c-iv-c2-v-rung25000 (path-2 rung-25000:5 probe).** SteadyAvg **1,438/s** at `25000:5` vs **7,501/s** at `10000:5` - a 5x regression on a 2.5x rung jump, with zero failures. Reverses the c2-iv-post "WAL is the global ceiling" conclusion: the WAL ceiling is a local limit reached only when the leaf can feed it; at higher rungs (more keyspace = more leaves per batch = deeper per-leaf queue) the leaf turn queue is the binding constraint. **Re-vindicates c2-iii as a throughput lever at higher rungs**, not just a tail-latency change.
-- **NEXT - U9p step 8c-c-iv-c2-iii-design (read split partials + draft the c2-iii patch).** Park c2-iii at the implementation-ready boundary. Next concrete action: read `BPlusLeafGrain.Split.cs` and `BPlusLeafGrain.MovedAwaySlots.cs` to choose between (option 1) a pre-`SplitAsync` guard that short-circuits on `state.State.SplitState == SplitInProgress`, or (option 2) a per-activation `_splitGate` `SemaphoreSlim` wrapping every `SplitAsync` invocation. Output of c2-iii-design is the draft patch + the chaos-test design. c2-iii-ship then runs the patch through: chaos test, full non-chaos suite (`dotnet test --filter "TestCategory!=Chaos"`), then the benchmark at `10000:5` and `25000:5` against the ship-criterion.
-- **DEFERRED behind c2-iii-design - U9p step 8c-c-iv-c2-iii-ship (`[AlwaysInterleave]` + split-guard ship).** Multi-rung ship criterion: (a) `10000:5` SteadyAvg ≥ 7,000/s, P99 `lattice.set_many.duration_ms` < 1,500 ms, `leaf.commit.in_flight` p99 > 0; (b) `25000:5` SteadyAvg ≥ 5,000/s; (c) FinalFailed = 0 on both; (d) full non-chaos + chaos suites green.
+- **DONE - U9p step 8c-c-iv-c2-iii-design (read split partials + draft the c2-iii patch).** `BPlusLeafGrain.Split.cs` read confirms option 1 (pre-call guard) is broken: `SplitState = SplitInProgress` is set inside `SplitAsync` after the first await, so a guard at the caller cannot observe it. **Option 2 (per-activation `_splitGate` `SemaphoreSlim` with re-check inside the gate) is chosen.** Patch surface: 5 gate sites (`BPlusLeafGrain.cs` lines 637, 757, 955, 2096, 2143), 4 interface attribute additions (`IBPlusLeafGrain.SetAsync` x2, `SetManyAsync`, `DeleteAsync`), 3 new tests (contract / unit / chaos). Estimated session: 2-4 hours including non-chaos and chaos suite passes.
+- **NEXT - U9p step 8c-c-iv-c2-iii-ship (apply the patch surface from c2-iii-design).** Carry out the patch verbatim from the c2-iii-design memo above. Ship criterion unchanged: (a) `10000:5` SteadyAvg ≥ 7,000/s, P99 `lattice.set_many.duration_ms` < 1,500 ms, `leaf.commit.in_flight` p99 > 0; (b) `25000:5` SteadyAvg ≥ 5,000/s; (c) FinalFailed = 0 on both; (d) full non-chaos + chaos suites green.
 - **DEFERRED - U9p step 8c-c-iv-c (steady-state grid search).** Originally the next step after iv-b; deferred behind iv-c2 because tail latency, not throughput, is the binding kink at the durable Azure Tables baseline. When iv-c2 ships, rerun this grid search with the lower per-write tail and record steady-state band, peak, and `wal.append.provider.duration` p50/p99 for each of: baseline, `walPartitions=16`, `walMaxPendingBatches=16`, `phase2CoalescingMs=3`, best-of-three combined. The winner becomes the recommended default in `docs/lattice/wal.md`.
 - **U9p step 8c-c-iv-d (write up campaign).** Update `docs/lattice/wal.md` with the durable steady-state band; update `docs/lattice/wal-storage-providers.md` with the Azure Tables-backed numbers; mark any roadmap items whose deps are now satisfied. Run `dotnet test --filter "TestCategory!=Chaos"` before each PR and `dotnet test --filter "TestCategory=Chaos"` before any merge that flips a default.
 - **DEFERRED - prior B / C / D plan steps.** The Phase A anomalies that originally paused them (harness ceiling at ~17 k/s on memory WAL; atomic-write throughput variance) are still real, but they live behind the kink-resolution plan. They become live again after 8c-c-iv-d ships and we have a documented production-shape band to compare against.
