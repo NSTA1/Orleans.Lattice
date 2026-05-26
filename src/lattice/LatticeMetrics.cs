@@ -305,6 +305,34 @@ public static class LatticeMetrics
         Meter.CreateHistogram<int>("orleans.lattice.leaf.commit.in_flight", unit: "{commit}",
             description: "In-flight commit count snapshot at the moment a BPlusLeafGrain commit enters the commit path.");
 
+    // --- Warm-up instruments (ILattice.WarmUpAsync) ------------------------------
+
+    /// <summary>
+    /// Counter of completed <see cref="Orleans.Lattice.ILattice.WarmUpAsync"/>
+    /// invocations observed on this silo. Tagged with <see cref="TagTree"/> so
+    /// operators can confirm per-tree warm-up fired exactly once before the
+    /// first hot-path write. A zero value on a tree whose first
+    /// <c>SetManyAsync</c> coincides with steady-state means warm-up was
+    /// skipped and the cold-start placement-directory storm landed against
+    /// producer-driven flush concurrency.
+    /// </summary>
+    public static readonly Counter<long> WarmUpInvocations =
+        Meter.CreateCounter<long>("orleans.lattice.warmup.invocations", unit: "{call}",
+            description: "Completed ILattice.WarmUpAsync calls observed on this silo.");
+
+    /// <summary>
+    /// Histogram of <see cref="Orleans.Lattice.ILattice.WarmUpAsync"/>
+    /// wall-clock duration, in milliseconds. One observation per call,
+    /// covering routing resolution plus every bounded-concurrency per-shard
+    /// probe round-trip. Tagged with <see cref="TagTree"/> and <c>shard_count</c>
+    /// so the per-tree warm-start cost is attributable in phase-A scrapes.
+    /// Useful as the headline "did warm-up actually fire and how long did it
+    /// take" signal alongside <see cref="WarmUpInvocations"/>.
+    /// </summary>
+    public static readonly Histogram<double> WarmUpDurationMs =
+        Meter.CreateHistogram<double>("orleans.lattice.warmup.duration", unit: "ms",
+            description: "Wall-clock duration of ILattice.WarmUpAsync including all per-shard probes.");
+
     // --- Cache instruments (LeafCacheGrain) --------------------------------------
 
     /// <summary>

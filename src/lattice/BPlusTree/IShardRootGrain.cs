@@ -288,6 +288,31 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<bool> IsDeletedAsync();
 
     /// <summary>
+    /// Pre-activates this shard's current root-node grain (root leaf when
+    /// the tree is flat, root internal node otherwise) so the first
+    /// traversing write does not pay placement-directory + grain-storage
+    /// first-touch cost on the hot path. Idempotent.
+    /// <para>
+    /// On a brand-new shard with no root yet, warm-up runs the same
+    /// <c>EnsureRootAsync</c> path the first traffic write would run -
+    /// it creates the deterministic root leaf and persists the shard
+    /// root's mapping. This is equivalent to the very first hot-path
+    /// write performing root materialization, just moved to startup
+    /// time, and it produces no extra grains the first write would not
+    /// have produced anyway.
+    /// </para>
+    /// <para>
+    /// Intended for benchmark / production startup proactive warm-up
+    /// driven by <see cref="ILattice.WarmUpAsync"/>. Callers must treat
+    /// transient <see cref="OrleansMessageRejectionException"/> the same
+    /// way they treat it on <c>ReshardAsync</c> - the placement-
+    /// directory cache can race a freshly-started silo - and apply
+    /// bounded retry.
+    /// </para>
+    /// </summary>
+    Task WarmUpAsync();
+
+    /// <summary>
     /// Permanently purges all grains in this shard (leaves, internal nodes)
     /// by clearing their persistent state and deactivating them, then clears
     /// the shard root's own state. Called by <see cref="ITreeDeletionGrain"/>

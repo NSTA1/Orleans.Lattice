@@ -562,6 +562,72 @@ internal sealed class TcpIngestService(
             }
         }
 
+        // Proactive warm-up. Pre-activate every physical shard root before
+        // we open the TCP listener so producers never see the placement-
+        // directory + grain-storage first-touch storm under traffic. The
+        // very first warm-up attempt can still race the Orleans client
+        // directory cache the same way ReshardAsync above does, so we
+        // wrap it in the same bounded retry loop and emit a single loud
+        // ERROR line if every attempt fails (degraded mode: traffic
+        // still starts, but the warm-start kink will be visible in the
+        // per-second timeline).
+        //
+        // Retry budget is intentionally wider than the reshard submit
+        // loop's: reshard ran INSIDE a subsequent 5-min
+        // IsReshardCompleteAsync poll loop (2 s ticks) that effectively
+        // gave the directory cache extra time to settle before warm-up
+        // ran. Warm-up has no such follow-up loop, so we need to absorb
+        // that slack here. 8 attempts with exponential backoff capped
+        // at 4 s totals ~25 s worst-case - comfortably under the rung
+        // duration and matches the empirically-observed time for a
+        // fresh silo's local client directory to converge.
+        const int MaxWarmUpAttempts = 8;
+        const int MaxWarmUpBackoffMs = 4000;
+        var warmUpAttempt = 0;
+        var warmUpCompleted = false;
+        Exception? lastWarmUpException = null;
+        var warmUpSw = System.Diagnostics.Stopwatch.StartNew();
+        while (warmUpAttempt < MaxWarmUpAttempts && !warmUpCompleted && !stoppingToken.IsCancellationRequested)
+        {
+            warmUpAttempt++;
+            try
+            {
+                Console.WriteLine($"[silo] warmup treeId={settings.TreeId} (attempt={warmUpAttempt}/{MaxWarmUpAttempts})");
+                await lattice.WarmUpAsync(stoppingToken).ConfigureAwait(false);
+                warmUpCompleted = true;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) when (IsOrleansMessageRejection(ex))
+            {
+                lastWarmUpException = ex;
+                var backoffMs = Math.Min(100 * (1 << (warmUpAttempt - 1)), MaxWarmUpBackoffMs);
+                Console.WriteLine($"[silo] warmup treeId={settings.TreeId} attempt={warmUpAttempt} REJECTED ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { throw; }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[silo] warmup treeId={settings.TreeId} FAILED: {ex.GetType().Name}: {ex.Message}");
+                lastWarmUpException = ex;
+                break;
+            }
+        }
+        warmUpSw.Stop();
+        if (warmUpCompleted)
+        {
+            Console.WriteLine($"[silo] warmup treeId={settings.TreeId} complete elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}");
+        }
+        else
+        {
+            var detail = lastWarmUpException is null
+                ? "no exception captured"
+                : $"{lastWarmUpException.GetType().Name}: {Truncate(lastWarmUpException.Message, 240)}";
+            Console.WriteLine($"[silo] ERROR warmup treeId={settings.TreeId} ABORTED after {warmUpAttempt} attempt(s) elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}: {detail}. Continuing in degraded mode - first writes may stall on cold-shard activation.");
+        }
+
         // Drain channel: each connection writes into the same shared channel; a single drain
         // task batches and pushes into ILattice.SetManyAsync. One reader keeps the rate
         // reporter and the flush cadence trivially monotonic.

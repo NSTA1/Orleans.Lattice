@@ -107,6 +107,8 @@ coordinator progress independently of whether the event stream is enabled.
 | `orleans.lattice.atomic_write.batch_size` | `Histogram<int>` | `{entry}` | Entry count of each `SetManyAtomicAsync` saga at terminal transition. Tagged with the same `outcome` values as `atomic_write.completed`; emitted alongside it. Lets operators correlate p99 saga duration with batch size and detect distribution shifts in caller batch sizing. |
 | `orleans.lattice.coordinator.completed` | `Counter<long>` | `{operation}` | Successful completion of a long-running coordinator. Tagged `kind=snapshot`, `resize`, `reshard`, `merge`, or `compaction`. |
 | `orleans.lattice.tree.lifecycle` | `Counter<long>` | `{event}` | Tree-lifecycle transition from `TreeDeletionGrain`. Tagged `kind=deleted`, `recovered`, or `purged`. Emitted **unconditionally** - regardless of the tree's `PublishEvents` setting. |
+| `orleans.lattice.warmup.invocations` | `Counter<long>` | `{call}` | One increment per successful `ILattice.WarmUpAsync` call. Tagged `tree`. Operators alerting on cold-start health expect to see exactly one increment per silo startup per warmed tree. |
+| `orleans.lattice.warmup.duration` | `Histogram<double>` | `ms` | End-to-end duration of `ILattice.WarmUpAsync` - the wall-clock cost of pre-activating every physical shard root via a bounded-concurrency read-only probe. Tagged `tree` and `shard_count` (the per-tree physical-shard-root probe fan-out). The p99 is the primary warm-start latency signal; sustained increases are a leading indicator of placement-directory or grain-storage cold-touch cost growth. |
 
 ### Event publisher health
 
