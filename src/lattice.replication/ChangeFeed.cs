@@ -48,14 +48,90 @@ internal sealed class ChangeFeed(
     private readonly ILatticeMergeModeResolver _modeResolver = modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<WalRecord> Subscribe(
+    public IAsyncEnumerable<WalRecord> Subscribe(
         string treeName,
         HybridLogicalClock cursor,
         bool includeLocalOrigin = true,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeName);
 
+        // Phase D1c: the HLC overload no longer filters entries by
+        // `entry.Timestamp <= cursor`. That predicate assumed
+        // HLC monotonicity per WAL partition, which does not hold
+        // under parallel cross-leaf appends (each leaf has its own
+        // independent HLC clock; two leaves can produce out-of-order
+        // HLCs that arrive interleaved at the same WAL partition),
+        // and silently dropped any lower-HLC entry that arrived after
+        // a higher-HLC one. The new `ChangeFeedCursor` overload is the
+        // canonical resume shape; this overload remains for backward
+        // compatibility and is now a thin shim that:
+        //   - `cursor == Zero` -> read from the start of every
+        //     partition (identical to the new overload's default).
+        //   - non-Zero cursor -> still read from the start; the
+        //     consumer's resume contract degrades to "yield every
+        //     locally-authored entry" and the consumer is responsible
+        //     for de-duplicating against entries it has already seen
+        //     (the per-origin HWM dedup the apply pipeline runs
+        //     downstream already handles this for replication
+        //     consumers). The HLC cursor is preserved on the public
+        //     signature for source-compat; new callers should migrate
+        //     to the `ChangeFeedCursor` overload.
+        // The yielded order remains HLC ascending (sorted at the end
+        // of the merge) for caller convenience.
+        _ = cursor;
+        return SubscribeCore(treeName, ChangeFeedCursor.Initial, includeLocalOrigin, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<WalRecord> Subscribe(
+        string treeName,
+        ChangeFeedCursor cursor,
+        bool includeLocalOrigin = true,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeName);
+        return SubscribeCore(treeName, cursor, includeLocalOrigin, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ChangeFeedCursor> GetCurrentCursorAsync(
+        string treeName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeName);
+        var resolved = _options.Get(treeName);
+        var partitions = resolved.ReplogPartitions;
+
+        // Read each partition's next-sequence in parallel. The next
+        // sequence is the position the NEXT append will occupy and is
+        // exactly the cursor entry the consumer needs to resume from:
+        // the Subscribe contract reads entries whose offset is greater
+        // than or equal to the cursor entry, so storing `_nextOffset`
+        // as the cursor entry yields every commit that lands after
+        // this call (and nothing already committed before it).
+        var tasks = new Task<long>[partitions];
+        for (var p = 0; p < partitions; p++)
+        {
+            var grain = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{p}");
+            tasks[p] = grain.GetNextSequenceAsync(cancellationToken);
+        }
+        var nextSequences = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        var partitionOffsets = new Dictionary<int, long>(partitions);
+        for (var p = 0; p < partitions; p++)
+        {
+            partitionOffsets[p] = nextSequences[p];
+        }
+        return new ChangeFeedCursor(partitionOffsets);
+    }
+
+    private async IAsyncEnumerable<WalRecord> SubscribeCore(
+        string treeName,
+        ChangeFeedCursor cursor,
+        bool includeLocalOrigin,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var resolved = _options.Get(treeName);
         var partitions = resolved.ReplogPartitions;
         var localClusterId = resolved.ClusterId;
@@ -79,7 +155,13 @@ internal sealed class ChangeFeed(
             cancellationToken.ThrowIfCancellationRequested();
 
             var grain = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
-            var nextSequence = 0L;
+            // Phase D1c: per-partition resume offset. The cursor entry
+            // is the offset of the NEXT entry to read (exclusive
+            // lower bound). Partitions absent from the cursor return 0
+            // (every entry yielded). No off-by-one dance is required
+            // because the cursor semantics align directly with
+            // IWalShardGrain.ReadAsync's `fromSequence` argument.
+            var nextSequence = cursor.GetOffsetForPartition(partition);
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -93,11 +175,8 @@ internal sealed class ChangeFeed(
 
                 for (var i = 0; i < pageEntries.Count; i++)
                 {
-                    var entry = pageEntries[i].Entry;
-                    if (entry.Timestamp <= cursor)
-                    {
-                        continue;
-                    }
+                    var sequenced = pageEntries[i];
+                    var entry = sequenced.Entry;
 
                     // Tombstone-reap envelopes are local structural
                     // cleanup records (see `ReplicationShipperGrain.ShouldShip`

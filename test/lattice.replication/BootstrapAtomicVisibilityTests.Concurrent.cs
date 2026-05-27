@@ -249,32 +249,33 @@ public partial class BootstrapAtomicVisibilityTests
         System.Collections.Concurrent.ConcurrentQueue<Exception> errors,
         CancellationToken cancellationToken)
     {
-        var cursor = HybridLogicalClock.Zero;
+        // Phase D1c: cursor shape is per-partition WAL offset.
+        // Capture the producer's current cursor before the Subscribe
+        // call so entries authored during our consume land in the
+        // next poll iteration; entries committed before the capture
+        // are streamed by the Subscribe call below.
+        var cursor = ChangeFeedCursor.Initial;
         var pollInterval = TimeSpan.FromMilliseconds(50);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
+                var nextCursor = await producerFeed
+                    .GetCurrentCursorAsync(treeName, cancellationToken)
+                    .ConfigureAwait(false);
                 await foreach (var entry in producerFeed
                     .Subscribe(treeName, cursor, includeLocalOrigin: true, cancellationToken)
                     .ConfigureAwait(false))
                 {
                     if (string.Equals(entry.OriginClusterId, receiverClusterId, StringComparison.Ordinal))
                     {
-                        if (entry.Timestamp > cursor)
-                        {
-                            cursor = entry.Timestamp;
-                        }
                         continue;
                     }
 
                     await receiverApplier.ApplyAsync(entry, cancellationToken).ConfigureAwait(false);
-                    if (entry.Timestamp > cursor)
-                    {
-                        cursor = entry.Timestamp;
-                    }
                 }
 
+                cursor = nextCursor;
                 await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

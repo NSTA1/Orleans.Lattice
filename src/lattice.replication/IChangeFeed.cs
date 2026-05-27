@@ -120,4 +120,79 @@ public interface IChangeFeed
         HybridLogicalClock cursor,
         bool includeLocalOrigin = true,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Per-partition-offset cursor overload of
+    /// <see cref="Subscribe(string, HybridLogicalClock, bool, CancellationToken)"/>.
+    /// Yields every captured <see cref="WalRecord"/> for
+    /// <paramref name="treeName"/> whose
+    /// <c>(partition, sequence)</c> position is greater than or equal
+    /// to the matching <paramref name="cursor"/> entry (the cursor
+    /// entry is the offset of the NEXT entry the consumer wants to
+    /// read - an exclusive lower bound on already-consumed offsets).
+    /// Entries are emitted in <see cref="HybridLogicalClock"/>
+    /// ascending order (the per-call merge sorts by HLC for caller
+    /// convenience), but the filter is offset-based so a low-HLC entry
+    /// that arrives after a higher-HLC entry on the same partition is
+    /// yielded rather than silently dropped.
+    /// <para>
+    /// <b>Cursor advance contract.</b> To stream forward, capture the
+    /// per-partition offset of the NEXT entry to read on each partition
+    /// (typically <c>lastObservedOffset + 1</c>, or the
+    /// <see cref="WalShardPage.NextSequence"/> returned by the most
+    /// recent shard read) and rebuild a fresh
+    /// <see cref="ChangeFeedCursor"/> for the next call.
+    /// </para>
+    /// <para>
+    /// All other contracts (locally-authored-writes-only,
+    /// foreign-origin filter, optional <paramref name="includeLocalOrigin"/>
+    /// suppression of local-origin entries, snapshot-at-call-time)
+    /// are identical to the HLC overload.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">
+    /// Logical tree id whose change feed is being consumed. Only
+    /// entries with <see cref="WalRecord.TreeId"/> equal to this
+    /// value are yielded. Must not be <see langword="null"/>.
+    /// </param>
+    /// <param name="cursor">
+    /// Per-partition exclusive-lower-bound offset snapshot (the offset
+    /// of the NEXT entry the consumer wants to read on each partition).
+    /// Pass <see cref="ChangeFeedCursor.Initial"/> to read from the
+    /// start of every partition's WAL.
+    /// </param>
+    /// <param name="includeLocalOrigin">
+    /// Same semantics as the HLC overload.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token observed between every page read and every yielded entry.</param>
+    IAsyncEnumerable<WalRecord> Subscribe(
+        string treeName,
+        ChangeFeedCursor cursor,
+        bool includeLocalOrigin = true,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a snapshot of the current per-partition WAL
+    /// high-water-mark cursor for <paramref name="treeName"/>. The
+    /// returned cursor, passed back to the
+    /// <see cref="Subscribe(string, ChangeFeedCursor, bool, CancellationToken)"/>
+    /// overload, yields exactly the entries committed after this call
+    /// (and after any concurrent commit that happened before this call
+    /// returned).
+    /// <para>
+    /// This is the canonical "resume from here" cursor-capture primitive
+    /// under the offset-cursor contract: a consumer that wants to
+    /// stream forward calls <see cref="GetCurrentCursorAsync"/> once,
+    /// consumes the snapshot returned by <see cref="Subscribe(string, ChangeFeedCursor, bool, CancellationToken)"/>
+    /// using that cursor as the lower bound, and on the next call
+    /// requests another fresh cursor (or rebuilds from the per-partition
+    /// offsets of the highest entries it consumed - both shapes are
+    /// supported, see remarks on <see cref="ChangeFeedCursor"/>).
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id to query. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any grain RPC.</param>
+    Task<ChangeFeedCursor> GetCurrentCursorAsync(
+        string treeName,
+        CancellationToken cancellationToken = default);
 }

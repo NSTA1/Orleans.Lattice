@@ -100,13 +100,17 @@ public class ChangeFeedIntegrationTests
     [Test]
     public async Task Subscribe_advances_when_re_subscribing_with_updated_cursor()
     {
+        // D1c: cursor shape is now per-partition WAL offset. Capture
+        // the cursor between passes via GetCurrentCursorAsync and the
+        // second pass yields only writes that landed after the cursor
+        // capture.
         const string tree = "feed-cursor";
         var lattice = _cluster.Client.GetGrain<ILattice>(tree);
 
         await lattice.SetAsync("first", new byte[] { 1 });
-        var firstPass = await CollectAsync(_feed.Subscribe(tree, HybridLogicalClock.Zero));
+        var firstPass = await CollectAsync(_feed.Subscribe(tree, ChangeFeedCursor.Initial));
         Assert.That(firstPass, Is.Not.Empty);
-        var cursor = firstPass[^1].Timestamp;
+        var cursor = await _feed.GetCurrentCursorAsync(tree);
 
         await lattice.SetAsync("second", new byte[] { 2 });
 

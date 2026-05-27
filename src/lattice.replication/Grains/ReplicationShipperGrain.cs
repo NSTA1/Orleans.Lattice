@@ -965,7 +965,30 @@ internal sealed class ReplicationShipperGrain(
             // been observed. DeleteRange entries are tracked solely
             // by partition sequence, which already prevents
             // re-shipping in steady state.
-            if (winningRecord.Timestamp != HybridLogicalClock.Zero
+            //
+            // Phase D1c additional bypass: saga prepare-phase entries
+            // (IsPrepared==true) carry the producer-stamped per-leaf
+            // HLC, which under the batched-saga path
+            // (AtomicWriteGrain.ExecutePhaseAsync's parallel cross-leaf
+            // `lattice.SetManyAsync` fan-out) can be non-monotonic
+            // per-WAL-partition: each touched leaf has its own
+            // independent HLC clock and advances independently. When
+            // two leaves' batches arrive at the same WAL partition
+            // in a different order than their HLCs would suggest,
+            // the later-arriving (lower-HLC) batch's prepared rows
+            // satisfy `entry.Timestamp <= state.Cursor` once any
+            // higher-HLC entry from the other leaf has been acked,
+            // and would be silently dropped here - the partial-saga
+            // failure shape. Bypass the HLC filter for those entries;
+            // partition-cursor monotonicity inside this method's
+            // outer loop already guarantees each entry is presented
+            // exactly once, and receiver-side idempotency on the
+            // prepared-write path (per-leaf LWW merge inside
+            // `AddPreparedMutation` + per-tx terminal-mark dedup)
+            // upholds at-most-once visibility.
+            var isPreparedAtomicBatch = winningRecord.IsPrepared && winningRecord.AtomicBatchSize > 0;
+            if (!isPreparedAtomicBatch
+                && winningRecord.Timestamp != HybridLogicalClock.Zero
                 && winningRecord.Timestamp.CompareTo(state.State.Cursor) <= 0)
             {
                 continue;
