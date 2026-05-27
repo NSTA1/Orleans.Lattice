@@ -448,16 +448,12 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
 
 // Throughput-capture (step 2): kebab-case rendering for the startup
 // echo line and any future diagnostic surfaces. Symmetrical with
-// ParseWorkloadMode above.
-static string FormatWorkloadMode(BenchWorkloadMode mode) => mode switch
-{
-    BenchWorkloadMode.SetMany => "set-many",
-    BenchWorkloadMode.SetManyAtomic => "set-many-atomic",
-    BenchWorkloadMode.SetPoint => "set-point",
-    BenchWorkloadMode.GetPoint => "get-point",
-    BenchWorkloadMode.GetMany => "get-many",
-    _ => mode.ToString(),
-};
+// ParseWorkloadMode above. Implemented as a thunk to the static
+// formatter on BenchWorkloadMetadata so the same kebab-case mapping
+// is reachable both from the top-level startup section AND from the
+// TcpIngestService class methods (top-level local functions cannot
+// be referenced from non-top-level types per CS8801).
+static string FormatWorkloadMode(BenchWorkloadMode mode) => BenchWorkloadMetadata.FormatWorkloadMode(mode);
 
 internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize);
 
@@ -1009,18 +1005,22 @@ internal sealed class TcpIngestService(
     {
         var startTs = Stopwatch.GetTimestamp();
         Exception? lastRejection = null;
+        var modeTag = new KeyValuePair<string, object?>("mode", BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
+        var treeTag = new KeyValuePair<string, object?>("tree", settings.TreeId);
         for (var attempt = 1; attempt <= FlushMaxAttempts; attempt++)
         {
             try
             {
-                await lattice.SetManyAsync(batch, ct);
+                await BenchWorkloadDispatcher.DispatchAsync(
+                    settings.WorkloadMode,
+                    lattice,
+                    batch,
+                    settings.AtomicBatchSize,
+                    settings.FlushConcurrency,
+                    ct).ConfigureAwait(false);
                 var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
-                BenchMetrics.LatticeSetManyDurationMs.Record(
-                    elapsedMs,
-                    new KeyValuePair<string, object?>("tree", settings.TreeId));
-                BenchMetrics.LatticeSetManyRetryAttempts.Record(
-                    attempt - 1,
-                    new KeyValuePair<string, object?>("tree", settings.TreeId));
+                BenchMetrics.LatticeSetManyDurationMs.Record(elapsedMs, treeTag, modeTag);
+                BenchMetrics.LatticeSetManyRetryAttempts.Record(attempt - 1, treeTag, modeTag);
                 return batch.Count;
             }
             catch (OperationCanceledException) { throw; }
@@ -1036,9 +1036,7 @@ internal sealed class TcpIngestService(
                 // also not be in `failed`, because they are not a real
                 // ingestion failure - they are shutdown back-pressure. Return
                 // the sentinel so the dispatcher skips both counters.
-                BenchMetrics.LatticeSetManyRetryAttempts.Record(
-                    attempt - 1,
-                    new KeyValuePair<string, object?>("tree", settings.TreeId));
+                BenchMetrics.LatticeSetManyRetryAttempts.Record(attempt - 1, treeTag, modeTag);
                 return ShutdownDiscarded;
             }
             catch (Exception ex) when (!lifetime.ApplicationStopping.IsCancellationRequested && IsOrleansMessageRejection(ex))
@@ -1064,22 +1062,19 @@ internal sealed class TcpIngestService(
             }
             catch (Exception ex)
             {
-                BenchMetrics.LatticeSetManyRetryAttempts.Record(
-                    attempt - 1,
-                    new KeyValuePair<string, object?>("tree", settings.TreeId));
-                logger.LogWarning(ex, "[silo] flush of {Count} failed", batch.Count);
+                BenchMetrics.LatticeSetManyRetryAttempts.Record(attempt - 1, treeTag, modeTag);
+                logger.LogWarning(ex, "[silo] flush of {Count} failed (mode={Mode})", batch.Count, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
                 return 0;
             }
         }
 
-        BenchMetrics.LatticeSetManyRetryAttempts.Record(
-            FlushMaxAttempts - 1,
-            new KeyValuePair<string, object?>("tree", settings.TreeId));
+        BenchMetrics.LatticeSetManyRetryAttempts.Record(FlushMaxAttempts - 1, treeTag, modeTag);
         logger.LogWarning(
             lastRejection,
-            "[silo] flush of {Count} failed after {Attempts} retry attempts against transient OrleansMessageRejectionException",
+            "[silo] flush of {Count} failed after {Attempts} retry attempts against transient OrleansMessageRejectionException (mode={Mode})",
             batch.Count,
-            FlushMaxAttempts);
+            FlushMaxAttempts,
+            BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
         return 0;
     }
 
@@ -1116,5 +1111,184 @@ internal sealed class TcpIngestService(
     {
         if (string.IsNullOrEmpty(s)) return string.Empty;
         return s.Length <= max ? s : s.Substring(0, max) + "...";
+    }
+}
+
+/// <summary>
+/// Shared kebab-case formatter for <see cref="BenchWorkloadMode"/>.
+/// Lives on a static class (not as a top-level local function) so the
+/// same mapping is reachable from both the program's startup section
+/// AND from the <c>TcpIngestService</c> / <c>BenchWorkloadDispatcher</c>
+/// class methods. Top-level local functions cannot be referenced from
+/// non-top-level types (CS8801).
+/// </summary>
+internal static class BenchWorkloadMetadata
+{
+    /// <summary>
+    /// Renders <paramref name="mode"/> in the same kebab-case form
+    /// <c>ParseWorkloadMode</c> accepts. Used for the silo's startup
+    /// banner echo line, the per-call latency histogram's <c>mode</c>
+    /// tag, and log-message context.
+    /// </summary>
+    public static string FormatWorkloadMode(BenchWorkloadMode mode) => mode switch
+    {
+        BenchWorkloadMode.SetMany => "set-many",
+        BenchWorkloadMode.SetManyAtomic => "set-many-atomic",
+        BenchWorkloadMode.SetPoint => "set-point",
+        BenchWorkloadMode.GetPoint => "get-point",
+        BenchWorkloadMode.GetMany => "get-many",
+        _ => mode.ToString(),
+    };
+}
+
+/// <summary>
+/// Workload-mode dispatcher used by <c>TcpIngestService.FlushAsync</c> to
+/// route each producer batch through the <c>ILattice</c> operation
+/// selected by <see cref="BenchWorkloadMode"/>. Extracted as a static
+/// helper so the per-mode dispatch logic is independently testable
+/// (see throughput-capture-plan.md step 7) without exposing the
+/// <c>TcpIngestService</c> internals via <c>[InternalsVisibleTo]</c>.
+/// </summary>
+internal static class BenchWorkloadDispatcher
+{
+    /// <summary>
+    /// Dispatches <paramref name="batch"/> through the <c>ILattice</c>
+    /// operation selected by <paramref name="mode"/>. Returns the number
+    /// of <c>ILattice</c>-visible entries the silo has issued
+    /// (always <c>batch.Count</c>; the count is mode-independent so the
+    /// existing per-second "Entries written per second" counter remains
+    /// directly comparable across modes when the offered load is held
+    /// constant).
+    /// </summary>
+    /// <param name="mode">Workload selector resolved from the
+    /// <c>BENCH_WORKLOAD_MODE</c> env-var at silo startup.</param>
+    /// <param name="lattice">The lattice instance, already warmed up
+    /// and (for read modes) already pre-seeded.</param>
+    /// <param name="batch">One producer batch's worth of
+    /// key/value pairs. For read modes the values are ignored; for
+    /// <see cref="BenchWorkloadMode.GetMany"/> the entire batch's key
+    /// list becomes the single <c>ILattice.GetManyAsync</c> argument.</param>
+    /// <param name="atomicBatchSize">Saga slice size for
+    /// <see cref="BenchWorkloadMode.SetManyAtomic"/>; ignored
+    /// otherwise.</param>
+    /// <param name="parallelism">In-flight cap for the per-entry fan-out
+    /// modes (<see cref="BenchWorkloadMode.SetPoint"/>,
+    /// <see cref="BenchWorkloadMode.GetPoint"/>); ignored
+    /// otherwise.</param>
+    /// <param name="ct">Propagates shutdown / producer-disconnect.</param>
+    public static async Task<int> DispatchAsync(
+        BenchWorkloadMode mode,
+        ILattice lattice,
+        List<KeyValuePair<string, byte[]>> batch,
+        int atomicBatchSize,
+        int parallelism,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(batch);
+        if (batch.Count == 0) return 0;
+
+        switch (mode)
+        {
+            case BenchWorkloadMode.SetMany:
+                await lattice.SetManyAsync(batch, ct).ConfigureAwait(false);
+                return batch.Count;
+
+            case BenchWorkloadMode.SetManyAtomic:
+                {
+                    // Slice the producer batch into atomicBatchSize-sized
+                    // sagas. Each saga is awaited under the same flush
+                    // gate the caller already holds, so concurrent sagas
+                    // are bounded by the outer FlushConcurrency cap.
+                    var sliceSize = Math.Max(1, atomicBatchSize);
+                    var i = 0;
+                    while (i < batch.Count)
+                    {
+                        var len = Math.Min(sliceSize, batch.Count - i);
+                        // GetRange returns a fresh List<KeyValuePair<,>>
+                        // so the slice is a self-contained value the
+                        // SetManyAtomicAsync seam can pin without
+                        // worrying about aliasing the outer batch.
+                        var slice = batch.GetRange(i, len);
+                        await lattice.SetManyAtomicAsync(slice, ct).ConfigureAwait(false);
+                        i += len;
+                    }
+                    return batch.Count;
+                }
+
+            case BenchWorkloadMode.SetPoint:
+                await FanOutAsync(
+                    batch,
+                    parallelism,
+                    (kvp, token) => lattice.SetAsync(kvp.Key, kvp.Value, token),
+                    ct).ConfigureAwait(false);
+                return batch.Count;
+
+            case BenchWorkloadMode.GetPoint:
+                await FanOutAsync(
+                    batch,
+                    parallelism,
+                    async (kvp, token) =>
+                    {
+                        _ = await lattice.GetAsync(kvp.Key, token).ConfigureAwait(false);
+                    },
+                    ct).ConfigureAwait(false);
+                return batch.Count;
+
+            case BenchWorkloadMode.GetMany:
+                {
+                    // Project the producer batch to its key list. Capacity-
+                    // hinted so the List grows zero times on the hot path.
+                    var keys = new List<string>(batch.Count);
+                    for (var i = 0; i < batch.Count; i++) keys.Add(batch[i].Key);
+                    _ = await lattice.GetManyAsync(keys, ct).ConfigureAwait(false);
+                    return batch.Count;
+                }
+
+            default:
+                throw new InvalidOperationException($"Unhandled BenchWorkloadMode: {mode}");
+        }
+    }
+
+    /// <summary>
+    /// Bounded-parallelism fan-out over <paramref name="batch"/>: at
+    /// most <paramref name="parallelism"/> calls to
+    /// <paramref name="action"/> are in flight at any time. Used by the
+    /// per-entry point-write and point-read modes so concurrency is
+    /// capped at the caller-supplied flush concurrency rather than
+    /// thrashing the threadpool with one Task per entry.
+    /// </summary>
+    private static async Task FanOutAsync(
+        List<KeyValuePair<string, byte[]>> batch,
+        int parallelism,
+        Func<KeyValuePair<string, byte[]>, CancellationToken, Task> action,
+        CancellationToken ct)
+    {
+        var maxInFlight = Math.Max(1, parallelism);
+        using var gate = new SemaphoreSlim(maxInFlight, maxInFlight);
+        // Track every issued task so a single failure surfaces via
+        // Task.WhenAll rather than escaping into the threadpool. The
+        // FlushAsync caller wraps DispatchAsync in retry/shutdown
+        // handling that treats a thrown exception as a transient
+        // failure or as a real fault; either way a fan-out task that
+        // faulted must propagate.
+        var tasks = new List<Task>(batch.Count);
+        for (var i = 0; i < batch.Count; i++)
+        {
+            await gate.WaitAsync(ct).ConfigureAwait(false);
+            var kvp = batch[i];
+            tasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    await action(kvp, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }, ct));
+        }
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 }
