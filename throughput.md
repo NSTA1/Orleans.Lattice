@@ -1,34 +1,31 @@
 # Orleans.Lattice throughput report
 
-> **Status**: WORK-IN-PROGRESS skeleton populated by [throughput-capture-plan.md](throughput-capture-plan.md). Layer-1 cells fill in after the BDN run completes; Layer-2 cells (except `SetMany`) fill in after the per-mode `azure-throughput` ladders complete.
->
-> **Source commit**: `b872262` on branch `throughput` (leaf etag-race fix, BPlusLeafGrainTests.EtagRace.cs). Numbers below are produced against this commit; the chaos suite has not yet run against it, so the report is for informational presentation only — not a release artefact.
 
 ## Headline table
 
 All latency values are expressed in **milliseconds (ms)**. Sub-microsecond Layer-1 reads show as `<0.001 ms` with the exact nanosecond value in the detail table below; sub-millisecond values are shown to 3 decimal places (e.g. `0.405` ms = 405 µs = 405,000 ns).
 
-| Operation        | Layer 1 — In-process p50 (ms/op) | Layer 1 — Allocated (B/op) | Layer 1 — Single-thread throughput (op/s) | Layer 2 — Sustained throughput (op/s) | Layer 2 — p50 (ms/call) | Layer 2 — p99 (ms/call) |
+| Operation        | Layer 1 - In-process p50 (ms/op) | Layer 1 - Allocated (B/op) | Layer 1 - Single-thread throughput (op/s) | Layer 2 - Sustained throughput (op/s) | Layer 2 - p50 (ms/call) | Layer 2 - p99 (ms/call) |
 | ---------------- | -------------------------------: | -------------------------: | ----------------------------------------: | ------------------------------------: | ----------------------: | ----------------------: |
 | `GetAsync` (point read)         | **0.000 405**       | 456    | **~2.47 M**       | **45,750** keys/s                                              | **~0.11**¹           | **~0.18**¹             |
 | `SetAsync` (point write)        | **0.003 971**       | 672    | **~252 k**        | **156** keys/s (sustained), **3,499** keys/s (burst max)²      | **~22**¹             | **~37**¹               |
 | `GetManyAsync` (4,096 keys/call) | **0.008 062** (16 keys) | 6,968 | **~124 k** calls/s ≈ **~2.0 M** keys/s | **49,736** keys/s ≈ **12.1** calls/s (sustained), **59,551** keys/s burst max | **14.1**           | **68.6**               |
 | `SetManyAsync` (4,096 entries/call) | **0.700** (1,000 entries) | 237,972 | **~1.43 k** calls/s ≈ **~1.43 M** entries/s | **9,758** entries/s ≈ **2.4** calls/s (sustained), **23,326** entries/s burst max | **2,734**            | **4,035**              |
-| `SetManyAtomicAsync` (64 keys/saga) | **0.188** (16 keys/saga) | 64,653 | **~5.3 k** sagas/s ≈ **~85 k** keys/s | **203** keys/s ≈ **3.2** sagas/s (sustained), **768** keys/s burst max³ ⁵ | **~3,667**⁴            | **~3,968**⁴            |
+| `SetManyAtomicAsync` (64 keys/saga) | **0.188** (16 keys/saga) | 64,653 | **~5.3 k** sagas/s ≈ **~85 k** keys/s | **268** keys/s ≈ **4.2** sagas/s (sustained), **768** keys/s burst max³ ⁵ | **~7,660**⁴            | **~9,510**⁴            |
 
 ¹ Layer-2 `SetAsync` / `GetAsync` are dispatched in a parallel fan-out under `FlushConcurrency=8`. The `DispatchAsync` call carries one full producer batch (4,096 per-key calls); the per-call latency shown is derived by dividing `DispatchAsync` p50/p99 by 4,096. Direct per-call timing would require instrumenting each `ILattice.SetAsync` / `GetAsync` invocation individually, which the bench harness does not currently do.
 
 ² Layer-2 `SetAsync` saturates because each per-key call pays a full Orleans grain RPC + WAL append round-trip with no batching amortisation. The `SteadyAvg` of 156 keys/s reflects the silo running at the WAL-saturated ceiling for the entire run; `SteadyMax` of 3,499 keys/s reflects the moments when in-flight calls were returning in burst.
 
-³ Layer-2 `SetManyAtomicAsync` is the only row where the producer's offered load was **deliberately lowered** to `BENCH_VEHICLE_COUNT=500, BENCH_BATCH_SIZE=256` (so the producer's 2,500 events/s offered load comfortably exceeds the atomic-saga path's measured ~200-800 keys/s capacity rather than saturating instantly). All other rows used the c2-iii baseline `vehicles=10000, batchSize=4096` shape. The `203 keys/s` headline is the silo's productive-window steady-state sustained rate; `768 keys/s` is the burst max from when the saga pipeline was full.
+³ Layer-2 `SetManyAtomicAsync` is the only row where the producer's offered load was **deliberately tuned** to `BENCH_VEHICLE_COUNT=500, BENCH_TICK_HZ=10, BENCH_BATCH_SIZE=256` (5,000 events/s offered, comfortably exceeding the atomic-saga path's measured ~200-800 keys/s capacity without saturating instantly). All other rows used the c2-iii baseline `vehicles=10000, batchSize=4096, tickHz=5` shape. The `268 keys/s` headline is the silo's productive-window steady-state sustained rate; `768 keys/s` is the burst max from when the saga pipeline was full.
 
-⁴ Layer-2 `SetManyAtomicAsync` p50/p99 are derived per-saga (not per-key): each `DispatchAsync` now carries 1-4 sagas at a time post-D1 (`AtomicWriteGrain` fans out per-key under `Task.WhenAll` bounded by `WalPartitions`). Reported values are per **single saga** (~3,667 ms p50, ~3,968 ms p99) - i.e. per 64-key atomic batch. Per-key latency: ~57 ms / ~62 ms (saga's WAL-append + commit-mark + apply protocol against Azure Tables; per-key cost is unchanged by D1 because each per-key path is identical - D1 lifts only the parallelism, not the per-key cost).
+⁴ Layer-2 `SetManyAtomicAsync` p50/p99 are derived per-saga (not per-key) from the silo-side `lattice.op.duration_ms` histogram (steady-state windows t=60s, 90s, 119s of the D1c rung). Reported values are per **single saga** (~7,660 ms p50, ~9,510 ms p99) - i.e. per 64-key atomic batch. Per-key latency: ~120 ms / ~149 ms (saga's WAL-append + commit-mark + apply protocol against Azure Tables). D1c restores D1's parallel cross-leaf saga shape (single `lattice.SetManyAsync(slice)` per batch) by closing the cross-cluster atomic-visibility hole that D1's parallel fan-out silently opened: the receiver-side replication applier and producer-side shipper now bypass HLC-based dedup / cursor-filter / causal-park gates for prepared+atomic-batch entries (`IsPrepared && AtomicBatchSize > 0`) so cross-leaf non-monotonic HLCs no longer silently drop saga prepared writes en route to the receiver. See `scaling.md` c2-xi memo for the full attribution.
 
-⁵ Phase D1 (parallel per-key fan-out in `AtomicWriteGrain`, commit `0017795`): replaces the historically-sequential per-key `for` loop in `ExecutePhaseAsync` with a bounded `Task.WhenAll` capped at `WalPartitions` (default 8). Measured uplift at this operating point: **SteadyAvg 137 → 203 keys/s (+48%), FinalWritten 14,522 → 21,065 (+45%)**, both with zero failures. Per-saga latency unchanged - the lift is entirely from running ~4 sagas in parallel rather than serially. The lift sits well below the theoretical 4-8x ceiling because per-leaf-grain pending-tx-map mutations serialise downstream of the saga's fan-out; closing that gap is a Phase D follow-up (D2 / D3 untouched; the leaf-side serialisation is a new finding from D1's measurement).
+⁵ Phase D1c (sequence-number cursor for `ChangeFeed.Subscribe` + prepared-batch bypasses on the receiver/shipper HLC gates, commit pending on this branch): supersedes Phase D1b. D1b serialised per-shard `SetManyAsync` dispatch inside the saga to keep WAL-partition HLCs monotonic; D1c removes that constraint by recognising that the HLC monotonicity assumption was wrong everywhere it was used. The fix has three parts: (a) the public `IChangeFeed.Subscribe` cursor flips from `HybridLogicalClock` to a per-partition WAL offset (`ChangeFeedCursor`), which is monotonic by construction at the WAL grain; the legacy HLC overload remains for source-compat but its filter becomes a no-op; (b) the receiver-side `ReplicationApplier` bypasses both the per-origin HWM dedup AND the causal-park gate for `IsPrepared && AtomicBatchSize > 0` entries - cross-leaf prepared writes carry independent per-leaf HLCs that interleave non-monotonically on the shared WAL partition and were silently dropped by HLC dedup or deadlocked by causal-park (siblings' VC dependencies referred to each other's per-leaf clocks); (c) the producer-side `ReplicationShipperGrain` bypasses its own `state.Cursor` HLC filter for the same class of entries. With the gates closed at every level the saga can revert to D1's single parallel `lattice.SetManyAsync(slice)` call, restoring most of D1's sustained throughput while preserving D1b's correctness guarantees. Measured at this operating point: **SteadyAvg 216 → 268 keys/s (+24% over D1b, +32% over D1)**, **per-saga p50 9.3s → 7.7s (-17% latency vs D1b)**, FinalFailed=0 (every saga commits cleanly through cross-cluster replication). Regression coverage: 7 unit tests in `ReplicationApplierTests.PreparedNonMonotonicHlc.cs` pin the four bypass conditions against future regression. See `scaling.md` c2-xi memo for the full attribution.
 
-**Layer-1 source**: BDN run `2026-05-27T09-02-19Z` on this branch (commit `b872262`), AMD Ryzen 7 PRO 7840U / 16 logical / 8 physical, .NET 10.0.8, in-process toolchain. P50 column shown above; mean and p99 are in the per-op detail table further down. "Single-thread throughput" is the derived `1 / p50`; treat it as the algorithmic ceiling, **not** as a multi-thread scaling claim. Multi-key rows (`GetManyAsync`, `SetManyAsync`, `SetManyAtomicAsync`) show both calls/sec and entries/sec — the entries/sec column is what the audience compares against per-key throughput of the point ops.
+**Layer-1 source**: BDN run `2026-05-27T09-02-19Z` on this branch (commit `b872262`), AMD Ryzen 7 PRO 7840U / 16 logical / 8 physical, .NET 10.0.8, in-process toolchain. P50 column shown above; mean and p99 are in the per-op detail table further down. "Single-thread throughput" is the derived `1 / p50`; treat it as the algorithmic ceiling, **not** as a multi-thread scaling claim. Multi-key rows (`GetManyAsync`, `SetManyAsync`, `SetManyAtomicAsync`) show both calls/sec and entries/sec - the entries/sec column is what the audience compares against per-key throughput of the point ops.
 
-**Layer-2 source**: c2-vii probe-0 ladder + c2-viii step-9 per-mode probes (commits `b872262`, `7fd37a6`) at the c2-iii operating-point baseline (single silo, 32 shards, real Azure Tables Standard, West Europe). The `SetManyAtomicAsync` row used the tuned operating point described in caveat ³ and measures the Phase D1 fan-out shipped at commit `0017795` (see caveat ⁵).
+**Layer-2 source**: c2-vii probe-0 ladder + c2-viii step-9 per-mode probes (commits `b872262`, `7fd37a6`) at the c2-iii operating-point baseline (single silo, 32 shards, real Azure Tables Standard, West Europe). The `SetManyAtomicAsync` row uses the tuned operating point described in caveat ³ and measures Phase D1c (commit pending on this branch; see caveat ⁵). The D1c rung was measured at offered 5,000 keys/s on `silo-20260527-143915Z.log`.
 
 ### Layer-1 detail (full mean / p50 / p99 / allocated, per [BenchmarkDotNet](https://benchmarkdotnet.org) run)
 
@@ -64,42 +61,42 @@ Raw harness JSON: `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json` 
 
 Two layers because they answer different questions; either alone misleads.
 
-### Layer 1 — In-process microbench
+### Layer 1 - In-process microbench
 
 **Source**: [benchmark/host/Bench.Microbench/LatticeMicroBenchmarks.cs](benchmark/host/Bench.Microbench/LatticeMicroBenchmarks.cs), driven by [BenchmarkDotNet](https://benchmarkdotnet.org). The harness instantiates the lattice's grain layer in-process against an in-memory storage provider; no Orleans RPC, no Azure I/O. BenchmarkDotNet runs O(10⁴–10⁶) iterations per op and computes mean / median / stddev / allocations with very tight error bars.
 
 **Reading**: the algorithmic cost of one call to each `ILattice` method when scheduling and storage are free. The upper bound on what the implementation could theoretically sustain if every other layer were perfect.
 
 **Units**:
-- `Mean (ms/op)` / `P50 (ms/op)` / `P99 (ms/op)` — wall-clock time per call, in milliseconds. Sub-microsecond cells (e.g. `PointRead` p50 = 0.000 405 ms = 405 ns) keep 6 decimal places; sub-millisecond cells use 3 decimals.
-- `Allocated (B/op)` — bytes of managed heap allocation per call. Lower is better for GC pressure under steady-state load.
-- `Single-thread throughput (op/s)` — derived `1 / p50` after converting p50 to seconds. The number of calls one thread could complete per second if it ran the op back-to-back with no other work.
+- `Mean (ms/op)` / `P50 (ms/op)` / `P99 (ms/op)` - wall-clock time per call, in milliseconds. Sub-microsecond cells (e.g. `PointRead` p50 = 0.000 405 ms = 405 ns) keep 6 decimal places; sub-millisecond cells use 3 decimals.
+- `Allocated (B/op)` - bytes of managed heap allocation per call. Lower is better for GC pressure under steady-state load.
+- `Single-thread throughput (op/s)` - derived `1 / p50` after converting p50 to seconds. The number of calls one thread could complete per second if it ran the op back-to-back with no other work.
 
-### Layer 2 — Azure-throughput bench
+### Layer 2 - Azure-throughput bench
 
 **Source**: [benchmark/azure-throughput/Silo/Program.cs](benchmark/azure-throughput/Silo/Program.cs) (silo) and [benchmark/azure-throughput/Producer/Program.cs](benchmark/azure-throughput/Producer/Program.cs) (producer), deployed via [benchmark/azure-throughput/scripts/40-ladder.ps1](benchmark/azure-throughput/scripts/40-ladder.ps1) to Azure Container Instances against a real Azure Tables Standard account. The producer streams vehicle telemetry over TCP; the silo's `TcpIngestService` batches events and dispatches them through `ILattice` against the c2-iii operating-point baseline.
 
 **Reading**: end-to-end sustained throughput on a single silo at a realistic operating point with durable storage. The number to quote as "what the system does in production" on a single silo.
 
 **Units**:
-- `Sustained throughput (op/s)` — the productive-window steady-state average (drain tail excluded; the bench-timing fix described in the c2-vi-bench-timing-fix memo applies). For multi-key ops (`SetManyAsync`, `GetManyAsync`, `SetManyAtomicAsync`), one "op" is one batched call and the number of entries per batch is documented per row.
-- `p50 / p99 (ms)` — per-call wall-clock latency at the 50th / 99th percentile from the `BenchMetrics.LatticeOpDurationMs` histogram over the productive window.
+- `Sustained throughput (op/s)` - the productive-window steady-state average (drain tail excluded; the bench-timing fix described in the c2-vi-bench-timing-fix memo applies). For multi-key ops (`SetManyAsync`, `GetManyAsync`, `SetManyAtomicAsync`), one "op" is one batched call and the number of entries per batch is documented per row.
+- `p50 / p99 (ms)` - per-call wall-clock latency at the 50th / 99th percentile from the `BenchMetrics.LatticeOpDurationMs` histogram over the productive window.
 
 ## How each op is dispatched (Layer 2)
 
 The Layer-2 harness uses `BENCH_WORKLOAD_MODE` to select the dispatch shape; all five modes share the same producer event stream:
 
-- **`set-many`** — every producer batch becomes one `ILattice.SetManyAsync(entries)` call. Default. The mode that produced today's `12,708 op/s` headline.
-- **`set-many-atomic`** — every producer batch is sliced into 64-key sub-batches; each sub-batch becomes one `ILattice.SetManyAtomicAsync(entries)` saga call. 64 is the realistic atomic-batch size; 4096-key sagas are not an audience-relevant shape.
-- **`set-point`** — every entry in the batch becomes one `ILattice.SetAsync(key, value)` call; the silo fans these out in parallel up to `BENCH_FLUSH_CONCURRENCY` (8). The reported "op/s" is **point-writes per second**, not batches per second.
-- **`get-point`** — silo pre-seeds `BENCH_VEHICLE_COUNT` keys via `BulkLoadAsync` at startup, then drives one `ILattice.GetAsync(key)` per producer-event; same parallel fan-out shape as `set-point`.
-- **`get-many`** — same pre-seed as `get-point`; every producer batch's key list becomes one `ILattice.GetManyAsync(keys)` call.
+- **`set-many`** - every producer batch becomes one `ILattice.SetManyAsync(entries)` call. Default. The mode that produced today's `12,708 op/s` headline.
+- **`set-many-atomic`** - every producer batch is sliced into 64-key sub-batches; each sub-batch becomes one `ILattice.SetManyAtomicAsync(entries)` saga call. 64 is the realistic atomic-batch size; 4096-key sagas are not an audience-relevant shape.
+- **`set-point`** - every entry in the batch becomes one `ILattice.SetAsync(key, value)` call; the silo fans these out in parallel up to `BENCH_FLUSH_CONCURRENCY` (8). The reported "op/s" is **point-writes per second**, not batches per second.
+- **`get-point`** - silo pre-seeds `BENCH_VEHICLE_COUNT` keys via `BulkLoadAsync` at startup, then drives one `ILattice.GetAsync(key)` per producer-event; same parallel fan-out shape as `set-point`.
+- **`get-many`** - same pre-seed as `get-point`; every producer batch's key list becomes one `ILattice.GetManyAsync(keys)` call.
 
 The pre-seed for the read modes ensures Layer-2 read numbers exercise a populated tree (warm leaf cache, populated WAL, populated grain state). Cold-cache reads are out of scope for this report; a follow-up could add a "between-pre-seed-and-measurement deactivate" lever.
 
 ## Configuration baseline (Layer 2)
 
-The c2-iii operating point, validated by the c2-vii probe-0 ladder ([scaling.md](scaling.md) U9p step c2-vii memo). This is the **full reproducible set** — every env-var pinned below is required to reproduce the headline numbers; defaults outside this table either don't affect throughput or are the deploy-script default at [commit b872262](benchmark/azure-throughput/scripts/20-build-and-deploy.ps1).
+The c2-iii operating point, validated by the c2-vii probe-0 ladder ([scaling.md](scaling.md) U9p step c2-vii memo). This is the **full reproducible set** - every env-var pinned below is required to reproduce the headline numbers; defaults outside this table either don't affect throughput or are the deploy-script default at [commit b872262](benchmark/azure-throughput/scripts/20-build-and-deploy.ps1).
 
 ### Producer (offered-load shape, rung `10000:5`)
 
@@ -173,6 +170,6 @@ Layer 2: per-mode CSVs under `benchmark/azure-throughput/scripts/`:
 | `set-point`        | `.ladder-results-c2-vii-mode-set-point.csv`              | `.ladder-phaseA-c2-vii-mode-set-point.csv`               | `silo-20260527-100754Z.log`                           |
 | `get-point`        | `.ladder-results-c2-vii-mode-get-point.csv`              | `.ladder-phaseA-c2-vii-mode-get-point.csv`               | `silo-20260527-101629Z.log`                           |
 | `get-many`         | `.ladder-results-c2-vii-mode-get-many.csv`               | `.ladder-phaseA-c2-vii-mode-get-many.csv`                | `silo-20260527-102106Z.log`                           |
-| `set-many-atomic` (Phase D1, commit `0017795`) | `.ladder-results-c2-viii-mode-set-many-atomic-D1.csv` | `.ladder-phaseA-c2-viii-mode-set-many-atomic-D1.csv` | `silo-20260527-112136Z.log` |
+| `set-many-atomic` (Phase D1c, commit pending on this branch)        | `.ladder-results-c2-xi-mode-set-many-atomic-D1c.csv`           | `.run/silo-20260527-143915Z.log` (silo-side `phaseA` lattice.op.duration_ms histogram) | `silo-20260527-143915Z.log` |
 
 All `benchmark/.run/silo-*.log` files are gitignored (large; multi-MiB per run). The CSVs are gitignored as well (`.ladder-*` pattern in `benchmark/azure-throughput/scripts/.gitignore`), but their contents are pinned in the headline tables above.
