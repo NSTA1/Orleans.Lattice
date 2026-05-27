@@ -153,4 +153,37 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(5)] public Dictionary<Guid, SnapshotPin> SnapshotPins { get; set; } = [];
+
+    /// <summary>
+    /// Monotonic revision counter bumped on every successful mutation
+    /// of <see cref="Decisions"/>. Used by reader-side fast paths in
+    /// <c>LatticeGrain</c> (e.g. <c>GetManyAsyncCore</c>) to replace
+    /// the snap2 dictionary fetch of the double-checked retry with a
+    /// cheap version probe: when the reader observes the same revision
+    /// before and after its fan-out, snap1 is provably still
+    /// authoritative and no second dictionary serialization is needed.
+    /// <para>
+    /// Bumped under the registry grain's single-turn token in the same
+    /// step that mutates <see cref="Decisions"/>, so a reader observing
+    /// <c>revision = N</c> is guaranteed to also observe every
+    /// decision change that produced <c>revision = N</c> in any
+    /// subsequent <c>SnapshotAsync</c> on the same grain. Any mutation
+    /// of <see cref="Decisions"/> bumps the counter, including Aborted
+    /// transitions and tombstone-driven physical removals - this is
+    /// strictly conservative (the reader's fall-through path re-runs
+    /// the existing <c>IsSnapshotStable</c> check on a freshly fetched
+    /// snap2, which already filters to Committed transitions).
+    /// </para>
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-6 slot
+    /// decodes to <c>0L</c>. A reactivated grain whose persisted
+    /// <see cref="Decisions"/> is non-empty but whose persisted
+    /// <c>DecisionsRevision</c> is 0 (migration path) seeds the
+    /// revision to <c>1</c> on first activation so newly-arriving
+    /// readers observe a non-zero value before the first post-migration
+    /// mutation; the revision is opaque (only equality / inequality
+    /// matter) so the seed value is arbitrary.
+    /// </para>
+    /// </summary>
+    [Id(6)] public long DecisionsRevision { get; set; }
 }

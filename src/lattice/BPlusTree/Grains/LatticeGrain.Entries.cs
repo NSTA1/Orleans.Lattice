@@ -79,7 +79,7 @@ internal sealed partial class LatticeGrain
             && LatticeRegistrySnapshotContext.Current is null;
         if (ownsScanSnapshotScope)
         {
-            scanSnapshot = await FetchRegistrySnapshotAsync();
+            scanSnapshot = (await FetchRegistrySnapshotAsync()).Snap;
         }
         using var scanSnapshotScope = ownsScanSnapshotScope
             ? LatticeRegistrySnapshotContext.BeginScope(scanSnapshot)

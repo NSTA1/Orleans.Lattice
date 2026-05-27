@@ -266,7 +266,8 @@ internal sealed partial class LatticeGrain(
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
-            var snap1 = await FetchRegistrySnapshotAsync();
+            var snap1Pair = await FetchRegistrySnapshotAsync();
+            var snap1 = snap1Pair.Snap;
             var concurrent = new ConcurrentDictionary<string, byte[]>();
             using (LatticeRegistrySnapshotContext.BeginScope(snap1))
             {
@@ -279,8 +280,7 @@ internal sealed partial class LatticeGrain(
                 await Task.WhenAll(tasks);
             }
 
-            var snap2 = await FetchRegistrySnapshotAsync();
-            if (IsSnapshotStable(snap1, snap2))
+            if (await IsSnap2StableAsync(snap1, snap1Pair.Revision))
             {
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={concurrent.Count} rounds=[{string.Join(',', concurrent.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
@@ -885,7 +885,8 @@ internal sealed partial class LatticeGrain(
             // undrained leaves consult snap1.InFlight and fall through
             // to pre-saga Entries - split observation that defeats
             // strict per-tree atomic visibility.
-            var snap1 = await FetchRegistrySnapshotAsync();
+            var snap1Pair = await FetchRegistrySnapshotAsync();
+            var snap1 = snap1Pair.Snap;
 
             // Fast path: Version == 0 means the default identity map is in
             // effect - no split has ever been persisted for this tree.
@@ -903,8 +904,7 @@ internal sealed partial class LatticeGrain(
                 }
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
                 if (mapAfter.Version != 0L) { shardMap0 = mapAfter; continue; }
-                var snap2Fast = await FetchRegistrySnapshotAsync();
-                if (!IsSnapshotStable(snap1, snap2Fast)) continue;
+                if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
                 return simple;
             }
 
@@ -946,8 +946,7 @@ internal sealed partial class LatticeGrain(
             // TxRegistry stability check: an InFlight->Committed
             // transition during the fan-out forces a retry under a
             // fresh snapshot.
-            var snap2 = await FetchRegistrySnapshotAsync();
-            if (!IsSnapshotStable(snap1, snap2)) continue;
+            if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
 
             return total;
         }
@@ -1112,7 +1111,8 @@ internal sealed partial class LatticeGrain(
             // validation prevents the InFlight->Committed transition
             // race that would otherwise produce a split observation
             // across drained vs undrained leaves.
-            var snap1 = await FetchRegistrySnapshotAsync();
+            var snap1Pair = await FetchRegistrySnapshotAsync();
+            var snap1 = snap1Pair.Snap;
 
             // Fast path: Version == 0 means no split has ever been persisted
             // for this tree. Use the cheap per-shard CountAsync() path and
@@ -1131,8 +1131,7 @@ internal sealed partial class LatticeGrain(
                 }
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap;
                 if (mapAfter.Version != 0L) { shardMap = mapAfter; continue; }
-                var snap2Fast = await FetchRegistrySnapshotAsync();
-                if (!IsSnapshotStable(snap1, snap2Fast)) continue;
+                if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
                 var fastCounts = new int[physicalShards.Count];
                 for (int i = 0; i < physicalShards.Count; i++) fastCounts[i] = fastTasks[i].Result;
                 return fastCounts;
@@ -1159,8 +1158,7 @@ internal sealed partial class LatticeGrain(
             var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
             if (shardMapNow.Version != versionAtStart) continue;
 
-            var snap2 = await FetchRegistrySnapshotAsync();
-            if (!IsSnapshotStable(snap1, snap2)) continue;
+            if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
 
             var counts = new int[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
@@ -1543,6 +1541,20 @@ internal sealed partial class LatticeGrain(
         LatticeSharding.GetShardIndex(key, shardCount);
 
     /// <summary>
+    /// Pair of <see cref="ITxRegistryGrain.SnapshotAsync"/> result and
+    /// the matching <see cref="ITxRegistryGrain.GetDecisionsRevisionAsync"/>
+    /// reading captured in the same call window. The revision lets the
+    /// double-checked retry replace its snap2 dictionary fetch with the
+    /// cheap revision probe (see
+    /// <see cref="IsSnap2StableAsync"/>): when the registry's
+    /// <em>post</em>-fan-out revision equals the snap1 revision, no
+    /// decision mutation occurred and snap1 is provably authoritative.
+    /// </summary>
+    private readonly record struct RegistrySnapshotPair(
+        Dictionary<Guid, TxStatus>? Snap,
+        long Revision);
+
+    /// <summary>
     /// Fetches a single per-tree <see cref="ITxRegistryGrain"/> decision
     /// snapshot. Used by multi-shard read fan-outs in concert with
     /// <see cref="IsSnapshotStable"/> to implement a double-checked
@@ -1561,18 +1573,103 @@ internal sealed partial class LatticeGrain(
     /// available. The matching <see cref="IsSnapshotStable"/> check
     /// treats a <c>null</c> snap2 as stable for the same reason.
     /// </para>
+    /// <para>
+    /// Returns a <see cref="RegistrySnapshotPair"/> carrying both the
+    /// decision dictionary and the registry's monotonic decisions
+    /// revision; the revision feeds the post-fan-out
+    /// <see cref="IsSnap2StableAsync"/> cheap-probe stability check.
+    /// On RPC failure both fields decay to defaults
+    /// (<c>Snap = null</c>, <c>Revision = 0</c>); the stability check
+    /// treats this as stable (same back-compat as the original
+    /// snap1-null path).
+    /// </para>
     /// </summary>
-    private async ValueTask<Dictionary<Guid, TxStatus>?> FetchRegistrySnapshotAsync()
+    private async ValueTask<RegistrySnapshotPair> FetchRegistrySnapshotAsync()
     {
         var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
         try
         {
-            return await registry.SnapshotAsync();
+            // Single atomic RPC returns both the dict and the revision
+            // captured in the same registry turn, so the (Snap,
+            // Revision) pair is guaranteed self-consistent. A sequential
+            // (SnapshotAsync, GetDecisionsRevisionAsync) pair would
+            // admit a writer-interleave skew: SnapshotAsync runs under
+            // the turn token (no AlwaysInterleave), but a writer's
+            // turn could complete fully between the two calls and
+            // produce a snapshot reflecting revision N alongside a
+            // probe reading N+1 - a "false stable" hazard the
+            // post-fan-out probe cannot detect.
+            var pair = await registry.SnapshotWithRevisionAsync();
+            return new RegistrySnapshotPair(pair.Decisions, pair.Revision);
         }
         catch
         {
-            return null;
+            return new RegistrySnapshotPair(null, 0L);
         }
+    }
+
+    /// <summary>
+    /// Cheap-probe replacement for the post-fan-out snap2 dictionary
+    /// fetch. Issues a single
+    /// <see cref="ITxRegistryGrain.GetDecisionsRevisionAsync"/> RPC and
+    /// returns <c>true</c> when the returned revision equals the
+    /// captured <paramref name="snap1Revision"/> - in that case the
+    /// registry's Decisions map provably did not mutate during the
+    /// fan-out, so <paramref name="snap1"/> is still authoritative and
+    /// no second dictionary serialization is required. On revision
+    /// mismatch the method falls through to a full
+    /// <see cref="ITxRegistryGrain.SnapshotAsync"/> fetch and applies
+    /// the existing <see cref="IsSnapshotStable"/> rule, preserving
+    /// every legacy correctness guarantee.
+    /// <para>
+    /// Multi-silo safe: the probe is still a grain RPC to the
+    /// single-activation registry; the saving is the elided dictionary
+    /// payload on the steady-state happy path, not the RPC turn itself.
+    /// </para>
+    /// </summary>
+    private async ValueTask<bool> IsSnap2StableAsync(
+        Dictionary<Guid, TxStatus>? snap1,
+        long snap1Revision)
+    {
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        long revision2;
+        try
+        {
+            revision2 = await registry.GetDecisionsRevisionAsync();
+        }
+        catch
+        {
+            // RPC failure: treat as stable (legacy snap1-null /
+            // snap2-null handling - the reader proceeds and falls back
+            // to per-leaf GetStatusManyAsync if a pending entry is
+            // observed).
+            return true;
+        }
+        if (revision2 == snap1Revision)
+        {
+            return true;
+        }
+
+        // Revision changed during the fan-out. A Committed transition
+        // would invalidate snap1; an Aborted-only or pure-Forget
+        // transition would not. Issue a fresh atomic
+        // SnapshotWithRevisionAsync to disambiguate (using the
+        // self-consistent shape avoids re-introducing the snap1
+        // skew the optimisation closed), then run the existing
+        // IsSnapshotStable rule.
+        Dictionary<Guid, TxStatus>? snap2;
+        try
+        {
+            var snap2Pair = await registry.SnapshotWithRevisionAsync();
+            snap2 = snap2Pair.Decisions;
+        }
+        catch
+        {
+            // RPC failure on the disambiguation path: same defensive
+            // treatment as FetchRegistrySnapshotAsync above.
+            return true;
+        }
+        return IsSnapshotStable(snap1, snap2);
     }
 
     /// <summary>

@@ -166,7 +166,7 @@ internal sealed partial class LatticeGrain
         // cursor grain will treat that as "no sagas captured" and
         // proceed; the snapshot semantics weaken to "WAL-only" rather
         // than failing the open.
-        var registrySnapshot = await FetchRegistrySnapshotAsync();
+        var registrySnapshot = (await FetchRegistrySnapshotAsync()).Snap;
         cancellationToken.ThrowIfCancellationRequested();
         // The HLC stamped on the snapshot is the maximum HLC observed
         // across every captured decision; HybridLogicalClock.Zero when
