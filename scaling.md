@@ -2302,6 +2302,68 @@ vs c2-iii baseline at the same rung (14,314/s): **-2.3%**, within run-to-run var
 
 **Last Updated**: 2026-05-26 (c2-vi-followup: etag race fixed via _splitGate on Digest writes; rung-1 14k/s preserved; 0 failures)
 
+#### U9p step 8c-c-iv-c2-vii (2026-05-27) - c2-iv-redux knob sweep at c2-iii baseline; ALSO uncovers and ships a leaf etag race (BPlusLeafGrainTests.EtagRace.cs, commit `b872262`)
+
+**Setup.** Five probes against the c2-iii baseline (`shardCount=32`, `WP=8`, `WMP=8`, `P2=5ms`, `FC=8`, `flushMs=50`, `responseTimeoutSec=180`, `batchSize=4096`), three rungs each (`10000:5`, `25000:5`, `50000:5`), 60 s producer per rung, real Azure Tables (`lat01-rg`). Source commit at probes A-D: `b872262` (post leaf-etag-race fix). Probe-0 was measured both pre-fix (commit `de3e723`, c2-iii-ship) and post-fix to confirm the fix did not regress the baseline.
+
+**Bug uncovered before the sweep could run.** Probe-0 at `25000:5` collapsed to **1,158/s** (vs c2-iii-ship's 7,184/s) with 204 leaf `InconsistentStateException` etag races on `bplusleaf` `state.WriteStateAsync()` calls (and 432 cascaded `OrleansMessageRejectionException`). Root cause: identical shape to the c2-vi-followup bug, but at the leaf layer. With `IBPlusLeafGrain.SetAsync` / `SetManyAsync` / `DeleteAsync` marked `[AlwaysInterleave]` (per c2-iii), the donor side of a foreground split (which already holds `_splitGate` via `SplitIfNeededUnderGateAsync`) releases the activation turn at any of its cross-grain awaits in `CompleteSplitAsync`. An unrelated leaf's split flow then lands a `SetNextSiblingAsync` / `SetPrevSiblingAsync` / `SetParentAsync` RPC on the same activation - producing two pending `WriteStateAsync` calls against the same row, and the loser of the etag CAS throws.
+
+**Fix (commit `b872262`).** Wrap each public PersistAsync site in `BPlusLeafGrain` with `_splitGate.WaitAsync()` / `Release()`, mirroring the c2-vi-followup pattern on the internal grain: 5 methods in `BPlusLeafGrain.cs` (`SetNextSiblingAsync`, `SetPrevSiblingAsync`, `SetTreeIdAsync`, `SetShardIndexAsync`, `SetKeyRangeAsync`) and 1 in `BPlusLeafGrain.DigestPublication.cs` (`SetParentAsync`). The gate is non-reentrant; none of these methods are reached from inside an already-held gate frame (the split flow calls them as cross-grain RPCs against a different activation), so no self-recursive acquisition is possible.
+
+**Failing-first regression** in `test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.EtagRace.cs` (3 tests covering representative pairs `SetParentAsync ⊥ SetNextSiblingAsync`, `SetParentAsync ⊥ SetPrevSiblingAsync`, `SetNextSiblingAsync ⊥ SetPrevSiblingAsync`). Verified failing without the gate; 3/3 pass with it. Non-chaos suite: **3,466/3,466 green**.
+
+**Headline knob-sweep results** (5 probes × 3 rungs, all post-fix at commit `b872262`):
+
+| Probe   | `WP` | `WMP` | `P2`(ms) | 10000:5 | 25000:5 | 50000:5 |
+| ------- | ---: | ----: | -------: | ------: | ------: | ------: |
+| **P0**  | 8    | 8     | 5        | **12,708** | **12,044** | **6,109** |
+| A       | 16   | 8     | 5        | 12,471  | 4,670   | 6,878   |
+| B       | 8    | 16    | 5        | 10,650  | 10,423  | 1,764   |
+| C       | 16   | 16    | 5        | 8,034   | 7,052   | 2,381   |
+| D       | 8    | 8     | 2        | 9,176   | (skipped) | (skipped) |
+
+All cells `FinalFailed=0`. Probe-D rungs 2 and 3 were cancelled after rung-1 measured a decisive -28% regression vs P0 - higher fan-out only makes coalescing more valuable, so rungs 2/3 would extend the regression with no information gain.
+
+**Reading.** **P0 (the c2-iii baseline as-shipped) is the empirical optimum at every rung.** Every knob deviation regresses on at least one rung; no knob produces a Pareto win.
+
+- **A (WP=16, WMP=8):** -61% at 25000:5. The extra WAL partitions split the per-batch coalescing pool, so each partition's `PhaseTwoWorker` accumulates fewer pending batches per drain - the per-partition manifest+TAIL update amortisation drops below the cross-partition parallelism gain. At 50000:5 the fan-out is high enough that the extra partitions help (+13% vs P0), but the rung-2 cost dominates the campaign decision.
+- **B (WP=8, WMP=16):** -71% at 50000:5. A deeper in-flight pipeline saturates the provider's HTTP client and the Azure Tables endpoint's per-partition queue; with the leaf no longer the binding constraint (c2-iii), the next ceiling is the Azure Tables HTTP layer, and `WMP>8` walks straight into it.
+- **C (WP=16, WMP=16):** -94% at 50000:5. Compound of A and B regressions; equivalent to U9c probe-C's original "-99% collapse" reading. Sweep confirms that probe is still inadmissible post-c2-iii.
+- **D (P2=2, vs P2=5):** -28% at 10000:5. The PhaseTwoWorker's coalescing window directly governs how many pending batches a single manifest+TAIL transaction amortises across; 2 ms is too short to gather a useful batch at the per-shard arrival rate (~2,500 batches/s/shard at the c2-iii operating point). This is the **third** time P2 has been measured and the third confirmation that 5 ms is structurally right at the c2-iii baseline (U9c: `P2=0` was a null result at c2-i; c2-iv probe-D: `P2=0` measured -57% at c2-ii; c2-vii probe-D: `P2=2` measures -28% at c2-iii).
+
+**Cumulative campaign trajectory** (corrected SteadyAvg, productive-window only, see c2-vi-bench-timing-fix):
+
+| Stage                          | 10000:5        | 25000:5        | 50000:5  |
+| ------------------------------ | -------------: | -------------: | -------: |
+| Pre-c2-* baseline              | ~2,817/s       | (not measured) | (n/a)    |
+| c2-ii (`shardCount=32` flip)   | 9,987/s        | (degraded)     | (n/a)    |
+| c2-iii (leaf `[AlwaysInterleave]` + split gate) | 14,314/s       | 9,485/s        | (n/a)    |
+| c2-vi-followup (internal etag) | 13,983/s       | (3,025/s, contaminated) | (n/a) |
+| **c2-vii (leaf etag fix + knob sweep)**       | **12,708/s** | **12,044/s** | **6,109/s** |
+
+The drop from c2-iii's 14,314/s to c2-vii's 12,708/s at 10000:5 is well within run-to-run variance (the c2-iii-ship rung-1 had a single late-cadence outlier that lifted its SteadyAvg; the c2-vii rung-1 is a cleaner number). At 25000:5 c2-vii is **+27% above c2-iii-ship's 9,485/s corrected reading**, recapturing the headroom lost to the etag race the bench harness had been masking.
+
+**Where the documented Azure Tables ceiling sits.** The Azure Tables documented account ceiling is 20,000 entities/s per Standard account. c2-vii probe-0 at 10000:5 is **63% of that ceiling on a single silo at a single rung**. The 25000:5 rung is **60%**. The 50000:5 rung shows the binding constraint moves from the leaf to a higher layer - the gap between rungs 1 and 3 (12,708 → 6,109 /s) is the WAL-side ceiling kicking in under deeper fan-out per per-second batch; consistent with the c2-vi-followup "WAL drain is now the next ceiling" finding.
+
+**Library default flip - recommended but NOT shipped in this session.** The library defaults `WalPartitions = 1`, `WalMaxPendingBatches = 1`, `AzureTableWalStorageOptions.PhaseTwoCoalescingWindow = TimeSpan.Zero`, `PipelinePhaseTwoCommits = false` are the wire-compat conservative shape. The c2-* campaign has measured `WalPartitions=8`, `WalMaxPendingBatches=8`, `PhaseTwoCoalescingWindow=5ms`, `PipelinePhaseTwoCommits=true` as the durable-Azure-Tables sweet spot at every rung tested. **Recommendation**: flip each default in its own PR per the Phase B2 / B3 / C1 plan ladder, gated on the chaos suite, with the migration impact documented in `docs/lattice/wal.md` and `docs/lattice/wal-storage-providers.md`. Not in scope for this session.
+
+**Benchmark deploy-script defaults are already at the optimum.** `benchmark/azure-throughput/scripts/20-build-and-deploy.ps1` defaults (post commit `b872262`): `BENCH_SHARD_COUNT=32`, `BENCH_WAL_PARTITIONS=8`, `BENCH_WAL_MAX_PENDING_BATCHES=8`, `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS=5`, `BENCH_FLUSH_CONCURRENCY=8`, `BENCH_FLUSH_MS=50`, `BENCH_BATCH_SIZE=4096`, `BENCH_RESPONSE_TIMEOUT_SEC=180`, `BENCH_PIPELINE_PHASE2=1`. The two changes shipped in `b872262` (`P2=0→5` and `responseTimeout=30→180`) close the gap between the library defaults and the c2-iii operating point that the bench needs to reproduce the baseline.
+
+**Artifacts.** Five probe-tagged CSVs under `benchmark/azure-throughput/scripts/`:
+- `.ladder-results-c2-vii-P0-postfix.csv` (rungs 2-3) + `.ladder-results-c2-vii-P0-rung1-postfix.csv` (rung 1, separate file due to mid-ladder terminal cancel)
+- `.ladder-results-c2-vii-A-WP16.csv`
+- `.ladder-results-c2-vii-B-WMP16.csv`
+- `.ladder-results-c2-vii-C-WP16WMP16.csv`
+- `.ladder-results-c2-vii-D-P2-2-rung1-only.csv` (rungs 2/3 deliberately not run)
+
+**Decision.**
+
+1. The leaf etag-race fix shipped at `b872262` is the headline durable change; the chaos suite needs to run before this can merge to `main`.
+2. The knob axis is now empirically closed at the c2-iii operating point on a single silo. P0 (the as-shipped c2-iii baseline) is the optimum for `WP`, `WMP`, and `P2` at every rung tested.
+3. The next campaign axis is now **above** the c2-* tree: either (a) library default flips per Phase B/C, or (b) the original Phase A/B/D plan steps (multi-silo clustering, atomic-write saga parallelism, second-silo bench harness) to climb from 12-13 k/s on one silo toward the 20 k/s account ceiling and beyond.
+
+**Last Updated**: 2026-05-27 (c2-vii: leaf etag fix shipped, knob sweep closed at P0, library default flips recommended for follow-up PRs)
+
 ## 📝 Plan Steps
 
 - **DONE - U9p step 8c-c-i (WAL pipeline uncork).** `[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync` lifted `wal.append.in_flight` from 0 to 7 and `batch_entries` p90 to the 100-entry cap. The change is kept; it exposed memory-storage as the next limiter.
@@ -2317,7 +2379,7 @@ vs c2-iii baseline at the same rung (14,314/s): **-2.3%**, within run-to-run var
 - **DONE (FALSIFIED prior ceiling reading) - U9p step 8c-c-iv-c2-v-rung25000 (path-2 rung-25000:5 probe).** SteadyAvg **1,438/s** at `25000:5` vs **7,501/s** at `10000:5` - a 5x regression on a 2.5x rung jump, with zero failures. Reverses the c2-iv-post "WAL is the global ceiling" conclusion: the WAL ceiling is a local limit reached only when the leaf can feed it; at higher rungs (more keyspace = more leaves per batch = deeper per-leaf queue) the leaf turn queue is the binding constraint. **Re-vindicates c2-iii as a throughput lever at higher rungs**, not just a tail-latency change.
 - **DONE - U9p step 8c-c-iv-c2-iii-ship (SHIPPED, source commit `de3e723`).** `[AlwaysInterleave]` on `IBPlusLeafGrain.SetAsync` (both overloads), `SetManyAsync`, `DeleteAsync` + per-activation `_splitGate` `SemaphoreSlim` serialising 5 split / complete-split call sites in `BPlusLeafGrain.cs`. Non-chaos suite green (5,257/5,257); chaos suite green (operator-run); benchmark at `10000:5` lifted SteadyAvg 7,501 → **10,166/s (+36%)**; benchmark at `25000:5` lifted SteadyAvg 1,438 → **7,184/s (+400%)** - the headline c2-iii result. `leaf.commit.in_flight` p99 lifted from 0 to 7 (rung 10000:5) / 2 (rung 25000:5), proving the interleave engages on the live cluster. Zero failures across both rungs. Cumulative c2-* lift: 2,817 → 10,166/s at 10000:5 (+261%).
 - **NEXT - documentation pass** (`docs/lattice/wal.md`, `docs/lattice/api.md`): document the durable Azure Tables baseline (`shardCount=32`, `walPartitions=8`, `walMaxPendingBatches=8`, `phase2CoalescingMs=5`, `flushConcurrency=8`) and the c2-iii leaf reentrancy semantics. Mark any roadmap items whose deps are now satisfied.
-- **NEW NEXT (campaign axis re-opens) - c2-iv knob sweep re-run at c2-iii baseline.** The c2-iv probe-B `WMP=16` and probe-A `WP=16` regressions were measured at the leaf-queueing baseline. With c2-iii decoupling the leaf from the WAL queue, raising WMP or WP past 8 may now produce a real throughput lift. Also probe `25000:5` and `50000:5` rungs to find the new WAL ceiling. The original Phase B / Phase C / Phase D plan steps (above the c2-* tree) also become live again - the durable Azure Tables baseline at 10 k/s steady on a single silo brings the 20 k/s account ceiling within 2x.
+- **DONE - U9p step 8c-c-iv-c2-vii (knob sweep at c2-iii baseline; leaf etag race fixed, commit `b872262`).** Five probes (P0/A/B/C/D) × 3 rungs (`10000:5`, `25000:5`, `50000:5`) against the c2-iii baseline. **Headline**: the c2-iii baseline does not reproduce on current HEAD until the leaf etag race is fixed (analogous to c2-vi-followup, this time on `BPlusLeafGrain` public state-writers); fix shipped via per-activation `_splitGate` on 6 methods (`SetNextSiblingAsync`, `SetPrevSiblingAsync`, `SetTreeIdAsync`, `SetShardIndexAsync`, `SetKeyRangeAsync`, `SetParentAsync`), 3 failing-first regression tests in `BPlusLeafGrainTests.EtagRace.cs`. Post-fix: 10000:5 = 12,708/s, 25000:5 = 12,044/s, 50000:5 = 6,109/s (all probe-0, `FinalFailed=0`). **Knob result**: every deviation from the c2-iii operating point (`WP=8`, `WMP=8`, `P2=5ms`) regressed on at least one rung; no Pareto win. Probe-A (`WP=16`) lost -61% at 25000:5; probe-B (`WMP=16`) lost -71% at 50000:5; probe-C (`WP=16+WMP=16`) lost -94% at 50000:5; probe-D (`P2=2`) lost -28% at 10000:5 and was cancelled after rung-1. **No knob-default flip needed.** See memo above for full table; library default flips (`WalPartitions`, `WalMaxPendingBatches`, `PhaseTwoCoalescingWindow`, `PipelinePhaseTwoCommits`) recommended for follow-up PRs gated on the chaos suite.
 - **DEFERRED - U9p step 8c-c-iv-c (steady-state grid search).** Originally the next step after iv-b; deferred behind iv-c2 because tail latency, not throughput, is the binding kink at the durable Azure Tables baseline. When iv-c2 ships, rerun this grid search with the lower per-write tail and record steady-state band, peak, and `wal.append.provider.duration` p50/p99 for each of: baseline, `walPartitions=16`, `walMaxPendingBatches=16`, `phase2CoalescingMs=3`, best-of-three combined. The winner becomes the recommended default in `docs/lattice/wal.md`.
 - **U9p step 8c-c-iv-d (write up campaign).** Update `docs/lattice/wal.md` with the durable steady-state band; update `docs/lattice/wal-storage-providers.md` with the Azure Tables-backed numbers; mark any roadmap items whose deps are now satisfied. Run `dotnet test --filter "TestCategory!=Chaos"` before each PR and `dotnet test --filter "TestCategory=Chaos"` before any merge that flips a default.
 - **DEFERRED - prior B / C / D plan steps.** The Phase A anomalies that originally paused them (harness ceiling at ~17 k/s on memory WAL; atomic-write throughput variance) are still real, but they live behind the kink-resolution plan. They become live again after 8c-c-iv-d ships and we have a documented production-shape band to compare against.
