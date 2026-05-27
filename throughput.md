@@ -6,13 +6,15 @@
 
 ## Headline table
 
-| Operation        | Layer 1 — In-process median (µs/op) | Layer 1 — Allocated (B/op) | Layer 1 — Single-thread throughput (op/s) | Layer 2 — Sustained throughput (op/s) | Layer 2 — p50 (ms) | Layer 2 — p99 (ms) |
-| ---------------- | ----------------------------------: | -------------------------: | ----------------------------------------: | ------------------------------------: | -----------------: | -----------------: |
-| `GetAsync` (point read)         | **0.41**          | 456    | **~2.47 M**       | TBD                              | TBD                | TBD                |
-| `SetAsync` (point write)        | **3.97**          | 672    | **~252 k**        | TBD                              | TBD                | TBD                |
-| `GetManyAsync` (16 keys/call)   | **8.06**          | 6,968  | **~124 k** calls/s ≈ **~2.0 M** keys/s | TBD                  | TBD                | TBD                |
-| `SetManyAsync` (1,000 entries/call, single shard) | **700.5** | 237,972 | **~1.43 k** calls/s ≈ **~1.43 M** entries/s | **12,708** entries/s @ 4,096 entries/call (probe-0) | TBD | TBD |
-| `SetManyAtomicAsync` (16 keys/saga) | **188.1**     | 64,653 | **~5.3 k** sagas/s ≈ **~85 k** keys/s | TBD                          | TBD                | TBD                |
+All latency values are expressed in **milliseconds (ms)**. Sub-microsecond Layer-1 reads show as `<0.001 ms` with the exact nanosecond value in the detail table below; sub-millisecond values are shown to 3 decimal places (e.g. `0.405` ms = 405 µs = 405,000 ns).
+
+| Operation        | Layer 1 — In-process p50 (ms/op) | Layer 1 — Allocated (B/op) | Layer 1 — Single-thread throughput (op/s) | Layer 2 — Sustained throughput (op/s) | Layer 2 — p50 (ms) | Layer 2 — p99 (ms) |
+| ---------------- | -------------------------------: | -------------------------: | ----------------------------------------: | ------------------------------------: | -----------------: | -----------------: |
+| `GetAsync` (point read)         | **0.000 405**       | 456    | **~2.47 M**       | TBD                              | TBD                | TBD                |
+| `SetAsync` (point write)        | **0.003 971**       | 672    | **~252 k**        | TBD                              | TBD                | TBD                |
+| `GetManyAsync` (16 keys/call)   | **0.008 062**       | 6,968  | **~124 k** calls/s ≈ **~2.0 M** keys/s | TBD                  | TBD                | TBD                |
+| `SetManyAsync` (1,000 entries/call, single shard) | **0.700**     | 237,972 | **~1.43 k** calls/s ≈ **~1.43 M** entries/s | **12,708** entries/s @ 4,096 entries/call (probe-0) | TBD | TBD |
+| `SetManyAtomicAsync` (16 keys/saga) | **0.188**     | 64,653 | **~5.3 k** sagas/s ≈ **~85 k** keys/s | TBD                          | TBD                | TBD                |
 
 **Layer-1 source**: BDN run `2026-05-27T09-02-19Z` on this branch (commit `b872262`), AMD Ryzen 7 PRO 7840U / 16 logical / 8 physical, .NET 10.0.8, in-process toolchain. P50 column shown above; mean and p99 are in the per-op detail table further down. "Single-thread throughput" is the derived `1 / p50`; treat it as the algorithmic ceiling, **not** as a multi-thread scaling claim. Multi-key rows (`GetManyAsync`, `SetManyAsync`, `SetManyAtomicAsync`) show both calls/sec and entries/sec — the entries/sec column is what the audience compares against per-key throughput of the point ops.
 
@@ -20,29 +22,31 @@
 
 ### Layer-1 detail (full mean / p50 / p99 / allocated, per [BenchmarkDotNet](https://benchmarkdotnet.org) run)
 
-| Benchmark               | Mean (ns) | P50 (ns) | P99 (ns)   | Allocated (B) | Notes |
-| ----------------------- | --------: | -------: | ---------: | ------------: | ----- |
-| `PointRead`             | 2,801.6   | 405.3    | 41,530.2   | 456           | single key, populated leaf |
-| `PointReadWithVersion`  | 2,364.8   | 586.4    | 34,777.4   | 496           | returns `VersionedValue` |
-| `PointWrite`            | 5,779.1   | 3,971.4  | 28,731.3   | 672           | single key, populated leaf |
-| `PointGetMany`          | 11,015.9  | 8,061.7  | 52,687.0   | 6,968         | 16 keys/call against pre-populated leaf |
-| `BulkLoad`              | 815,629.3 | 700,461.1 | 1,888,536.6 | 237,972    | 1,000 entries/call, single leaf |
-| `SetMany_4Shards`       | 574,726.1 | 561,256.3 | 691,335.8 | 250,252      | 1,000 entries across 4 shards |
-| `SetManyAtomic`         | 263,732.4 | 188,064.0 | 1,057,993.5 | 64,653     | 16 keys/saga, single shard |
-| `SetManyAtomic_4Shards` | 162,124.0 | 156,984.4 | 226,395.0 | 97,979       | 16 keys/saga across 4 shards |
-| `BulkLoad_DeepTree`     | not extracted | 33,308.5 | 124,526.3 | 15,968    | deep B+tree shape (height ≥ 2) |
-| `BulkLoad_DeeperTree`   | 144,844.8 | 148,757.3 | 239,282.3 | 80,185       | 32 entries/call, deeper tree |
-| `PointWrite_DeepTree`   | 6,515.5   | 4,170.7  | 37,675.5   | 1,592         | single key, deep tree |
-| `PointWrite_DeeperTree` | 13,846.0  | 11,849.5 | 41,452.1   | 6,192         | single key, deeper tree |
-| `PointRead_DeeperTree`  | 13,489.3  | 2,245.2  | 116,274.2  | 1,326         | single key, deeper tree |
-| `PointReadAtomicTreeIdle` | 2,411.8 | 325.7    | 39,657.7   | 456           | read on a tree configured for atomic writes, no in-flight saga |
-| `PointReadAtomicTreeWithActiveSaga` | 2,128.6 | 379.3 | 33,631.0 | 456    | read on the same tree with a concurrent saga in flight |
-| `SetManyAtomic_Concurrent_1`  | 146,018.5 | 143,345.8  | 180,348.6 | 63,334    | 16 keys/saga × 1 concurrent saga |
-| `SetManyAtomic_Concurrent_4`  | 559,296.7 | 588,283.5  | 957,841.3 | 246,951   | 16 keys/saga × 4 concurrent sagas |
-| `SetManyAtomic_Concurrent_16` | 2,489,389.8 | 2,577,123.6 | 3,766,498.8 | 987,509 | 16 keys/saga × 16 concurrent sagas |
-| `SetManyAtomic_Concurrent_64` | 10,737,081.3 | 11,968,757.0 | 14,212,772.6 | 3,949,740 | 16 keys/saga × 64 concurrent sagas |
+All times in **milliseconds**; sub-millisecond values shown to 3 decimal places (or to 6 decimals for sub-microsecond cells). Allocated is bytes per call.
 
-Raw harness JSON: `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json`.
+| Benchmark               | Mean (ms) | P50 (ms) | P99 (ms)  | Allocated (B) | Notes |
+| ----------------------- | --------: | -------: | --------: | ------------: | ----- |
+| `PointRead`             | 0.002 802 | 0.000 405 | 0.041 530 | 456          | single key, populated leaf |
+| `PointReadWithVersion`  | 0.002 365 | 0.000 586 | 0.034 777 | 496          | returns `VersionedValue` |
+| `PointWrite`            | 0.005 779 | 0.003 971 | 0.028 731 | 672          | single key, populated leaf |
+| `PointGetMany`          | 0.011 016 | 0.008 062 | 0.052 687 | 6,968        | 16 keys/call against pre-populated leaf |
+| `BulkLoad`              | 0.816     | 0.700    | 1.889     | 237,972       | 1,000 entries/call, single leaf |
+| `SetMany_4Shards`       | 0.575     | 0.561    | 0.691     | 250,252       | 1,000 entries across 4 shards |
+| `SetManyAtomic`         | 0.264     | 0.188    | 1.058     | 64,653        | 16 keys/saga, single shard |
+| `SetManyAtomic_4Shards` | 0.162     | 0.157    | 0.226     | 97,979        | 16 keys/saga across 4 shards |
+| `BulkLoad_DeepTree`     | not extracted | 0.033 309 | 0.124 526 | 15,968 | deep B+tree shape (height ≥ 2) |
+| `BulkLoad_DeeperTree`   | 0.145     | 0.149    | 0.239     | 80,185        | 32 entries/call, deeper tree |
+| `PointWrite_DeepTree`   | 0.006 516 | 0.004 171 | 0.037 676 | 1,592        | single key, deep tree |
+| `PointWrite_DeeperTree` | 0.013 846 | 0.011 850 | 0.041 452 | 6,192        | single key, deeper tree |
+| `PointRead_DeeperTree`  | 0.013 489 | 0.002 245 | 0.116 274 | 1,326        | single key, deeper tree |
+| `PointReadAtomicTreeIdle` | 0.002 412 | 0.000 326 | 0.039 658 | 456        | read on a tree configured for atomic writes, no in-flight saga |
+| `PointReadAtomicTreeWithActiveSaga` | 0.002 129 | 0.000 379 | 0.033 631 | 456 | read on the same tree with a concurrent saga in flight |
+| `SetManyAtomic_Concurrent_1`  | 0.146 | 0.143 | 0.180  | 63,334       | 16 keys/saga × 1 concurrent saga |
+| `SetManyAtomic_Concurrent_4`  | 0.559 | 0.588 | 0.958  | 246,951      | 16 keys/saga × 4 concurrent sagas |
+| `SetManyAtomic_Concurrent_16` | 2.489 | 2.577 | 3.766  | 987,509      | 16 keys/saga × 16 concurrent sagas |
+| `SetManyAtomic_Concurrent_64` | 10.737 | 11.969 | 14.213 | 3,949,740  | 16 keys/saga × 64 concurrent sagas |
+
+Raw harness JSON: `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json` (values stored there are in nanoseconds; this table converts to milliseconds by dividing by 1,000,000).
 
 **Rung context** (Layer 2): single silo, 32 shards, `WalPartitions=8`, `WalMaxPendingBatches=8`, `PhaseTwoCoalescingWindow=5ms`, `PipelinePhaseTwoCommits=true`, `FlushConcurrency=8`, `FlushMs=50`, `BatchSize=4096`, real Azure Tables Standard account (West Europe), producer rung `10000:5` (10,000 vehicle ids × 5 Hz tick = 50,000 events/sec target offered load, 245 B/event), 60-second producer window (`DurationSec=60`), `SteadyAvg` computed over the productive sub-window with drain tail excluded per the c2-vi-bench-timing-fix. Source commit `b872262`.
 
@@ -57,9 +61,9 @@ Two layers because they answer different questions; either alone misleads.
 **Reading**: the algorithmic cost of one call to each `ILattice` method when scheduling and storage are free. The upper bound on what the implementation could theoretically sustain if every other layer were perfect.
 
 **Units**:
-- `Mean (µs/op)` — wall-clock time per call (microseconds).
+- `Mean (ms/op)` / `P50 (ms/op)` / `P99 (ms/op)` — wall-clock time per call, in milliseconds. Sub-microsecond cells (e.g. `PointRead` p50 = 0.000 405 ms = 405 ns) keep 6 decimal places; sub-millisecond cells use 3 decimals.
 - `Allocated (B/op)` — bytes of managed heap allocation per call. Lower is better for GC pressure under steady-state load.
-- `Single-thread throughput (op/s)` — derived `10⁶ / mean_µs`. The number of calls one thread could complete per second if it ran the op back-to-back with no other work.
+- `Single-thread throughput (op/s)` — derived `1 / p50` after converting p50 to seconds. The number of calls one thread could complete per second if it ran the op back-to-back with no other work.
 
 ### Layer 2 — Azure-throughput bench
 
