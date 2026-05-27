@@ -97,8 +97,12 @@ $walMaxPending = if ($env:BENCH_WAL_MAX_PENDING_BATCHES) { $env:BENCH_WAL_MAX_PE
 # PhaseTwoWorker coalescing window in ms. Default 0 (drain-on-first-signal, matches
 # the library default and Silo/Program.cs default). Surfaced as an env-var override so
 # a U9c sweep (e.g. 0 vs 5 vs 10 ms) can be driven from the host without editing YAML.
+# Default 5: at the c2-iii durable Azure Tables baseline, P2=0 regresses -57%
+# vs P2=5 (scaling.md U9p step 8c-c-iv-c2-iv probe-D). All c2-iii / c2-vi /
+# c2-vi-followup milestones used P2=5, so the deploy default tracks the
+# operating-point baseline rather than the library default of 0.
 $phase2CoalescingMs = if ($env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS) { $env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS }
-                      else { '0' }
+                      else { '5' }
 # In-silo SetManyAsync flush concurrency cap (drainer semaphore size). Default 8
 # (matches Silo/Program.cs default). Surfaced as an env-var override so a U1b
 # A/B (e.g. 8 vs 16 vs 32) can be driven from the host without editing YAML.
@@ -132,14 +136,19 @@ $batchSize = if ($env:BENCH_BATCH_SIZE) { $env:BENCH_BATCH_SIZE }
 # main throughput log in noise. Set 0 to disable.
 $phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
                    else { '10' }
-# Orleans Silo+Client ResponseTimeout in seconds. Default 30 (matches the
-# Orleans default). U9p step 8c-b-i probe lever: lifts the caller-side
-# timeout on ILattice.SetManyAsync so a slow worst-partition WAL flush
-# does not surface as an Orleans TimeoutException + producer reconnect
-# storm. Forwarded into both SiloMessagingOptions.ResponseTimeout and
+# Orleans Silo+Client ResponseTimeout in seconds. Default 180. U9p step
+# 8c-b-i probe lever: lifts the caller-side timeout on ILattice.SetManyAsync
+# so a slow worst-partition WAL flush does not surface as an Orleans
+# TimeoutException + producer reconnect storm. The Orleans library default
+# is 30s, but at the c2-iii durable Azure Tables baseline the WAL p99 is
+# already ~2-3s and tail outliers push past 30s under load, so 30s
+# reproducibly collapses the producer at higher rungs (c2-iv-redux session
+# observed: WP=16 / 25000:5 with 30s timeout -> producer Broken pipe at
+# t=110s, FinalAvgRate=38/s). c2-iii-ship and all subsequent c2-* probes
+# used 180s. Forwarded into both SiloMessagingOptions.ResponseTimeout and
 # ClientMessagingOptions.ResponseTimeout in Silo/Program.cs.
 $responseTimeoutSec = if ($env:BENCH_RESPONSE_TIMEOUT_SEC) { $env:BENCH_RESPONSE_TIMEOUT_SEC }
-                      else { '30' }
+                      else { '180' }
 # Diagnostic gate (c2-vi etag-race probe). When '1' the silo emits one
 # stdout line per leaf/internal grain PersistAsync call with
 # state.RecordExists, state.Etag, and a caller tag. Default empty so

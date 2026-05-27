@@ -1292,8 +1292,27 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetNextSiblingAsync(GrainId? siblingId)
     {
-        state.State.NextSibling = siblingId;
-        await PersistAsync();
+        // U9p step c2-iv-redux: serialise every public PersistAsync
+        // site through the per-activation _splitGate. With
+        // SetAsync / SetManyAsync / DeleteAsync marked
+        // [AlwaysInterleave], the foreground split flow (which
+        // already holds the gate via SplitIfNeededUnderGateAsync)
+        // can release the activation turn at any of its cross-grain
+        // awaits; without serialisation here, a sibling-pointer
+        // update RPC from another leaf's split flow lands a
+        // concurrent PersistAsync against the same row and the
+        // loser of the etag CAS throws InconsistentStateException.
+        // Mirrors c2-vi-followup's fix on BPlusInternalGrain.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            state.State.NextSibling = siblingId;
+            await PersistAsync();
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
     }
 
     public Task<GrainId?> GetPrevSiblingAsync() =>
@@ -1301,29 +1320,47 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetPrevSiblingAsync(GrainId? siblingId)
     {
-        state.State.PrevSibling = siblingId;
-        await PersistAsync();
+        // See SetNextSiblingAsync above for the gate rationale.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            state.State.PrevSibling = siblingId;
+            await PersistAsync();
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
     }
 
     public async Task SetTreeIdAsync(string treeId)
     {
-        if (state.State.TreeId is not null) return;
-        var prevTreeId = state.State.TreeId;
-        state.State.TreeId = treeId;
+        // See SetNextSiblingAsync above for the gate rationale.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await PersistAsync();
+            if (state.State.TreeId is not null) return;
+            var prevTreeId = state.State.TreeId;
+            state.State.TreeId = treeId;
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                // Class B revert: a thrown WriteStateAsync leaves the
+                // in-memory TreeId set while storage stays null. The
+                // idempotency guard above would then short-circuit every
+                // retry from this activation, permanently divorcing the
+                // leaf's in-memory tree id from storage. Roll back the
+                // in-memory assignment so the next call retries the persist.
+                state.State.TreeId = prevTreeId;
+                throw;
+            }
         }
-        catch
+        finally
         {
-            // Class B revert: a thrown WriteStateAsync leaves the
-            // in-memory TreeId set while storage stays null. The
-            // idempotency guard above would then short-circuit every
-            // retry from this activation, permanently divorcing the
-            // leaf's in-memory tree id from storage. Roll back the
-            // in-memory assignment so the next call retries the persist.
-            state.State.TreeId = prevTreeId;
-            throw;
+            _splitGate.Release();
         }
     }
 
@@ -1332,62 +1369,80 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task SetShardIndexAsync(int shardIndex)
     {
-        // Idempotent: skip the persist if the slot is already seeded.
-        // The shard-root coordinator calls this once per leaf-create
-        // alongside SetTreeIdAsync; a re-call (e.g. from a defensive
-        // re-seed in a future code path) must not silently overwrite
-        // the persisted value, both because the value is immutable
-        // for a leaf's lifetime and because the writer would
-        // otherwise pay an extra WriteStateAsync round-trip on every
-        // shard-root activation that walks its leaves.
-        if (state.State.ShardIndex is not null) return;
-        var prevShardIndex = state.State.ShardIndex;
-        state.State.ShardIndex = shardIndex;
+        // See SetNextSiblingAsync above for the gate rationale.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await PersistAsync();
+            // Idempotent: skip the persist if the slot is already seeded.
+            // The shard-root coordinator calls this once per leaf-create
+            // alongside SetTreeIdAsync; a re-call (e.g. from a defensive
+            // re-seed in a future code path) must not silently overwrite
+            // the persisted value, both because the value is immutable
+            // for a leaf's lifetime and because the writer would
+            // otherwise pay an extra WriteStateAsync round-trip on every
+            // shard-root activation that walks its leaves.
+            if (state.State.ShardIndex is not null) return;
+            var prevShardIndex = state.State.ShardIndex;
+            state.State.ShardIndex = shardIndex;
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                // Class B revert: see SetTreeIdAsync above. Without this,
+                // the activation stamps ShardIndex on every foreground
+                // commit while every peer (or a future reactivation) still
+                // sees a null slot, and the replay-time ownership filter on
+                // the cross-shard fanout regression gate silently drops the
+                // legitimate records.
+                state.State.ShardIndex = prevShardIndex;
+                throw;
+            }
         }
-        catch
+        finally
         {
-            // Class B revert: see SetTreeIdAsync above. Without this,
-            // the activation stamps ShardIndex on every foreground
-            // commit while every peer (or a future reactivation) still
-            // sees a null slot, and the replay-time ownership filter on
-            // the cross-shard fanout regression gate silently drops the
-            // legitimate records.
-            state.State.ShardIndex = prevShardIndex;
-            throw;
+            _splitGate.Release();
         }
     }
 
     public async Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive)
     {
-        // Idempotent on the low bound: every legitimate caller
-        // (CompleteSplitAsync stamping a freshly-created sibling)
-        // passes a non-null splitKey as the low bound, so a non-null
-        // persisted LowKeyInclusive is the unambiguous "already
-        // seeded" sentinel. Donors never call this - they update
-        // their own HighKeyExclusive directly inside CompleteSplitAsync
-        // when narrowing their own range to the split key.
-        if (state.State.LowKeyInclusive is not null) return;
-        var prevLowKey = state.State.LowKeyInclusive;
-        var prevHighKey = state.State.HighKeyExclusive;
-        state.State.LowKeyInclusive = lowKeyInclusive;
-        state.State.HighKeyExclusive = highKeyExclusive;
+        // See SetNextSiblingAsync above for the gate rationale.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await PersistAsync();
+            // Idempotent on the low bound: every legitimate caller
+            // (CompleteSplitAsync stamping a freshly-created sibling)
+            // passes a non-null splitKey as the low bound, so a non-null
+            // persisted LowKeyInclusive is the unambiguous "already
+            // seeded" sentinel. Donors never call this - they update
+            // their own HighKeyExclusive directly inside CompleteSplitAsync
+            // when narrowing their own range to the split key.
+            if (state.State.LowKeyInclusive is not null) return;
+            var prevLowKey = state.State.LowKeyInclusive;
+            var prevHighKey = state.State.HighKeyExclusive;
+            state.State.LowKeyInclusive = lowKeyInclusive;
+            state.State.HighKeyExclusive = highKeyExclusive;
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                // Class B revert: see SetTreeIdAsync above. Both fields
+                // are restored together because the guard short-circuits
+                // on LowKeyInclusive alone - leaving the in-memory range
+                // even partially seeded would re-route range scans against
+                // a topology storage never accepted.
+                state.State.LowKeyInclusive = prevLowKey;
+                state.State.HighKeyExclusive = prevHighKey;
+                throw;
+            }
         }
-        catch
+        finally
         {
-            // Class B revert: see SetTreeIdAsync above. Both fields
-            // are restored together because the guard short-circuits
-            // on LowKeyInclusive alone - leaving the in-memory range
-            // even partially seeded would re-route range scans against
-            // a topology storage never accepted.
-            state.State.LowKeyInclusive = prevLowKey;
-            state.State.HighKeyExclusive = prevHighKey;
-            throw;
+            _splitGate.Release();
         }
     }
 

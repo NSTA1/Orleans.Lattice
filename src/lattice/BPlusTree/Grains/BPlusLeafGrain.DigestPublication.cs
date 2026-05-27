@@ -45,37 +45,58 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task SetParentAsync(GrainId? parentId)
     {
-        if (state.State.ParentId == parentId)
-        {
-            // Idempotent re-call with the same parent: no persist, no
-            // callback. The internal-node seeding path consults the
-            // child via GetChildDigestSnapshotAsync directly after a
-            // SetParentAsync call so we never callback into a parent
-            // that may still be inside its own AcceptSplitAsync /
-            // InitializeAsync mutation frame (which would deadlock the
-            // non-reentrant internal grain).
-            return;
-        }
-
-        var prev = state.State.ParentId;
-        state.State.ParentId = parentId;
+        // U9p step c2-iv-redux: serialise the public state-write
+        // surface through the per-activation _splitGate. The internal
+        // grain's seeding path calls this RPC concurrently with the
+        // donor leaf's split flow (which already holds the gate via
+        // SplitIfNeededUnderGateAsync) and with other topology RPCs
+        // (SetNextSiblingAsync / SetPrevSiblingAsync / ...); without
+        // the gate, two pending state.WriteStateAsync calls race the
+        // underlying grain-storage etag CAS and the loser throws
+        // InconsistentStateException. Mirrors c2-vi-followup's fix on
+        // BPlusInternalGrain.SetParentAsync. The gate is non-reentrant
+        // and SetParentAsync is only ever called as a cross-grain RPC
+        // (targeting a different activation than the caller's), so no
+        // self-recursive acquisition is possible.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await PersistAsync();
-        }
-        catch
-        {
-            state.State.ParentId = prev;
-            throw;
-        }
+            if (state.State.ParentId == parentId)
+            {
+                // Idempotent re-call with the same parent: no persist, no
+                // callback. The internal-node seeding path consults the
+                // child via GetChildDigestSnapshotAsync directly after a
+                // SetParentAsync call so we never callback into a parent
+                // that may still be inside its own AcceptSplitAsync /
+                // InitializeAsync mutation frame (which would deadlock the
+                // non-reentrant internal grain).
+                return;
+            }
 
-        // Mark the digest dirty so the next mutation triggers an upward
-        // publish to the new parent. The parent itself is expected to
-        // pull our current snapshot via GetChildDigestSnapshotAsync
-        // immediately after this call (driven by the internal-grain
-        // seeding path), which keeps the parent's ChildDigests table
-        // consistent without a reentrant callback.
-        if (parentId is not null) _digestDirty = true;
+            var prev = state.State.ParentId;
+            state.State.ParentId = parentId;
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                state.State.ParentId = prev;
+                throw;
+            }
+
+            // Mark the digest dirty so the next mutation triggers an upward
+            // publish to the new parent. The parent itself is expected to
+            // pull our current snapshot via GetChildDigestSnapshotAsync
+            // immediately after this call (driven by the internal-grain
+            // seeding path), which keeps the parent's ChildDigests table
+            // consistent without a reentrant callback.
+            if (parentId is not null) _digestDirty = true;
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
     }
 
     /// <inheritdoc />
