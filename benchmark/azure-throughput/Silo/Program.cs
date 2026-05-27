@@ -731,7 +731,16 @@ internal sealed class TcpIngestService(
             }
             try
             {
-                await lattice.BulkLoadAsync(seedEntries, stoppingToken).ConfigureAwait(false);
+                // Use SetManyAsync (not BulkLoadAsync) for the pre-seed:
+                // BulkLoadAsync requires an empty shard, but the silo's
+                // warm-up step already materialises the root leaf, and
+                // any prior probe run against the same Azure Tables
+                // grain-state table leaves rows behind. SetManyAsync
+                // handles a populated tree fine - that's what every
+                // foreground commit path runs - and produces the
+                // identical end-state (every key -> 245-byte payload)
+                // for the subsequent read modes.
+                await lattice.SetManyAsync(seedEntries, stoppingToken).ConfigureAwait(false);
                 preseedSw.Stop();
                 Console.WriteLine($"[silo] preseed treeId={settings.TreeId} entries={settings.PreseedKeyCount} payloadBytes={PreseedPayloadBytes} elapsedMs={preseedSw.Elapsed.TotalMilliseconds:F0}");
             }
