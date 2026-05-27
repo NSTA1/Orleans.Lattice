@@ -1019,8 +1019,8 @@ internal sealed class TcpIngestService(
                     settings.FlushConcurrency,
                     ct).ConfigureAwait(false);
                 var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
-                BenchMetrics.LatticeSetManyDurationMs.Record(elapsedMs, treeTag, modeTag);
-                BenchMetrics.LatticeSetManyRetryAttempts.Record(attempt - 1, treeTag, modeTag);
+                BenchMetrics.LatticeOpDurationMs.Record(elapsedMs, treeTag, modeTag);
+                BenchMetrics.LatticeOpRetryAttempts.Record(attempt - 1, treeTag, modeTag);
                 return batch.Count;
             }
             catch (OperationCanceledException) { throw; }
@@ -1036,7 +1036,7 @@ internal sealed class TcpIngestService(
                 // also not be in `failed`, because they are not a real
                 // ingestion failure - they are shutdown back-pressure. Return
                 // the sentinel so the dispatcher skips both counters.
-                BenchMetrics.LatticeSetManyRetryAttempts.Record(attempt - 1, treeTag, modeTag);
+                BenchMetrics.LatticeOpRetryAttempts.Record(attempt - 1, treeTag, modeTag);
                 return ShutdownDiscarded;
             }
             catch (Exception ex) when (!lifetime.ApplicationStopping.IsCancellationRequested && IsOrleansMessageRejection(ex))
@@ -1062,13 +1062,13 @@ internal sealed class TcpIngestService(
             }
             catch (Exception ex)
             {
-                BenchMetrics.LatticeSetManyRetryAttempts.Record(attempt - 1, treeTag, modeTag);
+                BenchMetrics.LatticeOpRetryAttempts.Record(attempt - 1, treeTag, modeTag);
                 logger.LogWarning(ex, "[silo] flush of {Count} failed (mode={Mode})", batch.Count, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
                 return 0;
             }
         }
 
-        BenchMetrics.LatticeSetManyRetryAttempts.Record(FlushMaxAttempts - 1, treeTag, modeTag);
+        BenchMetrics.LatticeOpRetryAttempts.Record(FlushMaxAttempts - 1, treeTag, modeTag);
         logger.LogWarning(
             lastRejection,
             "[silo] flush of {Count} failed after {Attempts} retry attempts against transient OrleansMessageRejectionException (mode={Mode})",

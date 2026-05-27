@@ -117,17 +117,19 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "azure.throughput.bench.tcp.read.channel_write_wait_ms",
         "azure.throughput.bench.drain.flush_dispatch_size",
         "azure.throughput.bench.drain.flush_dispatch_wait_ms",
-        // U9p step 1: outermost SetManyAsync call boundary observed by
-        // the silo flusher. Confirms the ~18 s/call inference from U9o
-        // step 2 directly rather than via gate-wait arithmetic.
-        "azure.throughput.bench.lattice.set_many.duration_ms",
-        // U9p step 8c-c-iv-a: retry density per terminal SetManyAsync
-        // outcome (0 on first-try success). Reading this off the
-        // phase-A scraper is the direct way to size the cold-start
-        // OrleansMessageRejectionException storm without relying on
-        // the failed-batch counter (which is zero by design once the
-        // retry policy absorbs the transient class).
-        "azure.throughput.bench.lattice.set_many.retry_attempts",
+        // U9p step 1 (renamed in throughput-capture-plan.md step 4):
+        // outermost ILattice op call boundary observed by the silo
+        // flusher. The `mode` tag (carried by every record from
+        // BenchWorkloadDispatcher) disambiguates set-many / set-many-
+        // atomic / set-point / get-point / get-many. Originally
+        // captured by `lattice.set_many.duration_ms` when the silo only
+        // dispatched SetManyAsync; renamed to `lattice.op.duration_ms`
+        // once the throughput-capture extension added per-mode dispatch.
+        "azure.throughput.bench.lattice.op.duration_ms",
+        // Retry density per terminal ILattice op outcome (0 on
+        // first-try success). Same rename rationale as the duration
+        // histogram above.
+        "azure.throughput.bench.lattice.op.retry_attempts",
     };
 
     /// <summary>

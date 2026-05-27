@@ -95,32 +95,36 @@ internal static class BenchMetrics
             description: "Wall-clock ms spent waiting on the silo flush gate per dispatched batch.");
 
     /// <summary>
-    /// Wall-clock ms spent inside a single <c>ILattice.SetManyAsync</c>
-    /// call from the silo's perspective. The headline number U9p step 1
-    /// is asked to confirm: U9o step 2 inferred ~18 s per call from the
-    /// gate-wait observations, but that was indirect arithmetic over 8
-    /// concurrent slots. This is the direct measurement of the call
-    /// boundary.
+    /// Wall-clock ms spent inside a single <c>ILattice</c> operation
+    /// from the silo's perspective. The <c>mode</c> tag (carried by the
+    /// dispatcher in <see cref="BenchWorkloadDispatcher"/>) disambiguates
+    /// which ILattice call shape is being measured: <c>set-many</c>,
+    /// <c>set-many-atomic</c>, <c>set-point</c>, <c>get-point</c>, or
+    /// <c>get-many</c>. Renamed from <c>LatticeSetManyDurationMs</c> in
+    /// throughput-capture-plan.md step 4 (the previous name only covered
+    /// one of the five ops the silo now dispatches; the metric name now
+    /// matches the actual coverage).
     /// </summary>
-    public static readonly Histogram<double> LatticeSetManyDurationMs =
+    public static readonly Histogram<double> LatticeOpDurationMs =
         Meter.CreateHistogram<double>(
-            name: "azure.throughput.bench.lattice.set_many.duration_ms",
+            name: "azure.throughput.bench.lattice.op.duration_ms",
             unit: "ms",
-            description: "Wall-clock ms per ILattice.SetManyAsync call observed by the silo flusher.");
+            description: "Wall-clock ms per ILattice op call observed by the silo flusher; mode tag disambiguates set-many / set-many-atomic / set-point / get-point / get-many.");
 
     /// <summary>
     /// Number of retry attempts the silo flusher performed against a
-    /// single <c>ILattice.SetManyAsync</c> call after a transient
+    /// single <c>ILattice</c> op call after a transient
     /// <c>OrleansMessageRejectionException</c>. Recorded once per
     /// terminal outcome (success, exhaustion, or shutdown-discard) with
     /// the value being the *retry* count (0 on a first-try success).
+    /// Carries the same <c>mode</c> tag as <see cref="LatticeOpDurationMs"/>.
     /// Step 8c-c-iv-a uses this to read the density of cold-start
     /// rejections off the phase-A scraper rather than inferring it from
     /// the failed-batch counter alone.
     /// </summary>
-    public static readonly Histogram<int> LatticeSetManyRetryAttempts =
+    public static readonly Histogram<int> LatticeOpRetryAttempts =
         Meter.CreateHistogram<int>(
-            name: "azure.throughput.bench.lattice.set_many.retry_attempts",
+            name: "azure.throughput.bench.lattice.op.retry_attempts",
             unit: "attempts",
-            description: "Retry attempts per SetManyAsync call after a transient OrleansMessageRejectionException (0 on first-try success).");
+            description: "Retry attempts per ILattice op call after a transient OrleansMessageRejectionException (0 on first-try success).");
 }
