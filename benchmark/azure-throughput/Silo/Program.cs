@@ -192,6 +192,22 @@ if (leafStorageKind is not ("azure" or "memory" or "null"))
 }
 var leafStorageTable = Environment.GetEnvironmentVariable("BENCH_LEAF_STORAGE_TABLE") ?? "OrleansLatticeGrainState";
 var leafStorageNumGrains = ReadIntAllowZero("BENCH_LEAF_STORAGE_NUM_GRAINS", 0);
+// Throughput-capture (throughput-capture-plan.md step 2): selects which
+// ILattice operation the silo dispatches per producer batch. Default is
+// `set-many` which preserves the existing harness behaviour. The other
+// four modes drive `ILattice.SetManyAtomicAsync`, `ILattice.SetAsync`
+// (fan-out point write), `ILattice.GetAsync` (fan-out point read), and
+// `ILattice.GetManyAsync` so a single rung can produce headline numbers
+// for every public ILattice op against the c2-iii operating point. The
+// `get-*` modes pre-seed the keyspace via `ILattice.BulkLoadAsync` at
+// silo startup before the TCP listener opens (step 5 wires this).
+var workloadMode = ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
+// Per-saga batch size used only when `workloadMode == SetManyAtomic`.
+// A 4096-key atomic saga is not a realistic shape; 64 reflects audience-
+// relevant atomic-write usage. Falls back to `batchSize` (4096) when the
+// env-var is unset, which is the legacy bench shape so the operator can
+// opt back to it.
+var atomicBatchSize = ReadInt("BENCH_ATOMIC_BATCH_SIZE", 64);
 
 if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageConn))
 {
@@ -200,7 +216,7 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
     return;
 }
 
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -231,7 +247,7 @@ builder.Logging.AddFilter("Orleans.Runtime.Placement.PlacementService", LogLevel
 
 builder.Services.AddHostedService<TcpIngestService>();
 builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.PhaseADiagnosticReporter>();
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize));
 
 builder.UseOrleans(silo =>
 {
@@ -415,7 +431,53 @@ static bool ReadBool(string name, bool @default)
     };
 }
 
-internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride);
+// Throughput-capture (step 2): parse the BENCH_WORKLOAD_MODE env-var.
+// Accepts case-insensitive kebab-case (set-many, set-many-atomic,
+// set-point, get-point, get-many). Null/empty/unknown falls back to
+// SetMany so a missing env-var preserves the legacy bench shape.
+static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
+    string.IsNullOrWhiteSpace(raw) ? BenchWorkloadMode.SetMany : raw.Trim().ToLowerInvariant() switch
+    {
+        "set-many" or "setmany" => BenchWorkloadMode.SetMany,
+        "set-many-atomic" or "setmanyatomic" => BenchWorkloadMode.SetManyAtomic,
+        "set-point" or "setpoint" or "set" => BenchWorkloadMode.SetPoint,
+        "get-point" or "getpoint" or "get" => BenchWorkloadMode.GetPoint,
+        "get-many" or "getmany" => BenchWorkloadMode.GetMany,
+        _ => BenchWorkloadMode.SetMany,
+    };
+
+// Throughput-capture (step 2): kebab-case rendering for the startup
+// echo line and any future diagnostic surfaces. Symmetrical with
+// ParseWorkloadMode above.
+static string FormatWorkloadMode(BenchWorkloadMode mode) => mode switch
+{
+    BenchWorkloadMode.SetMany => "set-many",
+    BenchWorkloadMode.SetManyAtomic => "set-many-atomic",
+    BenchWorkloadMode.SetPoint => "set-point",
+    BenchWorkloadMode.GetPoint => "get-point",
+    BenchWorkloadMode.GetMany => "get-many",
+    _ => mode.ToString(),
+};
+
+internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize);
+
+/// <summary>
+/// Selects which <c>ILattice</c> operation the benchmark silo dispatches
+/// per producer batch. Used by <see cref="BenchWorkloadDispatcher"/> in
+/// <c>TcpIngestService.FlushAsync</c>. The default <see cref="SetMany"/>
+/// preserves the harness's legacy behaviour (one <c>SetManyAsync</c> per
+/// producer batch); the other four modes exist so a single rung can
+/// produce headline numbers for every public <c>ILattice</c> op against
+/// the c2-iii operating point. See throughput-capture-plan.md.
+/// </summary>
+internal enum BenchWorkloadMode
+{
+    SetMany,
+    SetManyAtomic,
+    SetPoint,
+    GetPoint,
+    GetMany,
+}
 
 internal sealed class TcpIngestService(
     IGrainFactory grainFactory,
