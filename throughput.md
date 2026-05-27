@@ -8,11 +8,41 @@
 
 | Operation        | Layer 1 — In-process median (µs/op) | Layer 1 — Allocated (B/op) | Layer 1 — Single-thread throughput (op/s) | Layer 2 — Sustained throughput (op/s) | Layer 2 — p50 (ms) | Layer 2 — p99 (ms) |
 | ---------------- | ----------------------------------: | -------------------------: | ----------------------------------------: | ------------------------------------: | -----------------: | -----------------: |
-| `GetAsync`       | TBD                                 | TBD                        | TBD                                       | TBD                                   | TBD                | TBD                |
-| `SetAsync`       | TBD                                 | TBD                        | TBD                                       | TBD                                   | TBD                | TBD                |
-| `GetManyAsync`   | TBD                                 | TBD                        | TBD                                       | TBD                                   | TBD                | TBD                |
-| `SetManyAsync`   | TBD                                 | TBD                        | TBD                                       | **12,708** entries/s (probe-0)        | TBD                | TBD                |
-| `SetManyAtomicAsync` | TBD                              | TBD                        | TBD                                       | TBD                                   | TBD                | TBD                |
+| `GetAsync` (point read)         | **0.41**          | 456    | **~2.47 M**       | TBD                              | TBD                | TBD                |
+| `SetAsync` (point write)        | **3.97**          | 672    | **~252 k**        | TBD                              | TBD                | TBD                |
+| `GetManyAsync` (16 keys/call)   | **8.06**          | 6,968  | **~124 k** calls/s ≈ **~2.0 M** keys/s | TBD                  | TBD                | TBD                |
+| `SetManyAsync` (1,000 entries/call, single shard) | **700.5** | 237,972 | **~1.43 k** calls/s ≈ **~1.43 M** entries/s | **12,708** entries/s @ 4,096 entries/call (probe-0) | TBD | TBD |
+| `SetManyAtomicAsync` (16 keys/saga) | **188.1**     | 64,653 | **~5.3 k** sagas/s ≈ **~85 k** keys/s | TBD                          | TBD                | TBD                |
+
+**Layer-1 source**: BDN run `2026-05-27T09-02-19Z` on this branch (commit `b872262`), AMD Ryzen 7 PRO 7840U / 16 logical / 8 physical, .NET 10.0.8, in-process toolchain. P50 column shown above; mean and p99 are in the per-op detail table further down. "Single-thread throughput" is the derived `1 / p50`; treat it as the algorithmic ceiling, **not** as a multi-thread scaling claim. Multi-key rows (`GetManyAsync`, `SetManyAsync`, `SetManyAtomicAsync`) show both calls/sec and entries/sec — the entries/sec column is what the audience compares against per-key throughput of the point ops.
+
+**Layer-2 source**: c2-vii probe-0 ladder at the c2-iii operating-point baseline (single silo, 32 shards, real Azure Tables Standard, West Europe). Only `SetManyAsync` measured today; the other four Layer-2 cells require the harness extension described in [throughput-capture-plan.md](throughput-capture-plan.md) steps 2-9.
+
+### Layer-1 detail (full mean / p50 / p99 / allocated, per [BenchmarkDotNet](https://benchmarkdotnet.org) run)
+
+| Benchmark               | Mean (ns) | P50 (ns) | P99 (ns)   | Allocated (B) | Notes |
+| ----------------------- | --------: | -------: | ---------: | ------------: | ----- |
+| `PointRead`             | 2,801.6   | 405.3    | 41,530.2   | 456           | single key, populated leaf |
+| `PointReadWithVersion`  | 2,364.8   | 586.4    | 34,777.4   | 496           | returns `VersionedValue` |
+| `PointWrite`            | 5,779.1   | 3,971.4  | 28,731.3   | 672           | single key, populated leaf |
+| `PointGetMany`          | 11,015.9  | 8,061.7  | 52,687.0   | 6,968         | 16 keys/call against pre-populated leaf |
+| `BulkLoad`              | 815,629.3 | 700,461.1 | 1,888,536.6 | 237,972    | 1,000 entries/call, single leaf |
+| `SetMany_4Shards`       | 574,726.1 | 561,256.3 | 691,335.8 | 250,252      | 1,000 entries across 4 shards |
+| `SetManyAtomic`         | 263,732.4 | 188,064.0 | 1,057,993.5 | 64,653     | 16 keys/saga, single shard |
+| `SetManyAtomic_4Shards` | 162,124.0 | 156,984.4 | 226,395.0 | 97,979       | 16 keys/saga across 4 shards |
+| `BulkLoad_DeepTree`     | not extracted | 33,308.5 | 124,526.3 | 15,968    | deep B+tree shape (height ≥ 2) |
+| `BulkLoad_DeeperTree`   | 144,844.8 | 148,757.3 | 239,282.3 | 80,185       | 32 entries/call, deeper tree |
+| `PointWrite_DeepTree`   | 6,515.5   | 4,170.7  | 37,675.5   | 1,592         | single key, deep tree |
+| `PointWrite_DeeperTree` | 13,846.0  | 11,849.5 | 41,452.1   | 6,192         | single key, deeper tree |
+| `PointRead_DeeperTree`  | 13,489.3  | 2,245.2  | 116,274.2  | 1,326         | single key, deeper tree |
+| `PointReadAtomicTreeIdle` | 2,411.8 | 325.7    | 39,657.7   | 456           | read on a tree configured for atomic writes, no in-flight saga |
+| `PointReadAtomicTreeWithActiveSaga` | 2,128.6 | 379.3 | 33,631.0 | 456    | read on the same tree with a concurrent saga in flight |
+| `SetManyAtomic_Concurrent_1`  | 146,018.5 | 143,345.8  | 180,348.6 | 63,334    | 16 keys/saga × 1 concurrent saga |
+| `SetManyAtomic_Concurrent_4`  | 559,296.7 | 588,283.5  | 957,841.3 | 246,951   | 16 keys/saga × 4 concurrent sagas |
+| `SetManyAtomic_Concurrent_16` | 2,489,389.8 | 2,577,123.6 | 3,766,498.8 | 987,509 | 16 keys/saga × 16 concurrent sagas |
+| `SetManyAtomic_Concurrent_64` | 10,737,081.3 | 11,968,757.0 | 14,212,772.6 | 3,949,740 | 16 keys/saga × 64 concurrent sagas |
+
+Raw harness JSON: `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json`.
 
 **Rung context** (Layer 2): single silo, 32 shards, `WalPartitions=8`, `WalMaxPendingBatches=8`, `PhaseTwoCoalescingWindow=5ms`, `PipelinePhaseTwoCommits=true`, `FlushConcurrency=8`, `FlushMs=50`, `BatchSize=4096`, real Azure Tables Standard account (West Europe), producer rung `10000:5` (10,000 vehicle ids × 5 Hz tick = 50,000 events/sec target offered load, 245 B/event), 60-second producer window (`DurationSec=60`), `SteadyAvg` computed over the productive sub-window with drain tail excluded per the c2-vi-bench-timing-fix. Source commit `b872262`.
 
