@@ -208,6 +208,14 @@ var workloadMode = ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_W
 // env-var is unset, which is the legacy bench shape so the operator can
 // opt back to it.
 var atomicBatchSize = ReadInt("BENCH_ATOMIC_BATCH_SIZE", 64);
+// Read-mode pre-seed size. The producer's BENCH_VEHICLE_COUNT env-var
+// determines the keyspace the producer's events touch; the silo
+// mirrors that same env-var so `workloadMode in { GetPoint, GetMany }`
+// can pre-seed the exact set of keys the producer will subsequently
+// drive. Default 0 means "no pre-seed" (the read modes will then read
+// keys that may not exist - useful only when paired with a
+// previously-populated tree, e.g. against a pinned BENCH_TREE_ID).
+var preseedKeyCount = ReadIntAllowZero("BENCH_VEHICLE_COUNT", 0);
 
 if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageConn))
 {
@@ -216,7 +224,7 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
     return;
 }
 
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -247,7 +255,7 @@ builder.Logging.AddFilter("Orleans.Runtime.Placement.PlacementService", LogLevel
 
 builder.Services.AddHostedService<TcpIngestService>();
 builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.PhaseADiagnosticReporter>();
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount));
 
 builder.UseOrleans(silo =>
 {
@@ -447,15 +455,13 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
     };
 
 // Throughput-capture (step 2): kebab-case rendering for the startup
-// echo line and any future diagnostic surfaces. Symmetrical with
-// ParseWorkloadMode above. Implemented as a thunk to the static
-// formatter on BenchWorkloadMetadata so the same kebab-case mapping
-// is reachable both from the top-level startup section AND from the
-// TcpIngestService class methods (top-level local functions cannot
-// be referenced from non-top-level types per CS8801).
-static string FormatWorkloadMode(BenchWorkloadMode mode) => BenchWorkloadMetadata.FormatWorkloadMode(mode);
+// echo line and any future diagnostic surfaces lives on
+// BenchWorkloadMetadata.FormatWorkloadMode (a static class) so it is
+// reachable from both the top-level startup section AND from the
+// TcpIngestService class methods. Top-level local functions cannot
+// be referenced from non-top-level types per CS8801.
 
-internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize);
+internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount);
 
 /// <summary>
 /// Selects which <c>ILattice</c> operation the benchmark silo dispatches
@@ -684,6 +690,62 @@ internal sealed class TcpIngestService(
                 ? "no exception captured"
                 : $"{lastWarmUpException.GetType().Name}: {Truncate(lastWarmUpException.Message, 240)}";
             Console.WriteLine($"[silo] ERROR warmup treeId={settings.TreeId} ABORTED after {warmUpAttempt} attempt(s) elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}: {detail}. Continuing in degraded mode - first writes may stall on cold-shard activation.");
+        }
+
+        // Throughput-capture (step 5): read-mode pre-seed. When the silo
+        // is configured to drive ILattice.GetAsync or GetManyAsync per
+        // batch, populate the keyspace with PreseedKeyCount entries
+        // BEFORE the TCP listener opens so the read modes hit existing
+        // rows. Keys mirror the producer's vehicle-id derivation
+        // (`new Guid(i, 0xC0FFEE, 0xDEADBEEF, 0xCAFEBABE).ToString("N")`)
+        // so the producer's later "write" events touch exactly the same
+        // 32-char hex keys the pre-seed populated. Payload is 245 bytes
+        // -- matches the producer's measured JSON payload p50 in c2-vii
+        // silo logs -- so per-key read latency compares apples-to-apples
+        // against per-key write latency in the SetMany mode. Skipped
+        // when PreseedKeyCount == 0 or the workload mode does not need
+        // pre-seeded reads.
+        if ((settings.WorkloadMode == BenchWorkloadMode.GetPoint || settings.WorkloadMode == BenchWorkloadMode.GetMany)
+            && settings.PreseedKeyCount > 0)
+        {
+            var preseedSw = System.Diagnostics.Stopwatch.StartNew();
+            const int PreseedPayloadBytes = 245;
+            var seedEntries = new List<KeyValuePair<string, byte[]>>(settings.PreseedKeyCount);
+            Span<byte> idBytes = stackalloc byte[16];
+            for (var i = 0; i < settings.PreseedKeyCount; i++)
+            {
+                // Mirror Producer/Program.cs vehicle-id construction.
+                BitConverter.TryWriteBytes(idBytes[..4], i);
+                BitConverter.TryWriteBytes(idBytes.Slice(4, 4), 0xC0FFEE);
+                BitConverter.TryWriteBytes(idBytes.Slice(8, 4), unchecked((int)0xDEADBEEF));
+                BitConverter.TryWriteBytes(idBytes.Slice(12, 4), unchecked((int)0xCAFEBABE));
+                var vehicleId = new Guid(idBytes).ToString("N");
+                // Deterministic 245-byte payload so two re-runs over the
+                // same keyspace produce bit-identical rows in the WAL
+                // (cleanest cross-run diff). i mod 256 fill is enough to
+                // tell the rows apart on a hex-dump if anything is ever
+                // off.
+                var payload = new byte[PreseedPayloadBytes];
+                for (var b = 0; b < PreseedPayloadBytes; b++) payload[b] = (byte)((i + b) & 0xFF);
+                seedEntries.Add(new KeyValuePair<string, byte[]>(vehicleId, payload));
+            }
+            try
+            {
+                await lattice.BulkLoadAsync(seedEntries, stoppingToken).ConfigureAwait(false);
+                preseedSw.Stop();
+                Console.WriteLine($"[silo] preseed treeId={settings.TreeId} entries={settings.PreseedKeyCount} payloadBytes={PreseedPayloadBytes} elapsedMs={preseedSw.Elapsed.TotalMilliseconds:F0}");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                preseedSw.Stop();
+                // Fail loud: the read modes report meaningless numbers
+                // against an empty keyspace, so an aborted pre-seed must
+                // surface as an obvious bench-harness fault, not silently
+                // proceed.
+                Console.Error.WriteLine($"[silo] ERROR preseed treeId={settings.TreeId} entries={settings.PreseedKeyCount} elapsedMs={preseedSw.Elapsed.TotalMilliseconds:F0} FAILED: {ex.GetType().Name}: {Truncate(ex.Message, 240)}");
+                throw;
+            }
         }
 
         // Drain channel: each connection writes into the same shared channel; a single drain
