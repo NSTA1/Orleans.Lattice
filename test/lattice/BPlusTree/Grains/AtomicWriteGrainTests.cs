@@ -192,19 +192,33 @@ public partial class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_commits_all_entries_in_order()
     {
+        // D1c (post-c2-xi): the saga dispatches one
+        // ILattice.SetManyAsync call per batch covering every
+        // still-unwritten entry. LatticeGrain.SetManyAsync runs its
+        // shard-bucketing fan-out in parallel via Task.WhenAll, and
+        // the leaf-side CommitSetManyAsync stamps each WAL record
+        // with the saga-global AtomicBatchIndex by looking up the
+        // entry's key in the key->globalIndex map the saga publishes
+        // via LatticeAtomicBatchContext.
         var (grain, state, _, lattice, shard) = CreateGrain();
         shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
+
+        List<KeyValuePair<string, byte[]>>? observedSlice = null;
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(callInfo =>
+            {
+                var slice = (List<KeyValuePair<string, byte[]>>)callInfo[0];
+                observedSlice = slice.ToList();
+                return Task.CompletedTask;
+            });
 
         var entries = MakeEntries(("a", [1]), ("b", [2]), ("c", [3]));
 
         await grain.ExecuteAsync(TreeId, entries);
 
-        Received.InOrder(() =>
-        {
-            lattice.SetAsync("a", Arg.Any<byte[]>());
-            lattice.SetAsync("b", Arg.Any<byte[]>());
-            lattice.SetAsync("c", Arg.Any<byte[]>());
-        });
+        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        Assert.That(observedSlice, Is.Not.Null);
+        Assert.That(observedSlice!.Select(kv => kv.Key).ToList(), Is.EqualTo(new[] { "a", "b", "c" }));
 
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
         Assert.That(state.State.NextIndex, Is.EqualTo(3));
@@ -260,9 +274,11 @@ public partial class AtomicWriteGrainTests
     [Test]
     public async Task ExecuteAsync_compensation_preserves_failure_message()
     {
+        // D1b: failure arrives via SetManyAsync (one call per batch).
         var (grain, _, _, lattice, shard) = CreateGrain();
         shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
-        lattice.SetAsync("b", Arg.Any<byte[]>()).Throws(new InvalidOperationException("specific failure"));
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Throws(new InvalidOperationException("specific failure"));
 
         var entries = MakeEntries(("a", [1]), ("b", [2]));
 
@@ -377,11 +393,22 @@ public partial class AtomicWriteGrainTests
 
         var (grain, _, _, lattice, _) = CreateGrain(state);
 
+        List<KeyValuePair<string, byte[]>>? observedSlice = null;
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(callInfo =>
+            {
+                var slice = (List<KeyValuePair<string, byte[]>>)callInfo[0];
+                observedSlice = slice.ToList();
+                return Task.CompletedTask;
+            });
+
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
-        // Only the missing entry ("b") should be written on resume.
-        await lattice.DidNotReceive().SetAsync("a", Arg.Any<byte[]>());
-        await lattice.Received().SetAsync("b", Arg.Any<byte[]>());
+        // D1b: resume from NextIndex=1 dispatches a single SetManyAsync
+        // containing only the trailing unwritten entry ("b").
+        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        Assert.That(observedSlice, Is.Not.Null);
+        Assert.That(observedSlice!.Select(kv => kv.Key).ToList(), Is.EqualTo(new[] { "b" }));
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
     }
 
@@ -411,7 +438,7 @@ public partial class AtomicWriteGrainTests
         var (grain, _, _, lattice, _) = CreateGrain(state);
 
         byte[]? observedDuringSetB = null;
-        lattice.SetAsync("b", Arg.Any<byte[]>())
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
             .Returns(_ =>
             {
                 observedDuringSetB = LatticeDeltaContext.Current;
@@ -710,20 +737,18 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
-    public async Task ExecuteAsync_re_stamps_persisted_VectorClock_on_every_per_key_SetAsync()
+    public async Task ExecuteAsync_re_stamps_persisted_VectorClock_on_batched_SetManyAsync()
     {
-        // The saga's purpose: every per-key SetAsync the saga issues must
-        // observe the saga-wide VC ambient at the time it executes - i.e.
-        // before the leaf grain reads LatticeVectorClockContext.Current
-        // and stamps LwwValue.VectorClock. We capture the ambient inside
-        // each SetAsync callback and assert all observations equal the
-        // captured frontier.
+        // D1c: the saga issues a single SetManyAsync per batch and
+        // the saga-wide VC ambient must be visible at the time it
+        // executes so the leaf grain's CommitSetManyAsync reads the
+        // identical VersionVector for every entry's WAL record.
         var (grain, _, _, lattice, _) = CreateGrain();
         var vc = new VersionVector();
         vc.Tick("origin-peer");
 
         var observed = new List<VersionVector?>();
-        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
             .Returns(_ =>
             {
                 observed.Add(LatticeVectorClockContext.Current);
@@ -735,10 +760,8 @@ public partial class AtomicWriteGrainTests
             await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2]), ("c", [3])));
         }
 
-        Assert.That(observed, Has.Count.EqualTo(3));
+        Assert.That(observed, Has.Count.EqualTo(1));
         Assert.That(observed[0], Is.SameAs(vc));
-        Assert.That(observed[1], Is.SameAs(vc));
-        Assert.That(observed[2], Is.SameAs(vc));
     }
 
     [Test]
@@ -768,7 +791,7 @@ public partial class AtomicWriteGrainTests
         var (grain, _, _, lattice, _) = CreateGrain(state);
 
         VersionVector? observedDuringSetB = null;
-        lattice.SetAsync("b", Arg.Any<byte[]>())
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
             .Returns(_ =>
             {
                 observedDuringSetB = LatticeVectorClockContext.Current;

@@ -817,20 +817,33 @@ internal sealed partial class BPlusLeafGrain(
         // simple commit path inside CommitSetAsync - if any per-call
         // context flag would otherwise alter the per-key semantics, we
         // fall through to the per-key loop and pay the original cost.
-        // The gated branches are:
-        //   * an in-progress split (the split recovery in SetCoreAsync
-        //     forwards mid-batch entries across two grains and we keep
-        //     that path serialized);
-        //   * the saga prepare-phase write (entries route to the
-        //     pending-tx map and do not advance the projection, so the
-        //     digest / observer fan-out shape is different);
-        //   * the atomic-batch context (atomic-batch envelopes carry
-        //     per-entry index/size and the batched path would lose
-        //     that ordering across the WAL grain).
-        var isPrepared = LatticePreparedContext.Current;
-        var hasAtomicBatch = LatticeAtomicBatchContext.Current is not null;
+        // Saga prepare-phase writes were historically routed through
+        // the per-key fallback loop below because the batched
+        // CommitSetManyAsync path was originally written for visible
+        // writes only (StoreEntry into Entries) and could not bucket
+        // entries into the leaf's pending-tx map. Phase D1b (c2-ix
+        // memo): CommitSetManyAsync now handles the `isPrepared`
+        // branch internally - prepared entries route to
+        // AddPreparedMutation via the same one-batched-WAL-append
+        // shape foreground SetManyAsync uses, removing the saga's
+        // size-1-WAL-batch cost identified by D1's phase-A
+        // attribution (wal.append.in_flight=0 throughout the D1 run).
+        //
+        // Saga callers stamp the atomic-batch ambient with
+        // (Size, BaseIndex) AND an optional `key -> globalIndex` map.
+        // The map exists so the leaf can recover each entry's true
+        // saga-global index after LatticeGrain.SetManyAsync's
+        // shard-bucketing fan-out re-groups the saga's flat entry list
+        // into per-shard buckets (bucket-local position no longer
+        // equals saga-global position). When the map is absent the
+        // batched commit path falls back to BaseIndex + bucketLocal,
+        // matching the foreground non-saga shape.
+        //
+        // Only an in-progress split keeps the per-key fallback path:
+        // the split recovery in SetCoreAsync forwards mid-batch entries
+        // across two grains and we keep that path serialized.
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
-        if (isPrepared || hasAtomicBatch || splitInProgress)
+        if (splitInProgress)
         {
             SplitResult? lastSplit = null;
             foreach (var entry in entries)
@@ -885,6 +898,26 @@ internal sealed partial class BPlusLeafGrain(
         var treeId = state.State.TreeId ?? string.Empty;
         var shardIndex = state.State.ShardIndex ?? 0;
 
+        // Saga-flag pickup: isPrepared routes entries into the leaf's
+        // pending-tx map via AddPreparedMutation (step 2 below); the
+        // atomicBatch (Size, BaseIndex) pair plus optional
+        // key->globalIndex map together stamp the wire-level
+        // AtomicBatchSize / AtomicBatchIndex slots on every per-entry
+        // WAL record so the receiver-side cross-cluster
+        // atomic-visibility gate can reassemble the saga's siblings.
+        // When the key->globalIndex map is present (the saga path
+        // post-D1b), we prefer it because LatticeGrain.SetManyAsync's
+        // shard-bucketing fan-out re-groups entries into per-shard
+        // buckets and bucket-local position no longer equals
+        // saga-global position. When absent (the foreground path, or
+        // a saga that happens to land entirely on a single shard with
+        // a contiguous slice), we fall back to BaseIndex + bucketLocal.
+        var isPrepared = LatticePreparedContext.Current;
+        var atomicBatch = LatticeAtomicBatchContext.Current;
+        var atomicBatchSize = atomicBatch?.Size ?? 0;
+        var atomicBatchBaseIndex = atomicBatch?.Index ?? 0;
+        var atomicBatchIndexMap = LatticeAtomicBatchContext.CurrentIndexMap;
+
         for (var i = 0; i < count; i++)
         {
             var key = entries[i].Key;
@@ -898,6 +931,23 @@ internal sealed partial class BPlusLeafGrain(
                     VectorClock = vectorClock,
                 };
             values[i] = lww;
+            int atomicBatchIndexForEntry;
+            if (atomicBatchSize > 0)
+            {
+                if (atomicBatchIndexMap is not null
+                    && atomicBatchIndexMap.TryGetValue(key, out var globalIndex))
+                {
+                    atomicBatchIndexForEntry = globalIndex;
+                }
+                else
+                {
+                    atomicBatchIndexForEntry = atomicBatchBaseIndex + i;
+                }
+            }
+            else
+            {
+                atomicBatchIndexForEntry = 0;
+            }
             walEntries.Add(new WalRecord
             {
                 TreeId = treeId,
@@ -912,17 +962,31 @@ internal sealed partial class BPlusLeafGrain(
                 TransactionId = transactionId,
                 Category = category,
                 Delta = delta,
-                AtomicBatchSize = 0,
-                AtomicBatchIndex = 0,
-                IsPrepared = false,
+                AtomicBatchSize = atomicBatchSize,
+                AtomicBatchIndex = atomicBatchIndexForEntry,
+                IsPrepared = isPrepared,
                 ShardIndex = shardIndex,
             });
         }
 
         // Publish the highest assigned stamp once - the version vector
-        // for this replica jumps directly to the batch's end.
+        // for this replica jumps directly to the batch's end. Prepared
+        // saga writes are NOT visible in Entries (they live in the
+        // pending-tx map until the terminal Commit broadcast), so
+        // skipping the version-advance publish for prepared writes
+        // matches the per-key CommitSetAsync prepared branch and
+        // avoids advertising not-yet-visible writes to readers. The
+        // local-revision bump still fires for prepared writes to
+        // match CommitSetAsync (the registry's per-leaf revision
+        // counter advances on every committed leaf RPC regardless of
+        // visibility, so the LeafCacheGrain refresh protocol sees
+        // every prepare-phase RPC as a single logical delta even
+        // though the entries are invisible until the terminal flips).
         var highStamp = stamps[count - 1];
-        PublishVersionAdvance(highStamp);
+        if (!isPrepared)
+        {
+            PublishVersionAdvance(highStamp);
+        }
         BumpLocalRevision();
 
         var options = await GetOptionsAsync();
@@ -938,20 +1002,34 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("wal", walStartTicks);
 
-        // step 2 (apply) - per-key LWW merge into the projection. The
-        // split predicate is checked once at the end; if multiple
-        // entries push the leaf above capacity, a single SplitAsync
-        // produces the same SplitResult the per-key loop would have
-        // produced on its final overflowing entry.
+        // step 2 (apply) - per-key apply into the projection. Branches
+        // on `isPrepared`: visible writes call StoreEntry (which merges
+        // into Entries and runs the split predicate); prepared saga
+        // writes call AddPreparedMutation (which buckets into the
+        // pending-tx map and is invisible to readers until the saga's
+        // terminal mark fires). The split predicate is checked once at
+        // the end and only for the visible path; prepared writes never
+        // trigger a leaf split because they are not yet visible in
+        // Entries.
         var applyStartTicks = Stopwatch.GetTimestamp();
         SplitResult? splitResult = null;
-        for (var i = 0; i < count; i++)
+        if (isPrepared)
         {
-            StoreEntry(entries[i].Key, values[i]);
+            for (var i = 0; i < count; i++)
+            {
+                AddPreparedMutation(transactionId, entries[i].Key, values[i]);
+            }
         }
-        if (Cache.Count > options.MaxLeafKeys)
+        else
         {
-            splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
+            for (var i = 0; i < count; i++)
+            {
+                StoreEntry(entries[i].Key, values[i]);
+            }
+            if (Cache.Count > options.MaxLeafKeys)
+            {
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys);
+            }
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -960,24 +1038,72 @@ internal sealed partial class BPlusLeafGrain(
         // notification per mutation), matching the per-key loop's
         // contract; the saving in this method is in the WAL round-trip
         // and the digest publication, not the observer fan-out.
+        // Prepared writes publish values[i] verbatim (the entry is in
+        // the pending-tx map, not Cache), matching CommitSetAsync's
+        // per-key observer branch; the observer payload's IsPrepared
+        // flag tells downstream consumers the entry is not yet visible.
+        // Per-entry atomic-batch index stamping: PublishSetAsync reads
+        // LatticeAtomicBatchContext.Current to stamp the outbound
+        // LatticeMutation's AtomicBatchSize / AtomicBatchIndex slots
+        // (the wire-level metadata replication consumers use to
+        // reconstruct saga sibling membership). When the saga's
+        // key->globalIndex map is present we override the ambient
+        // per-entry so each LatticeMutation carries its true
+        // saga-global index regardless of how LatticeGrain.SetManyAsync
+        // bucketed the entries; otherwise we fall back to BaseIndex + i
+        // (matching the WAL-record stamping a few lines above).
         var observerStartTicks = Stopwatch.GetTimestamp();
         if (mutationObservers.HasObservers)
         {
             using (LatticeCommitLogContext.BeginScope())
             {
-                for (var i = 0; i < count; i++)
+                var previousBatch = LatticeAtomicBatchContext.Current;
+                try
                 {
-                    var key = entries[i].Key;
-                    var published = Cache.TryGetRow(key, out var committed) ? committed : values[i];
-                    await PublishSetAsync(key, published);
+                    for (var i = 0; i < count; i++)
+                    {
+                        var key = entries[i].Key;
+                        LwwValue<byte[]> published;
+                        if (isPrepared)
+                        {
+                            published = values[i];
+                        }
+                        else
+                        {
+                            published = Cache.TryGetRow(key, out var committed) ? committed : values[i];
+                        }
+                        if (atomicBatchSize > 0)
+                        {
+                            int globalIndex;
+                            if (atomicBatchIndexMap is not null
+                                && atomicBatchIndexMap.TryGetValue(key, out var fromMap))
+                            {
+                                globalIndex = fromMap;
+                            }
+                            else
+                            {
+                                globalIndex = atomicBatchBaseIndex + i;
+                            }
+                            LatticeAtomicBatchContext.Current = (atomicBatchSize, globalIndex);
+                        }
+                        await PublishSetAsync(key, published);
+                    }
+                }
+                finally
+                {
+                    LatticeAtomicBatchContext.Current = previousBatch;
                 }
             }
         }
         RecordCommitStep("observer", observerStartTicks);
 
-        // step 4 (digest) - one digest fold for the whole batch. The
-        // dirty-flag is idempotent so the funnel coalesces every
-        // per-key StoreEntry hash contribution into a single parent
+        // step 4 (digest) - one digest fold for the whole batch.
+        // Prepared writes route into the pending-tx map (not visible
+        // Entries), so the running projection hash does NOT change
+        // and PublishDigestUpwardAsync is a no-op via _digestDirty=
+        // false. Foreground (non-prepared) writes flip _digestDirty
+        // via StoreEntry's MarkDigestDirty call; the funnel coalesces
+        // every per-key hash contribution into a single parent
         // notification.
         var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAsync();

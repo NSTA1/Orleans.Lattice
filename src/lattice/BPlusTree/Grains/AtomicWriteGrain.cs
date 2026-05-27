@@ -1405,148 +1405,152 @@ internal sealed class AtomicWriteGrain(
         // Phase A horizontal-scaling diagnostic: publish the saga's
         // fan-out size once per execute-phase entry (regardless of
         // whether the activation later compensates or completes),
-        // tagged by tree only. SagaFanoutSize is intentionally
-        // separate from the terminal AtomicWriteBatchSize: this
-        // histogram lets dashboards correlate per-key duration with
-        // fan-out size even when a saga faults mid-loop.
+        // tagged by tree only.
         var sagaTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId);
         var resolvedOptions = optionsMonitor.Get(state.State.TreeId);
-        // Phase A attribution: pivot saga metrics by the tree's
-        // effective WalPartitions so the matrix sweep can correlate
-        // fan-out cost with WAL fan-out. WalMaxPendingBatches is
-        // deliberately omitted at the saga layer - the saga's
-        // serialisation is on the per-key loop (now per-batch fan-out),
-        // not on per-shard pending-flush capacity. Resolved once per
-        // execute-phase entry; option toggles between iterations are
-        // rare and the saga executes for at most a handful of seconds.
         var walPartitions = resolvedOptions.WalPartitions;
         var sagaWalPartitionsTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagWalPartitions,
             walPartitions);
         LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag);
 
-        // Stamp the prepare-phase ambient once for the entire saga prepare
-        // loop rather than per-key. The leaf grain's commit pipeline reads
-        // LatticePreparedContext.Current at LatticeMutation emit time, so the
-        // flag being "on" across the post-fan-out state.WriteStateAsync
-        // call is semantically equivalent to being "off" - the saga's
-        // own persists do not emit a LatticeMutation. Hoisting saves
-        // (N-1) Scope-class allocations per N-key saga without
-        // changing observable behaviour.
+        // Phase D1b (c2-ix memo): collapse the D1 per-key
+        // Task.WhenAll-of-N-SetAsync fan-out into a single
+        // ILattice.SetManyAsync call per batch. The leaf's
+        // CommitSetManyAsync now handles isPrepared=true via
+        // AddPreparedMutation after a single
+        // ICommitLogWriter.AppendManyAsync dispatch per partition;
+        // D1's phase-A data showed each per-key SetAsync dispatched
+        // as a size-1 WAL batch with wal.append.in_flight=0 throughout,
+        // so the saga was paying N WAL round-trips when one would do.
+        //
+        // Per-entry global index preservation across shard bucketing:
+        // LatticeGrain.SetManyAsync re-groups the saga's flat entry
+        // list into per-shard buckets and dispatches one
+        // IShardRootGrain.SetManyAsync per shard. Bucket-local
+        // position no longer equals saga-global position, so the leaf
+        // cannot stamp AtomicBatchIndex as BaseIndex + bucketLocal
+        // alone - that would produce 4 records all stamped "index 0
+        // of size 4" when the 4 saga keys hash to 4 different shards
+        // and break receiver-side cross-cluster atomic visibility.
+        // The saga therefore stamps an additional `key -> globalIndex`
+        // map alongside the (Size, BaseIndex) pair via the
+        // LatticeAtomicBatchContext.With(batch, indexMap) overload;
+        // the leaf's CommitSetManyAsync looks each entry's key up in
+        // the map to recover its saga-global index regardless of how
+        // SetManyAsync routed the entries to leaves.
+        //
+        // Crash-recovery: the per-key checkpoint that previously
+        // advanced NextIndex after every committed key was replaced
+        // in D1 with a single post-batch persist; D1b keeps the same
+        // semantics (set NextIndex to Entries.Count when the whole
+        // batch succeeds, Class-B revert on persist throw). A crash
+        // mid-batch leaves NextIndex at its pre-batch value;
+        // reactivation re-runs every entry. Re-running prepared
+        // writes is idempotent at the leaf - AddPreparedMutation
+        // merges via LwwValue.Merge on duplicate (transactionId, key)
+        // pairs and the saga's terminal MarkCommittedAsync is the
+        // single visibility gate.
+        //
+        // Retry semantics: MaxRetriesPerStep is the per-batch retry
+        // budget (carried forward from D1). On batch failure the
+        // whole unwritten remainder is re-attempted; on budget
+        // exhaustion the saga pivots to Compensate exactly as the
+        // pre-c2-viii sequential loop did.
         using (LatticePreparedContext.BeginScope())
-        // Sentinel-hoist the atomic-batch ambient with Index=0 at the outer
-        // scope. Each parallel task below sets its own (Size, Index)
-        // pair via the bare property setter; because the backing
-        // RequestContext is AsyncLocal-flowed, each Task.Run branch
-        // captures its parent's snapshot at branch time and then writes
-        // a private per-task entry on the first set. The outer using's
-        // Dispose restores the pre-saga ambient (typically null) once
-        // the fan-out completes.
-        using (LatticeAtomicBatchContext.With((state.State.AtomicBatchSize, 0)))
         {
-            // Bounded-parallelism cap: never run more concurrent SetAsync
-            // calls than the tree has WAL partitions. Each partition's
-            // pipeline tolerates WalMaxPendingBatches in-flight batches
-            // (8 at the c2-iii baseline); the saga's per-key fan-out
-            // already pays one in-flight slot per concurrent SetAsync,
-            // so capping at WalPartitions matches the WAL's downstream
-            // capacity without over-saturating. WalPartitions=1
-            // (library default) degenerates to the pre-c2-viii sequential
-            // shape (no measurable change).
-            var maxInFlight = Math.Max(1, walPartitions);
-
             while (state.State.NextIndex < state.State.Entries.Count)
             {
                 var startIndex = state.State.NextIndex;
                 var totalEntries = state.State.Entries.Count;
-
-                using var gate = new SemaphoreSlim(maxInFlight, maxInFlight);
-                var pending = new List<Task>(totalEntries - startIndex);
+                var remaining = totalEntries - startIndex;
 
 #if LATTICE_DIAG
                 var swBatch = System.Diagnostics.Stopwatch.StartNew();
-                DiagSink.Write($"[DIAG saga-execute-batch-enter] op={OperationKey} tree={state.State.TreeId} startIndex={startIndex} totalEntries={totalEntries} parallelism={maxInFlight} retries={state.State.RetriesOnCurrentStep}");
+                DiagSink.Write($"[DIAG saga-execute-batch-enter] op={OperationKey} tree={state.State.TreeId} startIndex={startIndex} totalEntries={totalEntries} retries={state.State.RetriesOnCurrentStep}");
 #endif
 
-                for (var idx = startIndex; idx < totalEntries; idx++)
+                // Build the per-batch entry slice plus a parallel
+                // key -> globalIndex map. The slice covers every
+                // unwritten entry; the indexMap lets the leaf-side
+                // batched commit path stamp each per-entry WAL record
+                // with its true saga-global AtomicBatchIndex regardless
+                // of which shard's bucket the entry ends up in after
+                // LatticeGrain.SetManyAsync's shard-bucketing fan-out.
+                var slice = new List<KeyValuePair<string, byte[]>>(remaining);
+                var indexMap = new Dictionary<string, int>(remaining);
+                for (var i = startIndex; i < totalEntries; i++)
                 {
-                    await gate.WaitAsync().ConfigureAwait(true);
-                    var capturedIdx = idx;
-                    var entry = state.State.Entries[capturedIdx];
-                    var capturedSize = state.State.AtomicBatchSize;
-                    pending.Add(Task.Run(async () =>
-                    {
-                        try
-                        {
-                            // RequestContext mutations are AsyncLocal-flowed:
-                            // each Task.Run branch inherits the parent's
-                            // ambient snapshot at branch time and then
-                            // writes a private per-task entry on the first
-                            // Set. Sibling tasks observe their own
-                            // (Size, Index) pair, not each other's. This
-                            // is the load-bearing invariant for stamping
-                            // distinct AtomicBatchIndex values onto the
-                            // per-key WAL records under fan-out.
-                            LatticeAtomicBatchContext.Current = (capturedSize, capturedIdx);
-#if LATTICE_DIAG
-                            var swKey = System.Diagnostics.Stopwatch.StartNew();
-                            DiagSink.Write($"[DIAG saga-execute-key-enter] op={OperationKey} tree={state.State.TreeId} idx={capturedIdx} key={entry.Key} round=r{DiagSink.DecodeRound(entry.Value)} retries={state.State.RetriesOnCurrentStep}");
-#endif
-                            var perKeyStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-                            try
-                            {
-                                await lattice.SetAsync(entry.Key, entry.Value).ConfigureAwait(true);
-                            }
-                            finally
-                            {
-                                var perKeyMs = System.Diagnostics.Stopwatch.GetElapsedTime(perKeyStartTicks).TotalMilliseconds;
-                                LatticeMetrics.SagaPerKeyDuration.Record(perKeyMs, sagaTreeTag, sagaWalPartitionsTag);
-                            }
-#if LATTICE_DIAG
-                            DiagSink.Write($"[DIAG saga-execute-key-exit] op={OperationKey} tree={state.State.TreeId} idx={capturedIdx} key={entry.Key} elapsedMs={swKey.Elapsed.TotalMilliseconds:F0}");
-#endif
-                        }
-                        finally
-                        {
-                            gate.Release();
-                        }
-                    }));
+                    var entry = state.State.Entries[i];
+                    slice.Add(entry);
+                    indexMap[entry.Key] = i;
                 }
 
                 Exception? batchFailure = null;
+                var batchStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
-                    await Task.WhenAll(pending).ConfigureAwait(true);
+                    // Phase D1c (post-c2-xi): restored the single-call
+                    // shape of D1 - one ILattice.SetManyAsync covering
+                    // the whole unwritten slice. The shard-bucketing
+                    // fan-out inside LatticeGrain.SetManyAsync runs
+                    // cross-leaf calls in parallel via Task.WhenAll,
+                    // giving the saga back its concurrent per-shard
+                    // dispatch. D1b's per-shard SERIAL dispatch -
+                    // installed as the load-bearing fix for the
+                    // changefeed's HLC-cursor inversion-drop bug - is
+                    // no longer required because the changefeed cursor
+                    // is now per-partition WAL offset, which IS
+                    // monotonic per partition by construction (offsets
+                    // are assigned under the WAL grain activation's
+                    // lock at append time). The HLC ordering of WAL
+                    // records may still interleave across leaves, but
+                    // the consume-side filter no longer drops entries
+                    // by HLC, so cross-leaf HLC interleaving is benign.
+                    //
+                    // The (Size, BaseIndex) + key->globalIndex ambient
+                    // remains required: LatticeGrain.SetManyAsync still
+                    // buckets entries by shard, and the leaf-side
+                    // CommitSetManyAsync needs the index map to stamp
+                    // each per-entry WAL record's AtomicBatchIndex
+                    // from the saga's global slot (bucket-local
+                    // position does not equal saga-global position).
+                    using (LatticeAtomicBatchContext.With(
+                        (state.State.AtomicBatchSize, startIndex),
+                        indexMap))
+                    {
+                        await lattice.SetManyAsync(slice).ConfigureAwait(true);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    // Task.WhenAll surfaces the first exception of the
-                    // aggregate; AggregateException's InnerExceptions
-                    // carry the rest. Capture the first concrete cause
-                    // for the FailureMessage; the others are lost (as
-                    // in the pre-c2-viii sequential loop, which only
-                    // ever recorded the first failure's message).
-                    batchFailure = ex is AggregateException agg && agg.InnerExceptions.Count > 0
-                        ? agg.InnerExceptions[0]
-                        : ex;
+                    batchFailure = ex;
 #if LATTICE_DIAG
                     DiagSink.Write($"[DIAG saga-execute-batch-fault] op={OperationKey} tree={state.State.TreeId} startIndex={startIndex} totalEntries={totalEntries} ex={batchFailure.GetType().Name} msg={batchFailure.Message.Replace(System.Environment.NewLine, " | ")}");
 #endif
                 }
 
+                // Record per-key duration as elapsed / count - the
+                // batched dispatch makes individual per-key timing
+                // unrecoverable from the saga's vantage point, but the
+                // average is the right shape for the per-key duration
+                // histogram (matches how dashboards consume it).
+                var batchElapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(batchStartTicks).TotalMilliseconds;
+                if (remaining > 0)
+                {
+                    var perKeyAvgMs = batchElapsedMs / remaining;
+                    for (var i = 0; i < remaining; i++)
+                    {
+                        LatticeMetrics.SagaPerKeyDuration.Record(perKeyAvgMs, sagaTreeTag, sagaWalPartitionsTag);
+                    }
+                }
+
                 if (batchFailure is null)
                 {
-                    // Whole batch committed - single post-fan-out
+                    // Whole batch committed - single post-batch
                     // checkpoint advancing NextIndex to Entries.Count.
-                    // Class B snapshot/restore: a transient storage
-                    // failure leaves NextIndex / RetriesOnCurrentStep
-                    // dirty in memory; the next reactivation reads
-                    // disk and would resume from the pre-batch value
-                    // (which is correct - the leaf re-applies the
-                    // already-prepared writes idempotently). Reverting
-                    // the in-memory advance keeps activation state
-                    // consistent with disk for the rest of this
-                    // execution.
+                    // Class B snapshot/restore: identical contract to
+                    // the D1 post-fan-out persist.
                     var prevNextIndex = state.State.NextIndex;
                     var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
                     state.State.NextIndex = totalEntries;
@@ -1567,19 +1571,13 @@ internal sealed class AtomicWriteGrain(
                     break;
                 }
 
-                // Batch failed. The retry budget is interpreted per-batch
-                // post-c2-viii rather than per-key: any per-task failure
-                // exhausts one budget slot for the whole remaining batch.
+                // Batch failed. Identical retry / compensate-pivot
+                // contract to D1's per-batch loop.
                 if (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)
                 {
 #if LATTICE_DIAG
                     DiagSink.Write($"[DIAG saga-execute-batch-retry] op={OperationKey} tree={state.State.TreeId} startIndex={startIndex} retries={state.State.RetriesOnCurrentStep} ex={batchFailure.GetType().Name} msg={batchFailure.Message.Replace(System.Environment.NewLine, " | ")}");
 #endif
-                    // Class B snapshot/restore at the retry persist.
-                    // Identical pattern to the pre-c2-viii sequential
-                    // loop's retry persist site - a failure here without
-                    // the restore would advance the retry counter in
-                    // memory while disk still says the pre-retry value.
                     var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
                     state.State.RetriesOnCurrentStep++;
                     try
@@ -1598,18 +1596,13 @@ internal sealed class AtomicWriteGrain(
                 }
 
                 // Exhausted retries - pivot to compensation. Class B
-                // snapshot/restore: identical contract to the pre-c2-viii
-                // sequential loop's compensate-pivot site.
+                // snapshot/restore: identical contract to D1's
+                // compensate-pivot site.
                 var prevPhase = state.State.Phase;
                 var prevFailureMessage = state.State.FailureMessage;
                 var prevRetriesOnCurrentStepPivot = state.State.RetriesOnCurrentStep;
                 state.State.Phase = AtomicWritePhase.Compensate;
                 state.State.FailureMessage = batchFailure.Message;
-                // NextIndex still points at the start of the failed
-                // batch; the prepared writes that DID succeed remain in
-                // the per-leaf pending-tx maps and get dropped by the
-                // forthcoming abort-terminal broadcast. Same compensation
-                // contract as the pre-c2-viii loop.
                 state.State.RetriesOnCurrentStep = 0;
                 try
                 {
@@ -1626,7 +1619,6 @@ internal sealed class AtomicWriteGrain(
             }
         }
 
-        // Every entry committed - switch to Completed marker on saga exit.
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG saga-execute-phase-exit] op={OperationKey} tree={state.State.TreeId} nextIndex={state.State.NextIndex} totalEntries={state.State.Entries.Count} elapsedMs={swPhase.Elapsed.TotalMilliseconds:F0}");
 #endif

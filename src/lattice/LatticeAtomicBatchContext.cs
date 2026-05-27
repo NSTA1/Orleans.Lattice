@@ -73,10 +73,65 @@ public static class LatticeAtomicBatchContext
     {
         var previous = Current;
         Current = batch;
-        return new Scope(previous);
+        return new Scope(previous, CurrentIndexMap, restoreMap: false);
     }
 
-    private sealed class Scope((int Size, int Index)? previous) : IDisposable
+    /// <summary>
+    /// Gets or sets the optional <c>key -> globalIndex</c> map on the
+    /// ambient <see cref="RequestContext"/>. The map exists to
+    /// preserve per-entry <see cref="LatticeMutation.AtomicBatchIndex"/>
+    /// stamping through the <c>LatticeGrain.SetManyAsync</c>
+    /// shard-bucketing fan-out: when a saga issues a single batched
+    /// <c>SetManyAsync</c> covering keys that route to multiple
+    /// shards, the leaf-side batched commit path looks each entry's
+    /// key up in this map to recover its saga-global index regardless
+    /// of bucket-local ordering. Setting <see langword="null"/>
+    /// removes the key, matching the "no map" default that triggers
+    /// the publish helpers' <c>BaseIndex + bucketLocal</c> fallback.
+    /// </summary>
+    public static IReadOnlyDictionary<string, int>? CurrentIndexMap
+    {
+        get => RequestContext.Get(LatticeEventConstants.AtomicBatchIndexMapRequestContextKey)
+            as IReadOnlyDictionary<string, int>;
+        set
+        {
+            if (value is null)
+            {
+                RequestContext.Remove(LatticeEventConstants.AtomicBatchIndexMapRequestContextKey);
+            }
+            else
+            {
+                RequestContext.Set(
+                    LatticeEventConstants.AtomicBatchIndexMapRequestContextKey,
+                    value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets <see cref="Current"/> AND <see cref="CurrentIndexMap"/>
+    /// for the lifetime of the returned scope. Restores both prior
+    /// values on <see cref="IDisposable.Dispose"/>. Used by the saga
+    /// coordinator to stamp <c>(Size, BaseIndex)</c> alongside the
+    /// per-key <c>key -> globalIndex</c> lookup table so the leaf
+    /// commit path can recover the saga-global index after
+    /// <c>LatticeGrain.SetManyAsync</c> shard-bucketing.
+    /// </summary>
+    public static IDisposable With(
+        (int Size, int Index)? batch,
+        IReadOnlyDictionary<string, int>? indexMap)
+    {
+        var previousBatch = Current;
+        var previousMap = CurrentIndexMap;
+        Current = batch;
+        CurrentIndexMap = indexMap;
+        return new Scope(previousBatch, previousMap, restoreMap: true);
+    }
+
+    private sealed class Scope(
+        (int Size, int Index)? previousBatch,
+        IReadOnlyDictionary<string, int>? previousMap,
+        bool restoreMap) : IDisposable
     {
         private bool _disposed;
 
@@ -88,7 +143,11 @@ public static class LatticeAtomicBatchContext
             }
 
             _disposed = true;
-            Current = previous;
+            Current = previousBatch;
+            if (restoreMap)
+            {
+                CurrentIndexMap = previousMap;
+            }
         }
     }
 }

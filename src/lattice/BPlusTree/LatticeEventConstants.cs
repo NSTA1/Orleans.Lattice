@@ -133,6 +133,24 @@ public static class LatticeEventConstants
     internal const string AtomicBatchRequestContextKey = "ol.batch";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry an optional
+    /// per-saga <c>key -> globalIndex</c> map alongside the
+    /// <see cref="AtomicBatchRequestContextKey"/> <c>(Size, BaseIndex)</c>
+    /// pair. The map exists to preserve the saga's per-entry global
+    /// <see cref="LatticeMutation.AtomicBatchIndex"/> contract through
+    /// the <see cref="BPlusTree.Grains.LatticeGrain.SetManyAsync"/>
+    /// shard-bucketing fan-out: <see cref="BPlusTree.Grains.LatticeGrain"/>
+    /// re-groups the saga's flat entry list into per-shard buckets,
+    /// then the leaf's batched commit path stamps each bucket-local
+    /// position back to its saga-global index by looking up the entry's
+    /// key in this map. Absent on non-saga writes; absent on saga
+    /// writes whose entries all land on a single shard with contiguous
+    /// indices (the publish helpers fall back to <c>BaseIndex + i</c>).
+    /// Internal - set through <see cref="LatticeAtomicBatchContext"/>.
+    /// </summary>
+    internal const string AtomicBatchIndexMapRequestContextKey = "ol.batch.idx";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the saga's
     /// authoritative touched-shard count from the
     /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator

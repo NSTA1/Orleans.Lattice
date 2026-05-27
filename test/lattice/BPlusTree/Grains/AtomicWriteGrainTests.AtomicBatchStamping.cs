@@ -35,29 +35,35 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
-    public async Task ExecuteAsync_stamps_per_key_ambient_with_strictly_increasing_index_across_batch()
+    public async Task ExecuteAsync_stamps_batched_ambient_with_size_and_base_index_and_index_map()
     {
-        // Every per-key SetAsync the saga issues must observe a
-        // (Size = N, Index = 0..N-1) ambient at the time it executes,
-        // matching the producer-side atomic-batch stamping contract
-        // the atomic-batch metadata slots reserve and the saga
-        // implements.
+        // D1b: the saga dispatches a single SetManyAsync per batch and
+        // stamps LatticeAtomicBatchContext with (Size, BaseIndex) plus
+        // a key->globalIndex map. The map preserves the wire-level
+        // per-entry AtomicBatchIndex contract through LatticeGrain's
+        // shard-bucketing fan-out: bucket-local position no longer
+        // equals saga-global position, so the leaf's CommitSetManyAsync
+        // looks each entry's key up in the map to recover its true
+        // saga-global index.
         var (grain, _, _, lattice, _) = CreateGrain();
 
-        var observed = new List<(int Size, int Index)?>();
-        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+        (int Size, int Index)? observedBatch = null;
+        IReadOnlyDictionary<string, int>? observedMap = null;
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
             .Returns(_ =>
             {
-                observed.Add(LatticeAtomicBatchContext.Current);
+                observedBatch = LatticeAtomicBatchContext.Current;
+                observedMap = LatticeAtomicBatchContext.CurrentIndexMap;
                 return Task.CompletedTask;
             });
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2]), ("c", [3])));
 
-        Assert.That(observed, Has.Count.EqualTo(3));
-        Assert.That(observed[0], Is.EqualTo(((int Size, int Index)?)(3, 0)));
-        Assert.That(observed[1], Is.EqualTo(((int Size, int Index)?)(3, 1)));
-        Assert.That(observed[2], Is.EqualTo(((int Size, int Index)?)(3, 2)));
+        Assert.That(observedBatch, Is.EqualTo(((int Size, int Index)?)(3, 0)));
+        Assert.That(observedMap, Is.Not.Null);
+        Assert.That(observedMap!["a"], Is.EqualTo(0));
+        Assert.That(observedMap!["b"], Is.EqualTo(1));
+        Assert.That(observedMap!["c"], Is.EqualTo(2));
     }
 
     [Test]
@@ -99,24 +105,33 @@ public partial class AtomicWriteGrainTests
 
         var (grain, _, _, lattice, _) = CreateGrain(state);
 
-        var observed = new List<(int Size, int Index)?>();
-        lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+        (int Size, int Index)? observedBatch = null;
+        IReadOnlyDictionary<string, int>? observedMap = null;
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
             .Returns(_ =>
             {
-                observed.Add(LatticeAtomicBatchContext.Current);
+                observedBatch = LatticeAtomicBatchContext.Current;
+                observedMap = LatticeAtomicBatchContext.CurrentIndexMap;
                 return Task.CompletedTask;
             });
 
         // Sanity: no ambient context outside the resume path.
         Assert.That(LatticeAtomicBatchContext.Current, Is.Null);
+        Assert.That(LatticeAtomicBatchContext.CurrentIndexMap, Is.Null);
 
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
-        Assert.That(observed, Has.Count.EqualTo(2));
-        // Resume from NextIndex=1 covers the trailing (b, c) entries:
-        // indices 1 and 2 of the originally-captured Size=3 batch.
-        Assert.That(observed[0], Is.EqualTo(((int Size, int Index)?)(3, 1)));
-        Assert.That(observed[1], Is.EqualTo(((int Size, int Index)?)(3, 2)));
+        // D1b: resume from NextIndex=1 dispatches a single SetManyAsync
+        // for the trailing (b, c) entries. The ambient is (Size=3,
+        // BaseIndex=1) and the key->globalIndex map carries the
+        // saga-global indices (b -> 1, c -> 2) so the leaf's commit
+        // path can stamp the correct per-entry AtomicBatchIndex
+        // regardless of how SetManyAsync routes entries to leaves.
+        Assert.That(observedBatch, Is.EqualTo(((int Size, int Index)?)(3, 1)));
+        Assert.That(observedMap, Is.Not.Null);
+        Assert.That(observedMap!["b"], Is.EqualTo(1));
+        Assert.That(observedMap!["c"], Is.EqualTo(2));
+        Assert.That(observedMap, Has.Count.EqualTo(2));
     }
 
     [Test]
