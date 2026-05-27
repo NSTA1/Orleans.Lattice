@@ -472,7 +472,7 @@ internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize,
 /// produce headline numbers for every public <c>ILattice</c> op against
 /// the c2-iii operating point. See throughput-capture-plan.md.
 /// </summary>
-internal enum BenchWorkloadMode
+public enum BenchWorkloadMode
 {
     SetMany,
     SetManyAtomic,
@@ -1184,7 +1184,7 @@ internal sealed class TcpIngestService(
 /// class methods. Top-level local functions cannot be referenced from
 /// non-top-level types (CS8801).
 /// </summary>
-internal static class BenchWorkloadMetadata
+public static class BenchWorkloadMetadata
 {
     /// <summary>
     /// Renders <paramref name="mode"/> in the same kebab-case form
@@ -1211,7 +1211,7 @@ internal static class BenchWorkloadMetadata
 /// (see throughput-capture-plan.md step 7) without exposing the
 /// <c>TcpIngestService</c> internals via <c>[InternalsVisibleTo]</c>.
 /// </summary>
-internal static class BenchWorkloadDispatcher
+public static class BenchWorkloadDispatcher
 {
     /// <summary>
     /// Dispatches <paramref name="batch"/> through the <c>ILattice</c>
