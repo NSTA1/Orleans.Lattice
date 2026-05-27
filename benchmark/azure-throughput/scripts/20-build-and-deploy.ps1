@@ -179,8 +179,22 @@ $leafStorageTable = if ($env:BENCH_LEAF_STORAGE_TABLE) { $env:BENCH_LEAF_STORAGE
                     else { 'OrleansLatticeGrainState' }
 $leafStorageNumGrains = if ($env:BENCH_LEAF_STORAGE_NUM_GRAINS) { $env:BENCH_LEAF_STORAGE_NUM_GRAINS }
                         else { '0' }
+# Throughput-capture (throughput-capture-plan.md step 6): selects which
+# ILattice op the silo dispatches per producer batch. Default `set-many`
+# preserves the legacy bench shape (one ILattice.SetManyAsync per batch).
+# Other accepted values: `set-many-atomic`, `set-point`, `get-point`,
+# `get-many`. See Silo/Program.cs::BenchWorkloadMode for the dispatch
+# table.
+$workloadMode = if ($env:BENCH_WORKLOAD_MODE) { $env:BENCH_WORKLOAD_MODE }
+                else { 'set-many' }
+# Per-saga key count used only when workloadMode == set-many-atomic.
+# Default 64 - a realistic atomic-write shape. (BENCH_BATCH_SIZE=4096
+# would not be a meaningful atomic-saga size; that's the SetMany batch
+# shape, not the atomic-saga shape.)
+$atomicBatchSize = if ($env:BENCH_ATOMIC_BATCH_SIZE) { $env:BENCH_ATOMIC_BATCH_SIZE }
+                   else { '64' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec leafStorageKind=$leafStorageKind leafStorageTable=$leafStorageTable leafStorageNumGrains=$leafStorageNumGrains skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec leafStorageKind=$leafStorageKind leafStorageTable=$leafStorageTable leafStorageNumGrains=$leafStorageNumGrains workloadMode=$workloadMode atomicBatchSize=$atomicBatchSize skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -394,6 +408,12 @@ properties:
             value: '$leafStorageTable'
           - name: BENCH_LEAF_STORAGE_NUM_GRAINS
             value: '$leafStorageNumGrains'
+          - name: BENCH_WORKLOAD_MODE
+            value: '$workloadMode'
+          - name: BENCH_ATOMIC_BATCH_SIZE
+            value: '$atomicBatchSize'
+          - name: BENCH_VEHICLE_COUNT
+            value: '$vehicleCount'
           - name: AZURE_CLIENT_ID
             value: $((az identity show --name $ctx.Identity --resource-group $ctx.ResourceGroup --query clientId --output tsv))
     - name: producer
