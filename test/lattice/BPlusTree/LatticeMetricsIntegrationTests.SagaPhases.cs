@@ -103,4 +103,101 @@ public partial class LatticeMetricsIntegrationTests
         Assert.That(anyBroadcastWithBothTags, Is.True,
             "saga.broadcast.duration must carry both the tree tag and the wal_partitions tag.");
     }
+
+    [Test]
+    public async Task SetManyAtomicAsync_emits_saga_checkpoint_duration_histogram_with_phase_tag()
+    {
+        // Each state.WriteStateAsync call inside AtomicWriteGrain is
+        // wrapped by WriteSagaStateAsync, which records on
+        // SagaCheckpointDuration with a per-call phase tag identifying
+        // the call site. A successful saga always hits at least the
+        // "prepare" and "complete" phases; pin both so a future change
+        // that drops the wrapper at one site is detected.
+        using var recorder = new MetricRecorder();
+        var treeId = $"metrics-saga-checkpoint-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+            new("b", Encoding.UTF8.GetBytes("2")),
+        };
+        await tree.SetManyAtomicAsync(entries);
+
+        var preparePhaseObserved = recorder.Records.Any(r =>
+            r.Name == "orleans.lattice.saga.checkpoint.duration"
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagPhase && (t.Value as string) == "prepare"));
+        Assert.That(preparePhaseObserved, Is.True,
+            "Expected saga.checkpoint.duration observation with phase=prepare for the saga's initial state persist.");
+
+        var completePhaseObserved = recorder.Records.Any(r =>
+            r.Name == "orleans.lattice.saga.checkpoint.duration"
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagPhase && (t.Value as string) == "complete"));
+        Assert.That(completePhaseObserved, Is.True,
+            "Expected saga.checkpoint.duration observation with phase=complete for the saga's terminal state persist.");
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_checkpoint_histogram_carries_wal_partitions_tag()
+    {
+        // Mirror of the prepare/broadcast tag-presence check for the
+        // new checkpoint histogram so dashboards can join across
+        // checkpoint observations and the (tree, walPartitions)
+        // dimension without instrument-level joins.
+        using var recorder = new MetricRecorder();
+        var treeId = $"metrics-saga-checkpoint-tags-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+        };
+        await tree.SetManyAtomicAsync(entries);
+
+        var anyWithAllThreeTags = recorder.Records.Any(r =>
+            r.Name == "orleans.lattice.saga.checkpoint.duration"
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagWalPartitions && t.Value is int)
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagPhase && t.Value is string));
+        Assert.That(anyWithAllThreeTags, Is.True,
+            "saga.checkpoint.duration must carry the tree tag, the wal_partitions tag, and a string phase tag.");
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_emits_saga_reminder_duration_histogram_for_register_and_unregister()
+    {
+        // RegisterKeepaliveAsync runs at saga entry; UnregisterKeepaliveAsync
+        // runs inside CompleteSagaAsync. Both are Azure-Tables-shaped
+        // RPCs against the Orleans reminder table - per the c2-xvii
+        // routing memo, the plausible binding constraint at the
+        // c2-iii operating point. Pin that BOTH lifecycle calls emit
+        // observations with their distinct phase tags so a future
+        // change cannot silently drop either.
+        using var recorder = new MetricRecorder();
+        var treeId = $"metrics-saga-reminder-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("a", Encoding.UTF8.GetBytes("1")),
+            new("b", Encoding.UTF8.GetBytes("2")),
+        };
+        await tree.SetManyAtomicAsync(entries);
+
+        var registerObserved = recorder.Records.Any(r =>
+            r.Name == "orleans.lattice.saga.reminder.duration"
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagPhase && (t.Value as string) == "register"));
+        Assert.That(registerObserved, Is.True,
+            "Expected saga.reminder.duration observation with phase=register for the saga's RegisterKeepaliveAsync call.");
+
+        var unregisterGetObserved = recorder.Records.Any(r =>
+            r.Name == "orleans.lattice.saga.reminder.duration"
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (t.Value as string) == treeId)
+            && r.Tags.Any(t => t.Key == LatticeMetrics.TagPhase && (t.Value as string) == "unregister-get"));
+        Assert.That(unregisterGetObserved, Is.True,
+            "Expected saga.reminder.duration observation with phase=unregister-get for the saga's UnregisterKeepaliveAsync GetReminder call.");
+    }
 }
