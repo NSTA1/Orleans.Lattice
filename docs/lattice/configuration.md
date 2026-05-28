@@ -63,7 +63,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
-| [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 0 (synchronous publish) | Yes |
+| [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 5 (measured sweet spot) | Yes |
 | [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
 | [`HotShardOpsPerSecondThreshold`](#hotshardopspersecondthreshold) | `int` | 200 | Yes |
 | [`HotShardSampleInterval`](#hotshardsampleinterval) | `TimeSpan` | 30 seconds | Yes |
@@ -185,13 +185,15 @@ This option can be changed freely at any time. The new TTL takes effect on the n
 
 ### `DigestCoalescingWindowMs`
 
-How long (in milliseconds) a `BPlusLeafGrain` defers a pending cross-grain projection-digest publish to its parent internal node, coalescing multiple per-mutation publishes into a single hop (default: `0` - the historical synchronous-publish shape). When set to a positive value, the first dirty mutation arms a one-shot grain timer; subsequent mutations arriving within the window observe the pending timer and skip rescheduling, so N writes share one cross-grain publish to the parent. The leaf's persisted `ProjectionHash` still advances per-mutation (cold-reactivation replay invariant preserved); only the cross-grain publish to the parent is deferred.
+How long (in milliseconds) a `BPlusLeafGrain` defers a pending cross-grain projection-digest publish to its parent internal node, coalescing multiple per-mutation publishes into a single hop (default: `5` - the c2-xxviii measured sweet spot at the c2-iii operating point, a 27% drop in caller-visible `SetAsync` p50). When set to a positive value, the first dirty mutation arms a one-shot grain timer; subsequent mutations arriving within the window observe the pending timer and skip rescheduling, so N writes share one cross-grain publish to the parent. The leaf's persisted `ProjectionHash` still advances per-mutation (cold-reactivation replay invariant preserved); only the cross-grain publish to the parent is deferred.
 
-The library default is `0` for wire compatibility - the synchronous publish is the historical shape and is observable by tests that issue a read-after-write against a parent internal node within the same task continuation. Operators running write-heavy point-set workloads on tall trees can opt into a small positive window (5 ms is a measured sweet spot) to collapse digest hops without changing per-mutation correctness. Set to `0` to restore the historical synchronous shape.
+Coalescing is scoped to the per-write hot path (`SetAsync`, `SetManyAsync`, `DeleteAsync`, `DeleteRangeAsync`); structural events (leaf split, projection rebuild, saga terminal apply, tombstone-reap compaction, CRDT merge, checkpoint flush) bypass the window and publish synchronously so operator-tooling oracles (e.g. `RebuildLeafProjectionAsync` followed by `GetLeafProjectionDigestAsync`) observe post-publish state without a settle delay.
+
+Set to `0` to restore the synchronous-publish shape on every path - useful for tests that issue read-after-write digest oracles against a parent internal node within the same task continuation, or for operators whose downstream consumers depend on bit-exact synchronous publish timing.
 
 ```csharp verify
-// Opt-in to digest coalescing for a write-heavy tree
-siloBuilder.ConfigureLattice("event-log", o => o.DigestCoalescingWindowMs = 5);
+// Restore the synchronous-publish shape for a test tree
+siloBuilder.ConfigureLattice("test-tree", o => o.DigestCoalescingWindowMs = 0);
 ```
 
 This option can be changed freely at any time. The new value takes effect on the next mutation on each leaf; pending timers from the prior value drain at the prior cadence.

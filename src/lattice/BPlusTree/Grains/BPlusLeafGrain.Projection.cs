@@ -189,7 +189,10 @@ internal sealed partial class BPlusLeafGrain
             await PersistAsync();
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
             await ReportCursorIfActiveAsync();
-            await PublishDigestUpwardAsync();
+            // Structural callers bypass the c2-xxviii coalescing
+            // window so the parent's chained-fold observes the new
+            // checkpoint offset before this method returns.
+            await PublishDigestUpwardInlineAsync();
             await MaybeRunPeriodicSnapshotRecheckAsync();
             return;
         }
@@ -200,8 +203,9 @@ internal sealed partial class BPlusLeafGrain
             _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
             await ReportCursorIfActiveAsync();
             // Apply work may have updated ProjectionHash since the
-            // previous publish; flush any pending dirt.
-            await PublishDigestUpwardAsync();
+            // previous publish; flush any pending dirt. Structural
+            // flush boundary - bypass the c2-xxviii coalescing window.
+            await PublishDigestUpwardInlineAsync();
             await MaybeRunPeriodicSnapshotRecheckAsync();
         }
     }

@@ -243,11 +243,15 @@ internal sealed partial class BPlusLeafGrain
         // FlushPendingCheckpointAsync when a WAL writer is present,
         // but the no-WAL-writer path skips that flush - so an
         // explicit publish here keeps the chain consistent across
-        // both shapes. PublishDigestUpwardAsync is a no-op when
+        // both shapes. PublishDigestUpwardInlineAsync is a no-op when
         // _digestDirty is false (no entries crossed the split) or
         // when this leaf has no parent yet (the split-into-flat-tree
         // case where the shard-root promotion is still pending).
-        await PublishDigestUpwardAsync();
+        // The inline variant bypasses the c2-xxviii coalescing window
+        // so the parent's chained fold observes the post-split
+        // aggregate before the caller returns - structural events
+        // are explicitly excluded from coalescing (see c2-xxviii memo).
+        await PublishDigestUpwardInlineAsync();
 
         return new SplitResult
         {

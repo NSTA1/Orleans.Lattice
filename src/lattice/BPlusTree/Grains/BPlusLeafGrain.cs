@@ -1813,8 +1813,9 @@ internal sealed partial class BPlusLeafGrain(
 
         // Forward the projection-hash delta from the reaped tombstones
         // (and the entry-count shrinkage) to the parent internal node.
-        // No-op when no entries were actually removed.
-        await PublishDigestUpwardAsync();
+        // No-op when no entries were actually removed. Structural
+        // event - bypass the c2-xxviii coalescing window.
+        await PublishDigestUpwardInlineAsync();
 
         return toRemove.Count;
     }
@@ -2057,8 +2058,10 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         // Forward the projection-hash delta to the parent internal
-        // node. See CommitSetAsync for the no-op semantics.
-        await PublishDigestUpwardAsync();
+        // node. See CommitSetAsync for the no-op semantics. CRDT
+        // merge is a structural apply (replication-driven, not the
+        // per-write hot path) - bypass the c2-xxviii coalescing window.
+        await PublishDigestUpwardInlineAsync();
     }
 
     public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
@@ -2530,8 +2533,10 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         // Forward the projection-hash delta to the parent internal
-        // node. See MergeEntriesAsync for the no-op semantics.
-        await PublishDigestUpwardAsync();
+        // node. See MergeEntriesAsync for the no-op semantics. CRDT
+        // merge is a structural apply - bypass the c2-xxviii
+        // coalescing window.
+        await PublishDigestUpwardInlineAsync();
     }
 
     public async Task ClearGrainStateAsync()

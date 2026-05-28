@@ -834,22 +834,20 @@ public class LatticeOptions
     /// staleness within the window because they re-poll periodically; the
     /// digest is not used for read consistency of point queries.
     /// <para>
-    /// Defaults to <see cref="DefaultDigestCoalescingWindowMs"/> (<c>0</c>,
-    /// wire-compat - the synchronous-publish shape every direct digest
-    /// reader has historically observed). Operators on the bulk-write
-    /// hot path (where the per-call digest publish dominates the
-    /// <c>SetAsync</c> envelope) should set this to a small positive
-    /// value such as 5 ms; the c2-xxviii memo measured a 27% drop in
-    /// the caller-visible <c>SetAsync</c> p50 at the c2-iii operating
-    /// point under <c>DigestCoalescingWindowMs = 5</c>. The resolver
-    /// forces the window to <c>0</c> when
+    /// Defaults to <see cref="DefaultDigestCoalescingWindowMs"/> (<c>5</c>,
+    /// the c2-xxviii measured sweet spot at the c2-iii operating point -
+    /// a 27% drop in caller-visible <c>SetAsync</c> p50 vs the synchronous
+    /// shape with no observable change to digest correctness). Set to
+    /// <c>0</c> to restore the historical synchronous-publish shape if a
+    /// consumer depends on the read-after-write digest invariant. The
+    /// resolver forces the window to <c>0</c> when
     /// <see cref="MaintainProjectionDigest"/> is <c>false</c>.
     /// </para>
     /// </summary>
     public int DigestCoalescingWindowMs { get; set; } = DefaultDigestCoalescingWindowMs;
 
-    /// <summary>Default value for <see cref="DigestCoalescingWindowMs"/> (<c>0</c>, wire-compat synchronous publish).</summary>
-    public const int DefaultDigestCoalescingWindowMs = 0;
+    /// <summary>Default value for <see cref="DigestCoalescingWindowMs"/> (<c>5</c>, c2-xxviii measured sweet spot).</summary>
+    public const int DefaultDigestCoalescingWindowMs = 5;
 
     /// <summary>
     /// Number of WAL partitions per tree. Each partition is an independent

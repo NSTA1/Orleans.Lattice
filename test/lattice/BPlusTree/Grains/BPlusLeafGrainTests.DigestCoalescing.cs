@@ -14,14 +14,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public partial class BPlusLeafGrainTests
 {
     [Test]
-    public void DigestCoalescingWindowMs_default_is_zero()
+    public void DigestCoalescingWindowMs_default_is_five()
     {
-        // The wire-compat default must remain 0 so existing deployments and
-        // integration tests observe the synchronous-publish shape they pin.
-        // Operators opt into coalescing per-tree (or per-deployment via the
-        // bench's BENCH_DIGEST_COALESCING_WINDOW_MS lever).
-        Assert.That(new LatticeOptions().DigestCoalescingWindowMs, Is.EqualTo(0));
-        Assert.That(LatticeOptions.DefaultDigestCoalescingWindowMs, Is.EqualTo(0));
+        // The default carries the c2-xxviii measured sweet spot: a 5 ms
+        // coalescing window. Operators opt OUT (set to 0) per-tree if a
+        // consumer depends on the historical synchronous-publish shape.
+        Assert.That(new LatticeOptions().DigestCoalescingWindowMs, Is.EqualTo(5));
+        Assert.That(LatticeOptions.DefaultDigestCoalescingWindowMs, Is.EqualTo(5));
     }
 
     [Test]

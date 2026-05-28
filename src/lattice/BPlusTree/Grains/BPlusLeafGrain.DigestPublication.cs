@@ -207,6 +207,15 @@ internal sealed partial class BPlusLeafGrain
         // and skip rescheduling, so we pay one Orleans grain hop per
         // window rather than one per write. _digestDirty stays set
         // until the handler completes the publish.
+        //
+        // Structural callers (leaf split, rebuild, snapshot capture,
+        // saga terminal apply, tombstone-reap compaction, cross-shard
+        // merge) opt out of coalescing by calling
+        // <see cref="PublishDigestUpwardInlineAsync"/> instead - those
+        // paths need the parent's chained-fold to observe the new
+        // aggregate before the caller returns so operator-tooling
+        // oracles (e.g. RebuildLeafProjectionAsync's post-rebuild
+        // digest read) see the post-publish state synchronously.
         if (_digestCoalescingWindowMs > 0)
         {
             if (_digestPublishTimer is null)
@@ -230,6 +239,55 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // Coalescing disabled - pre-c2-xxviii synchronous publish.
+        return PublishCurrentDigestAndClearDirtyAsync(parentId);
+    }
+
+    /// <summary>
+    /// Synchronous variant of <see cref="PublishDigestUpwardAsync"/>
+    /// that bypasses the c2-xxviii coalescing window and publishes
+    /// the current digest snapshot to the parent before returning.
+    /// <para>
+    /// Use from structural callers (leaf split, rebuild, snapshot
+    /// capture, saga terminal apply, tombstone-reap compaction,
+    /// cross-shard merge) whose contract requires the parent's
+    /// chained-fold to observe the new aggregate by the time the
+    /// caller returns - per the c2-xxviii memo, coalescing is
+    /// deliberately scoped to the per-write hot path and structural
+    /// events are excluded so operator-tooling oracles
+    /// (e.g. <c>RebuildLeafProjectionAsync</c> followed by
+    /// <c>GetLeafProjectionDigestAsync</c>) see post-publish state
+    /// without a settle delay.
+    /// </para>
+    /// <para>
+    /// Cancels any pending coalesced publish timer before issuing the
+    /// inline publish so we do not double-publish the same delta.
+    /// </para>
+    /// </summary>
+    private Task PublishDigestUpwardInlineAsync()
+    {
+        if (!_maintainProjectionDigest)
+        {
+            if (!_latchAttempted)
+            {
+                _latchAttempted = true;
+                return TryStampDigestLatchAsync();
+            }
+            return Task.CompletedTask;
+        }
+        if (!_digestDirty) return Task.CompletedTask;
+        if (state.State.ParentId is not { } parentId)
+        {
+            _digestDirty = false;
+            return Task.CompletedTask;
+        }
+
+        // Cancel any pending coalesced publish so the inline call is
+        // the authoritative one. The timer handler is idempotent on
+        // _digestDirty so leaving a fired tick in flight would be
+        // harmless, but cancelling avoids a redundant cross-grain hop.
+        var pending = System.Threading.Interlocked.Exchange(ref _digestPublishTimer, null);
+        pending?.Dispose();
+
         return PublishCurrentDigestAndClearDirtyAsync(parentId);
     }
 

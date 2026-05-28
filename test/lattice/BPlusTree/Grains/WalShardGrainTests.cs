@@ -272,6 +272,12 @@ public partial class WalShardGrainTests
         var options = new LatticeOptions
         {
             WalMaxBatchEntries = 2,
+            // The "wait for in-flight then follow-on flush" shape this
+            // test asserts only holds when there is a single in-flight
+            // slot. Under the library default of 8 each arrival
+            // observes spare capacity and kicks its own flush, so no
+            // pending overflow ever happens. Pin to 1 explicitly.
+            WalMaxPendingBatches = 1,
         };
         var grain = await CreateGrainAsync(capturing, options);
 
