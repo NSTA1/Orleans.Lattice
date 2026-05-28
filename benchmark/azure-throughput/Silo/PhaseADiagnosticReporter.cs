@@ -104,6 +104,12 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // resolution, HLC compute, optional WAL append).
         "orleans.lattice.saga.broadcast.shard.duration",
         "orleans.lattice.saga.broadcast.leaf.duration",
+        // c2-xxi follow-up: per-stage sub-attribution of the
+        // ~143ms per-shard envelope. Tagged with stage = resolve |
+        // hlc | wal | fanout. Splits the per-shard broadcast budget
+        // so the dominant sub-stage can be identified before any
+        // further structural attempt on the broadcast path.
+        "orleans.lattice.saga.broadcast.shard.stage.duration",
         // U9p step 2: ShardRootGrain.SetManyAsync split into local-apply
         // (per-leaf fan-out + WAL append + phase 2) and shadow-forward
         // (online-resize tail wait). Lattice-internal histograms on the
@@ -281,6 +287,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // without a public-surface tag rename.
         string tree = "-", shard = "-", phase = "-", status = "-";
         string? step = null;
+        string? stage = null;
         for (var i = 0; i < tags.Length; i++)
         {
             var tagKey = tags[i].Key;
@@ -301,6 +308,10 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
             {
                 step = value;
             }
+            else if (string.Equals(tagKey, LatticeMetrics.TagStage, StringComparison.Ordinal))
+            {
+                stage = value;
+            }
             else if (string.Equals(tagKey, LatticeMetrics.TagStatus, StringComparison.Ordinal))
             {
                 status = value;
@@ -309,6 +320,10 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         if (phase == "-" && step is not null)
         {
             phase = step;
+        }
+        if (phase == "-" && stage is not null)
+        {
+            phase = stage;
         }
 
         // Render the dictionary key. The same (instrument, tags) tuple

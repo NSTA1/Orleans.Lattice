@@ -147,22 +147,44 @@ internal sealed partial class ShardRootGrain
         // trackedAffected but holding a saga key are exactly the
         // Bug B exposure surface that the backstop is designed to
         // cover, so the fan-out must reach them too.
-        var trackedAffected = TryConsumeAffectedLeaves(transactionId);
+        // c2-xxi follow-up: per-stage sub-attribution. Each of the
+        // four sub-spans (resolve, hlc, wal, fanout) is recorded on
+        // SagaBroadcastShardStageDuration so the c2-xx-measured
+        // ~143ms per-shard envelope can be split into its
+        // constituents. Tags are constructed once per call (the
+        // tree/shard pair is invariant for the activation's lifetime
+        // but we still need fresh KeyValuePair instances per Record
+        // call to avoid mutating shared structs).
+        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var stageTagShard = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex);
+
+        var resolveStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        HashSet<GrainId>? trackedAffected;
         IReadOnlyList<IBPlusLeafGrain> hlcLeaves;
-        if (trackedAffected is { Count: > 0 })
+        try
         {
-            var resolved = new List<IBPlusLeafGrain>(trackedAffected.Count);
-            foreach (var id in trackedAffected)
-                resolved.Add(grainFactory.GetGrain<IBPlusLeafGrain>(id));
-            hlcLeaves = resolved;
+            trackedAffected = TryConsumeAffectedLeaves(transactionId);
+            if (trackedAffected is { Count: > 0 })
+            {
+                var resolved = new List<IBPlusLeafGrain>(trackedAffected.Count);
+                foreach (var id in trackedAffected)
+                    resolved.Add(grainFactory.GetGrain<IBPlusLeafGrain>(id));
+                hlcLeaves = resolved;
+            }
+            else
+            {
+                // Fallback path. The chain walk itself is sequential
+                // (each step needs the previous leaf's next-sibling
+                // pointer); the subsequent fan-outs (clock collection,
+                // terminal apply) parallelise across the collected list.
+                hlcLeaves = await CollectChainLeavesAsync(cancellationToken);
+            }
         }
-        else
+        finally
         {
-            // Fallback path. The chain walk itself is sequential
-            // (each step needs the previous leaf's next-sibling
-            // pointer); the subsequent fan-outs (clock collection,
-            // terminal apply) parallelise across the collected list.
-            hlcLeaves = await CollectChainLeavesAsync(cancellationToken);
+            LatticeMetrics.SagaBroadcastShardStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(resolveStartTicks).TotalMilliseconds,
+                stageTagTree, stageTagShard, LatticeMetrics.StageResolveTag);
         }
 
         // Step 2 (terminal HLC) - fan out GetClockAsync across the
@@ -180,7 +202,18 @@ internal sealed partial class ShardRootGrain
         // a receiver-side relay stamping a source-cluster terminal
         // verbatim) the override wins so the receiver's local record
         // matches the authoring cluster's HLC bit-identically.
-        var terminalHlc = await ComputeTerminalHlcAsync(hlcLeaves);
+        var hlcStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        HybridLogicalClock terminalHlc;
+        try
+        {
+            terminalHlc = await ComputeTerminalHlcAsync(hlcLeaves);
+        }
+        finally
+        {
+            LatticeMetrics.SagaBroadcastShardStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(hlcStartTicks).TotalMilliseconds,
+                stageTagTree, stageTagShard, LatticeMetrics.StageHlcTag);
+        }
 
         // Step 3 (durability) - append the terminal mark to this
         // shard's WAL partition before any in-memory delivery. The
@@ -194,8 +227,11 @@ internal sealed partial class ShardRootGrain
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
-            var terminal = new WalRecord
+            var walStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
             {
+                var terminal = new WalRecord
+                {
                 TreeId = TreeId,
                 Op = committed ? MutationKind.TxCommit : MutationKind.TxAbort,
                 Key = ShardIndex.ToString(CultureInfo.InvariantCulture),
@@ -228,7 +264,14 @@ internal sealed partial class ShardRootGrain
                 AtomicShardCount = LatticeAtomicShardCountContext.Current ?? 0,
             };
 
-            await writer.AppendAsync(terminal, cancellationToken);
+                await writer.AppendAsync(terminal, cancellationToken);
+            }
+            finally
+            {
+                LatticeMetrics.SagaBroadcastShardStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(walStartTicks).TotalMilliseconds,
+                    stageTagTree, stageTagShard, LatticeMetrics.StageWalTag);
+            }
         }
 
         // Step 4 (immediate visibility) - fan out the terminal mark
@@ -260,19 +303,29 @@ internal sealed partial class ShardRootGrain
         // shard in the closure in parallel - so cascading splits
         // collapse to a single-hop parallel fan-out at the saga
         // layer.
-        var leafFanOut = BroadcastTerminalToLeavesAsync(
-            trackedAffected,
-            transactionId,
-            committed,
-            committedValues,
-            cancellationToken);
+        var fanOutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            var leafFanOut = BroadcastTerminalToLeavesAsync(
+                trackedAffected,
+                transactionId,
+                committed,
+                committedValues,
+                cancellationToken);
 
-        var shadowForward = ForwardShadowAsync(
-            (transactionId, committed, committedValues, cancellationToken),
-            static (target, state) => target.AppendTxTerminalAsync(
-                state.transactionId, state.committed, state.committedValues, state.cancellationToken));
+            var shadowForward = ForwardShadowAsync(
+                (transactionId, committed, committedValues, cancellationToken),
+                static (target, state) => target.AppendTxTerminalAsync(
+                    state.transactionId, state.committed, state.committedValues, state.cancellationToken));
 
-        await Task.WhenAll(leafFanOut, shadowForward);
+            await Task.WhenAll(leafFanOut, shadowForward);
+        }
+        finally
+        {
+            LatticeMetrics.SagaBroadcastShardStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(fanOutStartTicks).TotalMilliseconds,
+                stageTagTree, stageTagShard, LatticeMetrics.StageFanOutTag);
+        }
         }
         finally
         {

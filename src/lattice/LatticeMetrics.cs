@@ -125,6 +125,18 @@ public static class LatticeMetrics
     public const string TagPhase = "phase";
 
     /// <summary>
+    /// Tag key for the sub-stage label inside
+    /// <c>ShardRootGrain.AppendTxTerminalAsync</c>. Emitted on
+    /// <see cref="SagaBroadcastShardStageDuration"/>. Values:
+    /// <c>resolve</c> (step 1 affected-leaves resolution),
+    /// <c>hlc</c> (step 2 <c>ComputeTerminalHlcAsync</c> fan-out + tick),
+    /// <c>wal</c> (step 3 commit-log adapter append; absent when no
+    /// adapter is registered), and <c>fanout</c> (step 4 per-leaf
+    /// <c>ApplyTxTerminalAsync</c> dispatch + shadow-forward).
+    /// </summary>
+    public const string TagStage = "stage";
+
+    /// <summary>
     /// Tag key for an Azure Tables HTTP status string on
     /// <see cref="ProviderRetryExhausted"/>. Cardinality is bounded by
     /// the small set of HTTP status codes the SDK surfaces on the WAL
@@ -932,6 +944,26 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.saga.broadcast.leaf.duration", unit: "ms",
             description: "Wall-clock ms inside a single per-leaf ApplyTxTerminalAsync RPC dispatched from the shard's terminal broadcast.");
 
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside a single sub-stage of
+    /// <c>ShardRootGrain.AppendTxTerminalAsync</c>. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagShard"/>, and
+    /// <see cref="TagStage"/> (<c>resolve</c> | <c>hlc</c> | <c>wal</c>
+    /// | <c>fanout</c>).
+    /// <para>
+    /// Per the c2-xxi memo the c2-xx <see cref="SagaBroadcastShardDuration"/>
+    /// p50 of ~143ms could not be attributed to leaf-side turn-token
+    /// queueing (<c>[AlwaysInterleave]</c> on <c>GetClockAsync</c> did
+    /// not move per-shard p50 down). The four sub-stage spans here
+    /// split the per-shard envelope into its constituent pieces so the
+    /// dominant cost can be identified before any further structural
+    /// attempt.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaBroadcastShardStageDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.broadcast.shard.stage.duration", unit: "ms",
+            description: "Wall-clock ms inside one sub-stage (resolve|hlc|wal|fanout) of ShardRootGrain.AppendTxTerminalAsync.");
+
     // --- Shard-root SetManyAsync split instruments ----------------
 
     /// <summary>
@@ -1140,4 +1172,16 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagPhase"/> = <c>phase2</c>.</summary>
     public static readonly KeyValuePair<string, object?> PhasePhase2Tag = new(TagPhase, "phase2");
+
+    /// <summary><see cref="TagStage"/> = <c>resolve</c> (step 1 affected-leaves resolution).</summary>
+    public static readonly KeyValuePair<string, object?> StageResolveTag = new(TagStage, "resolve");
+
+    /// <summary><see cref="TagStage"/> = <c>hlc</c> (step 2 ComputeTerminalHlcAsync fan-out + tick).</summary>
+    public static readonly KeyValuePair<string, object?> StageHlcTag = new(TagStage, "hlc");
+
+    /// <summary><see cref="TagStage"/> = <c>wal</c> (step 3 commit-log adapter append).</summary>
+    public static readonly KeyValuePair<string, object?> StageWalTag = new(TagStage, "wal");
+
+    /// <summary><see cref="TagStage"/> = <c>fanout</c> (step 4 per-leaf ApplyTxTerminalAsync dispatch + shadow-forward).</summary>
+    public static readonly KeyValuePair<string, object?> StageFanOutTag = new(TagStage, "fanout");
 }
