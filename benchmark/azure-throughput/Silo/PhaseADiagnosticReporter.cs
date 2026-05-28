@@ -85,6 +85,16 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.saga.prepare.duration",
         "orleans.lattice.saga.terminal_decision.duration",
         "orleans.lattice.saga.broadcast.duration",
+        // c2-xvi routing memo: saga-internal state.WriteStateAsync
+        // persists, attributing the residual ~6.2s of per-saga cost
+        // the three phase histograms do not cover. Per-call phase
+        // tag identifies the call site (e.g. "prepare", "complete").
+        "orleans.lattice.saga.checkpoint.duration",
+        // c2-xvii routing memo: Orleans reminder registry RPCs on the
+        // saga grain (RegisterKeepalive at entry, GetReminder +
+        // UnregisterReminder at completion). Each call is an Azure
+        // Tables transaction against the reminder table.
+        "orleans.lattice.saga.reminder.duration",
         // U9p step 2: ShardRootGrain.SetManyAsync split into local-apply
         // (per-leaf fan-out + WAL append + phase 2) and shadow-forward
         // (online-resize tail wait). Lattice-internal histograms on the

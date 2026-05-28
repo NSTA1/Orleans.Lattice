@@ -498,7 +498,7 @@ internal sealed class AtomicWriteGrain(
 #endif
         try
         {
-            await state.WriteStateAsync();
+            await WriteSagaStateAsync("prepare");
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG saga-prepare-persist-exit] op={OperationKey} tree={treeId} elapsedMs={swPersist.Elapsed.TotalMilliseconds:F0}");
 #endif
@@ -793,7 +793,7 @@ internal sealed class AtomicWriteGrain(
             state.State.TouchedShards = sorted;
             try
             {
-                await state.WriteStateAsync();
+                await WriteSagaStateAsync("broadcast-touched-init");
             }
             catch
             {
@@ -851,7 +851,7 @@ internal sealed class AtomicWriteGrain(
                 state.State.TouchedShards = sorted;
                 try
                 {
-                    await state.WriteStateAsync();
+                    await WriteSagaStateAsync("broadcast-touched-drift");
                 }
                 catch
                 {
@@ -913,7 +913,7 @@ internal sealed class AtomicWriteGrain(
                     state.State.TouchedShards = sorted;
                     try
                     {
-                        await state.WriteStateAsync();
+                        await WriteSagaStateAsync("broadcast-touched-registry");
                     }
                     catch
                     {
@@ -974,7 +974,7 @@ internal sealed class AtomicWriteGrain(
             if (expanded.Count != state.State.TouchedShards.Count)
             {
                 state.State.TouchedShards = expanded;
-                await state.WriteStateAsync();
+                await WriteSagaStateAsync("broadcast-touched-expand");
             }
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG broadcast-expanded] op={OperationKey} tx={transactionId} touched=[{string.Join(",", state.State.TouchedShards)}]");
@@ -1166,7 +1166,7 @@ internal sealed class AtomicWriteGrain(
                 var sortedSent = new List<int>(terminalled);
                 sortedSent.Sort();
                 state.State.TouchedShards = sortedSent;
-                await state.WriteStateAsync();
+                await WriteSagaStateAsync("broadcast-touched-late");
             }
         }
 
@@ -1624,7 +1624,7 @@ internal sealed class AtomicWriteGrain(
                     state.State.RetriesOnCurrentStep = 0;
                     try
                     {
-                        await state.WriteStateAsync();
+                        await WriteSagaStateAsync("execute-batch-commit");
                     }
                     catch
                     {
@@ -1649,7 +1649,7 @@ internal sealed class AtomicWriteGrain(
                     state.State.RetriesOnCurrentStep++;
                     try
                     {
-                        await state.WriteStateAsync();
+                        await WriteSagaStateAsync("execute-batch-retry");
                     }
                     catch
                     {
@@ -1673,7 +1673,7 @@ internal sealed class AtomicWriteGrain(
                 state.State.RetriesOnCurrentStep = 0;
                 try
                 {
-                    await state.WriteStateAsync();
+                    await WriteSagaStateAsync("execute-to-compensate");
                 }
                 catch
                 {
@@ -1714,7 +1714,7 @@ internal sealed class AtomicWriteGrain(
         state.State.RetriesOnCurrentStep = 0;
         try
         {
-            await state.WriteStateAsync();
+            await WriteSagaStateAsync("complete");
         }
         catch
         {
@@ -1941,14 +1941,75 @@ internal sealed class AtomicWriteGrain(
         {
             return cached;
         }
+        // Source the tree id from the grain key rather than
+        // state.State.TreeId so the cache is correctly populated even
+        // when the first observation fires before PrepareAsync has
+        // initialised the persisted state (e.g. RegisterKeepaliveAsync
+        // runs at saga entry, before PrepareAsync sets
+        // state.State.TreeId; reading from state at that point would
+        // cache a null tree tag for the activation's lifetime).
+        // The grain key is "{treeId}/{operationId}", so the prefix
+        // before the first slash is the tree id.
+        var grainKey = GrainContext.GrainId.Key.ToString()!;
+        var slashIndex = grainKey.IndexOf('/');
+        var treeIdFromKey = slashIndex >= 0 ? grainKey.Substring(0, slashIndex) : grainKey;
         var built = (
-            Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+            Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdFromKey),
             WalPartitions: new KeyValuePair<string, object?>(
                 LatticeMetrics.TagWalPartitions,
-                optionsMonitor.Get(state.State.TreeId).WalPartitions));
+                optionsMonitor.Get(treeIdFromKey).WalPartitions));
         _sagaMetricTags = built;
         return built;
     }
+
+    /// <summary>
+    /// Wraps a single <c>state.WriteStateAsync()</c> call with timing
+    /// instrumentation: records the wall-clock duration on
+    /// <see cref="LatticeMetrics.SagaCheckpointDuration"/> tagged with
+    /// the saga's tree, wal-partitions, and the supplied
+    /// <paramref name="phase"/> tag identifying the call site.
+    /// <para>
+    /// Used in place of <c>await state.WriteStateAsync()</c> at every
+    /// persist site on this grain so the per-saga checkpoint cost can
+    /// be decomposed across the ~10 distinct sites without joining
+    /// instruments at dashboard time. The <c>try/finally</c> ensures
+    /// the histogram captures even on the failure path; the caller's
+    /// surrounding rollback <c>try/catch</c> still observes the
+    /// original exception unchanged.
+    /// </para>
+    /// <para>
+    /// Per-call allocation: zero heap allocations beyond the
+    /// <see cref="KeyValuePair{TKey, TValue}"/> struct passed to
+    /// <c>Record</c> (stack-allocated; the <see cref="string"/>
+    /// <paramref name="phase"/> value avoids the int-boxing that the
+    /// wal-partitions tag pays once-per-activation in
+    /// <see cref="GetSagaMetricTags"/>).
+    /// </para>
+    /// </summary>
+    /// <param name="phase">
+    /// Short string tag identifying the call site (e.g. <c>"prepare"</c>,
+    /// <c>"execute-batch-commit"</c>, <c>"complete"</c>). Should be a
+    /// string literal so it is interned and observation-time
+    /// allocation is bounded to the struct itself.
+    /// </param>
+    private async Task WriteSagaStateAsync(string phase)
+    {
+        var (treeTag, walTag) = GetSagaMetricTags();
+        var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        finally
+        {
+            LatticeMetrics.SagaCheckpointDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
+                treeTag,
+                walTag,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, phase));
+        }
+    }
+
 
     /// <summary>
     /// Re-throws a remembered failure when the caller re-invokes a terminal
@@ -1966,20 +2027,64 @@ internal sealed class AtomicWriteGrain(
         return Task.CompletedTask;
     }
 
-    private Task RegisterKeepaliveAsync() =>
-        ReminderRegistry.RegisterOrUpdateReminder(
-            callingGrainId: GrainContext.GrainId,
-            reminderName: KeepaliveReminderName,
-            dueTime: TimeSpan.FromMinutes(1),
-            period: TimeSpan.FromMinutes(1));
+    private async Task RegisterKeepaliveAsync()
+    {
+        var (treeTag, walTag) = GetSagaMetricTags();
+        var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            await ReminderRegistry.RegisterOrUpdateReminder(
+                callingGrainId: GrainContext.GrainId,
+                reminderName: KeepaliveReminderName,
+                dueTime: TimeSpan.FromMinutes(1),
+                period: TimeSpan.FromMinutes(1));
+        }
+        finally
+        {
+            LatticeMetrics.SagaReminderDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
+                treeTag,
+                walTag,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "register"));
+        }
+    }
 
     private async Task UnregisterKeepaliveAsync()
     {
+        var (treeTag, walTag) = GetSagaMetricTags();
         try
         {
-            var reminder = await ReminderRegistry.GetReminder(GrainContext.GrainId, KeepaliveReminderName);
+            var getStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            IGrainReminder? reminder;
+            try
+            {
+                reminder = await ReminderRegistry.GetReminder(GrainContext.GrainId, KeepaliveReminderName);
+            }
+            finally
+            {
+                LatticeMetrics.SagaReminderDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(getStartTicks).TotalMilliseconds,
+                    treeTag,
+                    walTag,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "unregister-get"));
+            }
+
             if (reminder is not null)
-                await ReminderRegistry.UnregisterReminder(GrainContext.GrainId, reminder);
+            {
+                var dropStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
+                {
+                    await ReminderRegistry.UnregisterReminder(GrainContext.GrainId, reminder);
+                }
+                finally
+                {
+                    LatticeMetrics.SagaReminderDuration.Record(
+                        System.Diagnostics.Stopwatch.GetElapsedTime(dropStartTicks).TotalMilliseconds,
+                        treeTag,
+                        walTag,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "unregister-drop"));
+                }
+            }
         }
         catch (Exception ex)
         {

@@ -839,6 +839,56 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.saga.broadcast.duration", unit: "ms",
             description: "Wall-clock ms inside BroadcastTerminalsAsync's per-shard AppendTxTerminalAsync fan-out.");
 
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside a single
+    /// <c>state.WriteStateAsync</c> call on the saga grain
+    /// (<c>AtomicWriteGrain</c>). The per-call <see cref="TagPhase"/>
+    /// tag identifies which checkpoint site the observation came from
+    /// (e.g. <c>prepare</c>, <c>execute-batch-commit</c>,
+    /// <c>complete</c>) so dashboards can decompose the per-saga
+    /// checkpoint cost across the grain's ~10 distinct persist sites
+    /// without joining across instruments.
+    /// <para>
+    /// Closes the c2-xvi residual-cost attribution gap: the sum of
+    /// the three saga-phase histograms
+    /// (<see cref="SagaPrepareDuration"/>,
+    /// <see cref="SagaTerminalDecisionDuration"/>,
+    /// <see cref="SagaBroadcastDuration"/>) accounted for ~1.4s of
+    /// the c2-xi-measured 7.7s per-saga p50; the residual ~6.3s
+    /// lives in saga-internal state persists which this histogram
+    /// attributes. Tagged with <see cref="TagTree"/>,
+    /// <see cref="TagWalPartitions"/>, and <see cref="TagPhase"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaCheckpointDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.checkpoint.duration", unit: "ms",
+            description: "Wall-clock ms inside a single state.WriteStateAsync on AtomicWriteGrain, tagged with the call-site phase.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside Orleans reminder
+    /// registry calls on the saga grain
+    /// (<c>AtomicWriteGrain.RegisterKeepaliveAsync</c> and
+    /// <c>UnregisterKeepaliveAsync</c>). Each call is an Azure Tables
+    /// transaction against the reminder table (one
+    /// <c>RegisterOrUpdateReminder</c> at saga entry, one
+    /// <c>GetReminder</c> + <c>UnregisterReminder</c> at saga
+    /// completion). The per-call <see cref="TagPhase"/> tag
+    /// distinguishes the call site (<c>register</c> /
+    /// <c>unregister-get</c> / <c>unregister-drop</c>).
+    /// <para>
+    /// Closes the c2-xvi/c2-xvii unattributed-residual gap: the
+    /// c2-xvi-measured sum of phases (~1.4s) plus the c2-xvii-measured
+    /// checkpoint persists (~52ms) left ~6.9s of the c2-xi 7.7s saga
+    /// p50 unattributed. Reminder I/O is the most plausible
+    /// contributor and was not previously instrumented. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagWalPartitions"/>, and
+    /// <see cref="TagPhase"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaReminderDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.reminder.duration", unit: "ms",
+            description: "Wall-clock ms inside Orleans reminder registry RPCs on AtomicWriteGrain, tagged with the call-site phase.");
+
     // --- Shard-root SetManyAsync split instruments ----------------
 
     /// <summary>
