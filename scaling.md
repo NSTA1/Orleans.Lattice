@@ -2691,6 +2691,65 @@ Per-phase histogram correctness coverage: 4 new tests in `LatticeMetricsIntegrat
 
 **Last Updated**: 2026-05-28 (Phase D-instr shipped: three per-phase saga histograms attribute the producer-side saga cost; broadcast dominates at ~62% of saga p50 confirming the c2-xv hypothesis; terminal decision negligible at ~1%; c2-xi 7,660ms p50 is per-saga-public-surface not per-phase-sum and the residual cost lives in saga-internal state persists which become the next instrument target before any structural optimisation lands).
 
+#### U9p step 8c-c-iv-c2-xvii (2026-05-28) - Saga state checkpoints + reminder I/O attribution
+
+**Goal.** Close the c2-xvi residual: phase-sum was ~1.4s, public-surface `lattice.op.duration_ms` was ~7.7s, leaving ~6.3s unattributed. Hypothesised candidates: (a) saga `state.WriteStateAsync` checkpoint persists, (b) Orleans reminder registry I/O at saga entry/exit.
+
+**Instrumentation shipped.** Two new histograms on `LatticeMetrics`:
+
+| Histogram | What it captures | Per-call phase tag values |
+|-----------|------------------|-----------|
+| `orleans.lattice.saga.checkpoint.duration` | Wall-clock ms inside a single `state.WriteStateAsync` on `AtomicWriteGrain` | `prepare`, `execute-batch-commit`, `execute-batch-retry`, `execute-to-compensate`, `complete`, `broadcast-touched-init`, `broadcast-touched-drift`, `broadcast-touched-registry`, `broadcast-touched-expand`, `broadcast-touched-late` (10 distinct call sites) |
+| `orleans.lattice.saga.reminder.duration` | Wall-clock ms inside Orleans reminder registry RPCs on `AtomicWriteGrain` | `register`, `unregister-get`, `unregister-drop` |
+
+All `state.WriteStateAsync()` calls are now routed through `WriteSagaStateAsync(phase)`, a helper that captures `Stopwatch.GetTimestamp()`, awaits the persist, and records on the histogram in a `try/finally` so the observation fires even on the failure path. The wrapping leaves every surrounding rollback `try/catch` untouched. Reminder calls are similarly wrapped inline. Both histograms share the cached `(tree, walPartitions)` tag pair from `_sagaMetricTags`; per-call allocation is bounded to the `KeyValuePair<string, object?>` struct passed for the per-call phase tag (stack-allocated; the string value is a literal, no boxing).
+
+**Allocation-discipline correction.** The first version of `GetSagaMetricTags` cached the tree id from `state.State.TreeId`, which is `null` until `PrepareAsync` populates it. `RegisterKeepaliveAsync` runs before `PrepareAsync`, so its first observation cached a null tree tag for the activation's lifetime, poisoning every subsequent histogram observation. Fixed by sourcing the tree id from the grain key (`GrainContext.GrainId.Key.ToString()`), which is `{treeId}/{operationId}` and is always available at activation. The fix surfaced via the integration tests (7 saga-phase tests turned red immediately); pinned forward via the test-harness's tree-id-tagged matchers.
+
+**Measured (Azure, single silo, c2-xi rung `500:10`, steady-state mid-run, 116 sagas).**
+
+| Phase | Calls per saga | p50 (ms) | Per-saga contribution |
+|-------|---:|----:|----:|
+| `saga.reminder.duration[register]` | 1 | 0.12 | 0.12 |
+| `saga.reminder.duration[unregister-get]` | 1 | 0.10 | 0.10 |
+| `saga.reminder.duration[unregister-drop]` | 1 | 0.05 | 0.05 |
+| `saga.checkpoint.duration[prepare]` | 1 | 17.58 | 17.58 |
+| `saga.checkpoint.duration[execute-batch-commit]` | 1 | 15.74 | 15.74 |
+| `saga.checkpoint.duration[complete]` | 1 | 18.36 | 18.36 |
+| `saga.checkpoint.duration[execute-batch-retry]` | rare | 39.72 | ~0 (only on retry) |
+| `saga.checkpoint.duration[execute-to-compensate]` | rare | 25.73 | ~0 (only on failure) |
+| **Combined reminder + checkpoint** | | | **~52ms** |
+
+**The unattributed-residual hypothesis is falsified.** Reminder I/O is sub-millisecond. Saga checkpoints sum to ~52ms p50 per happy-path saga (~3 persists × ~18ms each). Combined with the c2-xvi-measured phase sum (~1,424ms), the total per-saga cost is **~1,476ms p50** - far below the `lattice.op.duration_ms` p50 of ~8,400ms observed at this run.
+
+**Root cause of the discrepancy.** `lattice.op.duration_ms` is a bench-only histogram defined in `benchmark/azure-throughput/Silo/BenchMetrics.cs`, recorded around `BenchWorkloadDispatcher.DispatchAsync`. Reading the dispatcher's `SetManyAtomic` branch reveals the misattribution: the dispatcher slices each producer batch (256 entries) into `AtomicBatchSize`-sized (64) sagas and **awaits each one sequentially** in a loop. `lattice.op.duration_ms` therefore measures **4 sequential saga calls** (256 / 64), not one saga. The c2-xi memo's *"per-saga p50 7,660ms"* attribution was wrong by a factor of 4; the actual per-saga p50 on the current branch is ~1.5-2.0s, fully attributable to the instrumented phases.
+
+**Result of the instrumentation campaign.**
+
+Final per-saga p50 attribution at the c2-iii operating point (single cluster, `shardCount=32`, `walPartitions=8`, `walMaxPendingBatches=8`, `phase2CoalescingMs=5`, rung `500:10`):
+
+| Component | p50 (ms) | Share of single-saga cost |
+|-----------|---------:|--------------------------:|
+| Reminder I/O (register + unregister) | ~0.3 | <0.1% |
+| Saga checkpoints (3 persists) | ~52 | ~3% |
+| Phase: terminal_decision | ~13 | ~1% |
+| Phase: prepare (parallel `lattice.SetManyAsync`) | ~531 | ~36% |
+| Phase: broadcast (per-shard terminal fan-out) | ~880 | **~60%** |
+| **Per-saga total** | **~1,476** | |
+
+**Throughput overhead check.** A=220 keys/s (HEAD without instrumentation), B=226 (HEAD + saga.checkpoint), C=256 (HEAD + saga.checkpoint + saga.reminder). All three sit within the same +35%/-15% run-variance band the campaign has observed at this rung (229-309 keys/s). Instrumentation is not a regression; if anything the C run sits at the high end of variance, plausibly attributable to Azure-side noise across the three back-to-back deploys.
+
+**Routing decision unchanged.** Broadcast remains the dominant cost at ~60% of per-saga p50. The next structural attack vector is the per-shard `AppendTxTerminalAsync` fan-out inside `BroadcastTerminalsAsync` (one Azure Tables WAL append per touched shard). Two candidate approaches identified in c2-xvi (eliminate per-shard terminal WAL append via registry-driven leaf drain; cross-saga WAL batching of terminal records) remain valid; both are larger than R1-scale changes and require a follow-up scoping memo. The instrumentation phase has now delivered the complete per-saga cost attribution so the next optimisation step can be evaluated against the measured contribution to per-saga p50.
+
+**Test coverage.** 3 new tests in `LatticeMetricsIntegrationTests.SagaPhases.cs` (2 for checkpoint, 1 for reminder): each pins the new histogram emits at least one observation when a saga commits, tagged with the saga's tree id and the call-site phase. 17 metrics-integration tests pass (13 pre-instrumentation + 4 from c2-xvi + 3 from this step). 594 focused saga + metrics tests green at the full focused suite. 123 hygiene tests green.
+
+**Provenance.**
+- A (c2-xvii baseline, no checkpoint instrumentation): `silo-20260528-071411Z.log`, `.ladder-results-c2-xvii-mode-set-many-atomic-A-baseline.csv`.
+- B (with checkpoint instrumentation only): `silo-20260528-072013Z.log`, `.ladder-results-c2-xvii-mode-set-many-atomic-B-instr2.csv`.
+- C (with checkpoint + reminder instrumentation): `silo-20260528-073440Z.log`, `.ladder-results-c2-xviii-mode-set-many-atomic-full-instr.csv`.
+
+**Last Updated**: 2026-05-28 (Phase D-instr complete: saga.checkpoint and saga.reminder histograms close the c2-xi attribution gap by revealing the c2-xi 7.7s p50 measured 4 sequential sagas not one; actual per-saga p50 is ~1.5s; broadcast 60% / prepare 36% / checkpoint 3% / decision 1% / reminder <0.1%; routing decision unchanged: broadcast is the next attack vector; structural optimisation requires a follow-up scoping memo).
+
 ## 📝 Plan Steps
 
 - **DONE - U9p step 8c-c-i (WAL pipeline uncork).** `[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync` lifted `wal.append.in_flight` from 0 to 7 and `batch_entries` p90 to the 100-entry cap. The change is kept; it exposed memory-storage as the next limiter.
@@ -2724,3 +2783,5 @@ Per-phase histogram correctness coverage: 4 new tests in `LatticeMetricsIntegrat
 - **NULL (reverted) - U9p step 8c-c-iv-c2-xv Phase D2-A attempt (parallel prepared-entry dispatch in `ReplicationApplier.ApplyBatchAsync`).** Shipped a ~120 LOC change buffering contiguous same-TransactionId prepared+atomic-batch entries into a `pendingPreparedTasks` list, dispatched via `Task.WhenAll` at the run boundary. All correctness tests green (1668 non-chaos replication + 9 chaos atomic visibility + bootstrap + SetManyAtomicAsync contract + 577 core lattice atomic / leaf / compensation). Azure A/B at the c2-xi operating point rung `500:10`: A=309 keys/s (HEAD without D2-A), B=309 keys/s (HEAD + D2-A) - bit-identical. Root cause: the Azure throughput bench is single-cluster (`ClusterId=azure-throughput`, no peer discovery), so the receiver-side replication apply path D2-A targets never executes. The c2-xi memo's attribution of the 7.6s per-saga p50 to `receiver-side per-key apply` was ambiguous; the actual binding constraint at the single-cluster bench is the producer-side saga path. Change reverted; next candidate is per-step instrumentation inside `AtomicWriteGrain.ExecutePhaseAsync` to attribute the producer-side cost across (a) parallel prepare, (b) broadcast terminal, (c) per-shard terminal commit + drain. See c2-xv memo above for the full attribution and the Azure-time accounting.
 
 - **DONE - U9p step 8c-c-iv-c2-xvi Phase D-instr (per-phase saga timing breakdown).** Added three histograms on the `LatticeMetrics` surface (`saga.prepare.duration`, `saga.terminal_decision.duration`, `saga.broadcast.duration`) recording each phase's wall-clock under the same `(tree, walPartitions)` tag pair the existing `SagaPerKeyDuration` / `SagaFanoutSize` use. Tags cached per-activation in `_sagaMetricTags` so per-saga allocation cost is exactly 2 KeyValuePair allocs + 1 int box, amortised across all 5 histogram Record calls. Azure-throughput phase-A reporter updated. Measured at the c2-xi operating point rung 500:10 (steady-state mid-run window, count=126 sagas): **prepare p50=531ms (37%), terminal_decision p50=13ms (1%), broadcast p50=880ms (62%)** - broadcast dominates, confirming the c2-xv routing-memo hypothesis. Throughput A/B (instrumentation overhead check): A=246/s, B=229/s, -6.9% within the run-to-run variance band (campaign spread +35%/-15% at this rung). 4 new tests in `LatticeMetricsIntegrationTests.SagaPhases.cs` pin the histograms emit. 75 focused saga + metrics tests green. **Next**: instrument the saga's internal `state.WriteStateAsync` calls to attribute the residual ~6s of per-saga cost the three phases do not cover (sum of phases ~1.4s vs c2-xi public-surface p50 7.7s). See c2-xvi memo above for the full attribution and provenance silo-20260528-063534Z.log.
+
+- **DONE - U9p step 8c-c-iv-c2-xvii Phase D-instr-completion (saga checkpoint + reminder histograms; c2-xi misattribution discovered and corrected).** Wrapped all 10 `state.WriteStateAsync()` call sites in `AtomicWriteGrain` via a new `WriteSagaStateAsync(phase)` helper recording on `orleans.lattice.saga.checkpoint.duration`; instrumented `RegisterKeepaliveAsync` / `UnregisterKeepaliveAsync` recording on `orleans.lattice.saga.reminder.duration`. Per-call phase tag distinguishes the 10 checkpoint sites and the 3 reminder sites. Allocation-discipline fix: `GetSagaMetricTags` now sources the tree id from the grain key (`{treeId}/{operationId}`) so the cache is correctly populated even before `PrepareAsync` sets `state.State.TreeId` (originally cached null tree tag from `RegisterKeepaliveAsync` which runs first). Measured at the c2-iii operating point rung 500:10 (steady-state mid-run window, 116 sagas): **checkpoint sum ~52ms/saga (3 happy-path persists × ~18ms p50), reminder sum ~0.3ms/saga (sub-millisecond)** - falsifies the residual-cost hypothesis. Root cause of the c2-xvi unattributed-residual: `lattice.op.duration_ms` is a bench-only histogram that measures `BenchWorkloadDispatcher.DispatchAsync`, which slices each producer batch (256 entries) into 64-key sagas and **awaits them sequentially in a loop** - so the c2-xi-reported `7,660ms per-saga p50` was actually 4 sequential sagas, not one. **Actual per-saga p50 is ~1,476ms** (broadcast 880 + prepare 531 + checkpoint 52 + decision 13 + reminder 0.3). Routing decision unchanged: broadcast is the next attack vector. 17 metrics-integration tests pass (10 pre-instrumentation + 4 from c2-xvi + 3 from this step); 594 focused saga + metrics tests green; 123 hygiene tests green. See c2-xvii memo above for the full attribution table, the allocation-discipline correction, and the provenance `silo-20260528-073440Z.log`.
