@@ -340,83 +340,140 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
-        await EnsureCompactionReminderAsync();
-        await EnsureMonitorAsync();
-        cancellationToken.ThrowIfCancellationRequested();
 
-        // Deadline-bounded stale-routing retry loop. Under a cascading
-        // mid-saga reshard or online resize, a single ShardMap swap is
-        // not the worst case - chains of adaptive shard splits during
-        // a 4-to-8 reshard can produce multiple sequential stale-routing
-        // throws on the same per-key write. The previous one-shot
-        // catch-and-retry shape exhausted on the second throw and the
-        // exception propagated into the saga, which then pivoted into
-        // compensation on a write that would have succeeded with one
-        // more refresh. The wall-clock budget here mirrors the saga's
-        // own per-shard retry pattern (AtomicWriteGrain.MarkOneShardAsync
-        // and CaptureShardAsync) and absorbs any reasonable topology
-        // storm; if the topology genuinely never quiesces within the
-        // budget, the original stale-routing throw still surfaces to
-        // the caller.
-        //
-        // Important asymmetry: only the two topology-change exceptions
-        // (StaleShardRoutingException, StaleTreeRoutingException)
-        // benefit from the deadline-budget retry. InvalidOperationException
-        // is typically permanent (e.g. tree deleted, alias removed) and
-        // looping on it would mask deletion semantics and trip Orleans'
-        // default response timeout on the caller side. Preserve the
-        // pre-existing single-retry shape for that catch so a deleted
-        // tree surfaces on the second throw, not after 60 seconds.
-        var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
-        var invalidOpRetried = false;
-#if LATTICE_DIAG
-        var swSetCore = System.Diagnostics.Stopwatch.StartNew();
-        var setCoreAttempts = 0;
-        DiagSink.Write($"[DIAG setcore-enter] tree={TreeId} key={key} round=r{DiagSink.DecodeRound(value)} deadlineMs={StaleRoutingWriteRetryBudget.TotalMilliseconds:F0}");
-#endif
-        while (true)
+        // c2-xxvii envelope + sub-stage attribution (see scaling.md
+        // c2-xxvii memo). SetDuration tracks the caller-visible
+        // wall-clock; SetStageDuration tagged with stage=
+        // (gate|route|shard|publish) splits the envelope into its
+        // four sub-spans so the LatticeGrain-side overhead of one
+        // single-key write is attributed alongside the existing
+        // leaf-side / WAL-side instruments. Mirrors c2-xxiv on the
+        // set-many path.
+        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var setStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var shard = await GetShardGrainAsync(key);
-#if LATTICE_DIAG
-            setCoreAttempts++;
-#endif
+            var gateStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                await shard.SetAsync(key, value);
-                break;
+                await EnsureCompactionReminderAsync();
+                await EnsureMonitorAsync();
             }
-            catch (StaleShardRoutingException)
+            finally
             {
-#if LATTICE_DIAG
-                DiagSink.Write($"[DIAG setcore-stale-shard] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
-#endif
-                if (DateTime.UtcNow >= deadline) throw;
-                InvalidateShardMap();
+                LatticeMetrics.SetStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageGateTag);
             }
-            catch (StaleTreeRoutingException)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Deadline-bounded stale-routing retry loop. Under a cascading
+            // mid-saga reshard or online resize, a single ShardMap swap is
+            // not the worst case - chains of adaptive shard splits during
+            // a 4-to-8 reshard can produce multiple sequential stale-routing
+            // throws on the same per-key write. The previous one-shot
+            // catch-and-retry shape exhausted on the second throw and the
+            // exception propagated into the saga, which then pivoted into
+            // compensation on a write that would have succeeded with one
+            // more refresh. The wall-clock budget here mirrors the saga's
+            // own per-shard retry pattern (AtomicWriteGrain.MarkOneShardAsync
+            // and CaptureShardAsync) and absorbs any reasonable topology
+            // storm; if the topology genuinely never quiesces within the
+            // budget, the original stale-routing throw still surfaces to
+            // the caller.
+            //
+            // Important asymmetry: only the two topology-change exceptions
+            // (StaleShardRoutingException, StaleTreeRoutingException)
+            // benefit from the deadline-budget retry. InvalidOperationException
+            // is typically permanent (e.g. tree deleted, alias removed) and
+            // looping on it would mask deletion semantics and trip Orleans'
+            // default response timeout on the caller side. Preserve the
+            // pre-existing single-retry shape for that catch so a deleted
+            // tree surfaces on the second throw, not after 60 seconds.
+            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var invalidOpRetried = false;
+#if LATTICE_DIAG
+            var swSetCore = System.Diagnostics.Stopwatch.StartNew();
+            var setCoreAttempts = 0;
+            DiagSink.Write($"[DIAG setcore-enter] tree={TreeId} key={key} round=r{DiagSink.DecodeRound(value)} deadlineMs={StaleRoutingWriteRetryBudget.TotalMilliseconds:F0}");
+#endif
+            // The shard stage covers route + shard.SetAsync + stale-
+            // routing retries together because those three sub-spans
+            // interleave inside the retry loop and a fresh route is
+            // part of every retry iteration; splitting them further
+            // would over-attribute the route stage on the no-retry
+            // happy path which is the only path that matters for
+            // steady-state attribution.
+            var shardStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
             {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var shard = await GetShardGrainAsync(key);
 #if LATTICE_DIAG
-                DiagSink.Write($"[DIAG setcore-stale-tree] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+                    setCoreAttempts++;
 #endif
-                if (DateTime.UtcNow >= deadline) throw;
-                if (!TryInvalidateStaleAlias()) throw;
+                    try
+                    {
+                        await shard.SetAsync(key, value);
+                        break;
+                    }
+                    catch (StaleShardRoutingException)
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG setcore-stale-shard] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
+                        if (DateTime.UtcNow >= deadline) throw;
+                        InvalidateShardMap();
+                    }
+                    catch (StaleTreeRoutingException)
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG setcore-stale-tree] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
+                        if (DateTime.UtcNow >= deadline) throw;
+                        if (!TryInvalidateStaleAlias()) throw;
+                    }
+                    catch (InvalidOperationException)
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG setcore-invalid-op] tree={TreeId} key={key} attempt={setCoreAttempts} retried={invalidOpRetried}");
+#endif
+                        if (invalidOpRetried) throw;
+                        if (!TryInvalidateStaleAlias()) throw;
+                        invalidOpRetried = true;
+                    }
+                }
             }
-            catch (InvalidOperationException)
+            finally
             {
-#if LATTICE_DIAG
-                DiagSink.Write($"[DIAG setcore-invalid-op] tree={TreeId} key={key} attempt={setCoreAttempts} retried={invalidOpRetried}");
-#endif
-                if (invalidOpRetried) throw;
-                if (!TryInvalidateStaleAlias()) throw;
-                invalidOpRetried = true;
+                LatticeMetrics.SetStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(shardStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageShardTag);
             }
-        }
 #if LATTICE_DIAG
-        DiagSink.Write($"[DIAG setcore-exit] tree={TreeId} key={key} attempts={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0}");
+            DiagSink.Write($"[DIAG setcore-exit] tree={TreeId} key={key} attempts={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0}");
 #endif
 
-        await PublishEventAsync(LatticeTreeEventKind.Set, key);
+            var publishStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await PublishEventAsync(LatticeTreeEventKind.Set, key);
+            }
+            finally
+            {
+                LatticeMetrics.SetStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(publishStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StagePublishTag);
+            }
+        }
+        finally
+        {
+            LatticeMetrics.SetDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(setStartTicks).TotalMilliseconds,
+                stageTagTree);
+        }
     }
 
     /// <inheritdoc />

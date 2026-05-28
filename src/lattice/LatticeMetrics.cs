@@ -1050,6 +1050,38 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.set_many.stage.duration", unit: "ms",
             description: "Wall-clock ms inside one sub-stage (gate|route|bucket|fanout|events) of LatticeGrain.SetManyAsync.");
 
+    /// <summary>
+    /// Histogram of wall-clock ms inside one call to
+    /// <c>LatticeGrain.SetAsync</c>, the user-facing point-write
+    /// <see cref="ILattice.SetAsync"/> entry point. Tagged with
+    /// <see cref="TagTree"/>. End-to-end caller-visible latency of one
+    /// single-key set call (includes gate, routing, the shard RPC, and
+    /// event publish). Pair with <see cref="SetStageDuration"/> to
+    /// attribute the per-call envelope to one of four sub-spans.
+    /// </summary>
+    public static readonly Histogram<double> SetDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.set.duration", unit: "ms",
+            description: "Wall-clock ms inside one LatticeGrain.SetAsync call (caller-visible envelope).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one sub-stage of
+    /// <c>LatticeGrain.SetAsync</c>. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagStage"/> (<c>gate</c> | <c>route</c> |
+    /// <c>shard</c> | <c>publish</c>).
+    /// <para>
+    /// Mirrors <see cref="SetManyStageDuration"/> for the point-write
+    /// path. Together with the existing per-leaf instruments
+    /// (<c>leaf.commit.duration phase=wal|apply|observer|digest</c>),
+    /// <c>wal.shard.dispatch.duration</c>, and <c>wal.append.*</c>
+    /// histograms, the full point-write envelope from
+    /// <c>ILattice.SetAsync</c> entry down to the Azure provider call is
+    /// attributed. The c2-xxvii investigation surfaced this seam.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SetStageDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.set.stage.duration", unit: "ms",
+            description: "Wall-clock ms inside one sub-stage (gate|route|shard|publish) of LatticeGrain.SetAsync.");
+
     // --- Retroactive shard-split sweep instruments ----------------
 
     /// <summary>
@@ -1232,4 +1264,10 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagStage"/> = <c>events</c> (LatticeGrain.SetManyAsync trailing per-entry PublishEventAsync foreach).</summary>
     public static readonly KeyValuePair<string, object?> StageEventsTag = new(TagStage, "events");
+
+    /// <summary><see cref="TagStage"/> = <c>shard</c> (LatticeGrain.SetAsync inner shard.SetAsync RPC including stale-routing retries).</summary>
+    public static readonly KeyValuePair<string, object?> StageShardTag = new(TagStage, "shard");
+
+    /// <summary><see cref="TagStage"/> = <c>publish</c> (LatticeGrain.SetAsync trailing PublishEventAsync hop).</summary>
+    public static readonly KeyValuePair<string, object?> StagePublishTag = new(TagStage, "publish");
 }
