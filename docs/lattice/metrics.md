@@ -27,10 +27,18 @@ Every Lattice instrument carries a consistent set of low-cardinality tags:
 | `shard` | shard-level instruments only | Physical shard index as an `int` |
 | `operation` | `orleans.lattice.leaf.scan.duration` only | `keys` or `entries` |
 | `step` | `orleans.lattice.leaf.commit.duration` only | `wal`, `apply`, `observer`, or `digest` |
-| `outcome` | `orleans.lattice.atomic_write.completed`, `orleans.lattice.atomic_write.duration`, `orleans.lattice.atomic_write.batch_size` | `committed`, `compensated`, or `failed` |
+| `stage` | `orleans.lattice.set.stage.duration`, `orleans.lattice.set_many.stage.duration`, `orleans.lattice.saga.broadcast.shard.stage.duration` | Sub-stage name within an envelope - see each instrument below |
+| `phase` | `orleans.lattice.provider.commit.duration` | `phase1` (per-batch partition txn) or `phase2` (manifest partition txn) |
+| `outcome` | `orleans.lattice.atomic_write.completed`, `orleans.lattice.atomic_write.duration`, `orleans.lattice.atomic_write.batch_size`, `orleans.lattice.leaf.replay.duration`, `orleans.lattice.leaf.replay.entries`, `orleans.lattice.compaction.leaves.visited` | Discriminator - see each instrument below |
 | `kind` | `orleans.lattice.coordinator.completed`, `orleans.lattice.tree.lifecycle`, `orleans.lattice.events.published` | Discriminator - see each instrument below |
+| `trigger` | `orleans.lattice.compaction.pass.duration`, `orleans.lattice.compaction.leaves.visited` | `reminder`, `ratio`, `size`, or `operator` |
+| `path` | `orleans.lattice.compaction.leaves.visited` | `walk` or `dirty-set` |
 | `reason` | `orleans.lattice.events.dropped` | `missing_provider` or `publish_error` |
 | `config` | `orleans.lattice.config.changed` | Configuration dimension name (e.g. `publish_events`) |
+| `wal_partitions` | every `orleans.lattice.wal.*` histogram | `LatticeOptions.WalPartitions` at the time of activation (Phase A attribution) |
+| `wal_max_pending_batches` | every `orleans.lattice.wal.*` histogram | `LatticeOptions.WalMaxPendingBatches` at the time of activation (Phase A attribution) |
+| `pipeline_phase2` | `orleans.lattice.provider.commit.duration` | `true` or `false`, reflecting `AzureTableWalStorageOptions.PipelinePhaseTwoCommits` |
+| `shard_count` | `orleans.lattice.warmup.duration` | Per-tree physical-shard-root probe fan-out |
 
 Leaf grain ids are **not** emitted as a tag - in a large tree they would produce
 unbounded tag cardinality. All leaf instruments are aggregated to the tree level.
@@ -58,6 +66,7 @@ drives autonomic splitting.
 |---|---|---|---|
 | `orleans.lattice.leaf.write.duration` | `Histogram<double>` | `ms` | Duration of `IPersistentState.WriteStateAsync` calls from a leaf grain - i.e. storage-provider write latency. |
 | `orleans.lattice.leaf.commit.duration` | `Histogram<double>` | `ms` | Per-step latency on the `BPlusLeafGrain` commit path. Tagged `step=wal` (commit-log-writer append), `step=apply` (in-memory projection apply + state persist), `step=observer` (`IMutationObserver` fan-out), or `step=digest` (awaited cross-grain `OnChildDigestPublishedAsync` RPC to the parent internal node). Emitted from every foreground commit-path code path (single-key `SetAsync` / `DeleteAsync`, per-leaf `DeleteRangeAsync`, prepared-write commit) so operators can attribute latency between durability, projection, observer overhead, and the parent-digest publish hop independently. Cold / structural digest publishes (leaf-split topology, projection-checkpoint flush, saga terminal, tombstone-reap compaction, cross-shard merge) are deliberately excluded so the histogram stays scoped to the per-write pipeline. |
+| `orleans.lattice.leaf.commit.in_flight` | `Histogram<int>` | `{commit}` | Concurrent foreground commits in flight on a single leaf at the moment a new commit enters the commit path. Tagged `tree` only (no shard tag - leaves are routed per-key so the same leaf grain can be addressed by multiple shards under online reshard). A flat-zero series indicates the leaf never serialises overlapping commits (its `[AlwaysInterleave]` mutator surface keeps the turn token released); a sustained tail tracks contention from saga-driven prepare arrivals or producer-side fan-in. |
 | `orleans.lattice.leaf.scan.duration` | `Histogram<double>` | `ms` | Duration of leaf-level range scans. Tagged `operation=keys` (from `GetKeysAsync`) or `operation=entries` (from `GetEntriesAsync`). |
 | `orleans.lattice.leaf.compaction.duration` | `Histogram<double>` | `ms` | Duration of `CompactTombstonesAsync` on a single leaf. |
 | `orleans.lattice.leaf.tombstones.reaped` | `Counter<long>` | `{tombstone}` | Tombstones (from explicit `DeleteAsync` / `DeleteRangeAsync`) permanently removed by compaction. |
@@ -94,6 +103,72 @@ drives autonomic splitting.
 | `orleans.lattice.cache.hits` | `Counter<long>` | `{hit}` | `LeafCacheGrain` reads served by a live, cached entry. |
 | `orleans.lattice.cache.misses` | `Counter<long>` | `{miss}` | `LeafCacheGrain` reads that did not find a live cached entry. |
 
+### Foreground write envelopes (sourced from `LatticeGrain`)
+
+The foreground write paths (`SetAsync`, `SetManyAsync`) are wrapped at the
+caller-visible boundary with envelope + per-sub-stage histograms so the
+end-to-end per-call wall-clock cost can be attributed to its constituent
+spans without per-call wire-format change. Pair these with the per-leaf
+`leaf.commit.duration` and per-WAL `wal.*` instruments to walk the full
+path from `ILattice` entry through Orleans RPC down to the storage
+provider.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.set.duration` | `Histogram<double>` | `ms` | End-to-end caller-visible wall-clock duration of one `LatticeGrain.SetAsync` call. Tagged `tree`. |
+| `orleans.lattice.set.stage.duration` | `Histogram<double>` | `ms` | Per-sub-stage wall-clock duration of one `LatticeGrain.SetAsync` call. Tagged `tree` and `stage=gate` (atomic-batch gate), `route` (shard routing), `shard` (the cross-grain `ShardRootGrain` RPC envelope - this is the dominant cell at the c2-iii operating point), or `publish` (event-stream dispatch). |
+| `orleans.lattice.set_many.duration` | `Histogram<double>` | `ms` | End-to-end caller-visible wall-clock duration of one `LatticeGrain.SetManyAsync` call. Tagged `tree`. |
+| `orleans.lattice.set_many.stage.duration` | `Histogram<double>` | `ms` | Per-sub-stage wall-clock duration of one `LatticeGrain.SetManyAsync` call. Tagged `tree` and `stage=gate` (atomic-batch gate), `route` (per-entry routing), `bucket` (per-shard bucket build), `fanout` (the cross-shard `Task.WhenAll` - the dominant cell under saturated traffic), or `events` (event-stream dispatch). |
+
+### Shard-root `SetManyAsync` decomposition (sourced from `ShardRootGrain`)
+
+Inside the `LatticeGrain.SetManyAsync` `stage=fanout` span, every shard runs
+its own `ShardRootGrain.SetManyAsync` slice. The instruments below split
+that per-shard slice into the local-apply work, the online-resize
+shadow-forward path, and the per-leaf RPC fan-out. Together with
+`leaf.commit.duration` per step, this gives an end-to-end attribution from
+the lattice grain boundary down to the leaf commit pipeline.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.shard_root.set_many.local_apply.duration` | `Histogram<double>` | `ms` | Wall-clock ms inside the local-apply path of `ShardRootGrain.SetManyAsync`: from receipt of a per-shard slice until every per-leaf `SetManyAsync` dispatched by `SetManyLocalOnlyAsync` returns. Tagged `tree` and `shard`. Includes per-leaf RPC scheduling, leaf turn-queue wait, leaf commit, WAL append, and WAL phase-2 commit. Excludes the lattice-grain's bucket build (covered by `set_many.stage`) and excludes the online-resize shadow-forward path (covered separately below). |
+| `orleans.lattice.shard_root.set_many.shadow_forward.duration` | `Histogram<double>` | `ms` | Wall-clock ms inside the online-resize shadow-forward path of `ShardRootGrain.SetManyAsync`, when the shard's slice is concurrently forwarded to a destination shard during an adaptive split. Tagged `tree` and `shard`. Zero on shards not currently splitting. |
+| `orleans.lattice.shard_root.set_many.leaf_rpc.duration` | `Histogram<double>` | `ms` | Per-leaf wall-clock ms inside one `IBPlusLeafGrain.SetManyAsync` RPC dispatched by the shard-root local-apply fan-out. Tagged `tree` and `shard`. The gap between this and `shard_root.set_many.local_apply.duration` is the max-of-N tail across the parallel per-leaf calls. |
+
+### WAL append pipeline (sourced from `WalShardGrain` and `WalCommitLogWriter`)
+
+The WAL partition grains expose per-flush instruments that distinguish
+grain-side scheduling cost from storage-provider cost; every histogram
+carries the Phase A attribution tags `wal_partitions` and
+`wal_max_pending_batches` so cross-configuration comparisons are direct.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.wal.shard.dispatch.duration` | `Histogram<double>` | `ms` | Caller-side wall-clock duration of the cross-grain `IWalShardGrain.AppendAsync` / `AppendBatchAsync` RPC, observed by `WalCommitLogWriter`. Tagged `tree`, `shard` (WAL partition index), `wal_partitions`, `wal_max_pending_batches`. Subtracting `wal.append.turn_wait` from this isolates the Orleans scheduling tax on the single WAL activation per partition. |
+| `orleans.lattice.wal.shard.dispatch.entries` | `Histogram<int>` | `{entry}` | Per-dispatch entry count handed to `IWalShardGrain.AppendAsync` / `AppendBatchAsync` by `WalCommitLogWriter`. Tagged `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches`. Single-key sends record `1`; batched sends record the per-partition slice size. |
+| `orleans.lattice.wal.append.batch_entries` | `Histogram<int>` | `{entry}` | Per-flush packing inside the WAL grain: how many entries the grain's cutover loop accumulated into the batch that the storage provider ultimately sees. Tagged `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches`. Pair with `wal.shard.dispatch.entries` to detect a missing cross-`AppendBatchAsync` coalescing window. |
+| `orleans.lattice.wal.append.batch_bytes` | `Histogram<long>` | `By` | Per-flush size of the packed batch handed to the storage provider, in bytes. Tagged `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches`. |
+| `orleans.lattice.wal.append.in_flight` | `Histogram<int>` | `{flush}` | `_inFlight.Count` (in-flight flushes against the provider) sampled at the moment a new flush is admitted. Tagged `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches`. p99 sitting at `wal_max_pending_batches - 1` indicates the cap is the binding constraint. |
+| `orleans.lattice.wal.append.provider.duration` | `Histogram<double>` | `ms` | Wall-clock duration of one storage-provider flush, measured inside the WAL grain (`FlushAsync` body). Tagged `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches`. This is the pure provider-RTT signal; the gap between `wal.shard.dispatch.duration` and this is everything Orleans + the grain do on top. |
+| `orleans.lattice.wal.append.turn_wait` | `Histogram<double>` | `ms` | Wall-clock duration spent waiting for the WAL activation's turn token before the appending caller could enter the grain body, measured inside the WAL grain. Tagged `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches`. |
+| `orleans.lattice.wal.append.queue_depth` | `Histogram<int>` | `{pending}` | Number of callers parked on the WAL activation's turn-token queue sampled at the moment a new caller enters the grain body. Tagged `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches`. |
+
+### Storage-provider commit pipeline
+
+The Azure Table WAL provider (and any other WAL provider that opts in)
+emits per-commit-phase histograms so the per-batch partition transaction
+and the manifest partition transaction can be observed independently.
+See [Write-Ahead Log](wal.md) and
+[WAL Storage Providers](wal-storage-providers.md) for the underlying
+two-phase commit shape.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.provider.commit.duration` | `Histogram<double>` | `ms` | Wall-clock duration of one storage-provider commit transaction. Tagged `tree`, `shard`, `phase=phase1` (per-batch partition transaction) or `phase=phase2` (manifest partition transaction), and `pipeline_phase2` reflecting `AzureTableWalStorageOptions.PipelinePhaseTwoCommits`. The phase-2 measurement covers a single coalesced commit transaction, not the per-shard worker's whole drain loop. |
+| `orleans.lattice.provider.phase2.batch_size` | `Histogram<int>` | `{commit}` | Number of coalesced phase-2 commits the per-shard provider worker bundled into a single transaction. Tagged `tree`, `shard`, `pipeline_phase2`. A distribution concentrated near 1 means the worker is never catching up against backed-up arrivals; values closer to the per-transaction cap (~49 commits) indicate the worker is the shard's effective rate limiter. |
+| `orleans.lattice.provider.retry.attempts` | `Counter<long>` | `{retry}` | Per-call retry attempts incurred by the storage-provider SDK during a single WAL append or commit. Tagged `tree`, `shard`. A non-zero rate is normal; sustained climbing rates suggest provider-side throttling that the local retry policy is masking. |
+| `orleans.lattice.provider.retry.exhausted` | `Counter<long>` | `{retry}` | Calls that exhausted the storage-provider retry budget and surfaced the underlying fault. Tagged `tree`, `shard`. **Any non-zero rate is alert-worthy** - the WAL append or commit failed past the SDK's retry envelope. |
+
 ### Saga / coordinator / lifecycle
 
 Long-running maintenance and atomicity primitives each emit a completion
@@ -105,6 +180,17 @@ coordinator progress independently of whether the event stream is enabled.
 | `orleans.lattice.atomic_write.completed` | `Counter<long>` | `{saga}` | Terminal transition of a `SetManyAtomicAsync` saga. Tagged `outcome=committed` (all writes applied), `compensated` (rolled back via LWW), or `failed` (post-compensation surrogate failure). |
 | `orleans.lattice.atomic_write.duration` | `Histogram<double>` | `ms` | End-to-end `SetManyAtomicAsync` saga duration, captured from the first `Prepare` to `Completed` and persisted across reminder-driven recovery so the recorded ms reflects true wall-clock cost (including any time the saga was suspended across silo restarts). Tagged with the same `outcome` values as `atomic_write.completed`; emitted alongside it on every terminal transition. Pair with `atomic_write.completed` to derive sustained atomic-write throughput and SLO percentiles. |
 | `orleans.lattice.atomic_write.batch_size` | `Histogram<int>` | `{entry}` | Entry count of each `SetManyAtomicAsync` saga at terminal transition. Tagged with the same `outcome` values as `atomic_write.completed`; emitted alongside it. Lets operators correlate p99 saga duration with batch size and detect distribution shifts in caller batch sizing. |
+| `orleans.lattice.saga.prepare.duration` | `Histogram<double>` | `ms` | Wall-clock ms inside one saga `Prepare` phase (the `lattice.SetManyAsync` fan-out that stages every per-key prepared mutation across all touched shards). Tagged `tree`. Pair with `set_many.duration` to confirm the saga prepare is dominated by the foreground multi-key write rather than saga-internal bookkeeping. |
+| `orleans.lattice.saga.terminal_decision.duration` | `Histogram<double>` | `ms` | Wall-clock ms inside one saga `TerminalDecision` phase (decide whether to commit or compensate after every prepared mutation has acknowledged). Tagged `tree`. Sub-millisecond except under failure paths. |
+| `orleans.lattice.saga.broadcast.duration` | `Histogram<double>` | `ms` | Wall-clock ms inside one saga `Broadcast` phase (the `Task.WhenAll` across affected shards that flips every prepared mutation to its terminal state). Tagged `tree`. The c2-xxiii batched-WAL terminal lift collapsed this phase from ~880ms p50 to ~96ms p50 at the `500:10` rung. |
+| `orleans.lattice.saga.broadcast.shard.duration` | `Histogram<double>` | `ms` | Per-shard contribution inside the saga broadcast: wall-clock ms inside one `ShardRootGrain.AppendTxTerminalAsync` call. Tagged `tree` and `shard`. The gap between `saga.broadcast.duration` and this is the max-of-N parallel tail (Orleans scheduling + the slowest shard). |
+| `orleans.lattice.saga.broadcast.shard.stage.duration` | `Histogram<double>` | `ms` | Per-sub-stage wall-clock ms inside one `ShardRootGrain.AppendTxTerminalAsync` call. Tagged `tree`, `shard`, and `stage=resolve` (affected-leaves resolution), `hlc` (terminal HLC compute via `GetClockAsync` fan-out), `wal` (per-shard WAL terminal append; collapsed to ~0ms after c2-xxiii batched the WAL terminal at the saga layer), or `fanout` (the per-leaf `ApplyTxTerminalAsync` fan-out). |
+| `orleans.lattice.saga.broadcast.leaf.duration` | `Histogram<double>` | `ms` | Wall-clock ms inside a single per-leaf `IBPlusLeafGrain.ApplyTxTerminalAsync` RPC dispatched from the shard's terminal broadcast (step 4). Tagged `tree` and `shard`. |
+| `orleans.lattice.saga.checkpoint.duration` | `Histogram<double>` | `ms` | Wall-clock ms inside one saga `Checkpoint` phase (the WriteStateAsync that persists the saga's terminal decision so recovery resumes after the decision rather than re-deciding). Tagged `tree`. |
+| `orleans.lattice.saga.reminder.duration` | `Histogram<double>` | `ms` | Wall-clock ms spent inside reminder-driven saga progress callbacks (recovery after silo restart, fallback driver for stalled sagas). Tagged `tree`. Negligible (<0.1ms) on the happy path. |
+| `orleans.lattice.saga.fanout.size` | `Histogram<int>` | `{shard}` | Number of shards a saga touched in its prepare-phase fan-out. Tagged `tree`. The histogram's distribution tells operators whether the workload is dominated by single-shard sagas (cheap), evenly-distributed sagas (max fan-out), or hot-shard sagas. |
+| `orleans.lattice.saga.perkey.duration` | `Histogram<double>` | `ms` | Per-key duration inside a saga's prepare phase. Tagged `tree`. Pair with `atomic_write.batch_size` to derive amortised per-key atomic-write cost across the saga envelope. |
+| `orleans.lattice.saga.wait.serial_gap` | `Histogram<double>` | `ms` | Serialisation gap (idle time between sequential sagas on the same coordinator activation) sampled per saga. Tagged `tree`. A wide tail under sustained offered load indicates the coordinator pool is the rate-limit. |
 | `orleans.lattice.coordinator.completed` | `Counter<long>` | `{operation}` | Successful completion of a long-running coordinator. Tagged `kind=snapshot`, `resize`, `reshard`, `merge`, or `compaction`. |
 | `orleans.lattice.tree.lifecycle` | `Counter<long>` | `{event}` | Tree-lifecycle transition from `TreeDeletionGrain`. Tagged `kind=deleted`, `recovered`, or `purged`. Emitted **unconditionally** - regardless of the tree's `PublishEvents` setting. |
 | `orleans.lattice.warmup.invocations` | `Counter<long>` | `{call}` | One increment per successful `ILattice.WarmUpAsync` call. Tagged `tree`. Operators alerting on cold-start health expect to see exactly one increment per silo startup per warmed tree. |
@@ -131,6 +217,79 @@ the same pipeline as the traffic they affect.
 |---|---|---|---|
 | `orleans.lattice.config.changed` | `Counter<long>` | `{change}` | A per-tree configuration change was applied. Tagged `config` = the configuration dimension (currently `publish_events` from `ILattice.SetPublishEventsEnabledAsync`). |
 
+## Replication meter
+
+The replication package (`Orleans.Lattice.Replication`) publishes its own
+meter so an operator can subscribe to cross-cluster telemetry independently
+of the core lattice surface. The meter name is pinned by a regression test
+in the replication package; subscribe to it the same way as the core meter.
+
+| Member | Value |
+|---|---|
+| `LatticeReplicationMetrics.MeterName` | `orleans.lattice.replication` |
+| `LatticeReplicationMetrics.Meter` | the `Meter` instance |
+
+### Tag conventions (replication)
+
+| Tag key | Applies to | Value |
+|---|---|---|
+| `tree` | every instrument | Logical tree id |
+| `peer` | ship-side instruments | Configured peer cluster identifier |
+| `origin` | apply-side instruments | Origin cluster id stamped on the inbound mutation |
+| `shard` | causal-apply buffer gauges | Physical shard index |
+| `outcome` | ship / bootstrap instruments | `success`, `transient_fault`, `permanent_fault`, etc. |
+| `reason` | dead-letter counters | Discriminator describing why the entry was parked / removed |
+
+### Outbound (ship) and replog throughput
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.replication.ship.duration` | `Histogram<double>` | `ms` | Wall-clock duration of one outbound ship-batch attempt. Tagged `tree`, `peer`, `outcome`. |
+| `orleans.lattice.replication.wal.entries_appended` | `Counter<long>` | `{entry}` | Replog entries committed to the local WAL. Tagged `tree`. |
+| `orleans.lattice.replication.wal.entries_shipped` | `Counter<long>` | `{entry}` | Replog entries acknowledged by a remote peer. Tagged `tree`, `peer`. |
+| `orleans.lattice.replication.peer.fell_off_log` | `Counter<long>` | `{event}` | Receiver fall-off-the-log detection events. Tagged `tree`, `origin`. |
+| `orleans.lattice.replication.peer.fell_off_log_suppressed` | `Counter<long>` | `{event}` | Receiver fall-off-the-log probes suppressed because the bootstrap coordinator is already draining from the same origin. Tagged `tree`, `origin`. |
+
+### Inbound (apply) and causal-buffer
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.replication.apply.duration` | `Histogram<double>` | `ms` | Wall-clock duration of one inbound apply-batch attempt. Tagged `tree`, `peer`, `outcome`. |
+| `orleans.lattice.replication.apply.lag` | `Histogram<double>` | `ms` | Receiver-side replication lag observed at successful apply. Tagged `tree`, `peer`. |
+| `orleans.lattice.replication.apply.buffered_entries` | `ObservableGauge<long>` | `{entry}` | Replog entries currently parked in the causal-apply buffer. Tagged `tree`, `shard`. |
+| `orleans.lattice.replication.apply.buffer_bytes` | `ObservableGauge<long>` | `By` | Cumulative serialised payload size parked in the causal-apply buffer. Tagged `tree`, `shard`. |
+| `orleans.lattice.replication.apply.dependency_wait_ms` | `Histogram<double>` | `ms` | Wait time between park and drain for a buffered causal-apply entry. Tagged `tree`. |
+| `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `{entry}` | Replog entries blocked by an unsatisfied causal dependency at apply time. Tagged `tree`. |
+| `orleans.lattice.replication.apply.fifo_violations` | `Counter<long>` | `{entry}` | Successful applies whose source HLC was strictly less than the previous apply for the same `(tree, origin)` pair. Tagged `tree`, `origin`. **Any non-zero rate is alert-worthy** - a FIFO violation breaks the per-origin causal guarantee. |
+
+### Dead-letter queue
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.replication.dead_letter.enqueued` | `Counter<long>` | `{entry}` | Replog entries parked on the per-tree dead-letter queue. Tagged `tree`, `reason`. |
+| `orleans.lattice.replication.dead_letter.removed` | `Counter<long>` | `{entry}` | Entries removed from the per-tree dead-letter queue. Tagged `tree`, `reason`. |
+
+### Bootstrap (receiver-side coordinator)
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `{entry}` | Snapshot entries applied by the bootstrap coordinator. Tagged `tree`, `origin`. |
+| `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` | `By` | Bytes applied by the bootstrap coordinator. Tagged `tree`, `origin`. |
+| `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` | `ms` | Bootstrap drain duration from `RequestingSnapshot` to the terminal phase. Tagged `tree`, `origin`, `outcome`. |
+| `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `{retry}` | Number of transient-fault retries consumed by the receiver-side bootstrap drain. Tagged `tree`, `origin`. |
+
+To subscribe to both meters, register them by name in the OpenTelemetry pipeline:
+
+```csharp
+using OpenTelemetry.Metrics;
+
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics => metrics
+        .AddMeter("orleans.lattice")
+        .AddMeter("orleans.lattice.replication")
+        .AddPrometheusExporter());
+```
+
 ## OpenTelemetry registration
 
 Register the meter by name - this is the same pattern used for any other
@@ -140,7 +299,6 @@ Register the meter by name - this is the same pattern used for any other
 // In your silo host's Program.cs or similar composition root.
 using OpenTelemetry.Metrics;
 
-var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
         .AddMeter("orleans.lattice")

@@ -63,6 +63,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
+| [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 0 (synchronous publish) | Yes |
 | [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
 | [`HotShardOpsPerSecondThreshold`](#hotshardopspersecondthreshold) | `int` | 200 | Yes |
 | [`HotShardSampleInterval`](#hotshardsampleinterval) | `TimeSpan` | 30 seconds | Yes |
@@ -90,6 +91,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
+| [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 1 | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 1 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 
@@ -180,6 +182,19 @@ siloBuilder.ConfigureLattice("debug-tree", o => o.DiagnosticsCacheTtl = TimeSpan
 ```
 
 This option can be changed freely at any time. The new TTL takes effect on the next `DiagnoseAsync` call.
+
+### `DigestCoalescingWindowMs`
+
+How long (in milliseconds) a `BPlusLeafGrain` defers a pending cross-grain projection-digest publish to its parent internal node, coalescing multiple per-mutation publishes into a single hop (default: `0` - the historical synchronous-publish shape). When set to a positive value, the first dirty mutation arms a one-shot grain timer; subsequent mutations arriving within the window observe the pending timer and skip rescheduling, so N writes share one cross-grain publish to the parent. The leaf's persisted `ProjectionHash` still advances per-mutation (cold-reactivation replay invariant preserved); only the cross-grain publish to the parent is deferred.
+
+The library default is `0` for wire compatibility - the synchronous publish is the historical shape and is observable by tests that issue a read-after-write against a parent internal node within the same task continuation. Operators running write-heavy point-set workloads on tall trees can opt into a small positive window (5 ms is a measured sweet spot) to collapse digest hops without changing per-mutation correctness. Set to `0` to restore the historical synchronous shape.
+
+```csharp verify
+// Opt-in to digest coalescing for a write-heavy tree
+siloBuilder.ConfigureLattice("event-log", o => o.DigestCoalescingWindowMs = 5);
+```
+
+This option can be changed freely at any time. The new value takes effect on the next mutation on each leaf; pending timers from the prior value drain at the prior cadence.
 
 ### `EventStreamProviderName`
 
@@ -446,6 +461,14 @@ This option can be changed freely at any time. The new value takes effect on the
 ### `WalMaxBatchEntries`
 
 Maximum number of WAL entries the partition grain coalesces into a single storage flush (default: 100). Lower values reduce per-entry flush latency at the cost of throughput. Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
+
+This option can be changed freely at any time. The new value takes effect on the next batch boundary.
+
+### `WalMaxPendingBatches`
+
+Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 1, wire-compat). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle. The dominant single-cluster shape uses 1 for strict-ordering semantics; durable-WAL deployments against high-throughput storage tiers can raise the cap to overlap provider round-trips and lift sustained commit throughput.
+
+The flush-cap-reached cutover backs off the calling task by awaiting the in-flight head, so the cap also acts as the natural back-pressure ceiling against caller fan-in. Raising the cap above what the storage provider can usefully serve in parallel degrades latency without improving throughput (more concurrent flushes compete for the same provider budget and grow each flush's slow-tail wait); the measured sweet spot for Azure Tables Standard is 8.
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
