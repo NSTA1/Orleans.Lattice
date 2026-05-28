@@ -180,6 +180,7 @@ var shardCountOverride = ReadIntAllowZero("BENCH_SHARD_COUNT", 0);
 var pipelinePhase2 = ReadBool("BENCH_PIPELINE_PHASE2", true);
 var eliminateCandidateRow = ReadBool("BENCH_WAL_ELIMINATE_CANDIDATE_ROW", false);
 var phaseTwoCoalescingMs = ReadIntAllowZero("BENCH_WAL_PHASE2_COALESCING_WINDOW_MS", 0);
+var digestCoalescingMs = ReadIntAllowZero("BENCH_DIGEST_COALESCING_WINDOW_MS", 5);
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
 var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
@@ -354,6 +355,13 @@ builder.UseOrleans(silo =>
     {
         o.WalPartitions = walPartitions;
         o.WalMaxPendingBatches = walMaxPending;
+        // c2-xxviii: opt the bench into the leaf-side digest coalescing
+        // window so the bulk-write hot path collapses N per-call
+        // OnChildDigestPublishedAsync hops into one per window. Library
+        // default is 0 (wire-compat synchronous publish, preserves the
+        // read-your-own-digest-after-write invariant integration tests
+        // pin); the bench has no such consumer.
+        o.DigestCoalescingWindowMs = digestCoalescingMs;
     });
 
     silo.AddAzureTableWalStorage(o =>

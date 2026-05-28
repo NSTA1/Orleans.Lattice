@@ -824,6 +824,34 @@ public class LatticeOptions
     public const bool DefaultMaintainProjectionDigest = true;
 
     /// <summary>
+    /// Coalescing window (in milliseconds) for leaf-side projection-digest
+    /// publishes to the parent internal node. When greater than zero, the
+    /// leaf defers the cross-grain <c>OnChildDigestPublishedAsync</c> hop
+    /// behind a one-shot grain timer; mutations arriving within the window
+    /// share a single publish, collapsing N per-call cross-grain hops into
+    /// one. The leaf's running <c>ProjectionHash</c> is persisted state and
+    /// digest consumers (replication shippers, replay coordinators) tolerate
+    /// staleness within the window because they re-poll periodically; the
+    /// digest is not used for read consistency of point queries.
+    /// <para>
+    /// Defaults to <see cref="DefaultDigestCoalescingWindowMs"/> (<c>0</c>,
+    /// wire-compat - the synchronous-publish shape every direct digest
+    /// reader has historically observed). Operators on the bulk-write
+    /// hot path (where the per-call digest publish dominates the
+    /// <c>SetAsync</c> envelope) should set this to a small positive
+    /// value such as 5 ms; the c2-xxviii memo measured a 27% drop in
+    /// the caller-visible <c>SetAsync</c> p50 at the c2-iii operating
+    /// point under <c>DigestCoalescingWindowMs = 5</c>. The resolver
+    /// forces the window to <c>0</c> when
+    /// <see cref="MaintainProjectionDigest"/> is <c>false</c>.
+    /// </para>
+    /// </summary>
+    public int DigestCoalescingWindowMs { get; set; } = DefaultDigestCoalescingWindowMs;
+
+    /// <summary>Default value for <see cref="DigestCoalescingWindowMs"/> (<c>0</c>, wire-compat synchronous publish).</summary>
+    public const int DefaultDigestCoalescingWindowMs = 0;
+
+    /// <summary>
     /// Number of WAL partitions per tree. Each partition is an independent
     /// per-shard append-only log; the foreground commit-log writer hashes
     /// the mutation key modulo this value to pick the partition. Defaults

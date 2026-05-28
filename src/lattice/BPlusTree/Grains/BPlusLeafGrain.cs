@@ -53,6 +53,23 @@ internal sealed partial class BPlusLeafGrain(
     {
         try
         {
+            // c2-xxviii: drain any pending coalesced digest publish
+            // before the checkpoint flush so a graceful shutdown does
+            // not leave the parent's digest table observing a stale
+            // snapshot. Crash deactivations bypass this hook by
+            // design; the digest is staleness-tolerant and the next
+            // mutation on reactivation will republish. Gated on the
+            // coalescing window being active because the
+            // synchronous-publish path (window=0, the wire-compat
+            // default) already publishes inline on every mutation -
+            // running the drain in that case can re-publish a
+            // post-publish state that races with materialiser-driven
+            // projection rebuilds and changes the parent's observed
+            // hash.
+            if (_digestCoalescingWindowMs > 0)
+            {
+                await FlushPendingDigestPublishAsync();
+            }
             await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
         }
         catch
@@ -138,6 +155,15 @@ internal sealed partial class BPlusLeafGrain(
     {
         _options = await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
         _maintainProjectionDigest = _options.MaintainProjectionDigest;
+        // c2-xxviii: cache the coalescing window so the synchronous
+        // PublishDigestUpwardAsync hot path can decide whether to
+        // schedule the one-shot timer or fall through to inline
+        // publish without re-resolving options. The resolver forces
+        // the window to 0 when MaintainProjectionDigest is false (no
+        // value in coalescing publishes that never happen).
+        _digestCoalescingWindowMs = _maintainProjectionDigest
+            ? _options.DigestCoalescingWindowMs
+            : 0;
         return _options;
     }
 
