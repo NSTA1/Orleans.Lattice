@@ -2941,3 +2941,41 @@ The shard histogram wraps the entire `AppendTxTerminalAsync` body after the `tra
   - **More WAL partitions** (`WalPartitions=16`): adds more independent grain activations per tree (more grain-management overhead) without changing per-partition Azure provider speed. c2-vii probe-0 already swept this and found WP=8 best for c2-iii topology.
 
   **Routing decision: campaign pause for consolidation.** The c2-xxiii batched-WAL saga terminal lift delivered the largest measurable structural win this campaign (-90% saga broadcast p50). The c2-xxiv attribution proved the next biggest cost (`SetManyAsync` fanout) is Azure-provider-bound at saturated traffic and would require a major durability-boundary refactor to relocate the bottleneck. **Both observations recommend shipping the c2-xxiii state and re-measuring the throughput.md headline cells at the full set-many rung and at saga rungs above the variance floor, rather than chasing a c2-xxvi lift whose theoretical win is below this rung's measurement signal.** Provenance: `silo-20260528-112016Z.log` (set-many baseline), `.ladder-results-c2-xxvi-mode-set-many-A-baseline.csv` (13,574 keys/s).
+- **DONE - U9p step 8c-c-iv-c2-xxvii Phase E-set-point-substage attribution.** Two new histograms on `LatticeMetrics` (`set.duration` wrapping `LatticeGrain.SetAsync`'s caller-visible envelope; `set.stage.duration` tagged `stage=(gate|shard|publish)` splitting the envelope into its constituent sub-spans). Mirrors the c2-xxiv `SetManyAsync` instrumentation pattern. Measured at the c2-iii operating point, set-point @ rung 10000:5 on `silo-20260528-120517Z.log`.
+
+  | Span                                       | p50       | p99       |
+  |--------------------------------------------|-----------|-----------|
+  | `set.duration` envelope                    | 79 ms     | 491 ms    |
+  | `set.stage phase=gate`                     | 0.00 ms   | 13.4 ms   |
+  | `set.stage phase=shard`                    | **87 ms** | 490 ms    |
+  | `set.stage phase=publish`                  | 0.00 ms   | 0.28 ms   |
+  | `leaf.commit phase=wal`                    | 48 ms     | 327 ms    |
+  | `leaf.commit phase=apply`                  | 0.01 ms   | 0.06 ms   |
+  | `leaf.commit phase=observer`               | 0.00 ms   | 0.00 ms   |
+  | **`leaf.commit phase=digest`**             | **13 ms** | 64 ms     |
+  | `wal.shard.dispatch.duration` shard=0      | 48 ms     | 395 ms    |
+  | `wal.append.provider.duration` (Azure)     | **19 ms** | 73 ms     |
+  | `wal.append.batch_entries`                 | **1**     | 1         |
+  | `wal.append.in_flight`                     | **0**     | 0         |
+
+  **Decisive attribution chain (per-call point write):**
+
+  | Component                             | p50      | % envelope |
+  |---------------------------------------|----------|------------|
+  | Azure provider (the only "real" work) | 19 ms    | 24%        |
+  | Orleans grain RPC overhead leaf↔WAL grain | ~29 ms | 37%      |
+  | **Per-call digest publish**           | **13 ms**| **16%**    |
+  | Shard root → leaf RPC overhead        | ~17 ms   | 22%        |
+  | Gate + publish event                  | ~1 ms    | 1%         |
+
+  ~76% of the per-call cost is overhead; only ~24% is actual Azure work. The user's observation that the previous throughput.md row's "22 ms p50" was suspicious given a 5-10 ms Azure floor was correct - the corrected envelope p50 is ~79 ms, with ~60 ms of overhead above the Azure floor. The 22 ms cell was derived as `DispatchAsync(4096) / 4096` under the FlushConcurrency=8 fan-out assumption (caveat ¹), which under-attributed because the dispatcher idles between batches.
+
+  **Two distinct overhead sources, two distinct routes:**
+
+  - **Orleans grain RPC overhead (~46 ms total across two hops: leaf↔WAL and shard↔leaf)** is framework cost that can only be reduced by collapsing grain boundaries (e.g. co-located activations, in-process leaf-as-library) - both are major refactors well beyond this campaign's scope.
+
+  - **Per-call digest publish (13 ms)** is the addressable target. `BPlusLeafGrain.CommitSetAsync` and `CommitSetManyAsync` both call `PublishDigestUpwardAsync()` at the end of every commit, which makes a synchronous Orleans grain call to the parent internal node's `OnChildDigestPublishedAsync`. Under the set-many path this fires once per batch (acceptable); under set-point it fires once per call. The leaf's `ProjectionHash` is already persisted, and digest readers (shard-root `GetShardProjectionDigestAsync` → parent `GetSubtreeProjectionDigestAsync`) are staleness-tolerant (replication shippers and replay coordinators re-poll periodically; digest is not used for read consistency of point queries). **The structural target is a brief leaf-side coalescing window** (e.g. 5-10 ms, analogous to `DirtyLeafFlushIntervalMs`): on `MarkDigestDirty()`, schedule a one-shot timer (idempotent if already scheduled); on timer fire, publish once for all accumulated mutations. On graceful `OnDeactivateAsync`, fire any pending publish synchronously so a clean shutdown does not leave the parent's digest table stale.
+
+  **Routing decision: digest-coalescing is the c2-xxviii structural target candidate.** Expected effect on set-point: per-call p50 drops from ~79 ms to ~66 ms (-16%); set-point sustained throughput proportionally up. **No effect on the saga path** because saga prepare writes are `isPrepared=true` which already skips `PublishDigestUpwardAsync` (per the comment block in `BPlusLeafGrain.CommitSetManyAsync` step 4). Saga rung will see no measurable change from this optimisation. **No effect on set-many** because digest already fires once per batch there.
+
+  Provenance: commits `ddf9f1d` (the instrumentation), `silo-20260528-115609Z.log` (A baseline with c2-xxiii in place, no c2-xxvii instrumentation), `silo-20260528-120517Z.log` (B with c2-xxvii instrumentation), `.ladder-results-c2-xxvii-mode-set-point-A-baseline.csv` (237 keys/s, before instr), `.ladder-results-c2-xxvii-mode-set-point-B-instr.csv` (146 keys/s, after instr - within the wide rung variance band; the set-point rung at 10000:5 has demonstrated 146-3,327 keys/s SteadyMin/Max in a single sample window, making throughput-cell attribution to the instrumentation overhead impossible at this rung).
