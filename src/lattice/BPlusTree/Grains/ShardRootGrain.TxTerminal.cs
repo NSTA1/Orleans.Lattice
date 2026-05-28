@@ -88,11 +88,12 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task AppendTxTerminalAsync(
+    public async Task<WalRecord?> AppendTxTerminalAsync(
         Guid transactionId,
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool inlineWalAppend = true)
     {
         // Pre-flight: refuse if this shard is rejecting (mid Rejecting phase of
         // a tree-rewrite) so the caller can catch StaleTreeRoutingException and
@@ -110,7 +111,7 @@ internal sealed partial class ShardRootGrain
         await PrepareForOperationAsync();
 
         if (transactionId == Guid.Empty)
-            return;
+            return null;
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -124,6 +125,9 @@ internal sealed partial class ShardRootGrain
         // the shard (affected-leaves resolution, HLC compute, optional
         // WAL append, scheduler dispatch).
         var shardBroadcastStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        // c2-xxiii: hoisted out of the outer try so it can be returned
+        // after the SagaBroadcastShardDuration finally records.
+        WalRecord? pendingTerminal = null;
         try
         {
 #if LATTICE_DIAG
@@ -224,6 +228,20 @@ internal sealed partial class ShardRootGrain
         // RPC fan-out below remains the only delivery channel for
         // such configurations, which is sufficient because there is
         // no replay-coordinator recovery seam to seed.
+        //
+        // c2-xxiii lift: when inlineWalAppend is false the shard
+        // builds the record but does NOT write it - the caller (the
+        // saga coordinator) collects every touched-shard record and
+        // dispatches them as one batched ICommitLogWriter.AppendManyAsync
+        // call, collapsing N serialised single-entry partition
+        // transactions into one per-partition batched transaction.
+        // Durability is still saga-awaited; only the dispatcher
+        // changes. The pre-stage timer still wraps the work even when
+        // the actual AppendAsync is skipped, so the per-shard `wal`
+        // histogram drops to ~0 on the saga path and rises only on
+        // direct callers (cross-cluster replay, shadow-forward,
+        // retroactive sweep) - exactly the attribution surface
+        // c2-xxii established.
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
@@ -264,7 +282,14 @@ internal sealed partial class ShardRootGrain
                 AtomicShardCount = LatticeAtomicShardCountContext.Current ?? 0,
             };
 
-                await writer.AppendAsync(terminal, cancellationToken);
+                if (inlineWalAppend)
+                {
+                    await writer.AppendAsync(terminal, cancellationToken);
+                }
+                else
+                {
+                    pendingTerminal = terminal;
+                }
             }
             finally
             {
@@ -315,7 +340,7 @@ internal sealed partial class ShardRootGrain
 
             var shadowForward = ForwardShadowAsync(
                 (transactionId, committed, committedValues, cancellationToken),
-                static (target, state) => target.AppendTxTerminalAsync(
+                static (target, state) => (Task)target.AppendTxTerminalAsync(
                     state.transactionId, state.committed, state.committedValues, state.cancellationToken));
 
             await Task.WhenAll(leafFanOut, shadowForward);
@@ -334,6 +359,8 @@ internal sealed partial class ShardRootGrain
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
         }
+
+        return pendingTerminal;
     }
 
     /// <summary>

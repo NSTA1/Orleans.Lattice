@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -1063,7 +1064,7 @@ internal sealed class AtomicWriteGrain(
         DiagSink.Write($"[DIAG broadcast-initial-fanout] op={OperationKey} tx={transactionId} shards=[{string.Join(",", state.State.TouchedShards)}]");
 #endif
 
-        var pending = new List<Task>(state.State.TouchedShards.Count);
+        var pending = new List<Task<WalRecord?>>(state.State.TouchedShards.Count);
         foreach (var shardIndex in state.State.TouchedShards)
         {
             IReadOnlyDictionary<string, byte[]>? subset = null;
@@ -1072,7 +1073,16 @@ internal sealed class AtomicWriteGrain(
             pending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed, subset));
         }
 
-        await Task.WhenAll(pending);
+        var initialRecords = await Task.WhenAll(pending);
+        // c2-xxiii: batched-WAL durability. The shard fan-out built one
+        // WalRecord per touched shard but did not write any of them;
+        // collapse the N serialised single-entry partition transactions
+        // into one ICommitLogWriter.AppendManyAsync dispatch per
+        // partition. The writer adapter already groups by partition
+        // and fans out in parallel, so each WAL partition observes one
+        // batched AppendBatchAsync rather than N stop-and-wait single
+        // appends. Saga still awaits durability before returning.
+        await FlushPendingTerminalsAsync(initialRecords);
 
         // Orphan-window closure: re-fetch participants and drain any
         // late arrivals. The initial GetParticipantsAsync fetch above
@@ -1137,7 +1147,7 @@ internal sealed class AtomicWriteGrain(
 #endif
                 if (lateToSend.Count == 0) break;
 
-                var latePending = new List<Task>(lateToSend.Count);
+                var latePending = new List<Task<WalRecord?>>(lateToSend.Count);
                 foreach (var shardIndex in lateToSend)
                 {
                     IReadOnlyDictionary<string, byte[]>? subset = null;
@@ -1161,7 +1171,8 @@ internal sealed class AtomicWriteGrain(
                     }
                     latePending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed, subset));
                 }
-                await Task.WhenAll(latePending);
+                var lateRecords = await Task.WhenAll(latePending);
+                await FlushPendingTerminalsAsync(lateRecords);
 
                 var sortedSent = new List<int>(terminalled);
                 sortedSent.Sort();
@@ -1173,6 +1184,55 @@ internal sealed class AtomicWriteGrain(
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG broadcast-done] op={OperationKey} tx={transactionId} finalTouched=[{string.Join(",", state.State.TouchedShards)}]");
 #endif
+    }
+
+    /// <summary>
+    /// Resolves the optional <see cref="ICommitLogWriter"/> registered
+    /// by <c>AddLattice</c>. Cached after first lookup. Returns
+    /// <c>null</c> on single-node / unit-test deployments that bypass
+    /// the WAL adapter entirely - in which case the per-shard
+    /// <see cref="ShardRootGrain.AppendTxTerminalAsync"/> calls also
+    /// return null and there is nothing to flush.
+    /// </summary>
+    private ICommitLogWriter? ResolveCommitLogWriter()
+    {
+        if (_commitLogWriterResolved) return _commitLogWriter;
+        _commitLogWriterResolved = true;
+        _commitLogWriter = context.ActivationServices?.GetService<ICommitLogWriter>();
+        return _commitLogWriter;
+    }
+    private bool _commitLogWriterResolved;
+    private ICommitLogWriter? _commitLogWriter;
+
+    /// <summary>
+    /// c2-xxiii batched-WAL durability barrier. Filters out the null
+    /// records produced by the no-WAL-adapter path and by
+    /// already-marked / Guid.Empty / stale-routing-no-op shards, then
+    /// dispatches the remainder through
+    /// <see cref="ICommitLogWriter.AppendManyAsync"/> which groups by
+    /// WAL partition and fans out one batched <see cref="IWalShardGrain.AppendBatchAsync"/>
+    /// call per partition in parallel. Awaits all partition writes so
+    /// the saga still observes WAL durability before returning - only
+    /// the dispatcher shape changes. A null or empty record list is a
+    /// no-op so single-node / unit-test deployments behave
+    /// historically.
+    /// </summary>
+    private async Task FlushPendingTerminalsAsync(WalRecord?[] records)
+    {
+        if (records is null || records.Length == 0) return;
+        var writer = ResolveCommitLogWriter();
+        if (writer is null) return;
+        List<WalRecord>? buffer = null;
+        for (var i = 0; i < records.Length; i++)
+        {
+            if (records[i] is { } r)
+            {
+                buffer ??= new List<WalRecord>(records.Length);
+                buffer.Add(r);
+            }
+        }
+        if (buffer is null) return;
+        await writer.AppendManyAsync(buffer, CancellationToken.None);
     }
 
     /// <summary>
@@ -1190,8 +1250,21 @@ internal sealed class AtomicWriteGrain(
     /// windows; the wall-clock budget absorbs any reasonable storm and
     /// still terminates with the original stale-routing throw if the
     /// topology never quiesces.
+    /// <para>
+    /// c2-xxiii: the shard returns the constructed terminal
+    /// <see cref="WalRecord"/> rather than appending it to its own WAL
+    /// partition - the saga coordinator collects every touched-shard
+    /// record from the parallel fan-out and dispatches them as one
+    /// batched <see cref="ICommitLogWriter.AppendManyAsync"/> call so
+    /// the N serialised single-entry partition transactions collapse
+    /// into one per-partition batched transaction. Durability is
+    /// preserved: the saga still awaits the batched write before
+    /// returning. The returned record is null when no WAL adapter is
+    /// registered (single-node / unit-test path) or when the shard
+    /// rejected the call before constructing one.
+    /// </para>
     /// </summary>
-    private async Task MarkOneShardAsync(
+    private async Task<WalRecord?> MarkOneShardAsync(
         string physicalTreeId,
         int shardIndex,
         Guid transactionId,
@@ -1223,8 +1296,10 @@ internal sealed class AtomicWriteGrain(
             try
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-                await shard.AppendTxTerminalAsync(transactionId, committed, committedValues);
-                return;
+                return await shard.AppendTxTerminalAsync(
+                    transactionId, committed, committedValues,
+                    cancellationToken: CancellationToken.None,
+                    inlineWalAppend: false);
             }
             catch (StaleShardRoutingException)
             {

@@ -154,12 +154,12 @@ public partial class AtomicWriteGrainTests
         // factory.GetGrain&lt;IShardRootGrain&gt;(...) call, so all three
         // attempts route through this single configured Returns.
         var attempts = 0;
-        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
             .Returns(_ =>
             {
                 if (attempts++ < 2)
                     throw new StaleShardRoutingException(0, 1, 0);
-                return Task.CompletedTask;
+                return Task.FromResult<WalRecord?>(null);
             });
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
@@ -180,7 +180,7 @@ public partial class AtomicWriteGrainTests
         shard.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
 
         var attempts = 0;
-        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
             .Returns(_ =>
             {
                 if (attempts++ < 1)
@@ -188,7 +188,7 @@ public partial class AtomicWriteGrainTests
                         logicalTreeId: TreeId,
                         stalePhysicalTreeId: TreeId,
                         destinationPhysicalTreeId: $"{TreeId}/v2");
-                return Task.CompletedTask;
+                return Task.FromResult<WalRecord?>(null);
             });
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
@@ -256,7 +256,7 @@ public partial class AtomicWriteGrainTests
 
         var attempts = 0;
         const int Storm = 12;
-        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
             .Returns(_ =>
             {
                 if (attempts < Storm)
@@ -270,7 +270,7 @@ public partial class AtomicWriteGrainTests
                         destinationPhysicalTreeId: $"{TreeId}/v{attempts}");
                 }
                 attempts++;
-                return Task.CompletedTask;
+                return Task.FromResult<WalRecord?>(null);
             });
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));

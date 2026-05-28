@@ -168,18 +168,20 @@ public class CompensationContinuousReaderTests
         // one Received call lands per distinct touched shard.
         await shard.Received(touchedCount).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: false,
+            Arg.Is<bool>(b => b == false),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
 
         // Defensive: no committed terminal must escape on the rollback
         // path - the abort and commit terminals are mutually exclusive
         // for a single saga.
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: true,
+            Arg.Is<bool>(b => b == true),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 
     /// <summary>
@@ -203,14 +205,16 @@ public class CompensationContinuousReaderTests
 
         await shard.Received(touchedCount).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: true,
+            Arg.Is<bool>(b => b == true),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: false,
+            Arg.Is<bool>(b => b == false),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 
     /// <summary>
@@ -230,6 +234,7 @@ public class CompensationContinuousReaderTests
             Arg.Any<Guid>(),
             Arg.Any<bool>(),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 }

@@ -718,11 +718,38 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <c>null</c> matches the pre-backstop call shape and remains
     /// supported for wire compatibility.
     /// </param>
-    Task AppendTxTerminalAsync(
+    /// <param name="inlineWalAppend">
+    /// When <c>true</c> (the default), the shard appends the
+    /// constructed terminal-mark <see cref="WalRecord"/> to its WAL
+    /// partition before returning - the historical durability shape
+    /// every direct caller (cross-cluster replay, shadow-forward,
+    /// retroactive prepared-mutation sweep, unit tests) relies on.
+    /// When <c>false</c>, the shard builds the record but does not
+    /// write it; the record is returned to the caller, which is
+    /// expected to durably persist it (e.g. by batching across every
+    /// touched shard in one <see cref="ICommitLogWriter.AppendManyAsync"/>
+    /// call). Only the saga coordinator
+    /// (<see cref="Orleans.Lattice.BPlusTree.Grains.AtomicWriteGrain"/>)
+    /// opts out, because it is the unique caller that has every
+    /// touched shard's record in hand and can collapse the per-shard
+    /// serialised WAL fan-out into a per-partition batched dispatch.
+    /// The saga still awaits the batched write before returning to
+    /// its own caller, so the WAL durability invariant is preserved.
+    /// </param>
+    /// <returns>
+    /// The constructed terminal-mark <see cref="WalRecord"/> when
+    /// <paramref name="inlineWalAppend"/> is <c>false</c> and the shard
+    /// has not written it; otherwise <c>null</c>. The shard always
+    /// returns <c>null</c> when the WAL adapter is not registered
+    /// (single-node / unit-test path), because there is nothing for
+    /// the caller to persist.
+    /// </returns>
+    Task<WalRecord?> AppendTxTerminalAsync(
         Guid transactionId,
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool inlineWalAppend = true);
 
     /// <summary>
     /// Returns this shard's transitive split-forward destination set -

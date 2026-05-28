@@ -121,7 +121,9 @@ public partial class AtomicWriteGrainTests
         await shard.Received(1).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             true,
-            Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 
     [Test]
@@ -152,7 +154,9 @@ public partial class AtomicWriteGrainTests
         await shard.Received(2).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             true,
-            Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
         // Initial union + first re-fetch (sees late arrival, fans out)
         // + second re-fetch (stable, breaks) = 3 calls.
         await registry.Received(3).GetParticipantsAsync(Arg.Any<Guid>());
@@ -191,7 +195,9 @@ public partial class AtomicWriteGrainTests
         await shard.Received().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             true,
-            Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+            Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 
     [Test]
