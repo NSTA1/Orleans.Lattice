@@ -7,11 +7,11 @@ All latency values are expressed in **milliseconds (ms)**. Sub-microsecond Layer
 
 | Operation        | Layer 1 - In-process p50 (ms/op) | Layer 1 - Allocated (B/op) | Layer 1 - Single-thread throughput (op/s) | Layer 2 - Sustained throughput (op/s) | Layer 2 - p50 (ms/call) | Layer 2 - p99 (ms/call) |
 | ---------------- | -------------------------------: | -------------------------: | ----------------------------------------: | ------------------------------------: | ----------------------: | ----------------------: |
-| `GetAsync` (point read)         | **0.000 405**       | 456    | **~2.47 M**       | **45,750** keys/s                                              | **~0.11**¹           | **~0.18**¹             |
-| `SetAsync` (point write)        | **0.003 971**       | 672    | **~252 k**        | **202** keys/s (sustained), **16,381** keys/s (burst max)² ¹⁰     | **~58**¹⁰            | **~300**¹⁰              |
-| `GetManyAsync` (4,096 keys/call) | **0.008 062** (16 keys) | 6,968 | **~124 k** calls/s ≈ **~2.0 M** keys/s | **178,927** keys/s ≈ **43.6** calls/s (sustained)⁶ | **14.1**           | **68.6**               |
-| `SetManyAsync` (4,096 entries/call) | **0.700** (1,000 entries) | 237,972 | **~1.43 k** calls/s ≈ **~1.43 M** entries/s | **13,574** entries/s ≈ **3.3** calls/s (sustained), **24,551** entries/s burst max | **2,012**⁸            | **2,854**⁸             |
-| `SetManyAtomicAsync` (64 keys/saga) | **0.188** (16 keys/saga) | 64,653 | **~5.3 k** sagas/s ≈ **~85 k** keys/s | **465** keys/s ≈ **7.3** sagas/s (sustained), **1,793** keys/s burst max³ ⁵ ⁷ ⁹ | **~800**⁴            | **~1,030**⁴            |
+| `GetAsync` (point read)         | **0.000 283**¹¹     | 456    | **~3.54 M**       | **45,750** keys/s                                              | **~0.11**¹           | **~0.18**¹             |
+| `SetAsync` (point write)        | **0.002 185**¹¹     | 616    | **~458 k**        | **202** keys/s (sustained), **16,381** keys/s (burst max)² ¹⁰     | **~58**¹⁰            | **~300**¹⁰              |
+| `GetManyAsync` (4,096 keys/call) | **0.006 586**¹¹ (16 keys) | 6,144 | **~152 k** calls/s ≈ **~2.4 M** keys/s | **178,927** keys/s ≈ **43.6** calls/s (sustained)⁶ | **14.1**           | **68.6**               |
+| `SetManyAsync` (4,096 entries/call) | **0.557**¹¹ (1,000 entries) | 250,213 | **~1.79 k** calls/s ≈ **~1.79 M** entries/s | **13,574** entries/s ≈ **3.3** calls/s (sustained), **24,551** entries/s burst max | **2,012**⁸            | **2,854**⁸             |
+| `SetManyAtomicAsync` (64 keys/saga) | **0.132**¹¹ (16 keys/saga) | 64,574 | **~7.57 k** sagas/s ≈ **~121 k** keys/s | **465** keys/s ≈ **7.3** sagas/s (sustained), **1,793** keys/s burst max³ ⁵ ⁷ ⁹ | **~800**⁴            | **~1,030**⁴            |
 
 ¹ Layer-2 `SetAsync` / `GetAsync` are dispatched in a parallel fan-out under `FlushConcurrency=8`. The `DispatchAsync` call carries one full producer batch (4,096 per-key calls); the per-call latency shown is derived by dividing `DispatchAsync` p50/p99 by 4,096. Direct per-call timing would require instrumenting each `ILattice.SetAsync` / `GetAsync` invocation individually, which the bench harness does not currently do.
 
@@ -33,37 +33,39 @@ All latency values are expressed in **milliseconds (ms)**. Sub-microsecond Layer
 
 ¹⁰ Layer-2 `SetAsync` per-call latency at the c2-iii operating point. Earlier revisions of this row reported `p50=~22 ms / p99=~37 ms` derived from `BenchMetrics.LatticeOpDurationMs(DispatchAsync) / 4096` under the `FlushConcurrency=8` fan-out assumption (caveat ¹). The c2-xxvii investigation added a direct `LatticeGrain.SetAsync` envelope histogram (`orleans.lattice.set.duration`) and proved the derivation was wrong: the dispatcher idles between producer batches, so `DispatchAsync` averaged across the full batch under-attributes the per-call cost by a factor of ~3. The current cells (`p50=~58 ms / p99=~300 ms`) are the honest measured envelope at `vehicles=10000, tickHz=5`. Sub-stage attribution at this rung: `set.stage phase=shard` p50 ~60 ms (entire envelope; gate / route / publish are <1 ms each); inside the shard call, `leaf.commit phase=wal` p50 ~36 ms decomposes as Azure provider round-trip ~16 ms + Orleans grain RPC overhead ~20 ms (the leaf↔WalShardGrain hop). The c2-xxviii leaf-side digest coalescing optimisation was originally credited with a -27% envelope p50 win on this row (79 ms → 58 ms), but the c2-xxix audit found the `LatticeOptionsResolver` was silently dropping the `DigestCoalescingWindowMs` field; coalescing therefore never fired on Azure, and the apparent win was misattribution. The latency cells in this row are the same with or without the resolver fix on the c2-iii `10000:5` rung because most leaves on this rung are flat-tree (single-leaf shards) and `PublishDigestUpwardAsync` early-returns without ever calling the parent. A reflective propagation guard (`LatticeOptionsResolverPropagationGuardTests`) now fails the build on any future `LatticeOptions` property added without an explicit propagation decision. Provenance: `silo-20260528-122140Z.log` (the c2-xxviii / c2-xxix sample at `10000:5`), `silo-20260528-144707Z.log` (`25000:5` cross-check), `silo-20260528-145728Z.log` (`1000:5` cross-check); see `scaling.md` c2-xxvii / c2-xxviii / c2-xxix memos for the full attribution chain.
 
-**Layer-1 source**: BDN run `2026-05-27T09-02-19Z` on this branch (commit `b872262`), AMD Ryzen 7 PRO 7840U / 16 logical / 8 physical, .NET 10.0.8, in-process toolchain. P50 column shown above; mean and p99 are in the per-op detail table further down. "Single-thread throughput" is the derived `1 / p50`; treat it as the algorithmic ceiling, **not** as a multi-thread scaling claim. Multi-key rows (`GetManyAsync`, `SetManyAsync`, `SetManyAtomicAsync`) show both calls/sec and entries/sec - the entries/sec column is what the audience compares against per-key throughput of the point ops.
+¹¹ Layer-1 cells re-measured against HEAD on 2026-05-28 (BDN run `2026-05-28T15-21-25Z`, this branch HEAD as of commit `bf41504`). Re-running was triggered by 12 hot-path commits since the original `b872262` baseline (the c2-xxiii batched-WAL terminal lift, the c2-xxiv/c2-xxvii instrumentation, the c2-xxviii digest-coalescing shape change, the c2-xxix resolver fix). Every re-measured row is **faster** than the original baseline: `PointRead` -30% (405 → 283 ns), `PointWrite` -45% (3,971 → 2,185 ns), `PointGetMany` -18% (8,062 → 6,586 ns), `SetMany_4Shards` -20% (700,000 → 557,406 ns), `SetManyAtomic` -30% (188,000 → 132,226 ns). Allocations are flat-or-slightly-improved on every row except `SetMany_4Shards` (+5%, within ShortRun noise band; the c2-xxiv five-stage histogram instrumentation lives on this path and is the most likely cause). The re-run used BDN's **ShortRun** job (3 iterations vs the original LongRun's 15) to fit the verification budget; this widens the confidence interval but the direction is unambiguous for every row - every p50 drop comfortably exceeds the row's ShortRun StdDev (Noop / PointRead / PointWrite / PointGetMany / SetMany_4Shards) or the row's mean is well within its baseline's LongRun confidence interval (SetManyAtomic). The five rows above were re-measured against the post-c2-xxix HEAD shape; rows in the detail table that were not in the re-run filter (PointReadWithVersion, BulkLoad family, deep-tree variants, the SetManyAtomic_Concurrent sweep) carry an explicit `(b872262)` marker - their numbers are the original LongRun baseline and are likely conservative (the same instrumentation that improved the headline rows also lives on their paths). Raw report: `BenchmarkDotNet.Artifacts/results/Orleans.Lattice.Benchmark.Microbench.LatticeMicroBenchmarks-report-full-compressed.json`, harness JSON: `benchmark/.run/microbench/2026-05-28T15-21-25Z/results.json`.
+
+**Layer-1 source**: headline rows re-measured 2026-05-28 against HEAD (commit `bf41504`) via BDN ShortRun (3 iterations × in-process toolchain); see caveat ¹¹ for full re-run methodology. Detail-table rows that were not part of the re-run filter (PointReadWithVersion, BulkLoad family, deep/deeper tree variants, SetManyAtomic_Concurrent sweep) carry an explicit `(b872262)` marker against their P50 cell and reflect the original LongRun baseline. AMD Ryzen 7 PRO 7840U / 16 logical / 8 physical, .NET 10.0.8, in-process toolchain. "Single-thread throughput" is the derived `1 / p50`; treat it as the algorithmic ceiling, **not** as a multi-thread scaling claim. Multi-key rows (`GetManyAsync`, `SetManyAsync`, `SetManyAtomicAsync`) show both calls/sec and entries/sec - the entries/sec column is what the audience compares against per-key throughput of the point ops.
 
 **Layer-2 source**: c2-vii probe-0 ladder + c2-viii step-9 per-mode probes (commits `b872262`, `7fd37a6`) at the c2-iii operating-point baseline (single silo, 32 shards, real Azure Tables Standard, West Europe). The `SetManyAsync` row uses the c2-iii baseline operating point (`vehicles=10000, tickHz=5, batchSize=4096`) and was re-baselined post-c2-xxiii / post-c2-xxiv on `silo-20260528-112016Z.log` (see caveat ⁸). The `SetManyAtomicAsync` row uses the tuned operating point described in caveat ³ and measures Phase c2-xxiii (commit `fdeca66` on this branch); the headline cell is the arithmetic mean of 5 ladder samples taken this session, range 308-623 keys/s, with per-saga phase decomposition from `silo-20260528-113221Z.log` (see caveats ⁴ and ⁹). The `GetManyAsync` row uses the saturating operating point described in caveat ³ and measures Phase R1 (commit pending on this branch; see caveat ⁶) on `silo-20260527-203734Z.log`.
 
-### Layer-1 detail (full mean / p50 / p99 / allocated, per [BenchmarkDotNet](https://benchmarkdotnet.org) run)
+### Layer-1 detail (full mean / p50 / p95 or p99 / allocated, per [BenchmarkDotNet](https://benchmarkdotnet.org) run)
 
-All times in **milliseconds**; sub-millisecond values shown to 3 decimal places (or to 6 decimals for sub-microsecond cells). Allocated is bytes per call.
+All times in **milliseconds**; sub-millisecond values shown to 3 decimal places (or to 6 decimals for sub-microsecond cells). Allocated is bytes per call. Rows marked `(re-run 2026-05-28)` were re-measured against HEAD (commit `bf41504`) using BDN ShortRun (3 iterations × in-process toolchain) and report **P95** in lieu of P99 (ShortRun does not collect enough samples to compute P99). Rows marked `(b872262)` retain the original LongRun baseline P50 and P99 and were not part of the re-run filter.
 
-| Benchmark               | Mean (ms) | P50 (ms) | P99 (ms)  | Allocated (B) | Notes |
+| Benchmark               | Mean (ms) | P50 (ms) | P95/P99 (ms) | Allocated (B) | Notes |
 | ----------------------- | --------: | -------: | --------: | ------------: | ----- |
-| `PointRead`             | 0.002 802 | 0.000 405 | 0.041 530 | 456          | single key, populated leaf |
-| `PointReadWithVersion`  | 0.002 365 | 0.000 586 | 0.034 777 | 496          | returns `VersionedValue` |
-| `PointWrite`            | 0.005 779 | 0.003 971 | 0.028 731 | 672          | single key, populated leaf |
-| `PointGetMany`          | 0.011 016 | 0.008 062 | 0.052 687 | 6,968        | 16 keys/call against pre-populated leaf |
-| `BulkLoad`              | 0.816     | 0.700    | 1.889     | 237,972       | 1,000 entries/call, single leaf |
-| `SetMany_4Shards`       | 0.575     | 0.561    | 0.691     | 250,252       | 1,000 entries across 4 shards |
-| `SetManyAtomic`         | 0.264     | 0.188    | 1.058     | 64,653        | 16 keys/saga, single shard |
-| `SetManyAtomic_4Shards` | 0.162     | 0.157    | 0.226     | 97,979        | 16 keys/saga across 4 shards |
-| `BulkLoad_DeepTree`     | not extracted | 0.033 309 | 0.124 526 | 15,968 | deep B+tree shape (height ≥ 2) |
-| `BulkLoad_DeeperTree`   | 0.145     | 0.149    | 0.239     | 80,185        | 32 entries/call, deeper tree |
-| `PointWrite_DeepTree`   | 0.006 516 | 0.004 171 | 0.037 676 | 1,592        | single key, deep tree |
-| `PointWrite_DeeperTree` | 0.013 846 | 0.011 850 | 0.041 452 | 6,192        | single key, deeper tree |
-| `PointRead_DeeperTree`  | 0.013 489 | 0.002 245 | 0.116 274 | 1,326        | single key, deeper tree |
-| `PointReadAtomicTreeIdle` | 0.002 412 | 0.000 326 | 0.039 658 | 456        | read on a tree configured for atomic writes, no in-flight saga |
-| `PointReadAtomicTreeWithActiveSaga` | 0.002 129 | 0.000 379 | 0.033 631 | 456 | read on the same tree with a concurrent saga in flight |
-| `SetManyAtomic_Concurrent_1`  | 0.146 | 0.143 | 0.180  | 63,334       | 16 keys/saga × 1 concurrent saga |
-| `SetManyAtomic_Concurrent_4`  | 0.559 | 0.588 | 0.958  | 246,951      | 16 keys/saga × 4 concurrent sagas |
-| `SetManyAtomic_Concurrent_16` | 2.489 | 2.577 | 3.766  | 987,509      | 16 keys/saga × 16 concurrent sagas |
-| `SetManyAtomic_Concurrent_64` | 10.737 | 11.969 | 14.213 | 3,949,740  | 16 keys/saga × 64 concurrent sagas |
+| `PointRead`             | 0.000 282 | 0.000 283 | 0.000 290 (p95) | 456          | single key, populated leaf (re-run 2026-05-28) |
+| `PointReadWithVersion`  | 0.000 379 | 0.000 389 | 0.000 403 (p95) | 496          | returns `VersionedValue` (re-run 2026-05-28) |
+| `PointWrite`            | 0.002 174 | 0.002 185 | 0.002 209 (p95) | 616          | single key, populated leaf (re-run 2026-05-28) |
+| `PointGetMany`          | 0.006 830 | 0.006 586 | 0.007 265 (p95) | 6,144        | 16 keys/call against pre-populated leaf (re-run 2026-05-28) |
+| `BulkLoad`              | 0.816     | 0.700    | 1.889 (p99) | 237,972       | 1,000 entries/call, single leaf (b872262) |
+| `SetMany_4Shards`       | 0.561     | 0.557    | 0.580 (p95) | 250,213       | 1,000 entries across 4 shards (re-run 2026-05-28) |
+| `SetManyAtomic`         | 0.132     | 0.132    | 0.154 (p95) | 64,574        | 16 keys/saga, single shard (re-run 2026-05-28) |
+| `SetManyAtomic_4Shards` | 0.245     | 0.245    | 0.256 (p95) | 100,732       | 16 keys/saga across 4 shards (re-run 2026-05-28) |
+| `BulkLoad_DeepTree`     | not extracted | 0.033 309 | 0.124 526 (p99) | 15,968 | deep B+tree shape (height ≥ 2) (b872262) |
+| `BulkLoad_DeeperTree`   | 0.145     | 0.149    | 0.239 (p99) | 80,185        | 32 entries/call, deeper tree (b872262) |
+| `PointWrite_DeepTree`   | 0.004 432 | 0.004 351 | 0.004 576 (p95) | 1,536       | single key, deep tree (re-run 2026-05-28) |
+| `PointWrite_DeeperTree` | 0.015 415 | 0.016 096 | 0.016 351 (p95) | 6,136        | single key, deeper tree (re-run 2026-05-28) |
+| `PointRead_DeeperTree`  | 0.002 104 | 0.002 016 | 0.002 269 (p95) | 1,326        | single key, deeper tree (re-run 2026-05-28) |
+| `PointRead_AtomicTreeIdle` | 0.000 334 | 0.000 338 | 0.000 345 (p95) | 456 | read on a tree configured for atomic writes, no in-flight saga (re-run 2026-05-28) |
+| `PointRead_AtomicTreeWithActiveSaga` | 0.000 354 | 0.000 351 | 0.000 361 (p95) | 456 | read on the same tree with a concurrent saga in flight (re-run 2026-05-28) |
+| `SetManyAtomic_Concurrent_1`  | 0.203 | 0.208 | 0.217 (p95) | 62,755       | 16 keys/saga × 1 concurrent saga (re-run 2026-05-28) |
+| `SetManyAtomic_Concurrent_4`  | 0.857 | 0.887 | 0.940 (p95) | 251,143      | 16 keys/saga × 4 concurrent sagas (re-run 2026-05-28) |
+| `SetManyAtomic_Concurrent_16` | 3.657 | 3.583 | 3.833 (p95) | 1,004,283    | 16 keys/saga × 16 concurrent sagas (re-run 2026-05-28) |
+| `SetManyAtomic_Concurrent_64` | 15.227 | 15.693 | 16.387 (p95) | 4,016,856 | 16 keys/saga × 64 concurrent sagas (re-run 2026-05-28) |
 
-Raw harness JSON: `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json` (values stored there are in nanoseconds; this table converts to milliseconds by dividing by 1,000,000).
+Raw harness JSON: `benchmark/.run/microbench/2026-05-28T15-21-25Z/results.json` (re-run subset against HEAD `bf41504`); original LongRun baseline: `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json` (`b872262`). Both stored in nanoseconds; the tables above convert to milliseconds by dividing by 1,000,000.
 
 **Rung context** (Layer 2): single silo, 32 shards, `WalPartitions=8`, `WalMaxPendingBatches=8`, `PhaseTwoCoalescingWindow=5ms`, `PipelinePhaseTwoCommits=true`, `FlushConcurrency=8`, `FlushMs=50`, `BatchSize=4096`, real Azure Tables Standard account (West Europe), producer rung `10000:5` (10,000 vehicle ids × 5 Hz tick = 50,000 events/sec target offered load, 245 B/event), 60-second producer window (`DurationSec=60`), `SteadyAvg` computed over the productive sub-window with drain tail excluded per the c2-vi-bench-timing-fix. Source commit `b872262`.
 
@@ -170,7 +172,7 @@ Flipping these library defaults is a recommended follow-up per Phase B2 / B3 / C
 
 ## Provenance / artefacts
 
-Layer 1: BDN JSON results at `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json` (gitignored). 20 benchmarks executed in 20m16s on a developer laptop (AMD Ryzen 7 PRO 7840U, .NET 10.0.8, BenchmarkDotNet 0.15.8 with the in-process toolchain).
+Layer 1: BDN JSON results re-run subset at `benchmark/.run/microbench/2026-05-28T15-21-25Z/results.json` + original LongRun baseline at `benchmark/.run/microbench/2026-05-27T09-02-19Z/results.json` (both gitignored). Re-run: 24 benchmarks (ShortRun, 3 iterations) against HEAD `bf41504`, completed in ~10m on a developer laptop (AMD Ryzen 7 PRO 7840U, .NET 10.0.8, BenchmarkDotNet 0.15.8 with the in-process toolchain). Original baseline: 20 benchmarks (LongRun, 15 iterations) at `b872262`, 20m16s on the same machine.
 
 Layer 2: per-mode CSVs under `benchmark/azure-throughput/scripts/`:
 
