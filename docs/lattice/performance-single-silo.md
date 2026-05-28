@@ -34,9 +34,6 @@ numbers will differ too. The benchmark harness ships with the repository
 and is easy to repoint at your own offered load - see
 [Benchmarks](benchmarks.md) for the runbook.
 
-The two-layer methodology and the raw figures used to build this guide live
-in [`throughput.md`](../../throughput.md) at the repository root.
-
 ## Layer 1 - In-process microbench (algorithmic ceiling)
 
 **How it was run.** Layer 1 measures the cost of one call to each
@@ -76,8 +73,7 @@ a single silo against a real Azure Tables Standard storage account in
 West Europe. A standalone producer streams vehicle telemetry events over
 TCP at a configured rate; the silo ingests, batches, and dispatches them
 through `ILattice` against a tuned operating point (32 shards, batched WAL,
-phase-2 commit pipelining, see [`throughput.md`](../../throughput.md) for
-the full pinned configuration). Both producer and silo run as Azure
+phase-2 commit pipelining). Both producer and silo run as Azure
 Container Instances; the bench harness records per-operation latency
 histograms throughout the run and reports the sustained throughput over
 the productive window after warm-up.
