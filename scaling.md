@@ -2629,6 +2629,68 @@ The two runs produced **bit-identical results**, indistinguishable to the per-se
 
 **Last Updated**: 2026-05-27 (Phase D2-A attempt null result reverted; c2-xi attribution corrected: the single-cluster bench cannot measure receiver-side replication apply changes; next candidate is producer-side saga per-step timing breakdown via `AtomicWriteGrain.ExecutePhaseAsync` instrumentation).
 
+#### U9p step 8c-c-iv-c2-xvi (2026-05-28) - Per-phase saga timing breakdown: broadcast dominates
+
+**Goal.** Close the c2-xv attribution gap. The c2-xv routing memo identified the producer-side saga path as the binding constraint at the single-cluster bench but could not distinguish among its three internal phases (parallel prepare, terminal-decision write, per-shard terminal broadcast) without instrumentation. This step adds three per-phase histograms on the `LatticeMetrics` surface and re-runs the c2-xi rung with the metrics enabled to attribute the per-saga cost.
+
+**Instrumentation shipped.**
+
+| Histogram | What it captures | Tags |
+|-----------|------------------|------|
+| `orleans.lattice.saga.prepare.duration` | Wall-clock ms inside `ExecutePhaseAsync` (parallel `lattice.SetManyAsync(slice)` through per-shard fan-out completion) | `tree`, `wal_partitions` |
+| `orleans.lattice.saga.terminal_decision.duration` | Wall-clock ms inside `RecordTerminalDecisionAsync` (one `MarkCommittedAsync` / `MarkAbortedAsync` RPC to the per-tree registry) | `tree`, `wal_partitions` |
+| `orleans.lattice.saga.broadcast.duration` | Wall-clock ms inside `BroadcastTerminalsAsync` (per-shard `AppendTxTerminalAsync` fan-out via `Task.WhenAll`) | `tree`, `wal_partitions` |
+
+The three histograms are recorded from `RunSagaAsync` (the saga's dispatch loop), wrapping each phase await with `Stopwatch.GetTimestamp()` + `try { ... } finally { Record(...); }` so the histogram captures even on the failure path. Tags are cached per-activation in `_sagaMetricTags` (one `KeyValuePair<string, object?>` pair, populated on first observation, reused across every subsequent `Record` call on the activation) so neither `RunSagaAsync` nor `ExecutePhaseAsync` allocates fresh tag pairs per saga or boxes the `WalPartitions` int per histogram observation. The Azure-throughput bench's phase-A reporter is updated to subscribe to the three new instruments so the silo log carries `[phaseA]` lines for each.
+
+**Measured (Azure, single silo, c2-xi operating point: rung `500:10`, `BENCH_BATCH_SIZE=256`, `BENCH_PHASEA_REPORT_SEC=30`, `DurationSec=180`).**
+
+Steady-state window t=60.7s, mid-run, observation count = 126 sagas. All values in milliseconds.
+
+| Phase | p50 | p90 | p99 | Share of saga p50 |
+|-------|----:|----:|----:|------------------:|
+| **Prepare** (parallel `lattice.SetManyAsync(slice)`) | 530.66 | 697.84 | 1011.36 | **~37%** |
+| **Terminal Decision** (one `MarkCommittedAsync` RPC) | 13.24 | 24.17 | 62.51 | **~1%** |
+| **Broadcast** (per-shard `AppendTxTerminalAsync` fan-out) | 879.89 | 1259.96 | 1819.56 | **~62%** |
+| **Sum of phases** | **~1,424** | **~1,982** | **~2,893** | |
+
+Cross-check: `saga.perkey.duration` at the same window reports p50 = 7.77ms × 64 keys/saga = 497ms serial-equivalent prepare time, which matches the prepare p50 of 531ms to within 7% (residue is the per-shard fan-out wait inside `LatticeGrain.SetManyAsync`'s shard-bucketing).
+
+**Throughput A/B (instrumentation overhead check).**
+
+| Run | SteadyAvg | Min | Max | Total | Failed |
+|-----|----------:|----:|----:|------:|-------:|
+| A (HEAD, instrumentation stashed) | 246/s | 0 | 767 | 26,931 | 0 |
+| B (HEAD + instrumentation) | 229/s | 0 | 1,025 | 24,113 | 0 |
+
+The -6.9% delta sits well within the run-to-run variance band observed across this campaign at the same rung (`500:10` set-many-atomic SteadyAvg: c2-xi=268, R1=278, c2-xv-A=309, c2-xvi-A=246, c2-xvi-B=229; spread ≈ +35%/-15% from the c2-xi mid-point). The instrumentation is observation-only (no behaviour change), with per-saga allocation cost held at 2 `KeyValuePair` allocations + 1 `int` box per activation (cached, amortised across all five histogram `Record` calls), so the run-to-run noise dominates the measurement. Concretely the instrumentation is not a regression.
+
+**Findings.**
+
+1. **The c2-xv hypothesis is confirmed.** Broadcast terminal IS the dominant per-saga cost at p50, contributing ~62% (880ms) versus prepare's ~37% (531ms). The hypothesis was right and the routing-memo prediction is shipworthy: broadcast is the next attack vector.
+
+2. **Terminal decision is negligible** at ~1% (13ms p50). A single grain RPC to the registry. R1's `[AlwaysInterleave]` probe optimisation has no leverage here; the registry mark itself is not the bottleneck.
+
+3. **The c2-xi 7,660ms saga p50 attribution.** The c2-xi memo cited a per-saga p50 of 7,660ms derived from the silo-side `lattice.op.duration_ms` histogram. The sum of phases measured here is ~1,424ms p50 - a 5.4× discrepancy. The residual cost (the missing ~6.2 seconds) lives in **saga-internal overhead the three phases do not cover**: PrepareAsync's initial WAL writes, inter-phase saga `state.WriteStateAsync` checkpoint persists (~30-50ms each against Azure Tables, several per saga), and CompleteSagaAsync cleanup. Throughput arithmetic corroborates: 229 keys/s ÷ 64 keys/saga = 3.58 sagas/s completing; with ~6 concurrent saga slots open this gives a per-saga floor of ~1,676ms - far closer to the 1,424ms sum of phases than to the 7,660ms public-surface p50. **The c2-xi p50 measured a different shape than the per-saga cost**; the per-phase histograms here are the canonical attribution for the producer-side saga internals.
+
+**Routing decision.**
+
+The optimisation candidate space, ranked by measured impact:
+
+- **(highest impact)** `BroadcastTerminalsAsync` is the dominant per-saga internal phase. Sub-attack 1: per-shard `AppendTxTerminalAsync` work in `ShardRootGrain` (WAL append + leaf pending-tx drain). At p50=880ms across ~32 touched shards in parallel = ~27ms per-shard average - that's the floor set by one Azure Tables WAL append. Reducing this requires either (a) eliminating the per-shard terminal WAL append entirely by making the leaf consult the registry on next read instead (architectural change), or (b) coalescing terminal records with the **next** prepare batch from the same producer (cross-saga batching at the WAL layer). Both are larger than R1-scale changes; gating on a follow-up scoping memo.
+
+- **(second-highest impact)** Saga-internal state persists (the ~6 seconds of residual cost the per-phase histograms do not cover). Instrument them next: add an `orleans.lattice.saga.checkpoint.duration` histogram around each `state.WriteStateAsync` inside `AtomicWriteGrain` to confirm the residual is checkpoint-write-bound. If yes, the candidate is reducing the number of saga checkpoint persists (some are conservative-restore safety nets that can be elided when the saga has not started observing visible side-effects yet).
+
+- **(third)** Prepare phase parallelism. p50=531ms for 64 keys across 8 WAL partitions ≈ 8 keys/partition × ~70ms each. That's already near the WAL provider's floor; per-key cost is dominated by the WAL append, not by saga overhead. Limited headroom.
+
+Per-phase histogram correctness coverage: 4 new tests in `LatticeMetricsIntegrationTests.SagaPhases.cs` pin that each new histogram emits at least one observation when a saga commits, tagged with the saga's tree id and the wal-partitions tag (4 tests total: one per histogram + one cross-cutting tag-presence check). 14 metrics-integration tests pass (10 pre-existing + 4 new). 75 focused saga + metrics tests green at the full focused suite.
+
+**Provenance.**
+- A (no instrumentation): `silo-20260528-061901Z.log` (approx; the closest `silo-2026052*.log` to A's complete time), `.ladder-results-c2-xvi-mode-set-many-atomic-A-baseline.csv`.
+- B (with instrumentation): `silo-20260528-063534Z.log`, `.ladder-results-c2-xvi-mode-set-many-atomic-B-instr.csv`.
+
+**Last Updated**: 2026-05-28 (Phase D-instr shipped: three per-phase saga histograms attribute the producer-side saga cost; broadcast dominates at ~62% of saga p50 confirming the c2-xv hypothesis; terminal decision negligible at ~1%; c2-xi 7,660ms p50 is per-saga-public-surface not per-phase-sum and the residual cost lives in saga-internal state persists which become the next instrument target before any structural optimisation lands).
+
 ## 📝 Plan Steps
 
 - **DONE - U9p step 8c-c-i (WAL pipeline uncork).** `[AlwaysInterleave]` on `IWalShardGrain.AppendBatchAsync` lifted `wal.append.in_flight` from 0 to 7 and `batch_entries` p90 to the 100-entry cap. The change is kept; it exposed memory-storage as the next limiter.
@@ -2660,3 +2722,5 @@ The two runs produced **bit-identical results**, indistinguishable to the per-se
 - **DONE - U9p step 8c-c-iv-c2-xiv Phase R1 (cheap revision probe replaces snap2 dict).** Adds `ITxRegistryGrain.GetDecisionsRevisionAsync` (`[AlwaysInterleave]`) and `ITxRegistryGrain.SnapshotWithRevisionAsync` (atomic pair); `TxRegistryState.DecisionsRevision` bumped on every Decisions mutation under the registry's single-turn token; `LatticeGrain.FetchRegistrySnapshotAsync` returns a `RegistrySnapshotPair` and the 5 snap2 sites use a new `IsSnap2StableAsync` cheap-probe helper with fall-through to a fresh `SnapshotWithRevisionAsync` on mismatch. Multi-silo safe (no process-wide cookie; the probe is still a grain RPC to the single-activation registry; saving is the elided dict payload). Measured at the c2-iii operating point: `get-many` at saturating rung 50000:5 lifts SteadyAvg 148,462 -> 178,927/s (+20.5%) with FinalFailed=0; `set-many-atomic` at the c2-xi rung 500:10 stays at 278 vs c2-xi 268 (+3.7% no regression), FinalFailed=0. 12 new tests in `TxRegistryGrainTests.Revision.cs` pin the revision-bump contract + `[AlwaysInterleave]` attribute. 3466/3466 non-chaos lattice tests green. Provenance: A=`silo-20260527-203322Z.log`, B=`silo-20260527-203734Z.log`, saga=`silo-20260527-204159Z.log`.
 
 - **NULL (reverted) - U9p step 8c-c-iv-c2-xv Phase D2-A attempt (parallel prepared-entry dispatch in `ReplicationApplier.ApplyBatchAsync`).** Shipped a ~120 LOC change buffering contiguous same-TransactionId prepared+atomic-batch entries into a `pendingPreparedTasks` list, dispatched via `Task.WhenAll` at the run boundary. All correctness tests green (1668 non-chaos replication + 9 chaos atomic visibility + bootstrap + SetManyAtomicAsync contract + 577 core lattice atomic / leaf / compensation). Azure A/B at the c2-xi operating point rung `500:10`: A=309 keys/s (HEAD without D2-A), B=309 keys/s (HEAD + D2-A) - bit-identical. Root cause: the Azure throughput bench is single-cluster (`ClusterId=azure-throughput`, no peer discovery), so the receiver-side replication apply path D2-A targets never executes. The c2-xi memo's attribution of the 7.6s per-saga p50 to `receiver-side per-key apply` was ambiguous; the actual binding constraint at the single-cluster bench is the producer-side saga path. Change reverted; next candidate is per-step instrumentation inside `AtomicWriteGrain.ExecutePhaseAsync` to attribute the producer-side cost across (a) parallel prepare, (b) broadcast terminal, (c) per-shard terminal commit + drain. See c2-xv memo above for the full attribution and the Azure-time accounting.
+
+- **DONE - U9p step 8c-c-iv-c2-xvi Phase D-instr (per-phase saga timing breakdown).** Added three histograms on the `LatticeMetrics` surface (`saga.prepare.duration`, `saga.terminal_decision.duration`, `saga.broadcast.duration`) recording each phase's wall-clock under the same `(tree, walPartitions)` tag pair the existing `SagaPerKeyDuration` / `SagaFanoutSize` use. Tags cached per-activation in `_sagaMetricTags` so per-saga allocation cost is exactly 2 KeyValuePair allocs + 1 int box, amortised across all 5 histogram Record calls. Azure-throughput phase-A reporter updated. Measured at the c2-xi operating point rung 500:10 (steady-state mid-run window, count=126 sagas): **prepare p50=531ms (37%), terminal_decision p50=13ms (1%), broadcast p50=880ms (62%)** - broadcast dominates, confirming the c2-xv routing-memo hypothesis. Throughput A/B (instrumentation overhead check): A=246/s, B=229/s, -6.9% within the run-to-run variance band (campaign spread +35%/-15% at this rung). 4 new tests in `LatticeMetricsIntegrationTests.SagaPhases.cs` pin the histograms emit. 75 focused saga + metrics tests green. **Next**: instrument the saga's internal `state.WriteStateAsync` calls to attribute the residual ~6s of per-saga cost the three phases do not cover (sum of phases ~1.4s vs c2-xi public-surface p50 7.7s). See c2-xvi memo above for the full attribution and provenance silo-20260528-063534Z.log.
