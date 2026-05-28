@@ -95,6 +95,15 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // UnregisterReminder at completion). Each call is an Azure
         // Tables transaction against the reminder table.
         "orleans.lattice.saga.reminder.duration",
+        // c2-xx routing memo: per-shard and per-leaf attribution
+        // inside the saga's broadcast phase. SagaBroadcastShardDuration
+        // is the wall-clock for one AppendTxTerminalAsync call;
+        // SagaBroadcastLeafDuration is the wall-clock for one
+        // per-leaf ApplyTxTerminalAsync RPC. The gap between them
+        // attributes the non-leaf shard-side overhead (affected-leaves
+        // resolution, HLC compute, optional WAL append).
+        "orleans.lattice.saga.broadcast.shard.duration",
+        "orleans.lattice.saga.broadcast.leaf.duration",
         // U9p step 2: ShardRootGrain.SetManyAsync split into local-apply
         // (per-leaf fan-out + WAL append + phase 2) and shadow-forward
         // (online-resize tail wait). Lattice-internal histograms on the

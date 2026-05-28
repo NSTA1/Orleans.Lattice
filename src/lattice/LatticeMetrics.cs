@@ -889,6 +889,49 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.saga.reminder.duration", unit: "ms",
             description: "Wall-clock ms inside Orleans reminder registry RPCs on AtomicWriteGrain, tagged with the call-site phase.");
 
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside a single
+    /// <c>ShardRootGrain.AppendTxTerminalAsync</c> call: the full
+    /// per-shard cost of broadcasting one saga's terminal mark, from
+    /// the start of step 1 (affected-leaves resolution) through step 4
+    /// (per-leaf <c>ApplyTxTerminalAsync</c> fan-out). Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// <para>
+    /// Sums (in parallel-Task.WhenAll-fashion) inside the saga grain's
+    /// <see cref="SagaBroadcastDuration"/> - the saga p50 of ~880ms is
+    /// the max across ~32 parallel shard calls; this histogram surfaces
+    /// the per-shard contribution so the broadcast-cost attribution
+    /// gap left open by c2-xvii can be closed. Per the c2-xix routing
+    /// memo this is the next instrument target before any structural
+    /// optimisation of the broadcast path.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaBroadcastShardDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.broadcast.shard.duration", unit: "ms",
+            description: "Wall-clock ms inside a single ShardRootGrain.AppendTxTerminalAsync call (per-shard broadcast contribution).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside a single per-leaf
+    /// <c>IBPlusLeafGrain.ApplyTxTerminalAsync</c> RPC dispatched from
+    /// <c>ShardRootGrain.BroadcastTerminalToLeavesAsync</c> (step 4
+    /// of the per-shard broadcast). Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagShard"/>.
+    /// <para>
+    /// The shard-side broadcast fan-out is a single
+    /// <c>Task.WhenAll</c> across ~1-2 affected leaves per shard, so
+    /// the shard duration is approximately the max of its per-leaf
+    /// durations. The gap between
+    /// <see cref="SagaBroadcastShardDuration"/> p50 and
+    /// <see cref="SagaBroadcastLeafDuration"/> p50 attributes the
+    /// non-leaf cost on the shard (affected-leaves resolution, HLC
+    /// compute, optional WAL append, the parallel-dispatch scheduler
+    /// overhead). Per the c2-xix routing memo.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaBroadcastLeafDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.broadcast.leaf.duration", unit: "ms",
+            description: "Wall-clock ms inside a single per-leaf ApplyTxTerminalAsync RPC dispatched from the shard's terminal broadcast.");
+
     // --- Shard-root SetManyAsync split instruments ----------------
 
     /// <summary>
