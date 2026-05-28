@@ -913,16 +913,20 @@ public class LatticeOptions
     /// flush before being enqueued; this provides natural back-pressure
     /// under sustained burst load without changing the dense-offset
     /// invariant. Defaults to <see cref="DefaultWalMaxPendingBatches"/>
-    /// (1) - bit-identical to the original single-in-flight behaviour.
-    /// Raise to pipeline writer-side burst absorption against a
-    /// higher-latency durable provider. Must be at least <c>1</c>; the
-    /// registered options validator rejects non-positive values at
-    /// first-resolve time.
+    /// (8) - the measured Azure Tables Standard sweet spot at the
+    /// c2-iii operating point. Set to <c>1</c> for the historical
+    /// single-in-flight shape (strict ordering against the provider;
+    /// no pipeline depth). Raising the cap above what the storage
+    /// provider can usefully serve in parallel degrades latency without
+    /// improving throughput (more concurrent flushes compete for the
+    /// same provider budget and grow each flush's slow-tail wait). Must
+    /// be at least <c>1</c>; the registered options validator rejects
+    /// non-positive values at first-resolve time.
     /// </summary>
     public int WalMaxPendingBatches { get; set; } = DefaultWalMaxPendingBatches;
 
-    /// <summary>Default value for <see cref="WalMaxPendingBatches"/> (1, wire-compat).</summary>
-    public const int DefaultWalMaxPendingBatches = 1;
+    /// <summary>Default value for <see cref="WalMaxPendingBatches"/> (8, measured Azure Tables sweet spot).</summary>
+    public const int DefaultWalMaxPendingBatches = 8;
 
     /// <summary>
     /// Optional per-tree <see cref="IWalStorageProvider"/> resolver. When

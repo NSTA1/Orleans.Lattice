@@ -91,7 +91,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
-| [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 1 | Yes |
+| [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 8 | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 1 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 
@@ -466,9 +466,11 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalMaxPendingBatches`
 
-Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 1, wire-compat). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle. The dominant single-cluster shape uses 1 for strict-ordering semantics; durable-WAL deployments against high-throughput storage tiers can raise the cap to overlap provider round-trips and lift sustained commit throughput.
+Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 8, the measured Azure Tables Standard sweet spot at the c2-iii operating point). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle.
 
-The flush-cap-reached cutover backs off the calling task by awaiting the in-flight head, so the cap also acts as the natural back-pressure ceiling against caller fan-in. Raising the cap above what the storage provider can usefully serve in parallel degrades latency without improving throughput (more concurrent flushes compete for the same provider budget and grow each flush's slow-tail wait); the measured sweet spot for Azure Tables Standard is 8.
+Set to `1` to restore the historical single-in-flight shape (strict ordering against the provider; no pipeline depth). Most workloads on durable backing stores benefit from the default; the strict-ordering shape is useful only when targeting a provider whose ordering guarantees are weaker than per-request linearisability.
+
+The flush-cap-reached cutover backs off the calling task by awaiting the in-flight head, so the cap also acts as the natural back-pressure ceiling against caller fan-in. Raising the cap above what the storage provider can usefully serve in parallel degrades latency without improving throughput - more concurrent flushes compete for the same provider budget and grow each flush's slow-tail wait.
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 

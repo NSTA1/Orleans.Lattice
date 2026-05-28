@@ -32,8 +32,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// by construction, but each flush's <c>AppendBatchAsync</c> call runs
 /// independently so the writer-side burst absorption is no longer capped
 /// at <c>1 / provider_latency</c>. The default
-/// (<see cref="LatticeOptions.DefaultWalMaxPendingBatches"/> = 1) is
-/// bit-identical to the single-in-flight protocol.
+/// (<see cref="LatticeOptions.DefaultWalMaxPendingBatches"/> = 8) is the
+/// measured Azure Tables Standard sweet spot at the c2-iii operating
+/// point; setting it to <c>1</c> restores the historical single-in-flight
+/// protocol bit-for-bit.
 /// On flush failure the affected batch's offsets are rolled back, every
 /// TCS in the failed batch is faulted, and every later in-flight + the
 /// currently-accumulating pending batch is faulted with the same
