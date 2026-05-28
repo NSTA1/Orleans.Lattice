@@ -2871,3 +2871,39 @@ The shard histogram wraps the entire `AppendTxTerminalAsync` body after the `tra
   | SteadyAvg throughput                             | 283 keys/s    | 308 keys/s    | +9%       |
 
   Decisive structural win on the broadcast phase. The ~960 ms saga-side `broadcast.duration` p50 collapsed to ~96 ms - exactly the magnitude the c2-xxii instrument-first attribution predicted (per-shard envelope dominated by WAL; batched dispatch removes N-way serialisation). The modest +9% on bench throughput reflects that the WAL is no longer the saga's bottleneck at this rung; per the c2-xvii attribution table the remaining saga p50 budget is prepare (~531 ms) + checkpoint (~52 ms) + the new ~96 ms broadcast = ~679 ms instead of ~1,476 ms (-54% saga-side wall-clock). Bench throughput at rung 500:10 is offered-load-bound at ~5,000/s and producer-side flow control, not WAL-side, dominates the steady rate - the win surfaces at higher rungs where multiple sagas overlap, and on saga-side latency-sensitive workloads. Routing decision: next attack vector per the c2-xvii budget is prepare-phase WAL append (also a 531 ms saga-side cost), which lends to the same lift pattern (per-key prepare records collected at the saga, written via `AppendManyAsync` per partition). 893 focused tests green (5 NSubstitute Returns + assertion shape updates were required for the new signature; saga-path assertions disambiguated via `Arg.Is<bool>(b => b == X)` because mixed positional bool literals + `Arg.Any<bool>()` was ambiguous). Provenance: commit `fdeca66`, `.ladder-results-c2-xxiii-mode-set-many-atomic-A-baseline.csv`, `.ladder-results-c2-xxiii-mode-set-many-atomic-B-batched-wal.csv`.
+- **DONE - U9p step 8c-c-iv-c2-xxiv Phase D-set-many-substage attribution.** Two new histograms on `LatticeMetrics` (`set_many.duration` wrapping `LatticeGrain.SetManyAsync`'s caller-visible envelope; `set_many.stage.duration` tagged `stage=(gate|route|bucket|fanout|events)` splitting the envelope into its five constituent sub-spans). The `stage` tag fold inside the PhaseA reporter (shipped in c2-xxii) surfaces the per-stage rows in the silo log alongside the envelope. Measured at the c2-iii operating point on two rungs to cover both the non-saga and saga paths.
+
+  **set-many rung `10000:5` (sustained 13,248 keys/s, set-many mode):**
+
+  | Span                                       | p50         | p99         |
+  |--------------------------------------------|-------------|-------------|
+  | `set_many.duration` envelope               | 8.7 ms*     | 4,376 ms    |
+  | `set_many.stage phase=fanout`              | **1,517 ms**| 4,375 ms    |
+  | `set_many.stage phase=gate`                | 7.9 ms      | 30.7 ms     |
+  | `set_many.stage phase=route`               | 0.00 ms     | 0.00 ms     |
+  | `set_many.stage phase=bucket`              | 0.58 ms     | 1.10 ms     |
+  | `set_many.stage phase=events`              | 0.00 ms     | 5.44 ms     |
+  | `shard_root.set_many.local_apply` (per-shard) | 1,346 ms | 4,050 ms    |
+  | `shard_root.set_many.leaf_rpc` (per-leaf RPC) | 662 ms   | 1,167 ms    |
+
+  *the envelope p50 of 8.7 ms is misleading because the bench's `set-many` dispatcher emits short empty/near-empty trailing flushes alongside the substantive 4,096-key batches - the envelope `count` (28) is larger than the fanout `count` (8) because empty batches early-out before reaching the fanout span. The p50 over substantive calls is the fanout p50, ~1,517 ms.
+
+  **set-many-atomic rung `500:10` (saga path; SteadyAvg 623 keys/s, well above the c2-xxiii baseline 308 and at the upper end of the campaign variance band for this rung):**
+
+  | Span                                       | p50         | p99         |
+  |--------------------------------------------|-------------|-------------|
+  | `saga.prepare.duration` (=ExecutePhase)    | 560 ms      | 967 ms      |
+  | `set_many.duration` envelope               | **531 ms**  | 949 ms      |
+  | `set_many.stage phase=fanout`              | **540 ms**  | 954 ms      |
+  | `set_many.stage phase=gate/route/bucket/events` | <0.1 ms each | <6 ms each |
+  | `shard_root.set_many.local_apply`          | 96 ms       | 662 ms      |
+  | `shard_root.set_many.leaf_rpc`             | 78 ms       | 632 ms      |
+  | `saga.broadcast.duration` (post-c2-xxiii)  | 91 ms       | 482 ms      |
+  | `saga.checkpoint.duration`                 | 14 ms       | 72 ms       |
+  | `saga.terminal_decision.duration`          | 21 ms       | 188 ms      |
+
+  **Decisive attribution.** (a) `set_many.duration` p50 = 531 ms ≈ `saga.prepare.duration` p50 = 560 ms - confirms `SetManyAsync` IS the entire saga prepare phase; the c2-xxiii routing decision pointed at the right histogram. (b) `set_many.fanout` p50 = 540 ms ≈ envelope p50 = 531 ms - gate/route/bucket/events are all noise (<0.1 ms each); the entire cost is the cross-shard `Task.WhenAll`. (c) `shard_root.set_many.local_apply` p50 = 96 ms ≪ fanout p50 = 540 ms - per-shard work is only ~18% of fanout. **The remaining ~444 ms (82%) is *between* shards: slowest-shard tail of the WhenAll, per-leaf grain turn-queue wait at the shard boundary, WAL append serialisation across leaves sharing one WAL partition.** (d) `leaf_rpc` p50 (78 ms) ≈ `local_apply` p50 (96 ms) - the leaf RPC IS the local apply; per-leaf scheduling overhead inside the shard is negligible. The cost lives in the leaf's commit path (leaf-side `_pendingTx` insert + WAL append + phase 2). (e) The c2-xxiii pattern (batched-WAL lift via `AppendManyAsync` to collapse N serialised partition transactions into one batched dispatch per partition) is directly applicable to the per-leaf `SetManyAsync` write path - the leaf currently calls `writer.AppendAsync(record)` per entry inside its own `CommitSetManyAsync`, exactly the c2-xxiii saga-terminal shape one layer down the stack.
+
+  **Routing decision for c2-xxv.** Apply the c2-xxiii lift pattern to per-leaf `SetManyAsync` writes: change `IBPlusLeafGrain.SetManyAsync` to optionally build per-entry `WalRecord`s without writing them, and have `ShardRootGrain.SetManyLocalOnlyAsync` collect every leaf's records and dispatch them through `writer.AppendManyAsync` once per shard. The leaf still inserts into `_pendingTx` (correctness) but the WAL writes batch at the shard level - one `AppendBatchAsync` per WAL partition the shard touches rather than N serialised single-entry calls. Expected effect (extrapolating c2-xxiii's WAL p50 191 ms → 0 ms collapse): the ~444 ms "between-shards" gap shrinks toward the per-partition WAL round-trip floor (~22 ms per c2-xxii). Topology safety: same as c2-xxiii (durability still saga-awaited; receiver-side dedup is cross-cluster; the only structural change is *who* dispatches the WAL write). Direct callers of `IBPlusLeafGrain.SetManyAsync` (the saga's CaptureShardAsync path, the retroactive split sweep) keep the default inline shape via a `inlineWalAppend: bool = true` parameter, mirroring the c2-xxiii contract.
+
+  Provenance: commit `c100ef7`, `silo-20260528-105000Z.log` (set-many), `silo-20260528-105751Z.log` (set-many-atomic), `.ladder-results-c2-xxiv-mode-set-many.csv`, `.ladder-results-c2-xxiv-mode-set-many-atomic.csv`. 893 focused tests green; build clean.
