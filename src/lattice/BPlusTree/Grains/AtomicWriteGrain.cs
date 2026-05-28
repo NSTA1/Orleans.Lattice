@@ -1266,6 +1266,19 @@ internal sealed class AtomicWriteGrain(
         StampVectorClockContext();
         StampAtomicBatchContext();
 
+        // Phase-attribution instrumentation (c2-xv routing memo).
+        // The saga's three internal phases - parallel prepare via
+        // ExecutePhaseAsync, terminal-decision write via
+        // RecordTerminalDecisionAsync, per-shard terminal broadcast via
+        // BroadcastTerminalsAsync - are timed independently so the
+        // dashboards can decompose the saga's end-to-end p50 across
+        // the three contributors. The c2-xi memo's residual-cost
+        // attribution was inconclusive at the single-cluster bench
+        // (c2-xv memo, Phase D2-A null result); these histograms
+        // close the attribution gap so the next optimisation step
+        // targets the actual binding constraint.
+        var (sagaTreeTag, sagaWalPartitionsTag) = GetSagaMetricTags();
+
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
             // Crash before execute was persisted - replay Prepare.
@@ -1275,7 +1288,18 @@ internal sealed class AtomicWriteGrain(
 
         if (state.State.Phase == AtomicWritePhase.Execute)
         {
-            await ExecutePhaseAsync();
+            var prepareStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await ExecutePhaseAsync();
+            }
+            finally
+            {
+                LatticeMetrics.SagaPrepareDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(prepareStartTicks).TotalMilliseconds,
+                    sagaTreeTag,
+                    sagaWalPartitionsTag);
+            }
         }
 
         if (state.State.Phase == AtomicWritePhase.Compensate)
@@ -1297,8 +1321,30 @@ internal sealed class AtomicWriteGrain(
             // bucket between this call and the terminal fan-out
             // resolves to the pre-saga value via the registry, so
             // readers never observe a partial rollback.
-            await RecordTerminalDecisionAsync(committed: false);
-            await BroadcastTerminalsAsync(committed: false);
+            var decisionStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await RecordTerminalDecisionAsync(committed: false);
+            }
+            finally
+            {
+                LatticeMetrics.SagaTerminalDecisionDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(decisionStartTicks).TotalMilliseconds,
+                    sagaTreeTag,
+                    sagaWalPartitionsTag);
+            }
+            var broadcastStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await BroadcastTerminalsAsync(committed: false);
+            }
+            finally
+            {
+                LatticeMetrics.SagaBroadcastDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(broadcastStartTicks).TotalMilliseconds,
+                    sagaTreeTag,
+                    sagaWalPartitionsTag);
+            }
             await CompleteSagaAsync(success: false);
             throw new InvalidOperationException(
                 $"Atomic write saga for tree '{state.State.TreeId}' failed and was rolled back: " +
@@ -1324,8 +1370,30 @@ internal sealed class AtomicWriteGrain(
             // (idempotent), re-runs the broadcast (idempotent via
             // the leaf-side recently-terminal dedup), and proceeds
             // to CompleteSagaAsync.
-            await RecordTerminalDecisionAsync(committed: true);
-            await BroadcastTerminalsAsync(committed: true);
+            var decisionStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await RecordTerminalDecisionAsync(committed: true);
+            }
+            finally
+            {
+                LatticeMetrics.SagaTerminalDecisionDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(decisionStartTicks).TotalMilliseconds,
+                    sagaTreeTag,
+                    sagaWalPartitionsTag);
+            }
+            var broadcastStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await BroadcastTerminalsAsync(committed: true);
+            }
+            finally
+            {
+                LatticeMetrics.SagaBroadcastDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(broadcastStartTicks).TotalMilliseconds,
+                    sagaTreeTag,
+                    sagaWalPartitionsTag);
+            }
             await CompleteSagaAsync(success: true);
         }
     }
@@ -1406,12 +1474,11 @@ internal sealed class AtomicWriteGrain(
         // fan-out size once per execute-phase entry (regardless of
         // whether the activation later compensates or completes),
         // tagged by tree only.
-        var sagaTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId);
-        var resolvedOptions = optionsMonitor.Get(state.State.TreeId);
-        var walPartitions = resolvedOptions.WalPartitions;
-        var sagaWalPartitionsTag = new KeyValuePair<string, object?>(
-            LatticeMetrics.TagWalPartitions,
-            walPartitions);
+        //
+        // Tags are sourced from the per-activation cache populated by
+        // RunSagaAsync so we do not re-allocate the KeyValuePair pair
+        // (and re-box the WalPartitions int) on every saga.
+        var (sagaTreeTag, sagaWalPartitionsTag) = GetSagaMetricTags();
         LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag);
 
         // Phase D1b (c2-ix memo): collapse the D1 per-key
@@ -1842,6 +1909,46 @@ internal sealed class AtomicWriteGrain(
     }
 
     private readonly PublishEventsGate _eventsGate = new();
+
+    /// <summary>
+    /// Cached per-activation metric tags. The two histograms
+    /// (<see cref="LatticeMetrics.SagaFanoutSize"/>,
+    /// <see cref="LatticeMetrics.SagaPerKeyDuration"/>,
+    /// <see cref="LatticeMetrics.SagaPrepareDuration"/>,
+    /// <see cref="LatticeMetrics.SagaTerminalDecisionDuration"/>,
+    /// <see cref="LatticeMetrics.SagaBroadcastDuration"/>) all share
+    /// the same <c>(tree, walPartitions)</c> tag pair. The pair is
+    /// constructed once per activation (per-saga lifetime, since
+    /// AtomicWriteGrain uses per-operation grain keys) and reused
+    /// across every <c>Record</c> call. This avoids allocating two
+    /// fresh <see cref="KeyValuePair{TKey, TValue}"/> boxes (the
+    /// int <c>walPartitions</c> is boxed into <c>object?</c>) per
+    /// histogram observation. The cache also closes the
+    /// pre-instrumentation duplication where both
+    /// <see cref="RunSagaAsync"/> and <see cref="ExecutePhaseAsync"/>
+    /// independently rebuilt the same pair per saga.
+    /// </summary>
+    private (KeyValuePair<string, object?> Tree, KeyValuePair<string, object?> WalPartitions)? _sagaMetricTags;
+
+    /// <summary>
+    /// Returns the cached per-saga metric tag pair, building it on
+    /// first access. See <see cref="_sagaMetricTags"/> for the
+    /// allocation-reduction rationale.
+    /// </summary>
+    private (KeyValuePair<string, object?> Tree, KeyValuePair<string, object?> WalPartitions) GetSagaMetricTags()
+    {
+        if (_sagaMetricTags is { } cached)
+        {
+            return cached;
+        }
+        var built = (
+            Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+            WalPartitions: new KeyValuePair<string, object?>(
+                LatticeMetrics.TagWalPartitions,
+                optionsMonitor.Get(state.State.TreeId).WalPartitions));
+        _sagaMetricTags = built;
+        return built;
+    }
 
     /// <summary>
     /// Re-throws a remembered failure when the caller re-invokes a terminal

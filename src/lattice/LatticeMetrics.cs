@@ -776,6 +776,69 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.saga.wait.serial_gap", unit: "ms",
             description: "Wall-clock gap between consecutive per-key awaits inside an atomic-write saga.");
 
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside the saga's prepare
+    /// phase: from the start of <c>ExecutePhaseAsync</c>'s parallel
+    /// batched <c>lattice.SetManyAsync(slice)</c> dispatch to the
+    /// moment every per-shard fan-out completes (post-D1c shape -
+    /// a single parallel call rather than a per-key loop). Excludes
+    /// the saga checkpoint persist that follows the dispatch.
+    /// Tagged with <see cref="TagTree"/> and the per-tree WAL
+    /// partition count tag.
+    /// <para>
+    /// Sums with <see cref="SagaTerminalDecisionDuration"/> and
+    /// <see cref="SagaBroadcastDuration"/> to approximate the saga's
+    /// end-to-end <c>SetManyAtomicAsync</c> p50 (the residue is
+    /// saga-checkpoint persist + grain-RPC framing on the public
+    /// surface, both negligible at the c2-iii operating point).
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaPrepareDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.prepare.duration", unit: "ms",
+            description: "Wall-clock ms inside the saga's parallel-prepare phase (lattice.SetManyAsync(slice) dispatch through per-shard fan-out completion).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside the saga's terminal
+    /// decision write: the per-tree
+    /// <see cref="ITxRegistryGrain.MarkCommittedAsync"/> /
+    /// <see cref="ITxRegistryGrain.MarkAbortedAsync"/> call that
+    /// records the single tree-wide linearization point before the
+    /// per-leaf terminal fan-out. Tagged with <see cref="TagTree"/>
+    /// and the per-tree WAL partition count tag.
+    /// <para>
+    /// Per the c2-xv routing memo this is the lowest-prior candidate
+    /// for the saga's binding constraint (one grain RPC per saga) but
+    /// is instrumented so the attribution is conclusive rather than
+    /// inferred.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaTerminalDecisionDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.terminal_decision.duration", unit: "ms",
+            description: "Wall-clock ms inside the per-tree TxRegistry MarkCommittedAsync / MarkAbortedAsync call.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent inside the saga's broadcast
+    /// terminal phase: from the start of <c>BroadcastTerminalsAsync</c>'s
+    /// per-shard fan-out (one <c>IShardRootGrain.AppendTxTerminalAsync</c>
+    /// per touched shard, dispatched via <c>Task.WhenAll</c>) to the
+    /// moment every per-shard terminal has been appended and the
+    /// leaf-side pending-tx buckets drained into the visible
+    /// projection. Tagged with <see cref="TagTree"/> and the per-tree
+    /// WAL partition count tag.
+    /// <para>
+    /// Per the c2-xv routing memo this is the highest-prior candidate
+    /// for the saga's binding constraint. Each per-shard
+    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> appends one
+    /// WAL record and drains the leaf-side pending-tx bucket; if
+    /// per-shard turn-token contention or per-shard WAL-append
+    /// serialisation dominates, the histogram's p50 is the per-saga
+    /// floor regardless of how parallel the prepare phase is.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SagaBroadcastDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.saga.broadcast.duration", unit: "ms",
+            description: "Wall-clock ms inside BroadcastTerminalsAsync's per-shard AppendTxTerminalAsync fan-out.");
+
     // --- Shard-root SetManyAsync split instruments ----------------
 
     /// <summary>

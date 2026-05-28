@@ -78,6 +78,13 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.saga.fanout.size",
         "orleans.lattice.saga.perkey.duration",
         "orleans.lattice.saga.wait.serial_gap",
+        // c2-xv routing memo: per-phase attribution inside the saga.
+        // Sums to approximately the end-to-end SetManyAtomicAsync p50
+        // (residue is the saga-checkpoint persists and grain-RPC
+        // framing on the public surface).
+        "orleans.lattice.saga.prepare.duration",
+        "orleans.lattice.saga.terminal_decision.duration",
+        "orleans.lattice.saga.broadcast.duration",
         // U9p step 2: ShardRootGrain.SetManyAsync split into local-apply
         // (per-leaf fan-out + WAL append + phase 2) and shadow-forward
         // (online-resize tail wait). Lattice-internal histograms on the
