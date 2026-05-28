@@ -1014,6 +1014,42 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.leaf_rpc.duration", unit: "ms",
             description: "Wall-clock ms per per-leaf IBPlusLeafGrain.SetManyAsync RPC dispatched from ShardRootGrain.SetManyLocalOnlyAsync.");
 
+    /// <summary>
+    /// Histogram of wall-clock ms inside one call to
+    /// <c>LatticeGrain.SetManyAsync</c>, the user-facing
+    /// <see cref="ILattice.SetManyAsync"/> entry point. Tagged with
+    /// <see cref="TagTree"/>. End-to-end caller-visible latency of one
+    /// batched write call (includes routing, bucketing, per-shard
+    /// parallel fan-out, and event publish). Pair with
+    /// <see cref="SetManyStageDuration"/> to attribute the per-call
+    /// envelope to one of five sub-spans.
+    /// </summary>
+    public static readonly Histogram<double> SetManyDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.set_many.duration", unit: "ms",
+            description: "Wall-clock ms inside one LatticeGrain.SetManyAsync call (caller-visible envelope).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one sub-stage of
+    /// <c>LatticeGrain.SetManyAsync</c>. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagStage"/> (<c>gate</c> | <c>route</c> |
+    /// <c>bucket</c> | <c>fanout</c> | <c>events</c>).
+    /// <para>
+    /// Mirrors the c2-xxii saga-broadcast sub-stage instrumentation
+    /// (<see cref="SagaBroadcastShardStageDuration"/>). Splits the
+    /// caller-visible envelope into its constituent spans so the
+    /// dominant cost on the set-many path can be identified before any
+    /// further structural attempt. Together with the existing
+    /// <see cref="ShardRootSetManyLocalApplyDuration"/> /
+    /// <see cref="ShardRootSetManyShadowForwardDuration"/> /
+    /// <see cref="ShardRootSetManyLeafRpcDuration"/> instruments,
+    /// the full envelope from <c>ILattice.SetManyAsync</c> entry down
+    /// to the leaf RPC is attributed.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> SetManyStageDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.set_many.stage.duration", unit: "ms",
+            description: "Wall-clock ms inside one sub-stage (gate|route|bucket|fanout|events) of LatticeGrain.SetManyAsync.");
+
     // --- Retroactive shard-split sweep instruments ----------------
 
     /// <summary>
@@ -1184,4 +1220,16 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagStage"/> = <c>fanout</c> (step 4 per-leaf ApplyTxTerminalAsync dispatch + shadow-forward).</summary>
     public static readonly KeyValuePair<string, object?> StageFanOutTag = new(TagStage, "fanout");
+
+    /// <summary><see cref="TagStage"/> = <c>gate</c> (LatticeGrain.SetManyAsync pre-flight: compaction reminder + monitor + events-gate probe).</summary>
+    public static readonly KeyValuePair<string, object?> StageGateTag = new(TagStage, "gate");
+
+    /// <summary><see cref="TagStage"/> = <c>route</c> (LatticeGrain.SetManyAsync routing fetch via GetRoutingAsync).</summary>
+    public static readonly KeyValuePair<string, object?> StageRouteTag = new(TagStage, "route");
+
+    /// <summary><see cref="TagStage"/> = <c>bucket</c> (LatticeGrain.SetManyAsync per-key shard bucketing loop).</summary>
+    public static readonly KeyValuePair<string, object?> StageBucketTag = new(TagStage, "bucket");
+
+    /// <summary><see cref="TagStage"/> = <c>events</c> (LatticeGrain.SetManyAsync trailing per-entry PublishEventAsync foreach).</summary>
+    public static readonly KeyValuePair<string, object?> StageEventsTag = new(TagStage, "events");
 }

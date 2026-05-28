@@ -119,6 +119,14 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.shard_root.set_many.local_apply.duration",
         "orleans.lattice.shard_root.set_many.shadow_forward.duration",
         "orleans.lattice.shard_root.set_many.leaf_rpc.duration",
+        // c2-xxiv set-many sub-stage attribution. SetManyDuration is
+        // the caller-visible envelope at the LatticeGrain entry point;
+        // SetManyStageDuration tagged stage=(gate|route|bucket|fanout|events)
+        // splits the envelope into its five constituent spans. Together
+        // with the shard-side instruments above the full envelope from
+        // ILattice.SetManyAsync down to the per-leaf RPC is attributed.
+        "orleans.lattice.set_many.duration",
+        "orleans.lattice.set_many.stage.duration",
         // U9p step 6: cross-grain dispatch view from `WalCommitLogWriter`
         // around `await walGrain.AppendAsync(...)`. The leaf's
         // `leaf.commit.duration phase=wal` measures the inside of

@@ -555,29 +555,83 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
-        await EnsureCompactionReminderAsync();
-        await EnsureMonitorAsync();
-        cancellationToken.ThrowIfCancellationRequested();
-        await RetryOnStaleRoutingAsync(
-            () => SetManyAsyncCore(entries),
-            cancellationToken);
 
-        // Publish one Set event per entry. Emitted only after all shard writes
-        // have committed so subscribers never observe a Set for a key that
-        // failed to persist (we'd have thrown above). Skipped entirely when
-        // publishing is disabled to avoid walking the entry list.
-        if (entries.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+        // c2-xxiv envelope + sub-stage attribution (see scaling.md
+        // c2-xxiv memo): SetManyDuration tracks the caller-visible
+        // wall-clock; SetManyStageDuration tagged with stage=
+        // (gate|route|bucket|fanout|events) splits the envelope into
+        // its constituent spans so the dominant cost on the set-many
+        // path can be identified before any structural attempt. The
+        // existing shard-side instruments (ShardRootSetManyLocalApply /
+        // ShardRootSetManyShadowForward / ShardRootSetManyLeafRpc)
+        // continue to attribute the per-shard half; this fills the
+        // missing LatticeGrain-side half of the envelope.
+        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var setManyStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            foreach (var entry in entries)
+            var gateStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
             {
-                await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+                await EnsureCompactionReminderAsync();
+                await EnsureMonitorAsync();
             }
+            finally
+            {
+                LatticeMetrics.SetManyStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageGateTag);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            await RetryOnStaleRoutingAsync(
+                () => SetManyAsyncCore(entries, stageTagTree),
+                cancellationToken);
+
+            // Publish one Set event per entry. Emitted only after all shard writes
+            // have committed so subscribers never observe a Set for a key that
+            // failed to persist (we'd have thrown above). Skipped entirely when
+            // publishing is disabled to avoid walking the entry list.
+            var eventsStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                if (entries.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+                {
+                    foreach (var entry in entries)
+                    {
+                        await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+                    }
+                }
+            }
+            finally
+            {
+                LatticeMetrics.SetManyStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(eventsStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageEventsTag);
+            }
+        }
+        finally
+        {
+            LatticeMetrics.SetManyDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(setManyStartTicks).TotalMilliseconds,
+                stageTagTree);
         }
     }
 
-    private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries)
+    private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries, KeyValuePair<string, object?> stageTagTree)
     {
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var routeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        string physicalTreeId;
+        ShardMap shardMap;
+        try
+        {
+            (physicalTreeId, shardMap) = await GetRoutingAsync();
+        }
+        finally
+        {
+            LatticeMetrics.SetManyStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(routeStartTicks).TotalMilliseconds,
+                stageTagTree, LatticeMetrics.StageRouteTag);
+        }
 
         // Group entries by shard. Pre-size each bucket to the expected
         // shard-fair fraction of the batch, capped at 256 to bound
@@ -586,30 +640,51 @@ internal sealed partial class LatticeGrain(
         // AddWithResize cascade that previously dominated bulk-write
         // allocations.
 
-        var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
-        var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
-        var bucketCapacity = Math.Min(expectedPerShard, 256);
-        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
-        foreach (var entry in entries)
+        var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        Dictionary<int, List<KeyValuePair<string, byte[]>>> shardBuckets;
+        try
         {
-            var idx = shardMap.Resolve(entry.Key);
-            if (!shardBuckets.TryGetValue(idx, out var bucket))
+            var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
+            var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
+            var bucketCapacity = Math.Min(expectedPerShard, 256);
+            shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
+            foreach (var entry in entries)
             {
-                bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
-                shardBuckets[idx] = bucket;
+                var idx = shardMap.Resolve(entry.Key);
+                if (!shardBuckets.TryGetValue(idx, out var bucket))
+                {
+                    bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
+                    shardBuckets[idx] = bucket;
+                }
+                bucket.Add(entry);
             }
-            bucket.Add(entry);
+        }
+        finally
+        {
+            LatticeMetrics.SetManyStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(bucketStartTicks).TotalMilliseconds,
+                stageTagTree, LatticeMetrics.StageBucketTag);
         }
 
         // Fan out writes in parallel per shard.
-        var tasks = new List<Task>(shardBuckets.Count);
-        foreach (var (shardIdx, bucket) in shardBuckets)
+        var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-            tasks.Add(WriteToShardAsync(shard, bucket));
-        }
+            var tasks = new List<Task>(shardBuckets.Count);
+            foreach (var (shardIdx, bucket) in shardBuckets)
+            {
+                var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+                tasks.Add(WriteToShardAsync(shard, bucket));
+            }
 
-        await Task.WhenAll(tasks);
+            await Task.WhenAll(tasks);
+        }
+        finally
+        {
+            LatticeMetrics.SetManyStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
+                stageTagTree, LatticeMetrics.StageFanOutTag);
+        }
 
         static async Task WriteToShardAsync(
             IShardRootGrain shard,
