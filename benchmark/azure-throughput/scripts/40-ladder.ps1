@@ -129,6 +129,25 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
         }
     }
 
+    # Silo-side hard-fail gate. The silo emits a loud, greppable line of
+    # the shape `[silo] ERROR <name> ABORTED ...` whenever a startup-
+    # critical hook fails (reshard, warm-up). The silo's own throw exits
+    # the process, but ACI's default per-container exit-code propagation
+    # is not enough for the harness to distinguish "silo healthy, just
+    # got 0 offered load" from "silo failed to start"; the steady-state
+    # parser below would happily report SteadyAvg=0 as a real
+    # measurement. Scan for any `[silo] ERROR` line and abort the entire
+    # ladder so an Azure-side regression cannot silently land a 0 keys/s
+    # cell in the results CSV.
+    $siloErrors = ($siloLog -split "`n") |
+        Select-String -Pattern '^\[silo\] ERROR\b' |
+        ForEach-Object { $_.Line.Trim() }
+    if ($siloErrors -and $siloErrors.Count -gt 0) {
+        $logName = if ($localLog) { $localLog.Name } else { '(streamed container logs)' }
+        $errSummary = ($siloErrors | Select-Object -First 5) -join "`n  "
+        throw "[ladder] silo reported $($siloErrors.Count) ERROR line(s) for rung '$rung'; aborting ladder run. Log: $logName. First $([math]::Min(5,$siloErrors.Count)):`n  $errSummary"
+    }
+
     # Steady-state: avg of per-second lines from t=10s onward (skip producer warm-up).
     $perSec = ($siloLog -split "`n") |
         Select-String -Pattern 'Entries written per second=\s*([\d,]+)' |

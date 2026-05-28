@@ -225,7 +225,19 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
     return;
 }
 
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount}");
+// c2-xxix: a misleading prior header reported `preseedKeyCount=` as the
+// raw env-var value even when the gate inside the IngestService skipped
+// the seed (e.g. set-point inherits BENCH_VEHICLE_COUNT as
+// preseedKeyCount but the gate only fires on read modes - write modes
+// deliberately do not pre-seed because seeding the target keys would
+// convert the bench from "write keys" to "update existing keys"). Report
+// both the configured value and the effective fire-or-not state so a
+// glance at the silo log line answers "did the seed actually run?"
+// unambiguously.
+var preseedWillFire = preseedKeyCount > 0
+    && (workloadMode == BenchWorkloadMode.GetPoint
+        || workloadMode == BenchWorkloadMode.GetMany);
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -541,8 +553,12 @@ internal sealed class TcpIngestService(
             // shard count (64) instead of the configured override - the
             // bench then measures the wrong configuration. Retry the
             // submit a few times on rejection and emit a loud, greppable
-            // ERROR line if every attempt fails.
-            const int MaxReshardAttempts = 4;
+            // ERROR line if every attempt fails. The bench then throws so
+            // the silo container exits non-zero and the harness marks the
+            // run as misconfigured rather than silently measuring the wrong
+            // shard count.
+            const int MaxReshardAttempts = 12;
+            const int MaxReshardBackoffMs = 6000;
             var attempt = 0;
             var reshardSubmitted = false;
             Exception? lastReshardException = null;
@@ -559,8 +575,10 @@ internal sealed class TcpIngestService(
                 {
                     // Grow-only violation (target <= current shard count on a
                     // populated tree) or above the virtual-shard-space ceiling.
-                    // Not retriable - log and continue with the existing pinned
-                    // shard count.
+                    // Not retriable - and not silently survivable either:
+                    // the bench would otherwise measure the previously-pinned
+                    // shard count, which is exactly the misconfiguration the
+                    // operator is trying to avoid by requesting the override.
                     Console.WriteLine($"[silo] reshard treeId={settings.TreeId} rejected: {ex.Message}");
                     lastReshardException = ex;
                     break;
@@ -569,7 +587,17 @@ internal sealed class TcpIngestService(
                 catch (Exception ex) when (IsOrleansMessageRejection(ex))
                 {
                     lastReshardException = ex;
-                    var backoffMs = 100 * (1 << (attempt - 1));
+                    // Exponential backoff capped at MaxReshardBackoffMs:
+                    // 100, 200, 400, 800, 1600, 3200, 6000, 6000, 6000,
+                    // 6000, 6000, 6000 ms. Cumulative wait across 12
+                    // attempts is ~48 s - well within the harness deploy
+                    // timeout and long enough to absorb the cold-start
+                    // Orleans client directory convergence observed in
+                    // production runs (the prior 8-attempt / 25 s budget
+                    // was empirically too tight: the 25000:5 c2-xxix
+                    // probe saw 7+ consecutive rejections across two
+                    // restarts before the directory cleared).
+                    var backoffMs = Math.Min(100 * (1 << (attempt - 1)), MaxReshardBackoffMs);
                     Console.WriteLine($"[silo] reshard treeId={settings.TreeId} attempt={attempt} REJECTED ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
                     try
                     {
@@ -587,13 +615,20 @@ internal sealed class TcpIngestService(
 
             if (!reshardSubmitted)
             {
-                // Loud, greppable failure line. The harness must see this
-                // and treat the run as misconfigured rather than silently
-                // measuring the default shard count.
+                // Loud, greppable failure line - and a hard throw so the
+                // silo container exits non-zero rather than silently
+                // measuring the wrong shard count. Previously this only
+                // warned and continued, but the operator's
+                // ShardCountOverride is the entire reason the bench needs
+                // a reshard in the first place; silently falling back to
+                // the registry-pinned default invalidates the entire run
+                // and pollutes any throughput cell that depended on it.
                 var detail = lastReshardException is null
                     ? "no exception captured"
                     : $"{lastReshardException.GetType().Name}: {Truncate(lastReshardException.Message, 240)}";
-                Console.WriteLine($"[silo] ERROR reshard treeId={settings.TreeId} ABORTED after {attempt} attempt(s): {detail}. Tree remains at its previously-pinned shard count (likely the library default, NOT shardCount={settings.ShardCountOverride}).");
+                var msg = $"[silo] ERROR reshard treeId={settings.TreeId} ABORTED after {attempt} attempt(s): {detail}. Tree remains at its previously-pinned shard count (likely the library default, NOT shardCount={settings.ShardCountOverride}).";
+                Console.WriteLine(msg);
+                throw new InvalidOperationException(msg, lastReshardException);
             }
             else
             {
@@ -653,8 +688,8 @@ internal sealed class TcpIngestService(
         // at 4 s totals ~25 s worst-case - comfortably under the rung
         // duration and matches the empirically-observed time for a
         // fresh silo's local client directory to converge.
-        const int MaxWarmUpAttempts = 8;
-        const int MaxWarmUpBackoffMs = 4000;
+        const int MaxWarmUpAttempts = 12;
+        const int MaxWarmUpBackoffMs = 6000;
         var warmUpAttempt = 0;
         var warmUpCompleted = false;
         Exception? lastWarmUpException = null;
@@ -694,10 +729,22 @@ internal sealed class TcpIngestService(
         }
         else
         {
+            // Loud, greppable failure line - and a hard throw so the silo
+            // container exits non-zero rather than measuring a cold tree.
+            // Previously this only warned and continued ("degraded mode -
+            // first writes may stall on cold-shard activation"), but a
+            // cold start materially distorts the first ~30 s of per-call
+            // latency by paying the placement-directory + grain-storage
+            // first-touch storm against the measurement window. The
+            // throughput.md cells are quoted as steady-state numbers; a
+            // silently-degraded warm-up invalidates them just as surely
+            // as a silently-degraded reshard does.
             var detail = lastWarmUpException is null
                 ? "no exception captured"
                 : $"{lastWarmUpException.GetType().Name}: {Truncate(lastWarmUpException.Message, 240)}";
-            Console.WriteLine($"[silo] ERROR warmup treeId={settings.TreeId} ABORTED after {warmUpAttempt} attempt(s) elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}: {detail}. Continuing in degraded mode - first writes may stall on cold-shard activation.");
+            var msg = $"[silo] ERROR warmup treeId={settings.TreeId} ABORTED after {warmUpAttempt} attempt(s) elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}: {detail}.";
+            Console.WriteLine(msg);
+            throw new InvalidOperationException(msg, lastWarmUpException);
         }
 
         // Throughput-capture (step 5): read-mode pre-seed. When the silo
@@ -713,8 +760,19 @@ internal sealed class TcpIngestService(
         // against per-key write latency in the SetMany mode. Skipped
         // when PreseedKeyCount == 0 or the workload mode does not need
         // pre-seeded reads.
-        if ((settings.WorkloadMode == BenchWorkloadMode.GetPoint || settings.WorkloadMode == BenchWorkloadMode.GetMany)
-            && settings.PreseedKeyCount > 0)
+        //
+        // Write modes (SetPoint, SetMany, SetManyAtomic) deliberately do
+        // NOT pre-seed: seeding the very keys the writes target would
+        // convert the benchmark from "write keys to a tree" into "update
+        // existing keys", which is a different latency profile. Tree
+        // warm-up (proactive shard-root activation, library-level grain
+        // cache population) happens for every mode via the
+        // `lattice.WarmUpAsync` call earlier in startup; only the
+        // tree-content pre-seed is gated on the read modes.
+        var preseedEnabled = settings.PreseedKeyCount > 0
+            && (settings.WorkloadMode == BenchWorkloadMode.GetPoint
+                || settings.WorkloadMode == BenchWorkloadMode.GetMany);
+        if (preseedEnabled)
         {
             var preseedSw = System.Diagnostics.Stopwatch.StartNew();
             const int PreseedPayloadBytes = 245;
