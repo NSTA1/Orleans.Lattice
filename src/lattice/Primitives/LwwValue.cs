@@ -7,6 +7,7 @@ namespace Orleans.Lattice.Primitives;
 /// This is the simplest monotonic conflict-resolution strategy for individual keys.
 /// </summary>
 [GenerateSerializer]
+[Immutable]
 [Alias(TypeAliases.LwwValue)]
 internal readonly record struct LwwValue<T>
 {

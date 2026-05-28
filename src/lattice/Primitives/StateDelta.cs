@@ -8,6 +8,7 @@ namespace Orleans.Lattice.Primitives;
 /// strictly newer than the corresponding entry in the requester's version vector.
 /// </summary>
 [GenerateSerializer]
+[Immutable]
 [Alias(TypeAliases.StateDelta)]
 internal sealed record StateDelta
 {

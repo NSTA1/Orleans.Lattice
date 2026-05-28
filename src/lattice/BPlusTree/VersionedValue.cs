@@ -8,6 +8,7 @@ namespace Orleans.Lattice;
 /// Used as the return type of <see cref="ILattice.GetWithVersionAsync"/>.
 /// </summary>
 [GenerateSerializer]
+[Immutable]
 [Alias(TypeAliases.VersionedValue)]
 [EditorBrowsable(EditorBrowsableState.Never)]
 public sealed record VersionedValue
