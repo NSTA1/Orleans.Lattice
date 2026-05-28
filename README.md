@@ -50,6 +50,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Fault-tolerant** | Validated end-to-end against parametrised fault injection. | [Chaos Tests](docs/lattice/chaos-tests.md) |
 | **Metrics** | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter, ready for OpenTelemetry subscription. | [Metrics](docs/lattice/metrics.md) |
 | **Online reshard** | Grow-only online migration of the physical shard count. | [Online Reshard](docs/lattice/online-reshard.md) |
+| **Performance** | Approximate single-silo throughput and per-call latency for point reads, point writes, multi-key batches, and atomic sagas, measured against real Azure Tables. | [Performance: single-silo guide](docs/lattice/performance-single-silo.md) |
 | **Projection rebuild** | Cross-silo divergence detection with policy-driven recovery. | [Projection Rebuild](docs/lattice/projection-rebuild.md) |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) |
 | **Retry policy** | Opt-in retry surface for transient storage faults with caller-supplied idempotency keys. Library default is zero ambient cost. | [Retry Policy](docs/lattice/retry-policy.md) |
