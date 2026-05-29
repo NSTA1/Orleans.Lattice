@@ -24,6 +24,7 @@ internal sealed class SnapshotLeafGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILogger<SnapshotLeafGrain> logger) : Grain, ISnapshotLeafGrain
 {
     /// <summary>

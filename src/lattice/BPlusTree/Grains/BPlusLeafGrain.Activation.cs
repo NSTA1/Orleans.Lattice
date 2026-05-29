@@ -259,6 +259,12 @@ internal sealed partial class BPlusLeafGrain
         var projection = (ILeafProjection)this;
 
         var anyAdvanced = false;
+        // Pass 1: per-partition tail replay, deferring every saga
+        // terminal (TxCommit / TxAbort) into a shared list so the
+        // _pendingTx bucket is fully populated across every partition
+        // before any terminal drains it. See the DeferredTerminal
+        // docstring for the saga atomicity rationale.
+        var deferredTerminals = new List<DeferredTerminal>();
         for (var partition = 0; partition < partitionCount; partition++)
         {
             // Per-partition checkpoint: a leaf whose persisted state
@@ -293,12 +299,6 @@ internal sealed partial class BPlusLeafGrain
                     case FallOffLogDecision.TailReplay:
                         break;
                     case FallOffLogDecision.SnapshotPending:
-                        // SnapshotPending is a non-fatal advisory. The
-                        // activation hook drives the proactive snapshot
-                        // capture after every partition's tail replay
-                        // completes. Latched per-leaf (not per-partition)
-                        // because the snapshot capture is whole-leaf and
-                        // benefits any partition that fired the advisory.
                         _activationSnapshotPending = true;
                         break;
                     case FallOffLogDecision.SnapshotThenWal:
@@ -313,13 +313,89 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var advanced = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, cancellationToken);
+            var advanced = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, cancellationToken);
             if (advanced)
                 anyAdvanced = true;
         }
 
+        // Pass 2: drain every deferred saga terminal in arrival order
+        // across partitions. By this point pass 1 has fully populated
+        // every saga's pending bucket in _pendingTx, so each terminal's
+        // ApplyTxCommit / ApplyTxAbort observes the complete prepared-
+        // mutation set. Ordering across partitions does not matter
+        // because each terminal's id keys directly into the pending-
+        // bucket map; within a single partition's deferred list the
+        // arrival order is preserved by the append order. The
+        // per-partition projection-checkpoint advance fires AFTER each
+        // terminal's apply so the persisted checkpoint never overruns
+        // an unresolved terminal, preserving the saga reader-isolation
+        // invariant under crash recovery.
+        foreach (var terminal in deferredTerminals)
+        {
+            using (LatticeApplyOffsetContext.BeginScope(terminal.Partition, terminal.Offset))
+            {
+                projection.Apply(terminal.Mutation);
+                // Re-advance the per-partition checkpoint past the
+                // terminal offset now that the terminal has applied
+                // and its pending-bucket clamp has lifted. Guard
+                // against a monotonic-decrease throw when pass 1
+                // already advanced the partition's checkpoint past
+                // this terminal's offset (e.g. a later non-terminal
+                // entry in the same partition raised maxApplied in
+                // pass 1 or another deferred terminal in this loop
+                // already advanced past this offset).
+                var current = GetCurrentCheckpointForPartition(terminal.Partition);
+                if (terminal.Offset > current)
+                {
+                    await projection.SetCheckpointOffsetAsync(terminal.Offset, cancellationToken);
+                    anyAdvanced = true;
+                }
+            }
+        }
+
         return anyAdvanced;
     }
+
+    /// <summary>
+    /// <summary>
+    /// Mutation deferred during pass 1 of the activation-time replay
+    /// to be applied in pass 2 once every partition's per-key Set /
+    /// Delete entries have been absorbed into the leaf's Cache and
+    /// every prepare into <c>_pendingTx</c>. Covers the two mutation
+    /// shapes whose apply semantics depend on the global per-shard
+    /// state being fully reconstructed:
+    /// <list type="bullet">
+    ///   <item>
+    ///     <see cref="MutationKind.TxCommit"/> /
+    ///     <see cref="MutationKind.TxAbort"/> - the saga's per-key
+    ///     prepares fan out across multiple WAL partitions while the
+    ///     terminal lands in a single (shard-routed) partition. Per-
+    ///     partition independent replay would observe the terminal
+    ///     before some of its prepares had been absorbed into
+    ///     <c>_pendingTx</c>, so the terminal's <c>ApplyTxCommit</c>
+    ///     would drain an incomplete bucket and the late-arriving
+    ///     prepares would be added to <c>_pendingTx</c> after the
+    ///     <c>_recentlyTerminal</c> dedup had already accepted the
+    ///     txid - leaving the late prepares stranded and silently
+    ///     invisible.
+    ///   </item>
+    ///   <item>
+    ///     <see cref="MutationKind.DeleteRange"/> - the tombstone
+    ///     mutation iterates the leaf's Cache at apply time to
+    ///     tombstone every in-range key. A range tombstone in
+    ///     partition <c>P_t</c> whose target Set entries live in
+    ///     partition <c>P_s</c> would see an empty Cache during
+    ///     pass 1 (when partition <c>P_t</c> happens to replay
+    ///     before partition <c>P_s</c>), tombstone nothing, and let
+    ///     the Sets in <c>P_s</c> become visible. Deferring to pass 2
+    ///     restores the tombstone-after-its-targets ordering invariant.
+    ///   </item>
+    /// </list>
+    /// </summary>
+    private readonly record struct DeferredTerminal(
+        int Partition,
+        long Offset,
+        LatticeMutation Mutation);
 
     /// <summary>
     /// Per-partition replay inner loop extracted from
@@ -331,12 +407,28 @@ internal sealed partial class BPlusLeafGrain
     /// for every Apply, then advances the per-partition projection
     /// checkpoint via the projection seam. Returns <c>true</c> when
     /// the per-partition checkpoint actually advanced.
+    /// <para>
+    /// <b>Pass 1 of two-pass replay.</b> Saga terminals
+    /// (<see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>)
+    /// are appended to <paramref name="deferredTerminals"/> instead of
+    /// being applied inline - see the <see cref="DeferredTerminal"/>
+    /// docstring for the saga atomicity rationale. Per-partition
+    /// checkpoint advance is also deferred to pass 2: a partition that
+    /// emitted a terminal would otherwise advance its checkpoint past
+    /// the still-pending prepare offsets in the OTHER partitions'
+    /// pending-tx clamp range (the per-partition clamp is scoped to
+    /// the partition the prepare landed in, so the terminal's
+    /// partition can advance unclamped) - but the terminal itself
+    /// hasn't been applied yet, so the visible-state contract requires
+    /// us to wait.
+    /// </para>
     /// </summary>
     private async Task<bool> ReplayPartitionAsync(
         string treeId,
         int partition,
         long checkpoint,
         ILeafProjection projection,
+        List<DeferredTerminal> deferredTerminals,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
@@ -372,12 +464,35 @@ internal sealed partial class BPlusLeafGrain
                     state.State.LowKeyInclusive,
                     state.State.HighKeyExclusive))
                 {
-#if LATTICE_DIAG
-                    DiagSink.Write($"[DIAG replay-apply] gid={context.GrainId} partition={partition} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' shardIndex={entry.Mutation.ShardIndex}");
-#endif
-                    using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
+                    // Defer saga terminals AND DeleteRange to pass 2:
+                    // - Terminals: see the DeferredTerminal docstring
+                    //   for the multi-partition saga atomicity rationale.
+                    // - DeleteRange: ApplyDeleteRange iterates the leaf's
+                    //   Cache at the moment of apply to tombstone every
+                    //   in-range key, but under multi-partition pass 1
+                    //   the Cache is still being rebuilt across partitions.
+                    //   A DeleteRange that lands in partition 2 but whose
+                    //   target Set entries land in partition 5 would
+                    //   tombstone nothing in pass 1 (Cache empty for that
+                    //   key range) and then the Sets in partition 5 would
+                    //   replay AFTER the tombstone, leaving the keys
+                    //   visible. Deferring DeleteRange to pass 2 (after
+                    //   every Set has populated the Cache) restores the
+                    //   tombstone-after-its-targets ordering invariant.
+                    if (entry.Mutation.Kind is MutationKind.TxCommit or MutationKind.TxAbort
+                        or MutationKind.DeleteRange)
                     {
-                        projection.Apply(entry.Mutation);
+                        deferredTerminals.Add(new DeferredTerminal(partition, entry.Offset, entry.Mutation));
+                    }
+                    else
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG replay-apply] gid={context.GrainId} partition={partition} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' shardIndex={entry.Mutation.ShardIndex}");
+#endif
+                        using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
+                        {
+                            projection.Apply(entry.Mutation);
+                        }
                     }
                 }
 #if LATTICE_DIAG
@@ -399,6 +514,27 @@ internal sealed partial class BPlusLeafGrain
 
         if (maxApplied > checkpoint)
         {
+            // The cold-start coherence override (step 0.5 in
+            // OnActivateAsync) drives the local replay-scope checkpoint
+            // to -1 so the replay covers the full readable WAL window
+            // and rebuilds the empty cache. The persisted per-partition
+            // slot, however, may carry a higher value from a previous
+            // activation that flushed its checkpoint before the cache
+            // was cleared - and SetCheckpointOffsetAsync's monotonic-
+            // non-decreasing guard reads from the persisted slot, not
+            // the override. If we call SetCheckpointOffsetAsync(maxApplied)
+            // where maxApplied is below the persisted value (e.g. this
+            // partition's slice contained only foreign-range entries
+            // the filter dropped, leaving maxApplied at the override
+            // sentinel), the monotonic guard fires. Clamp our advance
+            // to be above the persisted value to short-circuit when
+            // the override+filter combination produced a no-progress
+            // replay - the persisted checkpoint is already past
+            // maxApplied so there is nothing to advance.
+            var persisted = GetPersistedCheckpointForPartition(partition);
+            if (maxApplied <= persisted)
+                return false;
+
             // SetCheckpointOffsetAsync reads CurrentPartition from the
             // ambient apply scope; scope this final advance so the
             // per-partition clamp is applied to the correct partition.
