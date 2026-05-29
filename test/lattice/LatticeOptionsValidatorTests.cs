@@ -117,9 +117,9 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
-    public void WalPartitions_default_is_one()
+    public void WalPartitions_default_is_eight()
     {
-        Assert.That(new LatticeOptions().WalPartitions, Is.EqualTo(1));
-        Assert.That(LatticeOptions.DefaultWalPartitions, Is.EqualTo(1));
+        Assert.That(new LatticeOptions().WalPartitions, Is.EqualTo(8));
+        Assert.That(LatticeOptions.DefaultWalPartitions, Is.EqualTo(8));
     }
 }

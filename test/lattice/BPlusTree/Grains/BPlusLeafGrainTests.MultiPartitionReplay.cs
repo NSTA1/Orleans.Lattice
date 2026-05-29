@@ -109,14 +109,14 @@ public sealed class BPlusLeafGrainMultiPartitionReplayTests
     }
 
     [Test]
-    public async Task Default_wal_partitions_pin_is_one()
+    public async Task Default_wal_partitions_pin_is_eight()
     {
-        // Defence-in-depth pin: the silo-wide default for
-        // WalPartitions must stay at 1 until the documented
-        // breaking-change release. The fixture overrides per tree;
-        // a fresh options instance must still observe the default.
-        Assert.That(new LatticeOptions().WalPartitions, Is.EqualTo(1));
-        Assert.That(LatticeOptions.DefaultWalPartitions, Is.EqualTo(1));
+        // Pin: the silo-wide default for WalPartitions is 8. Existing
+        // trees pin the value in force at first WAL write into the
+        // tree registry, so a default flip is non-breaking for
+        // already-registered trees.
+        Assert.That(new LatticeOptions().WalPartitions, Is.EqualTo(8));
+        Assert.That(LatticeOptions.DefaultWalPartitions, Is.EqualTo(8));
         await Task.CompletedTask;
     }
 }

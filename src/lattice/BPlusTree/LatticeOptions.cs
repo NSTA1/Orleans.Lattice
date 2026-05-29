@@ -853,14 +853,15 @@ public class LatticeOptions
     /// Number of WAL partitions per tree. Each partition is an independent
     /// per-shard append-only log; the foreground commit-log writer hashes
     /// the mutation key modulo this value to pick the partition. Defaults
-    /// to <see cref="DefaultWalPartitions"/> (1) - the dominant
-    /// single-cluster shape. Increase to fan out WAL throughput across
-    /// independent grains when a single partition becomes the bottleneck.
+    /// to <see cref="DefaultWalPartitions"/> (8) - the multi-partition
+    /// fan-out shape. Existing trees pin the value in force at first
+    /// WAL write into the tree registry, so a future default flip is
+    /// non-breaking for already-registered trees.
     /// </summary>
     public int WalPartitions { get; set; } = DefaultWalPartitions;
 
-    /// <summary>Default value for <see cref="WalPartitions"/> (1).</summary>
-    public const int DefaultWalPartitions = 1;
+    /// <summary>Default value for <see cref="WalPartitions"/> (8).</summary>
+    public const int DefaultWalPartitions = 8;
 
     /// <summary>
     /// Maximum number of entries the WAL grain will batch into a single
