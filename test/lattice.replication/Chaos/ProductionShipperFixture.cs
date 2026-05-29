@@ -354,6 +354,16 @@ internal sealed class LoopbackReplicationTransport : IReplicationTransport
     public long BatchesShipped => Interlocked.Read(ref _batchesShipped);
     public long BatchesAccepted => Interlocked.Read(ref _batchesAccepted);
 
+    /// <summary>
+    /// Optional inspector invoked once per accepted batch with the
+    /// fully-decoded entry list. Chaos tests that want to assert on
+    /// the wire-level entry shape (e.g. "no maintenance-tagged
+    /// tombstone-reap envelopes must cross the producer-side
+    /// ShouldShip filter") wire a callback here. Runs synchronously
+    /// inside SendAsync.
+    /// </summary>
+    public Action<IReadOnlyList<WalRecord>>? OnBatchObserved { get; set; }
+
     public void IsolateSite(string peerClusterId) => _isolated[peerClusterId] = 0;
     public void HealSite(string peerClusterId) => _isolated.TryRemove(peerClusterId, out _);
     public void FaultOutboundOnce(string peerClusterId) => _pendingFaults[peerClusterId] = 0;
@@ -391,6 +401,7 @@ internal sealed class LoopbackReplicationTransport : IReplicationTransport
             decoded.Add(record);
         }
 
+        OnBatchObserved?.Invoke(decoded);
         var result = await peerApplier.ApplyBatchAsync(decoded, cancellationToken).ConfigureAwait(false);
         Interlocked.Increment(ref _batchesAccepted);
         return new ReplicationAck
