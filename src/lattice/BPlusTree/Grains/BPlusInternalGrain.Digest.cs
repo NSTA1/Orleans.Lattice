@@ -103,33 +103,47 @@ internal sealed partial class BPlusInternalGrain
     internal async Task ApplyChildSnapshotAsync(GrainId childId, ChildDigestSnapshot newSnapshot)
     {
         EnsureSubtreeHashInitialized();
-        var hash = state.State.SubtreeProjectionHash!;
 
-        // XOR the prior contribution out (if any) and the new contribution in.
-        var hadPrior = state.State.ChildDigests.TryGetValue(childId, out var prior);
-        if (hadPrior && prior.Hash is { Length: SubtreeHashSize } priorHash)
-        {
-            for (var i = 0; i < SubtreeHashSize; i++) hash[i] ^= priorHash[i];
-            state.State.SubtreeEntryCount -= prior.EntryCount;
-        }
-        if (newSnapshot.Hash is { Length: SubtreeHashSize } incoming)
-        {
-            for (var i = 0; i < SubtreeHashSize; i++) hash[i] ^= incoming[i];
-        }
-        state.State.SubtreeEntryCount += newSnapshot.EntryCount;
+        // Update the per-child snapshot table first - it is the single
+        // source of truth for every aggregate derived below.
         state.State.ChildDigests[childId] = newSnapshot;
 
-        // Max-reduce upward: a child's checkpoint can only advance, but a
-        // child can be REMOVED from the table (split-merge in future code).
-        // Recompute the max from the dictionary to remain correct under that
-        // shape; the per-child count is bounded by the internal fanout
-        // (<= MaxInternalChildren) so the scan is cheap.
+        // Re-derive every aggregate (hash, entry count, max checkpoint)
+        // from the persisted dictionary on every apply. The prior
+        // incremental shape (`hash ^= prior; hash ^= new;
+        // SubtreeEntryCount -= prior; SubtreeEntryCount += new`)
+        // gated BOTH the hash XOR-out AND the EntryCount subtract on
+        // the prior snapshot having a well-formed length-16 Hash; a
+        // prior with a null-or-wrong-length Hash silently skipped
+        // the entry-count subtract too, so the new count was added
+        // to a stale count that should have been subtracted. Each
+        // re-publish for that child compounded the drift, and the
+        // CI-only flake on the digest-coalescing integration test
+        // (post-split chained fold over-counting by exactly N for N
+        // splits) was the visible symptom. Per-child fanout is
+        // bounded by <c>MaxInternalChildren</c> (default 128) so
+        // recomputing from the table is cheap, and the
+        // single-source-of-truth shape leaves no incremental-
+        // arithmetic invariant left to violate under topology
+        // rewrites, legacy persisted state, or any interleave that
+        // could otherwise eat a prior contribution. The shape
+        // mirrors how <see cref="SubtreeHighestCheckpointOffset"/>
+        // was already recomputed before this fix.
+        var hash = state.State.SubtreeProjectionHash!;
+        Array.Clear(hash, 0, SubtreeHashSize);
+        long entryCount = 0;
         long maxCheckpoint = 0;
         foreach (var kvp in state.State.ChildDigests)
         {
+            entryCount += kvp.Value.EntryCount;
             if (kvp.Value.CheckpointOffset > maxCheckpoint)
                 maxCheckpoint = kvp.Value.CheckpointOffset;
+            if (kvp.Value.Hash is { Length: SubtreeHashSize } childHash)
+            {
+                for (var i = 0; i < SubtreeHashSize; i++) hash[i] ^= childHash[i];
+            }
         }
+        state.State.SubtreeEntryCount = entryCount;
         state.State.SubtreeHighestCheckpointOffset = maxCheckpoint;
 
         await state.WriteStateAsync();
