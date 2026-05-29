@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Regression coverage for the etag race that the real-Azure U9g ladder
-/// surfaced (see <c>scaling.md</c> §"U9g result" / "U9h audit"). When
+/// surfaced. When
 /// <see cref="IShardRootGrain.SetManyAsync"/> is marked
 /// <see cref="AlwaysInterleaveAttribute"/>, two concurrent batches whose
 /// leaf returns a non-null <see cref="SplitResult"/> both enter

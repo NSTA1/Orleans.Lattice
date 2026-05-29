@@ -341,8 +341,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
-        // c2-xxvii envelope + sub-stage attribution (see scaling.md
-        // c2-xxvii memo). SetDuration tracks the caller-visible
+        // c2-xxvii envelope + sub-stage attribution. SetDuration tracks the caller-visible
         // wall-clock; SetStageDuration tagged with stage=
         // (gate|route|shard|publish) splits the envelope into its
         // four sub-spans so the LatticeGrain-side overhead of one
@@ -613,8 +612,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
-        // c2-xxiv envelope + sub-stage attribution (see scaling.md
-        // c2-xxiv memo): SetManyDuration tracks the caller-visible
+        // c2-xxiv envelope + sub-stage attribution: SetManyDuration tracks the caller-visible
         // wall-clock; SetManyStageDuration tagged with stage=
         // (gate|route|bucket|fanout|events) splits the envelope into
         // its constituent spans so the dominant cost on the set-many

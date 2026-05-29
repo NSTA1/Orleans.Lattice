@@ -13,10 +13,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>DeleteAsync</c> caller queues behind the prior call's full
 /// commit (HLC tick + WAL append + apply + observer + digest), which
 /// is the binding ~1.8 s in-leaf queue residual measured at the
-/// c2-ii baseline (see <c>scaling.md</c>).
+/// c2-ii baseline.
 /// <para>
 /// Safety argument (recorded in the c2-iii pre-implementation re-read
-/// in <c>scaling.md</c>): Orleans serialises synchronous code between
+///): Orleans serialises synchronous code between
 /// awaits regardless of <see cref="AlwaysInterleaveAttribute"/>, so the
 /// per-key LWW merge into <c>Cache</c>, the HLC tick, the
 /// <c>PublishVersionAdvance</c> / <c>BumpLocalRevision</c> bumps, and
@@ -61,7 +61,7 @@ public sealed class IBPlusLeafGrainInterleavedWritesTests
                 $"IBPlusLeafGrain.{methodName}({string.Join(", ", method.GetParameters().Select(p => p.ParameterType.Name))}) " +
                 "MUST be annotated [AlwaysInterleave] per U9p step 8c-c-iv-c2-iii. Removing the attribute " +
                 "reintroduces the ~1.8 s per-leaf queue residual measured at the c2-ii baseline and " +
-                "regresses lattice.set_many.duration_ms P99. See scaling.md for the safety argument.");
+                "regresses lattice.set_many.duration_ms P99.");
         }
     }
 }

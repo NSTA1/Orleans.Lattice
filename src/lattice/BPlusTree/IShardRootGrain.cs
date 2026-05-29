@@ -131,7 +131,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// and the second-from-front call routinely exceeds Orleans' 30 s
     /// response timeout. The bound is per-shard serial-turn pressure, not
     /// upstream <see cref="LatticeGrain"/> work or provider commit p50
-    /// (see U9g in <c>scaling.md</c>).
+    /// (see U9g).
     /// </para>
     /// <para>
     /// Safety relies on three invariants that hold across interleaved
@@ -156,7 +156,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     ///   race that surfaced as <c>InconsistentStateException</c> /
     ///   "Etag mismatch during Update" warnings on real Azure Tables when
     ///   <c>[AlwaysInterleave]</c> first shipped (U9g result, U9h-A fix
-    ///   in <c>scaling.md</c>).</item>
+    ///).</item>
     /// </list>
     /// <para>
     /// The split-bubble loop in <c>SetManyLocalOnlyAsync</c> calls
@@ -391,7 +391,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <see cref="IShardRootGrain.SetManyAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}})"/>
     /// reentrancy queue is required so the monitor does not time out (and fire
     /// spurious reshards) when the shard is at sustained producer pressure
-    /// (see U9d in <c>scaling.md</c>).
+    /// (see U9d).
     /// </para>
     /// </summary>
     [AlwaysInterleave]
@@ -520,7 +520,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// state mutation - it cannot race any other in-flight turn. Paired with
     /// <see cref="GetHotnessAsync"/> so the hot-shard monitor's per-tick
     /// fan-out (which awaits both) is not gated on producer
-    /// <see cref="SetManyAsync"/> work (see U9d in <c>scaling.md</c>).
+    /// <see cref="SetManyAsync"/> work (see U9d).
     /// </para>
     /// </summary>
     [AlwaysInterleave]

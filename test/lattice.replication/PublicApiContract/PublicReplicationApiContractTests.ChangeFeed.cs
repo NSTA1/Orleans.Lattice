@@ -62,7 +62,7 @@ public partial class PublicReplicationApiContractTests
         // cursor previously used to advance the feed silently dropped
         // any low-HLC entry that arrived after a higher-HLC entry on
         // the same WAL partition under parallel cross-leaf appends
-        // (see scaling.md c2-xi memo for the full attribution).
+        //.
         // Consumers now capture the resume cursor via
         // IChangeFeed.GetCurrentCursorAsync.
         var treeId = NextTreeId("feed-cursor");

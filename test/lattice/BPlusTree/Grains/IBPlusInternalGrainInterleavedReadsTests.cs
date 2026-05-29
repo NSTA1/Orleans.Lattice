@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// re-introducing the per-internal-node serial-turn ceiling that
 /// c2-vi removed.
 /// <para>
-/// Safety argument (recorded in the c2-vi memo in <c>scaling.md</c>):
+/// Safety argument:
 /// every read method on <see cref="IBPlusInternalGrain"/> is a single
 /// synchronous <c>Task.FromResult(state.State.X)</c> expression with
 /// no awaits and no multi-step cross-state-field traversal, so the
@@ -33,7 +33,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// future refactor silently stripping the attribute; that regression
 /// would otherwise only be observable on a real cluster under live
 /// load (as a regression in the c2-vi benchmark numbers in
-/// <c>scaling.md</c>).
+/// <c></c>).
 /// </para>
 /// </summary>
 [TestFixture]
@@ -63,8 +63,7 @@ public sealed class IBPlusInternalGrainInterleavedReadsTests
             Assert.That(attr, Is.Not.Null,
                 $"IBPlusInternalGrain.{methodName}({string.Join(", ", method.GetParameters().Select(p => p.ParameterType.Name))}) " +
                 "MUST be annotated [AlwaysInterleave] per U9p step 8c-c-iv-c2-vi. Removing the attribute " +
-                "reintroduces the per-internal-node serial-turn ceiling that c2-vi removed. See scaling.md " +
-                "for the safety argument.");
+                "reintroduces the per-internal-node serial-turn ceiling that c2-vi removed..");
         }
     }
 }

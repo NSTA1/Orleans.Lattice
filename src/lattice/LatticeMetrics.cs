@@ -360,7 +360,7 @@ public static class LatticeMetrics
     /// commit-log scope) routed back through the commit-set path while
     /// an outer commit was still awaiting a WAL append.
     /// Either reading is informative for the U9m / leaf-side-commit-concurrency
-    /// probe in <c>scaling.md</c>: a steady pin at <c>0</c> falsifies
+    /// probe: a steady pin at <c>0</c> falsifies
     /// the leaf turn-queue hypothesis and routes the next probe to
     /// WAL-side fan-in (U9n); a steady lift above <c>0</c> identifies
     /// the leaf grain as the binding constraint.
@@ -770,7 +770,7 @@ public static class LatticeMetrics
     /// (the HTTP status string of the response that triggered the
     /// retry, e.g. <c>503</c>, <c>429</c>; <c>0</c> when the trigger
     /// was a transport-level exception with no HTTP status). Phase A
-    /// (see <c>scaling.md</c>) discovered a 5-100x gap between wall
+    /// discovered a 5-100x gap between wall
     /// p99 (700-1,700 ms) and Azure Tables server-timing p99
     /// (10-130 ms) on the WAL hot path - the canonical signature of
     /// retry storms whose retries ultimately succeed and therefore

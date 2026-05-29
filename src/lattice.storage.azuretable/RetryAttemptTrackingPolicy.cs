@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// whether the retry ultimately succeeds.
 /// <para>
 /// <b>Why.</b> The Phase A scaling diagnostic
-/// (<c>scaling.md</c> &#8594; Phase A &#8212; Outcomes) found a 5-100x gap
+/// found a 5-100x gap
 /// between caller-observed wall p99 (700-1,700 ms) and Azure Tables
 /// server-timing p99 (10-130 ms) on the WAL hot path. That signature
 /// is the canonical fingerprint of retry storms whose retries

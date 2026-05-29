@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// path. Under the shipping Orleans single-threaded grain scheduling
 /// (neither commit entry point is marked <c>[AlwaysInterleave]</c>)
 /// the snapshot is always <c>0</c>; the tests pin that invariant so
-/// the U9m roadmap probe in <c>scaling.md</c> retains a stable
+/// the U9m roadmap probe retains a stable
 /// falsifiability baseline. A future change that introduces commit
 /// reentrancy on the leaf is expected to surface here as a non-zero
 /// measurement.

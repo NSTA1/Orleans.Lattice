@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// <summary>
 /// White-box unit tests for <see cref="RetryAttemptTrackingPolicy"/>:
 /// the per-retry pipeline policy added in Phase C / step C4 of
-/// <c>scaling.md</c> to attribute wall-time inflation to SDK retries
+/// <c></c> to attribute wall-time inflation to SDK retries
 /// whose retries ultimately succeed (and therefore never increment
 /// <see cref="LatticeMetrics.ProviderRetryExhausted"/>).
 /// <para>

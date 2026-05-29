@@ -269,7 +269,7 @@ internal sealed partial class BPlusLeafGrain
     /// is always <c>0</c>: Orleans serialises grain calls and the
     /// next commit cannot enter until the current one returns. The
     /// histogram is a falsifiability instrument for the U9m roadmap
-    /// probe in <c>scaling.md</c>: a steady pin at <c>0</c> proves
+    /// probe: a steady pin at <c>0</c> proves
     /// the leaf turn queue is not the binding constraint and routes
     /// the next probe to WAL-side fan-in (U9n); a steady lift above
     /// <c>0</c> identifies the leaf grain as the binding constraint.

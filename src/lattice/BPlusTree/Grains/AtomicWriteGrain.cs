@@ -1198,7 +1198,7 @@ internal sealed class AtomicWriteGrain(
     {
         if (_commitLogWriterResolved) return _commitLogWriter;
         _commitLogWriterResolved = true;
-        _commitLogWriter = context.ActivationServices?.GetService<ICommitLogWriter>();
+        _commitLogWriter = GrainContext.ActivationServices?.GetService<ICommitLogWriter>();
         return _commitLogWriter;
     }
     private bool _commitLogWriterResolved;
