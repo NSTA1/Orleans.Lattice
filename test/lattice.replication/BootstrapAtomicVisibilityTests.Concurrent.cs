@@ -231,10 +231,18 @@ public partial class BootstrapAtomicVisibilityTests
     private static IOptionsMonitor<LatticeReplicationOptions> BuildOptionsMonitor(string clusterId)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        // The pump's ChangeFeed must read every partition the producer
+        // silo wrote to. Leave ReplogPartitions at the package default
+        // (LatticeReplicationOptions.DefaultReplogPartitions) so it
+        // matches the silos' resolved WalPartitions; hardcoding =1 here
+        // would cause the pump to read only partition 0 and miss every
+        // entry hash-routed to a sibling partition, producing a
+        // partial-saga visibility failure on the receiver that is an
+        // artefact of the test wiring rather than a real invariant
+        // violation.
         var opts = new LatticeReplicationOptions
         {
             ClusterId = clusterId,
-            ReplogPartitions = 1,
         };
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
