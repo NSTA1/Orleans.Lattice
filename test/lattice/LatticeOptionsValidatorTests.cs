@@ -73,4 +73,26 @@ public class LatticeOptionsValidatorTests
         var result = Validate(o => o.LeafSnapshotReClassifyEveryNCheckpoints = value);
         Assert.That(result.Succeeded, Is.True);
     }
+
+    // --- v6.0.1 ship-default pins --------------------------------------
+    // One per knob the throughput campaign flipped from a v6.0.0 baseline.
+    // Each pin asserts (a) the live property's default matches the named
+    // constant, and (b) the named constant carries the documented value.
+    // The constant indirection exists so a future re-tune lands in one
+    // place; the pin catches a future blind edit that flips the default
+    // without coordinating with the docs / changelog.
+
+    [Test]
+    public void WalMaxPendingBatches_default_is_eight()
+    {
+        Assert.That(new LatticeOptions().WalMaxPendingBatches, Is.EqualTo(8));
+        Assert.That(LatticeOptions.DefaultWalMaxPendingBatches, Is.EqualTo(8));
+    }
+
+    [Test]
+    public void DirtyLeafFlushIntervalMs_default_is_fifty_ms()
+    {
+        Assert.That(new LatticeOptions().DirtyLeafFlushIntervalMs, Is.EqualTo(50));
+        Assert.That(LatticeOptions.DefaultDirtyLeafFlushIntervalMs, Is.EqualTo(50));
+    }
 }

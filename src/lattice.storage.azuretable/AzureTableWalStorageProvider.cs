@@ -47,19 +47,21 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// into a single phase-2 transaction. The strict-offset drain order
 /// makes TAIL unconditionally monotonic regardless of phase-1
 /// completion order, and the coalescing collapses N round-trips into
-/// one under burst load. By default <see cref="AppendBatchAsync"/>
-/// awaits the phase-2 completion so post-append
-/// <see cref="GetHighestOffsetAsync"/> observes the new TAIL. When
+/// one under burst load. The v6.0.1 default
 /// <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
-/// is <see langword="true"/>, <see cref="AppendBatchAsync"/> instead
-/// awaits the <i>previous</i> append's phase-2 task on the same
+/// = <see langword="true"/> makes <see cref="AppendBatchAsync"/>
+/// await the <i>previous</i> append's phase-2 task on the same
 /// shard before returning - phase 2 of batch N runs in parallel with
 /// phase 0+1 of batch N+1, halving the steady-state request-path
-/// latency under <c>WalMaxPendingBatches = 1</c> while preserving
-/// every durability and ordering invariant the synchronous mode
-/// enforces (sticky failure still surfaces, just on the next call;
-/// reconciliation still rolls forward any phase-1-durable batch
-/// after a crash).
+/// latency while preserving every durability and ordering invariant
+/// the synchronous mode enforces (sticky failure still surfaces, just
+/// on the next call; reconciliation still rolls forward any
+/// phase-1-durable batch after a crash). Set the option to
+/// <see langword="false"/> to restore the pre-v6.0.1 synchronous
+/// shape where each <see cref="AppendBatchAsync"/> awaits its own
+/// phase-2 commit (the rare host that needs failure-on-the-failing-
+/// call semantics, or that runs against a single-writer backend
+/// where overlapping writes contend rather than overlap).
 /// </para>
 /// <para>
 /// <b>Capacity.</b> Azure Tables caps a single transaction at 100
@@ -76,11 +78,13 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// across distinct partitions. Concurrent calls into the same shard
 /// land in distinct batch partitions during phase 1 (no contention)
 /// and serialise through the per-shard phase-2 worker for phase 2.
-/// With the default <c>WalMaxPendingBatches = 1</c>, only one
-/// <see cref="AppendBatchAsync"/> is in-flight per shard. With
-/// <c>&gt; 1</c>, a phase-1 failure on an earlier offset while a later
-/// offset has already enqueued phase 2 will be caught by activation
-/// reconciliation (stage 2c) and surfaced on next activation.
+/// With the v6.0.1 default <c>WalMaxPendingBatches = 8</c>, up to
+/// eight <see cref="AppendBatchAsync"/> calls can be in-flight per
+/// shard; the worker's phase-2 coalescing window collapses
+/// overlapping commits into one Azure-Tables transaction. A phase-1
+/// failure on an earlier offset while a later offset has already
+/// enqueued phase 2 will be caught by activation reconciliation
+/// (stage 2c) and surfaced on next activation.
 /// </para>
 /// </summary>
 public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDisposable
