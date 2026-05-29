@@ -540,6 +540,39 @@ Latency drops from reminder-cadence (~60 s) to sub-second; bandwidth improves ~2
 
   **What this entry is NOT.** This is not a known correctness regression on the production OR-Map path. The non-chaos OR-Map integration tests (`test/lattice/BPlusTree/CrdtAccessorIntegrationTests.cs`) all pass, and the in-process `ReplicationApplier.ApplyStateMergeAsync<OrMap<TKey, TValue>>` path is exercised by the replication integration tests. The symptom is specifically about the chaos delivery pump's ability to detect convergence on a key whose value is a recursive CRDT - the pump never reaches a stable cursor because its dedupe heuristic doesn't fire on OR-Map post-merge bytes.
 
+- [ ] **R-123 - Production-shipper-based multi-site chaos fixture (prerequisite for WAL-trim-under-shipping chaos)**
+  Surfaced during the chaos-update branch's Part B planning. The existing `MultiSiteClusterFixture` (`test/lattice.replication/Chaos/MultiSiteClusterFixture.cs`) routes inter-site replication through an in-process `ChaosDeliveryPump` that subscribes to each silo's local `IChangeFeed` and dispatches to a manually-constructed `ReplicationApplier` on the receiver side. The pump never registers a per-peer cursor against the per-tree `IWalCursorRegistry`, so the silo-side `LatticeWalGc` consumer-cursor min has no visibility into what the pump has shipped. Any chaos test that drives `MaintenanceGcInterval` aggressively in this fixture would trim WAL entries the pump still owes to a peer, racing the reader and producing arbitrary delivery loss - not the steady-state-trim-under-incremental-shipping behaviour the test would aim to pin.
+
+  **Prerequisite for the deferred chaos test.** The WAL-trim-under-shipping chaos test (originally Part B item B4 on the chaos-update plan) needs a multi-site fixture whose receivers use the production `ReplicationShipperGrain` (`src/lattice.replication/Grains/ReplicationShipperGrain.cs`) and the production `ReplicationDriverActivationService` so the WAL cursor registry sees real per-peer cursors. That fixture does not exist today; building it inside the chaos-update branch would inflate the branch's scope far beyond the intended chaos-suite review and would need its own design pass (gRPC vs in-process transport, silo lifecycle vs `TestCluster`, fault-injection seam for transport-level outages).
+
+  **Scope of work.**
+  1. New `MultiSiteShipperFixture` (or extend `MultiSiteClusterFixture` with an opt-in shipper-driven mode) that brings up two or more `TestCluster` sites with `AddLatticeReplication` configured to use a real transport implementation (in-process loopback or gRPC against a per-site Kestrel host).
+  2. A directed-partition seam on the chosen transport so the chaos test can isolate / heal individual edges without restarting the silo - mirrors `ChaosDeliveryPump.IsolateSite` / `HealSite` at the transport layer.
+  3. Once the fixture exists, the deferred chaos test asserts that a high-rate write workload on site A, paired with `MaintenanceGcInterval = 1s` and a partition window that exceeds the per-tree `WalRetention`, either (a) catches site B up via incremental shipping when the partition heals, OR (b) detects fall-off-the-log and the auto-bootstrap path drains B to A's state within the test's drain deadline.
+
+  Not on the chaos-update branch. Track as a discrete feature PR once the production-shipper-driven test fixture lands as its own piece of work.
+
+- [ ] **R-124 - Multi-silo chaos fixture with silo-restart driver**
+  Surfaced during the chaos-update branch's Part B planning (item B6). Every chaos test today runs on a single Orleans silo via `TestClusterBuilder` with `initialSilosCount: 1`; silo restart, primary failover, and reminder takeover under load are not exercised. Sagas that span a silo restart are a known correctness-sensitive surface (the `AtomicWriteGrain.Lifecycle.cs` reactivation paths), and a chaos test that drives a real silo restart mid-workload would catch reactivation regressions in the lifecycle hooks.
+
+  **Scope.** New `MultiSiloClusterFixture` (or an opt-in mode on `FourShardClusterFixture`) that brings up a `TestCluster` with `initialSilosCount: 2`, plus a `RestartSiloAsync(int siloIndex)` helper that tears down one silo's in-process host and re-deploys it. Once the fixture exists, the deferred chaos test runs the existing CAS / range-delete / atomic-batch workload while a restart driver flips one silo mid-window, then asserts post-quiescence universe correctness and that every saga reached a terminal state.
+
+  Not on the chaos-update branch.
+
+- [ ] **R-125 - gRPC transport chaos fixture with fault-injecting Channel**
+  Surfaced during the chaos-update branch's Part B planning (item B7). `ChaosDeliveryPump` is in-process only. The gRPC transport path (`Orleans.Lattice.Replication.Grpc`) has no chaos coverage - transport-layer faults (channel reset, partial frame, header reject, mid-stream cancellation) are not exercised under the convergence matrix.
+
+  **Scope.** New `MultiSiteGrpcClusterFixture` that brings up N silos with `AddLatticeReplicationGrpc` configured against per-site Kestrel hosts on `127.0.0.1:<port>`, plus a fault-injecting `Channel` decorator that can be configured to reset the underlying connection at a tunable probability per RPC. The convergence matrix (LWW / OR-Set / MV / PN, mirrored from the in-process tests) then runs against this fixture and asserts the same convergence invariants under transport-level fault injection. Catches regressions in the gRPC transport's retry / reconnect / partial-frame handling that the unit tests cannot reach.
+
+  Not on the chaos-update branch.
+
+- [ ] **R-126 - Azure Table WAL chaos fixture under Azurite throttling**
+  Surfaced during the chaos-update branch's Part B planning (item B8). The Azure Table WAL provider has integration tests under `test/lattice.storage.azuretable` but no chaos coverage: mid-flight phase-2 commit failures, partial batch acks, and Azurite-driven throttling are not exercised. `ChaosWithFaultsIntegrationTests` injects faults into the in-memory grain-storage provider only.
+
+  **Scope.** New `AzureTableWalChaosClusterFixture` that wires the Azure Table WAL provider against a local Azurite instance, plus a chaos driver that toggles Azurite throttling (HTTP 429 responses), connection resets, and per-row write delays. Sustained-write chaos workload asserts post-quiescence WAL is fully recoverable, no orphaned phase-2 commits, and the per-shard cursor registry converges to the same offset every silo observed. Tagged `[Category("Chaos")][Category("AzureTableEmulator")]` so it only runs in environments with Azurite available.
+
+  Not on the chaos-update branch.
+
 - [x] **R-121 ✓ shipped - Bidirectional `peer.last_contact_seconds` (inbound twin + liveness probe)**
   Closes both gaps on the previously outbound-only `orleans.lattice.replication.peer.last_contact_seconds` gauge: an idle but healthy outbound link no longer sees the gauge climb unbounded between local-write bursts, and the receiver side now records a symmetric inbound contact per per-origin run. **Implemented:**
 
