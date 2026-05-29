@@ -86,13 +86,18 @@ public sealed class CoalescingClusterFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
-            // Pin the c2-xxviii coalescing window deliberately so the
-            // tests using this fixture exercise the
-            // publish-deferred-then-fires path. ConfigureLattice (no
-            // tree name) uses ConfigureAll, which applies to every
-            // named options instance the resolver pulls from
-            // IOptionsMonitor.
-            siloBuilder.ConfigureLattice(o => o.DigestCoalescingWindowMs = CoalescingWindowMs);
+            // The coalescing-metrics tests assert per-publish mechanics
+            // (scheduled / skipped / fired / inline counts) under the
+            // single-partition shape these tests were written against.
+            // Pin WalPartitions=1 so the tests stay deterministic after
+            // the silo-wide default flipped to 8 - multi-partition fan-
+            // out is exercised by its own dedicated MultiPartition*
+            // integration suite.
+            siloBuilder.ConfigureLattice(o =>
+            {
+                o.DigestCoalescingWindowMs = CoalescingWindowMs;
+                o.WalPartitions = 1;
+            });
             siloBuilder.UseInMemoryReminderService();
         }
     }
