@@ -370,8 +370,17 @@ public partial class BootstrapAtomicVisibilityTests
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // Pin WalPartitions=1 (and ReplogPartitions=1 below) so the
+            // concurrent-saga bootstrap test stays deterministic under
+            // loaded CI. Multi-partition fan-out is covered by its own
+            // dedicated MultiPartition* integration suite.
+            siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
+            siloBuilder.AddLatticeReplication(opts =>
+            {
+                opts.ClusterId = ClusterId;
+                opts.ReplogPartitions = 1;
+            });
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }
     }
@@ -384,12 +393,20 @@ public partial class BootstrapAtomicVisibilityTests
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // Pin WalPartitions=1 alongside the producer's pin so the
+            // single-partition shape this test was originally written
+            // against is preserved on both sides.
+            siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
             siloBuilder.UseInMemoryReminderService();
             // Receiver uses the package-default bootstrap retry budget.
             // If the default proves insufficient under this workload,
             // widen LatticeReplicationOptions.DefaultBootstrapMaxAttempts
             // rather than overriding it here.
-            siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
+            siloBuilder.AddLatticeReplication(opts =>
+            {
+                opts.ClusterId = ClusterId;
+                opts.ReplogPartitions = 1;
+            });
             if (Transport is not null)
             {
                 siloBuilder.Services.AddSingleton<IRemoteSnapshotTransport>(Transport);

@@ -242,10 +242,21 @@ internal sealed class PublicReplicationApiClusterFixture
         var peerClusterId = clusterId == SiteAClusterId ? SiteBClusterId : SiteAClusterId;
 
         siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+        // The public-API contract suite exercises foreground + replication
+        // mechanics, not multi-partition fan-out. Pin WalPartitions=1 so
+        // the small-leaf trees the contract tests build stay deterministic
+        // under loaded CI (the silo-wide default is 8); ReplogPartitions
+        // is pinned alongside in AddLatticeReplication below.
+        siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
         siloBuilder.UseInMemoryReminderService();
         siloBuilder.AddLatticeReplication(opts =>
         {
             opts.ClusterId = clusterId;
+            // Pin the replication-side partition count to match the
+            // pinned WalPartitions above; without alignment the shipper
+            // would only read partition 0 and miss writes routed to
+            // other partitions.
+            opts.ReplogPartitions = 1;
             // Configure the peer so ShardedReplogSink fires the
             // writer-side doorbell on each WAL append; tests
             // converge in tens of ms instead of waiting for the
