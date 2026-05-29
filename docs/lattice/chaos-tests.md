@@ -8,8 +8,8 @@ hold. They act as the end-to-end contract for the properties described
 in [Consistency](consistency.md) and [Replication](../lattice.replication/replication.md) -
 specifically that the public `ILattice` API is strongly consistent
 across arbitrary concurrent shard splits, online resizes, and online
-reshards; that point-mutation public-API calls (`RemoveRangeAsync`,
-`CompareAndSwapAsync`, `ScanAsync` cancellation) hold their stated
+reshards; that point-mutation public-API calls (`DeleteRangeAsync`,
+`SetIfVersionAsync` (the public compare-and-swap entry point), `ScanKeysAsync` / `ScanEntriesAsync` cancellation) hold their stated
 invariants under concurrent contention; that `SetManyAtomicAsync`
 remains atomically visible (zero-or-all keys per poll) on the
 authoring site and on every receiver site; and that the per-merge-mode
@@ -39,9 +39,9 @@ Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests
 | Atomic-write reader isolation across online resize | `ResizeTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs an online `ResizeAsync` (`MaxLeafKeys` / `MaxInternalChildren` to 8) concurrently with the saga chain. Exercises shadow-forwarding from the source physical tree to the destination, the alias swap, and the saga terminal-broadcast retry onto the new owner via `StaleTreeRoutingException`. |
 | Atomic-write reader isolation across online reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with the saga chain. Exercises the retroactive prepared-mutation sweep at `BeginShadowWrite`, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup. |
 | Digest determinism under load | `ChaosDigestIntegrationTests.cs` | `ILattice.GetLeafProjectionDigestAsync` is byte-stable across repeated calls in a write-quiescent window after concurrent writer / scanner load, and per-shard `EntryCount` sums equal `CountAsync`. |
-| Range delete under load | `ChaosRangeDeleteIntegrationTests.cs` | `RemoveRangeAsync` under concurrent writer load preserves range exclusivity (no key inside the deleted range survives a quiescent re-read) and never tombstones a key outside the range. Includes the cross-shard range case and the empty / single-key boundary cases. |
-| Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Many concurrent `CompareAndSwapAsync` callers racing on a small key universe produce exactly one observed `success=true` per logical CAS round; lost-update rounds report `success=false` with the actual current envelope so the call-site retry loop can make progress. |
-| Scan cancellation under load | `ScanCancellationChaosTests.cs` | An in-flight `ScanAsync` enumerator that observes a cancellation token transition surfaces `OperationCanceledException` within a bounded delay and leaks no grain-side resources; subsequent scans against the same range succeed normally. |
+| Range delete under load | `ChaosRangeDeleteIntegrationTests.cs` | `DeleteRangeAsync` under concurrent writer load preserves range exclusivity (no key inside the deleted range survives a quiescent re-read) and never tombstones a key outside the range. Includes the cross-shard range case and the empty / single-key boundary cases. |
+| Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Many concurrent `SetIfVersionAsync` (CAS) callers racing on a small key universe produce exactly one observed `success=true` per logical CAS round; lost-update rounds report `success=false` with the actual current envelope so the call-site retry loop can make progress. |
+| Scan cancellation under load | `ScanCancellationChaosTests.cs` | An in-flight `ScanKeysAsync` / `ScanEntriesAsync` enumerator that observes a cancellation token transition surfaces `OperationCanceledException` within a bounded delay and leaks no grain-side resources; subsequent scans against the same range succeed normally. |
 | Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | _Currently `[Ignore]`'d - the underlying gap (grain-type discrimination on B+ leaf / internal grain ids) is tracked in `roadmap.md`._ Two-silo `TestCluster`, sustained write/read load, secondary silo restart every ~2.5 s; flips to a live `[Test]` once the leaf / internal grain-key discriminator lands.
 
 ### Cross-cluster chaos suite (`test/lattice.replication/Chaos/`)
@@ -430,7 +430,7 @@ never a partial subset.
 
 ### Companion observability
 
-Same `atomic_write.*` histograms as Test 5, plus the topology-mutator's own metrics: `orleans.lattice.split.duration` / `orleans.lattice.resize.duration` / `orleans.lattice.reshard.duration`. See [Metrics](metrics.md).
+Same `orleans.lattice.atomic_write.*` histograms as Test 5, plus the topology-mutator-side counters that fire when the split / resize / reshard actually mutates the tree (`orleans.lattice.leaf.splits`, `orleans.lattice.shard.splits_committed`, and the per-split `orleans.lattice.split.retroactive_forward.duration` / `.entries` pair on shadow-forward). See [Metrics](metrics.md).
 
 ## Test 7 - Digest determinism under load (`ChaosDigestIntegrationTests`)
 
@@ -657,11 +657,11 @@ document.
 
 | Surface | Range delete | CAS | Scan cancel | Multi-silo restart | WAL trim | Liveness + inbound | OR-Map | Compaction + shipping | gRPC transport | Azure Table WAL |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| `RemoveRangeAsync` range exclusivity under concurrent writers | ✅ | - | - | - | - | - | - | - | - | - |
-| `RemoveRangeAsync` cross-shard fan-out + tombstone scope | ✅ | - | - | - | - | - | - | - | - | - |
-| `CompareAndSwapAsync` linearisable winner under contention | - | ✅ | - | - | - | - | - | - | - | - |
-| `CompareAndSwapAsync` lost-update returns current envelope | - | ✅ | - | - | - | - | - | - | - | - |
-| `ScanAsync` cooperative cancellation surfaces `OperationCanceledException` within bounded delay | - | - | ✅ | - | - | - | - | - | - | - |
+| `DeleteRangeAsync` range exclusivity under concurrent writers | ✅ | - | - | - | - | - | - | - | - | - |
+| `DeleteRangeAsync` cross-shard fan-out + tombstone scope | ✅ | - | - | - | - | - | - | - | - | - |
+| `SetIfVersionAsync` (CAS) linearisable winner under contention | - | ✅ | - | - | - | - | - | - | - | - |
+| `SetIfVersionAsync` (CAS) lost-update returns current envelope | - | ✅ | - | - | - | - | - | - | - | - |
+| `ScanKeysAsync` / `ScanEntriesAsync` cooperative cancellation surfaces `OperationCanceledException` within bounded delay | - | - | ✅ | - | - | - | - | - | - | - |
 | Cancelled scan leaks no grain-side enumerator state | - | - | ✅ | - | - | - | - | - | - | - |
 | `TestCluster.RestartSiloAsync` mid-workload preserves universe | - | - | - | ⏭ | - | - | - | - | - | - |
 | Grain-type discrimination on B+ leaf / internal grain ids (silo-restart safety) | - | - | - | ⏭ | - | - | - | - | - | - |

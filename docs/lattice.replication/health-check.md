@@ -101,8 +101,8 @@ A peer that drops out of `ReplicationPeerStats.Snapshot()` between probes (e.g. 
 
 The metrics in [observability](observability.md) are the raw inputs the health check classifies:
 
-- `orleans.lattice.replication.entries_behind` feeds the `EntriesBehind` tier.
-- `orleans.lattice.replication.last_contact_seconds` feeds the `LastContactSeconds` tier.
-- `orleans.lattice.replication.consecutive_errors` feeds the `ConsecutiveErrors` tier.
+- `orleans.lattice.replication.peer.entries_behind` feeds the `EntriesBehind` tier.
+- `orleans.lattice.replication.peer.last_contact_seconds` feeds the `LastContactSeconds` tier.
+- `orleans.lattice.replication.peer.consecutive_errors` feeds the `ConsecutiveErrors` tier.
 
 A host that exports the meter to OpenTelemetry can recreate the threshold tiers as alert rules and have the health check act purely as a gate for the orchestrator's readiness probe. The meter and the health check are independent surfaces; either, both, or neither may be subscribed without impacting the other.
