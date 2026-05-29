@@ -103,16 +103,28 @@ public class ChaosIntegrationTests
         // pre-saga values which also satisfy the v-{idx}-* envelope).
         || (ex is InvalidOperationException
             && ex.Message.Contains("failed and was rolled back", StringComparison.Ordinal))
-        // Documented MaxScanRetries-exhaustion on CountAsync / CountPerShardAsync /
-        // GetManyAsync under aggressive concurrent split churn. The exception
-        // message itself instructs the operator to "Increase
-        // LatticeOptions.MaxScanRetries or reduce concurrent split activity",
-        // and this chaos test deliberately drives both at the documented
-        // edge. Treat as transient so the rate shows up in transient-counts /
-        // transient-splits stats counters rather than as an invariant
-        // violation.
+        // Documented MaxScanRetries-exhaustion on CountAsync /
+        // CountPerShardAsync / KeysAsync / EntriesAsync under aggressive
+        // concurrent split churn. The exception message itself instructs
+        // the operator to "Increase LatticeOptions.MaxScanRetries or reduce
+        // concurrent split activity", and this chaos test deliberately
+        // drives both at the documented edge. Treat as transient so the
+        // rate shows up in transient-counts / transient-splits stats
+        // counters rather than as an invariant violation.
         || (ex is InvalidOperationException
             && ex.Message.Contains("retries while topology kept changing", StringComparison.Ordinal))
+        // Companion documented exhaustion class for GetManyAsync: when the
+        // TxRegistry commits sagas faster than the per-shard fan-out can
+        // complete a stable snapshot, GetManyAsync surfaces a different
+        // operator-action message ("kept committing sagas faster than the
+        // fan-out could complete. Increase LatticeOptions.MaxScanRetries or
+        // reduce concurrent saga rate."). Same documented-transient
+        // contract as the topology-retries class above; matched by a
+        // distinct substring so the predicate covers every documented
+        // MaxScanRetries-exhaustion shape - CountAsync, CountPerShardAsync,
+        // KeysAsync, EntriesAsync, and GetManyAsync.
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("kept committing sagas faster than the fan-out", StringComparison.Ordinal))
         // Orleans call timeout under saturated load ( sagas serialise 8+
         // round-trips per call). The saga's own reminder-driven recovery will
         // finish the write; from the chaos test's perspective this is a

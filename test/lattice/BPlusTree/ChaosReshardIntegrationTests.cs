@@ -75,6 +75,28 @@ public class ChaosReshardIntegrationTests
 
     private static bool IsTransient(Exception ex) =>
         ex.GetType().Name is "EnumerationAbortedException" or "StaleShardRoutingException"
+        // Saga rollback on a transient routing fault during a mid-saga split
+        // or reshard - the envelope / count invariants are preserved
+        // (compensation restores pre-saga values which also satisfy the
+        // v-{idx}-* envelope).
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("failed and was rolled back", StringComparison.Ordinal))
+        // Documented MaxScanRetries-exhaustion on CountAsync /
+        // CountPerShardAsync / KeysAsync / EntriesAsync under aggressive
+        // concurrent split churn (reshard drives many implicit splits while
+        // growing 4 -> 8 shards). The exception message itself instructs the
+        // operator to "Increase LatticeOptions.MaxScanRetries or reduce
+        // concurrent split activity"; this chaos test deliberately drives
+        // both at the documented edge. Treat as transient.
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("retries while topology kept changing", StringComparison.Ordinal))
+        // Documented MaxScanRetries-exhaustion on GetManyAsync when the
+        // TxRegistry commits sagas faster than the per-shard fan-out can
+        // complete a stable snapshot. Different operator-action message
+        // shape from the topology-retries class above; same documented
+        // exception contract.
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("kept committing sagas faster than the fan-out", StringComparison.Ordinal))
         || ex is TimeoutException;
 
     private static async Task SeedAsync(ILattice tree)
