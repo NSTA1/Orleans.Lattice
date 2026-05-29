@@ -241,6 +241,14 @@ internal sealed class LatticeOptionsResolver(
             // to false. See LatticeOptionsResolverPropagationGuardTests
             // for the regression gate.
             DigestCoalescingWindowMs = baseOptions.DigestCoalescingWindowMs,
+            // WalPartitions must propagate through the resolver so the
+            // leaf-grain activation-time materialiser fans out its
+            // per-partition replay over the configured number of
+            // partitions. Without this projection the materialiser
+            // silently reads the LatticeOptions default (1) regardless
+            // of the operator's configured value, exactly mirroring the
+            // c2-xxix DigestCoalescingWindowMs leak above.
+            WalPartitions = baseOptions.WalPartitions,
         };
     }
 

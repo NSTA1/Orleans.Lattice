@@ -64,7 +64,10 @@ internal sealed partial class BPlusLeafGrain
         // -1-for-empty-WAL contract, so the materialiser reads from
         // offset 0 inclusive on the next activation.
         state.State.ProjectionCheckpointOffset = -1;
-        _pendingCheckpointOffset = null;
+        // Drop the per-partition slot too: a rebuild seeds a fresh
+        // single-partition shape and a future write fans out lazily.
+        state.State.ProjectionCheckpointOffsetsByPartition = null;
+        _pendingCheckpointOffsetsByPartition = null;
 
         // The per-leaf saga pending-tx map and dedup sets live entirely
         // in activation memory; clearing them here makes the rebuild

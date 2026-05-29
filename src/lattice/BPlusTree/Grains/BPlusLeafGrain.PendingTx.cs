@@ -59,17 +59,28 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>>? _pendingTx;
 
     /// <summary>
-    /// Per-transaction earliest WAL offset of any prepared mutation
-    /// recorded under that transaction id. Populated when the replay
-    /// coordinator drives <c>ILeafProjection.Apply</c> with a
+    /// Per-(transaction, WAL partition) earliest offset of any prepared
+    /// mutation recorded under that transaction id and partition pair.
+    /// Populated when the replay coordinator drives
+    /// <c>ILeafProjection.Apply</c> with a
     /// <see cref="LatticeApplyOffsetContext"/> scope active; left
     /// untouched on the foreground commit path (where there is no WAL
-    /// offset to stamp). The minimum value across this map is the
-    /// projection-checkpoint clamp floor - advancing the persisted
-    /// checkpoint past <c>min - 1</c> would silently lose any prepare
-    /// whose terminal mark has not yet replayed, so
+    /// offset to stamp). A single saga whose per-key writes hash to
+    /// distinct WAL partitions registers one entry per partition so the
+    /// per-partition projection-checkpoint clamp is computed against
+    /// the correct partition's offset space; single-partition replay
+    /// stamps partition 0 throughout, preserving the legacy clamp
+    /// shape.
+    /// <para>
+    /// The minimum offset across entries for a given partition is the
+    /// projection-checkpoint clamp floor for that partition -
+    /// advancing the persisted checkpoint past
+    /// <c>(min unresolved prepare offset for partition) - 1</c> would
+    /// silently lose any prepare whose terminal mark has not yet
+    /// replayed, so
     /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> clamps
     /// requested advances back to that floor.
+    /// </para>
     /// <para>
     /// Lazily allocated on the first prepared-mutation apply that
     /// carries an ambient offset. The vast majority of leaves never
@@ -78,7 +89,7 @@ internal sealed partial class BPlusLeafGrain
     /// pure waste - see the rationale on <see cref="_pendingTx"/>.
     /// </para>
     /// </summary>
-    private Dictionary<Guid, long>? _pendingTxOffsets;
+    private Dictionary<(Guid TransactionId, int Partition), long>? _pendingTxOffsets;
 
     /// <summary>
     /// Idempotency dedup set. Populated as terminal marks replay so a
@@ -199,17 +210,22 @@ internal sealed partial class BPlusLeafGrain
         var ambientOffset = LatticeApplyOffsetContext.Current;
         if (ambientOffset is long offset)
         {
-            var offsets = _pendingTxOffsets ??= new Dictionary<Guid, long>();
-            if (offsets.TryGetValue(transactionId, out var existingOffset))
+            // CurrentPartition is null on the legacy single-partition
+            // apply scope; treat as partition 0 to preserve the
+            // pre-multi-partition clamp shape.
+            var ambientPartition = LatticeApplyOffsetContext.CurrentPartition ?? 0;
+            var offsets = _pendingTxOffsets ??= new Dictionary<(Guid, int), long>();
+            var offsetKey = (transactionId, ambientPartition);
+            if (offsets.TryGetValue(offsetKey, out var existingOffset))
             {
                 if (offset < existingOffset)
                 {
-                    offsets[transactionId] = offset;
+                    offsets[offsetKey] = offset;
                 }
             }
             else
             {
-                offsets[transactionId] = offset;
+                offsets[offsetKey] = offset;
             }
         }
     }
@@ -294,7 +310,7 @@ internal sealed partial class BPlusLeafGrain
         // _pendingTx (which may still be null).
         if (_pendingTx is null || !_pendingTx.Remove(transactionId, out var bucket))
         {
-            _pendingTxOffsets?.Remove(transactionId);
+            RemovePendingTxOffsetsForTransaction(transactionId);
             (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
 #if LATTICE_DIAG
             // DIAG: commit arrived on leaf with no bucket (fast-path).
@@ -524,7 +540,7 @@ internal sealed partial class BPlusLeafGrain
             AdvanceProjectionClock(terminalStamp);
         }
 
-        _pendingTxOffsets?.Remove(transactionId);
+        RemovePendingTxOffsetsForTransaction(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
 
         // Bump the same-silo revision cookie so a co-located
@@ -546,7 +562,7 @@ internal sealed partial class BPlusLeafGrain
             return;
 
         var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId);
-        _pendingTxOffsets?.Remove(transactionId);
+        RemovePendingTxOffsetsForTransaction(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
 
 #if LATTICE_DIAG
@@ -780,6 +796,17 @@ internal sealed partial class BPlusLeafGrain
     internal int RecentlyTerminalCount => _recentlyTerminal?.Count ?? 0;
 
     /// <summary>
+    /// Test-only seam exposing the per-partition unresolved-prepare
+    /// clamp floor used by the projection-checkpoint advance gate.
+    /// Returns the same value as the internal
+    /// <see cref="MinUnresolvedPrepareOffsetForPartition"/>; preserved
+    /// as a distinct entry-point so test assertions remain stable
+    /// against a future rename of the production accessor.
+    /// </summary>
+    internal long? MinUnresolvedPrepareOffsetForPartitionForTest(int partition)
+        => MinUnresolvedPrepareOffsetForPartition(partition);
+
+    /// <summary>
     /// Returns the minimum WAL offset across every unresolved
     /// pending-tx prepare on this leaf, or <c>null</c> when no
     /// prepare-with-offset is currently buffered. Used by
@@ -804,6 +831,63 @@ internal sealed partial class BPlusLeafGrain
                     min = offset;
             }
             return min;
+        }
+    }
+
+    /// <summary>
+    /// Returns the minimum WAL offset across every unresolved
+    /// pending-tx prepare on this leaf that was recorded under
+    /// <paramref name="partition"/>, or <c>null</c> when no
+    /// prepare-with-offset for the given partition is currently
+    /// buffered. Required by the per-partition projection-checkpoint
+    /// clamp so a multi-partition replay does not advance partition
+    /// <c>P</c>'s checkpoint past an unresolved prepare from a
+    /// distinct partition's offset space.
+    /// </summary>
+    internal long? MinUnresolvedPrepareOffsetForPartition(int partition)
+    {
+        if (_pendingTxOffsets is null || _pendingTxOffsets.Count == 0)
+            return null;
+
+        long min = long.MaxValue;
+        var seen = false;
+        foreach (var ((_, p), offset) in _pendingTxOffsets)
+        {
+            if (p != partition)
+                continue;
+            seen = true;
+            if (offset < min)
+                min = offset;
+        }
+        return seen ? min : null;
+    }
+
+    /// <summary>
+    /// Removes every per-partition pending-tx offset entry recorded
+    /// under <paramref name="transactionId"/>. Called from
+    /// <see cref="ApplyTxCommit"/> / <see cref="ApplyTxAbort"/> at
+    /// terminal-replay time. A single saga whose per-key writes hashed
+    /// across multiple WAL partitions has one entry per partition;
+    /// this helper removes all of them so the per-partition clamp
+    /// frees up correctly on every partition once the saga terminates.
+    /// </summary>
+    private void RemovePendingTxOffsetsForTransaction(Guid transactionId)
+    {
+        if (_pendingTxOffsets is null || _pendingTxOffsets.Count == 0)
+            return;
+        List<(Guid, int)>? toRemove = null;
+        foreach (var key in _pendingTxOffsets.Keys)
+        {
+            if (key.TransactionId == transactionId)
+            {
+                (toRemove ??= new List<(Guid, int)>()).Add(key);
+            }
+        }
+        if (toRemove is null)
+            return;
+        foreach (var key in toRemove)
+        {
+            _pendingTxOffsets.Remove(key);
         }
     }
 
@@ -845,12 +929,26 @@ internal sealed partial class BPlusLeafGrain
             // Per-saga WAL offset (if any) for the snapshot's
             // WalOffset field. Foreground commits leave this map
             // untouched; the value is surfaced for diagnostics only
-            // and is 0 when unstamped.
+            // and is 0 when unstamped. Under multi-partition replay a
+            // saga can register one offset per partition; for the
+            // diagnostic field we report the minimum across all
+            // recorded partitions for the saga (the earliest WAL
+            // observation of the saga's prepare on this leaf).
             long walOffset = 0;
-            if (_pendingTxOffsets is not null
-                && _pendingTxOffsets.TryGetValue(txid, out var offset))
+            if (_pendingTxOffsets is not null)
             {
-                walOffset = offset;
+                long min = long.MaxValue;
+                var seen = false;
+                foreach (var ((tx, _), offset) in _pendingTxOffsets)
+                {
+                    if (tx != txid)
+                        continue;
+                    seen = true;
+                    if (offset < min)
+                        min = offset;
+                }
+                if (seen)
+                    walOffset = min;
             }
 
             foreach (var (key, value) in bucket)

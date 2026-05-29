@@ -85,9 +85,14 @@ internal sealed partial class BPlusLeafGrain
     private const int ReplaySliceBudget = 256;
 
     /// <summary>
-    /// V1 WAL partition the activation-time replay reads from. Pinned
-    /// to <c>0</c> until multi-partition fan-out lands; see the type
-    /// docstring above for the rationale.
+    /// V1 WAL partition the activation-time replay reads from. Retained
+    /// as a name for the legacy single-partition shape (default
+    /// <see cref="LatticeOptions.WalPartitions"/> = 1); under multi-
+    /// partition replay the activation hook iterates
+    /// <c>[0, WalPartitions)</c> and threads each partition through
+    /// <see cref="LatticeApplyOffsetContext.BeginScope(int, long)"/>
+    /// so the per-partition projection-checkpoint clamp can scope to
+    /// the correct partition's offset space.
     /// </summary>
     private const int ReplayWalPartition = 0;
 
@@ -248,67 +253,94 @@ internal sealed partial class BPlusLeafGrain
         if (string.IsNullOrEmpty(treeId))
             return false;
 
-        var checkpoint = checkpointOverride ?? state.State.ProjectionCheckpointOffset;
+        var resolvedOptions = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, resolvedOptions.WalPartitions);
+        var detector = context.ActivationServices?.GetService<ILatticeFallOffLogDetector>();
+        var projection = (ILeafProjection)this;
+
+        var anyAdvanced = false;
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            // Per-partition checkpoint: a leaf whose persisted state
+            // pre-dates the per-partition slot falls back to the
+            // scalar ProjectionCheckpointOffset for partition 0 only;
+            // every other partition starts at the -1 "nothing applied"
+            // sentinel. The cold-start cache-empty override (see step
+            // 0.5 in OnActivateAsync) drives every partition to -1
+            // because the cache rebuild covers the full readable
+            // window of every partition.
+            long persistedCheckpoint = GetPersistedCheckpointForPartition(partition);
+            var checkpoint = checkpointOverride ?? persistedCheckpoint;
 
 #if LATTICE_DIAG
-        DiagSink.Write($"[DIAG replay-enter] gid={context.GrainId} treeId={treeId} shardIndex={state.State.ShardIndex} " +
-            $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +
-            $"checkpoint={checkpoint} entryCount={Cache.Count}");
+            DiagSink.Write($"[DIAG replay-enter] gid={context.GrainId} treeId={treeId} partition={partition} shardIndex={state.State.ShardIndex} " +
+                $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +
+                $"checkpoint={checkpoint} entryCount={Cache.Count}");
 #endif
 
-        // Fall-off-log gate: classify the gap before reading any
-        // slice. The detector consults the commit log's head and
-        // tail offsets, the configured replay budget, and the
-        // projection retention. Anything other than TailReplay
-        // means the WAL alone cannot recover the projection (either
-        // entries below the checkpoint have been trimmed, or the
-        // gap exceeds the operator-configured budget). V1 surfaces
-        // every non-tail decision as LeafProjectionStaleException
-        // because snapshot-driven recovery and full-rebuild are not
-        // wired in this commit; the host's grain-activation
-        // pipeline will retry, escalate, or surface the failure to
-        // the operator according to LatticeOptions.ProjectionRebuildPolicy.
-        var detector = context.ActivationServices?.GetService<ILatticeFallOffLogDetector>();
-        if (detector is not null)
-        {
-            var resolvedOptions = await GetOptionsAsync();
-            var decision = await detector.ClassifyAsync(
-                treeId,
-                ReplayWalPartition,
-                checkpoint,
-                TimeSpan.Zero,
-                resolvedOptions,
-                cancellationToken);
-
-            switch (decision)
+            if (detector is not null)
             {
-                case FallOffLogDecision.TailReplay:
-                    break;
-                case FallOffLogDecision.SnapshotPending:
-                    // SnapshotPending is a non-fatal advisory. At
-                    // activation time the leaf treats it exactly as
-                    // TailReplay for the replay loop below - the
-                    // persisted checkpoint is still inside the readable
-                    // WAL window. We latch the advisory so the
-                    // activation hook (OnActivateAsync) can drive a
-                    // proactive snapshot capture once the tail replay
-                    // has completed.
-                    _activationSnapshotPending = true;
-                    break;
-                case FallOffLogDecision.SnapshotThenWal:
-                case FallOffLogDecision.FullRebuildFromWal:
-                case FallOffLogDecision.Fail:
-                default:
-                    throw new LeafProjectionStaleException(
-                        $"Leaf projection for tree '{treeId}' shard {ReplayWalPartition} cannot be recovered " +
-                        $"from the WAL alone (decision={decision}, persistedCheckpoint={checkpoint}). " +
-                        "Snapshot-then-WAL and full-rebuild recovery paths are not yet integrated; " +
-                        "operator-driven rebuild is required.");
+                var decision = await detector.ClassifyAsync(
+                    treeId,
+                    partition,
+                    checkpoint,
+                    TimeSpan.Zero,
+                    resolvedOptions,
+                    cancellationToken);
+
+                switch (decision)
+                {
+                    case FallOffLogDecision.TailReplay:
+                        break;
+                    case FallOffLogDecision.SnapshotPending:
+                        // SnapshotPending is a non-fatal advisory. The
+                        // activation hook drives the proactive snapshot
+                        // capture after every partition's tail replay
+                        // completes. Latched per-leaf (not per-partition)
+                        // because the snapshot capture is whole-leaf and
+                        // benefits any partition that fired the advisory.
+                        _activationSnapshotPending = true;
+                        break;
+                    case FallOffLogDecision.SnapshotThenWal:
+                    case FallOffLogDecision.FullRebuildFromWal:
+                    case FallOffLogDecision.Fail:
+                    default:
+                        throw new LeafProjectionStaleException(
+                            $"Leaf projection for tree '{treeId}' partition {partition} cannot be recovered " +
+                            $"from the WAL alone (decision={decision}, persistedCheckpoint={checkpoint}). " +
+                            "Snapshot-then-WAL and full-rebuild recovery paths are not yet integrated; " +
+                            "operator-driven rebuild is required.");
+                }
             }
+
+            var advanced = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, cancellationToken);
+            if (advanced)
+                anyAdvanced = true;
         }
 
+        return anyAdvanced;
+    }
+
+    /// <summary>
+    /// Per-partition replay inner loop extracted from
+    /// <see cref="ReplayWalSinceCheckpointAsync"/>. Reads WAL slices
+    /// from <paramref name="partition"/>'s coordinator strictly past
+    /// <paramref name="checkpoint"/>, threads
+    /// (<paramref name="partition"/>, offset) into
+    /// <see cref="LatticeApplyOffsetContext.BeginScope(int, long)"/>
+    /// for every Apply, then advances the per-partition projection
+    /// checkpoint via the projection seam. Returns <c>true</c> when
+    /// the per-partition checkpoint actually advanced.
+    /// </summary>
+    private async Task<bool> ReplayPartitionAsync(
+        string treeId,
+        int partition,
+        long checkpoint,
+        ILeafProjection projection,
+        CancellationToken cancellationToken)
+    {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
-            $"{treeId}/{ReplayWalPartition}");
+            $"{treeId}/{partition}");
 
         var head = await coordinator.GetHeadOffsetAsync(cancellationToken);
         if (head <= checkpoint)
@@ -316,7 +348,6 @@ internal sealed partial class BPlusLeafGrain
 
         var fromExclusive = checkpoint;
         long maxApplied = checkpoint;
-        var projection = (ILeafProjection)this;
 
         while (fromExclusive < head)
         {
@@ -333,11 +364,6 @@ internal sealed partial class BPlusLeafGrain
 
             foreach (var entry in slice)
             {
-                // Per-entry cancellation check: the slice budget is
-                // 256 entries, but a long-tailed replay may stitch
-                // many slices together. Honouring cancellation
-                // between Apply calls keeps activation responsive
-                // when the host is shutting down or rebalancing.
                 cancellationToken.ThrowIfCancellationRequested();
 
                 if (ShouldApplyDuringReplay(
@@ -347,40 +373,17 @@ internal sealed partial class BPlusLeafGrain
                     state.State.HighKeyExclusive))
                 {
 #if LATTICE_DIAG
-                    DiagSink.Write($"[DIAG replay-apply] gid={context.GrainId} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' shardIndex={entry.Mutation.ShardIndex}");
+                    DiagSink.Write($"[DIAG replay-apply] gid={context.GrainId} partition={partition} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' shardIndex={entry.Mutation.ShardIndex}");
 #endif
-                    using (LatticeApplyOffsetContext.BeginScope(entry.Offset))
+                    using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
                     {
-                        // Drives the existing ILeafProjection.Apply
-                        // dispatch in BPlusLeafGrain.Projection.cs:
-                        //
-                        //   * Committed Set/Delete -> ApplySet/ApplyDelete
-                        //     -> MergeIntoProjection (visible Entries map).
-                        //   * Prepared Set/Delete  -> ApplyPreparedSet/Delete
-                        //     -> AddPreparedMutation (grain-local
-                        //     _pendingTx dictionary in
-                        //     BPlusLeafGrain.PendingTx.cs). The ambient
-                        //     LatticeApplyOffsetContext scope above
-                        //     stamps the WAL offset onto each pending
-                        //     record so MinUnresolvedPrepareOffset can
-                        //     clamp the checkpoint advance below.
-                        //   * TxCommit / TxAbort  -> terminal handler
-                        //     flips the pending bucket into Entries
-                        //     (commit) or drops it (abort).
-                        //   * DeleteRange -> ApplyDeleteRange iterates
-                        //     this leaf's own Entries only.
-                        //
-                        // The materialiser does not duplicate any of
-                        // this logic - rebuilding the pending-tx map
-                        // is a side effect of replaying through the
-                        // same Apply seam that runtime mutations use.
                         projection.Apply(entry.Mutation);
                     }
                 }
 #if LATTICE_DIAG
                 else
                 {
-                    DiagSink.Write($"[DIAG replay-skip] gid={context.GrainId} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' mutShard={entry.Mutation.ShardIndex} leafShard={state.State.ShardIndex} low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}'");
+                    DiagSink.Write($"[DIAG replay-skip] gid={context.GrainId} partition={partition} offset={entry.Offset} kind={entry.Mutation.Kind} key='{entry.Mutation.Key}' mutShard={entry.Mutation.ShardIndex} leafShard={state.State.ShardIndex} low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}'");
                 }
 #endif
 
@@ -388,33 +391,21 @@ internal sealed partial class BPlusLeafGrain
                     maxApplied = entry.Offset;
             }
 
-            // Advance the slice cursor by the highest offset returned;
-            // the coordinator may legitimately end the slice short of
-            // the requested upper bound when the budget is exhausted
-            // or when the WAL has trimmed an interior gap.
             var lastOffset = slice[^1].Offset;
             if (lastOffset <= fromExclusive)
-                break; // defensive: never spin if the slice failed to advance.
+                break;
             fromExclusive = lastOffset;
         }
 
         if (maxApplied > checkpoint)
         {
-            // SetCheckpointOffsetAsync clamps the requested advance
-            // behind MinUnresolvedPrepareOffset - 1 (the existing
-            // unresolved-prepare clamp in BPlusLeafGrain.Projection.cs)
-            // so the persisted checkpoint never overruns an unresolved
-            // prepare. The internal FlushPendingCheckpointAsync persist
-            // seam fires here - this is the legitimate
-            // materialiser-driven checkpoint persist for the projection
-            // offset, distinct from the saga pending-tx state, which
-            // remains in-memory and is rebuilt deterministically on
-            // every reactivation. FlushPendingCheckpointAsync also
-            // publishes the cursor as part of its persist sequence,
-            // which is why this method returns true here so the
-            // activation hook can skip the explicit cursor publish
-            // and avoid a redundant RPC.
-            await projection.SetCheckpointOffsetAsync(maxApplied, cancellationToken);
+            // SetCheckpointOffsetAsync reads CurrentPartition from the
+            // ambient apply scope; scope this final advance so the
+            // per-partition clamp is applied to the correct partition.
+            using (LatticeApplyOffsetContext.BeginScope(partition, maxApplied))
+            {
+                await projection.SetCheckpointOffsetAsync(maxApplied, cancellationToken);
+            }
             return true;
         }
 

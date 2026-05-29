@@ -48,19 +48,58 @@ internal static class LatticeApplyOffsetContext
     }
 
     /// <summary>
+    /// Gets the current ambient WAL partition hint companion to
+    /// <see cref="Current"/>. Returns the replay-coordinator-stamped
+    /// partition when a partition-aware apply scope is active on the
+    /// <see cref="RequestContext"/>; otherwise returns <c>null</c>,
+    /// which every reader treats as partition <c>0</c> for wire-compat
+    /// with the legacy single-partition shape.
+    /// </summary>
+    public static int? CurrentPartition
+    {
+        get
+        {
+            var raw = RequestContext.Get(LatticeEventConstants.ApplyOffsetPartitionRequestContextKey);
+            return raw is int partition ? partition : null;
+        }
+    }
+
+    /// <summary>
     /// Stamps <paramref name="offset"/> as the ambient WAL offset for
     /// the lifetime of the returned scope, restoring the prior value on
     /// <see cref="IDisposable.Dispose"/>. Safe to nest; disposal is
-    /// idempotent.
+    /// idempotent. Equivalent to <see cref="BeginScope(int, long)"/>
+    /// with partition <c>0</c> - the legacy single-partition shape.
     /// </summary>
     public static IDisposable BeginScope(long offset)
+        => BeginScope(0, offset);
+
+    /// <summary>
+    /// Stamps the (<paramref name="partition"/>, <paramref name="offset"/>)
+    /// pair as the ambient WAL partition + offset for the lifetime of
+    /// the returned scope, restoring the prior values on
+    /// <see cref="IDisposable.Dispose"/>. Safe to nest; disposal is
+    /// idempotent. The partition tag is required for multi-partition
+    /// WAL replay so the leaf's per-prepare offset map can clamp the
+    /// per-partition projection checkpoint without conflating offsets
+    /// from disjoint partition offset spaces.
+    /// </summary>
+    public static IDisposable BeginScope(int partition, long offset)
     {
-        var previous = RequestContext.Get(LatticeEventConstants.ApplyOffsetRequestContextKey) as long?;
+        if (partition < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(partition), partition, "WAL partition index must be non-negative.");
+        }
+
+        var previousOffset = RequestContext.Get(LatticeEventConstants.ApplyOffsetRequestContextKey) as long?;
+        var previousPartition = RequestContext.Get(LatticeEventConstants.ApplyOffsetPartitionRequestContextKey) as int?;
         RequestContext.Set(LatticeEventConstants.ApplyOffsetRequestContextKey, offset);
-        return new Scope(previous);
+        RequestContext.Set(LatticeEventConstants.ApplyOffsetPartitionRequestContextKey, partition);
+        return new Scope(previousOffset, previousPartition);
     }
 
-    private sealed class Scope(long? previous) : IDisposable
+    private sealed class Scope(long? previousOffset, int? previousPartition) : IDisposable
     {
         private bool _disposed;
 
@@ -72,13 +111,22 @@ internal static class LatticeApplyOffsetContext
             }
 
             _disposed = true;
-            if (previous is null)
+            if (previousOffset is null)
             {
                 RequestContext.Remove(LatticeEventConstants.ApplyOffsetRequestContextKey);
             }
             else
             {
-                RequestContext.Set(LatticeEventConstants.ApplyOffsetRequestContextKey, previous.Value);
+                RequestContext.Set(LatticeEventConstants.ApplyOffsetRequestContextKey, previousOffset.Value);
+            }
+
+            if (previousPartition is null)
+            {
+                RequestContext.Remove(LatticeEventConstants.ApplyOffsetPartitionRequestContextKey);
+            }
+            else
+            {
+                RequestContext.Set(LatticeEventConstants.ApplyOffsetPartitionRequestContextKey, previousPartition.Value);
             }
         }
     }

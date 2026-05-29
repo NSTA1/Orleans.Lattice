@@ -48,6 +48,12 @@ if (options.WalMaxPendingBatches < 1)
 }
 if (options.MaxSnapshotReplayEntries < 1)
     return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxSnapshotReplayEntries)} must be greater than or equal to 1.");
+if (options.WalPartitions < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalPartitions)} must be greater than or equal to 1. "
+        + "Set to 1 (the default) to retain the single-partition WAL shape; raise to fan out WAL throughput across independent grains.");
+}
 if (options.SnapshotLeafIdleTtl <= TimeSpan.Zero
     && options.SnapshotLeafIdleTtl != Timeout.InfiniteTimeSpan)
 {

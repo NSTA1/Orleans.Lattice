@@ -194,6 +194,22 @@ public static class LatticeEventConstants
     internal const string ApplyOffsetRequestContextKey = "ol.aoff";
 
     /// <summary>
+    /// Companion to <see cref="ApplyOffsetRequestContextKey"/> carrying
+    /// the WAL <em>partition</em> from which the in-flight Apply'd
+    /// mutation was read. Required when
+    /// <see cref="LatticeOptions.WalPartitions"/> is greater than
+    /// <c>1</c>: each partition advances its own checkpoint independently
+    /// and the leaf's per-prepare offset map records (partition, offset)
+    /// pairs so the per-partition projection-checkpoint clamp
+    /// (<c>min unresolved prepare offset for partition - 1</c>) does not
+    /// confuse offsets from disjoint partition offset spaces. Unset on
+    /// the single-partition shape and treated as partition <c>0</c>
+    /// by every reader for wire-compat. Internal - set through
+    /// <see cref="LatticeApplyOffsetContext"/>.
+    /// </summary>
+    internal const string ApplyOffsetPartitionRequestContextKey = "ol.aoff.p";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry a per-scan
     /// snapshot of <see cref="BPlusTree.ITxRegistryGrain"/> decisions
     /// from a lattice-level read fan-out down into every per-shard

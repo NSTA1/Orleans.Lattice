@@ -482,6 +482,10 @@ Number of independent WAL partitions per tree (default: 1). The foreground commi
 
 **Per-tree, pinned on first WAL write.** Changing this value after a tree has accepted writes silently re-routes new mutations to different partitions; existing entries remain in the partition they were originally written to. Set the value before the tree first commits if a non-default fan-out is required.
 
+**Activation-time replay is partition-aware.** The leaf grain's activation-time materialiser iterates `[0, WalPartitions)` and runs an independent fall-off-log classification, slice read, and projection-checkpoint advance per partition. Per-partition checkpoints persist into the `LeafNodeState.ProjectionCheckpointOffsetsByPartition` slot (`long[]?`, additive `[Id]`), with partition 0 also mirrored into the legacy scalar `ProjectionCheckpointOffset` slot so a downgrade to a host that has never observed multi-partition state still reads a valid single-partition shape. Per-partition cursor consumer ids take the form `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}` so the per-shard WAL GC trims each partition independently against its own slowest consumer; on `WalPartitions = 1` the legacy unsuffixed shape `_lattice_materialiser_{treeId}_{leafGrainId}` is preserved for wire compatibility with hosts that have never enabled multi-partition replay.
+
+Must be `>= 1`. Values below 1 fail option validation at silo start.
+
 ### `WalRetention`
 
 Optional wall-clock hard ceiling on WAL retention (default: `null`, disabled). When set, the WAL garbage collector trims entries whose HLC wall-clock is older than `now - WalRetention` regardless of consumer cursor position, bounding worst-case disk usage even when a registered consumer is hopelessly behind. The lagging consumer then "falls off the log" on its next read, surfacing the gap to the auto-bootstrap trigger (replication-side concern). When `null`, the GC predicate is purely `min(consumer cursors)`, and a lagging consumer pins the WAL until it catches up. Must be strictly greater than `TimeSpan.Zero` when set.

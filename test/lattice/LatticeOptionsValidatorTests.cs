@@ -95,4 +95,31 @@ public class LatticeOptionsValidatorTests
         Assert.That(new LatticeOptions().DirtyLeafFlushIntervalMs, Is.EqualTo(50));
         Assert.That(LatticeOptions.DefaultDirtyLeafFlushIntervalMs, Is.EqualTo(50));
     }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(-8)]
+    public void WalPartitions_must_be_at_least_one(int value)
+    {
+        var result = Validate(o => o.WalPartitions = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalPartitions)));
+    }
+
+    [TestCase(1)]
+    [TestCase(2)]
+    [TestCase(8)]
+    [TestCase(1024)]
+    public void WalPartitions_positive_passes(int value)
+    {
+        var result = Validate(o => o.WalPartitions = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalPartitions_default_is_one()
+    {
+        Assert.That(new LatticeOptions().WalPartitions, Is.EqualTo(1));
+        Assert.That(LatticeOptions.DefaultWalPartitions, Is.EqualTo(1));
+    }
 }

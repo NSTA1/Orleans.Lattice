@@ -46,73 +46,70 @@ internal sealed partial class BPlusLeafGrain
     private bool _cursorReporterResolved;
 
     /// <summary>
-    /// Cached consumer id of the form
-    /// <c>_lattice_materialiser_{treeId}_{leafGrainId}</c>. Computed once
-    /// on first use; <c>null</c> when <see cref="LeafNodeState.TreeId"/>
+    /// Cached consumer id template of the form
+    /// <c>_lattice_materialiser_{treeId}_{leafGrainId}</c> for the
+    /// single-partition shape, or the partition-suffixed form
+    /// <c>_lattice_materialiser_{treeId}_{leafGrainId}_{partition}</c>
+    /// when <see cref="LatticeOptions.WalPartitions"/> > 1. Computed
+    /// once on first use; <c>null</c> when <see cref="LeafNodeState.TreeId"/>
     /// is unset (system-tree leaves and tests that bypass tree
     /// initialisation), in which case the cursor-report path is a
     /// no-op.
     /// </summary>
-    private string? _cachedConsumerId;
+    private string? _cachedConsumerIdBase;
 
     /// <summary>
     /// Reports the leaf's current projection HLC to the registered
     /// <see cref="ILeafCursorReporter"/>, lazy-gated on
     /// <c>state.State.Clock &gt; HybridLogicalClock.Zero</c>. Called from
     /// <see cref="FlushPendingCheckpointAsync"/> after every successful
-    /// persist; never throws.
+    /// persist; never throws. Under multi-partition WAL the leaf reports
+    /// one cursor per partition so the per-shard WAL GC trims each
+    /// partition independently against its own slowest consumer.
     /// </summary>
     private async Task ReportCursorIfActiveAsync()
     {
         var clock = state.State.Clock;
         if (clock <= HybridLogicalClock.Zero)
         {
-            // No Apply has run, the projection is
-            // empty, and registering at Zero would pin the WAL at offset
-            // zero indefinitely. Skip the report entirely so a host that
-            // has not yet flipped to the WAL-as-sole-commit-point
-            // promotion never registers a cursor.
             return;
         }
 
         var reporter = ResolveCursorReporter();
         if (reporter is null)
         {
-            // Host has not added Orleans.Lattice.Replication; nothing to
-            // report against and the per-shard WAL GC predicate falls
-            // back to its pre-integration baseline.
             return;
         }
 
-        var consumerId = ResolveConsumerId();
-        if (consumerId is null)
+        var idBase = ResolveConsumerIdBase();
+        if (idBase is null)
         {
-            // Tree id has not been seeded yet (system trees, isolated
-            // unit tests). The leaf is not eligible for cursor
-            // registration in this state.
             return;
         }
 
-        var treeId = state.State.TreeId!; // non-null when consumerId resolved.
+        var treeId = state.State.TreeId!;
+        var options = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, options.WalPartitions);
 
-        try
+        for (var partition = 0; partition < partitionCount; partition++)
         {
-            await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // Monotonic cursor: the next successful flush will catch up,
-            // so a transient registry failure must not stall the
-            // foreground write path or block our checkpoint advance.
-            var logger = context.ActivationServices?
-                .GetService<ILoggerFactory>()?
-                .CreateLogger<BPlusLeafGrain>();
-            logger?.LogWarning(
-                ex,
-                "Failed to report leaf cursor for tree {TreeId} consumer {ConsumerId} at HLC {Cursor}; will retry on next checkpoint flush.",
-                treeId,
-                consumerId,
-                clock);
+            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+            try
+            {
+                await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                var logger = context.ActivationServices?
+                    .GetService<ILoggerFactory>()?
+                    .CreateLogger<BPlusLeafGrain>();
+                logger?.LogWarning(
+                    ex,
+                    "Failed to report leaf cursor for tree {TreeId} consumer {ConsumerId} at HLC {Cursor}; will retry on next checkpoint flush.",
+                    treeId,
+                    consumerId,
+                    clock);
+            }
         }
     }
 
@@ -126,21 +123,27 @@ internal sealed partial class BPlusLeafGrain
         return _cursorReporter;
     }
 
-    private string? ResolveConsumerId()
+    private string? ResolveConsumerIdBase()
     {
-        if (_cachedConsumerId is not null)
-            return _cachedConsumerId;
+        if (_cachedConsumerIdBase is not null)
+            return _cachedConsumerIdBase;
 
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
             return null;
 
-        // Stable, deterministic consumer id pinned
-        // to the leaf grain so each leaf advances its own cursor
-        // independently and the registry's per-shard min predicate
-        // (replication slowest-consumer trim) trims under the slowest
-        // local consumer.
-        _cachedConsumerId = $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{context.GrainId}";
-        return _cachedConsumerId;
+        _cachedConsumerIdBase = $"{ILeafCursorReporter.MaterialiserConsumerIdPrefix}{treeId}_{context.GrainId}";
+        return _cachedConsumerIdBase;
     }
+
+    /// <summary>
+    /// Builds the per-partition consumer id. The single-partition shape
+    /// (<paramref name="partitionCount"/> == 1) returns the legacy
+    /// unsuffixed form for wire compatibility with hosts that have
+    /// never enabled multi-partition WAL replay; the multi-partition
+    /// shape suffixes <c>_{partition}</c> so each partition's cursor
+    /// is tracked independently.
+    /// </summary>
+    private static string BuildConsumerId(string idBase, int partition, int partitionCount)
+        => partitionCount == 1 ? idBase : $"{idBase}_{partition}";
 }

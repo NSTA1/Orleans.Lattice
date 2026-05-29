@@ -23,8 +23,15 @@ internal sealed partial class BPlusLeafGrain
     /// yet durably persisted. <c>null</c> when no advance is pending
     /// (the persisted offset on <see cref="LeafNodeState"/> is the
     /// source of truth).
+    /// <para>
+    /// Under <see cref="LatticeOptions.WalPartitions"/> greater than 1
+    /// this map is keyed by partition; partition <c>0</c>'s entry is
+    /// also mirrored into the scalar <c>ProjectionCheckpointOffset</c>
+    /// on flush so a downgrade to a legacy silo still reads a valid
+    /// single-partition shape.
+    /// </para>
     /// </summary>
-    private long? _pendingCheckpointOffset;
+    private Dictionary<int, long>? _pendingCheckpointOffsetsByPartition;
 
     /// <summary>
     /// <see cref="Stopwatch.GetTimestamp"/> reading at the last durable
@@ -77,41 +84,108 @@ internal sealed partial class BPlusLeafGrain
     {
         cancellationToken.ThrowIfCancellationRequested();
         // Return the most recent offset the caller has communicated
-        // (pending or persisted, whichever is higher). The "durably
-        // committed" notion is preserved via FlushCheckpointAsync; this
-        // accessor reports the materialiser's current view so a
-        // read-modify-write caller observes its own most-recent advance.
-        var persisted = state.State.ProjectionCheckpointOffset;
-        var pending = _pendingCheckpointOffset;
-        return Task.FromResult(pending is null ? persisted : Math.Max(persisted, pending.Value));
+        // (pending or persisted, whichever is higher) for the partition
+        // the caller is currently scoped under. The "durably committed"
+        // notion is preserved via FlushCheckpointAsync; this accessor
+        // reports the materialiser's current view so a read-modify-
+        // write caller observes its own most-recent advance.
+        var partition = LatticeApplyOffsetContext.CurrentPartition ?? 0;
+        return Task.FromResult(GetCurrentCheckpointForPartition(partition));
+    }
+
+    /// <summary>
+    /// Returns the materialiser's current per-partition view of the
+    /// projection checkpoint (max of pending and persisted) for
+    /// <paramref name="partition"/>. Partition <c>0</c> always reflects
+    /// the scalar <c>ProjectionCheckpointOffset</c> slot for wire-compat
+    /// with legacy single-partition state.
+    /// </summary>
+    internal long GetCurrentCheckpointForPartition(int partition)
+    {
+        var persisted = GetPersistedCheckpointForPartition(partition);
+        if (_pendingCheckpointOffsetsByPartition is not null
+            && _pendingCheckpointOffsetsByPartition.TryGetValue(partition, out var pending))
+        {
+            return Math.Max(persisted, pending);
+        }
+        return persisted;
+    }
+
+    private long GetPersistedCheckpointForPartition(int partition)
+    {
+        if (partition == 0)
+            return state.State.ProjectionCheckpointOffset;
+        var arr = state.State.ProjectionCheckpointOffsetsByPartition;
+        if (arr is null || partition >= arr.Length)
+            return -1L; // "nothing applied" sentinel - legacy state has no per-partition value.
+        return arr[partition];
+    }
+
+    private void SetPersistedCheckpointForPartition(int partition, long value)
+    {
+        if (partition == 0)
+        {
+            state.State.ProjectionCheckpointOffset = value;
+        }
+        // Mirror partition 0 into the array slot (when present) so a
+        // host that later reads ProjectionCheckpointOffsetsByPartition
+        // observes a consistent picture; mirror non-zero partitions
+        // into the array slot, growing it on first write. We never
+        // shrink: the array's length is the maximum partition count
+        // ever observed on this leaf.
+        var arr = state.State.ProjectionCheckpointOffsetsByPartition;
+        if (arr is null)
+        {
+            if (partition == 0)
+                return; // legacy single-partition state, scalar slot suffices.
+            arr = new long[partition + 1];
+            // Seed every slot to the -1 "nothing applied" sentinel
+            // except partition 0, which mirrors the scalar slot.
+            for (var i = 0; i < arr.Length; i++)
+                arr[i] = -1L;
+            arr[0] = state.State.ProjectionCheckpointOffset;
+            arr[partition] = value;
+            state.State.ProjectionCheckpointOffsetsByPartition = arr;
+            return;
+        }
+        if (partition >= arr.Length)
+        {
+            var grown = new long[partition + 1];
+            arr.CopyTo(grown, 0);
+            for (var i = arr.Length; i < grown.Length; i++)
+                grown[i] = -1L;
+            grown[partition] = value;
+            state.State.ProjectionCheckpointOffsetsByPartition = grown;
+            return;
+        }
+        arr[partition] = value;
     }
 
     async Task ILeafProjection.SetCheckpointOffsetAsync(long offset, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var persisted = state.State.ProjectionCheckpointOffset;
-        var current = _pendingCheckpointOffset is { } p ? Math.Max(persisted, p) : persisted;
+        var partition = LatticeApplyOffsetContext.CurrentPartition ?? 0;
+        var persisted = GetPersistedCheckpointForPartition(partition);
+        long current = persisted;
+        if (_pendingCheckpointOffsetsByPartition is not null
+            && _pendingCheckpointOffsetsByPartition.TryGetValue(partition, out var p))
+        {
+            current = Math.Max(persisted, p);
+        }
 
         if (offset < current)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(offset),
                 offset,
-                $"Projection checkpoint must be monotonically non-decreasing; current offset is {current}.");
+                $"Projection checkpoint must be monotonically non-decreasing; current offset for partition {partition} is {current}.");
         }
 
         // Clamp the requested advance back behind any unresolved saga
-        // prepare. Advancing the persisted checkpoint past the WAL
-        // offset of an unresolved prepare would silently lose the
-        // saga's writes if the leaf crashes before the terminal mark
-        // replays - crash recovery would resume from offset+1 and
-        // never see the prepare again. The clamp floor is
-        // (min unresolved prepare offset) - 1 so a future replay
-        // re-emits the prepare exactly once. Foreground commits leave
-        // _pendingTxOffsets untouched (no ambient apply offset to
-        // stamp), so this clamp degrades to a no-op for foreground-
-        // only leaves.
-        if (MinUnresolvedPrepareOffset is long minPrepare)
+        // prepare for this partition. See the multi-partition note in
+        // RemovePendingTxOffsetsForTransaction: the clamp is partition-
+        // scoped because cross-partition offsets are disjoint.
+        if (MinUnresolvedPrepareOffsetForPartition(partition) is long minPrepare)
         {
             var clampFloor = minPrepare - 1;
             if (offset > clampFloor)
@@ -122,24 +196,19 @@ internal sealed partial class BPlusLeafGrain
 
         if (offset < current)
         {
-            // The clamp drove the requested offset back behind the
-            // current materialised position. Silent no-op: the caller's
-            // intent is preserved by the still-buffered prepare, and a
-            // subsequent SetCheckpointOffsetAsync after the prepare's
-            // terminal mark will be free to advance.
+            // Clamp drove the requested offset back behind the current
+            // materialised position. Silent no-op.
             return;
         }
 
         if (offset == current)
         {
-            // Idempotent re-assert is a force-flush signal: durably
-            // commit any in-memory Apply work issued since the previous
-            // persist, even if the offset itself has not advanced.
+            // Idempotent re-assert is a force-flush signal.
             await FlushPendingCheckpointAsync(persistEvenWithoutPendingAdvance: true);
             return;
         }
 
-        _pendingCheckpointOffset = offset;
+        (_pendingCheckpointOffsetsByPartition ??= new Dictionary<int, long>())[partition] = offset;
 
         // Coalescing predicate: persist if either threshold has been
         // exceeded. Zero interval means every-entry mode.
@@ -176,10 +245,13 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     private async Task FlushPendingCheckpointAsync(bool persistEvenWithoutPendingAdvance)
     {
-        if (_pendingCheckpointOffset is { } pending)
+        if (_pendingCheckpointOffsetsByPartition is { Count: > 0 } pending)
         {
-            state.State.ProjectionCheckpointOffset = pending;
-            _pendingCheckpointOffset = null;
+            foreach (var (partition, offset) in pending)
+            {
+                SetPersistedCheckpointForPartition(partition, offset);
+            }
+            _pendingCheckpointOffsetsByPartition = null;
             // The checkpoint offset is a field of the published
             // ChildDigestSnapshot, so an advance must propagate upward
             // even when the projection hash itself is unchanged - the
