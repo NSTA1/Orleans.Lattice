@@ -2,6 +2,7 @@ using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.TestingHost;
@@ -86,9 +87,13 @@ public sealed class SingleClusterWalDurabilityTests
         }
 
         var provider = RequireSiloServices().GetRequiredService<IWalStorageProvider>();
-        var partitions = RequireSiloServices()
-            .GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>()
-            .Get(treeId).WalPartitions;
+        // Resolve through LatticeOptionsResolver so the test loop
+        // iterates the partitions the writer-side actually routed
+        // to (the tree-registry pin), not whatever the silo's live
+        // IOptionsMonitor<LatticeOptions> value happens to be.
+        var partitions = (await RequireSiloServices()
+            .GetRequiredService<LatticeOptionsResolver>()
+            .ResolveAsync(treeId)).WalPartitions;
         Assert.That(partitions, Is.GreaterThanOrEqualTo(1));
 
         var totalAppended = 0L;

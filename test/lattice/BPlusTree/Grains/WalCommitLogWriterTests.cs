@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -47,7 +48,8 @@ public class WalCommitLogWriterTests
         var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
         clusterIdResolver.Resolve(Arg.Any<string>()).Returns(clusterId);
 
-        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: optionsMonitor.Get(string.Empty), factory: grainFactory);
+        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, optionsResolver, modeResolver, clusterIdResolver);
         return (writer, captured);
     }
 
@@ -148,7 +150,7 @@ public class WalCommitLogWriterTests
         var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
         modeResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
 
-        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
+        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, TestOptionsResolver.Create(baseOptions: optionsMonitor.Get(string.Empty), factory: grainFactory), modeResolver, clusterIdResolver);
 
         await writer.AppendAsync(MakeMutation(originClusterId: null));
 
@@ -197,9 +199,11 @@ public class WalCommitLogWriterTests
     [Test]
     public async Task AppendManyAsync_dispatches_one_grain_batch_per_partition()
     {
-        // Default options pin WalPartitions=1, so every key in a batch
+        // Explicitly pin WalPartitions=1 so every key in a batch
         // hashes to the same WAL grain, which means a 16-key batched
-        // dispatch produces exactly one AppendBatchAsync call.
+        // dispatch produces exactly one AppendBatchAsync call. The
+        // silo-wide default is 8, so the pin keeps this single-partition
+        // narrative independent of the default-flip.
         var partitionCalls = new List<int>();
         var shard = Substitute.For<IWalShardGrain>();
         shard
@@ -214,13 +218,13 @@ public class WalCommitLogWriterTests
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalPartitions = 1 });
         var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
         modeResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
         var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
         clusterIdResolver.Resolve(Arg.Any<string>()).Returns("site-test");
 
-        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
+        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, TestOptionsResolver.Create(baseOptions: optionsMonitor.Get(string.Empty), factory: grainFactory), modeResolver, clusterIdResolver);
 
         var mutations = new List<WalRecord>();
         for (var i = 0; i < 16; i++)
@@ -283,7 +287,7 @@ public class WalCommitLogWriterTests
         var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
         clusterIdResolver.Resolve(Arg.Any<string>()).Returns("site-test");
 
-        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, modeResolver, clusterIdResolver);
+        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, TestOptionsResolver.Create(baseOptions: optionsMonitor.Get(string.Empty), factory: grainFactory), modeResolver, clusterIdResolver);
 
         var mutations = new List<WalRecord>();
         for (var i = 0; i < 32; i++)
