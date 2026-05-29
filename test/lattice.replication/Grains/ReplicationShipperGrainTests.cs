@@ -106,7 +106,19 @@ public partial class ReplicationShipperGrainTests
         {
             ClusterId = LocalCluster,
             ShipCursorWriteInterval = 1,
+            // The shipper-grain unit-test fixture stubs a single-partition feed
+            // (StubReplogShardGrain at {tree}/0). Force ReplogPartitions=1 so
+            // tests stay deterministic after the silo-wide default flipped to 8.
+            ReplogPartitions = 1,
         };
+        // Tests that supply their own options but don't explicitly set
+        // ReplogPartitions inherit the silo-wide default (8). The unit-test
+        // fixture only stubs a single-partition feed, so collapse the default
+        // back to 1 here; multi-partition tests set ReplogPartitions != default.
+        if (resolved.ReplogPartitions == LatticeReplicationOptions.DefaultReplogPartitions)
+        {
+            resolved.ReplogPartitions = 1;
+        }
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);

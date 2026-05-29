@@ -60,7 +60,20 @@ public partial class BPlusLeafGrainTests
         // flush mode so the persisted checkpoint becomes the observable of
         // "the materialiser advanced". The default coalescing predicate
         // (1 s / 1 000 entries) does not fire under sub-second tests.
-        var baseOptions = new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero };
+        var baseOptions = new LatticeOptions
+        {
+            MaterialiserCheckpointInterval = TimeSpan.Zero,
+            // Pin WalPartitions=1 for these unit tests: each test sets
+            // up a single mock ILeafReplayCoordinatorGrain and asserts
+            // exact call counts on it. The silo-wide default flipped
+            // to 8 with multi-partition WAL replay, which would
+            // otherwise drive the activation hook to iterate 8
+            // coordinator addresses and fail the per-call assertions.
+            // The single-partition shape under test is preserved by
+            // this explicit pin; the multi-partition fan-out is
+            // covered by BPlusLeafGrainTests.MultiPartitionMaterialiser.
+            WalPartitions = 1,
+        };
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,

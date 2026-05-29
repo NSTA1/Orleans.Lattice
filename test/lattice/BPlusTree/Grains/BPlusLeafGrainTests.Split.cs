@@ -492,7 +492,7 @@ public partial class BPlusLeafGrainTests
         // flush mode so the persisted checkpoint becomes the observable of
         // "the split-time checkpoint advance fired".
         var optionsResolver = TestOptionsResolver.Create(
-            baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero },
+            baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero, WalPartitions = 1 },
             maxLeafKeys: maxLeafKeys,
             shardCount: 1,
             factory: grainFactory);
@@ -567,7 +567,7 @@ public partial class BPlusLeafGrainTests
         context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
 
         var optionsResolver = TestOptionsResolver.Create(
-            baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero },
+            baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero, WalPartitions = 1 },
             maxLeafKeys: 3,
             shardCount: 1,
             factory: grainFactory);

@@ -364,8 +364,10 @@ strictly forward on every positive ack.
 Wire-compat is additive: the new `[Id(2)] PartitionCursors` slot on
 `ReplicationShipperState` decodes as the empty dictionary for legacy
 persisted state, which the cold-start path treats identically to a
-fresh activation. Setting `ReplogPartitions=1` (the default) reduces
-the merge to a single read per tick.
+fresh activation. Setting `ReplogPartitions=1` reduces the merge to a
+single read per tick; the shipping default is `8` (kept in lockstep
+with `LatticeOptions.WalPartitions` so the shipper reads every
+partition the commit-log writer fanned across).
 
 ### Deferred cursor persistence
 

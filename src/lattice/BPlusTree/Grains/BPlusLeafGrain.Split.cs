@@ -88,22 +88,16 @@ internal sealed partial class BPlusLeafGrain
         int mid = keys.Count / 2;
         var splitKey = keys[mid];
 
-        // Snapshot the WAL head for this shard's partition before the
-        // split's intent is persisted. The donor's foreground commits
-        // up to this offset have already been applied to the runtime
-        // entry cache, so on a future activation the
-        // materialiser can skip replaying them. This is correctness-
-        // safe even without the snapshot (the per-key-range filter
-        // drops foreign-range entries and LWW makes own-range
-        // re-application idempotent), but the snapshot bounds replay
-        // to entries committed strictly after the split.
+        // Snapshot the WAL head per partition before the split's
+        // intent is persisted. Under multi-partition replay every
+        // partition has its own offset space, so the sibling's per-
+        // partition replay-from-zero must be bounded by the matching
+        // partition's head; a single scalar would conflate them.
         var treeId = state.State.TreeId;
-        long walHeadAtSplit = 0;
+        long[]? walHeadsAtSplit = null;
         if (!string.IsNullOrEmpty(treeId))
         {
-            var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
-                $"{treeId}/{ReplayWalPartition}");
-            walHeadAtSplit = await coordinator.GetHeadOffsetAsync(CancellationToken.None);
+            walHeadsAtSplit = await CaptureWalHeadsByPartitionAsync(treeId);
         }
 
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
@@ -115,64 +109,60 @@ internal sealed partial class BPlusLeafGrain
 
         LatticeMetrics.LeafSplits.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty));
-        return await CompleteSplitAsync(walHeadAtSplit);
+        return await CompleteSplitAsync(walHeadsAtSplit);
+    }
+
+    /// <summary>
+    /// Captures the current WAL head offset across every partition for
+    /// the leaf's tree. Returns a non-null array whose length is the
+    /// configured <see cref="LatticeOptions.WalPartitions"/>; entry
+    /// <c>i</c> is the head of partition <c>i</c> at capture time.
+    /// </summary>
+    private async Task<long[]> CaptureWalHeadsByPartitionAsync(string treeId)
+    {
+        var options = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, options.WalPartitions);
+        var heads = new long[partitionCount];
+        for (var p = 0; p < partitionCount; p++)
+        {
+            var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+                $"{treeId}/{p}");
+            heads[p] = await coordinator.GetHeadOffsetAsync(CancellationToken.None);
+        }
+        return heads;
     }
 
     /// <summary>
     /// Completes (or resumes) a split whose intent has already been persisted.
     /// Safe to call multiple times - MergeEntriesAsync is idempotent (LWW merge).
-    /// On the recovery path (caller does not hold a captured WAL head) the
-    /// optional <paramref name="walHeadAtSplit"/> is omitted; the recovery
-    /// branch reads the current WAL head fresh, which is still safe - a
+    /// On the recovery path (caller does not hold captured WAL heads) the
+    /// optional <paramref name="walHeadsAtSplit"/> is omitted; the recovery
+    /// branch reads the current WAL heads fresh, which is still safe - a
     /// later head only causes the sibling to skip more replay, never less.
     /// </summary>
-    private async Task<SplitResult> CompleteSplitAsync(long? walHeadAtSplit = null)
+    private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
         var splitKey = state.State.SplitKey!;
         var siblingId = state.State.SplitSiblingId!.Value;
-        // Capture the donor's pre-split high BEFORE the donor narrows
-        // its own range at the end of this method. The sibling's high
-        // is the donor's pre-split high (siblings inherit the donor's
-        // upstream upper bound); the donor's new high becomes the
-        // split key.
         var donorPreSplitHigh = state.State.HighKeyExclusive;
         var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(siblingId);
 
-        // Fresh WAL-head read on the recovery path (no captured head
-        // from the original SplitAsync invocation). A larger head is
-        // still safe - it only causes the sibling to skip more
-        // replay, never less.
-        var resolvedWalHead = walHeadAtSplit;
-        if (resolvedWalHead is null)
+        // Fresh per-partition WAL-head reads on the recovery path.
+        long[]? resolvedHeads = walHeadsAtSplit;
+        if (resolvedHeads is null)
         {
             var treeId = state.State.TreeId;
             if (!string.IsNullOrEmpty(treeId))
             {
-                var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
-                    $"{treeId}/{ReplayWalPartition}");
-                resolvedWalHead = await coordinator.GetHeadOffsetAsync(CancellationToken.None);
+                resolvedHeads = await CaptureWalHeadsByPartitionAsync(treeId);
             }
         }
 
         await newLeaf.SetTreeIdAsync(state.State.TreeId!);
-        // The split sibling inherits this leaf's owning chain-shard
-        // index. A leaf-level split never crosses chain-shard
-        // boundaries (cross-shard rebalance goes through the
-        // shard-rewrite path, not a leaf split), so the parent's
-        // ShardIndex is the correct value for the new sibling.
-        // Pre-Option A leaves whose ShardIndex slot is null (legacy
-        // state shape) skip this seed so the sibling remains in the
-        // same legacy "apply unconditionally" mode.
         if (state.State.ShardIndex is { } parentShardIndex)
         {
             await newLeaf.SetShardIndexAsync(parentShardIndex);
         }
-        // Stamp the sibling's [low, high) ownership range. The
-        // sibling's low is the split key (its lowest owned key); its
-        // high is the donor's pre-split high (the sibling inherits the
-        // upper bound from the upstream chain). SetKeyRangeAsync is
-        // idempotent on a non-null low, so a re-call from the
-        // recovery path is safe.
         await newLeaf.SetKeyRangeAsync(splitKey, donorPreSplitHigh);
 
         var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
@@ -189,13 +179,22 @@ internal sealed partial class BPlusLeafGrain
             await newLeaf.MergeEntriesAsync(rightEntries);
         }
 
-        // Stamp the sibling's initial projection-checkpoint hint AFTER
-        // the merge so the sibling considers its just-populated
-        // entries already-materialised on its first activation. No-op
-        // when no WAL writer is configured (resolvedWalHead = 0).
-        if (resolvedWalHead is { } siblingHead && siblingHead > 0)
+        // Per-partition projection-checkpoint hint on the sibling.
+        // Each partition's hint must be scoped to that partition so the
+        // sibling's clamp targets the right partition's offset space.
+        if (resolvedHeads is not null)
         {
-            await newLeaf.SetCheckpointOffsetHintAsync(siblingHead);
+            for (var p = 0; p < resolvedHeads.Length; p++)
+            {
+                var siblingHead = resolvedHeads[p];
+                if (siblingHead > 0)
+                {
+                    using (LatticeApplyOffsetContext.BeginScope(p, siblingHead))
+                    {
+                        await newLeaf.SetCheckpointOffsetHintAsync(siblingHead);
+                    }
+                }
+            }
         }
 
         var oldNextId = state.State.OldNextSibling;
@@ -214,43 +213,30 @@ internal sealed partial class BPlusLeafGrain
             RemoveEntry(key);
         }
 
-        // Donor narrows its own ownership range to [low, splitKey).
-        // The low is unchanged; only the high collapses to the split
-        // key. Performed AFTER the sibling has been stamped with the
-        // donor's pre-split high so a crash mid-CompleteSplitAsync
-        // leaves the donor's slot at the original high (idempotent
-        // re-run on recovery still passes the correct high to the
-        // sibling).
         state.State.HighKeyExclusive = splitKey;
         state.State.OldNextSibling = null;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
-        // Advance the donor's projection checkpoint to the WAL head
-        // captured at split time so the donor's first post-split
-        // activation skips replaying entries already reflected in the
-        // runtime entry cache. Routes through the projection seam so
-        // the unresolved-prepare clamp is honoured. No-op when no WAL
-        // writer is configured.
-        if (resolvedWalHead is { } donorHead && donorHead > 0)
+        // Advance the donor's per-partition projection checkpoints to
+        // the WAL heads captured at split time. Each partition's
+        // SetCheckpointOffsetAsync call is scoped to that partition so
+        // the per-partition clamp is applied correctly.
+        if (resolvedHeads is not null)
         {
-            await ((ILeafProjection)this).SetCheckpointOffsetAsync(donorHead, CancellationToken.None);
+            var projection = (ILeafProjection)this;
+            for (var p = 0; p < resolvedHeads.Length; p++)
+            {
+                var donorHead = resolvedHeads[p];
+                if (donorHead > 0)
+                {
+                    using (LatticeApplyOffsetContext.BeginScope(p, donorHead))
+                    {
+                        await projection.SetCheckpointOffsetAsync(donorHead, CancellationToken.None);
+                    }
+                }
+            }
         }
 
-        // Forward the donor's projection-hash delta (the XOR-fold
-        // over every removed entry's contribution) plus the new
-        // entry-count to the parent internal node. SetCheckpointOffsetAsync
-        // above already triggers an upward publish via
-        // FlushPendingCheckpointAsync when a WAL writer is present,
-        // but the no-WAL-writer path skips that flush - so an
-        // explicit publish here keeps the chain consistent across
-        // both shapes. PublishDigestUpwardInlineAsync is a no-op when
-        // _digestDirty is false (no entries crossed the split) or
-        // when this leaf has no parent yet (the split-into-flat-tree
-        // case where the shard-root promotion is still pending).
-        // The inline variant bypasses the c2-xxviii coalescing window
-        // so the parent's chained fold observes the post-split
-        // aggregate before the caller returns - structural events
-        // are explicitly excluded from coalescing (see c2-xxviii memo).
         await PublishDigestUpwardInlineAsync();
 
         return new SplitResult

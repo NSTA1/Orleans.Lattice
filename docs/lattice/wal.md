@@ -149,7 +149,7 @@ follow:
 
 The per-shard WAL is owned by the internal `IWalShardGrain`, keyed
 `{treeId}/{partition}` where `partition` is `WalPartitionHash.Compute(key, partitions) %
-LatticeOptions.WalPartitions` (default `1`). The grain is in the core
+LatticeOptions.WalPartitions` (default `8`). The grain is in the core
 `Orleans.Lattice.BPlusTree.Grains` namespace and is the single producer-side
 entry point for foreground commits and the read-back source for the
 replication change feed.
@@ -170,6 +170,31 @@ commit-log writer maps that shard index to a WAL partition by taking
 count, multiple shards collapse onto the same WAL partition; receivers
 dedupe by `TransactionId`, so multiple terminal appends with the same id
 are idempotent on the apply side.
+
+### Activation-time replay under `WalPartitions > 1`
+
+The leaf grain's activation-time materialiser is partition-aware. When
+`LatticeOptions.WalPartitions > 1` the activation hook iterates
+`[0, WalPartitions)` and, for each partition, runs an independent
+fall-off-log classification, slice read loop, and projection-checkpoint
+advance. Per-partition state lives on the additive
+`LeafNodeState.ProjectionCheckpointOffsetsByPartition` slot (`long[]?`);
+partition 0 is mirrored into the legacy scalar
+`ProjectionCheckpointOffset` slot for downgrade safety. The per-leaf
+saga pending-tx clamp is also partition-scoped: each prepared mutation
+records the `(transactionId, partition)` pair it arrived under, and the
+projection-checkpoint advance for partition `P` is clamped behind
+`(min unresolved prepare offset for P) - 1` so cross-partition offsets
+are never compared.
+
+Each leaf reports one cursor per partition to the WAL cursor registry
+under consumer ids of the form
+`_lattice_materialiser_{treeId}_{leafGrainId}_{partition}`, so the
+per-shard WAL GC trims each partition independently against its own
+slowest consumer. On the legacy default `WalPartitions = 1` the
+unsuffixed `_lattice_materialiser_{treeId}_{leafGrainId}` shape is
+preserved so a host that has never enabled multi-partition replay is
+wire-compatible with its existing cursor registrations.
 
 ## Origin cluster id stamping
 

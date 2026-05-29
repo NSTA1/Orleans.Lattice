@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using Orleans.Serialization;
 
@@ -41,6 +42,7 @@ public partial class WalShardGrainTests
             grainContext,
             services,
             monitor,
+            TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)),
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
             encoder ?? CreateDefaultEncoder());
@@ -650,7 +652,7 @@ public partial class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
+        var grain = new WalShardGrain(grainContext, services, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), CancellationToken.None),
@@ -663,7 +665,7 @@ public partial class WalShardGrainTests
         var grainContext = Substitute.For<IGrainContext>();
         var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
+        var grain = new WalShardGrain(grainContext, services, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, CancellationToken.None),
@@ -700,6 +702,7 @@ public partial class WalShardGrainTests
             grainContext,
             services,
             monitor,
+            TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)),
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
             CreateDefaultEncoder());

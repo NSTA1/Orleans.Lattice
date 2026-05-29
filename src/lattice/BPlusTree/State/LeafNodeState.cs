@@ -215,4 +215,33 @@ internal sealed class LeafNodeState
     /// behind the public <see cref="LeafProjectionDigest"/> surface).
     /// </summary>
     [Id(18)] public GrainId? ParentId { get; set; }
+
+    /// <summary>
+    /// Per-partition projection-checkpoint offsets when the leaf's
+    /// owning tree is configured with <see cref="LatticeOptions.WalPartitions"/>
+    /// greater than <c>1</c>. The array is indexed by WAL partition;
+    /// each slot holds the highest WAL offset whose mutation has been
+    /// durably applied to this leaf's projection from that specific
+    /// partition (semantics identical to the legacy scalar
+    /// <see cref="ProjectionCheckpointOffset"/> slot, but scoped to a
+    /// single partition's offset space).
+    /// <para>
+    /// <see langword="null"/> in the steady state (single-partition
+    /// trees and any leaf whose persisted state pre-dates this slot),
+    /// in which case the activation-time materialiser falls back to
+    /// the scalar <see cref="ProjectionCheckpointOffset"/> for
+    /// partition <c>0</c> only - preserving the legacy single-
+    /// partition replay semantics for wire-compat. When non-null, the
+    /// array's length is exactly <c>WalPartitions</c> and partition
+    /// <c>0</c>'s entry is kept in sync with the scalar slot so a
+    /// downgrade to a legacy silo (or a re-read by a legacy-shaped
+    /// consumer) degrades gracefully into the single-partition replay
+    /// path on read.
+    /// </para>
+    /// <para>
+    /// Per-entry "nothing applied" sentinel is <c>-1</c>, matching the
+    /// scalar slot's convention.
+    /// </para>
+    /// </summary>
+    [Id(19)] public long[]? ProjectionCheckpointOffsetsByPartition { get; set; }
 }

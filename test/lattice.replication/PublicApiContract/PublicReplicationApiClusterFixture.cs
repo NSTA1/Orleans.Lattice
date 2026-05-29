@@ -65,12 +65,23 @@ internal sealed class PublicReplicationApiClusterFixture
     /// failure when delivery is actually broken (e.g. a transport that
     /// silently drops batches). Keeping the ceiling tight bounds the
     /// blast radius of a regression: at 30s, 21 broken tests cost
-    /// ~11 minutes; at 10s, the same break costs ~3.5 minutes and is
+    /// ~11 minutes; at 20s, the same break costs ~7 minutes and is
     /// caught faster in the inner dev loop. Individual call sites can
     /// still pass an explicit longer <paramref name="timeout"/> for
     /// scenarios that legitimately need more headroom.
+    /// <para>
+    /// Sized at 20 s under the multi-partition default
+    /// (<see cref="LatticeOptions.WalPartitions"/> = 8 /
+    /// <see cref="LatticeReplicationOptions.ReplogPartitions"/> = 8):
+    /// every pump tick now refills 8 per-partition pages instead of
+    /// 1, and on loaded CI runners the wall-clock cost of those
+    /// per-partition grain RPCs can push a healthy convergence past
+    /// the pre-multi-partition 10 s ceiling without indicating a real
+    /// regression. The new ceiling is still tight enough that a
+    /// genuinely-broken transport surfaces quickly.
+    /// </para>
     /// </remarks>
-    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(20);
 
     /// <summary>The first site's test cluster.</summary>
     public TestCluster SiteA { get; private set; } = null!;

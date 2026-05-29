@@ -585,11 +585,21 @@ public class LatticeReplicationOptions
     public const string DefaultClusterId = "";
 
     /// <summary>
-    /// Default value for <see cref="ReplogPartitions"/>: a single WAL
-    /// partition per replicated tree. Adequate for low-fan-in workloads;
-    /// raise for hot trees that benefit from parallel WAL append paths.
+    /// Default value for <see cref="ReplogPartitions"/>: matches the
+    /// core's <c>LatticeOptions.DefaultWalPartitions</c> (8). The
+    /// replication shipper iterates <c>[0, ReplogPartitions)</c> per
+    /// pump tick, so this value must equal the routing-truth
+    /// <c>WalPartitions</c> count or the shipper will miss writes
+    /// authored against partitions <c>[ReplogPartitions, WalPartitions)</c>.
+    /// Adequate for low-fan-in workloads; raise for hot trees that
+    /// benefit from parallel WAL append paths. Hosts that explicitly
+    /// configure <see cref="LatticeOptions.WalPartitions"/> get the
+    /// reverse-mirrored value on this option via
+    /// <c>LatticeReplicationServiceCollectionExtensions</c>'s
+    /// post-configure step, so this default only applies when neither
+    /// option is touched.
     /// </summary>
-    public const int DefaultReplogPartitions = 1;
+    public const int DefaultReplogPartitions = 8;
 
     /// <summary>
     /// Default value for <see cref="WalMaxBatchEntries"/>: matches the

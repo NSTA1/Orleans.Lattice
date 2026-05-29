@@ -50,6 +50,7 @@ internal sealed class WalShardGrain(
     IGrainContext context,
     IServiceProvider services,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILatticeMergeModeResolver modeResolver,
     ILatticeOriginClusterIdResolver clusterIdResolver,
     IWalRecordEncoder encoder) : IWalShardGrain, IGrainBase
@@ -239,17 +240,26 @@ internal sealed class WalShardGrain(
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
 
         var options = optionsMonitor.Get(_treeId);
+        // Resolve WalPartitions through the tree-registry pin (via
+        // LatticeOptionsResolver) so the metric tag reflects the
+        // routing-truth shape used by WalCommitLogWriter and the
+        // activation-time materialiser, not the live IOptionsMonitor
+        // value that may have drifted since the tree was registered.
+        var resolved = await optionsResolver.ResolveAsync(_treeId).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         // Phase A attribution tags. The values are captured once at
-        // activation; if the operator retunes WalPartitions or
-        // WalMaxPendingBatches through IOptionsMonitor while activations
-        // are live, existing activations continue to emit the value
-        // they activated under (the WAL hot-path code already resolves
-        // WalMaxBatchEntries / WalMaxBatchBytes per call, which is the
-        // documented dynamic-tunability contract; the activation-cached
-        // tag is a deliberate cardinality bound that prevents a high-
-        // frequency option toggle from polluting the metric series).
+        // activation; if the operator retunes WalMaxPendingBatches
+        // through IOptionsMonitor while activations are live, existing
+        // activations continue to emit the value they activated under
+        // (the WAL hot-path code already resolves WalMaxBatchEntries /
+        // WalMaxBatchBytes per call, which is the documented dynamic-
+        // tunability contract; the activation-cached tag is a deliberate
+        // cardinality bound that prevents a high-frequency option toggle
+        // from polluting the metric series). WalPartitions is tree-
+        // immutable by virtue of the registry pin, so the activation-
+        // cached tag matches the routing shape for the lifetime of the
+        // tree.
         _walPartitionsTag = new KeyValuePair<string, object?>(
-            LatticeMetrics.TagWalPartitions, options.WalPartitions);
+            LatticeMetrics.TagWalPartitions, resolved.WalPartitions);
         _walMaxPendingBatchesTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagWalMaxPendingBatches, options.WalMaxPendingBatches);
 

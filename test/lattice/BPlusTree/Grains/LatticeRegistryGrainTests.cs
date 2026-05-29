@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -7,13 +8,17 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class LatticeRegistryGrainTests
 {
-    private static (LatticeRegistryGrain grain, ISystemLattice registryTree) CreateGrain()
+    private static (LatticeRegistryGrain grain, ISystemLattice registryTree) CreateGrain(
+        LatticeOptions? options = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         var registryTree = Substitute.For<ISystemLattice>();
         grainFactory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId).Returns(registryTree);
 
-        var grain = new LatticeRegistryGrain(grainFactory);
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
+
+        var grain = new LatticeRegistryGrain(grainFactory, optionsMonitor);
         return (grain, registryTree);
     }
 
@@ -50,6 +55,50 @@ public partial class LatticeRegistryGrainTests
 
         await tree.Received(1).SetAsync("my-tree", Arg.Is<byte[]>(b =>
             b.Length > 0));
+    }
+
+    [Test]
+    public async Task RegisterAsync_seeds_WalPartitions_from_silo_default_when_caller_omits()
+    {
+        // The silo's current LatticeOptions.WalPartitions is the
+        // first-register pin: the value persisted into the registry
+        // for the lifetime of the tree, never the live IOptionsMonitor
+        // value. The seed is the "at first register" snapshot.
+        var (grain, tree) = CreateGrain(new LatticeOptions { WalPartitions = 8 });
+        tree.ExistsAsync("fresh-tree").Returns(false);
+
+        byte[]? written = null;
+        tree.SetAsync("fresh-tree", Arg.Do<byte[]>(b => written = b))
+            .Returns(Task.CompletedTask);
+
+        await grain.RegisterAsync("fresh-tree", entry: null);
+
+        Assert.That(written, Is.Not.Null);
+        var deserialised = System.Text.Json.JsonSerializer.Deserialize<TreeRegistryEntry>(written!);
+        Assert.That(deserialised, Is.Not.Null);
+        Assert.That(deserialised!.WalPartitions, Is.EqualTo(8));
+    }
+
+    [Test]
+    public async Task RegisterAsync_preserves_caller_supplied_WalPartitions_pin()
+    {
+        // The caller can opt out of silo-default seeding by passing an
+        // explicit WalPartitions value on the registry entry. The pin
+        // is persisted verbatim and overrides whatever the silo's
+        // current LatticeOptions value happens to be.
+        var (grain, tree) = CreateGrain(new LatticeOptions { WalPartitions = 8 });
+        tree.ExistsAsync("explicit-tree").Returns(false);
+
+        byte[]? written = null;
+        tree.SetAsync("explicit-tree", Arg.Do<byte[]>(b => written = b))
+            .Returns(Task.CompletedTask);
+
+        await grain.RegisterAsync("explicit-tree", new TreeRegistryEntry { WalPartitions = 16 });
+
+        Assert.That(written, Is.Not.Null);
+        var deserialised = System.Text.Json.JsonSerializer.Deserialize<TreeRegistryEntry>(written!);
+        Assert.That(deserialised, Is.Not.Null);
+        Assert.That(deserialised!.WalPartitions, Is.EqualTo(16));
     }
 
     [Test]

@@ -92,7 +92,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 8 | Yes |
-| [`WalPartitions`](#walpartitions) | `int` | 1 | No (per-tree, pinned on first WAL write) |
+| [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 
 ### Structural sizing (registry-pinned)
@@ -478,9 +478,13 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalPartitions`
 
-Number of independent WAL partitions per tree (default: 1). The foreground commit-log writer hashes the mutation key modulo this value to pick the partition, so increasing the value fans WAL throughput out across multiple `IWalShardGrain` activations when a single partition becomes the bottleneck. The dominant single-cluster shape uses 1.
+Number of independent WAL partitions per tree (default: 8). The foreground commit-log writer hashes the mutation key modulo this value to pick the partition, fanning WAL throughput across multiple `IWalShardGrain` activations.
 
-**Per-tree, pinned on first WAL write.** Changing this value after a tree has accepted writes silently re-routes new mutations to different partitions; existing entries remain in the partition they were originally written to. Set the value before the tree first commits if a non-default fan-out is required.
+**Per-tree, pinned on first WAL write.** Existing trees pin the value in force at first WAL write into the tree registry, so a silo-wide default change is non-breaking for already-registered trees - they continue to fan across whatever partition count they were created with. New trees pick up the current default unless an operator override is configured.
+
+**Activation-time replay is partition-aware.** The leaf grain's activation-time materialiser iterates `[0, WalPartitions)` and runs an independent fall-off-log classification, slice read, and projection-checkpoint advance per partition. Per-partition checkpoints persist into the `LeafNodeState.ProjectionCheckpointOffsetsByPartition` slot (`long[]?`, additive `[Id]`), with partition 0 also mirrored into the legacy scalar `ProjectionCheckpointOffset` slot so a downgrade to a host that has never observed multi-partition state still reads a valid single-partition shape. Per-partition cursor consumer ids take the form `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}` so the per-shard WAL GC trims each partition independently against its own slowest consumer; on `WalPartitions = 1` the legacy unsuffixed shape `_lattice_materialiser_{treeId}_{leafGrainId}` is preserved for wire compatibility with hosts that have never enabled multi-partition replay.
+
+Must be `>= 1`. Values below 1 fail option validation at silo start.
 
 ### `WalRetention`
 

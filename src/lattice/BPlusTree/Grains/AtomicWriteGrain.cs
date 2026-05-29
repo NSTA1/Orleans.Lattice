@@ -2032,6 +2032,23 @@ internal sealed class AtomicWriteGrain(
             Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdFromKey),
             WalPartitions: new KeyValuePair<string, object?>(
                 LatticeMetrics.TagWalPartitions,
+                // Metric-only: reads from the live IOptionsMonitor
+                // rather than the LatticeOptionsResolver tree-registry
+                // pin, because the cached tag is a hot-path field on
+                // a synchronous getter and threading the async
+                // resolver through every caller would not buy
+                // correctness here - this value is a histogram
+                // attribution tag, not the routing-truth value used
+                // by WalCommitLogWriter / BPlusLeafGrain (those go
+                // through the resolver). The tag drifts from the
+                // routing-truth value only when the operator retunes
+                // LatticeOptions.WalPartitions on a live silo whose
+                // trees were registered at a different value - the
+                // resolver continues to route against the pin, so
+                // routing stays correct; only the metric attribution
+                // can lag. Documented gap; promote to the resolver
+                // if the lag ever surfaces as an operator-visible
+                // observability bug.
                 optionsMonitor.Get(treeIdFromKey).WalPartitions));
         _sagaMetricTags = built;
         return built;

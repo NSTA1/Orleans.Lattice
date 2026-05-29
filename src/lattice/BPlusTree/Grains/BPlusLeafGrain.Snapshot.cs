@@ -224,16 +224,25 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            var decision = await detector.ClassifyAsync(
-                state.State.TreeId,
-                ReplayWalPartition,
-                state.State.ProjectionCheckpointOffset,
-                TimeSpan.Zero,
-                resolved,
-                CancellationToken.None);
-            if (decision == FallOffLogDecision.SnapshotPending)
+            // Per-partition classification: under multi-partition WAL
+            // any partition raising SnapshotPending warrants a
+            // proactive whole-leaf capture (the capture is partition-
+            // independent - it serialises the full entry cache).
+            var partitionCount = Math.Max(1, resolved.WalPartitions);
+            for (var partition = 0; partition < partitionCount; partition++)
             {
-                await TryCaptureSnapshotForAdvisoryAsync();
+                var decision = await detector.ClassifyAsync(
+                    state.State.TreeId,
+                    partition,
+                    GetPersistedCheckpointForPartition(partition),
+                    TimeSpan.Zero,
+                    resolved,
+                    CancellationToken.None);
+                if (decision == FallOffLogDecision.SnapshotPending)
+                {
+                    await TryCaptureSnapshotForAdvisoryAsync();
+                    return;
+                }
             }
         }
         catch (Exception ex)

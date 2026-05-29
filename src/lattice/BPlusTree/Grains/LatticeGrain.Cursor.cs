@@ -123,12 +123,17 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        // Step 2: per-shard WAL-head capture, concurrent across shards.
-        // The fan-out is intentionally not linearizable across shards in
-        // real time - the registry snapshot below resolves cross-shard
-        // saga visibility uniformly so the union of all four captures
-        // still encodes a deterministic tree-wide view.
-        var headTasks = new Task<long>[physicalShards.Count];
+        // Step 2: per-shard per-partition WAL-head capture, concurrent
+        // across shards. The fan-out is intentionally not linearizable
+        // across shards in real time - the registry snapshot below
+        // resolves cross-shard saga visibility uniformly so the union
+        // of all captures still encodes a deterministic tree-wide
+        // view. Each shard returns one offset per WAL partition
+        // (length equals the tree's pinned WalPartitions) so the
+        // snapshot leaf can drive its per-partition replay with
+        // saga-atomicity preserved across the multi-partition
+        // boundary.
+        var headTasks = new Task<long[]>[physicalShards.Count];
         for (var i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
@@ -137,13 +142,16 @@ internal sealed partial class LatticeGrain
         await Task.WhenAll(headTasks);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var perShardOffsets = new Dictionary<int, long>(physicalShards.Count);
+        var perShardPerPartitionOffsets = new Dictionary<int, IReadOnlyList<long>>(physicalShards.Count);
         long maxOffset = 0;
         for (var i = 0; i < physicalShards.Count; i++)
         {
-            var off = headTasks[i].Result;
-            perShardOffsets[physicalShards[i]] = off;
-            if (off > maxOffset) maxOffset = off;
+            var perPartition = headTasks[i].Result;
+            perShardPerPartitionOffsets[physicalShards[i]] = perPartition;
+            for (var p = 0; p < perPartition.Length; p++)
+            {
+                if (perPartition[p] > maxOffset) maxOffset = perPartition[p];
+            }
         }
 
         // Step 4: replay-budget gate. Each shard's snapshot leaf will
@@ -178,7 +186,7 @@ internal sealed partial class LatticeGrain
 
         var coordinate = new LatticeSnapshotCoordinate(
             shardMap.Version,
-            perShardOffsets,
+            perShardPerPartitionOffsets,
             registryHlc);
 
         var cursorId = Guid.NewGuid().ToString("N");

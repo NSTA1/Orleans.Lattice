@@ -104,7 +104,7 @@ public partial class PublicReplicationApiContractTests
         Assert.Multiple(() =>
         {
             Assert.That(LatticeReplicationOptions.DefaultClusterId, Is.EqualTo(string.Empty));
-            Assert.That(LatticeReplicationOptions.DefaultReplogPartitions, Is.EqualTo(1));
+            Assert.That(LatticeReplicationOptions.DefaultReplogPartitions, Is.EqualTo(8));
             Assert.That(LatticeReplicationOptions.DefaultWalMaxBatchEntries, Is.EqualTo(100));
             Assert.That(LatticeReplicationOptions.DefaultWalMaxBatchBytes, Is.EqualTo(4L * 1024L * 1024L));
             Assert.That(LatticeReplicationOptions.DefaultWalMaxPendingBatches, Is.EqualTo(4));
