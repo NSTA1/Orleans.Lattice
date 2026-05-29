@@ -23,21 +23,30 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
 {
     /// <summary>
     /// Materialises the snapshot leaf by replaying the per-shard WAL
-    /// prefix <c>[0, capturedOffset)</c>. Idempotent: a second call
-    /// with the same <paramref name="capturedOffset"/> is a no-op
-    /// once the first call has completed; a call with a different
-    /// offset throws <see cref="InvalidOperationException"/>
-    /// (snapshot leaves are coordinate-keyed - a different offset
-    /// belongs to a different grain activation).
+    /// prefix across every WAL partition. Idempotent: a second call
+    /// with the same <paramref name="capturedOffsetsByPartition"/>
+    /// sequence is a no-op once the first call has completed; a call
+    /// with a different sequence throws
+    /// <see cref="InvalidOperationException"/> (snapshot leaves are
+    /// coordinate-keyed - a different captured frontier belongs to a
+    /// different grain activation).
     /// </summary>
     /// <param name="treeId">Tree the snapshot belongs to.</param>
     /// <param name="shardIndex">Virtual shard this leaf materialises.</param>
-    /// <param name="capturedOffset">
-    /// Upper-bound (exclusive) WAL offset captured at open time. The
-    /// snapshot leaf replays records <c>[0, capturedOffset)</c>.
+    /// <param name="capturedOffsetsByPartition">
+    /// Per-WAL-partition upper-bound (exclusive) WAL offsets captured
+    /// at open time. Indexed by partition number; the snapshot leaf
+    /// replays records <c>(empty, capturedOffsetsByPartition[p])</c>
+    /// for each partition <c>p</c> and merges the results under the
+    /// two-pass (Set/Delete/prepare first, then TxCommit/TxAbort/
+    /// DeleteRange) replay strategy so saga atomicity and range-
+    /// tombstone ordering are preserved across partition boundaries.
+    /// On single-partition trees the list has a single element and
+    /// the two-pass collapses to a single forward walk for
+    /// behavioural parity with the legacy scalar-offset shape.
     /// </param>
     /// <param name="cancellationToken">Cancels the replay loop between slices.</param>
-    Task OpenAsync(string treeId, int shardIndex, long capturedOffset, CancellationToken cancellationToken);
+    Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the sorted list of keys this snapshot leaf observes in

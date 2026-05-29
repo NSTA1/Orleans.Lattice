@@ -72,8 +72,8 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
-    public void DefaultReplogPartitions_is_one() =>
-        Assert.That(LatticeReplicationOptions.DefaultReplogPartitions, Is.EqualTo(1));
+    public void DefaultReplogPartitions_is_eight() =>
+        Assert.That(LatticeReplicationOptions.DefaultReplogPartitions, Is.EqualTo(8));
 
     [Test]
     public void ReplogPartitions_is_settable()

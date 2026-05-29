@@ -24,7 +24,6 @@ internal sealed class SnapshotLeafGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
-    LatticeOptionsResolver optionsResolver,
     ILogger<SnapshotLeafGrain> logger) : Grain, ISnapshotLeafGrain
 {
     /// <summary>
@@ -41,8 +40,13 @@ internal sealed class SnapshotLeafGrain(
     /// <summary>Virtual shard index this snapshot leaf materialises.</summary>
     private int _shardIndex = -1;
 
-    /// <summary>Upper-bound (exclusive) WAL offset the snapshot replays to.</summary>
-    private long _capturedOffset = -1;
+    /// <summary>
+    /// Upper-bound (exclusive) per-partition WAL offsets the snapshot
+    /// replays to. Indexed by WAL partition number; on a single-
+    /// partition tree this is a single-element list. Sourced from the
+    /// snapshot coordinate captured at <c>OpenSnapshot*Async</c> time.
+    /// </summary>
+    private IReadOnlyList<long> _capturedOffsetsByPartition = Array.Empty<long>();
 
     /// <summary>
     /// True once the WAL replay has completed and the snapshot
@@ -71,13 +75,19 @@ internal sealed class SnapshotLeafGrain(
     private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
 
     /// <inheritdoc />
-    public async Task OpenAsync(string treeId, int shardIndex, long capturedOffset, CancellationToken cancellationToken)
+    public async Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(capturedOffsetsByPartition);
         if (shardIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(shardIndex), "Shard index must be non-negative.");
-        if (capturedOffset < 0)
-            throw new ArgumentOutOfRangeException(nameof(capturedOffset), "Captured offset must be non-negative.");
+        if (capturedOffsetsByPartition.Count == 0)
+            throw new ArgumentException("Captured offsets list must contain at least one partition.", nameof(capturedOffsetsByPartition));
+        for (var i = 0; i < capturedOffsetsByPartition.Count; i++)
+        {
+            if (capturedOffsetsByPartition[i] < 0)
+                throw new ArgumentOutOfRangeException(nameof(capturedOffsetsByPartition), $"Captured offset for partition {i} must be non-negative.");
+        }
         cancellationToken.ThrowIfCancellationRequested();
 
         if (_opened)
@@ -85,18 +95,21 @@ internal sealed class SnapshotLeafGrain(
             // Idempotent re-open with the same coordinate is a no-op;
             // a different coordinate would target a different grain
             // key, so a mismatch here indicates a programming error
-            // upstream and must surface loudly.
-            if (_treeId != treeId || _shardIndex != shardIndex || _capturedOffset != capturedOffset)
+            // upstream and must surface loudly. Compare the captured
+            // per-partition arrays element-wise.
+            if (_treeId != treeId
+                || _shardIndex != shardIndex
+                || !PartitionOffsetsEqual(_capturedOffsetsByPartition, capturedOffsetsByPartition))
             {
                 throw new InvalidOperationException(
-                    $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' was already opened against ({_treeId}, {_shardIndex}, {_capturedOffset}); refusing to re-open against ({treeId}, {shardIndex}, {capturedOffset}).");
+                    $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' was already opened against ({_treeId}, {_shardIndex}, [{string.Join(',', _capturedOffsetsByPartition)}]); refusing to re-open against ({treeId}, {shardIndex}, [{string.Join(',', capturedOffsetsByPartition)}]).");
             }
             return;
         }
 
         _treeId = treeId;
         _shardIndex = shardIndex;
-        _capturedOffset = capturedOffset;
+        _capturedOffsetsByPartition = capturedOffsetsByPartition;
 
         await ReplayWalAsync(cancellationToken);
 
@@ -105,12 +118,22 @@ internal sealed class SnapshotLeafGrain(
         if (logger.IsEnabled(LogLevel.Debug))
         {
             logger.LogDebug(
-                "SnapshotLeafGrain opened: tree={TreeId}, shard={ShardIndex}, capturedOffset={CapturedOffset}, entries={EntryCount}, pendingSagas={PendingSagaCount}.",
-                treeId, shardIndex, capturedOffset, _entries.Count, _pendingTx.Count);
+                "SnapshotLeafGrain opened: tree={TreeId}, shard={ShardIndex}, capturedOffsets=[{CapturedOffsets}], entries={EntryCount}, pendingSagas={PendingSagaCount}.",
+                treeId, shardIndex, string.Join(',', capturedOffsetsByPartition), _entries.Count, _pendingTx.Count);
         }
 
         _ = optionsMonitor;
         _ = context;
+    }
+
+    private static bool PartitionOffsetsEqual(IReadOnlyList<long> a, IReadOnlyList<long> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (var i = 0; i < a.Count; i++)
+        {
+            if (a[i] != b[i]) return false;
+        }
+        return true;
     }
 
     /// <inheritdoc />
@@ -175,53 +198,96 @@ internal sealed class SnapshotLeafGrain(
     }
 
     /// <summary>
-    /// Drives the per-slice WAL replay loop. Reads
-    /// <c>[0, _capturedOffset)</c> through
-    /// <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/> in
-    /// <see cref="ReplaySliceBudget"/>-sized chunks, applying each
-    /// mutation to the in-memory projection. Cancellation is honoured
-    /// between slices and between entries.
+    /// Mutation deferred during pass 1 of the snapshot-leaf replay to
+    /// be applied in pass 2 once every partition's per-key Set/Delete
+    /// entries have been absorbed into <see cref="_entries"/> and
+    /// every prepare into <see cref="_pendingTx"/>. Same rationale as
+    /// the activation-time materialiser's <c>DeferredTerminal</c> -
+    /// see <c>BPlusLeafGrain.Activation.cs</c> for the saga atomicity
+    /// and <see cref="MutationKind.DeleteRange"/> ordering proofs.
+    /// </summary>
+    private readonly record struct DeferredTerminal(LatticeMutation Mutation);
+
+    /// <summary>
+    /// Drives the per-partition WAL replay loop for the snapshot leaf.
+    /// Iterates every partition's <c>(empty, capturedOffsets[p]]</c>
+    /// slice through <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>
+    /// in <see cref="ReplaySliceBudget"/>-sized chunks. Saga terminals
+    /// and <see cref="MutationKind.DeleteRange"/> mutations are
+    /// deferred to a pass-2 drain after every partition's pass-1 has
+    /// completed so the same atomicity and ordering invariants the
+    /// live-leaf two-pass replay enforces also hold for snapshot
+    /// reads. Cancellation is honoured between slices and between
+    /// entries.
     /// </summary>
     private async Task ReplayWalAsync(CancellationToken cancellationToken)
     {
-        if (_capturedOffset == 0)
-            return;
-
-        var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
-            $"{_treeId}/{_shardIndex}");
-
-        // ReadSliceAsync semantics: (fromExclusive, toInclusive]. We
-        // want [0, capturedOffset), so the inclusive upper bound is
-        // capturedOffset - 1.
-        long fromExclusive = -1;
-        long toInclusive = _capturedOffset - 1;
-        long entriesObserved = 0;
+        var partitionCount = _capturedOffsetsByPartition.Count;
+        long totalEntriesObserved = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        while (fromExclusive < toInclusive)
+        // Pass 1: per-partition Set/Delete/prepare absorption. Saga
+        // terminals (TxCommit/TxAbort) and DeleteRange are deferred.
+        var deferred = new List<DeferredTerminal>();
+        for (var partition = 0; partition < partitionCount; partition++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var capturedOffset = _capturedOffsetsByPartition[partition];
+            if (capturedOffset == 0)
+                continue;
 
-            var slice = await coordinator.ReadSliceAsync(
-                fromExclusive,
-                toInclusive,
-                ReplaySliceBudget,
-                cancellationToken);
+            var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+                $"{_treeId}/{partition}");
 
-            if (slice.Count == 0)
-                break;
+            // ReadSliceAsync semantics: (fromExclusive, toInclusive].
+            // We want [0, capturedOffset), so the inclusive upper
+            // bound is capturedOffset - 1.
+            long fromExclusive = -1;
+            long toInclusive = capturedOffset - 1;
 
-            foreach (var entry in slice)
+            while (fromExclusive < toInclusive)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                ApplyEntry(entry.Mutation);
-                entriesObserved++;
-            }
 
-            var lastOffset = slice[^1].Offset;
-            if (lastOffset <= fromExclusive)
-                break; // defensive: never spin if the slice failed to advance.
-            fromExclusive = lastOffset;
+                var slice = await coordinator.ReadSliceAsync(
+                    fromExclusive,
+                    toInclusive,
+                    ReplaySliceBudget,
+                    cancellationToken);
+
+                if (slice.Count == 0)
+                    break;
+
+                foreach (var entry in slice)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (entry.Mutation.Kind is MutationKind.TxCommit or MutationKind.TxAbort or MutationKind.DeleteRange)
+                    {
+                        deferred.Add(new DeferredTerminal(entry.Mutation));
+                    }
+                    else
+                    {
+                        ApplyEntry(entry.Mutation);
+                    }
+                    totalEntriesObserved++;
+                }
+
+                var lastOffset = slice[^1].Offset;
+                if (lastOffset <= fromExclusive)
+                    break; // defensive: never spin if the slice failed to advance.
+                fromExclusive = lastOffset;
+            }
+        }
+
+        // Pass 2: drain every deferred saga terminal and range-delete
+        // tombstone. By this point pass 1 has fully populated
+        // _pendingTx across every partition and _entries carries every
+        // Set/Delete, so each terminal's pending-bucket flip is
+        // complete and each range tombstone iterates the full
+        // pre-tombstone Cache.
+        foreach (var d in deferred)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ApplyEntry(d.Mutation);
         }
 
         sw.Stop();
@@ -233,9 +299,9 @@ internal sealed class SnapshotLeafGrain(
             new(LatticeMetrics.TagShard, _shardIndex),
         };
         LatticeMetrics.SnapshotReplayDuration.Record(sw.Elapsed.TotalMilliseconds, tags);
-        if (entriesObserved > 0)
+        if (totalEntriesObserved > 0)
         {
-            LatticeMetrics.SnapshotReplayEntries.Add(entriesObserved, tags);
+            LatticeMetrics.SnapshotReplayEntries.Add(totalEntriesObserved, tags);
         }
     }
 
@@ -247,11 +313,24 @@ internal sealed class SnapshotLeafGrain(
     /// </summary>
     private void ApplyEntry(in LatticeMutation mutation)
     {
-        // The shard's WAL only carries entries authored against this
-        // shard; no shard-index filter is needed. Per-leaf key-range
-        // filtering is irrelevant at the shard scope - the snapshot
-        // view covers every key in the shard regardless of which leaf
-        // currently owns it.
+        // Per-shard filter: under multi-partition WAL replay the
+        // snapshot leaf reads from coordinators 0..WalPartitions-1,
+        // each of which carries mutations for EVERY shard whose
+        // shardIndex modulo WalPartitions hashes there (saga
+        // terminals) and EVERY key whose WalPartitionHash hashes
+        // there (per-key writes). The snapshot leaf must filter out
+        // mutations whose ShardIndex does not match this leaf's
+        // owning shard so it does not absorb sibling shards' data.
+        // Range / TxCommit / TxAbort apply unconditionally - the
+        // per-shard scope is enforced by the writer-side routing
+        // (saga terminals are pre-routed by shard via
+        // shardIndex % WalPartitions), and the range tombstone
+        // iterates only this snapshot's _entries (already filtered).
+        if (mutation.Kind is MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone
+            && mutation.ShardIndex != _shardIndex)
+        {
+            return;
+        }
         switch (mutation.Kind)
         {
             case MutationKind.Set:

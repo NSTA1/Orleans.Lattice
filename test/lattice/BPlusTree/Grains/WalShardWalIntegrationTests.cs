@@ -143,6 +143,13 @@ public class WalShardWalIntegrationTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
 
+            // Pin WalPartitions=1 so tests that query a specific
+            // {tree}/0 IWalShardGrain see deterministic single-
+            // partition routing (the silo-wide default is 8, which
+            // would scatter per-key writes across 8 partitions and
+            // make per-grain entry-count assertions flaky).
+            siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
+
             // Tests use ad-hoc tree ids; opt every tree in to LwwRegister so
             // the commit-time observer doesn't short-circuit.
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();

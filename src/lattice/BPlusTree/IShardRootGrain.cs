@@ -457,14 +457,17 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// writes snapshot cursor opened by
     /// <see cref="ILattice.OpenSnapshotKeyCursorAsync"/> /
     /// <see cref="ILattice.OpenSnapshotEntryCursorAsync"/>. The
-    /// returned offset is the upper bound of the WAL prefix a
+    /// returned offsets are the upper bound of the WAL prefix a
     /// per-shard snapshot leaf will replay to materialise this
     /// shard's view of the snapshot: replay covers offsets
-    /// <c>[0, value)</c>, so a write that appends after this call
-    /// is invisible by construction.
+    /// <c>[0, value)</c> per partition, so a write that appends after
+    /// this call is invisible by construction.
     /// <para>
-    /// The fan-out across shards is concurrent and not linearisable
-    /// in real time; the snapshot's
+    /// Returns one offset per WAL partition (length equal to the
+    /// shard's pinned <see cref="LatticeOptions.WalPartitions"/>).
+    /// Under the default single-partition shape the array has a
+    /// single element. The fan-out across shards is concurrent and
+    /// not linearisable in real time; the snapshot's
     /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>
     /// resolves saga visibility uniformly across shards so any
     /// single atomic write is all-or-nothing on every shard it
@@ -472,7 +475,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the underlying coordinator RPC.</param>
-    Task<long> SnapshotWalHeadAsync(CancellationToken cancellationToken);
+    Task<long[]> SnapshotWalHeadAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.

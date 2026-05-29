@@ -54,7 +54,7 @@ public partial class BPlusLeafGrainTests
             state.State.TreeId = treeId;
 
         var grainFactory = Substitute.For<IGrainFactory>();
-        var optionsResolver = TestOptionsResolver.Create(maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions { WalPartitions = 1 }, maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
         var grain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         return (grain, reporter, state);
     }
@@ -159,7 +159,7 @@ public partial class BPlusLeafGrainTests
         var state = new FakePersistentState<LeafNodeState>();
         state.State.TreeId = CursorTreeId;
         var grainFactory = Substitute.For<IGrainFactory>();
-        var optionsResolver = TestOptionsResolver.Create(maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions { WalPartitions = 1 }, maxLeafKeys: 128, shardCount: 1, factory: grainFactory);
         var nullSvcGrain = new BPlusLeafGrain(context, state, grainFactory, optionsResolver, TestMutationObservers.NoObservers(), TestOriginClusterIdResolver.Default());
         var projection = AsProjection(nullSvcGrain);
 

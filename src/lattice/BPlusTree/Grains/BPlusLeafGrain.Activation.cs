@@ -264,7 +264,15 @@ internal sealed partial class BPlusLeafGrain
         // _pendingTx bucket is fully populated across every partition
         // before any terminal drains it. See the DeferredTerminal
         // docstring for the saga atomicity rationale.
+        // Per-partition max-applied is tracked so the final reconciled
+        // SetCheckpointOffsetAsync (after pass 2's terminals lift the
+        // pending-tx clamps) advances each partition's checkpoint to
+        // the actual highest offset observed during replay, not the
+        // pass-1 clamped value.
         var deferredTerminals = new List<DeferredTerminal>();
+        var perPartitionMaxApplied = new long[partitionCount];
+        for (var p = 0; p < partitionCount; p++) perPartitionMaxApplied[p] = -1L;
+
         for (var partition = 0; partition < partitionCount; partition++)
         {
             // Per-partition checkpoint: a leaf whose persisted state
@@ -313,41 +321,53 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var advanced = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, cancellationToken);
             if (advanced)
                 anyAdvanced = true;
+            if (maxApplied > perPartitionMaxApplied[partition])
+                perPartitionMaxApplied[partition] = maxApplied;
         }
 
-        // Pass 2: drain every deferred saga terminal in arrival order
-        // across partitions. By this point pass 1 has fully populated
-        // every saga's pending bucket in _pendingTx, so each terminal's
-        // ApplyTxCommit / ApplyTxAbort observes the complete prepared-
-        // mutation set. Ordering across partitions does not matter
-        // because each terminal's id keys directly into the pending-
-        // bucket map; within a single partition's deferred list the
-        // arrival order is preserved by the append order. The
-        // per-partition projection-checkpoint advance fires AFTER each
-        // terminal's apply so the persisted checkpoint never overruns
-        // an unresolved terminal, preserving the saga reader-isolation
-        // invariant under crash recovery.
+        // Pass 2: drain every deferred saga terminal (and DeleteRange
+        // tombstone) in arrival order across partitions. By this
+        // point pass 1 has fully populated every saga's pending bucket
+        // in _pendingTx and every Set/Delete is in the Cache, so each
+        // terminal's ApplyTxCommit / ApplyTxAbort observes the
+        // complete prepared-mutation set and each range-tombstone's
+        // ApplyDeleteRange iterates the full pre-tombstone Cache.
+        // Ordering across partitions does not matter because each
+        // terminal's id keys directly into the pending-bucket map;
+        // within a single partition's deferred list the arrival order
+        // is preserved by the append order.
         foreach (var terminal in deferredTerminals)
         {
             using (LatticeApplyOffsetContext.BeginScope(terminal.Partition, terminal.Offset))
             {
                 projection.Apply(terminal.Mutation);
-                // Re-advance the per-partition checkpoint past the
-                // terminal offset now that the terminal has applied
-                // and its pending-bucket clamp has lifted. Guard
-                // against a monotonic-decrease throw when pass 1
-                // already advanced the partition's checkpoint past
-                // this terminal's offset (e.g. a later non-terminal
-                // entry in the same partition raised maxApplied in
-                // pass 1 or another deferred terminal in this loop
-                // already advanced past this offset).
-                var current = GetCurrentCheckpointForPartition(terminal.Partition);
-                if (terminal.Offset > current)
+            }
+        }
+
+        // Final reconciliation: every pending-tx clamp has lifted now
+        // that the terminals have drained, so the per-partition
+        // checkpoint can advance to the actual maxApplied observed
+        // during pass 1. Without this step, a partition whose
+        // pass-1 SetCheckpointOffsetAsync was clamped behind an
+        // unresolved prepare (whose terminal would later land in
+        // pass 2) would stay at the clamped offset forever, even
+        // after the terminal drained its pending bucket - the next
+        // activation would needlessly re-replay the prefix that was
+        // already absorbed into the Cache.
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var maxApplied = perPartitionMaxApplied[partition];
+            if (maxApplied <= GetPersistedCheckpointForPartition(partition))
+                continue;
+            using (LatticeApplyOffsetContext.BeginScope(partition, maxApplied))
+            {
+                var current = GetCurrentCheckpointForPartition(partition);
+                if (maxApplied > current)
                 {
-                    await projection.SetCheckpointOffsetAsync(terminal.Offset, cancellationToken);
+                    await projection.SetCheckpointOffsetAsync(maxApplied, cancellationToken);
                     anyAdvanced = true;
                 }
             }
@@ -423,7 +443,7 @@ internal sealed partial class BPlusLeafGrain
     /// us to wait.
     /// </para>
     /// </summary>
-    private async Task<bool> ReplayPartitionAsync(
+    private async Task<(bool Advanced, long MaxApplied)> ReplayPartitionAsync(
         string treeId,
         int partition,
         long checkpoint,
@@ -436,7 +456,7 @@ internal sealed partial class BPlusLeafGrain
 
         var head = await coordinator.GetHeadOffsetAsync(cancellationToken);
         if (head <= checkpoint)
-            return false;
+            return (false, checkpoint);
 
         var fromExclusive = checkpoint;
         long maxApplied = checkpoint;
@@ -512,40 +532,22 @@ internal sealed partial class BPlusLeafGrain
             fromExclusive = lastOffset;
         }
 
-        if (maxApplied > checkpoint)
-        {
-            // The cold-start coherence override (step 0.5 in
-            // OnActivateAsync) drives the local replay-scope checkpoint
-            // to -1 so the replay covers the full readable WAL window
-            // and rebuilds the empty cache. The persisted per-partition
-            // slot, however, may carry a higher value from a previous
-            // activation that flushed its checkpoint before the cache
-            // was cleared - and SetCheckpointOffsetAsync's monotonic-
-            // non-decreasing guard reads from the persisted slot, not
-            // the override. If we call SetCheckpointOffsetAsync(maxApplied)
-            // where maxApplied is below the persisted value (e.g. this
-            // partition's slice contained only foreign-range entries
-            // the filter dropped, leaving maxApplied at the override
-            // sentinel), the monotonic guard fires. Clamp our advance
-            // to be above the persisted value to short-circuit when
-            // the override+filter combination produced a no-progress
-            // replay - the persisted checkpoint is already past
-            // maxApplied so there is nothing to advance.
-            var persisted = GetPersistedCheckpointForPartition(partition);
-            if (maxApplied <= persisted)
-                return false;
-
-            // SetCheckpointOffsetAsync reads CurrentPartition from the
-            // ambient apply scope; scope this final advance so the
-            // per-partition clamp is applied to the correct partition.
-            using (LatticeApplyOffsetContext.BeginScope(partition, maxApplied))
-            {
-                await projection.SetCheckpointOffsetAsync(maxApplied, cancellationToken);
-            }
-            return true;
-        }
-
-        return false;
+        // The actual checkpoint advance (SetCheckpointOffsetAsync) is
+        // deferred to the post-pass-2 reconciliation step in
+        // ReplayWalSinceCheckpointAsync. That step waits until every
+        // deferred terminal has applied (lifting pending-tx clamps)
+        // and only then advances each partition's persisted checkpoint
+        // to the corresponding maxApplied. The pass-1 advance was
+        // unsafe because: (a) a partition that observed a prepare in
+        // pass 1 would clamp its checkpoint behind the prepare's
+        // offset, but the matching terminal would only land in pass
+        // 2; (b) a partition with no prepares but the same maxApplied
+        // would over-eagerly advance past offsets the deferred
+        // terminals must still be observed at by future activations.
+        // Returning the per-partition maxApplied here gives the
+        // caller the data it needs to do the post-pass-2 advance
+        // with full knowledge of every partition's outcome.
+        return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
     }
 
     /// <summary>

@@ -92,6 +92,12 @@ public partial class BPlusLeafGrainTests
         {
             MaterialiserCheckpointInterval = TimeSpan.Zero,
             LeafSnapshotReClassifyEveryNCheckpoints = reClassifyEveryN,
+            // Pin WalPartitions=1: these tests stub a single ILeafReplayCoordinatorGrain
+            // and assert exact ClassifyAsync call counts. The silo-wide
+            // default flipped to 8 with multi-partition WAL replay, which
+            // would otherwise drive 8 classifier calls per activation
+            // instead of 1.
+            WalPartitions = 1,
         };
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,

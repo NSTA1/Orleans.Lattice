@@ -162,6 +162,10 @@ public class ChangeFeedIntegrationTests
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // The ChangeFeed stub in OneTimeSetUp pins ReplogPartitions=1.
+            // Align the silo's WalPartitions so every mutation lands on the
+            // single partition the feed reads from.
+            siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
 

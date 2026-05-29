@@ -81,6 +81,47 @@ public readonly record struct LatticeSnapshotCoordinate
     }
 
     /// <summary>
+    /// Initialises a new snapshot coordinate carrying per-partition WAL
+    /// head offsets captured at open time. Required when the snapshot
+    /// covers a tree configured with <see cref="LatticeOptions.WalPartitions"/>
+    /// greater than 1: each shard has independent per-partition offset
+    /// spaces and the snapshot leaf needs every partition's head to
+    /// replay the shard's full WAL slice. The scalar
+    /// <see cref="PerShardWalOffsets"/> companion is filled with the
+    /// maximum offset across each shard's partitions for diagnostic
+    /// continuity with legacy consumers that read only the scalar slot.
+    /// </summary>
+    /// <param name="treeMapVersion">Routing-map version observed at open time.</param>
+    /// <param name="perShardPerPartitionWalOffsets">
+    /// Per-shard, per-partition WAL head offsets at open time. Each
+    /// key is a virtual shard index; each value is an array of
+    /// next-to-be-assigned offsets, indexed by WAL partition number.
+    /// Must not be <see langword="null"/>.
+    /// </param>
+    /// <param name="registrySnapshotHlc">HLC stamped on the registry-snapshot scope captured at open time.</param>
+    public LatticeSnapshotCoordinate(
+        long treeMapVersion,
+        IReadOnlyDictionary<int, IReadOnlyList<long>> perShardPerPartitionWalOffsets,
+        HybridLogicalClock registrySnapshotHlc)
+    {
+        ArgumentNullException.ThrowIfNull(perShardPerPartitionWalOffsets);
+        TreeMapVersion = treeMapVersion;
+        var scalar = new Dictionary<int, long>(perShardPerPartitionWalOffsets.Count);
+        foreach (var (shard, partitionOffsets) in perShardPerPartitionWalOffsets)
+        {
+            long max = 0;
+            for (var i = 0; i < partitionOffsets.Count; i++)
+            {
+                if (partitionOffsets[i] > max) max = partitionOffsets[i];
+            }
+            scalar[shard] = max;
+        }
+        PerShardWalOffsets = scalar;
+        PerShardPerPartitionWalOffsets = perShardPerPartitionWalOffsets;
+        RegistrySnapshotHlc = registrySnapshotHlc;
+    }
+
+    /// <summary>
     /// Routing-map version observed at <c>OpenSnapshot*Async</c> time.
     /// A topology change that publishes a new shard map after capture
     /// does not perturb the snapshot's view: the cursor continues to
@@ -105,4 +146,24 @@ public readonly record struct LatticeSnapshotCoordinate
     /// covers no saga decisions.
     /// </summary>
     [Id(2)] public HybridLogicalClock RegistrySnapshotHlc { get; init; }
+
+    /// <summary>
+    /// Per-shard, per-partition WAL head offsets captured at open time
+    /// when the snapshot covers a tree configured with
+    /// <see cref="LatticeOptions.WalPartitions"/> greater than 1. Each
+    /// key is a virtual shard index; each value is an array of
+    /// next-to-be-assigned offsets, indexed by WAL partition number.
+    /// <para>
+    /// <see langword="null"/> on coordinates persisted before this slot
+    /// was introduced, or on coordinates whose origin tree was
+    /// configured with <see cref="LatticeOptions.WalPartitions"/> = 1
+    /// (in which case the legacy scalar <see cref="PerShardWalOffsets"/>
+    /// fully describes the captured frontier). The cursor grain
+    /// prefers this slot when non-null and falls back to wrapping each
+    /// scalar offset in <see cref="PerShardWalOffsets"/> as a single-
+    /// element array when this slot is null, preserving the legacy
+    /// replay semantics for single-partition snapshots.
+    /// </para>
+    /// </summary>
+    [Id(3)] public IReadOnlyDictionary<int, IReadOnlyList<long>>? PerShardPerPartitionWalOffsets { get; init; }
 }

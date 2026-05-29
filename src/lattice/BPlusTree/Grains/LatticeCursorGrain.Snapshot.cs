@@ -251,12 +251,12 @@ internal sealed partial class LatticeCursorGrain
         string? effEnd,
         int pageSize)
     {
-        var shards = coord.PerShardWalOffsets;
+        var shards = ResolvePerShardPerPartitionOffsets(coord);
         var tasks = new Task<List<string>>[shards.Count];
         var index = 0;
-        foreach (var (shardIdx, capturedOffset) in shards)
+        foreach (var (shardIdx, capturedOffsets) in shards)
         {
-            tasks[index++] = FetchSnapshotShardKeysAsync(shardIdx, capturedOffset, coord, effStart, effEnd, pageSize);
+            tasks[index++] = FetchSnapshotShardKeysAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize);
         }
 
         return await Task.WhenAll(tasks);
@@ -264,27 +264,27 @@ internal sealed partial class LatticeCursorGrain
 
     private async Task<List<string>> FetchSnapshotShardKeysAsync(
         int shardIndex,
-        long capturedOffset,
+        IReadOnlyList<long> capturedOffsetsByPartition,
         LatticeSnapshotCoordinate coord,
         string? effStart,
         string? effEnd,
         int pageSize)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffset, default);
+        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
         return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize);
     }
 
     private async Task<List<KeyValuePair<string, byte[]>>> FetchSnapshotShardEntriesAsync(
         int shardIndex,
-        long capturedOffset,
+        IReadOnlyList<long> capturedOffsetsByPartition,
         LatticeSnapshotCoordinate coord,
         string? effStart,
         string? effEnd,
         int pageSize)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffset, default);
+        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
         return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize);
     }
 
@@ -297,15 +297,38 @@ internal sealed partial class LatticeCursorGrain
         string? effEnd,
         int pageSize)
     {
-        var shards = coord.PerShardWalOffsets;
+        var shards = ResolvePerShardPerPartitionOffsets(coord);
         var tasks = new Task<List<KeyValuePair<string, byte[]>>>[shards.Count];
         var index = 0;
-        foreach (var (shardIdx, capturedOffset) in shards)
+        foreach (var (shardIdx, capturedOffsets) in shards)
         {
-            tasks[index++] = FetchSnapshotShardEntriesAsync(shardIdx, capturedOffset, coord, effStart, effEnd, pageSize);
+            tasks[index++] = FetchSnapshotShardEntriesAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize);
         }
 
         return await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Resolves the per-shard per-partition WAL offsets the snapshot
+    /// leaves replay against. Prefers
+    /// <see cref="LatticeSnapshotCoordinate.PerShardPerPartitionWalOffsets"/>
+    /// when non-null (multi-partition capture path); falls back to
+    /// wrapping each scalar offset in
+    /// <see cref="LatticeSnapshotCoordinate.PerShardWalOffsets"/> as a
+    /// single-element list for legacy single-partition coordinates
+    /// persisted before the per-partition slot was introduced.
+    /// </summary>
+    private static IReadOnlyDictionary<int, IReadOnlyList<long>> ResolvePerShardPerPartitionOffsets(LatticeSnapshotCoordinate coord)
+    {
+        if (coord.PerShardPerPartitionWalOffsets is { } perPartition)
+            return perPartition;
+        var legacy = coord.PerShardWalOffsets;
+        var promoted = new Dictionary<int, IReadOnlyList<long>>(legacy.Count);
+        foreach (var (shard, offset) in legacy)
+        {
+            promoted[shard] = new[] { offset };
+        }
+        return promoted;
     }
 
     /// <summary>
@@ -412,7 +435,26 @@ internal sealed partial class LatticeCursorGrain
     {
         for (var s = 0; s < perShard.Length; s++)
         {
-            if (perShard[s].Count >= pageSize) return true;
+            // "hasMore" must be true whenever any shard returned at
+            // least one entry on this fetch, because under multi-
+            // shard merging some shards' entries may sit beyond the
+            // current page's cap and only get picked by the next
+            // fetch (after effStart advances past the just-yielded
+            // last key). The pre-multi-partition predicate compared
+            // against pageSize, which was safe under the legacy
+            // single-shard-WAL routing (each shard's snapshot leaf
+            // saw ALL its shard's entries in one pass and either
+            // returned a full page or was the only shard with data),
+            // but stranded keys under multi-shard balanced fan-out:
+            // 4 shards x 2 keys each at pageSize=2 would yield the
+            // first two keys but report hasMore=false even though
+            // the remaining 6 still lived in the per-shard fetches.
+            // The next-fetch advance handles termination correctly:
+            // a shard whose entries all sit at-or-below the merge's
+            // last yielded key returns an empty fetch on the next
+            // call, the merge yields zero new keys, and the cursor
+            // exhausts naturally.
+            if (perShard[s].Count > 0) return true;
         }
         return false;
     }
@@ -421,7 +463,8 @@ internal sealed partial class LatticeCursorGrain
     {
         for (var s = 0; s < perShard.Length; s++)
         {
-            if (perShard[s].Count >= pageSize) return true;
+            // See AnyShardHasRemaining for the rationale.
+            if (perShard[s].Count > 0) return true;
         }
         return false;
     }
