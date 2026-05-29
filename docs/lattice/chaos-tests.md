@@ -8,16 +8,23 @@ hold. They act as the end-to-end contract for the properties described
 in [Consistency](consistency.md) and [Replication](../lattice.replication/replication.md) -
 specifically that the public `ILattice` API is strongly consistent
 across arbitrary concurrent shard splits, online resizes, and online
-reshards; that `SetManyAtomicAsync` remains atomically visible
-(zero-or-all keys per poll) on the authoring site and on every
-receiver site; and that the per-merge-mode CRDT dispatch paths
-(`LwwRegister`, `OrSet`, `PnCounter`) converge across partitioned
-sites. The single-cluster suite also exercises the recovery protocols
-(resumable splits, two-phase root promotion, shadow-write atomicity,
-shadow-forwarding, registry version stamping, idempotent bulk graft)
-under random storage-write faults.
+reshards; that point-mutation public-API calls (`RemoveRangeAsync`,
+`CompareAndSwapAsync`, `ScanAsync` cancellation) hold their stated
+invariants under concurrent contention; that `SetManyAtomicAsync`
+remains atomically visible (zero-or-all keys per poll) on the
+authoring site and on every receiver site; and that the per-merge-mode
+CRDT dispatch paths (`LwwRegister`, `OrSet`, `PnCounter`, `MvRegister`,
+and - once the tracked gap closes - `OrMap`) converge across
+partitioned sites. The single-cluster suite also exercises the
+recovery protocols (resumable splits, two-phase root promotion,
+shadow-write atomicity, shadow-forwarding, registry version stamping,
+idempotent bulk graft) under random storage-write faults. The
+replication suite extends those guarantees to the production shipper,
+WAL trim, per-peer liveness, tombstone-reap filtering, and the gRPC
+transport; the Azure Table WAL suite pins append-batch atomicity and
+offset monotonicity against a real Azurite-backed provider.
 
-Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests live under `test/lattice.replication/Chaos/`. Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to itself, and is tagged `[Category("Chaos")]` so the iterative-development test filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them.
+Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests live under `test/lattice.replication/Chaos/`; transport-specific chaos tests live under `test/lattice.replication.grpc/Chaos/`; WAL-provider chaos tests live under `test/lattice.storage.azuretable/Chaos/`. Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to itself, and is tagged `[Category("Chaos")]` so the iterative-development test filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them. Tests that are currently [Ignore]'d are still listed below with their tracking roadmap entry; they flip back to live when the underlying gap is closed.
 
 ### Core chaos suite (`test/lattice/BPlusTree/`)
 
@@ -32,6 +39,10 @@ Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests
 | Atomic-write reader isolation across online resize | `ResizeTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs an online `ResizeAsync` (`MaxLeafKeys` / `MaxInternalChildren` to 8) concurrently with the saga chain. Exercises shadow-forwarding from the source physical tree to the destination, the alias swap, and the saga terminal-broadcast retry onto the new owner via `StaleTreeRoutingException`. |
 | Atomic-write reader isolation across online reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with the saga chain. Exercises the retroactive prepared-mutation sweep at `BeginShadowWrite`, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup. |
 | Digest determinism under load | `ChaosDigestIntegrationTests.cs` | `ILattice.GetLeafProjectionDigestAsync` is byte-stable across repeated calls in a write-quiescent window after concurrent writer / scanner load, and per-shard `EntryCount` sums equal `CountAsync`. |
+| Range delete under load | `ChaosRangeDeleteIntegrationTests.cs` | `RemoveRangeAsync` under concurrent writer load preserves range exclusivity (no key inside the deleted range survives a quiescent re-read) and never tombstones a key outside the range. Includes the cross-shard range case and the empty / single-key boundary cases. |
+| Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Many concurrent `CompareAndSwapAsync` callers racing on a small key universe produce exactly one observed `success=true` per logical CAS round; lost-update rounds report `success=false` with the actual current envelope so the call-site retry loop can make progress. |
+| Scan cancellation under load | `ScanCancellationChaosTests.cs` | An in-flight `ScanAsync` enumerator that observes a cancellation token transition surfaces `OperationCanceledException` within a bounded delay and leaks no grain-side resources; subsequent scans against the same range succeed normally. |
+| Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | _Currently `[Ignore]`'d - the underlying gap (grain-type discrimination on B+ leaf / internal grain ids) is tracked in `roadmap.md`._ Two-silo `TestCluster`, sustained write/read load, secondary silo restart every ~2.5 s; flips to a live `[Test]` once the leaf / internal grain-key discriminator lands.
 
 ### Cross-cluster chaos suite (`test/lattice.replication/Chaos/`)
 
@@ -43,15 +54,42 @@ Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests
 | PN-Counter convergence | `PnCounterConvergenceChaosTests.cs` | Three sites issue concurrent increments and decrements against a single counter under partition; after drain, every site reads the same algebraic sum. |
 | MV-Register convergence | `MvRegisterConvergenceChaosTests.cs` | Three sites issue concurrent `Set` operations against a single MV-Register key under partition; after drain, every site observes the same dot-tagged multi-value set with concurrent writes preserved and observed predecessors collapsed. |
 | Multi-site fixture smoke | `MultiSiteClusterFixtureSmokeTests.cs` | Diagnostic smoke tests for `MultiSiteClusterFixture` + `ChaosDeliveryPump`. Not chaos tests themselves - they pin the simpler invariants the convergence suite relies on (per-site WAL capture, per-site change feed yield, end-to-end pump delivery). Tagged `[Category("Chaos")]` so they ship alongside the suite they diagnose. |
+| OR-Map convergence | `OrMapConvergenceChaosTests.cs` | _Currently `[Ignore]`'d - the underlying gap (chaos-pump byte-cache dedupe on OR-Map post-merge bytes) is tracked in `roadmap.md`._ Three sites concurrently mutate an OR-Map key under partition; flips to a live `[Test]` once the pump's post-merge byte cache treats OR-Map entries the way it already treats OR-Set entries.
+| WAL trim under shipping | `WalTrimUnderShippingChaosTests.cs` | Producer-side WAL trim cannot prune entries the per-peer shipper has not yet acknowledged. Uses `ProductionShipperFixture` (real `AddLatticeReplication` + in-process loopback transport) to drive sustained writes while invoking trim against an artificially low retention bound; asserts every authored entry that the shipper has not yet acked remains readable from the WAL after trim. |
+| Liveness probe + inbound error under partition | `LivenessProbeAndInboundStatsChaosTests.cs` | Real partition-then-heal cycle against `ProductionShipperFixture`'s loopback transport with a `FaultInjectingReplicationApplier` decorator injecting receiver-side throws on the healed path; asserts the per-peer `IPeerStats` liveness probe flips to `Unhealthy` during isolation and back to `Healthy` after heal, and that the inbound-error counter records every injected receiver fault without inflating the success counter. |
+| Compaction + shipping | `CompactionShippingChaosTests.cs` | Sustained write+delete churn against site A with explicit `RunCompactionPassAsync` calls between phases. The producer-side `ReplicationShipperGrain.ShouldShip` filter must keep every maintenance-tagged tombstone-reap envelope (`MutationKind.Tombstone`) off the wire, since per-cluster compaction is local structural cleanup with no defined cross-cluster semantics; asserts the observed wire stream contains zero `Tombstone` entries while the workload itself shipped non-trivial traffic and the receiver converged on the live key set. |
+
+### gRPC transport chaos suite (`test/lattice.replication.grpc/Chaos/`)
+
+| Test class | File | Purpose |
+|---|---|---|
+| gRPC transport chaos | `GrpcTransportChaosTests.cs` | Exercises the gRPC replication transport under transient channel faults: server restart mid-shipment, idle-channel reconnection, and slow-receiver back-pressure all converge with no batch loss and no duplicate apply. |
+
+### Azure Table WAL chaos suite (`test/lattice.storage.azuretable/Chaos/`)
+
+| Test class | File | Purpose |
+|---|---|---|
+| Azure Table WAL chaos | `AzureTableWalChaosTests.cs` | Real Azurite-backed (Docker) WAL provider under concurrent append + read load with transient storage faults; asserts append-batch atomicity, monotone offset assignment, and trim correctness. Skipped at run time if the Azurite probe in `[OneTimeSetUp]` cannot reach the local emulator. |
 
 ## The workload
 
-Every chaos test runs a parallel workload against a 4-shard tree with
-aggressive structural sizing (`MaxLeafKeys = 4` on the happy-path /
-faults fixtures) over a fixed key *universe*. Writers only rewrite
-existing keys with monotonically-increasing values of the form
-`v-{keyIndex}-{writerId}-{seq}`. Any value matching that envelope proves
-the byte array is internally consistent.
+The four full-workload single-cluster fixtures (Tests 1-4 below) run a
+parallel workload against a 4-shard tree with aggressive structural
+sizing (`MaxLeafKeys = 4` on the happy-path / faults fixtures) over a
+fixed key *universe*. Writers only rewrite existing keys with
+monotonically-increasing values of the form `v-{keyIndex}-{writerId}-{seq}`.
+Any value matching that envelope proves the byte array is internally
+consistent.
+
+The atomic-visibility fixtures (Tests 5-6, 8), the per-mode
+convergence fixtures (Test 9), the multi-site smoke (Test 10), the
+range-delete / CAS / scan-cancel public-API fixtures, the
+production-shipper fixtures (WAL trim, liveness + inbound stats,
+compaction + shipping), and the downstream-package fixtures (gRPC
+transport, Azure Table WAL) do not follow this exact shape - each
+defines its own universe and worker mix appropriate to the invariant
+it targets. See the per-test sections (or the suite tables at the top
+of this document for the newer fixtures) for details.
 
 Fixture and parameter differences:
 
@@ -469,9 +507,9 @@ The chaos pump's per-edge loop catches and queues transient grain exceptions ont
 
 ### Companion observability
 
-Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atomic_write.batch_size` on the authoring site (see [Metrics](metrics.md#saga-coordinator-lifecycle)). On the receiver side
+Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atomic_write.batch_size` on the authoring site (see [Metrics](metrics.md#saga-coordinator-lifecycle)). On the receiver side the apply seam emits `orleans.lattice.replication.apply.duration` tagged with the source cluster id, the merge mode, and the apply outcome.
 
-## Test 9 - Per-mode convergence chaos (`LwwRegisterConvergenceChaosTests`, `OrSetConvergenceChaosTests`, `PnCounterConvergenceChaosTests`, `MvRegisterConvergenceChaosTests`)
+## Test 9
 
 Four sibling fixtures - one per `LatticeMergeMode` dispatch path -
 prove that the producer-side change-feed → shipper → receiver-side
@@ -547,9 +585,17 @@ None - these tests run on a quiescent 2-site fixture with no partition / concurr
 Between them, the chaos tests exercise every recovery path documented
 in [shard-splitting.md](shard-splitting.md),
 [online-reshard.md](online-reshard.md),
-[tree-sizing.md](tree-sizing.md), and the architecture notes:
+[tree-sizing.md](tree-sizing.md),
+[tombstone-compaction.md](tombstone-compaction.md),
+[wal.md](wal.md),
+[wal-storage-providers.md](wal-storage-providers.md),
+[state-primitives.md](state-primitives.md),
+[../lattice.replication/replication.md](../lattice.replication/replication.md),
+[../lattice.replication/transport.md](../lattice.replication/transport.md),
+[../lattice.replication/grpc-push-transport.md](../lattice.replication/grpc-push-transport.md),
+and the architecture notes:
 
-The table below covers the four full-workload topology-mutation chaos fixtures (Tests 1-4). The atomic-write reader-isolation (Test 5), atomic-visibility-across-topology siblings (Test 6), digest-determinism (Test 7), cross-cluster atomic-visibility (Test 8), per-mode convergence chaos (Test 9), and multi-site smoke (Test 10) fixtures target orthogonal invariants and are documented in their own sections above.
+The table below covers the four full-workload topology-mutation chaos fixtures (Tests 1-4). The atomic-write reader-isolation (Test 5), atomic-visibility-across-topology siblings (Test 6), digest-determinism (Test 7), cross-cluster atomic-visibility (Test 8), per-mode convergence chaos (Test 9), multi-site smoke (Test 10), and the per-test invariant fixtures (range delete, CAS, scan cancel, multi-silo restart, WAL trim, liveness + inbound stats, OR-Map convergence, compaction + shipping, gRPC transport, Azure Table WAL) target orthogonal invariants and are documented in their own grids below.
 
 | Surface | Happy path | Faults | Resize | Reshard |
 |---|:---:|:---:|:---:|:---:|
@@ -597,6 +643,45 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 | Dot-context supersession of causally-dominated entries on merge | - | - | - | ✅ |
 | CAS-budget exhaustion handled by call-site retry under sustained foreign-origin contention | - | - | ✅ | ✅ |
 
+### Per-test invariant surfaces (range delete, CAS, scan cancel, restart, replication, storage)
+
+The chaos tests below target surfaces that the four full-workload
+topology grids above do not cover: per-call public-API invariants
+(range delete, CAS, scan cancellation), Orleans membership churn
+(multi-silo restart, currently `[Ignore]`'d), the production
+replication pipeline (WAL trim, liveness + inbound stats, OR-Map
+convergence currently `[Ignore]`'d, compaction + shipping), and the
+two downstream-package suites (gRPC transport, Azure Table WAL).
+Columns map to the test rows in the suite tables at the top of this
+document.
+
+| Surface | Range delete | CAS | Scan cancel | Multi-silo restart | WAL trim | Liveness + inbound | OR-Map | Compaction + shipping | gRPC transport | Azure Table WAL |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `RemoveRangeAsync` range exclusivity under concurrent writers | ✅ | - | - | - | - | - | - | - | - | - |
+| `RemoveRangeAsync` cross-shard fan-out + tombstone scope | ✅ | - | - | - | - | - | - | - | - | - |
+| `CompareAndSwapAsync` linearisable winner under contention | - | ✅ | - | - | - | - | - | - | - | - |
+| `CompareAndSwapAsync` lost-update returns current envelope | - | ✅ | - | - | - | - | - | - | - | - |
+| `ScanAsync` cooperative cancellation surfaces `OperationCanceledException` within bounded delay | - | - | ✅ | - | - | - | - | - | - | - |
+| Cancelled scan leaks no grain-side enumerator state | - | - | ✅ | - | - | - | - | - | - | - |
+| `TestCluster.RestartSiloAsync` mid-workload preserves universe | - | - | - | ⏭ | - | - | - | - | - | - |
+| Grain-type discrimination on B+ leaf / internal grain ids (silo-restart safety) | - | - | - | ⏭ | - | - | - | - | - | - |
+| Producer-side WAL trim cannot prune un-acked entries | - | - | - | - | ✅ | - | - | - | - | - |
+| Real `AddLatticeReplication` + loopback transport under sustained writes | - | - | - | - | ✅ | ✅ | ⏭ | ✅ | - | - |
+| Per-peer `IPeerStats` liveness probe flips Unhealthy on isolation and Healthy on heal | - | - | - | - | - | ✅ | - | - | - | - |
+| Receiver-side fault-injection records inbound-error counter without inflating success counter | - | - | - | - | - | ✅ | - | - | - | - |
+| OR-Map convergence under concurrent multi-site mutation + partition | - | - | - | - | - | - | ⏭ | - | - | - |
+| `ReplicationShipperGrain.ShouldShip` keeps `MutationKind.Tombstone` envelopes off the wire | - | - | - | - | - | - | - | ✅ | - | - |
+| `ITombstoneCompactionGrain.RunCompactionPassAsync` mid-shipment preserves receiver convergence | - | - | - | - | - | - | - | ✅ | - | - |
+| gRPC server restart mid-shipment converges with no batch loss / no duplicate apply | - | - | - | - | - | - | - | - | ✅ | - |
+| gRPC idle-channel reconnection + slow-receiver back-pressure converge | - | - | - | - | - | - | - | - | ✅ | - |
+| Azurite-backed WAL append-batch atomicity + monotone offset assignment under concurrent load | - | - | - | - | - | - | - | - | - | ✅ |
+| Azurite-backed WAL trim correctness under transient storage faults | - | - | - | - | - | - | - | - | - | ✅ |
+
+Legend: ✅ = covered by a live test; ⏭ = covered by an `[Ignore]`'d test
+pending the tracked roadmap fix (the multi-silo restart and OR-Map
+entries are both tracked in the respective `roadmap.md` files). The
+`[Ignore]` flips to a live `[Test]` once the underlying gap closes.
+
 ## Runtime characteristics
 
 ### Single-cluster suite (`test/lattice/BPlusTree/`)
@@ -621,6 +706,17 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 | Universe size | 72 keys (3 × 6 × 4) | 1 key | 1 key (set-valued) | 1 key (counter) | 1 key (multi-value register) | 1 key |
 | Parallel workers | 3 saga writers (one per site) + 6 inter-site delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 1 writer + 2 delivery pumps |
 | Shards (per site) | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 |
+
+The runtime tables above capture the originally-shipped baseline fixtures.
+Newer chaos tests (range delete, CAS, scan cancel, multi-silo restart, WAL
+trim, liveness probe, OR-Map convergence, compaction + shipping, the gRPC
+transport suite, and the Azure Table WAL suite) follow the same general
+shape - short chaos window, bounded drain, single-tree or single-key
+universe - and add per-suite cost in proportion to the workload described
+in their "Purpose" column above. The cross-cluster, gRPC, and Azure Table
+suites all run end-to-end against real `AddLatticeReplication` (and, where
+applicable, real `AddLatticeReplicationGrpc` / `AddLatticeAzureTableWal`)
+silos rather than test-double transports.
 
 ## See also
 
