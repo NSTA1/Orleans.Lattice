@@ -203,6 +203,59 @@ public static class LatticeMetrics
             description: "Projection-digest reads served by a shard root (one per GetShardProjectionDigestAsync call).");
 
     /// <summary>
+    /// Counter incremented once for every leaf-side projection-digest decision
+    /// point, tagged with <see cref="TagTree"/> and <see cref="TagPath"/>:
+    /// <list type="bullet">
+    ///   <item><description><c>coalesced_scheduled</c> - the leaf scheduled a
+    ///   fresh one-shot timer (first dirty mutation inside a new coalescing
+    ///   window). Future <c>coalesced_skipped</c> increments share its
+    ///   eventual <c>coalesced_fired</c> publish.</description></item>
+    ///   <item><description><c>coalesced_skipped</c> - a dirty mutation arrived
+    ///   while a coalesced publish was already scheduled, so the
+    ///   cross-grain hop was deferred onto the existing window. This is the
+    ///   "publishes saved" surface that justifies the coalescing default.</description></item>
+    ///   <item><description><c>coalesced_fired</c> - the coalescing timer
+    ///   tick issued the cross-grain
+    ///   <c>OnChildDigestPublishedAsync</c> RPC to the parent. One per
+    ///   window per leaf (unless an inline publish or a graceful flush
+    ///   cancelled the timer first).</description></item>
+    ///   <item><description><c>inline</c> - the leaf issued the cross-grain
+    ///   publish synchronously (either because <c>DigestCoalescingWindowMs</c>
+    ///   is zero, the timer registration failed in a test harness, or the
+    ///   call came from a structural caller via
+    ///   <c>PublishDigestUpwardInlineAsync</c>).</description></item>
+    ///   <item><description><c>deactivation_flush</c> - the leaf's graceful
+    ///   <c>OnDeactivateAsync</c> drained a pending coalesced publish before
+    ///   the activation tore down.</description></item>
+    /// </list>
+    /// <para>
+    /// The headline operational invariant the coalescing path was designed
+    /// for is "N writes inside one window produce one cross-grain hop". That
+    /// translates to <c>coalesced_scheduled + coalesced_fired</c> per window
+    /// regardless of write count, with <c>coalesced_skipped</c> absorbing
+    /// the remaining N-1 dirtying mutations.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafDigestPublishes =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.digest.publishes", unit: "{publish}",
+            description: "Leaf-side projection-digest publish decisions, partitioned by path (coalesced scheduling, skip, fire, inline, deactivation flush).");
+
+    /// <summary><see cref="TagPath"/> = <c>coalesced_scheduled</c> on <see cref="LeafDigestPublishes"/>.</summary>
+    public static readonly KeyValuePair<string, object?> PathCoalescedScheduledTag = new(TagPath, "coalesced_scheduled");
+
+    /// <summary><see cref="TagPath"/> = <c>coalesced_skipped</c> on <see cref="LeafDigestPublishes"/>.</summary>
+    public static readonly KeyValuePair<string, object?> PathCoalescedSkippedTag = new(TagPath, "coalesced_skipped");
+
+    /// <summary><see cref="TagPath"/> = <c>coalesced_fired</c> on <see cref="LeafDigestPublishes"/>.</summary>
+    public static readonly KeyValuePair<string, object?> PathCoalescedFiredTag = new(TagPath, "coalesced_fired");
+
+    /// <summary><see cref="TagPath"/> = <c>inline</c> on <see cref="LeafDigestPublishes"/>.</summary>
+    public static readonly KeyValuePair<string, object?> PathInlineTag = new(TagPath, "inline");
+
+    /// <summary><see cref="TagPath"/> = <c>deactivation_flush</c> on <see cref="LeafDigestPublishes"/>.</summary>
+    public static readonly KeyValuePair<string, object?> PathDeactivationFlushTag = new(TagPath, "deactivation_flush");
+
+    /// <summary>
     /// Counter incremented once per adaptive shard-split commit, fired from
     /// <c>TreeShardSplitGrain.FinaliseAsync</c> immediately after the shard
     /// map swap succeeds.

@@ -59,13 +59,24 @@ public sealed class CoalescingClusterFixture
     /// reference to it.
     /// </summary>
     public async Task<ILattice> CreateTreeAsync(string treeId)
+        => await CreateTreeAsync(treeId, TestShardCount);
+
+    /// <summary>
+    /// Pre-registers <paramref name="treeId"/> in the tree registry with
+    /// the fixture's pinned small-leaf layout but the caller-supplied
+    /// shard count and returns a grain reference to it. Used by the
+    /// chained-fold-under-coalescing integration test that needs to
+    /// exercise the per-shard fan-out path with more than one shard.
+    /// </summary>
+    public async Task<ILattice> CreateTreeAsync(string treeId, int shardCount)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(shardCount);
         var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(treeId, new TreeRegistryEntry
         {
             MaxLeafKeys = SmallMaxLeafKeys,
-            ShardCount = TestShardCount,
+            ShardCount = shardCount,
         });
         return Cluster.Client.GetGrain<ILattice>(treeId);
     }
