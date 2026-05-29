@@ -217,6 +217,18 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private HybridLogicalClock _lastReportedCursor = HybridLogicalClock.Zero;
 
+    /// <summary>
+    /// Wall-clock instant of the most recent successful outbound
+    /// contact with the peer - a non-empty acked batch, or an empty
+    /// acked liveness probe. Anchored at activation in
+    /// <see cref="DateTime.MinValue"/> so the first pump tick whose
+    /// drain finds no work fires an immediate liveness probe (the
+    /// "(MinValue) - now &gt;= interval" branch trivially passes for
+    /// every finite interval). Activation-scoped; no persisted state
+    /// is added.
+    /// </summary>
+    private DateTime _lastSuccessfulContactUtc = DateTime.MinValue;
+
     /// <inheritdoc />
     protected override string KeepaliveReminderName => "shipper-keepalive";
 
@@ -372,7 +384,14 @@ internal sealed class ReplicationShipperGrain(
 
         if (_drainBuffer.Count == 0)
         {
-            // No work this tick; preserve any accumulated backoff.
+            // No work this tick. Consider firing an empty liveness
+            // probe so the outbound peer.last_contact_seconds gauge
+            // does not climb unbounded on a healthy idle link. The
+            // probe rides the same transport ack contract as a
+            // normal batch; the receiver sees a zero-entry envelope
+            // and acks immediately. Preserves any accumulated backoff
+            // by short-circuiting when one is in flight.
+            await TryEmitLivenessProbeAsync(options, cancellationToken);
             return;
         }
 
@@ -556,6 +575,7 @@ internal sealed class ReplicationShipperGrain(
         // (already counted into _drainEncodedByteCount during the
         // drain) - the same bytes that just travelled the wire.
         _peerStats.RecordSuccess(_treeName, _peerClusterId);
+        _lastSuccessfulContactUtc = DateTime.UtcNow;
         var hitBatchCap = _drainBuffer.Count >= maxPerBatch;
         var entriesBehind = hitBatchCap ? (long)_drainBuffer.Count : 0L;
         var bytesBehind = hitBatchCap ? _drainEncodedByteCount : 0L;
@@ -1061,6 +1081,123 @@ internal sealed class ReplicationShipperGrain(
         Array.Resize(ref _partitionGrainCache, partitions);
         Array.Resize(ref _partitionHead, partitions);
         Array.Resize(ref _partitionHeadDecoded, partitions);
+    }
+
+    /// <summary>
+    /// Sends an empty <see cref="ReplicationBatch"/> as a liveness
+    /// probe when the pump tick found no entries to ship AND the
+    /// configured <see cref="LatticeReplicationOptions.LivenessProbeInterval"/>
+    /// has elapsed since the last successful outbound contact. The
+    /// peer acks the empty batch and the standard success-recording
+    /// path runs so the
+    /// <c>peer.last_contact_seconds{direction="outbound"}</c> gauge
+    /// resets and no longer climbs unbounded between local-write
+    /// bursts on a healthy idle link. Disabled by setting the
+    /// interval to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>.
+    /// Transport throws apply the standard backoff path; ack
+    /// rejection leaves the cursor untouched (there is nothing to
+    /// advance past). The encoded payload is the 16-byte framing
+    /// header alone.
+    /// </summary>
+    private async Task TryEmitLivenessProbeAsync(LatticeReplicationOptions options, CancellationToken cancellationToken)
+    {
+        if (options.LivenessProbeInterval == System.Threading.Timeout.InfiniteTimeSpan)
+        {
+            return;
+        }
+        var now = DateTime.UtcNow;
+        if (_lastSuccessfulContactUtc == DateTime.MinValue)
+        {
+            // First idle tick on this activation: anchor the
+            // probe-interval timer to now so the probe fires
+            // ProbeInterval after activation rather than
+            // immediately - matches the semantics operators
+            // expect (a quiet but healthy link refreshes at the
+            // configured cadence) and preserves the "empty drain
+            // = no transport call" invariant existing tests
+            // depend on for the activation's first pump tick.
+            _lastSuccessfulContactUtc = now;
+            return;
+        }
+        if (now - _lastSuccessfulContactUtc < options.LivenessProbeInterval)
+        {
+            return;
+        }
+
+        ReplicationBatchEncodedEnvelope encodedEnvelope;
+        try
+        {
+            var header = new EncodedBatchHeader
+            {
+                Magic = EncodedBatchHeader.MagicValue,
+                WireVersion = EncodedBatchHeader.CurrentWireVersion,
+                OriginClusterIdHash = EncodedBatchHeader.HashClusterId(options.ClusterId),
+                EntryCount = 0,
+                BatchSequence = 0,
+                Mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister,
+                Compression = LatticeCompression.None,
+            };
+            encodedEnvelope = new ReplicationBatchEncodedEnvelope
+            {
+                Header = header,
+                EncodedEntries = ReadOnlyMemory<ArraySegment<byte>>.Empty,
+            };
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // Header construction failure on a probe is logged and
+            // swallowed - there are no per-entry side effects to
+            // dead-letter, and the next pump tick (or the next
+            // doorbell) will try again.
+            Logger.LogWarning(ex,
+                "Liveness-probe header construction failed for {Context}; skipping probe", LogContext);
+            return;
+        }
+
+        ReplicationAck ack;
+        try
+        {
+            var batch = new ReplicationBatch
+            {
+                TargetClusterId = _peerClusterId,
+                TreeName = _treeName,
+                OriginClusterId = options.ClusterId,
+                Payload = ReadOnlyMemory<byte>.Empty,
+                Envelope = null,
+                EncodedEnvelope = encodedEnvelope,
+            };
+            ack = await _transport.SendAsync(batch, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            ApplyBackoff(options, ex, "transport");
+            return;
+        }
+
+        if (!ack.Accepted)
+        {
+            ApplyBackoff(options, exception: null, reason: "ack-rejected");
+            return;
+        }
+
+        // Successful probe: stamp last-contact and refresh the
+        // outbound peer-stats success/backlog gauges. Receiver-side
+        // flow-control hints are still honoured (a receiver may
+        // pause an idle link).
+        state.State.ConsecutiveFailures = 0;
+        _nextRetryAtUtc = DateTime.MinValue;
+        _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
+        if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
+        {
+            var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
+            if (requested > _nextRetryAtUtc)
+            {
+                _nextRetryAtUtc = requested;
+            }
+        }
+        _peerStats.RecordSuccess(_treeName, _peerClusterId);
+        _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind: 0, bytesBehind: 0);
+        _lastSuccessfulContactUtc = DateTime.UtcNow;
     }
 
     private void ApplyBackoff(LatticeReplicationOptions options, Exception? exception, string reason)

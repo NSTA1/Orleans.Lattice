@@ -10,6 +10,18 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Items merged into `main` after the v6.0.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
+### Added
+
+- **Bidirectional `peer.last_contact_seconds` and `peer.consecutive_errors`** (`Orleans.Lattice.Replication`). Both observable gauges now carry a `direction` tag (`outbound` / `inbound`). The receiver-side `ReplicationApplier` records an inbound success or failure per per-origin run keyed on `WalRecord.OriginClusterId`, so dashboards can finally answer "when did this silo last receive from peer X?" alongside the existing "when did this silo last ship to peer X?". `peer.entries_behind` and `peer.bytes_behind` remain outbound-only (the receiver does not track a per-peer backlog into itself).
+- **Outbound liveness probe** (`Orleans.Lattice.Replication`). New `LatticeReplicationOptions.LivenessProbeInterval` (default `30 s`; `Timeout.InfiniteTimeSpan` disables). When the shipper's pump tick finds no entries to ship and the interval since the last successful outbound contact has elapsed, the shipper ships an empty `ReplicationBatch` so the outbound gauge resets on healthy idle links. Activation-anchored: the first idle tick is silent, the probe begins one interval after activation. Payload is the 16-byte framing header alone.
+- **New public `ReplicationContactDirection` enum** (`Outbound = 0`, `Inbound = 1`) and **additive `Direction` init-property on `ReplicationPeerSnapshot`** (defaulted to `Outbound` - existing positional-constructor call sites are bit-identical). New public methods `ReplicationPeerStats.RecordInboundSuccess` / `RecordInboundError` for receiver-side recording.
+- **Inbound health-check tier** (`Orleans.Lattice.Replication`). New `LatticeReplicationHealthCheckOptions.InboundDegradedAfter` / `InboundCriticalAfter` (both default `Timeout.InfiniteTimeSpan` - opt-in). Inbound-stale rows escalate on the same per-`(tree, peer)` first-degraded-since ladder the outbound thresholds use; inbound rows surface in the `degradedPeers` / `unhealthyPeers` arrays with a `" (inbound)"` label suffix.
+- **Bundled Grafana dashboard updates** (`Orleans.Lattice.Dashboards`). Panel #11 retitled to "Per-peer last outbound ship (seconds ago)" with `direction="outbound"` matcher; consecutive-errors panel breaks down by `direction`; new panel #20 "Per-peer last inbound apply (seconds ago)" mirrors the outbound view filtered by `direction="inbound"`.
+
+### Breaking
+
+- **Doubled series on `peer.last_contact_seconds` and `peer.consecutive_errors`.** Hosts that opt into both directions see two series per `(tree, peer)` pair (one outbound, one inbound). Dashboards that previously matched these gauges without filtering by `direction` must add `direction="outbound"` to preserve the pre-bidirectional shape, or accept the doubled series. Metric names and units are unchanged. `peer.entries_behind` / `peer.bytes_behind` are unaffected.
+
 ### Candidate themes for a future major
 
 - Loosen the LWW-by-default contract on `ILattice.SetAsync` / `GetAsync` via an opt-in per-tree `DefaultMergeMode` (so `MvRegister` and other CRDT shapes can be the default for trees that want concurrency-preserving semantics).

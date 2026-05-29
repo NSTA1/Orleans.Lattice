@@ -2,7 +2,7 @@
 
 `Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
 
-- **Per-peer gauges** - `entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`.
+- **Per-peer gauges** - `entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind` and `bytes_behind` remain outbound-only (the receiver does not track a per-peer backlog into itself).
 - **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`. Reported in milliseconds.
 - **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
@@ -166,3 +166,14 @@ covering the five transitions:
 - `{previous} -> Failed` (catch-and-persist path; the previous phase is included so an operator can see where the drain aborted).
 
 Tailing the silo log for a single bootstrap run is `(treeName, sourceClusterId)` keyed: every transition log carries both. Pair with the metric tags above to correlate log-line timestamps against per-entry throughput.
+
+## Bidirectional `peer.last_contact_seconds` and the liveness probe
+
+`peer.last_contact_seconds` and `peer.consecutive_errors` carry a `direction` tag with two values:
+
+- `direction="outbound"` - recorded by `ReplicationShipperGrain` after a peer accepts a shipped batch. Includes the periodic empty **liveness probe** the shipper fires when the drain buffer is empty and the wall-clock interval since the last successful outbound contact has elapsed. The probe is configured by `LatticeReplicationOptions.LivenessProbeInterval` (default `30 s`; set to `Timeout.InfiniteTimeSpan` to disable). The probe interval timer is anchored on the first idle pump tick after activation, so the first idle tick is silent and the probe begins one interval after activation. The payload is the 16-byte framing header alone; no entries are shipped.
+- `direction="inbound"` - recorded by `ReplicationApplier`'s batch path after a per-origin run of inbound entries applies (or fails) on the local receiver. Keyed by the entries' `WalRecord.OriginClusterId`. Range-delete and local-origin entries skip the recording.
+
+The two directions are independent: a peer that this silo only ships to never produces an inbound row; a peer that this silo only receives from never produces an outbound row. `Snapshot()` returns one row per `(tree, peer, direction)` triple, each carrying a `Direction` property of type `ReplicationContactDirection`.
+
+**Migration note.** Dashboards that previously matched `peer.last_contact_seconds` or `peer.consecutive_errors` without filtering on `direction` will see two series per `(tree, peer)` pair on hosts that opt into both directions. Add `direction="outbound"` to the matcher to preserve the pre-bidirectional shape, or accept the doubled series. Metric names and units are otherwise unchanged. `peer.entries_behind` and `peer.bytes_behind` remain outbound-only and emit a single series per pair without the `direction` tag.

@@ -108,4 +108,7 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-tree maintenance grain persistent state class.</summary>
     internal const string ReplicationMaintenanceState = "olr.ms";
 
+    /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
+    internal const string ReplicationContactDirection = "olr.cd";
+
 }

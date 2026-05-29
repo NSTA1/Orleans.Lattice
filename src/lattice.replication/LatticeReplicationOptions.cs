@@ -442,6 +442,27 @@ public class LatticeReplicationOptions
     public TimeSpan ShipPhaseTimerPeriod { get; set; } = DefaultShipPhaseTimerPeriod;
 
     /// <summary>
+    /// Maximum interval between successful outbound contacts with a
+    /// peer. When the per-<c>(tree, peer)</c> shipper grain's pump
+    /// tick finds the drain buffer empty AND the wall-clock interval
+    /// since the last successful contact equals or exceeds this
+    /// value, the shipper sends an empty
+    /// <see cref="ReplicationBatch"/> as a liveness probe. The peer
+    /// acks the empty batch and the standard success-recording path
+    /// runs, so the outbound
+    /// <c>peer.last_contact_seconds{direction="outbound"}</c> gauge
+    /// resets and no longer climbs unbounded between local-write
+    /// bursts on a healthy idle link.
+    /// <para>
+    /// Defaults to <see cref="DefaultLivenessProbeInterval"/>. Set
+    /// to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>
+    /// to disable the empty-tick probe entirely; any other value
+    /// must be strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// </para>
+    /// </summary>
+    public TimeSpan LivenessProbeInterval { get; set; } = DefaultLivenessProbeInterval;
+
+    /// <summary>
     /// Maximum backoff delay between failed ship attempts, capping
     /// the doubling sequence seeded by <see cref="ShipBackoffInitial"/>.
     /// Defaults to <see cref="DefaultShipBackoffMax"/>. Must be
@@ -739,6 +760,15 @@ public class LatticeReplicationOptions
     /// timer so the option is a strict superset of prior behaviour.
     /// </summary>
     public static readonly TimeSpan DefaultShipPhaseTimerPeriod = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Default value for <see cref="LivenessProbeInterval"/>: 30 s.
+    /// Aligned with the maintenance fall-off probe cadence so an
+    /// idle but healthy outbound link refreshes its
+    /// <c>peer.last_contact_seconds{direction="outbound"}</c> gauge
+    /// at least once per maintenance cycle.
+    /// </summary>
+    public static readonly TimeSpan DefaultLivenessProbeInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Default value for <see cref="ShipBackoffMax"/>: 30 seconds.

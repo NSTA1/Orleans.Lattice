@@ -828,5 +828,48 @@ public class LatticeReplicationOptionsValidatorTests
             Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.FramingCompressionMinBatchBytes)));
         });
     }
+
+    [Test]
+    public void Validate_succeeds_for_default_liveness_probe_interval()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_liveness_probe_interval_is_infinite()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            LivenessProbeInterval = System.Threading.Timeout.InfiniteTimeSpan,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_liveness_probe_interval_is_non_positive(int ticks)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            LivenessProbeInterval = TimeSpan.FromTicks(ticks),
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.LivenessProbeInterval)));
+        });
+    }
 }
 

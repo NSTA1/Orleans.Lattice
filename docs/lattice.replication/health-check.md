@@ -39,6 +39,15 @@ The check classifies every `(tree, peer)` pair captured in telemetry against thr
 | `LastContactSeconds` | `ReplicationPeerSnapshot.LastContactSeconds` (age of last successful contact) | 30 s | 300 s |
 | `ConsecutiveErrors` | `ReplicationPeerSnapshot.ConsecutiveErrors` (failure streak since last success) | 5 | 50 |
 
+The `EntriesBehind`, `LastContactSeconds`, and `ConsecutiveErrors` tiers above classify **outbound** snapshot rows only - inbound rows carry zero `EntriesBehind` by construction and the inbound counterparts of the contact / error tiers are exposed separately as the **inbound silence** signal:
+
+| Property | Description | Default |
+|---|---|---|
+| `InboundDegradedAfter` | Duration of inbound silence after which the row contributes `Degraded` to the aggregate verdict. | `Timeout.InfiniteTimeSpan` (disabled) |
+| `InboundCriticalAfter` | Duration of inbound silence after which the row contributes `Unhealthy` to the aggregate verdict. | `Timeout.InfiniteTimeSpan` (disabled) |
+
+The inbound signal is opt-in - a host that wants readiness gating on inbound liveness configures finite thresholds. A peer that this silo only ships to (and never receives from) produces no inbound rows and is excluded from this signal regardless of the configured thresholds. Inbound rows appear in the `degradedPeers` / `unhealthyPeers` arrays with the label suffix `" (inbound)"` so dashboards can distinguish them from outbound rows.
+
 Defaults are exposed as `public static readonly` fields on `LatticeReplicationHealthCheckOptions` (`DefaultEntriesBehind`, `DefaultLastContactSeconds`, `DefaultConsecutiveErrors`). A host overrides any subset:
 
 ```csharp verify

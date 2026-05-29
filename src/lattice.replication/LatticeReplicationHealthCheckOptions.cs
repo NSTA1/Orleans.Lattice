@@ -65,6 +65,32 @@ public sealed class LatticeReplicationHealthCheckOptions
     public TimeSpan UnhealthyAfter { get; set; } = DefaultUnhealthyAfter;
 
     /// <summary>
+    /// Duration of inbound silence after which an inbound row's
+    /// <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>
+    /// signal contributes <see cref="HealthStatus.Degraded"/> to the
+    /// aggregate verdict. Inbound rows are only recorded by the
+    /// receiver-side apply path; a peer that this silo only ships to
+    /// (never receives from) does not produce inbound rows and is
+    /// excluded from this signal regardless of the configured value.
+    /// Defaults to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>
+    /// so the inbound signal is opt-in: existing health-check
+    /// behaviour is preserved unless the host explicitly configures
+    /// a finite threshold.
+    /// </summary>
+    public TimeSpan InboundDegradedAfter { get; set; } = DefaultInboundDegradedAfter;
+
+    /// <summary>
+    /// Duration of inbound silence after which an inbound row's
+    /// <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>
+    /// signal contributes <see cref="HealthStatus.Unhealthy"/> to
+    /// the aggregate verdict. Must be greater than or equal to
+    /// <see cref="InboundDegradedAfter"/> when both are finite.
+    /// Defaults to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>
+    /// (signal disabled).
+    /// </summary>
+    public TimeSpan InboundCriticalAfter { get; set; } = DefaultInboundCriticalAfter;
+
+    /// <summary>
     /// Default for <see cref="EntriesBehind"/>: 1 000 entries soft,
     /// 10 000 entries hard. Sized so a steady-state catch-up of a few
     /// shipper batches does not flap the probe while a sustained backlog
@@ -96,6 +122,20 @@ public sealed class LatticeReplicationHealthCheckOptions
     /// more does.
     /// </summary>
     public static readonly TimeSpan DefaultUnhealthyAfter = TimeSpan.FromSeconds(60d);
+
+    /// <summary>
+    /// Default for <see cref="InboundDegradedAfter"/>:
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>. The
+    /// inbound-direction health signal is opt-in; hosts that want
+    /// to gate readiness on inbound liveness set a finite value.
+    /// </summary>
+    public static readonly TimeSpan DefaultInboundDegradedAfter = System.Threading.Timeout.InfiniteTimeSpan;
+
+    /// <summary>
+    /// Default for <see cref="InboundCriticalAfter"/>:
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>.
+    /// </summary>
+    public static readonly TimeSpan DefaultInboundCriticalAfter = System.Threading.Timeout.InfiniteTimeSpan;
 
     /// <summary>
     /// Default registered name for the health check. Hosts that register

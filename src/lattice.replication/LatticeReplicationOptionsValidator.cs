@@ -209,6 +209,18 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "fire the polling fallback when the doorbell signal is unavailable.");
         }
 
+        if (options.LivenessProbeInterval != System.Threading.Timeout.InfiniteTimeSpan
+            && options.LivenessProbeInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.LivenessProbeInterval)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} or equal to "
+                + $"{nameof(System.Threading.Timeout)}.{nameof(System.Threading.Timeout.InfiniteTimeSpan)} ({scope}). "
+                + "A zero or negative interval would cause the shipper to fire an empty liveness probe on every "
+                + $"pump tick; set the value to {nameof(System.Threading.Timeout)}.{nameof(System.Threading.Timeout.InfiniteTimeSpan)} "
+                + "to disable the probe entirely.");
+        }
+
         if (options.ShipBackoffMax < options.ShipBackoffInitial)
         {
             return ValidateOptionsResult.Fail(
