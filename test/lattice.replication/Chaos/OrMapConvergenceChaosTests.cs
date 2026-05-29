@@ -31,12 +31,6 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 [TestFixture]
 [NonParallelizable]
 [Category("Chaos")]
-[Ignore(
-    "Tracked on the replication roadmap as 'OR-Map convergence under chaos-pump partition cycling does not drain'. " +
-    "The ChaosDeliveryPump byte-cache ping-pong-break heuristic does not fire on OR-Map post-merge state bytes (likely a non-canonical " +
-    "dictionary iteration order on OrMap serialization), so HealAllAndDrainAsync times out even on very small workloads. " +
-    "Re-enable once the recovery work lands (test-side dedupe via the CrdtShape equality seam, or a canonical-serialisation guarantee " +
-    "on OrMap.SerializeState).")]
 public class OrMapConvergenceChaosTests
 {
     private const string TreeName = "chaos-ormap";
