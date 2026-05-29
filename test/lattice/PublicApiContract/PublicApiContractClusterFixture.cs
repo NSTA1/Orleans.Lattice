@@ -177,7 +177,20 @@ public sealed class PublicApiContractClusterFixture
             // Streams provider for SetPublishEventsEnabled / Subscribe tests.
             siloBuilder.AddMemoryStreams("Default");
             siloBuilder.AddMemoryGrainStorage("PubSubStore");
-            siloBuilder.ConfigureLattice(opts => opts.PublishEvents = true);
+            siloBuilder.ConfigureLattice(opts =>
+            {
+                opts.PublishEvents = true;
+                // Pin DigestCoalescingWindowMs = 0 at the silo level.
+                // This fixture serves a large body of contract tests
+                // that issue synchronous read-after-write digest
+                // oracles (e.g. RebuildLeafProjectionAsync followed
+                // by GetLeafProjectionDigestAsync). With the library
+                // default of 5 ms those oracles race the leaf's
+                // one-shot publish timer. Tests that exercise the
+                // coalescing shape itself live in
+                // CoalescingClusterFixture's dedicated suite.
+                opts.DigestCoalescingWindowMs = 0;
+            });
 
             // In-fixture mutation observer so observer tests do not need
             // their own dedicated cluster.

@@ -83,8 +83,29 @@ internal sealed partial class BPlusLeafGrain
     /// when the tree has not yet been registered with this leaf
     /// (pre-<c>SetTreeIdAsync</c>).
     /// </summary>
-    private async Task PersistAsync()
+    /// <summary>
+    /// Diagnostic gate for the c2-vi etag-race probe. Set
+    /// <c>LATTICE_BENCH_TRACE_PERSIST=1</c> in the silo environment to
+    /// emit one stdout line per <see cref="PersistAsync"/> call with
+    /// the activation id, <see cref="IPersistentState{TState}.RecordExists"/>,
+    /// <see cref="IPersistentState{TState}.Etag"/>, and a short caller-
+    /// supplied tag. Read once at process start; flipping the env var
+    /// mid-run has no effect. Default <c>false</c> so production and
+    /// the unit-test harness pay zero cost.
+    /// </summary>
+    private static readonly bool _tracePersist =
+        Environment.GetEnvironmentVariable("LATTICE_BENCH_TRACE_PERSIST") is { Length: > 0 } v
+        && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
+
+    private async Task PersistAsync([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
+        if (_tracePersist)
+        {
+            var etag = state.Etag is null
+                ? "<null>"
+                : (state.Etag.Length > 32 ? state.Etag.Substring(0, 32) + ".." : state.Etag);
+            Console.WriteLine($"[diag persist] kind=leaf caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' shard={state.State.ShardIndex} recordExists={state.RecordExists} etag={etag}");
+        }
         var startTicks = Stopwatch.GetTimestamp();
         try
         {
@@ -197,5 +218,93 @@ internal sealed partial class BPlusLeafGrain
         LatticeMetrics.LeafCommitDuration.Record(elapsedMs,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
             new KeyValuePair<string, object?>(LatticeMetrics.TagStep, step));
+    }
+
+    /// <summary>
+    /// Per-activation gate that serialises every entry into
+    /// <see cref="BPlusLeafGrain.SplitAsync"/> and
+    /// <see cref="BPlusLeafGrain.CompleteSplitAsync"/>.
+    /// <para>
+    /// The leaf's mutation surface
+    /// (<see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/>,
+    /// <see cref="IBPlusLeafGrain.SetManyAsync"/>,
+    /// <see cref="IBPlusLeafGrain.DeleteAsync"/>,
+    /// <see cref="IBPlusLeafGrain.MergeManyAsync"/>) is marked
+    /// <c>[AlwaysInterleave]</c> so multiple producer turns can run on
+    /// the same activation concurrently (U9p c2-iii). Orleans serialises
+    /// synchronous code between awaits, so the per-key LWW merge,
+    /// HLC tick, and projection-hash updates are race-free. The single
+    /// remaining hazard is concurrent entry into <c>SplitAsync</c>:
+    /// the split predicate (<c>Cache.Count &gt; MaxLeafKeys</c>) is
+    /// observed by the caller before <c>SplitAsync</c> sets
+    /// <see cref="Primitives.SplitState.SplitInProgress"/> at its first
+    /// post-await line, so two interleaved turns can both observe
+    /// overflow and both enter <c>SplitAsync</c>, double-flipping the
+    /// state row, allocating two siblings, and corrupting the chain.
+    /// </para>
+    /// <para>
+    /// This gate serialises every <c>SplitAsync</c> / <c>CompleteSplitAsync</c>
+    /// call site on the grain. The expected critical-section
+    /// occupancy is &lt;= 1 ms per turn under steady state (no split)
+    /// and ~tens-of-ms during an actual split, both of which are
+    /// dominated by the post-WAL await the caller is already paying
+    /// for; the gate adds no measurable latency to the steady-state
+    /// path.
+    /// </para>
+    /// </summary>
+    private readonly SemaphoreSlim _splitGate = new(1, 1);
+
+    /// <summary>
+    /// Per-activation count of foreground commits (<see cref="CommitSetAsync"/>
+    /// or <see cref="CommitSetManyAsync"/>) currently in flight on this
+    /// leaf. Snapshotted at the moment a new commit enters the commit
+    /// path, recorded on <see cref="LatticeMetrics.LeafCommitInFlight"/>,
+    /// then incremented for the duration of the commit. The decrement
+    /// runs unconditionally in the disposed scope so an exception
+    /// midway through the commit cannot leak depth.
+    /// <para>
+    /// Under the shipping non-reentrant scheduling of
+    /// <see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/> /
+    /// <see cref="IBPlusLeafGrain.SetManyAsync"/> the recorded value
+    /// is always <c>0</c>: Orleans serialises grain calls and the
+    /// next commit cannot enter until the current one returns. The
+    /// histogram is a falsifiability instrument for the U9m roadmap
+    /// probe: a steady pin at <c>0</c> proves
+    /// the leaf turn queue is not the binding constraint and routes
+    /// the next probe to WAL-side fan-in (U9n); a steady lift above
+    /// <c>0</c> identifies the leaf grain as the binding constraint.
+    /// </para>
+    /// </summary>
+    private int _commitInFlight;
+
+    /// <summary>
+    /// Opens a <see cref="CommitInFlightScope"/> that snapshots
+    /// <see cref="_commitInFlight"/> on the
+    /// <see cref="LatticeMetrics.LeafCommitInFlight"/> histogram and
+    /// increments the counter for the lifetime of the returned scope.
+    /// Callers must <see langword="using"/> the scope so the matching
+    /// decrement runs in every commit-path exit (return, exception,
+    /// or split).
+    /// </summary>
+    private CommitInFlightScope EnterCommitScope()
+    {
+        var depthBefore = Interlocked.Increment(ref _commitInFlight) - 1;
+        LatticeMetrics.LeafCommitInFlight.Record(depthBefore, LeafTreeTag());
+        return new CommitInFlightScope(this);
+    }
+
+    /// <summary>
+    /// Decrements the leaf's in-flight commit counter on
+    /// <see cref="IDisposable.Dispose"/>. The scope is paired with
+    /// <see cref="EnterCommitScope"/> via a <c>using</c> statement so
+    /// the decrement runs in the commit path's <c>finally</c>
+    /// regardless of how the commit body exits (normal return,
+    /// exception, or split-induced sibling promotion).
+    /// </summary>
+    private readonly struct CommitInFlightScope : IDisposable
+    {
+        private readonly BPlusLeafGrain _grain;
+        public CommitInFlightScope(BPlusLeafGrain grain) => _grain = grain;
+        public void Dispose() => Interlocked.Decrement(ref _grain._commitInFlight);
     }
 }

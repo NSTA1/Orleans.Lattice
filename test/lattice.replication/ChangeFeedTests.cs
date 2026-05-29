@@ -46,6 +46,8 @@ public class ChangeFeedTests
             sequenced[i] = new WalShardSequencedEntry { Sequence = i, Entry = entries[i] };
         }
 
+        grain.GetNextSequenceAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult((long)sequenced.Length));
         grain.ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
@@ -114,8 +116,15 @@ public class ChangeFeedTests
     }
 
     [Test]
-    public async Task Subscribe_yields_entries_with_timestamp_strictly_greater_than_cursor()
+    public async Task Subscribe_yields_entries_at_or_after_cursor_offset()
     {
+        // D1c: cursors are per-partition WAL offsets, not HLCs.
+        // The cursor entry is the EXCLUSIVE lower bound (offset of the
+        // next entry to read). Build a cursor positioned at offset 2
+        // and confirm only the third entry (offset 2, key "c") is
+        // yielded. The HLC overload is no longer cursor-filtered
+        // (its filter was the inversion-drop bug); the offset
+        // overload is now the canonical cursor shape.
         var (feed, factory) = CreateFeed(partitions: 1);
         var grain = Grain(
             Entry("a", Hlc(1)),
@@ -123,9 +132,48 @@ public class ChangeFeedTests
             Entry("c", Hlc(10)));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
-        var entries = await CollectAsync(feed.Subscribe(Tree, Hlc(5)));
+        var cursor = new ChangeFeedCursor(new Dictionary<int, long> { [0] = 2L });
+        var entries = await CollectAsync(feed.Subscribe(Tree, cursor));
 
         Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "c" }));
+    }
+
+    [Test]
+    public async Task GetCurrentCursorAsync_resume_after_single_append_does_not_redeliver()
+    {
+        // Regression test for the off-by-one cursor bug discovered in
+        // post-D1c review. Under the original INCLUSIVE-lower-bound
+        // semantics (cursor[p] = highest-consumed-offset, clamped at 0
+        // for an empty partition), a partition holding exactly one
+        // entry produced cursor[p]=0 from GetCurrentCursorAsync (next
+        // sequence is 1, next-1 clamped at 0). The Subscribe filter
+        // could not distinguish that "consumed offset 0" cursor from
+        // ChangeFeedCursor.Initial, so re-subscribing at the captured
+        // cursor silently re-yielded offset 0 every time until a
+        // second entry was appended. The fix flips the cursor to
+        // EXCLUSIVE-lower-bound semantics (cursor[p] = next-offset-to
+        // -read), which encodes "fresh" as 0 and "consumed offset 0"
+        // as 1, removing the ambiguity. This test pins the contract
+        // by exercising the smallest reproducer: one entry, capture
+        // cursor, re-subscribe, expect empty.
+        var (feed, factory) = CreateFeed(partitions: 1);
+        var grain = Grain(Entry("only", Hlc(1)));
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
+
+        var firstPass = await CollectAsync(feed.Subscribe(Tree, ChangeFeedCursor.Initial));
+        Assert.That(firstPass.Select(e => e.Key), Is.EqualTo(new[] { "only" }),
+            "First pass from Initial must yield the single entry.");
+
+        var cursor = await feed.GetCurrentCursorAsync(Tree);
+
+        // The captured cursor must be distinguishable from Initial -
+        // otherwise resume cannot avoid re-delivering offset 0.
+        Assert.That(cursor, Is.Not.EqualTo(ChangeFeedCursor.Initial),
+            "Cursor captured after a single append must not equal Initial.");
+
+        var secondPass = await CollectAsync(feed.Subscribe(Tree, cursor));
+        Assert.That(secondPass, Is.Empty,
+            "Re-subscribing at the captured cursor must not redeliver the already-consumed entry.");
     }
 
     [Test]

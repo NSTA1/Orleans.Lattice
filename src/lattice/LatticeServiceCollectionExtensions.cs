@@ -46,6 +46,15 @@ public static class LatticeServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configureStorage);
 
+        // Register the GrainId TypeConverter before any grain storage is
+        // configured below so Newtonsoft.Json (the default serialiser
+        // backing AzureTableGrainStorage) can round-trip the
+        // GrainId-keyed dictionaries the lattice persists (e.g.
+        // InternalNodeState.ChildDigests). Without this, the first
+        // grain reactivation against a non-empty Azure Tables grain-
+        // state table throws JsonSerializationException. Idempotent.
+        Internal.GrainIdTypeConverterRegistration.EnsureRegistered();
+
         configureStorage(builder, LatticeOptions.StorageProviderName);
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();

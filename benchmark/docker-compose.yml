@@ -71,6 +71,20 @@ services:
       Lattice__Wal__TableName: ${BENCH_WAL_TABLE_NAME:-OrleansLatticeWal}
       Lattice__Wal__PipelinePhaseTwo: ${BENCH_WAL_PIPELINE_PHASE_TWO:-false}
       Lattice__Wal__EliminateCandidateRowOnHotPath: ${BENCH_WAL_ELIMINATE_CANDIDATE_ROW:-false}
+      # Phase C / step C4 retry-budget tuning knobs for the Azure Table WAL
+      # provider. Empty means "fall through to the Azure SDK defaults";
+      # benchmark-attribution.ps1 stamps these per matrix cell when the
+      # tuning cohort is in scope. Delays/timeouts are in milliseconds.
+      Lattice__Wal__RetryMaxAttempts: ${BENCH_WAL_RETRY_MAX_ATTEMPTS:-}
+      Lattice__Wal__RetryDelayMs: ${BENCH_WAL_RETRY_DELAY_MS:-}
+      Lattice__Wal__RetryMaxDelayMs: ${BENCH_WAL_RETRY_MAX_DELAY_MS:-}
+      Lattice__Wal__RetryNetworkTimeoutMs: ${BENCH_WAL_RETRY_NETWORK_TIMEOUT_MS:-}
+      # Phase A horizontal-scaling sweep knobs. Empty means "fall through to
+      # LatticeOptions defaults (1, 1)"; benchmark-attribution.ps1 sets these
+      # per matrix cell so a single run can be pivoted by option state on the
+      # WalPartitions / WalMaxPendingBatches tags emitted by the WAL grain.
+      Lattice__WalPartitions: ${BENCH_LATTICE_WAL_PARTITIONS:-}
+      Lattice__WalMaxPendingBatches: ${BENCH_LATTICE_WAL_MAX_PENDING_BATCHES:-}
       # Replication switch (only consumed when Telemetry__Sink=lattice).
       Replication__Enabled: ${BENCH_REPLICATION_ENABLED:-false}
       Replication__OriginClusterId: ${BENCH_REPLICATION_CLUSTER_ID:-vfs-bench}

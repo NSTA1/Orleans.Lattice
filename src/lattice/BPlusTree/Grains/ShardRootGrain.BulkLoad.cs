@@ -143,7 +143,7 @@ internal sealed partial class ShardRootGrain
             state.State.RootNodeId = leafIds[0];
             state.State.RootIsLeaf = true;
             state.State.LastCompletedBulkOperationId = operationId;
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
             return;
         }
 
@@ -191,7 +191,7 @@ internal sealed partial class ShardRootGrain
         state.State.RootNodeId = currentLevel[0].id;
         state.State.RootIsLeaf = false;
         state.State.LastCompletedBulkOperationId = operationId;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     public async Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
@@ -244,7 +244,7 @@ internal sealed partial class ShardRootGrain
         if (idx >= sortedEntries.Count)
         {
             state.State.LastCompletedBulkOperationId = operationId;
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
             return;
         }
 
@@ -289,7 +289,7 @@ internal sealed partial class ShardRootGrain
             NewLeaves = graftEntries,
             RootWasLeaf = state.State.RootIsLeaf,
         };
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
 
         await CompleteBulkGraftAsync();
     }
@@ -326,6 +326,7 @@ internal sealed partial class ShardRootGrain
                 {
                     PromotedKey = entry.SeparatorKey,
                     NewSiblingId = entry.LeafId,
+                    ChildIsLeaf = true,
                 };
                 await PromoteRootAsync(splitResult);
                 continue;
@@ -352,8 +353,19 @@ internal sealed partial class ShardRootGrain
             // first null return from AcceptSplitAsync. The class allocation
             // is only paid in the very rare case where the root itself
             // needs to split (caught by the `if (pendingHasValue)` tail).
+            //
+            // pendingChildIsLeaf tracks the node-type of pendingChild as it
+            // bubbles up: it starts as `true` (the graft-supplied leaf id)
+            // and flips to `false` as soon as an internal-parent's
+            // AcceptSplitAsync returns a non-null bubble (whose NewSiblingId
+            // is the freshly-split internal sibling). This value is stamped
+            // into the final PromoteRootAsync's SplitResult so the
+            // CompletePromotionAsync seam can dispatch SeedChildParentAsync
+            // through IBPlusLeafGrain or IBPlusInternalGrain without
+            // re-reading the (potentially raced) RootIsLeaf flag.
             var pendingKey = entry.SeparatorKey;
             var pendingChild = entry.LeafId;
+            var pendingChildIsLeaf = true;
             var pendingHasValue = true;
             while (pendingHasValue && path.Count > 0)
             {
@@ -369,6 +381,7 @@ internal sealed partial class ShardRootGrain
                 {
                     pendingKey = bubble.PromotedKey;
                     pendingChild = bubble.NewSiblingId;
+                    pendingChildIsLeaf = bubble.ChildIsLeaf;
                 }
             }
 
@@ -378,13 +391,14 @@ internal sealed partial class ShardRootGrain
                 {
                     PromotedKey = pendingKey,
                     NewSiblingId = pendingChild,
+                    ChildIsLeaf = pendingChildIsLeaf,
                 });
             }
         }
 
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <summary>

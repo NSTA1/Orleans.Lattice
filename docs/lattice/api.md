@@ -524,6 +524,18 @@ foreach (var shard in report.Shards)
 }
 ```
 
+#### Lifecycle
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `WarmUpAsync` | `Task WarmUpAsync(CancellationToken cancellationToken = default)` | Pre-activates every physical shard root *and* each shard's current root-node grain (root leaf when the tree is flat, root internal node otherwise) for this tree using a bounded-concurrency fan-out. On a brand-new empty shard, warm-up runs the same `EnsureRootAsync` path the first traffic write would take - it materializes the deterministic root leaf at startup instead of under hot-path load. Designed to be called once at host startup, *after* the lattice has been resolved and *before* the first hot-path write lands, so the Orleans placement-directory + grain-storage first-touch cost (and root-materialization persistence cost on an empty tree) is absorbed while the silo is idle rather than against producer-driven flush concurrency. The fan-out is capped at `min(physicalShardCount, 32)` simultaneous probes. Throws `InvalidOperationException` when invoked on an internal system tree. Records the `orleans.lattice.warmup.invocations` counter and the `orleans.lattice.warmup.duration` histogram. |
+
+```csharp verify
+// Run once during host startup, after the lattice has been
+// resolved but before any producer traffic is accepted.
+await tree.WarmUpAsync(cancellationToken);
+```
+
 #### Events
 
 | Method | Signature | Description |

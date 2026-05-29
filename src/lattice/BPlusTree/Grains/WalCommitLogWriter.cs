@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Extensions.Options;
 
@@ -53,9 +54,25 @@ internal sealed class WalCommitLogWriter(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var (stamped, partition) = Route(entry);
+        var (stamped, partition, perTree) = Route(entry);
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{stamped.TreeId}/{partition}");
-        return await grain.AppendAsync(stamped, cancellationToken).ConfigureAwait(false);
+
+        // A2 cross-grain dispatch attribution: clock the awaited grain
+        // RPC on the caller side so the Orleans turn-queue wait at the
+        // target WalShardGrain activation becomes visible. Subtracting
+        // WalAppendTurnWait (the WAL grain's own self-clock) from this
+        // histogram isolates the scheduling tax on the single WAL
+        // activation per partition - the dominant cost under the
+        // default WalPartitions = 1.
+        var dispatchStartTicks = Stopwatch.GetTimestamp();
+        try
+        {
+            return await grain.AppendAsync(stamped, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            RecordDispatchOutcome(stamped.TreeId, partition, perTree, entryCount: 1, dispatchStartTicks);
+        }
     }
 
     /// <inheritdoc />
@@ -85,15 +102,21 @@ internal sealed class WalCommitLogWriter(
         // a hand-constructed cross-tree batch still routes correctly.
         var partitionEntries = new Dictionary<string, List<WalRecord>>(StringComparer.Ordinal);
         var partitionReverse = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        // Captured alongside partitionEntries so the per-partition
+        // dispatch histogram (A2) can tag the tree id / partition /
+        // WalPartitions / WalMaxPendingBatches without re-resolving
+        // the options on the metric path.
+        var partitionMeta = new Dictionary<string, (string TreeId, int Partition, LatticeOptions PerTree)>(StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
-            var (stamped, partition) = Route(entries[i]);
+            var (stamped, partition, perTree) = Route(entries[i]);
             var grainKey = $"{stamped.TreeId}/{partition}";
             if (!partitionEntries.TryGetValue(grainKey, out var list))
             {
                 list = new List<WalRecord>();
                 partitionEntries[grainKey] = list;
                 partitionReverse[grainKey] = new List<int>();
+                partitionMeta[grainKey] = (stamped.TreeId, partition, perTree);
             }
             list.Add(stamped);
             partitionReverse[grainKey].Add(i);
@@ -109,7 +132,8 @@ internal sealed class WalCommitLogWriter(
         foreach (var (grainKey, list) in partitionEntries)
         {
             var grain = grainFactory.GetGrain<IWalShardGrain>(grainKey);
-            tasks[t++] = AppendForPartitionAsync(grainKey, grain, list, cancellationToken);
+            var meta = partitionMeta[grainKey];
+            tasks[t++] = AppendForPartitionAsync(grainKey, grain, list, meta.TreeId, meta.Partition, meta.PerTree, cancellationToken);
         }
         var partitionResults = await Task.WhenAll(tasks).ConfigureAwait(false);
 
@@ -131,10 +155,36 @@ internal sealed class WalCommitLogWriter(
         string grainKey,
         IWalShardGrain grain,
         IReadOnlyList<WalRecord> entries,
+        string treeId,
+        int partition,
+        LatticeOptions perTree,
         CancellationToken cancellationToken)
     {
-        var offsets = await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false);
-        return new KeyValuePair<string, IReadOnlyList<long>>(grainKey, offsets);
+        // A2 cross-grain dispatch attribution on the batched path:
+        // mirrors the single-entry overload so AppendBatchAsync's
+        // per-partition fan-out is attributable too. Each partition
+        // gets one observation per AppendManyAsync call.
+        var dispatchStartTicks = Stopwatch.GetTimestamp();
+        try
+        {
+            var offsets = await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false);
+            return new KeyValuePair<string, IReadOnlyList<long>>(grainKey, offsets);
+        }
+        finally
+        {
+            RecordDispatchOutcome(treeId, partition, perTree, entryCount: entries.Count, dispatchStartTicks);
+        }
+    }
+
+    private static void RecordDispatchOutcome(string treeId, int partition, LatticeOptions perTree, int entryCount, long startTicks)
+    {
+        var elapsedMs = Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition);
+        var walPartitionsTag = new KeyValuePair<string, object?>(LatticeMetrics.TagWalPartitions, perTree.WalPartitions);
+        var walMaxPendingTag = new KeyValuePair<string, object?>(LatticeMetrics.TagWalMaxPendingBatches, perTree.WalMaxPendingBatches);
+        LatticeMetrics.WalShardDispatchDuration.Record(elapsedMs, treeTag, shardTag, walPartitionsTag, walMaxPendingTag);
+        LatticeMetrics.WalShardDispatchEntries.Record(entryCount, treeTag, shardTag, walPartitionsTag, walMaxPendingTag);
     }
 
     /// <summary>
@@ -144,9 +194,13 @@ internal sealed class WalCommitLogWriter(
     /// entry lands on. Pulled out so the single-entry and batched
     /// overloads share the same routing semantics by construction; the
     /// saga-terminal shard-index-in-key contract therefore applies
-    /// identically to both paths.
+    /// identically to both paths. Returns the resolved per-tree
+    /// options alongside the routed entry so the cross-grain dispatch
+    /// histogram (A2 attribution) can tag <c>WalPartitions</c> /
+    /// <c>WalMaxPendingBatches</c> without a second
+    /// <c>IOptionsMonitor.Get</c> on the metric path.
     /// </summary>
-    private (WalRecord Entry, int Partition) Route(WalRecord entry)
+    private (WalRecord Entry, int Partition, LatticeOptions PerTree) Route(WalRecord entry)
     {
         var perTree = options.Get(entry.TreeId);
         var partitions = perTree.WalPartitions;
@@ -194,6 +248,6 @@ internal sealed class WalCommitLogWriter(
         {
             partition = WalPartitionHash.Compute(stamped.Key, partitions);
         }
-        return (stamped, partition);
+        return (stamped, partition, perTree);
     }
 }

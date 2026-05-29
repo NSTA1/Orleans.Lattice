@@ -56,8 +56,15 @@ public partial class PublicReplicationApiContractTests
     }
 
     [Test]
-    public async Task IChangeFeed_subscribe_advances_when_cursor_is_set_to_last_observed_timestamp()
+    public async Task IChangeFeed_subscribe_advances_when_resumed_from_captured_cursor()
     {
+        // D1c: cursor shape is now per-partition WAL offset. The HLC
+        // cursor previously used to advance the feed silently dropped
+        // any low-HLC entry that arrived after a higher-HLC entry on
+        // the same WAL partition under parallel cross-leaf appends
+        //.
+        // Consumers now capture the resume cursor via
+        // IChangeFeed.GetCurrentCursorAsync.
         var treeId = NextTreeId("feed-cursor");
         var lattice = await CreateReplicatedTreeAsync(treeId);
         var feed = PublicReplicationApiClusterFixture
@@ -65,14 +72,14 @@ public partial class PublicReplicationApiContractTests
             .GetRequiredService<IChangeFeed>();
 
         await lattice.SetAsync("a", Bytes("1"));
-        var firstPass = await CollectFeedAsync(feed.Subscribe(treeId, HybridLogicalClock.Zero));
+        var firstPass = await CollectFeedAsync(feed.Subscribe(treeId, ChangeFeedCursor.Initial));
         Assert.That(firstPass, Is.Not.Empty);
 
-        var cursor = firstPass[^1].Timestamp;
+        var cursor = await feed.GetCurrentCursorAsync(treeId);
 
         var emptyPass = await CollectFeedAsync(feed.Subscribe(treeId, cursor));
         Assert.That(emptyPass, Is.Empty,
-            "Re-subscribing at the last observed timestamp must yield no entries.");
+            "Re-subscribing at the captured cursor must yield no entries.");
 
         await lattice.SetAsync("b", Bytes("2"));
         var nextPass = await CollectFeedAsync(feed.Subscribe(treeId, cursor));

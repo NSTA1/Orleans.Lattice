@@ -339,6 +339,179 @@
           "legendFormat": "created"
         }
       ]
+    },
+    {
+      "id": 100,
+      "title": "SetAsync / SetManyAsync envelope p50 (ms)",
+      "description": "Top-of-stack public-API call duration: set.duration is single-key SetAsync, set_many.duration is bulk SetManyAsync. Pairs with the stage-breakdown panels below to attribute envelope cost to gate / route / bucket / shard / publish.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "S", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_set_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 SetAsync" },
+        { "refId": "M", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_set_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 SetManyAsync" }
+      ]
+    },
+    {
+      "id": 101,
+      "title": "SetAsync / SetManyAsync envelope p95 (ms)",
+      "description": "p95 of the public-API call envelopes. The gap between p50 and p95 here is the tail introduced by stale-routing retries, registry probes, or contended placement-directory lookups.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "S", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_set_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 SetAsync" },
+        { "refId": "M", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_set_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 SetManyAsync" }
+      ]
+    },
+    {
+      "id": 102,
+      "title": "SetAsync stage breakdown p95 (ms)",
+      "description": "Per-stage sub-attribution inside LatticeGrain.SetAsync. set.stage.duration is tagged stage = shard (inner shard.SetAsync RPC including stale-routing retries) and stage = publish (trailing PublishEventAsync hop).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(orleans_lattice_set_stage_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{stage}}" }
+      ]
+    },
+    {
+      "id": 103,
+      "title": "SetManyAsync stage breakdown p95 (ms)",
+      "description": "Per-stage sub-attribution inside LatticeGrain.SetManyAsync. set_many.stage.duration is tagged stage in {gate, route, bucket, fanout, events}, isolating pre-flight gating, routing fetch, per-key bucketing, per-shard fan-out, and trailing event publication.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(orleans_lattice_set_many_stage_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{stage}}" }
+      ]
+    },
+    {
+      "id": 104,
+      "title": "ShardRoot.SetMany sub-attribution p95 (ms)",
+      "description": "Per-step latency inside ShardRootGrain.SetManyLocalOnlyAsync: local_apply (per-leaf parallel dispatch), shadow_forward (mid-split forward to destination shard), and leaf_rpc (the actual per-leaf SetManyAsync RPC envelope).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 52 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_set_many_local_apply_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 local_apply" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_set_many_shadow_forward_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 shadow_forward" },
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_set_many_leaf_rpc_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 leaf_rpc" }
+      ]
+    },
+    {
+      "id": 105,
+      "title": "WAL append latency p95 (ms) - turn-wait / provider / dispatch",
+      "description": "Decomposed WAL-append cost: turn_wait (time spent in the WalShardGrain turn queue before the append runs), provider.duration (storage-provider append latency), dispatch.duration (caller-side cross-grain RPC envelope - turn_wait + provider + Orleans transport). dispatch - (turn_wait + provider) approximates Orleans transport overhead per partition.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 60 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "T", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_append_turn_wait_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 turn_wait" },
+        { "refId": "P", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_append_provider_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 provider" },
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_shard_dispatch_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 dispatch" }
+      ]
+    },
+    {
+      "id": 106,
+      "title": "WAL batch shape p95 - entries / bytes / dispatch-entries",
+      "description": "Per-flush batch shape. wal.append.batch_entries / batch_bytes are the per-flush sizes at the WalShardGrain (sized to WalMaxBatchEntries / WalMaxBatchBytes). wal.shard.dispatch.entries is the caller-side per-RPC batch size (=1 for single AppendAsync, N for AppendManyAsync). A persistent batch_entries p95 = 1 indicates the producer is not actually saturating the WAL flush envelope and coalescing is wasted.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "E", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_append_batch_entries_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 batch_entries" },
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_shard_dispatch_entries_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 dispatch_entries" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_append_batch_bytes_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 batch_bytes (B, secondary axis)" }
+      ]
+    },
+    {
+      "id": 107,
+      "title": "WAL pipeline depth p95 - in-flight flushes / queue depth",
+      "description": "Back-pressure indicators on WalShardGrain. wal.append.in_flight is the number of concurrent provider flushes (capped at WalMaxPendingBatches). wal.append.queue_depth is the in-grain pending-entry depth before flush. Pinned in-flight at the cap with growing queue_depth indicates the cap is saturated and a higher WalMaxPendingBatches could lift throughput; queue_depth = 0 with in-flight < cap indicates the producer side is the binding constraint.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "I", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_append_in_flight_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 in_flight" },
+        { "refId": "Q", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_append_queue_depth_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 queue_depth" }
+      ]
+    },
+    {
+      "id": 108,
+      "title": "Storage-provider phase-2 commit p95 (ms) + batch size",
+      "description": "provider.commit.duration is the storage-provider's phase-2 commit latency. provider.phase2.batch_size is the per-commit entry count (= 1 on every commit means the provider's coalescing window never traps a second arrival; raise the coalescing window if throughput is bound).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 76 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_provider_commit_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 commit.duration (ms)" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_provider_phase2_batch_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "p95 phase2.batch_size (entries, secondary)" }
+      ]
+    },
+    {
+      "id": 109,
+      "title": "Storage-provider retries (ops/s) - attempts vs exhausted",
+      "description": "provider.retry.attempts tracks every retry the storage adapter issues against a transient failure (healthy resilience under transient-fault load). provider.retry.exhausted increments when the bounded-retry budget is exhausted and the caller-visible exception propagates - any non-zero rate is alert-worthy because it means a foreground commit failed.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 76 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(orleans_lattice_provider_retry_attempts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "attempts" },
+        { "refId": "E", "expr": "sum(rate(orleans_lattice_provider_retry_exhausted_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "exhausted" }
+      ]
+    },
+    {
+      "id": 110,
+      "title": "Leaf commit concurrency (in-flight) p95",
+      "description": "Snapshot of in-flight foreground commits on a single BPlusLeafGrain at the moment a new commit enters the commit path. Pins at 0 under the default non-reentrant grain shape; a sustained non-zero tail tracks contention from saga-prepare arrivals or producer-side fan-in.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 84 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_commit_in_flight_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 leaf.commit.in_flight" }
+      ]
+    },
+    {
+      "id": 111,
+      "title": "WarmUpAsync - invocations and duration",
+      "description": "ILattice.WarmUpAsync per-call cost and rate. A non-zero invocation rate after the cluster has warmed up indicates the host is re-warming on every request (a configuration bug); duration is the wall-clock cost of routing resolution plus the bounded-concurrency per-shard probe round-trip.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 84 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_warmup_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))) or vector(0)", "legendFormat": "p95 duration (ms)" },
+        { "refId": "I", "expr": "sum(rate(orleans_lattice_warmup_invocations_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) or vector(0)", "legendFormat": "invocations / s (secondary)" }
+      ]
+    },
+    {
+      "id": 112,
+      "title": "Digest publish path attribution (ops/s) - coalescing efficacy",
+      "description": "leaf.digest.publishes tagged path = {coalesced_scheduled, coalesced_skipped, coalesced_fired, inline, deactivation_flush}. Headline coalescing invariant: coalesced_skipped/(scheduled+skipped) is the ratio of writes that avoided a parent RPC; coalesced_fired is the actual per-window cross-grain hop. A regression to the c2-xxix shape (resolver dropping DigestCoalescingWindowMs) shows up as zero coalesced_* rates and inline rising in lockstep with writes.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 92 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (path) (rate(orleans_lattice_leaf_digest_publishes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{path}}" }
+      ]
     }
   ]
 }

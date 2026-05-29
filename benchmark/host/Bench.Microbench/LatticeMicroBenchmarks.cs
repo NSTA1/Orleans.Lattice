@@ -81,6 +81,17 @@ public class LatticeMicroBenchmarks
     // the per-shard fan-out cost.
     private List<string> _getManyBatch = null!;
 
+    // Phase R (c2-viii open question (c)): pre-built GetMany batches at
+    // a sweep of small sizes. PointGetMany_BatchSize uses these to answer
+    // "what is the per-call gain ratio as batch size grows?" without
+    // per-iteration List<string> allocation noise. Indexed by enum-style
+    // size constant (1, 2, 4, 8, 16, 32, 64) so the Arguments attribute
+    // can dispatch by ordinal. Each batch is drawn from the seeded
+    // keyspace, identity-stable across iterations, and shares the same
+    // allocation discipline as _getManyBatch.
+    private Dictionary<int, List<string>> _getManyBatchesBySize = null!;
+    private static readonly int[] GetManyBatchSizesSweep = { 1, 2, 4, 8, 16, 32, 64 };
+
     private int _writeCursor;
     private int _readCursor;
     private int _mixedCursor;
@@ -423,6 +434,23 @@ public class LatticeMicroBenchmarks
             _getManyBatch.Add(_keys[i]);
         }
 
+        // Phase R: pre-build the sweep batches. Each batch's keys are
+        // drawn contiguously from _keys[] so larger batches strictly
+        // superset smaller ones, which means shard-fan-out grows
+        // monotonically with batch size. Capped at _keys.Length so a
+        // small BENCH_MICROBENCH_KEY_COUNT does not over-request.
+        _getManyBatchesBySize = new Dictionary<int, List<string>>(GetManyBatchSizesSweep.Length);
+        foreach (var size in GetManyBatchSizesSweep)
+        {
+            var capped = Math.Min(size, _keys.Length);
+            var batch = new List<string>(capped);
+            for (var i = 0; i < capped; i++)
+            {
+                batch.Add(_keys[i]);
+            }
+            _getManyBatchesBySize[size] = batch;
+        }
+
         BuildFanoutTree(keyCount, bulkBatch);
         BuildDeepTree();
         BuildDeeperTree();
@@ -697,6 +725,34 @@ public class LatticeMicroBenchmarks
         // baseline reasons (see _getManyBatch comment).
         _ = unchecked(_getManyCursor++) & int.MaxValue;
         return _lattice.GetManyAsync(_getManyBatch);
+    }
+
+    /// <summary>
+    /// Phase R (c2-viii open question (c)): sweep
+    /// <see cref="ILattice.GetManyAsync(System.Collections.Generic.List{string}, System.Threading.CancellationToken)"/>
+    /// across batch sizes <c>{1, 2, 4, 8, 16, 32, 64}</c> to surface
+    /// the per-call gain ratio as batch size grows. At <c>size=1</c> the
+    /// benchmark exercises the same single-key path as <see cref="PointRead"/>
+    /// but through the multi-key surface (a List with one element), so
+    /// the diff between the two rows isolates the
+    /// <c>LatticeGrain.GetManyAsyncCore</c> shard-bucket dictionary +
+    /// double-snapshot retry overhead from the underlying read cost.
+    /// Larger sizes surface the per-shard fan-out scaling. Batches are
+    /// pre-built in <see cref="GlobalSetup"/> and reused identity-stable
+    /// across iterations so per-iteration allocation reflects only the
+    /// async state machine + result dictionary.
+    /// </summary>
+    [Benchmark(Description = "Point get many sweep")]
+    [Arguments(1)]
+    [Arguments(2)]
+    [Arguments(4)]
+    [Arguments(8)]
+    [Arguments(16)]
+    [Arguments(32)]
+    [Arguments(64)]
+    public Task<Dictionary<string, byte[]>> PointGetMany_BatchSize(int batchSize)
+    {
+        return _lattice.GetManyAsync(_getManyBatchesBySize[batchSize]);
     }
 
     /// <summary>

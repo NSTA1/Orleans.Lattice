@@ -16,6 +16,15 @@
                         (default 120; >= DurationSec + a small grace).
       -Tag              image tag (default 'latest')
       -SkipBuild        reuse the existing image; only redeploy the container group.
+      -LocalBuild       build images locally via `docker build` and `docker push` instead
+                        of `az acr build`. Requires Docker Desktop (or equivalent) on a
+                        linux/amd64 host. Trades remote build time (~1m45s for a clean
+                        ACI build with full source upload) for local incremental
+                        `docker build` + `docker push` (~15s when only Program.cs
+                        changed), which is the dominant speedup on code-change
+                        iteration. The remote `az acr build` path remains the default
+                        and the supported fallback for clean environments without
+                        Docker.
       -NoWait           submit the deployment and return immediately (legacy behaviour;
                         the script will not capture logs or stop the group).
 
@@ -33,6 +42,7 @@ param(
     [string] $Tag,
     [string] $TreeId,
     [switch] $SkipBuild,
+    [switch] $LocalBuild,
     [switch] $NoWait
 )
 
@@ -76,8 +86,115 @@ $tag          = if ($PSBoundParameters.ContainsKey('Tag'))          { $Tag }
 # the optimisation against a real Azure Tables account.
 $walElimCRow  = if ($env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW) { $env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW }
                 else { 'false' }
+# WAL partition count per tree. Default 8 (matches Silo/Program.cs default).
+# Operator override path is honoured so a P=1 vs P=8 A/B can be driven from the
+# host env without editing the inline YAML below.
+$walPartitions = if ($env:BENCH_WAL_PARTITIONS) { $env:BENCH_WAL_PARTITIONS }
+                 else { '8' }
+# Per-WalShardGrain pipeline depth. Default 8 (matches Silo/Program.cs default).
+$walMaxPending = if ($env:BENCH_WAL_MAX_PENDING_BATCHES) { $env:BENCH_WAL_MAX_PENDING_BATCHES }
+                 else { '8' }
+# PhaseTwoWorker coalescing window in ms. Default 0 (drain-on-first-signal, matches
+# the library default and Silo/Program.cs default). Surfaced as an env-var override so
+# a U9c sweep (e.g. 0 vs 5 vs 10 ms) can be driven from the host without editing YAML.
+# Default 5: at the c2-iii durable Azure Tables baseline, P2=0 regresses -57%
+# vs P2=5 (scaling.md U9p step 8c-c-iv-c2-iv probe-D). All c2-iii / c2-vi /
+# c2-vi-followup milestones used P2=5, so the deploy default tracks the
+# operating-point baseline rather than the library default of 0.
+$phase2CoalescingMs = if ($env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS) { $env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS }
+                      else { '5' }
+# In-silo SetManyAsync flush concurrency cap (drainer semaphore size). Default 8
+# (matches Silo/Program.cs default). Surfaced as an env-var override so a U1b
+# A/B (e.g. 8 vs 16 vs 32) can be driven from the host without editing YAML.
+$flushConcurrency = if ($env:BENCH_FLUSH_CONCURRENCY) { $env:BENCH_FLUSH_CONCURRENCY }
+                    else { '8' }
+# In-silo TcpIngestService flush-window cadence in milliseconds. Default 50
+# (matches Silo/Program.cs default). Surfaced as an env-var override so a
+# U9l sweep (e.g. 50 vs 100 vs 200 vs 400 ms) over the flush-window vs
+# producer-inter-tick interaction can be driven from the host without
+# editing YAML. The producer's inter-tick at TickHz=5 is 200 ms, so this
+# probe brackets it on both sides.
+$flushMs = if ($env:BENCH_FLUSH_MS) { $env:BENCH_FLUSH_MS }
+           else { '50' }
+# Optional ShardRoot fan-out override. The benchmark default is 32, set by
+# U9p step 8c-c-iv-c2-ii: at the durable Azure Tables baseline, raising the
+# shard count from the library default lifts SteadyAvg +166% (2,817 -> 7,501/s
+# at 10000:5). s=64 regresses (-14%), so s=32 is the measured sweet spot.
+# Set BENCH_SHARD_COUNT=0 to fall back to the library default; any other
+# positive value triggers the silo's startup ReshardAsync(N) call.
+$shardCount = if ($env:BENCH_SHARD_COUNT) { $env:BENCH_SHARD_COUNT }
+              else { '32' }
+# Producer batch size (entries per SetManyAsync). Default 4096 (matches
+# Silo/Program.cs default and sizes the 64-way shard fan-out so each shard
+# sees ~64 entries per batch). Surfaced as an env-var override so a U7 A/B
+# (e.g. 1024 vs 4096) can be driven from the host without editing YAML.
+$batchSize = if ($env:BENCH_BATCH_SIZE) { $env:BENCH_BATCH_SIZE }
+             else { '4096' }
+# Phase A diagnostic reporter cadence in the silo. Forward whatever the
+# operator (or 40-ladder.ps1) put on the host env; default to 10s so a
+# 60s rung captures ~5 windows of attribution data without burying the
+# main throughput log in noise. Set 0 to disable.
+$phaseAReportSec = if ($env:BENCH_PHASEA_REPORT_SEC) { $env:BENCH_PHASEA_REPORT_SEC }
+                   else { '10' }
+# Orleans Silo+Client ResponseTimeout in seconds. Default 180. U9p step
+# 8c-b-i probe lever: lifts the caller-side timeout on ILattice.SetManyAsync
+# so a slow worst-partition WAL flush does not surface as an Orleans
+# TimeoutException + producer reconnect storm. The Orleans library default
+# is 30s, but at the c2-iii durable Azure Tables baseline the WAL p99 is
+# already ~2-3s and tail outliers push past 30s under load, so 30s
+# reproducibly collapses the producer at higher rungs (c2-iv-redux session
+# observed: WP=16 / 25000:5 with 30s timeout -> producer Broken pipe at
+# t=110s, FinalAvgRate=38/s). c2-iii-ship and all subsequent c2-* probes
+# used 180s. Forwarded into both SiloMessagingOptions.ResponseTimeout and
+# ClientMessagingOptions.ResponseTimeout in Silo/Program.cs.
+$responseTimeoutSec = if ($env:BENCH_RESPONSE_TIMEOUT_SEC) { $env:BENCH_RESPONSE_TIMEOUT_SEC }
+                      else { '180' }
+# Diagnostic gate (c2-vi etag-race probe). When '1' the silo emits one
+# stdout line per leaf/internal grain PersistAsync call with
+# state.RecordExists, state.Etag, and a caller tag. Default empty so
+# normal runs pay zero cost.
+$tracePersist = if ($env:LATTICE_BENCH_TRACE_PERSIST) { $env:LATTICE_BENCH_TRACE_PERSIST }
+                else { '' }
+# Leaf/internal/atomic grain checkpoint storage. BENCH_LEAF_STORAGE_KIND selects
+# the IGrainStorage backing the lattice's leaf/internal/atomic state:
+#   "azure" (default) - production-shape Azure Table grain storage. Reuses the
+#                       same storage account + credential as the WAL provider
+#                       and writes to the table named by BENCH_LEAF_STORAGE_TABLE
+#                       (default "OrleansLatticeGrainState"). This is the
+#                       production-viable baseline.
+#   "memory"          - Orleans.Persistence.Memory. Diagnostic-only A/B lever
+#                       (step 8c-c-i exposed its NumStorageGrains=10 default
+#                       as a chokepoint once the WAL pipeline was uncorked).
+#   "null"            - benchmark-only NullGrainStorage. Removes persistence
+#                       from the measurement window to expose the WAL ceiling;
+#                       NOT production-shape.
+# BENCH_LEAF_STORAGE_TABLE selects the Azure Table name used when
+# leafStorageKind=azure (default "OrleansLatticeGrainState").
+# BENCH_LEAF_STORAGE_NUM_GRAINS overrides MemoryGrainStorageOptions
+# .NumStorageGrains when leafStorageKind=memory (0 = keep the Orleans
+# default of 10).
+$leafStorageKind = if ($env:BENCH_LEAF_STORAGE_KIND) { $env:BENCH_LEAF_STORAGE_KIND }
+                   else { 'azure' }
+$leafStorageTable = if ($env:BENCH_LEAF_STORAGE_TABLE) { $env:BENCH_LEAF_STORAGE_TABLE }
+                    else { 'OrleansLatticeGrainState' }
+$leafStorageNumGrains = if ($env:BENCH_LEAF_STORAGE_NUM_GRAINS) { $env:BENCH_LEAF_STORAGE_NUM_GRAINS }
+                        else { '0' }
+# Throughput-capture (throughput-capture-plan.md step 6): selects which
+# ILattice op the silo dispatches per producer batch. Default `set-many`
+# preserves the legacy bench shape (one ILattice.SetManyAsync per batch).
+# Other accepted values: `set-many-atomic`, `set-point`, `get-point`,
+# `get-many`. See Silo/Program.cs::BenchWorkloadMode for the dispatch
+# table.
+$workloadMode = if ($env:BENCH_WORKLOAD_MODE) { $env:BENCH_WORKLOAD_MODE }
+                else { 'set-many' }
+# Per-saga key count used only when workloadMode == set-many-atomic.
+# Default 64 - a realistic atomic-write shape. (BENCH_BATCH_SIZE=4096
+# would not be a meaningful atomic-saga size; that's the SetMany batch
+# shape, not the atomic-saga shape.)
+$atomicBatchSize = if ($env:BENCH_ATOMIC_BATCH_SIZE) { $env:BENCH_ATOMIC_BATCH_SIZE }
+                   else { '64' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walElimCRow=$walElimCRow skipBuild=$SkipBuild noWait=$NoWait" -ForegroundColor Cyan
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec leafStorageKind=$leafStorageKind leafStorageTable=$leafStorageTable leafStorageNumGrains=$leafStorageNumGrains workloadMode=$workloadMode atomicBatchSize=$atomicBatchSize skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -130,13 +247,59 @@ Write-Host "[deploy] staged size:" (
 $producerImage = "$($ctx.AcrLoginServer)/azure-throughput-producer:$tag"
 $siloImage     = "$($ctx.AcrLoginServer)/azure-throughput-silo:$tag"
 
-Write-Host "[deploy] building producer image via 'az acr build' ..." -ForegroundColor Cyan
-# `az acr build --file` is resolved relative to the CURRENT working directory. Push-Location
-# into the staging tree so both the --file path and the source context path are unambiguous.
 if ($SkipBuild) {
     Write-Host "[deploy] -SkipBuild: reusing existing images in $($ctx.AcrLoginServer)" -ForegroundColor Yellow
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+} elseif ($LocalBuild) {
+    # Local docker build + push. Faster than `az acr build` for code-change
+    # iteration because:
+    #   (a) source upload to ACR is skipped (gigabytes of layers stay on the
+    #       local builder cache; only the changed layers are pushed),
+    #   (b) builds reuse the host's Docker layer cache across runs, so the
+    #       restore/publish steps don't re-execute when only Program.cs
+    #       changed.
+    # Requires Docker Desktop (or equivalent) on a linux/amd64 host so the
+    # produced image matches what ACI expects. The remote `az acr build`
+    # path remains the default and the supported fallback for clean
+    # environments without Docker.
+    Write-Host "[deploy] -LocalBuild: building images locally via 'docker build' ..." -ForegroundColor Cyan
+    Push-Location $stage
+    try {
+        Write-Host "[deploy] az acr login -n $($ctx.Acr) ..." -ForegroundColor DarkGray
+        & az acr login --name $ctx.Acr | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "az acr login failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker build (producer) -> $producerImage ..." -ForegroundColor Cyan
+        & docker build `
+            --platform linux/amd64 `
+            --file "benchmark/azure-throughput/Producer/Dockerfile" `
+            --tag $producerImage `
+            . | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker build (producer) failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker build (silo) -> $siloImage ..." -ForegroundColor Cyan
+        & docker build `
+            --platform linux/amd64 `
+            --file "benchmark/azure-throughput/Silo/Dockerfile" `
+            --tag $siloImage `
+            . | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker build (silo) failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker push $producerImage ..." -ForegroundColor Cyan
+        & docker push $producerImage | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker push (producer) failed with exit code $LASTEXITCODE." }
+
+        Write-Host "[deploy] docker push $siloImage ..." -ForegroundColor Cyan
+        & docker push $siloImage | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "docker push (silo) failed with exit code $LASTEXITCODE." }
+    } finally {
+        Pop-Location
+        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
 } else {
+    Write-Host "[deploy] building producer image via 'az acr build' ..." -ForegroundColor Cyan
+    # `az acr build --file` is resolved relative to the CURRENT working directory. Push-Location
+    # into the staging tree so both the --file path and the source context path are unambiguous.
     Push-Location $stage
     try {
         & az acr build --registry $ctx.Acr `
@@ -212,23 +375,45 @@ properties:
           - name: BENCH_TCP_PORT
             value: '7000'
           - name: BENCH_BATCH_SIZE
-            value: '4096'
+            value: '$batchSize'
           - name: BENCH_FLUSH_MS
-            value: '50'
+            value: '$flushMs'
           - name: BENCH_FLUSH_CONCURRENCY
-            value: '8'
+            value: '$flushConcurrency'
+          - name: BENCH_SHARD_COUNT
+            value: '$shardCount'
           - name: BENCH_WAL_PARTITIONS
-            value: '8'
+            value: '$walPartitions'
           - name: BENCH_WAL_MAX_PENDING_BATCHES
-            value: '8'
+            value: '$walMaxPending'
+          - name: BENCH_WAL_PHASE2_COALESCING_WINDOW_MS
+            value: '$phase2CoalescingMs'
           - name: BENCH_PIPELINE_PHASE2
             value: '1'
           - name: BENCH_WAL_ELIMINATE_CANDIDATE_ROW
             value: '$walElimCRow'
           - name: BENCH_REPORT_SEC
             value: '1'
+          - name: BENCH_PHASEA_REPORT_SEC
+            value: '$phaseAReportSec'
           - name: BENCH_TOTAL_DURATION_SEC
             value: '$totalDuration'
+          - name: LATTICE_BENCH_TRACE_PERSIST
+            value: '$tracePersist'
+          - name: BENCH_RESPONSE_TIMEOUT_SEC
+            value: '$responseTimeoutSec'
+          - name: BENCH_LEAF_STORAGE_KIND
+            value: '$leafStorageKind'
+          - name: BENCH_LEAF_STORAGE_TABLE
+            value: '$leafStorageTable'
+          - name: BENCH_LEAF_STORAGE_NUM_GRAINS
+            value: '$leafStorageNumGrains'
+          - name: BENCH_WORKLOAD_MODE
+            value: '$workloadMode'
+          - name: BENCH_ATOMIC_BATCH_SIZE
+            value: '$atomicBatchSize'
+          - name: BENCH_VEHICLE_COUNT
+            value: '$vehicleCount'
           - name: AZURE_CLIENT_ID
             value: $((az identity show --name $ctx.Identity --resource-group $ctx.ResourceGroup --query clientId --output tsv))
     - name: producer

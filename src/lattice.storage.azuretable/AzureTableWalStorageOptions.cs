@@ -1,4 +1,5 @@
 using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Data.Tables;
 
 namespace Orleans.Lattice.Storage.AzureTable;
@@ -97,8 +98,96 @@ public sealed class AzureTableWalStorageOptions
     /// retry policies, diagnostics, or transport without the provider
     /// having to surface a pass-through option per setting. The default
     /// (null) leaves the options at <c>Azure.Data.Tables</c> defaults.
+    /// <para>
+    /// Invoked <i>after</i> the provider applies any of the
+    /// <see cref="RetryMaxAttempts"/> / <see cref="RetryDelay"/> /
+    /// <see cref="RetryMaxDelay"/> / <see cref="RetryNetworkTimeout"/>
+    /// / <see cref="RetryMode"/> knobs to
+    /// <see cref="TableClientOptions.Retry"/>, so anything the host
+    /// does inside this callback wins. To attach an additional
+    /// per-retry policy without dropping the provider's bundled
+    /// <see cref="RetryAttemptTrackingPolicy"/>, call
+    /// <see cref="ClientOptions.AddPolicy"/> rather than replacing
+    /// <see cref="TableClientOptions.Retry"/> wholesale.
+    /// </para>
     /// </summary>
     public Action<TableClientOptions>? ConfigureClientOptions { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.MaxRetries"/> on
+    /// the constructed <see cref="TableClientOptions.Retry"/>. The
+    /// value is the number of <i>retries</i> after the initial
+    /// attempt (so <c>RetryMaxAttempts = 3</c> yields up to four total
+    /// attempts), matching the Azure.Core convention. <c>null</c>
+    /// leaves the SDK default (3 retries) in place; <c>0</c>
+    /// disables retries entirely. Must be non-negative.
+    /// <para>
+    /// Phase A observed a 5–100x gap between
+    /// wall p99 (700–1,700 ms) and Azure Tables server-timing p99
+    /// (10–130 ms) on the WAL hot path, which is consistent with the
+    /// SDK's default 4-attempt × 0.8 s base-delay exponential backoff
+    /// dominating wall latency. This knob, together with
+    /// <see cref="RetryDelay"/> / <see cref="RetryMaxDelay"/> /
+    /// <see cref="RetryNetworkTimeout"/>, lets operators tune the
+    /// per-call retry budget without surrendering the SDK's transient
+    /// fault classification or having to provide a full
+    /// <see cref="ConfigureClientOptions"/> delegate.
+    /// </para>
+    /// <para>
+    /// Ignored when <see cref="ServiceClient"/> is set: in pre-built
+    /// client mode the host owns the retry policy on the
+    /// <see cref="TableClientOptions"/> it constructed.
+    /// </para>
+    /// </summary>
+    public int? RetryMaxAttempts { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.Delay"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/> - the base
+    /// delay used by the exponential / fixed backoff strategy.
+    /// <c>null</c> leaves the SDK default (0.8 s) in place. Must be
+    /// non-negative and not exceed <see cref="RetryMaxDelay"/> when
+    /// both are set.
+    /// <para>
+    /// Ignored when <see cref="ServiceClient"/> is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? RetryDelay { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.MaxDelay"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/> - the
+    /// per-attempt upper bound on backoff. <c>null</c> leaves the SDK
+    /// default (60 s) in place. Must be non-negative and at least as
+    /// large as <see cref="RetryDelay"/> when both are set.
+    /// <para>
+    /// Ignored when <see cref="ServiceClient"/> is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? RetryMaxDelay { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.NetworkTimeout"/>
+    /// on the constructed <see cref="TableClientOptions.Retry"/> - the
+    /// per-attempt deadline applied at the transport layer. <c>null</c>
+    /// leaves the SDK default (100 s) in place. Must be positive.
+    /// <para>
+    /// Functions as a per-attempt deadline budget: a stuck request
+    /// cannot keep a WAL slot occupied longer than this value before
+    /// being cancelled and either retried (if attempts remain) or
+    /// surfacing a <see cref="ProviderRetryExhausted"/>-tagged failure
+    /// to the caller. Ignored when <see cref="ServiceClient"/> is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? RetryNetworkTimeout { get; set; }
+
+    /// <summary>
+    /// When set, overrides <see cref="RetryOptions.Mode"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/>. Defaults to
+    /// <c>null</c>, which leaves the SDK default (<see cref="Azure.Core.RetryMode.Exponential"/>)
+    /// in place. Ignored when <see cref="ServiceClient"/> is set.
+    /// </summary>
+    public RetryMode? RetryMode { get; set; }
 
     /// <summary>
     /// When <see langword="true"/>, an <c>AppendBatchAsync</c> call
@@ -109,22 +198,24 @@ public sealed class AzureTableWalStorageOptions
     /// the previous call's phase-2 task before returning, so failures
     /// remain sticky and a caller can never advance past an
     /// unrecovered phase-2 fault undetected. Default is
-    /// <see langword="false"/> - the safe, simple behaviour where
-    /// every <c>AppendBatchAsync</c> awaits its own phase-2 commit
-    /// before returning.
+    /// <see langword="true"/> - the throughput campaign's measured
+    /// Azure-Tables operating-point default and the second-highest-
+    /// impact entry on the library-default-flip ladder (synchronous
+    /// phase-2 forces every commit to await its own manifest+TAIL
+    /// update, halving the steady-state per-shard request-path
+    /// latency). Set to <see langword="false"/> to restore the
+    /// pre-v6.0 historical behaviour (every <c>AppendBatchAsync</c>
+    /// awaits its own phase-2 commit before returning).
     /// <para>
-    /// <b>Why pipeline.</b> With the default
-    /// <c>LatticeOptions.WalMaxPendingBatches = 1</c> the WAL grain
-    /// serialises append calls per shard. Each call's request-path
-    /// latency is then
-    /// <c>max(phase0, phase1) + phase2</c>, and the per-shard worker's
-    /// coalescing window (up to 49 phase-2 commits collapsed into one
-    /// transaction) is wasted because it never sees more than one
-    /// pending commit at a time. Enabling this option overlaps phase
-    /// 2 of batch <c>N</c> with phase 0+1 of batch <c>N+1</c>, which
-    /// halves the steady-state request-path latency per shard and
-    /// turns the worker's coalescing window from "never used" to
-    /// "saturates under burst".
+    /// <b>Why pipeline.</b> Each call's request-path latency without
+    /// pipelining is <c>max(phase0, phase1) + phase2</c>, and the
+    /// per-shard worker's coalescing window (up to 49 phase-2
+    /// commits collapsed into one transaction) is wasted because it
+    /// never sees more than one pending commit at a time. Pipelining
+    /// overlaps phase 2 of batch <c>N</c> with phase 0+1 of batch
+    /// <c>N+1</c>, which halves the steady-state request-path
+    /// latency per shard and turns the worker's coalescing window
+    /// from "never used" to "saturates under burst".
     /// </para>
     /// <para>
     /// <b>What changes.</b> The WAL's all-or-nothing durability
@@ -162,7 +253,10 @@ public sealed class AzureTableWalStorageOptions
     /// invisible to the canonical replication path.
     /// </para>
     /// </summary>
-    public bool PipelinePhaseTwoCommits { get; set; }
+    public bool PipelinePhaseTwoCommits { get; set; } = DefaultPipelinePhaseTwoCommits;
+
+    /// <summary>Default value for <see cref="PipelinePhaseTwoCommits"/> (<c>true</c>; the throughput-campaign operating-point default).</summary>
+    public const bool DefaultPipelinePhaseTwoCommits = true;
 
     /// <summary>
     /// When <see langword="true"/>, <c>AppendBatchAsync</c> and
@@ -254,6 +348,69 @@ public sealed class AzureTableWalStorageOptions
     public Action<Exception>? PipelinedPhaseTwoFaultHandler { get; set; }
 
     /// <summary>
+    /// Maximum wall-time the per-shard
+    /// <c>PhaseTwoWorker</c> drain loop deliberately waits, after the
+    /// first arrival but before submitting the coalesced phase-2
+    /// transaction, so additional pending commits can accumulate.
+    /// Default <see cref="TimeSpan.Zero"/> preserves the historical
+    /// drain-on-first-signal behaviour (one phase-2 commit per
+    /// transaction whenever per-shard arrival inter-spacing exceeds
+    /// the commit's own duration).
+    /// <para>
+    /// <b>Why a coalescing window.</b> Phase A observations (see
+    /// <c></c>) showed <c>provider.phase2.batch_size</c>
+    /// pinned at exactly <c>1.00</c> across hundreds of thousands of
+    /// samples even when producer-side knobs
+    /// (<c>WalMaxPendingBatches</c>, <c>WalPartitions</c>) were swept
+    /// to widen the inbound stream. Root cause: under a steady-state
+    /// per-partition arrival rate slower than the phase-2 commit's
+    /// own latency, the channel is empty at the moment the previous
+    /// commit returns, so the next <c>WaitToReadAsync</c> wakes on
+    /// the very first arrival and commits a one-item batch. A small,
+    /// opt-in window between the first arrival and the commit gives
+    /// the worker an opportunity to coalesce additional arrivals
+    /// into the same Azure Tables transaction without weakening the
+    /// strict offset-FIFO invariant.
+    /// </para>
+    /// <para>
+    /// <b>Soundness.</b> The window only delays the first commit
+    /// after a quiet period; the SortedSet ordering primitive is
+    /// unchanged, every committed group is still drained in
+    /// ascending <c>startOffset</c> order, and the per-transaction
+    /// ceiling of 49 coalesced batches still applies. The window is
+    /// short-circuited the moment the worker already has 49 pending
+    /// commits buffered - there is no point waiting once the
+    /// transaction is full.
+    /// </para>
+    /// <para>
+    /// <b>Cost.</b> The window adds up to this much wall-time to the
+    /// inline phase-2 latency of an isolated batch (one arrival, no
+    /// follow-up). Under burst load the cost is amortised because
+    /// multiple commits collapse into one round-trip; under steady
+    /// load with no follow-up arrivals the cost is paid every batch.
+    /// Pick a value smaller than the observed phase-2 commit
+    /// duration p50 so the steady-state-loss case stays bounded.
+    /// Must be non-negative.
+    /// </para>
+    /// <para>
+    /// <b>Default.</b> 5 ms - the measured Azure-Tables sweet spot
+    /// the throughput campaign settled on as the operating-point
+    /// default and the highest-impact entry on the campaign's
+    /// library-default-flip ladder (a probe at
+    /// <c>PhaseTwoCoalescingWindow = 0</c> measured a -57% throughput
+    /// regression vs <c>= 5 ms</c> on the same baseline; a probe at
+    /// <c>= 2 ms</c> measured -28% vs <c>= 5 ms</c>). Set to
+    /// <see cref="TimeSpan.Zero"/> to restore the pre-v6.0 historical
+    /// behaviour (commit-on-first-arrival) when the workload's
+    /// arrival shape makes any window-induced delay net-negative.
+    /// </para>
+    /// </summary>
+    public TimeSpan PhaseTwoCoalescingWindow { get; set; } = DefaultPhaseTwoCoalescingWindow;
+
+    /// <summary>Default value for <see cref="PhaseTwoCoalescingWindow"/> (5 ms - the throughput-campaign sweet spot).</summary>
+    public static readonly TimeSpan DefaultPhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(5);
+
+    /// <summary>
     /// Validates that exactly one authentication mode is configured and
     /// that <see cref="TableName"/> is non-empty. Called by the provider
     /// at first use.
@@ -306,6 +463,42 @@ public sealed class AzureTableWalStorageOptions
             throw new InvalidOperationException(
                 $"{nameof(AzureTableWalStorageOptions)}.{nameof(ServiceUri)} requires either {nameof(TokenCredential)} or {nameof(SharedKeyCredential)} to be configured.");
         }
+
+        if (RetryMaxAttempts is { } maxAttempts && maxAttempts < 0)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryMaxAttempts)} must be non-negative when set.");
+        }
+
+        if (RetryDelay is { } delay && delay < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryDelay)} must be non-negative when set.");
+        }
+
+        if (RetryMaxDelay is { } maxDelay && maxDelay < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryMaxDelay)} must be non-negative when set.");
+        }
+
+        if (RetryDelay is { } d && RetryMaxDelay is { } md && d > md)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryDelay)} must not exceed {nameof(RetryMaxDelay)} when both are set.");
+        }
+
+        if (RetryNetworkTimeout is { } networkTimeout && networkTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(RetryNetworkTimeout)} must be positive when set.");
+        }
+
+        if (PhaseTwoCoalescingWindow < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(PhaseTwoCoalescingWindow)} must be non-negative.");
+        }
     }
 
     /// <summary>
@@ -328,7 +521,47 @@ public sealed class AzureTableWalStorageOptions
         }
 
         var clientOptions = new TableClientOptions();
+
+        // Tuning knobs: apply BEFORE the host's ConfigureClientOptions
+        // callback so the host has the final word and can override any
+        // value (or replace clientOptions.Retry wholesale) if needed.
+        // null on a knob means "leave the SDK default in place".
+        if (RetryMaxAttempts is { } maxAttempts)
+        {
+            clientOptions.Retry.MaxRetries = maxAttempts;
+        }
+
+        if (RetryDelay is { } delay)
+        {
+            clientOptions.Retry.Delay = delay;
+        }
+
+        if (RetryMaxDelay is { } maxDelay)
+        {
+            clientOptions.Retry.MaxDelay = maxDelay;
+        }
+
+        if (RetryNetworkTimeout is { } networkTimeout)
+        {
+            clientOptions.Retry.NetworkTimeout = networkTimeout;
+        }
+
+        if (RetryMode is { } retryMode)
+        {
+            clientOptions.Retry.Mode = retryMode;
+        }
+
         ConfigureClientOptions?.Invoke(clientOptions);
+
+        // Layered AFTER the user's ConfigureClientOptions callback so
+        // hosts cannot accidentally drop our per-retry observability
+        // (e.g. by replacing clientOptions.Transport or rebuilding the
+        // policy list). Purely additive: never replaces clientOptions.Retry.
+        // Skipped in pre-built ServiceClient mode (the early return
+        // above) - hosts using that path attach
+        // RetryAttemptTrackingPolicy.Instance themselves if they want
+        // the counter populated.
+        clientOptions.AddPolicy(RetryAttemptTrackingPolicy.Instance, HttpPipelinePosition.PerRetry);
 
         if (!string.IsNullOrWhiteSpace(ConnectionString))
         {

@@ -126,9 +126,26 @@ public class CompensationContinuousReaderTests
     public async Task Compensation_broadcasts_TxAbort_to_every_touched_shard()
     {
         var (grain, state, _, lattice, shard) = CreateGrain();
-        // Inject a deterministic mid-batch failure on the second key.
-        lattice.SetAsync("b", Arg.Any<byte[]>())
-            .Throws(new InvalidOperationException("simulated mid-batch failure"));
+        // Inject a deterministic mid-batch failure on the per-shard
+        // bucket containing key "b". Phase D1b (c2-x memo): the saga
+        // pre-buckets entries by shard and issues one SetManyAsync per
+        // touched shard, so we throw when the call's slice contains
+        // "b". This preserves the original test intent: a mid-saga
+        // failure must surface to the caller and Compensate must fan
+        // an abort terminal to every touched shard.
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(callInfo =>
+            {
+                var slice = (List<KeyValuePair<string, byte[]>>)callInfo[0];
+                foreach (var entry in slice)
+                {
+                    if (entry.Key == "b")
+                    {
+                        throw new InvalidOperationException("simulated mid-batch failure");
+                    }
+                }
+                return Task.CompletedTask;
+            });
 
         try
         {
@@ -151,18 +168,20 @@ public class CompensationContinuousReaderTests
         // one Received call lands per distinct touched shard.
         await shard.Received(touchedCount).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: false,
+            Arg.Is<bool>(b => b == false),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
 
         // Defensive: no committed terminal must escape on the rollback
         // path - the abort and commit terminals are mutually exclusive
         // for a single saga.
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: true,
+            Arg.Is<bool>(b => b == true),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 
     /// <summary>
@@ -186,14 +205,16 @@ public class CompensationContinuousReaderTests
 
         await shard.Received(touchedCount).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: true,
+            Arg.Is<bool>(b => b == true),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
         await shard.DidNotReceive().AppendTxTerminalAsync(
             Arg.Any<Guid>(),
-            committed: false,
+            Arg.Is<bool>(b => b == false),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 
     /// <summary>
@@ -213,6 +234,7 @@ public class CompensationContinuousReaderTests
             Arg.Any<Guid>(),
             Arg.Any<bool>(),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<bool>());
     }
 }

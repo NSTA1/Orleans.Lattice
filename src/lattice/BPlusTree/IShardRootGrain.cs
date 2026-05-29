@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -11,7 +12,30 @@ namespace Orleans.Lattice.BPlusTree;
 [Alias(TypeAliases.IShardRootGrain)]
 internal interface IShardRootGrain : IGrainWithStringKey
 {
+    /// <summary>
+    /// Returns the value for <paramref name="key"/>, or <c>null</c> if absent or tombstoned.
+    /// <para>
+    /// NOT marked <see cref="AlwaysInterleaveAttribute"/>: the original U9h-C
+    /// attempt to interleave pure reads against in-flight
+    /// <see cref="SetManyAsync"/> turns reintroduced a chaos-reshard mid-saga
+    /// invariant violation ("key missing mid-chaos"). The reader does multiple
+    /// non-atomic reads of <c>state.State.RootNodeId</c> /
+    /// <c>state.State.RootIsLeaf</c> / <c>state.State.MovedAwaySlots</c>
+    /// across awaits, and an interleaved promotion or move-away publish can
+    /// land between them, surfacing as a null return for a key the workload
+    /// invariant guarantees must be present.
+    /// </para>
+    /// </summary>
     Task<byte[]?> GetAsync(string key);
+
+    /// <summary>
+    /// Returns <c>true</c> if <paramref name="key"/> exists and is live.
+    /// <para>
+    /// NOT marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// documented on <see cref="GetAsync"/>: read traversal is composed of
+    /// multiple non-atomic shard-root state reads across awaits.
+    /// </para>
+    /// </summary>
     Task<bool> ExistsAsync(string key);
 
     /// <summary>
@@ -25,6 +49,11 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Returns the values for the given <paramref name="keys"/>, performing a single
     /// tree traversal per distinct leaf and batching reads at each leaf.
     /// Keys that do not exist or are tombstoned are omitted from the result.
+    /// <para>
+    /// NOT marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// documented on <see cref="GetAsync"/>: batch read traversal performs
+    /// multiple non-atomic reads of shard-root routing state across awaits.
+    /// </para>
     /// </summary>
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
 
@@ -91,7 +120,53 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Inserts or updates multiple key-value pairs in a single traversal batch.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so multiple producer
+    /// flush slots aimed at the same per-shard activation can pipeline
+    /// concurrent batches instead of serialising behind a single in-flight
+    /// turn. Background: at <c>shardCount=16</c> and producer
+    /// <c>flushConcurrency&gt;8</c>, every flush slot independently routes
+    /// to the same <see cref="ShardRootGrain"/> activation; the
+    /// non-reentrant queue then grows to <c>NonReentrancyQueueSize=FC</c>
+    /// and the second-from-front call routinely exceeds Orleans' 30 s
+    /// response timeout. The bound is per-shard serial-turn pressure, not
+    /// upstream <see cref="LatticeGrain"/> work or provider commit p50
+    /// (see U9g).
+    /// </para>
+    /// <para>
+    /// Safety relies on three invariants that hold across interleaved
+    /// turns on the same activation:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>The per-activation grain-reference and routing-table caches
+    ///   in <see cref="ShardRootGrain"/>'s traversal partial are
+    ///   <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/>
+    ///   instances, so two turns can read/write them concurrently.</item>
+    ///   <item>The leaf apply path is LWW-convergent: two interleaved
+    ///   batches that touch the same key resolve via HLC at the owning
+    ///   leaf and converge regardless of arrival order.</item>
+    ///   <item>Every shard-root <c>state.WriteStateAsync()</c> call is
+    ///   routed through a single per-activation
+    ///   <see cref="System.Threading.SemaphoreSlim"/>
+    ///   (<c>WriteShardStateAsync()</c> in the main partial). This
+    ///   serialises the storage I/O - including the
+    ///   <c>PromoteRootAsync</c> / <c>CompletePromotionAsync</c> root
+    ///   rewrite and the hot <c>MarkLeafDirtyAsync</c> write - while
+    ///   leaving the surrounding compute interleaved. Closes the etag
+    ///   race that surfaced as <c>InconsistentStateException</c> /
+    ///   "Etag mismatch during Update" warnings on real Azure Tables when
+    ///   <c>[AlwaysInterleave]</c> first shipped (U9g result, U9h-A fix
+    ///).</item>
+    /// </list>
+    /// <para>
+    /// The split-bubble loop in <c>SetManyLocalOnlyAsync</c> calls
+    /// <see cref="Grains.IBPlusInternalGrain.AcceptSplitAsync"/> against
+    /// parent internals (which remain non-reentrant), so the per-shard
+    /// split ordering is still serialised at the parent grain even under
+    /// interleaved shard-root turns.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
@@ -213,6 +288,31 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<bool> IsDeletedAsync();
 
     /// <summary>
+    /// Pre-activates this shard's current root-node grain (root leaf when
+    /// the tree is flat, root internal node otherwise) so the first
+    /// traversing write does not pay placement-directory + grain-storage
+    /// first-touch cost on the hot path. Idempotent.
+    /// <para>
+    /// On a brand-new shard with no root yet, warm-up runs the same
+    /// <c>EnsureRootAsync</c> path the first traffic write would run -
+    /// it creates the deterministic root leaf and persists the shard
+    /// root's mapping. This is equivalent to the very first hot-path
+    /// write performing root materialization, just moved to startup
+    /// time, and it produces no extra grains the first write would not
+    /// have produced anyway.
+    /// </para>
+    /// <para>
+    /// Intended for benchmark / production startup proactive warm-up
+    /// driven by <see cref="ILattice.WarmUpAsync"/>. Callers must treat
+    /// transient <see cref="OrleansMessageRejectionException"/> the same
+    /// way they treat it on <c>ReshardAsync</c> - the placement-
+    /// directory cache can race a freshly-started silo - and apply
+    /// bounded retry.
+    /// </para>
+    /// </summary>
+    Task WarmUpAsync();
+
+    /// <summary>
     /// Permanently purges all grains in this shard (leaves, internal nodes)
     /// by clearing their persistent state and deactivating them, then clears
     /// the shard root's own state. Called by <see cref="ITreeDeletionGrain"/>
@@ -282,7 +382,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Returns volatile in-memory hotness counters for this shard. Counters
     /// track reads and writes since grain activation and reset on deactivation.
     /// Used by split coordinators to detect hot shards without persistence overhead.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> because the implementation is a
+    /// pure synchronous read of three private fields wrapped in
+    /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
+    /// state mutation - it cannot race any other in-flight turn. Allowing the
+    /// hot-shard monitor's sampling RPC to bypass the
+    /// <see cref="IShardRootGrain.SetManyAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}})"/>
+    /// reentrancy queue is required so the monitor does not time out (and fire
+    /// spurious reshards) when the shard is at sustained producer pressure
+    /// (see U9d).
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<ShardHotness> GetHotnessAsync();
 
     /// <summary>
@@ -401,7 +513,17 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Returns <c>true</c> if this shard has a pending bulk-load or bulk-append
     /// operation that has not yet been fully grafted into the tree. Used by the
     /// auto-split monitor to suppress splits while bulk operations are mid-flight.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> because the implementation is a
+    /// pure synchronous read of <c>state.State.PendingBulkGraft</c> wrapped in
+    /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
+    /// state mutation - it cannot race any other in-flight turn. Paired with
+    /// <see cref="GetHotnessAsync"/> so the hot-shard monitor's per-tick
+    /// fan-out (which awaits both) is not gated on producer
+    /// <see cref="SetManyAsync"/> work (see U9d).
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<bool> HasPendingBulkOperationAsync();
 
     /// <summary>
@@ -596,11 +718,38 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <c>null</c> matches the pre-backstop call shape and remains
     /// supported for wire compatibility.
     /// </param>
-    Task AppendTxTerminalAsync(
+    /// <param name="inlineWalAppend">
+    /// When <c>true</c> (the default), the shard appends the
+    /// constructed terminal-mark <see cref="WalRecord"/> to its WAL
+    /// partition before returning - the historical durability shape
+    /// every direct caller (cross-cluster replay, shadow-forward,
+    /// retroactive prepared-mutation sweep, unit tests) relies on.
+    /// When <c>false</c>, the shard builds the record but does not
+    /// write it; the record is returned to the caller, which is
+    /// expected to durably persist it (e.g. by batching across every
+    /// touched shard in one <see cref="ICommitLogWriter.AppendManyAsync"/>
+    /// call). Only the saga coordinator
+    /// (<see cref="Orleans.Lattice.BPlusTree.Grains.AtomicWriteGrain"/>)
+    /// opts out, because it is the unique caller that has every
+    /// touched shard's record in hand and can collapse the per-shard
+    /// serialised WAL fan-out into a per-partition batched dispatch.
+    /// The saga still awaits the batched write before returning to
+    /// its own caller, so the WAL durability invariant is preserved.
+    /// </param>
+    /// <returns>
+    /// The constructed terminal-mark <see cref="WalRecord"/> when
+    /// <paramref name="inlineWalAppend"/> is <c>false</c> and the shard
+    /// has not written it; otherwise <c>null</c>. The shard always
+    /// returns <c>null</c> when the WAL adapter is not registered
+    /// (single-node / unit-test path), because there is nothing for
+    /// the caller to persist.
+    /// </returns>
+    Task<WalRecord?> AppendTxTerminalAsync(
         Guid transactionId,
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool inlineWalAppend = true);
 
     /// <summary>
     /// Returns this shard's transitive split-forward destination set -

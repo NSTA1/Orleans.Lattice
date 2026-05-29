@@ -1,5 +1,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
+using Orleans.Concurrency;
+
 /// <summary>
 /// An internal (non-leaf) node grain in the B+ tree. Stores separator keys
 /// and references to child grains (which may be internal or leaf nodes).
@@ -14,7 +16,18 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// Routes a key down to the appropriate child grain and returns whether
     /// this node's children are leaves, in a single call. Avoids two
     /// sequential RPCs during tree traversal.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi: implementation is a single synchronous
+    /// <c>Task.FromResult((state.State.Route(key), state.State.ChildrenAreLeaves))</c>
+    /// expression with no awaits and no cross-state-field traversal,
+    /// so the U9h-C "multi-step traversal" hazard does not apply.
+    /// Letting multiple concurrent traversals on the same activation
+    /// run without queueing lifts the per-internal-node serial-turn
+    /// ceiling that shard-root and leaf reentrancy exposed.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key);
 
     /// <summary>
@@ -26,30 +39,77 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// cross-grain RPC. The snapshot becomes stale on the next
     /// <see cref="AcceptSplitAsync"/> against this node; the shard root
     /// invalidates its cache entry on every such call.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi: implementation is a synchronous projection over
+    /// <c>state.State.Children</c> into a freshly-allocated snapshot
+    /// (no awaits, no cross-state-field traversal). This is the hottest
+    /// read on the shard-root traversal path on non-flat trees; without
+    /// the attribute every cache-miss traversal across the same
+    /// internal node queues on its activation turn.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<RoutingTableSnapshot> GetRoutingTableAsync();
 
     /// <summary>Returns the grain identity of the leftmost child.</summary>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi. Single-line synchronous read of
+    /// <c>state.State.Children[0].ChildId</c>; no traversal hazard.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<GrainId> GetLeftmostChildAsync();
 
     /// <summary>Returns the grain identity of the rightmost child.</summary>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi. Single-line synchronous read.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<GrainId> GetRightmostChildAsync();
 
     /// <summary>
     /// Returns the leftmost child and whether this node's children are leaves, in a single call.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi. Single synchronous tuple read.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetLeftmostChildWithMetadataAsync();
 
     /// <summary>
     /// Returns the rightmost child and whether this node's children are leaves, in a single call.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi. Single synchronous tuple read.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetRightmostChildWithMetadataAsync();
 
     /// <summary>Returns whether this node's children are leaf grains.</summary>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi. Single-line synchronous bool read.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<bool> AreChildrenLeavesAsync();
 
     /// <summary>Accepts a promoted split from a child node.</summary>
     /// <returns>A <see cref="SplitResult"/> if this node itself needed to split, otherwise <c>null</c>.</returns>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// 8c-c-iv-c2-vi so concurrent overflow propagations from
+    /// different leaves do not queue on the internal node's turn. The
+    /// mutation-state race that would otherwise result is serialised
+    /// by a per-activation <c>_splitGate</c> <see cref="SemaphoreSlim"/>
+    /// on <see cref="Grains.BPlusInternalGrain"/>, which re-checks the
+    /// <see cref="Primitives.SplitState.SplitInProgress"/> recovery
+    /// branch inside the gate (mirror of the c2-iii leaf gate).
+    /// </remarks>
+    [AlwaysInterleave]
     Task<SplitResult?> AcceptSplitAsync(string promotedKey, GrainId newChild);
 
     /// <summary>

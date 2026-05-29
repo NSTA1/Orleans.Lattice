@@ -367,6 +367,65 @@
           "legendFormat": "{{outcome}}"
         }
       ]
+    },
+    {
+      "id": 100,
+      "title": "Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder",
+      "description": "Per-phase saga latency breakdown. Sum of phase p95s approximates the total saga p95; outliers identify which phase is binding under load.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "P", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_prepare_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "prepare" },
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_terminal_decision_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "decision" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_broadcast_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "broadcast" },
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_checkpoint_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "checkpoint" },
+        { "refId": "R", "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(orleans_lattice_saga_reminder_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "reminder {{phase}}" }
+      ]
+    },
+    {
+      "id": 101,
+      "title": "Saga broadcast sub-attribution p95 (ms) - per-shard / per-leaf / per-shard-stage",
+      "description": "Inside the broadcast phase: per-shard fan-out cost (saga.broadcast.shard.duration), per-leaf within a shard (saga.broadcast.leaf.duration), and per-shard-stage breakdown (saga.broadcast.shard.stage.duration tagged stage). Identifies whether broadcast latency is shard-fanout-bound, per-leaf-RPC-bound, or stage-of-shard bound.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "S", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_broadcast_shard_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "per-shard" },
+        { "refId": "L", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_broadcast_leaf_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "per-leaf" },
+        { "refId": "T", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(orleans_lattice_saga_broadcast_shard_stage_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "stage {{stage}}" }
+      ]
+    },
+    {
+      "id": 102,
+      "title": "Per-key saga work - p95 per-key duration vs serial-gap wait (ms)",
+      "description": "saga.perkey.duration: per-key work inside the saga loop. saga.wait.serial_gap: time the saga sat idle between per-key operations. A growing serial_gap relative to perkey.duration indicates the saga is queue-bound rather than work-bound.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "K", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_perkey_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 perkey.duration" },
+        { "refId": "W", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_wait_serial_gap_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 wait.serial_gap" }
+      ]
+    },
+    {
+      "id": 103,
+      "title": "Saga fan-out size (entries per saga)",
+      "description": "Distribution of how many entries each saga touches. Pairs with saga.broadcast.shard.duration to identify whether broadcast cost scales linearly with fan-out.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_saga_fanout_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_fanout_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_saga_fanout_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
     }
   ]
 }

@@ -11,7 +11,29 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// based on a stable hash of the key.
 /// Key format: <c>{treeId}</c>.
 /// </summary>
-[StatelessWorker]
+/// <remarks>
+/// <para>
+/// <see cref="StatelessWorkerAttribute.MaxLocalWorkers"/> is set to 32 so the
+/// per-silo activation pool can absorb 32 concurrent in-flight calls before any
+/// new caller starts queueing on an existing activation's non-reentrancy queue.
+/// The Orleans default (<c>Environment.ProcessorCount</c>) is much smaller on
+/// modest hosts (e.g. 4 on a 4-vCPU container) which becomes the visible
+/// throughput cap on bulk-write fan-out: the U1b ladder probe (raising the
+/// upstream ingest flush-concurrency from 8 to 16 on a 4-vCPU container) drove
+/// every <c>SetManyAsync</c> caller onto one of just four activations and the
+/// resulting 30 s grain-RPC timeouts surfaced as
+/// <c>NonReentrancyQueueSize=7 NumRunning=1</c> in the Orleans timeout
+/// diagnostic. 32 is enough headroom that doubling the upstream flush-
+/// concurrency knob no longer collides on activation count, while still being
+/// bounded so a runaway caller cannot expand the pool without limit. Each
+/// activation still serialises its own non-reentrant calls; the per-activation
+/// caches (<see cref="_treeIdCache"/>, <see cref="_shardMap"/>,
+/// <see cref="_cachedShards"/>, <see cref="_cachedRouting"/>,
+/// <see cref="_compactionEnsured"/>, <see cref="_monitorEnsured"/>) are
+/// activation-scoped and remain safe under multiple parallel activations.
+/// </para>
+/// </remarks>
+[StatelessWorker(maxLocalWorkers: 32)]
 internal sealed partial class LatticeGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
@@ -244,7 +266,8 @@ internal sealed partial class LatticeGrain(
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
-            var snap1 = await FetchRegistrySnapshotAsync();
+            var snap1Pair = await FetchRegistrySnapshotAsync();
+            var snap1 = snap1Pair.Snap;
             var concurrent = new ConcurrentDictionary<string, byte[]>();
             using (LatticeRegistrySnapshotContext.BeginScope(snap1))
             {
@@ -257,8 +280,7 @@ internal sealed partial class LatticeGrain(
                 await Task.WhenAll(tasks);
             }
 
-            var snap2 = await FetchRegistrySnapshotAsync();
-            if (IsSnapshotStable(snap1, snap2))
+            if (await IsSnap2StableAsync(snap1, snap1Pair.Revision))
             {
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={concurrent.Count} rounds=[{string.Join(',', concurrent.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
@@ -318,83 +340,139 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
-        await EnsureCompactionReminderAsync();
-        await EnsureMonitorAsync();
-        cancellationToken.ThrowIfCancellationRequested();
 
-        // Deadline-bounded stale-routing retry loop. Under a cascading
-        // mid-saga reshard or online resize, a single ShardMap swap is
-        // not the worst case - chains of adaptive shard splits during
-        // a 4-to-8 reshard can produce multiple sequential stale-routing
-        // throws on the same per-key write. The previous one-shot
-        // catch-and-retry shape exhausted on the second throw and the
-        // exception propagated into the saga, which then pivoted into
-        // compensation on a write that would have succeeded with one
-        // more refresh. The wall-clock budget here mirrors the saga's
-        // own per-shard retry pattern (AtomicWriteGrain.MarkOneShardAsync
-        // and CaptureShardAsync) and absorbs any reasonable topology
-        // storm; if the topology genuinely never quiesces within the
-        // budget, the original stale-routing throw still surfaces to
-        // the caller.
-        //
-        // Important asymmetry: only the two topology-change exceptions
-        // (StaleShardRoutingException, StaleTreeRoutingException)
-        // benefit from the deadline-budget retry. InvalidOperationException
-        // is typically permanent (e.g. tree deleted, alias removed) and
-        // looping on it would mask deletion semantics and trip Orleans'
-        // default response timeout on the caller side. Preserve the
-        // pre-existing single-retry shape for that catch so a deleted
-        // tree surfaces on the second throw, not after 60 seconds.
-        var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
-        var invalidOpRetried = false;
-#if LATTICE_DIAG
-        var swSetCore = System.Diagnostics.Stopwatch.StartNew();
-        var setCoreAttempts = 0;
-        DiagSink.Write($"[DIAG setcore-enter] tree={TreeId} key={key} round=r{DiagSink.DecodeRound(value)} deadlineMs={StaleRoutingWriteRetryBudget.TotalMilliseconds:F0}");
-#endif
-        while (true)
+        // c2-xxvii envelope + sub-stage attribution. SetDuration tracks the caller-visible
+        // wall-clock; SetStageDuration tagged with stage=
+        // (gate|route|shard|publish) splits the envelope into its
+        // four sub-spans so the LatticeGrain-side overhead of one
+        // single-key write is attributed alongside the existing
+        // leaf-side / WAL-side instruments. Mirrors c2-xxiv on the
+        // set-many path.
+        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var setStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var shard = await GetShardGrainAsync(key);
-#if LATTICE_DIAG
-            setCoreAttempts++;
-#endif
+            var gateStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                await shard.SetAsync(key, value);
-                break;
+                await EnsureCompactionReminderAsync();
+                await EnsureMonitorAsync();
             }
-            catch (StaleShardRoutingException)
+            finally
             {
-#if LATTICE_DIAG
-                DiagSink.Write($"[DIAG setcore-stale-shard] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
-#endif
-                if (DateTime.UtcNow >= deadline) throw;
-                InvalidateShardMap();
+                LatticeMetrics.SetStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageGateTag);
             }
-            catch (StaleTreeRoutingException)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Deadline-bounded stale-routing retry loop. Under a cascading
+            // mid-saga reshard or online resize, a single ShardMap swap is
+            // not the worst case - chains of adaptive shard splits during
+            // a 4-to-8 reshard can produce multiple sequential stale-routing
+            // throws on the same per-key write. The previous one-shot
+            // catch-and-retry shape exhausted on the second throw and the
+            // exception propagated into the saga, which then pivoted into
+            // compensation on a write that would have succeeded with one
+            // more refresh. The wall-clock budget here mirrors the saga's
+            // own per-shard retry pattern (AtomicWriteGrain.MarkOneShardAsync
+            // and CaptureShardAsync) and absorbs any reasonable topology
+            // storm; if the topology genuinely never quiesces within the
+            // budget, the original stale-routing throw still surfaces to
+            // the caller.
+            //
+            // Important asymmetry: only the two topology-change exceptions
+            // (StaleShardRoutingException, StaleTreeRoutingException)
+            // benefit from the deadline-budget retry. InvalidOperationException
+            // is typically permanent (e.g. tree deleted, alias removed) and
+            // looping on it would mask deletion semantics and trip Orleans'
+            // default response timeout on the caller side. Preserve the
+            // pre-existing single-retry shape for that catch so a deleted
+            // tree surfaces on the second throw, not after 60 seconds.
+            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var invalidOpRetried = false;
+#if LATTICE_DIAG
+            var swSetCore = System.Diagnostics.Stopwatch.StartNew();
+            var setCoreAttempts = 0;
+            DiagSink.Write($"[DIAG setcore-enter] tree={TreeId} key={key} round=r{DiagSink.DecodeRound(value)} deadlineMs={StaleRoutingWriteRetryBudget.TotalMilliseconds:F0}");
+#endif
+            // The shard stage covers route + shard.SetAsync + stale-
+            // routing retries together because those three sub-spans
+            // interleave inside the retry loop and a fresh route is
+            // part of every retry iteration; splitting them further
+            // would over-attribute the route stage on the no-retry
+            // happy path which is the only path that matters for
+            // steady-state attribution.
+            var shardStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
             {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var shard = await GetShardGrainAsync(key);
 #if LATTICE_DIAG
-                DiagSink.Write($"[DIAG setcore-stale-tree] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+                    setCoreAttempts++;
 #endif
-                if (DateTime.UtcNow >= deadline) throw;
-                if (!TryInvalidateStaleAlias()) throw;
+                    try
+                    {
+                        await shard.SetAsync(key, value);
+                        break;
+                    }
+                    catch (StaleShardRoutingException)
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG setcore-stale-shard] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
+                        if (DateTime.UtcNow >= deadline) throw;
+                        InvalidateShardMap();
+                    }
+                    catch (StaleTreeRoutingException)
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG setcore-stale-tree] tree={TreeId} key={key} attempt={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0} deadlineRemainMs={(deadline - DateTime.UtcNow).TotalMilliseconds:F0}");
+#endif
+                        if (DateTime.UtcNow >= deadline) throw;
+                        if (!TryInvalidateStaleAlias()) throw;
+                    }
+                    catch (InvalidOperationException)
+                    {
+#if LATTICE_DIAG
+                        DiagSink.Write($"[DIAG setcore-invalid-op] tree={TreeId} key={key} attempt={setCoreAttempts} retried={invalidOpRetried}");
+#endif
+                        if (invalidOpRetried) throw;
+                        if (!TryInvalidateStaleAlias()) throw;
+                        invalidOpRetried = true;
+                    }
+                }
             }
-            catch (InvalidOperationException)
+            finally
             {
-#if LATTICE_DIAG
-                DiagSink.Write($"[DIAG setcore-invalid-op] tree={TreeId} key={key} attempt={setCoreAttempts} retried={invalidOpRetried}");
-#endif
-                if (invalidOpRetried) throw;
-                if (!TryInvalidateStaleAlias()) throw;
-                invalidOpRetried = true;
+                LatticeMetrics.SetStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(shardStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageShardTag);
             }
-        }
 #if LATTICE_DIAG
-        DiagSink.Write($"[DIAG setcore-exit] tree={TreeId} key={key} attempts={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0}");
+            DiagSink.Write($"[DIAG setcore-exit] tree={TreeId} key={key} attempts={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0}");
 #endif
 
-        await PublishEventAsync(LatticeTreeEventKind.Set, key);
+            var publishStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await PublishEventAsync(LatticeTreeEventKind.Set, key);
+            }
+            finally
+            {
+                LatticeMetrics.SetStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(publishStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StagePublishTag);
+            }
+        }
+        finally
+        {
+            LatticeMetrics.SetDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(setStartTicks).TotalMilliseconds,
+                stageTagTree);
+        }
     }
 
     /// <inheritdoc />
@@ -533,29 +611,82 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
-        await EnsureCompactionReminderAsync();
-        await EnsureMonitorAsync();
-        cancellationToken.ThrowIfCancellationRequested();
-        await RetryOnStaleRoutingAsync(
-            () => SetManyAsyncCore(entries),
-            cancellationToken);
 
-        // Publish one Set event per entry. Emitted only after all shard writes
-        // have committed so subscribers never observe a Set for a key that
-        // failed to persist (we'd have thrown above). Skipped entirely when
-        // publishing is disabled to avoid walking the entry list.
-        if (entries.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+        // c2-xxiv envelope + sub-stage attribution: SetManyDuration tracks the caller-visible
+        // wall-clock; SetManyStageDuration tagged with stage=
+        // (gate|route|bucket|fanout|events) splits the envelope into
+        // its constituent spans so the dominant cost on the set-many
+        // path can be identified before any structural attempt. The
+        // existing shard-side instruments (ShardRootSetManyLocalApply /
+        // ShardRootSetManyShadowForward / ShardRootSetManyLeafRpc)
+        // continue to attribute the per-shard half; this fills the
+        // missing LatticeGrain-side half of the envelope.
+        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var setManyStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            foreach (var entry in entries)
+            var gateStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
             {
-                await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+                await EnsureCompactionReminderAsync();
+                await EnsureMonitorAsync();
             }
+            finally
+            {
+                LatticeMetrics.SetManyStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageGateTag);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            await RetryOnStaleRoutingAsync(
+                () => SetManyAsyncCore(entries, stageTagTree),
+                cancellationToken);
+
+            // Publish one Set event per entry. Emitted only after all shard writes
+            // have committed so subscribers never observe a Set for a key that
+            // failed to persist (we'd have thrown above). Skipped entirely when
+            // publishing is disabled to avoid walking the entry list.
+            var eventsStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                if (entries.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+                {
+                    foreach (var entry in entries)
+                    {
+                        await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+                    }
+                }
+            }
+            finally
+            {
+                LatticeMetrics.SetManyStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(eventsStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageEventsTag);
+            }
+        }
+        finally
+        {
+            LatticeMetrics.SetManyDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(setManyStartTicks).TotalMilliseconds,
+                stageTagTree);
         }
     }
 
-    private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries)
+    private async Task SetManyAsyncCore(List<KeyValuePair<string, byte[]>> entries, KeyValuePair<string, object?> stageTagTree)
     {
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        var routeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        string physicalTreeId;
+        ShardMap shardMap;
+        try
+        {
+            (physicalTreeId, shardMap) = await GetRoutingAsync();
+        }
+        finally
+        {
+            LatticeMetrics.SetManyStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(routeStartTicks).TotalMilliseconds,
+                stageTagTree, LatticeMetrics.StageRouteTag);
+        }
 
         // Group entries by shard. Pre-size each bucket to the expected
         // shard-fair fraction of the batch, capped at 256 to bound
@@ -564,30 +695,51 @@ internal sealed partial class LatticeGrain(
         // AddWithResize cascade that previously dominated bulk-write
         // allocations.
 
-        var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
-        var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
-        var bucketCapacity = Math.Min(expectedPerShard, 256);
-        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
-        foreach (var entry in entries)
+        var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        Dictionary<int, List<KeyValuePair<string, byte[]>>> shardBuckets;
+        try
         {
-            var idx = shardMap.Resolve(entry.Key);
-            if (!shardBuckets.TryGetValue(idx, out var bucket))
+            var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
+            var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
+            var bucketCapacity = Math.Min(expectedPerShard, 256);
+            shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
+            foreach (var entry in entries)
             {
-                bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
-                shardBuckets[idx] = bucket;
+                var idx = shardMap.Resolve(entry.Key);
+                if (!shardBuckets.TryGetValue(idx, out var bucket))
+                {
+                    bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
+                    shardBuckets[idx] = bucket;
+                }
+                bucket.Add(entry);
             }
-            bucket.Add(entry);
+        }
+        finally
+        {
+            LatticeMetrics.SetManyStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(bucketStartTicks).TotalMilliseconds,
+                stageTagTree, LatticeMetrics.StageBucketTag);
         }
 
         // Fan out writes in parallel per shard.
-        var tasks = new List<Task>(shardBuckets.Count);
-        foreach (var (shardIdx, bucket) in shardBuckets)
+        var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-            tasks.Add(WriteToShardAsync(shard, bucket));
-        }
+            var tasks = new List<Task>(shardBuckets.Count);
+            foreach (var (shardIdx, bucket) in shardBuckets)
+            {
+                var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+                tasks.Add(WriteToShardAsync(shard, bucket));
+            }
 
-        await Task.WhenAll(tasks);
+            await Task.WhenAll(tasks);
+        }
+        finally
+        {
+            LatticeMetrics.SetManyStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
+                stageTagTree, LatticeMetrics.StageFanOutTag);
+        }
 
         static async Task WriteToShardAsync(
             IShardRootGrain shard,
@@ -863,7 +1015,8 @@ internal sealed partial class LatticeGrain(
             // undrained leaves consult snap1.InFlight and fall through
             // to pre-saga Entries - split observation that defeats
             // strict per-tree atomic visibility.
-            var snap1 = await FetchRegistrySnapshotAsync();
+            var snap1Pair = await FetchRegistrySnapshotAsync();
+            var snap1 = snap1Pair.Snap;
 
             // Fast path: Version == 0 means the default identity map is in
             // effect - no split has ever been persisted for this tree.
@@ -881,8 +1034,7 @@ internal sealed partial class LatticeGrain(
                 }
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
                 if (mapAfter.Version != 0L) { shardMap0 = mapAfter; continue; }
-                var snap2Fast = await FetchRegistrySnapshotAsync();
-                if (!IsSnapshotStable(snap1, snap2Fast)) continue;
+                if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
                 return simple;
             }
 
@@ -924,8 +1076,7 @@ internal sealed partial class LatticeGrain(
             // TxRegistry stability check: an InFlight->Committed
             // transition during the fan-out forces a retry under a
             // fresh snapshot.
-            var snap2 = await FetchRegistrySnapshotAsync();
-            if (!IsSnapshotStable(snap1, snap2)) continue;
+            if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
 
             return total;
         }
@@ -1090,7 +1241,8 @@ internal sealed partial class LatticeGrain(
             // validation prevents the InFlight->Committed transition
             // race that would otherwise produce a split observation
             // across drained vs undrained leaves.
-            var snap1 = await FetchRegistrySnapshotAsync();
+            var snap1Pair = await FetchRegistrySnapshotAsync();
+            var snap1 = snap1Pair.Snap;
 
             // Fast path: Version == 0 means no split has ever been persisted
             // for this tree. Use the cheap per-shard CountAsync() path and
@@ -1109,8 +1261,7 @@ internal sealed partial class LatticeGrain(
                 }
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap;
                 if (mapAfter.Version != 0L) { shardMap = mapAfter; continue; }
-                var snap2Fast = await FetchRegistrySnapshotAsync();
-                if (!IsSnapshotStable(snap1, snap2Fast)) continue;
+                if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
                 var fastCounts = new int[physicalShards.Count];
                 for (int i = 0; i < physicalShards.Count; i++) fastCounts[i] = fastTasks[i].Result;
                 return fastCounts;
@@ -1137,8 +1288,7 @@ internal sealed partial class LatticeGrain(
             var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
             if (shardMapNow.Version != versionAtStart) continue;
 
-            var snap2 = await FetchRegistrySnapshotAsync();
-            if (!IsSnapshotStable(snap1, snap2)) continue;
+            if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
 
             var counts = new int[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
@@ -1521,6 +1671,20 @@ internal sealed partial class LatticeGrain(
         LatticeSharding.GetShardIndex(key, shardCount);
 
     /// <summary>
+    /// Pair of <see cref="ITxRegistryGrain.SnapshotAsync"/> result and
+    /// the matching <see cref="ITxRegistryGrain.GetDecisionsRevisionAsync"/>
+    /// reading captured in the same call window. The revision lets the
+    /// double-checked retry replace its snap2 dictionary fetch with the
+    /// cheap revision probe (see
+    /// <see cref="IsSnap2StableAsync"/>): when the registry's
+    /// <em>post</em>-fan-out revision equals the snap1 revision, no
+    /// decision mutation occurred and snap1 is provably authoritative.
+    /// </summary>
+    private readonly record struct RegistrySnapshotPair(
+        Dictionary<Guid, TxStatus>? Snap,
+        long Revision);
+
+    /// <summary>
     /// Fetches a single per-tree <see cref="ITxRegistryGrain"/> decision
     /// snapshot. Used by multi-shard read fan-outs in concert with
     /// <see cref="IsSnapshotStable"/> to implement a double-checked
@@ -1539,18 +1703,103 @@ internal sealed partial class LatticeGrain(
     /// available. The matching <see cref="IsSnapshotStable"/> check
     /// treats a <c>null</c> snap2 as stable for the same reason.
     /// </para>
+    /// <para>
+    /// Returns a <see cref="RegistrySnapshotPair"/> carrying both the
+    /// decision dictionary and the registry's monotonic decisions
+    /// revision; the revision feeds the post-fan-out
+    /// <see cref="IsSnap2StableAsync"/> cheap-probe stability check.
+    /// On RPC failure both fields decay to defaults
+    /// (<c>Snap = null</c>, <c>Revision = 0</c>); the stability check
+    /// treats this as stable (same back-compat as the original
+    /// snap1-null path).
+    /// </para>
     /// </summary>
-    private async ValueTask<Dictionary<Guid, TxStatus>?> FetchRegistrySnapshotAsync()
+    private async ValueTask<RegistrySnapshotPair> FetchRegistrySnapshotAsync()
     {
         var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
         try
         {
-            return await registry.SnapshotAsync();
+            // Single atomic RPC returns both the dict and the revision
+            // captured in the same registry turn, so the (Snap,
+            // Revision) pair is guaranteed self-consistent. A sequential
+            // (SnapshotAsync, GetDecisionsRevisionAsync) pair would
+            // admit a writer-interleave skew: SnapshotAsync runs under
+            // the turn token (no AlwaysInterleave), but a writer's
+            // turn could complete fully between the two calls and
+            // produce a snapshot reflecting revision N alongside a
+            // probe reading N+1 - a "false stable" hazard the
+            // post-fan-out probe cannot detect.
+            var pair = await registry.SnapshotWithRevisionAsync();
+            return new RegistrySnapshotPair(pair.Decisions, pair.Revision);
         }
         catch
         {
-            return null;
+            return new RegistrySnapshotPair(null, 0L);
         }
+    }
+
+    /// <summary>
+    /// Cheap-probe replacement for the post-fan-out snap2 dictionary
+    /// fetch. Issues a single
+    /// <see cref="ITxRegistryGrain.GetDecisionsRevisionAsync"/> RPC and
+    /// returns <c>true</c> when the returned revision equals the
+    /// captured <paramref name="snap1Revision"/> - in that case the
+    /// registry's Decisions map provably did not mutate during the
+    /// fan-out, so <paramref name="snap1"/> is still authoritative and
+    /// no second dictionary serialization is required. On revision
+    /// mismatch the method falls through to a full
+    /// <see cref="ITxRegistryGrain.SnapshotAsync"/> fetch and applies
+    /// the existing <see cref="IsSnapshotStable"/> rule, preserving
+    /// every legacy correctness guarantee.
+    /// <para>
+    /// Multi-silo safe: the probe is still a grain RPC to the
+    /// single-activation registry; the saving is the elided dictionary
+    /// payload on the steady-state happy path, not the RPC turn itself.
+    /// </para>
+    /// </summary>
+    private async ValueTask<bool> IsSnap2StableAsync(
+        Dictionary<Guid, TxStatus>? snap1,
+        long snap1Revision)
+    {
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        long revision2;
+        try
+        {
+            revision2 = await registry.GetDecisionsRevisionAsync();
+        }
+        catch
+        {
+            // RPC failure: treat as stable (legacy snap1-null /
+            // snap2-null handling - the reader proceeds and falls back
+            // to per-leaf GetStatusManyAsync if a pending entry is
+            // observed).
+            return true;
+        }
+        if (revision2 == snap1Revision)
+        {
+            return true;
+        }
+
+        // Revision changed during the fan-out. A Committed transition
+        // would invalidate snap1; an Aborted-only or pure-Forget
+        // transition would not. Issue a fresh atomic
+        // SnapshotWithRevisionAsync to disambiguate (using the
+        // self-consistent shape avoids re-introducing the snap1
+        // skew the optimisation closed), then run the existing
+        // IsSnapshotStable rule.
+        Dictionary<Guid, TxStatus>? snap2;
+        try
+        {
+            var snap2Pair = await registry.SnapshotWithRevisionAsync();
+            snap2 = snap2Pair.Decisions;
+        }
+        catch
+        {
+            // RPC failure on the disambiguation path: same defensive
+            // treatment as FetchRegistrySnapshotAsync above.
+            return true;
+        }
+        return IsSnapshotStable(snap1, snap2);
     }
 
     /// <summary>

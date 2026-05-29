@@ -226,8 +226,33 @@ internal sealed partial class ReplicationApplier(
             // (re-marking a saga is a no-op). See
             // <see cref="LatticeBootstrapApplyContext"/> for the
             // rationale and the dedup primitives that remain in force.
+            //
+            // Phase D1c additional bypass: saga prepare-phase entries
+            // (IsPrepared==true) carry the producer-stamped per-leaf
+            // HLC, which under the batched-saga path
+            // (AtomicWriteGrain.ExecutePhaseAsync's parallel cross-leaf
+            // `lattice.SetManyAsync` fan-out) can be non-monotonic
+            // across the saga's touched leaves: each leaf has its own
+            // independent HLC clock and advances independently. The
+            // pump delivers entries in WAL-append order (offset-monotonic
+            // per partition), which is not HLC-monotonic per-origin
+            // when multiple leaves participate in a single producer-side
+            // saga. Applying the per-origin HWM gate to those entries
+            // would deduplicate the second-arriving (lower-HLC) prepared
+            // row, leaving the receiver's per-tx pending bucket with a
+            // strict subset of the saga's keys - the same partial-saga
+            // failure shape the bootstrap-drain bypass closes for the
+            // snapshot path. Idempotency on the prepared-write path is
+            // upheld by the leaf-level LWW merge inside
+            // <see cref="BPlusTree.Grains.BPlusLeafGrain.AddPreparedMutation"/>
+            // (re-delivery of the same (txid, key) merges via
+            // LwwValue.Merge and is a no-op for identical bytes) and
+            // the per-tx terminal-mark idempotency (TxRegistry
+            // repeat-same-outcome + per-leaf _recentlyTerminal
+            // HashSet).
             var isBootstrapDrain = LatticeBootstrapApplyContext.IsActive;
-            if (!isBootstrapDrain && entry.Timestamp <= hwm)
+            var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
+            if (!isBootstrapDrain && !isPreparedAtomicBatch && entry.Timestamp <= hwm)
             {
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
@@ -282,7 +307,21 @@ internal sealed partial class ReplicationApplier(
                 // and must continue to apply unconditionally on the existing
                 // HWM-only path so this code is wire-compatible with the
                 // additive vector-clock schema slot.
-                if (HasCausalDependencies(entry))
+                //
+                // Phase D1c: saga prepare-phase entries
+                // (IsPrepared && AtomicBatchSize > 0) bypass the
+                // causal-park gate for the same reason they bypass
+                // the HWM gate (see the HWM dedup comment above):
+                // parallel cross-leaf saga writes carry VectorClock
+                // frontiers whose entries point at sibling per-leaf
+                // clocks, and parking them would produce a
+                // chicken-and-egg deadlock with their not-yet-arrived
+                // siblings. The per-leaf AddPreparedMutation routes
+                // the entry into the pending-tx bucket where causal
+                // ordering across the saga's keys is irrelevant -
+                // the terminal flip is the single atomic-visibility
+                // transition.
+                if (!isPreparedAtomicBatch && HasCausalDependencies(entry))
                 {
                     var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
                     if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc))

@@ -202,6 +202,44 @@ public partial class WalShardGrainTests
         Assert.That(offsets, Is.EqualTo(new[] { 0L, 1L, 2L }));
     }
 
+    [Test]
+    public async Task AppendAsync_steady_fan_in_during_in_flight_flush_pipelines_against_cap()
+    {
+        // U9p step 7 regression: with cap = 4 and the default per-batch
+        // ceilings (so the per-batch caps are not the trigger), four
+        // appends fanning in while the first flush is still gated MUST
+        // pipeline into separate in-flight slots, not coalesce behind a
+        // single one. Pre-step-7 the kick predicate keyed off
+        // `_inFlight.Count == 0`, so callers 2..N parked on their TCS
+        // and the cap was never reachable - which is precisely what the
+        // step-6 telemetry observed against real Azure Tables
+        // (`wal.append.in_flight = 0`, batch p50 = 8 entries at deep
+        // queue). Post-step-7 the kick keys off
+        // `_inFlight.Count < maxPending`, so the cap is reachable.
+        var gated = new ConcurrencyTrackingGatedProvider(new InMemoryWalStorageProvider());
+        var grain = await CreateGrainAsync(gated, new LatticeOptions
+        {
+            WalMaxPendingBatches = 4,
+        });
+
+        var t1 = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        var t2 = grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
+        var t3 = grain.AppendAsync(MakeEntry("c"), CancellationToken.None);
+        var t4 = grain.AppendAsync(MakeEntry("d"), CancellationToken.None);
+
+        // The first append's flush is gated; callers 2..4 each find
+        // _inFlight.Count < 4 and kick their own flush. All four must
+        // observe the provider concurrently before any of them
+        // completes - i.e. the cap is reachable under steady fan-in
+        // even though no per-batch cap is hit.
+        await gated.WaitForActiveAsync(4, TimeSpan.FromSeconds(5));
+        Assert.That(gated.PeakActive, Is.EqualTo(4));
+
+        gated.Open();
+        var offsets = await Task.WhenAll(t1, t2, t3, t4);
+        Assert.That(offsets, Is.EqualTo(new[] { 0L, 1L, 2L, 3L }));
+    }
+
     /// <summary>
     /// Provider double that tracks concurrent in-flight
     /// <c>AppendBatchAsync</c> calls and blocks every one on a shared

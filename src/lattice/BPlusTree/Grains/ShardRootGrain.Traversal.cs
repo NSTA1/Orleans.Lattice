@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -8,51 +10,42 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class ShardRootGrain
 {
-    // Per-activation cache of the most recently resolved ILeafCacheGrain
-    // reference, keyed by leaf GrainId. Eliminates a fresh
-    // "leaf/<32-hex>" string allocation per read on the hot path. In the
-    // common RootIsLeaf=true case (microbench, single-leaf workloads),
-    // every call hits this cache; multi-leaf workloads degrade gracefully
-    // to "cache the most-recently-used leaf" which is still a win for
-    // sequential access patterns and a no-op for diverse access.
+    // Per-activation cache of resolved ILeafCacheGrain references, keyed
+    // by leaf GrainId. Eliminates the fresh "leaf/<32-hex>" string
+    // allocation per read on the hot path. Each entry survives for the
+    // activation's lifetime; because the only thing that "invalidates" a
+    // cache entry is the source leaf being deleted (drop / migrate /
+    // re-key), and the resolved grain reference is itself just a routing
+    // handle, stale entries are harmless - the resolved grain would
+    // simply fail to address a leaf that no longer exists, which is
+    // exactly the behaviour any uncached lookup would produce too.
     //
-    // Invalidation: implicit. The cache key check on every access means
-    // any leaf-id rotation (root-split promotes a leaf to internal,
-    // causing RootNodeId to change) is detected on the next call and the
-    // cache is refreshed against the new leafId.
-    private GrainId _cachedLeafCacheKey;
-    private ILeafCacheGrain? _cachedLeafCache;
+    // The previous shape was a single-slot LRU which produced a write to
+    // the slot on every miss. That write made the cache unsafe to share
+    // across interleaved grain turns. Switching to ConcurrentDictionary
+    // makes the cache (a) thread-safe across the concurrent turns that
+    // SetManyAsync's [AlwaysInterleave] annotation enables, and
+    // (b) strictly higher hit-rate for multi-leaf workloads (every
+    // previously-seen leaf remains a hit, not just the most-recent one).
+    private readonly ConcurrentDictionary<GrainId, ILeafCacheGrain> _leafCacheGrains = new();
 
-    // Per-activation cache of the most recently resolved IBPlusLeafGrain
-    // reference, keyed by leaf GrainId. Eliminates the
-    // grainFactory.GetGrain<IBPlusLeafGrain>(leafId) materialisation on
-    // every Set/Get/CAS/GetOrSet write-or-traversal call into the leaf.
-    // Same invalidation semantics as _cachedLeafCache above: implicit on
-    // leaf-id mismatch, so root-splits and multi-leaf rotations refresh
-    // the slot on the next call.
-    private GrainId _cachedLeafKey;
-    private IBPlusLeafGrain? _cachedLeaf;
+    // Per-activation cache of resolved IBPlusLeafGrain references, keyed
+    // by leaf GrainId. Same rationale as _leafCacheGrains above: the
+    // grain reference is just a routing handle, so caching it for the
+    // activation's lifetime is safe and concurrent-turn-friendly.
+    private readonly ConcurrentDictionary<GrainId, IBPlusLeafGrain> _leafGrains = new();
 
-    // Per-activation cache of the most recently resolved IBPlusInternalGrain
-    // reference, keyed by the internal node's GrainId. Eliminates the
-    // grainFactory.GetGrain<IBPlusInternalGrain>(currentId) materialisation
-    // on every traversal step through an internal node. Mirrors the
-    // _cachedLeaf shape directly - a single-slot LRU keyed by GrainId
-    // equality. Hit rate per traversal:
-    //   * depth-2 tree (root-internal + leaves): 100% after first miss,
-    //     since every traversal calls GetGrain<IBPlusInternalGrain>(rootId)
-    //     and the root is invariant for the activation's lifetime.
-    //   * depth-3+ tree: hits on the root slot for every traversal; level-1+
-    //     nodes flip through the slot on each call. A future cycle could
-    //     widen the slot to a 2-slot LRU (root + most-recent) if a
-    //     deeper-tree microbench shows level-1 misses dominating.
-    // Invalidation is implicit on the GrainId equality check, the same
-    // pattern that keeps _cachedLeaf safe across root promotions: any
-    // RootNodeId rotation produces a mismatched currentId on the next
-    // traversal, which routes through ResolveInternalGrainSlow to refresh
-    // the slot under the new id.
-    private GrainId _cachedInternalKey;
-    private IBPlusInternalGrain? _cachedInternal;
+    // Per-activation cache of resolved IBPlusInternalGrain references,
+    // keyed by the internal node's GrainId. Same rationale as the leaf
+    // caches above. Hit rate after the first traversal:
+    //   * depth-2 tree (root-internal + leaves): 100% on the root after
+    //     the first descent, since every traversal queries the root.
+    //   * depth-3+ tree: 100% on every previously-visited internal.
+    // The unbounded dictionary footprint is O(touched-internal-nodes);
+    // for the workloads this cycle targets (bounded MaxInternalChildren,
+    // production trees with reasonable fanout) the memory cost is
+    // negligible.
+    private readonly ConcurrentDictionary<GrainId, IBPlusInternalGrain> _internalGrains = new();
 
     // Per-activation cache of internal-node *routing tables*, keyed by the
     // internal node's GrainId. Each entry is a point-in-time
@@ -77,43 +70,45 @@ internal sealed partial class ShardRootGrain
     // routing query, which is negligible compared to the recovery cost
     // itself.
     //
-    // Lifetime: the dictionary is lazily allocated on first miss. Per-entry
-    // footprint is dominated by the separator-key strings + GrainId array;
-    // for an internal node of fanout F the snapshot holds F separator
-    // strings + F GrainIds + a bool. Per-activation memory is therefore
-    // O(touched-internal-nodes × fanout). For pathological access patterns
-    // a future cycle could add an LRU cap; for the workloads this cycle
-    // targets (deep-tree microbench, production trees with bounded
-    // internal-fanout via MaxInternalChildren) the unbounded dictionary
-    // is correct and small.
-    private Dictionary<GrainId, RoutingTableSnapshot>? _routingTableCache;
+    // Lifetime: per-entry footprint is dominated by the separator-key
+    // strings + GrainId array; for an internal node of fanout F the
+    // snapshot holds F separator strings + F GrainIds + a bool.
+    // Per-activation memory is therefore O(touched-internal-nodes × fanout).
+    // For pathological access patterns a future cycle could add an LRU
+    // cap; for the workloads this cycle targets (deep-tree microbench,
+    // production trees with bounded internal-fanout via
+    // MaxInternalChildren) the unbounded dictionary is correct and small.
+    private readonly ConcurrentDictionary<GrainId, RoutingTableSnapshot> _routingTableCache = new();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ILeafCacheGrain ResolveLeafCacheGrain(GrainId leafId)
+        => _leafCacheGrains.TryGetValue(leafId, out var existing)
+            ? existing
+            : ResolveLeafCacheGrainSlow(leafId);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ILeafCacheGrain ResolveLeafCacheGrainSlow(GrainId leafId)
-    {
-        var cache = grainFactory.GetGrain<ILeafCacheGrain>(leafId.ToString());
-        _cachedLeafCacheKey = leafId;
-        _cachedLeafCache = cache;
-        return cache;
-    }
+        => _leafCacheGrains.GetOrAdd(leafId, static (id, gf) => gf.GetGrain<ILeafCacheGrain>(id.ToString()), grainFactory);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private IBPlusLeafGrain ResolveLeafGrain(GrainId leafId)
+        => _leafGrains.TryGetValue(leafId, out var existing)
+            ? existing
+            : ResolveLeafGrainSlow(leafId);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private IBPlusLeafGrain ResolveLeafGrainSlow(GrainId leafId)
-    {
-        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-        _cachedLeafKey = leafId;
-        _cachedLeaf = leaf;
-        return leaf;
-    }
+        => _leafGrains.GetOrAdd(leafId, static (id, gf) => gf.GetGrain<IBPlusLeafGrain>(id), grainFactory);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private IBPlusInternalGrain ResolveInternalGrain(GrainId internalId)
+        => _internalGrains.TryGetValue(internalId, out var existing)
+            ? existing
+            : ResolveInternalGrainSlow(internalId);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private IBPlusInternalGrain ResolveInternalGrainSlow(GrainId internalId)
-    {
-        var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(internalId);
-        _cachedInternalKey = internalId;
-        _cachedInternal = internalGrain;
-        return internalGrain;
-    }
+        => _internalGrains.GetOrAdd(internalId, static (id, gf) => gf.GetGrain<IBPlusInternalGrain>(id), grainFactory);
 
     /// <summary>
     /// Returns the routing-table snapshot for the internal node identified
@@ -132,7 +127,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private ValueTask<RoutingTableSnapshot> GetRoutingTableSnapshotAsync(GrainId internalId)
     {
-        if (_routingTableCache is { } cache && cache.TryGetValue(internalId, out var snapshot))
+        if (_routingTableCache.TryGetValue(internalId, out var snapshot))
         {
             return new ValueTask<RoutingTableSnapshot>(snapshot);
         }
@@ -142,11 +137,9 @@ internal sealed partial class ShardRootGrain
     [MethodImpl(MethodImplOptions.NoInlining)]
     private async ValueTask<RoutingTableSnapshot> GetRoutingTableSnapshotSlowAsync(GrainId internalId)
     {
-        var grain = (_cachedInternal is { } existing && _cachedInternalKey.Equals(internalId))
-            ? existing
-            : ResolveInternalGrainSlow(internalId);
+        var grain = ResolveInternalGrain(internalId);
         var snapshot = await grain.GetRoutingTableAsync();
-        (_routingTableCache ??= new Dictionary<GrainId, RoutingTableSnapshot>())[internalId] = snapshot;
+        _routingTableCache[internalId] = snapshot;
         return snapshot;
     }
 
@@ -156,12 +149,12 @@ internal sealed partial class ShardRootGrain
     /// issues <see cref="IBPlusInternalGrain.AcceptSplitAsync"/> against an
     /// internal node - that is the only call shape capable of mutating an
     /// existing internal node's children list. The method is a no-op when
-    /// the cache is unallocated or the entry is absent (e.g. the very
-    /// first split before any read traversed through the parent).
+    /// the entry is absent (e.g. the very first split before any read
+    /// traversed through the parent).
     /// </summary>
     private void InvalidateRoutingTable(GrainId internalId)
     {
-        _routingTableCache?.Remove(internalId);
+        _routingTableCache.TryRemove(internalId, out _);
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
@@ -186,9 +179,7 @@ internal sealed partial class ShardRootGrain
         // exact signature of the V_{N-2} regression hunted by Section 14.
         DiagSink.Write($"[DIAG read-routing] gid={context.GrainId} key={key} leafId={leafId} rootIsLeaf={state.State.RootIsLeaf} movedSlots=[{string.Join(',', state.State.MovedAwaySlots.Keys)}] phase={state.State.SplitInProgress?.Phase.ToString() ?? "(none)"}");
 #endif
-        var cache = (_cachedLeafCache is { } existing && _cachedLeafCacheKey.Equals(leafId))
-            ? existing
-            : ResolveLeafCacheGrainSlow(leafId);
+        var cache = ResolveLeafCacheGrain(leafId);
         return await cache.GetAsync(key);
     }
 
@@ -205,9 +196,7 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
-        var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(leafId))
-            ? existing
-            : ResolveLeafGrainSlow(leafId);
+        var leaf = ResolveLeafGrain(leafId);
         return await leaf.GetWithVersionAsync(key);
     }
 
@@ -223,9 +212,7 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
-        var cache = (_cachedLeafCache is { } existing && _cachedLeafCacheKey.Equals(leafId))
-            ? existing
-            : ResolveLeafCacheGrainSlow(leafId);
+        var cache = ResolveLeafCacheGrain(leafId);
         return await cache.ExistsAsync(key);
     }
 
@@ -265,9 +252,7 @@ internal sealed partial class ShardRootGrain
         var result = new Dictionary<string, byte[]>();
         foreach (var (leafId, bucket) in leafBuckets)
         {
-            var cache = (_cachedLeafCache is { } existing && _cachedLeafCacheKey.Equals(leafId))
-                ? existing
-                : ResolveLeafCacheGrainSlow(leafId);
+            var cache = ResolveLeafCacheGrain(leafId);
             var values = await cache.GetManyAsync(bucket);
             foreach (var (k, v) in values)
             {
@@ -282,9 +267,7 @@ internal sealed partial class ShardRootGrain
         if (state.State.RootIsLeaf)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
-                ? existing
-                : ResolveLeafGrainSlow(rootLeafId);
+            var leaf = ResolveLeafGrain(rootLeafId);
             await RecordAffectedLeafIfPreparedAsync(rootLeafId);
             return await leaf.SetAsync(key, value);
         }
@@ -311,18 +294,14 @@ internal sealed partial class ShardRootGrain
         }
 
         var leafId = path.Pop();
-        var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
-            ? existingLeaf
-            : ResolveLeafGrainSlow(leafId);
+        var leafGrain = ResolveLeafGrain(leafId);
         await RecordAffectedLeafIfPreparedAsync(leafId);
         var splitResult = await leafGrain.SetAsync(key, value);
 
         while (splitResult is not null && path.Count > 0)
         {
             var parentId = path.Pop();
-            var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
-                ? existingParent
-                : ResolveInternalGrainSlow(parentId);
+            var parentGrain = ResolveInternalGrain(parentId);
             splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
             InvalidateRoutingTable(parentId);
         }
@@ -345,9 +324,7 @@ internal sealed partial class ShardRootGrain
         if (state.State.RootIsLeaf)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
-                ? existing
-                : ResolveLeafGrainSlow(rootLeafId);
+            var leaf = ResolveLeafGrain(rootLeafId);
             await RecordAffectedLeafIfPreparedAsync(rootLeafId);
             return await leaf.SetAsync(key, value, expiresAtTicks);
         }
@@ -374,18 +351,14 @@ internal sealed partial class ShardRootGrain
             }
 
             var leafId = path.Pop();
-            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
-                ? existingLeaf
-                : ResolveLeafGrainSlow(leafId);
+            var leafGrain = ResolveLeafGrain(leafId);
             await RecordAffectedLeafIfPreparedAsync(leafId);
             var splitResult = await leafGrain.SetAsync(key, value, expiresAtTicks);
 
             while (splitResult is not null && path.Count > 0)
             {
                 var parentId = path.Pop();
-                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
-                    ? existingParent
-                    : ResolveInternalGrainSlow(parentId);
+                var parentGrain = ResolveInternalGrain(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
                 InvalidateRoutingTable(parentId);
             }
@@ -403,9 +376,7 @@ internal sealed partial class ShardRootGrain
         if (state.State.RootIsLeaf)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
-                ? existing
-                : ResolveLeafGrainSlow(rootLeafId);
+            var leaf = ResolveLeafGrain(rootLeafId);
             return await leaf.GetOrSetAsync(key, value);
         }
 
@@ -431,9 +402,7 @@ internal sealed partial class ShardRootGrain
             }
 
             var leafId = path.Pop();
-            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
-                ? existingLeaf
-                : ResolveLeafGrainSlow(leafId);
+            var leafGrain = ResolveLeafGrain(leafId);
             var result = await leafGrain.GetOrSetAsync(key, value);
 
             // If the key was already live, no write occurred - no splits to propagate.
@@ -447,9 +416,7 @@ internal sealed partial class ShardRootGrain
             while (splitResult is not null && path.Count > 0)
             {
                 var parentId = path.Pop();
-                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
-                    ? existingParent
-                    : ResolveInternalGrainSlow(parentId);
+                var parentGrain = ResolveInternalGrain(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
                 InvalidateRoutingTable(parentId);
             }
@@ -467,9 +434,7 @@ internal sealed partial class ShardRootGrain
         if (state.State.RootIsLeaf)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
-                ? existing
-                : ResolveLeafGrainSlow(rootLeafId);
+            var leaf = ResolveLeafGrain(rootLeafId);
             return await leaf.SetIfVersionAsync(key, value, expectedVersion);
         }
 
@@ -495,9 +460,7 @@ internal sealed partial class ShardRootGrain
             }
 
             var leafId = path.Pop();
-            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
-                ? existingLeaf
-                : ResolveLeafGrainSlow(leafId);
+            var leafGrain = ResolveLeafGrain(leafId);
             var result = await leafGrain.SetIfVersionAsync(key, value, expectedVersion);
 
             // If CAS failed, no write occurred - no splits to propagate.
@@ -511,9 +474,7 @@ internal sealed partial class ShardRootGrain
             while (splitResult is not null && path.Count > 0)
             {
                 var parentId = path.Pop();
-                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
-                    ? existingParent
-                    : ResolveInternalGrainSlow(parentId);
+                var parentGrain = ResolveInternalGrain(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
                 InvalidateRoutingTable(parentId);
             }
@@ -536,9 +497,7 @@ internal sealed partial class ShardRootGrain
         if (state.State.RootIsLeaf)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
-                ? existing
-                : ResolveLeafGrainSlow(rootLeafId);
+            var leaf = ResolveLeafGrain(rootLeafId);
             return await leaf.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
         }
 
@@ -564,9 +523,7 @@ internal sealed partial class ShardRootGrain
             }
 
             var leafId = path.Pop();
-            var leafGrain = (_cachedLeaf is { } existingLeaf && _cachedLeafKey.Equals(leafId))
-                ? existingLeaf
-                : ResolveLeafGrainSlow(leafId);
+            var leafGrain = ResolveLeafGrain(leafId);
             var result = await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
 
             // Propagate splits up the tree.
@@ -574,9 +531,7 @@ internal sealed partial class ShardRootGrain
             while (splitResult is not null && path.Count > 0)
             {
                 var parentId = path.Pop();
-                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
-                    ? existingParent
-                    : ResolveInternalGrainSlow(parentId);
+                var parentGrain = ResolveInternalGrain(parentId);
                 splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
                 InvalidateRoutingTable(parentId);
             }
@@ -596,8 +551,9 @@ internal sealed partial class ShardRootGrain
     private ValueTask<GrainId> TraverseToLeafAsync(string key)
     {
         // Sync fast path: every internal hop's routing snapshot is served
-        // out of _routingTableCache (a Dictionary<GrainId, ...> populated
-        // on first miss and only invalidated on AcceptSplitAsync). In the
+        // out of _routingTableCache (a ConcurrentDictionary<GrainId, ...>
+        // populated on first miss and only invalidated on
+        // AcceptSplitAsync). In the
         // steady state - the workload that PointRead / GetWithVersion /
         // Exists / BatchRead actually exercise after warmup - every
         // GetRoutingTableSnapshotAsync call sync-completes via the
@@ -717,11 +673,93 @@ internal sealed partial class ShardRootGrain
 
     private async Task<SplitResult?> PromoteRootAsync(SplitResult splitResult)
     {
-        state.State.PendingPromotion = splitResult;
-        state.State.PendingPromotionRootWasLeaf = state.State.RootIsLeaf;
-        await state.WriteStateAsync();
+        // Serialise the entire promotion sequence (Phase 1 persist +
+        // Phase 2 complete) against other interleaved SetManyAsync turns
+        // on this activation. SetManyAsync is [AlwaysInterleave] for
+        // throughput, which means two concurrent turns can race here.
+        // Without the gate, turn A's `state.State.PendingPromotion = A;`
+        // can be overwritten by turn B before A's CompletePromotionAsync
+        // observes it, silently corrupting the tree topology - and even
+        // when A wins the assignment, turn B can read the stale
+        // RootIsLeaf flag (still `true` on disk while A's promotion is
+        // mid-flight) and seed the new internal root with the wrong
+        // childrenAreLeaves bit, which is exactly the
+        // InvalidCastException SeedChildParentAsync surfaced on the
+        // U9k step 2 ladder. The promotion gate is distinct from the
+        // _stateWriteGate (which only serialises individual storage
+        // writes) because promotion is a multi-await sequence that
+        // includes cross-grain Initialize / Seed calls between two
+        // shard-root persistence sites.
+        await _promotionGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            // Re-validate the current root shape under the gate. The
+            // caller computed `splitResult` from a TraverseForWrite /
+            // SetManyLocalOnly pass that observed the tree shape BEFORE
+            // the gate was entered. The U9k step 2 race is asymmetric:
+            // turn A enters `SetManyLocalOnlyAsync` when the root is a
+            // leaf and computes a leaf-level bubble
+            // (`splitResult.ChildIsLeaf == true`); turn B then promotes
+            // the root, flipping `state.State.RootIsLeaf` to false.
+            // When turn A finally reaches the gate, wrapping a second
+            // new root above the just-promoted internal one would seed
+            // it with `childrenAreLeaves = true` against an internal
+            // child - the inverted-cast InvalidCastException observed
+            // on the U9k step 2 ladder. The non-race case has
+            // `splitResult.ChildIsLeaf == state.State.RootIsLeaf` by
+            // construction (the bubble was produced by the current
+            // root splitting), so the asymmetric predicate below
+            // fires only when an interleaved peer promotion has
+            // landed between the splitter and us. A symmetric
+            // `ChildrenAreLeaves == ChildIsLeaf` check would ALSO
+            // false-positive every legitimate depth->=1 root split
+            // (where the splitting root produced a same-level bubble
+            // and the live root is, correctly, internal), so this
+            // predicate is deliberately one-sided.
+            if (splitResult.ChildIsLeaf && !state.State.RootIsLeaf && state.State.PendingPromotion is null)
+            {
+                var currentRootId = state.State.RootNodeId!.Value;
+                var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
+                if (rootSnapshot.ChildrenAreLeaves)
+                {
+                    // The current root sits exactly one level above
+                    // our leaf-level bubble, so feed the bubble into
+                    // the existing root via AcceptSplitAsync. If the
+                    // root itself splits in turn we return its bubble
+                    // so the caller's `while (split is not null)`
+                    // loop re-enters PromoteRootAsync for the next
+                    // level up.
+                    var currentRoot = ResolveInternalGrain(currentRootId);
+                    var rebubble = await currentRoot.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                    InvalidateRoutingTable(currentRootId);
+                    return rebubble;
+                }
+                // Deeper race: the live root is at depth >= 2 (its
+                // children are themselves internal nodes) but our
+                // bubble is leaf-level. Routing the bubble safely
+                // would require traversing down to the correct
+                // internal parent; that path is not yet exercised in
+                // production. Log and fall through to the legacy
+                // wrap, which is still incorrect in this corner case
+                // but matches pre-fix behaviour rather than
+                // regressing the depth-1 path the U9k step 2 fix
+                // legitimately repaired.
+                logger.LogWarning(
+                    "ShardRootGrain {ShardId} PromoteRootAsync observed a depth->=2 race (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf=true); falling through to legacy wrap.",
+                    context.GrainId,
+                    rootSnapshot.ChildrenAreLeaves);
+            }
 
-        await CompletePromotionAsync();
+            state.State.PendingPromotion = splitResult;
+            state.State.PendingPromotionRootWasLeaf = state.State.RootIsLeaf;
+            await WriteShardStateAsync();
+
+            await CompletePromotionAsync();
+        }
+        finally
+        {
+            _promotionGate.Release();
+        }
         return null;
     }
 
@@ -731,23 +769,100 @@ internal sealed partial class ShardRootGrain
     private async Task CompletePromotionAsync()
     {
         var pending = state.State.PendingPromotion!;
-        var childrenAreLeaves = state.State.PendingPromotionRootWasLeaf;
+        var currentRootId = state.State.RootNodeId!.Value;
+
+        // Recovery shape check. The persisted `PendingPromotion` was
+        // written when some earlier turn decided to wrap a new root.
+        // For a legitimate wrap-as-new-root that crashed between
+        // Phase 1 (persist intent) and Phase 2 (create new root + clear
+        // intent), `state.State.RootIsLeaf` is still on the pre-wrap
+        // value (true for the first-ever promotion, false for higher
+        // promotions) because Phase 2 is what flips it; the branch
+        // below is skipped and the legacy wrap reapplies idempotently
+        // via the deterministic new-root id.
+        //
+        // The branch fires only on the U9k step 2 race shape: turn A
+        // persisted a leaf-level `PendingPromotion`
+        // (`pending.ChildIsLeaf == true`) when `RootIsLeaf == true`,
+        // then turn B's interleaved promotion completed before our
+        // resume - leaving the live root as a fresh level-1 internal
+        // node with `ChildrenAreLeaves == true`. The pending bubble
+        // belongs INSIDE that promoted root rather than ABOVE it.
+        // Wrapping again would seed the new root with the wrong
+        // `childrenAreLeaves` bit and surface as the inverse
+        // InvalidCastException SeedChildParentAsync observed on the
+        // U9k step 2 ladder ("cast BPlusInternalGrain to
+        // IBPlusLeafGrain"). The predicate is deliberately asymmetric
+        // (only `ChildIsLeaf=true`); a symmetric
+        // `ChildrenAreLeaves == ChildIsLeaf` check would false-
+        // positive every legitimate depth->=1 root split whose
+        // persisted intent legitimately needs to wrap.
+        if (pending.ChildIsLeaf && !state.State.RootIsLeaf)
+        {
+            var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
+            if (rootSnapshot.ChildrenAreLeaves)
+            {
+                var existingRoot = ResolveInternalGrain(currentRootId);
+                await existingRoot.AcceptSplitAsync(pending.PromotedKey, pending.NewSiblingId);
+                InvalidateRoutingTable(currentRootId);
+                state.State.PendingPromotion = null;
+                await WriteShardStateAsync();
+                return;
+            }
+
+            // Deeper race on resume: leaf-level pending bubble against
+            // a root whose children are themselves internals. The
+            // bubble's NewSiblingId belongs deeper in the tree than
+            // we can safely splice from here; drop the stale intent
+            // and let the surrounding write retry envelope replay the
+            // user mutation against the current topology. In practice
+            // this only happens when the leaf-level bubble's
+            // NewSiblingId was already absorbed by a sibling
+            // promotion (so the leaf is reachable via the live
+            // topology) - dropping the intent simply releases the
+            // stuck recovery without re-wrapping.
+            logger.LogWarning(
+                "ShardRootGrain {ShardId} CompletePromotionAsync observed a depth->=2 race on resume (rootChildrenAreLeaves={RootChildrenAreLeaves}, pending.ChildIsLeaf=true); dropping the stale promotion intent.",
+                context.GrainId,
+                rootSnapshot.ChildrenAreLeaves);
+            state.State.PendingPromotion = null;
+            await WriteShardStateAsync();
+            return;
+        }
+
+        // Prefer the self-describing ChildIsLeaf flag on the persisted
+        // SplitResult over the racy PendingPromotionRootWasLeaf scalar
+        // (which is filled in from the live `RootIsLeaf` field at
+        // PromoteRootAsync time and would have been clobbered if a
+        // previous interleaved turn already flipped `RootIsLeaf` to
+        // false). The ChildIsLeaf flag is stamped at split-construction
+        // time by the leaf or internal grain that produced the split,
+        // so it is immutable across any subsequent shard-root
+        // interleaving. PendingPromotionRootWasLeaf is retained on
+        // disk for backward compatibility with state persisted by a
+        // pre-fix activation: if such state is resumed, ChildIsLeaf
+        // would deserialise as its default `false`, and the older
+        // bool is the only surviving signal of whether the new
+        // sibling holds leaves.
+        var childrenAreLeaves = pending.ChildIsLeaf
+            ? true
+            : state.State.PendingPromotionRootWasLeaf;
 
         var shardKey = context.GrainId.Key.ToString()!;
         var deterministicId = DeterministicGuid(
-            shardKey + "/root-above/" + state.State.RootNodeId!.Value);
+            shardKey + "/root-above/" + currentRootId);
 
         var newRoot = grainFactory.GetGrain<IBPlusInternalGrain>(deterministicId);
         await newRoot.SetTreeIdAsync(TreeId);
         await newRoot.InitializeAsync(
             pending.PromotedKey,
-            state.State.RootNodeId!.Value,
+            currentRootId,
             pending.NewSiblingId,
             childrenAreLeaves);
 
         state.State.RootNodeId = newRoot.GetGrainId();
         state.State.RootIsLeaf = false;
         state.State.PendingPromotion = null;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 }

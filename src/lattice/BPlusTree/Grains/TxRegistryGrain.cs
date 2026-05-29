@@ -97,6 +97,8 @@ internal sealed class TxRegistryGrain(
         // short-circuit and silently returns without re-persisting.
         var hadEntry = state.State.Decisions.TryGetValue(txid, out var prevStatus);
         state.State.Decisions[txid] = TxStatus.Committed;
+        var prevRevision = state.State.DecisionsRevision;
+        state.State.DecisionsRevision = prevRevision + 1;
         try
         {
             await state.WriteStateAsync();
@@ -105,6 +107,7 @@ internal sealed class TxRegistryGrain(
         {
             if (hadEntry) state.State.Decisions[txid] = prevStatus;
             else state.State.Decisions.Remove(txid);
+            state.State.DecisionsRevision = prevRevision;
             throw;
         }
     }
@@ -131,6 +134,8 @@ internal sealed class TxRegistryGrain(
         // can be unwound (see MarkCommittedAsync for the same rationale).
         var hadEntry = state.State.Decisions.TryGetValue(txid, out var prevStatus);
         state.State.Decisions[txid] = TxStatus.Aborted;
+        var prevRevision = state.State.DecisionsRevision;
+        state.State.DecisionsRevision = prevRevision + 1;
         try
         {
             await state.WriteStateAsync();
@@ -139,6 +144,7 @@ internal sealed class TxRegistryGrain(
         {
             if (hadEntry) state.State.Decisions[txid] = prevStatus;
             else state.State.Decisions.Remove(txid);
+            state.State.DecisionsRevision = prevRevision;
             throw;
         }
     }
@@ -204,6 +210,54 @@ internal sealed class TxRegistryGrain(
             result[txid] = status;
         }
         return Task.FromResult(result);
+    }
+
+    /// <inheritdoc />
+    public Task<TxRegistrySnapshot> SnapshotWithRevisionAsync()
+    {
+        // Same body as SnapshotAsync, with the revision captured
+        // inside the same synchronous block. Both fields therefore
+        // reflect the exact same persisted state - no inter-call skew
+        // is possible because the method runs on the registry's
+        // single-turn token (the body has no await) and reads the
+        // revision after the dict copy, so any concurrent in-memory
+        // mutation (which would need its own turn token to reach the
+        // synchronous mutation path in MarkCommittedAsync /
+        // MarkAbortedAsync / ForgetAsync) is necessarily fully visible
+        // in BOTH fields or neither.
+        var now = TimeProvider.GetUtcNow();
+        var retention = Retention;
+        var dict = new Dictionary<Guid, TxStatus>(state.State.Decisions.Count);
+        foreach (var (txid, status) in state.State.Decisions)
+        {
+            if (IsTombstoneExpiredAt(txid, now, retention)) continue;
+            dict[txid] = status;
+        }
+        return Task.FromResult(new TxRegistrySnapshot
+        {
+            Decisions = dict,
+            Revision = state.State.DecisionsRevision,
+        });
+    }
+
+    /// <inheritdoc />
+    public Task<long> GetDecisionsRevisionAsync()
+    {
+        // Cheap probe paired with SnapshotAsync's double-checked retry.
+        // [AlwaysInterleave] on the interface lets this method bypass
+        // the registry's turn token so heavy saga workloads do not
+        // block reader-side probes. The writers (MarkCommittedAsync /
+        // MarkAbortedAsync / ForgetAsync) perform their in-memory dict
+        // mutation AND the revision bump synchronously before their
+        // first await (state.WriteStateAsync), so an interleaved probe
+        // observes a self-consistent (dict, revision) pair: a pre-bump
+        // revision corresponds to a pre-mutation dict, a post-bump
+        // revision to a post-mutation dict. The persisted long is
+        // value-typed and aligned, so the read is JIT-atomic on every
+        // supported runtime architecture; the surrounding Task
+        // continuation establishes the memory barrier needed to see
+        // the most recent committed write.
+        return Task.FromResult(state.State.DecisionsRevision);
     }
 
     /// <inheritdoc />
@@ -279,6 +333,21 @@ internal sealed class TxRegistryGrain(
 
         if (changed)
         {
+            // Bump the decisions revision whenever the Decisions map
+            // itself mutated (legacy zero-retention drop OR a physical
+            // tombstone prune). Other deltas in this method (pure
+            // Participants/Arrivals/Expected removals or a
+            // first-tombstone insert into ForgottenAt) do not change
+            // the readable Decisions surface and do not need to invalidate
+            // the reader-side snap1. The local also feeds the catch
+            // block's rollback.
+            var revisionBumped = droppedDecision
+                || (pruned.Tombstones is { Count: > 0 });
+            var prevRevision = state.State.DecisionsRevision;
+            if (revisionBumped)
+            {
+                state.State.DecisionsRevision = prevRevision + 1;
+            }
             try
             {
                 await state.WriteStateAsync();
@@ -321,6 +390,10 @@ internal sealed class TxRegistryGrain(
                     {
                         state.State.SnapshotPins[pinId] = pin;
                     }
+                }
+                if (revisionBumped)
+                {
+                    state.State.DecisionsRevision = prevRevision;
                 }
                 throw;
             }

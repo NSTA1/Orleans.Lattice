@@ -81,6 +81,15 @@ The activation path therefore tolerates any combination of:
 
 - A fresh leaf with no snapshot and no WAL entries past the
   checkpoint (zero-cost replay).
+- A fresh leaf (`ProjectionCheckpointOffset` = -1, the "nothing
+  applied" sentinel) joining a WAL partition already populated by
+  sibling leaves. The fall-off-log detector does not apply its
+  replay budget to the sentinel because the per-leaf range filter
+  inside the materialiser drops every WAL entry that falls outside
+  this leaf's `[LowKeyInclusive, HighKeyExclusive)` ownership
+  range, so the cost of the tail replay is bounded by the leaf's
+  own range, not by the WAL head. The trim trigger is also a no-op
+  for the sentinel: there is no projection state to lose.
 - A leaf whose snapshot is older than the persisted checkpoint
   (snapshot ignored, tail replay handles it).
 - A leaf whose snapshot is newer than the persisted checkpoint and

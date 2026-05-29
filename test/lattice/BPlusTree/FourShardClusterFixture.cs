@@ -92,6 +92,24 @@ public sealed class FourShardClusterFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // Pin DigestCoalescingWindowMs = 0 at the silo level.
+            //
+            // This fixture serves a large body of pre-coalescing-era
+            // integration tests that issue synchronous
+            // read-after-write digest oracles (e.g.
+            // GetLeafProjectionDigestAsync immediately after SetAsync).
+            // With the library default of 5 ms the parent's chained
+            // digest is read before the leaf's one-shot publish timer
+            // fires, causing those oracles to observe a pre-mutation
+            // aggregate. Tests that genuinely need to exercise the
+            // coalescing shape (publish-deferred-then-fires invariants)
+            // use the dedicated CoalescingClusterFixture instead.
+            //
+            // ConfigureLattice (no tree name) uses ConfigureAll which
+            // applies to every named options instance the resolver
+            // pulls from IOptionsMonitor; this is the correct seam to
+            // override the silo's default before any per-tree register.
+            siloBuilder.ConfigureLattice(o => o.DigestCoalescingWindowMs = 0);
             siloBuilder.UseInMemoryReminderService();
         }
     }

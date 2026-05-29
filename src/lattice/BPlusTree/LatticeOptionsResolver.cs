@@ -228,7 +228,19 @@ internal sealed class LatticeOptionsResolver(
             CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,
             CompactionShardTickInterval = effectiveTickInterval,
             CompactionLeafBatchSize = effectiveLeafBatchSize,
+            DirtyLeafFlushIntervalMs = baseOptions.DirtyLeafFlushIntervalMs,
             MaintainProjectionDigest = maintainDigest,
+            // c2-xxix bugfix: the resolver previously dropped this
+            // field, so every leaf grain observed the
+            // ResolvedLatticeOptions default (0 = synchronous publish)
+            // regardless of what the operator or bench configured. The
+            // c2-xxviii coalescing path therefore never fired on Azure
+            // - the apparent win in the c2-xxviii memo (digest p50
+            // 13ms -> 0.00ms) was misattribution. The leaf clamps
+            // this to 0 anyway when MaintainProjectionDigest resolves
+            // to false. See LatticeOptionsResolverPropagationGuardTests
+            // for the regression gate.
+            DigestCoalescingWindowMs = baseOptions.DigestCoalescingWindowMs,
         };
     }
 

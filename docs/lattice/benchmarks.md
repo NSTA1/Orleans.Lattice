@@ -87,24 +87,31 @@ A few commonly-needed variants:
 
 ## Scenarios
 
-The suite ships fourteen scenarios spanning five lattice-usage profiles plus
-a micro-benchmark control. A condensed table is reproduced below; the
+The suite ships **eighteen** scenarios spanning seven lattice-usage profiles
+plus a micro-benchmark control. A condensed table is reproduced below; the
 authoritative list with per-scenario knobs is in
 [`benchmark/benchmark-scenarios.md`](../../benchmark/benchmark-scenarios.md).
 
-| Profile             | Example scenario id              | What it stresses                                          |
-|---------------------|----------------------------------|-----------------------------------------------------------|
-| Micro               | `microbench`                     | `ILattice` algorithm cost, no Orleans dispatch            |
-| Write-heavy random  | `current-state-no-replication`   | Steady-state per-vehicle current-state overwrites         |
-| Write-heavy random  | `skewed-key-shard-splits`        | Adaptive shard splitting under skewed keys                |
-| Write-heavy ordered | `event-log-with-ttl`             | Append-only event-log keyspace + TTL eviction             |
-| Read-heavy          | `read-heavy-random`              | 95:5 read:write, random key distribution                  |
-| Read-write mix      | `read-write-mix-random`          | 50:50 mix, random keys (YCSB-A shape)                     |
-| Replication         | `current-state-single-peer`      | Current-state tree, single-peer replication               |
-| Replication         | `bidirectional-replication`      | Two-cluster bidirectional replication                     |
-| Replication chaos   | `replication-backpressure`       | Backpressure / catch-up under sender pause                |
-| Replication chaos   | `receiver-crash`                 | Receiver crash mid-stream, recovery cost                  |
-| Replication control | `observer-no-peer`               | Observer-off control paired with `current-state-single-peer` |
+| Profile             | Example scenario id                          | What it stresses                                          |
+|---------------------|----------------------------------------------|-----------------------------------------------------------|
+| Micro               | `microbench`                                 | `ILattice` algorithm cost, no Orleans dispatch            |
+| Write-heavy random  | `current-state-no-replication`               | Steady-state per-vehicle current-state overwrites         |
+| Write-heavy random  | `skewed-key-shard-splits`                    | Adaptive shard splitting under skewed keys                |
+| Write-heavy ordered | `event-log-with-ttl`                         | Append-only event-log keyspace + TTL eviction             |
+| Read-heavy          | `read-heavy-random`                          | 95:5 read:write, random key distribution                  |
+| Read-heavy          | `read-heavy-ordered`                         | 95:5 read:write, sequential `ScanKeysAsync` walk          |
+| Read-write mix      | `read-write-mix-random`                      | 50:50 mix, random keys (YCSB-A shape)                     |
+| Read-write mix      | `read-write-mix-ordered`                     | 50:50 mix, sequential `ScanKeysAsync` walk                |
+| Durable WAL         | `current-state-no-replication-azuretable`    | Same write topology with Azure Table WAL durable storage  |
+| Atomic writes       | `atomic-write`                               | Sustained `SetManyAtomicAsync` saga throughput            |
+| Atomic writes       | `atomic-write-replication`                   | Two-cluster bidirectional atomic-saga visibility          |
+| Replication         | `current-state-single-peer`                  | Current-state tree, single-peer replication               |
+| Replication         | `bidirectional-replication`                  | Two-cluster bidirectional replication                     |
+| Replication         | `bidirectional-replication-azuretable`       | Two-cluster bidirectional replication with Azure Table WAL |
+| Replication chaos   | `replication-backpressure`                   | Backpressure / catch-up under sender pause                |
+| Replication chaos   | `receiver-crash`                             | Receiver crash mid-stream, recovery cost                  |
+| Replication control | `observer-no-peer`                           | Observer-off control paired with `current-state-single-peer` |
+| Replication control | `replication-key-filter`                     | Per-key replication filter cost vs no-filter baseline      |
 
 ## Interpreting results
 
@@ -198,9 +205,18 @@ workload filter (full suite), in `benchmark/scenarios/microbench.env`.
 
 The available workload method names are listed by running
 `./benchmark.ps1 microbench -Workloads '*'` and reading the BDN summary
-table; representative examples include `PointWrite`, `PointRead`,
-`BulkLoad`, `Mixed_70R_30W`, `SetMany_4Shards`, `KeyScan_PageOver4Shards`,
-`SetManyAtomic`, `PointRead_AtomicTreeIdle`.
+table. The suite currently ships 24 `[Benchmark]` methods covering point
+reads / writes (`PointRead`, `PointWrite`, `PointReadWithVersion`,
+`PointExists`), multi-key reads (`PointGetMany`, `PointGetMany_BatchSize`
+parameterised over batch sizes 1-64), bulk and multi-key writes
+(`BulkLoad`, `SetMany_4Shards`, `Mixed_70R_30W`), key/range scans
+(`KeyScan_PageOver4Shards`), deep- and deeper-tree variants of the point
+and bulk paths, atomic-write sagas (`SetManyAtomic`, `SetManyAtomic_4Shards`,
+`SetManyAtomic_Concurrent` parameterised over concurrency 1-64),
+atomic-tree reads (`PointRead_AtomicTreeIdle`,
+`PointRead_AtomicTreeWithActiveSaga`), WAL-encoder microbenchmarks
+(`WalEncodeBatch_AzureTable`), and the replication ship-envelope
+microbenchmarks (`ShipTypedEnvelope`, `ShipFramingOnly`).
 
 ### Per-method allocation and CPU profiling
 

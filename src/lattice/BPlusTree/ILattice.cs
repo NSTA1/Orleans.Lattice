@@ -480,6 +480,35 @@ public interface ILattice : IGrainWithStringKey
     Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Pre-activates every <see cref="IShardRootGrain"/> for this tree so the
+    /// first hot-path write does not pay first-touch Orleans activation cost
+    /// (placement-directory round-trip, grain-storage <c>ReadStateAsync</c>,
+    /// constructor execution) inline with caller latency. Resolves routing
+    /// once, enumerates the physical shard indices from the current
+    /// <see cref="ShardMap"/>, and issues a bounded-concurrency fan-out of
+    /// the cheapest read-only probe on each shard root (currently
+    /// <see cref="IShardRootGrain.IsDeletedAsync"/>). Returns once every probe
+    /// has completed.
+    /// <para>
+    /// Idempotent and safe to call repeatedly: re-activating an already-live
+    /// shard root is a placement-directory lookup plus a single
+    /// in-activation field read. Failures during warm-up are propagated as
+    /// an <see cref="AggregateException"/> via <c>Task.WhenAll</c>; the
+    /// caller decides whether to fail-fast or proceed with a partially-warm
+    /// tree.
+    /// </para>
+    /// <para>
+    /// Intended as an operational hook for ingest gateways and benchmark
+    /// silos that need a non-zero warm-start: call after the silo has
+    /// reported ready but before the first external write lands, so the
+    /// cold-start placement-directory storm is absorbed while the silo is
+    /// idle rather than against producer-driven flush concurrency.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the warm-up fan-out before the next shard probe is dispatched. In-flight probes are not cooperatively cancelled.</param>
+    Task WarmUpAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
     /// for the physical shard at <paramref name="shardIndex"/>. Used by
     /// operators and chaos tests to detect cross-silo divergence the

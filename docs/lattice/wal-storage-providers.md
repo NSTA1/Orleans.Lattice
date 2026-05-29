@@ -177,16 +177,18 @@ The activation seam itself - `IWalStorageProvider.ReconcileAsync` - ships with a
 - **Recovery**: `GetHighestOffsetAsync` resolves in **one point read** of the shard's `TAIL` row - O(1) regardless of log length. `GetLowestOffsetAsync` walks the manifest partition forward until it finds a non-empty batch partition, so its cost is O(trimmed batches with surviving manifest rows), typically 0 outside the trim hot path.
 - **Reads**: `ReadAsync` walks the manifest partition in ascending start-offset order, then streams the matching batch partitions' entry rows. Paging is server-side; the provider yields entries lazily through `IAsyncEnumerable<WalEntry>` so a caller that only needs the first N entries pays for one Azure Tables page per overlapping batch.
 - **Trim**: chunked delete in 100-action transactions with `ETag.All` (unconditional) per batch partition, plus a per-batch manifest-row delete in commit order. A crash mid-trim leaves a contiguous live tail and a stale prefix; the next trim resumes from the new head. `TAIL` is never moved back by trim.
-- **Concurrency**: instances are safe for concurrent calls across distinct shards. Concurrent calls into the same shard land in distinct batch partitions during phase 1 (no contention) and serialise through the per-shard phase-2 worker for phase 2. With the default `WalMaxPendingBatches = 1` only one `AppendBatchAsync` is in flight per shard.
+- **Concurrency**: instances are safe for concurrent calls across distinct shards. Concurrent calls into the same shard land in distinct batch partitions during phase 1 (no contention) and serialise through the per-shard phase-2 worker for phase 2. With the v6.0.1 default `WalMaxPendingBatches = 8` up to eight `AppendBatchAsync` calls can be in flight per shard; the worker's phase-2 coalescing window collapses overlapping commits into one Azure-Tables transaction.
 - **Per-call allocations**: percent-encoded tree-id segments are cached process-wide so a repeated tree id pays the encode cost exactly once. The hot path (`AppendEncodedBatchAsync`) materialises the row payload by copying each `ArraySegment<byte>` into a freshly-owned `byte[]` for the entity (the segment's backing buffer is pooled upstream by the WAL grain) and allocates a single `List<TableTransactionAction>` sized to `entries.Count` for the batch. The legacy `AppendBatchAsync` overload additionally reuses a single `ArrayBufferWriter<byte>` across every entry in the batch for the per-entry encode.
 
 #### Phase-2 pipelining
 
 Setting `AzureTableWalStorageOptions.PipelinePhaseTwoCommits = true` opts the provider into a **pipelined phase-2** mode in which `AppendBatchAsync` returns as soon as the **previous** batch's phase-2 commit lands, rather than waiting for the **current** batch's own phase-2. Phase 0 (candidate-row stamp) and phase 1 (entry-row transactional batch) remain synchronous and durable on every call, so a crash at any point still produces a state the activation-time reconciler can roll forward or roll back deterministically. Pipelining only changes when the caller of the *current* `AppendBatchAsync` learns that phase-2 succeeded - it does not relax atomicity, ordering, or recovery.
 
-The mode is off by default and is purely a throughput-vs-latency knob:
+**As of v6.0.1 the default is `PipelinePhaseTwoCommits = true`** (the operating-point default selected by the throughput campaign). The mode is now opt-out rather than opt-in; hosts that need the pre-v6.0 strict-serial-phase-2 behaviour (phase-2 failure surfaces on the failing call rather than the next one) set it back to `false` explicitly. The default flip is paired with `PhaseTwoCoalescingWindow = 5 ms` (also flipped in v6.0.1) so the worker's 49-row coalescing window actually engages under burst load instead of committing one-row transactions every call.
 
-| Property | Default | Pipelined |
+The mode is purely a throughput-vs-latency knob:
+
+| Property | Pre-v6.0.1 / opt-out (`= false`) | v6.0.1 default / pipelined (`= true`) |
 |---|---|---|
 | Caller-visible append latency | own phase-0+1+2 | own phase-0+1 + previous phase-2 |
 | Phase-2 commit ordering on a shard | strict ascending start-offset | strict ascending start-offset (unchanged) |
@@ -230,7 +232,7 @@ A representative single-silo Azurite measurement (current-state-no-replication s
 Two practical rules follow:
 
 - Enable pipelining only on backends that scale write concurrency (e.g. real Azure Tables with multiple WAL shards spreading across partitions). On a single-writer backend - Azurite, a single-shard configuration, or any WAL whose effective write width is one - pipelining can amplify saturation rather than relieve it.
-- Treat `PipelinePhaseTwoCommits` as a per-deployment knob, not a default. Validate it with the workload's actual sustained offered rate against the actual backend; the win regime is bounded both above and below.
+- **As of v6.0.1 the default is `PipelinePhaseTwoCommits = true`** because the throughput campaign measured a large, sustained win at the Azure-Tables operating point - the single highest-impact entry on the campaign's library-default-flip ladder - with the recovery contract unchanged and failures still sticky on the next call. Hosts running against a single-writer backend (Azurite, single-shard configurations, or any WAL whose effective write width is one) should explicitly opt **out** (`PipelinePhaseTwoCommits = false`) - the table above's "past knee" row applies. The same rule covers any host that wants the pre-v6.0 behaviour where a phase-2 failure surfaces on the failing call rather than the next one.
 
 #### Eliminating the phase-0 candidate row
 
@@ -253,6 +255,33 @@ The reconciler always performs both scans when the flag is on, so a silo started
 The mode is opt-in for the same reason as `PipelinePhaseTwoCommits`: it is a change in the recovery contract, not just a perf tweak. Bake it into a representative workload before defaulting it on per deployment.
 
 The `benchmark/azure-throughput/` harness exposes this flag via the `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` environment variable so the same single-silo, real-Azure-Tables deployment can drive both arms of an A/B run with no code change. See `benchmark/azure-throughput/README.md` for the A/B runbook.
+
+#### Retry-attempt observability
+
+The provider attaches a per-retry pipeline policy (`RetryAttemptTrackingPolicy`) to every `TableServiceClient` it constructs from `ConnectionString`, `ServiceUri` + credential, or `ServiceUri` + shared-key. The policy increments the counter `orleans.lattice.provider.retry.attempts` exactly once per retry attempt the Azure SDK performs, tagged with the HTTP status code that triggered the retry (or `0` for a transport-level failure with no HTTP exchange). The counter is purely additive - it sits alongside the existing `orleans.lattice.provider.retry.exhausted` counter, which only fires when the SDK gives up. Together the two counters separate two distinct failure shapes:
+
+| Counter | Fires when | Hot-path attribution |
+|---|---|---|
+| `orleans.lattice.provider.retry.exhausted` | The SDK has burned its retry budget and is about to surface an exception. | Sustained throttling at the partition / account ceiling. |
+| `orleans.lattice.provider.retry.attempts` | The SDK has decided to retry an attempt, regardless of the eventual outcome. | Transient throttling / 503 / 429 storms whose retries ultimately succeed - the canonical fingerprint of wall-time inflation while server-timing stays low. |
+
+The policy is registered at `HttpPipelinePosition.PerRetry` **after** the host's `ConfigureClientOptions` callback runs, so a host that customises the retry policy cannot accidentally drop the observability hook. In pre-built `ServiceClient` mode the provider returns the host-supplied client verbatim and does not attach the policy; hosts using that path can opt in by calling `clientOptions.AddPolicy(RetryAttemptTrackingPolicy.Instance, HttpPipelinePosition.PerRetry)` themselves before constructing the client they hand to the provider. The counter's cardinality is intentionally bounded to the small set of HTTP status codes the SDK surfaces on the WAL hot path; it deliberately omits tree / shard tags, because per-shard failure attribution is already covered by `orleans.lattice.provider.retry.exhausted`.
+
+#### Retry-budget tuning
+
+The provider surfaces five nullable knobs on `AzureTableWalStorageOptions` that map straight onto `TableClientOptions.Retry`. All default to `null`, which leaves the Azure SDK defaults in place (4 attempts, 0.8 s base delay, 60 s cap, 100 s per-attempt deadline, exponential backoff); set any subset of them to bound the WAL hot path's per-call retry budget without surrendering the SDK's transient-fault classification.
+
+| Option | Maps to | SDK default | Typical Phase-C value |
+|---|---|---|---|
+| `RetryMaxAttempts` | `Retry.MaxRetries` (retries after the initial attempt) | `3` | `1` or `2` to clip long backoff trains |
+| `RetryDelay` | `Retry.Delay` (base backoff) | `0.8 s` | `40 ms` – `100 ms` to keep the first retry inside a single Orleans turn |
+| `RetryMaxDelay` | `Retry.MaxDelay` (per-attempt cap) | `60 s` | `400 ms` – `1 s` to bound the worst-case backoff |
+| `RetryNetworkTimeout` | `Retry.NetworkTimeout` (per-attempt deadline) | `100 s` | `2 s` – `10 s` so a stuck request cannot park a WAL slot indefinitely |
+| `RetryMode` | `Retry.Mode` | `Exponential` | usually unchanged |
+
+The knobs are applied to `clientOptions.Retry` **before** the host's `ConfigureClientOptions` callback runs, so a host that wants final say can override any of them inside that callback (or replace `clientOptions.Retry` wholesale). The provider's `Validate()` rejects negative values, `RetryDelay > RetryMaxDelay`, and a non-positive `RetryNetworkTimeout`. In pre-built `ServiceClient` mode the knobs are ignored: the host already owns the `TableClientOptions.Retry` on the client it constructed.
+
+The motivation is the diagnostic finding that the WAL hot path's wall-time p99 sat 5–100x above Azure Tables' server-timing p99 - the canonical signature of a retry storm whose retries ultimately succeed. The `orleans.lattice.provider.retry.attempts` counter from the observability section above is the diagnostic that tells operators whether to reach for these knobs, and `RetryNetworkTimeout` in particular is the per-attempt deadline budget that prevents a single stuck request from holding a WAL slot for the full SDK default of 100 s.
 
 ## Testing
 

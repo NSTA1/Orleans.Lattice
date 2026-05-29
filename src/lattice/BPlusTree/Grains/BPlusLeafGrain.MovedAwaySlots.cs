@@ -110,7 +110,7 @@ internal sealed partial class BPlusLeafGrain
         await PersistAsync();
 
 #if LATTICE_DIAG
-        entriesCount={Cache.Count}
+        DiagSink.Write($"[DIAG moved-away-slots] gid={context.GrainId} entriesCount={Cache.Count}");
 #endif
     }
 

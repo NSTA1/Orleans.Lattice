@@ -1,3 +1,5 @@
+using Orleans.Concurrency;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -77,6 +79,69 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// snapshot's wall-clock moment".
     /// </summary>
     Task<Dictionary<Guid, TxStatus>> SnapshotAsync();
+
+    /// <summary>
+    /// Atomically captures the registry's
+    /// <see cref="SnapshotAsync"/> result together with the matching
+    /// <see cref="GetDecisionsRevisionAsync"/> reading, in a single
+    /// turn-serialised call. Used by reader-side double-checked
+    /// retries in <c>LatticeGrain</c> to feed the cheap revision-probe
+    /// stability check without the inter-call skew that a sequential
+    /// <c>(SnapshotAsync, GetDecisionsRevisionAsync)</c> pair would
+    /// admit (a writer's turn can interleave between the two calls,
+    /// producing a snapshot whose dict reflects revision <c>N</c>
+    /// alongside a probe reading <c>N+1</c>).
+    /// </summary>
+    Task<TxRegistrySnapshot> SnapshotWithRevisionAsync();
+
+    /// <summary>
+    /// Cheap monotonic-revision probe paired with
+    /// <see cref="SnapshotAsync"/>. The returned <see cref="long"/>
+    /// changes (strictly increases, by an unspecified amount) on every
+    /// mutation of the registry's recorded-decisions map; two probe
+    /// values <c>v1</c> and <c>v2</c> taken before and after an
+    /// arbitrary work window with <c>v1 == v2</c> are sufficient
+    /// evidence that <em>no</em> decision mutation occurred during
+    /// the window. Reader-side fast paths in <c>LatticeGrain</c>
+    /// (e.g. the double-checked retry in
+    /// <c>GetManyAsyncCore</c> / <c>CountAsync</c>) use this to replace
+    /// the snap2 dictionary fetch of the double-checked retry with a
+    /// cheap version probe: when <c>v1 == v2</c> the snap1 dictionary
+    /// is provably still authoritative and the second dictionary
+    /// serialization is elided.
+    /// <para>
+    /// Multi-silo safety: the revision is persisted as part of the
+    /// registry's grain state and is observed atomically with each
+    /// decision mutation under the registry's single-turn token, so a
+    /// reader on any silo issuing this probe gets the same authoritative
+    /// view (the probe is still a grain RPC to the single-activation
+    /// registry; the saving is the elided dictionary payload, not the
+    /// RPC turn itself).
+    /// </para>
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so the probe
+    /// bypasses the registry's per-turn token entirely. Under heavy
+    /// saga workloads the registry's main RPCs
+    /// (<c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c> /
+    /// <c>ForgetAsync</c>) hold the turn for the duration of their
+    /// state-write await; without interleave the probe queues behind
+    /// every in-flight saga decision, defeating the whole point of the
+    /// cheap-probe optimisation. Interleave is safe because the writer
+    /// performs the in-memory Decisions mutation AND the revision bump
+    /// synchronously before its first await
+    /// (<c>state.WriteStateAsync()</c>), so a probe that observes the
+    /// post-bump revision necessarily also observes the post-mutation
+    /// in-memory dictionary; conversely a probe that interleaves
+    /// before the writer started its turn observes both the pre-bump
+    /// revision and the pre-mutation dict. There is no observable
+    /// window where the two diverge. Aligned <see cref="long"/> reads
+    /// are JIT-atomic on every supported runtime architecture and the
+    /// surrounding Task continuation establishes the memory barrier
+    /// needed to see the most recent committed write.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<long> GetDecisionsRevisionAsync();
 
     /// <summary>
     /// Drops the recorded outcome for <paramref name="txid"/>. Called

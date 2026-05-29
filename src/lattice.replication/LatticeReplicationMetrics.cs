@@ -318,8 +318,24 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Canonical name of the <c>last_contact_seconds</c> observable gauge.
     /// Reports the wall-clock seconds elapsed since the local sender last
-    /// successfully contacted the named peer. <c>NaN</c> indicates the peer
-    /// has never been contacted.
+    /// successfully <em>shipped a non-empty batch</em> to the named peer.
+    /// <c>NaN</c> indicates the peer has never been contacted.
+    /// <para>
+    /// <b>Outbound-only by design.</b> Recorded exclusively by
+    /// <c>ReplicationShipperGrain.SendBatchAsync</c> after a peer accepts a
+    /// shipped batch; the receiver-side apply path does NOT update this
+    /// gauge. An idle but healthy link therefore sees the value climb
+    /// between local-write bursts (the pump tick has nothing to ship and
+    /// short-circuits before the success-recording call), and a peer that
+    /// only ever <em>receives</em> from this silo never records a contact
+    /// in the reverse direction. The bundled Grafana dashboard exposes
+    /// this gauge as "Per-peer last outbound ship (seconds ago)" so the
+    /// directional scope is explicit at the operator-visible surface. A
+    /// future enhancement to add an inbound twin (recorded by the
+    /// receiver-side apply path) is tracked on the replication roadmap;
+    /// the same instrument will gain a <c>direction</c> tag at that point
+    /// to keep outbound and inbound timelines distinguishable.
+    /// </para>
     /// </summary>
     public const string LastContactSecondsName = "orleans.lattice.replication.peer.last_contact_seconds";
 

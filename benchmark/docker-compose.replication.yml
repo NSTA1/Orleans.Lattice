@@ -61,6 +61,18 @@ services:
       # path symmetrically.
       Lattice__Wal__Provider: ${BENCH_WAL_PROVIDER:-memory}
       Lattice__Wal__TableName: ${BENCH_WAL_TABLE_NAME:-OrleansLatticeWal}
+      # Phase C / step C4 retry-budget tuning knobs on the replica silo too,
+      # so bidirectional-replication scenarios apply the same Azure SDK
+      # retry policy on both sides of the overlay.
+      Lattice__Wal__RetryMaxAttempts: ${BENCH_WAL_RETRY_MAX_ATTEMPTS:-}
+      Lattice__Wal__RetryDelayMs: ${BENCH_WAL_RETRY_DELAY_MS:-}
+      Lattice__Wal__RetryMaxDelayMs: ${BENCH_WAL_RETRY_MAX_DELAY_MS:-}
+      Lattice__Wal__RetryNetworkTimeoutMs: ${BENCH_WAL_RETRY_NETWORK_TIMEOUT_MS:-}
+      # Phase A horizontal-scaling sweep knobs on the replica silo too, so
+      # bidirectional-replication scenarios apply the same WAL fan-out
+      # configuration on both directions of the overlay.
+      Lattice__WalPartitions: ${BENCH_LATTICE_WAL_PARTITIONS:-}
+      Lattice__WalMaxPendingBatches: ${BENCH_LATTICE_WAL_MAX_PENDING_BATCHES:-}
       Replication__Enabled: ${BENCH_REPLICA_REPLICATION_ENABLED:-true}
       Replication__OriginClusterId: ${BENCH_REPLICA_CLUSTER_ID:-vfs-bench-replica}
       Replication__KeyPrefixes: ${BENCH_REPLICATION_KEY_PREFIXES:-}

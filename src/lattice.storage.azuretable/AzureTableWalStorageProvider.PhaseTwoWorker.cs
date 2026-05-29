@@ -56,6 +56,47 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     private long _highestCommittedEndOffset = -1L;
 
     /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagTree"/> tag forwarded to
+    /// <see cref="LatticeMetrics.ProviderCommitDuration"/> and
+    /// <see cref="LatticeMetrics.ProviderPhase2BatchSize"/>. Populated
+    /// from the production constructor; the test constructor passes an
+    /// empty string and the tag still publishes (Phase A diagnostics
+    /// are observability-only and tolerate an empty tree tag in
+    /// fixture-only scenarios).
+    /// </summary>
+    private readonly KeyValuePair<string, object?> _treeTag;
+
+    /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagShard"/> tag for the same
+    /// instruments as <see cref="_treeTag"/>.
+    /// </summary>
+    private readonly KeyValuePair<string, object?> _shardTag;
+
+    /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagPipelinePhaseTwo"/> tag
+    /// forwarded to the worker's
+    /// <see cref="LatticeMetrics.ProviderCommitDuration"/> and
+    /// <see cref="LatticeMetrics.ProviderRetryExhausted"/> records.
+    /// Same provider-singleton lifetime as the value on the parent
+    /// <see cref="AzureTableWalStorageProvider"/>; the worker simply
+    /// re-emits it so the phase-2 series carries the same option-state
+    /// dimension as phase-1, and the Phase A attribution sweep can
+    /// pivot both phases in a single dashboard query.
+    /// </summary>
+    private readonly KeyValuePair<string, object?> _pipelinePhaseTwoTag;
+
+    /// <summary>
+    /// Wall-time window the drain loop deliberately waits after the
+    /// first arrival but before submitting, so additional commits can
+    /// coalesce into the same Azure Tables transaction. Captured from
+    /// <see cref="AzureTableWalStorageOptions.PhaseTwoCoalescingWindow"/>
+    /// at construction time. <see cref="TimeSpan.Zero"/> preserves the
+    /// historical drain-on-first-signal behaviour (no delay). Always
+    /// non-negative (validated upstream).
+    /// </summary>
+    private readonly TimeSpan _coalescingWindow;
+
+    /// <summary>
     /// Production constructor. Captures the provider's table-client
     /// lookup and adapts it to the worker's narrower transaction-submit
     /// seam so the worker has no <see cref="TableClient"/> dependency
@@ -63,14 +104,22 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// </summary>
     public PhaseTwoWorker(
         Func<CancellationToken, ValueTask<TableClient>> tableProvider,
-        string manifestPartitionKey)
+        string manifestPartitionKey,
+        string treeId,
+        int shardIndex,
+        KeyValuePair<string, object?> pipelinePhaseTwoTag,
+        TimeSpan coalescingWindow)
         : this(
             async (actions, cancellationToken) =>
             {
                 var table = await tableProvider(cancellationToken).ConfigureAwait(false);
                 await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
             },
-            manifestPartitionKey)
+            manifestPartitionKey,
+            treeId,
+            shardIndex,
+            pipelinePhaseTwoTag,
+            coalescingWindow)
     {
     }
 
@@ -81,14 +130,52 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// <see cref="TableTransactionAction"/> sequence the worker would
     /// have sent to Azure Tables; its returned <see cref="Task"/>
     /// stand-in determines whether the worker treats the commit as
-    /// durable (completed) or faulted (faulted).
+    /// durable (completed) or faulted (faulted). Coalescing window
+    /// defaults to <see cref="TimeSpan.Zero"/>.
     /// </summary>
     internal PhaseTwoWorker(
         Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
         string manifestPartitionKey)
+        : this(submit, manifestPartitionKey, TimeSpan.Zero)
+    {
+    }
+
+    /// <summary>
+    /// Test-only constructor that lets a unit test choose an explicit
+    /// coalescing window in addition to substituting the submit seam.
+    /// </summary>
+    internal PhaseTwoWorker(
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
+        string manifestPartitionKey,
+        TimeSpan coalescingWindow)
+        : this(
+            submit,
+            manifestPartitionKey,
+            treeId: string.Empty,
+            shardIndex: 0,
+            // Test constructor: default the pipeline tag to false so
+            // emitted records still carry a stable, observable value.
+            // Production callers thread the provider's actual setting.
+            pipelinePhaseTwoTag: new KeyValuePair<string, object?>(
+                LatticeMetrics.TagPipelinePhaseTwo, false),
+            coalescingWindow)
+    {
+    }
+
+    private PhaseTwoWorker(
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
+        string manifestPartitionKey,
+        string treeId,
+        int shardIndex,
+        KeyValuePair<string, object?> pipelinePhaseTwoTag,
+        TimeSpan coalescingWindow)
     {
         _submit = submit;
         _manifestPartitionKey = manifestPartitionKey;
+        _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex);
+        _pipelinePhaseTwoTag = pipelinePhaseTwoTag;
+        _coalescingWindow = coalescingWindow;
         _arrivals = Channel.CreateUnbounded<PhaseTwoCommit>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -189,6 +276,27 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     _pending.Add(arriving);
                 }
 
+                // Coalescing window: when configured, wait a short
+                // bounded interval after the first arrival so any
+                // additional phase-2 commits queued during the
+                // window collapse into the same Azure Tables
+                // transaction. Gated on the buffer being below the
+                // per-transaction ceiling (no point waiting once 49
+                // commits are already queued) and on the window
+                // being positive (default Zero short-circuits to the
+                // historical drain-on-first-signal behaviour). The
+                // post-delay TryRead loop folds in arrivals that
+                // landed during the wait. OperationCanceledException
+                // from Task.Delay falls through to the outer catch.
+                if (_coalescingWindow > TimeSpan.Zero && _pending.Count < MaxBatchedManifestRows)
+                {
+                    await Task.Delay(_coalescingWindow, cancellationToken).ConfigureAwait(false);
+                    while (_arrivals.Reader.TryRead(out var late))
+                    {
+                        _pending.Add(late);
+                    }
+                }
+
                 while (_pending.Count > 0)
                 {
                     // Coalesce up to MaxBatchedManifestRows pending
@@ -241,6 +349,13 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         // commits is non-empty and sorted ascending by StartOffset by
         // construction (SortedSet.Min drains in ascending order).
         var highestEndOffset = commits[^1].EndOffsetInclusive;
+        // Phase A horizontal-scaling diagnostic: publish the coalesced
+        // batch size (number of phase-2 commits about to fold into one
+        // manifest transaction) before we issue the round-trip, so the
+        // histogram covers both committed and faulted batches. The
+        // matching duration histogram is recorded around the actual
+        // _submit call below.
+        LatticeMetrics.ProviderPhase2BatchSize.Record(commits.Count, _treeTag, _shardTag);
         try
         {
             var actions = new List<TableTransactionAction>((commits.Count * 2) + 1);
@@ -318,7 +433,20 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     }));
             }
 
-            await _submit(actions, cancellationToken).ConfigureAwait(false);
+            var phaseTwoStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await _submit(actions, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                var elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(phaseTwoStartTicks).TotalMilliseconds;
+                LatticeMetrics.ProviderCommitDuration.Record(elapsedMs,
+                    _treeTag,
+                    _shardTag,
+                    LatticeMetrics.PhasePhase2Tag,
+                    _pipelinePhaseTwoTag);
+            }
 
             _highestCommittedEndOffset = tailToPersist;
             for (var i = 0; i < commits.Count; i++)
@@ -344,8 +472,27 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 pending.Completion.TrySetException(ex);
             }
             _pending.Clear();
+            LatticeMetrics.ProviderRetryExhausted.Add(1,
+                _treeTag,
+                _shardTag,
+                LatticeMetrics.PhasePhase2Tag,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)));
         }
     }
+
+    /// <summary>
+    /// Maps a provider exception to a low-cardinality
+    /// <see cref="LatticeMetrics.TagStatus"/> tag value. The Azure
+    /// Tables SDK surfaces transient and exhausted retries as
+    /// <see cref="RequestFailedException"/>; everything else maps to
+    /// the catch-all <c>unknown</c> bucket so the tag's cardinality
+    /// stays bounded.
+    /// </summary>
+    private static string ResolveProviderStatusTag(Exception ex) => ex switch
+    {
+        RequestFailedException rfe => rfe.Status.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        _ => "unknown",
+    };
 
     /// <summary>
     /// Phase-2 commit work item. Carries the offsets the manifest row

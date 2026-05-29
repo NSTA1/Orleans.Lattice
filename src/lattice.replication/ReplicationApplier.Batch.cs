@@ -321,7 +321,18 @@ internal sealed partial class ReplicationApplier
                     continue;
                 }
 
-                if (!bootstrapMode && entry.Timestamp.CompareTo(runningHwm) <= 0)
+                // Phase D1c: saga prepare-phase entries
+                // (IsPrepared && AtomicBatchSize > 0) bypass BOTH the
+                // runningHwm dedup AND the causal-park gate below.
+                // See ReplicationApplier.ApplyAsync for the full
+                // rationale; the same conditions apply on the batched
+                // per-entry pass. Compute the flag once and reuse it
+                // for both gates.
+                var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
+
+                if (!bootstrapMode
+                    && !isPreparedAtomicBatch
+                    && entry.Timestamp.CompareTo(runningHwm) <= 0)
                 {
                     outcome = LatticeReplicationMetrics.OutcomeDedup;
                     continue;
@@ -341,7 +352,27 @@ internal sealed partial class ReplicationApplier
                 }
                 cacheReservedForCurrent = true;
 
-                if (HasCausalDependencies(entry))
+                // Phase D1c: saga prepare-phase entries
+                // (IsPrepared && AtomicBatchSize > 0) bypass the
+                // causal-park gate. The producer-side batched saga
+                // path (AtomicWriteGrain.ExecutePhaseAsync's parallel
+                // cross-leaf SetManyAsync) can stamp prepared writes
+                // with VectorClock frontiers whose entries point at
+                // sibling per-leaf clocks. Parking those entries
+                // produces a chicken-and-egg deadlock: the sibling
+                // prepared write that would advance localVc may be
+                // parked itself behind the very same VC, and neither
+                // drains until the matching terminal arrives - but the
+                // terminal is gated on every prepared write applying
+                // first. Bypass the park gate; the per-leaf
+                // AddPreparedMutation routes the entry into the
+                // pending-tx bucket where causal ordering across the
+                // saga's keys is irrelevant (the terminal flip is the
+                // single atomic-visibility transition). Idempotency on
+                // re-delivery is upheld by LwwValue.Merge inside
+                // AddPreparedMutation and the per-tx
+                // _recentlyTerminal dedup on the terminal mark.
+                if (!isPreparedAtomicBatch && HasCausalDependencies(entry))
                 {
                     if (cachedLocalVc is null || localVcDirty)
                     {

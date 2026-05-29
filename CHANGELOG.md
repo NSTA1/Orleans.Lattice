@@ -8,12 +8,7 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.0.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
-
-### Added
-
-- `AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath` - opt-in WAL throughput optimisation that skips the phase-0 candidate-row write on every `AppendBatchAsync` and shrinks the phase-2 transaction by one action. Off by default; orphan recovery is preserved by an additional batch-partition scan above `TAIL` in `ReconcileAsync`. See `docs/lattice/wal-storage-providers.md` for the downgrade-safety note.
-- `benchmark/azure-throughput/` - real-Azure Storage WAL throughput harness (two-container ACI deployment) brought into the benchmark family. Exposes `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` so the same single-silo harness can A/B the candidate-row elision optimisation against a real Azure Tables account. See `benchmark/azure-throughput/README.md` for the A/B runbook.
+Items merged into `main` after the v6.0.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 ### Candidate themes for a future major
 
@@ -22,6 +17,58 @@ Items merged into `main` after the v6.0.0 cut accumulate here under the `### Add
 - Migration guide (core roadmap **F-021**) to accompany any breaking changes.
 
 Outstanding work is tracked in [`src/lattice/roadmap.md`](src/lattice/roadmap.md) and [`src/lattice.replication/roadmap.md`](src/lattice.replication/roadmap.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.0.1] - 2026-05-29
+
+Minor release. **Backwards-compatible at the wire level.** Defaults flips on three configuration knobs lift the out-of-the-box throughput at the Azure-Tables operating point measured by the post-v6.0.0 throughput campaign; hosts that depend on the pre-v6.0.1 behaviour opt out explicitly per knob. One previously-deferred `Orleans.Lattice.Dashboards` rebuild surfaces 34 instruments that shipped without any operator-visible panel on v6.0.0.
+
+### Changed - configuration defaults (opt-out)
+
+- **`LatticeOptions.WalMaxPendingBatches`: `1` -> `8`.** The per-shard WAL grain's in-flight-batch cap. Raises the pipeline depth between the producer and the storage provider's flush envelope; pairs with the `PhaseTwoCoalescingWindow` flip so the worker's 49-row coalescing window has enough arrivals to engage. Hosts that depend on strict-serial-per-shard append shape opt out by setting `WalMaxPendingBatches = 1` explicitly.
+- **`LatticeOptions.DigestCoalescingWindowMs`: `0` -> `5` ms.** The leaf-side projection-digest publish window. Defers the cross-grain `OnChildDigestPublishedAsync` hop behind a one-shot grain timer; mutations arriving within the window collapse into one publish. The running `ProjectionHash` on persisted state still advances per-mutation, so cold-reactivation replay is bit-identical to the synchronous shape. Hosts that depend on the read-after-write digest invariant opt out by setting `DigestCoalescingWindowMs = 0`.
+- **`AzureTableWalStorageOptions.PhaseTwoCoalescingWindow`: `TimeSpan.Zero` -> `5 ms`.** The worker's first-arrival hold window before a phase-2 commit fires. Lets the worker coalesce multiple commits into one Azure-Tables transaction when arrivals overlap; pairs with `PipelinePhaseTwoCommits` and `WalMaxPendingBatches` so the upstream pipeline actually produces overlapping arrivals. Hosts that depend on commit-on-first-arrival opt out by setting `PhaseTwoCoalescingWindow = TimeSpan.Zero`.
+- **`AzureTableWalStorageOptions.PipelinePhaseTwoCommits`: `false` -> `true`.** Returns the caller as soon as the *previous* batch's phase-2 commit lands; the current batch's phase-2 runs asynchronously through the same per-shard worker. Phases 0 and 1 remain synchronous and durable, so the activation-time reconciler contract is unchanged - the only observable change is that a phase-2 failure surfaces on the *next* `AppendBatchAsync` rather than the failing one. Hosts that need failure-on-the-failing-call semantics (or that run against a single-writer backend like Azurite where overlapping writes contend rather than overlap) opt out by setting `PipelinePhaseTwoCommits = false`.
+
+**Not flipped on v6.0.1 (deferred).** `LatticeOptions.WalPartitions` remains at `1`. The throughput campaign measured the sweet spot at `8`, but the activation-time WAL replay loop on `BPlusLeafGrain` is pinned to a single partition today (`ReplayWalPartition = 0`), so raising the default would silently break the rebuild-from-WAL invariant a cold leaf reactivation depends on. Tracked on the core roadmap as **F-077 - Multi-partition WAL replay on leaf activation**; the default will be flipped to `8` in a follow-up `breaking`-labelled release after the multi-partition replay paths ship. See `docs/lattice/performance-single-silo.md` for the operator-visible caveat on the Layer 2 write-path benchmark cells.
+
+### Added - operator-visible surface
+
+- **34 new metrics surfaced in `Orleans.Lattice.Dashboards`.** The `CommitPath` dashboard gained 13 panels (SetAsync / SetManyAsync envelope p50/p95, per-stage sub-attribution for both, ShardRoot per-step, WAL append decomposition + batch shape + back-pressure, storage-provider phase-2 + retries, `leaf.commit.in_flight`, `WarmUpAsync`, digest-coalescing efficacy). The `AtomicWrites` dashboard gained 4 panels (per-phase saga durations, broadcast sub-attribution, per-key work vs serial-gap wait, fan-out size distribution). All 34 referenced metrics resolve via the existing drift-guard test.
+- **`orleans.lattice.leaf.digest.publishes` counter** tagged `tree` + `path` (`coalesced_scheduled` / `coalesced_skipped` / `coalesced_fired` / `inline` / `deactivation_flush`). Closes the behavioural-attribution gap for the `DigestCoalescingWindowMs` flip - operators can now confirm the coalescing path is actually firing on Azure rather than silently regressing to the pre-c2-xxix resolver-drop shape.
+- **`AzureTableWalStorageOptions.DefaultPhaseTwoCoalescingWindow`** and **`DefaultPipelinePhaseTwoCommits`** static-readonly fields so hosts can reference the shipping defaults symbolically. Each is pinned by a dedicated unit test (`PhaseTwoCoalescingWindow_defaults_to_five_ms`, `PipelinePhaseTwoCommits_default_value_is_true`).
+
+### Added - WAL throughput
+
+- **`AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath`** - opt-in WAL throughput optimisation that skips the phase-0 candidate-row write on every `AppendBatchAsync` and shrinks the phase-2 transaction by one action. Off by default; orphan recovery is preserved by an additional batch-partition scan above `TAIL` in `ReconcileAsync`. See `docs/lattice/wal-storage-providers.md` for the downgrade-safety note.
+
+### Added - benchmark harness
+
+- **`benchmark/azure-throughput/`** - real-Azure Storage WAL throughput harness (two-container ACI deployment) brought into the benchmark family. Exposes `BENCH_WAL_ELIMINATE_CANDIDATE_ROW`, `BENCH_WAL_PARTITIONS`, `BENCH_WAL_MAX_PENDING_BATCHES`, `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS`, `BENCH_FLUSH_CONCURRENCY`, `BENCH_SHARD_COUNT`, `BENCH_FLUSH_MS`, `BENCH_DIGEST_COALESCING_WINDOW_MS`, and `BENCH_RESPONSE_TIMEOUT_SEC` so the same single-silo harness can A/B every defaults-flip candidate against a real Azure Tables account. The bundled ladder driver and Phase-A attribution reporter were brought into this branch alongside the harness.
+
+### Changed - documentation
+
+- **`docs/lattice/wal-storage-providers.md`** updated for both Azure-Tables default flips: the `PipelinePhaseTwoCommits` section is now framed as "as of v6.0.1 the default is `true`" with the opt-out conditions enumerated, and the comparison table relabels "Default" / "Pipelined" as "Pre-v6.0.1 / opt-out (`= false`)" / "v6.0.1 default / pipelined (`= true`)".
+- **`docs/lattice/metrics.md`** documents the new `orleans.lattice.leaf.digest.publishes` counter including the c2-xxix regression signature it catches, and the expanded scope of the `CommitPath` and `AtomicWrites` dashboards.
+- **`docs/lattice/performance-single-silo.md`** carries the explicit caveat that the Layer 2 write-path cells were measured at `WalPartitions = 8` (not the shipping `1`) - the cells should be read as "what the silo will deliver once multi-partition WAL replay ships", not "what you get out of the box on this branch".
+- **`docs/lattice/wal.md`** notes the `PhaseTwoCoalescingWindow` + `PipelinePhaseTwoCommits` flips as the new default operating point.
+- Bundled Grafana dashboard panel **`Per-peer last contact (seconds ago)`** in `OrleansLatticeReplication.json` renamed to **`Per-peer last outbound ship (seconds ago)`** and gained an inline description explaining the outbound-only scope and the empty-tick climb behaviour, after operator-reported confusion on the MultiSiteManufacturing sample. The corresponding gauge docstring on `LatticeReplicationMetrics.LastContactSecondsName` was expanded with the same directional-scope explanation. A bidirectional rework (inbound twin + liveness probe) is tracked on the replication roadmap as **R-121**.
+
+### Added - roadmap
+
+- **`F-077 - Multi-partition WAL replay on leaf activation`** added to the core roadmap (prerequisite for raising the `WalPartitions` default to `8`).
+- **`R-121 - Bidirectional peer.last_contact_seconds (inbound twin + liveness probe)`** added to the replication roadmap with a full scope estimate covering both the outbound liveness probe and the receiver-side inbound recording.
+
+### Fixed
+
+- **CS9107 warning on `AtomicWriteGrain`.** The primary-constructor `context` parameter was being captured into the enclosing type for one call site while also being passed to the base `TtlGrain` constructor. The captured-and-base-passed double-use is replaced with a single `GrainContext.ActivationServices` call. No behavioural change; warning count drops from 1 to 0.
+
+### Migration notes
+
+- **No wire-format or persisted-state changes.** v6.0.1 is a drop-in upgrade from v6.0.0 with the four defaults-flip caveats above.
+- **Hosts that depend on the pre-v6.0.1 defaults** explicitly opt out per knob - no other action required.
+- **Hosts running against a single-writer WAL backend** (Azurite, single-shard configurations, or any WAL whose effective write width is one) should explicitly set `PipelinePhaseTwoCommits = false` because the table in `docs/lattice/wal-storage-providers.md` shows that mode is bounded by backend write concurrency.
 
 ---
 
@@ -127,5 +174,6 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.0.1...HEAD
+[6.0.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/NSTA1/Orleans.Lattice/compare/lattice-v5.1.0...v6.0.0

@@ -131,7 +131,7 @@ internal sealed partial class ShardRootGrain
             OperationId = operationId,
             LogicalTreeId = logicalTreeId,
         };
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <inheritdoc />
@@ -153,7 +153,7 @@ internal sealed partial class ShardRootGrain
         }
 
         sf.Phase = ShadowForwardPhase.Drained;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <inheritdoc />
@@ -174,7 +174,7 @@ internal sealed partial class ShardRootGrain
         }
 
         sf.Phase = ShadowForwardPhase.Rejecting;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 
     /// <inheritdoc />
@@ -191,6 +191,6 @@ internal sealed partial class ShardRootGrain
                 $"Shard '{context.GrainId.Key}' is participating in shadow-forward operation '{sf.OperationId}'; refused ClearShadowForwardAsync under different operationId '{operationId}'.");
 
         state.State.ShadowForward = null;
-        await state.WriteStateAsync();
+        await WriteShardStateAsync();
     }
 }

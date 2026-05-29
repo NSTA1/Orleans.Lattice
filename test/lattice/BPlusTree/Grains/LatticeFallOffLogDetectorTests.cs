@@ -115,13 +115,29 @@ public sealed class LatticeFallOffLogDetectorTests
     }
 
     [Test]
-    public async Task ClassifyAsync_with_nothing_applied_sentinel_respects_replay_budget()
+    public async Task ClassifyAsync_with_nothing_applied_sentinel_returns_TailReplay_even_when_gap_exceeds_budget()
     {
-        // Sentinel must still honour the replay-budget trigger: the
-        // detector classifies the gap (head - checkpoint) against
-        // MaxLeafReplayEntries, so a large WAL beyond the budget
-        // selects the configured recovery policy.
-        var (detector, _) = CreateDetector(head: 100, tail: 0);
+        // Reproduces the c2-vi production scenario (silo log 20260526-201857Z):
+        // a leaf that has just been created by a split races its own
+        // OnActivateAsync against the donor's SetCheckpointOffsetHintAsync.
+        // If the activation wins, the sibling reads
+        // ProjectionCheckpointOffset = -1 (default) against a shard
+        // WAL partition whose head has been pushed past 10 000 by
+        // sibling leaves' commits. With the prior logic, gap =
+        // head - (-1) blew past MaxLeafReplayEntries and the activation
+        // threw LeafProjectionStaleException, taking the leaf offline
+        // and cascading into Orleans 'Unable to create local activation'.
+        //
+        // The corrected contract: the replay-budget trigger only counts
+        // entries the leaf could plausibly have applied. The -1
+        // sentinel means "nothing applied, nothing in cache to lose",
+        // so the entry filter inside the materialiser (per-leaf range
+        // check) drops every pre-existence WAL entry on iteration -
+        // there is no projection state to recover, so the budget
+        // semantically does not apply. The classifier returns
+        // TailReplay and the materialiser handles bounding itself via
+        // ReplaySliceBudget on the read side.
+        var (detector, _) = CreateDetector(head: 50_000, tail: 0);
         var options = await BuildOptionsAsync(new LatticeOptions
         {
             MaxLeafReplayEntries = 10,
@@ -135,7 +151,36 @@ public sealed class LatticeFallOffLogDetectorTests
             options,
             CancellationToken.None);
 
-        Assert.That(decision, Is.EqualTo(FallOffLogDecision.Fail));
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplay));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_nothing_applied_sentinel_safe_against_trimmed_WAL()
+    {
+        // The trim trigger is a guard for leaves that previously
+        // applied state and would now lose it if the WAL has been
+        // trimmed past their checkpoint. A -1 sentinel means the
+        // leaf has nothing in cache: there is no projection state
+        // to lose, regardless of where the WAL tail sits. The
+        // classifier must therefore return TailReplay even when
+        // tail > 0, so a freshly-created sibling does not throw
+        // LeafProjectionStaleException simply because its sibling
+        // partition has been actively trimmed by background
+        // compaction (the c2-vi production scenario).
+        var (detector, _) = CreateDetector(head: 1000, tail: 100);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            ProjectionRebuildPolicy = ProjectionRebuildPolicy.Fail,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: -1,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplay));
     }
 
     [Test]

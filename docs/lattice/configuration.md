@@ -63,6 +63,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
+| [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 5 (measured sweet spot) | Yes |
 | [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
 | [`HotShardOpsPerSecondThreshold`](#hotshardopspersecondthreshold) | `int` | 200 | Yes |
 | [`HotShardSampleInterval`](#hotshardsampleinterval) | `TimeSpan` | 30 seconds | Yes |
@@ -90,6 +91,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
+| [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 8 | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 1 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 
@@ -180,6 +182,21 @@ siloBuilder.ConfigureLattice("debug-tree", o => o.DiagnosticsCacheTtl = TimeSpan
 ```
 
 This option can be changed freely at any time. The new TTL takes effect on the next `DiagnoseAsync` call.
+
+### `DigestCoalescingWindowMs`
+
+How long (in milliseconds) a `BPlusLeafGrain` defers a pending cross-grain projection-digest publish to its parent internal node, coalescing multiple per-mutation publishes into a single hop (default: `5` - the c2-xxviii measured sweet spot at the c2-iii operating point, a 27% drop in caller-visible `SetAsync` p50). When set to a positive value, the first dirty mutation arms a one-shot grain timer; subsequent mutations arriving within the window observe the pending timer and skip rescheduling, so N writes share one cross-grain publish to the parent. The leaf's persisted `ProjectionHash` still advances per-mutation (cold-reactivation replay invariant preserved); only the cross-grain publish to the parent is deferred.
+
+Coalescing is scoped to the per-write hot path (`SetAsync`, `SetManyAsync`, `DeleteAsync`, `DeleteRangeAsync`); structural events (leaf split, projection rebuild, saga terminal apply, tombstone-reap compaction, CRDT merge, checkpoint flush) bypass the window and publish synchronously so operator-tooling oracles (e.g. `RebuildLeafProjectionAsync` followed by `GetLeafProjectionDigestAsync`) observe post-publish state without a settle delay.
+
+Set to `0` to restore the synchronous-publish shape on every path - useful for tests that issue read-after-write digest oracles against a parent internal node within the same task continuation, or for operators whose downstream consumers depend on bit-exact synchronous publish timing.
+
+```csharp verify
+// Restore the synchronous-publish shape for a test tree
+siloBuilder.ConfigureLattice("test-tree", o => o.DigestCoalescingWindowMs = 0);
+```
+
+This option can be changed freely at any time. The new value takes effect on the next mutation on each leaf; pending timers from the prior value drain at the prior cadence.
 
 ### `EventStreamProviderName`
 
@@ -446,6 +463,16 @@ This option can be changed freely at any time. The new value takes effect on the
 ### `WalMaxBatchEntries`
 
 Maximum number of WAL entries the partition grain coalesces into a single storage flush (default: 100). Lower values reduce per-entry flush latency at the cost of throughput. Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
+
+This option can be changed freely at any time. The new value takes effect on the next batch boundary.
+
+### `WalMaxPendingBatches`
+
+Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 8, the measured Azure Tables Standard sweet spot at the c2-iii operating point). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle.
+
+Set to `1` to restore the historical single-in-flight shape (strict ordering against the provider; no pipeline depth). Most workloads on durable backing stores benefit from the default; the strict-ordering shape is useful only when targeting a provider whose ordering guarantees are weaker than per-request linearisability.
+
+The flush-cap-reached cutover backs off the calling task by awaiting the in-flight head, so the cap also acts as the natural back-pressure ceiling against caller fan-in. Raising the cap above what the storage provider can usefully serve in parallel degrades latency without improving throughput - more concurrent flushes compete for the same provider budget and grow each flush's slow-tail wait.
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 

@@ -129,6 +129,27 @@ public class LatticeOptions
     public int CompactionLeafBatchSize { get; set; } = DefaultCompactionLeafBatchSize;
 
     /// <summary>
+    /// Coalescing window (in milliseconds) for shard-root dirty-leaf marks.
+    /// Every routed <c>Delete</c> stamps the destination leaf into an
+    /// in-memory pending-marks map; a grain timer on the shard root drains
+    /// the map and calls <c>WriteStateAsync</c> exactly once per interval,
+    /// regardless of how many distinct leaves were dirtied. Snapshot and
+    /// drain calls from the compaction coordinator
+    /// (<c>GetDirtyLeavesSinceLastCompactionAsync</c> /
+    /// <c>ClearDirtyLeavesUpToAsync</c>) and clean deactivation also flush
+    /// pending marks, so persistence is best-effort-coalesced rather than
+    /// best-effort-lost.
+    /// <para>
+    /// Default <c>50 ms</c> trades at most one flush-interval of dirty
+    /// signal against eliminating the per-Delete storage write from the
+    /// shard-root hot path. Set to <c>0</c> to disable coalescing (every
+    /// first-call-per-leaf-per-window persists synchronously, matching
+    /// pre-U9h-B behaviour).
+    /// </para>
+    /// </summary>
+    public int DirtyLeafFlushIntervalMs { get; set; } = DefaultDirtyLeafFlushIntervalMs;
+
+    /// <summary>
     /// How long a soft-deleted tree is retained before its grains are permanently
     /// purged. During this window the tree is inaccessible (reads and writes throw
     /// <see cref="InvalidOperationException"/>), but its data still exists in storage
@@ -180,6 +201,13 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="CompactionLeafBatchSize"/> (64 leaves).</summary>
     public const int DefaultCompactionLeafBatchSize = 64;
+
+    /// <summary>
+    /// Default value for <see cref="DirtyLeafFlushIntervalMs"/> (50 ms).
+    /// Coalesces shard-root dirty-leaf marks into one <c>WriteStateAsync</c>
+    /// per window, removing the per-Delete storage write from the hot path.
+    /// </summary>
+    public const int DefaultDirtyLeafFlushIntervalMs = 50;
 
     /// <summary>
     /// Minimum effective value for <see cref="CompactionLeafBatchSize"/>
@@ -796,6 +824,32 @@ public class LatticeOptions
     public const bool DefaultMaintainProjectionDigest = true;
 
     /// <summary>
+    /// Coalescing window (in milliseconds) for leaf-side projection-digest
+    /// publishes to the parent internal node. When greater than zero, the
+    /// leaf defers the cross-grain <c>OnChildDigestPublishedAsync</c> hop
+    /// behind a one-shot grain timer; mutations arriving within the window
+    /// share a single publish, collapsing N per-call cross-grain hops into
+    /// one. The leaf's running <c>ProjectionHash</c> is persisted state and
+    /// digest consumers (replication shippers, replay coordinators) tolerate
+    /// staleness within the window because they re-poll periodically; the
+    /// digest is not used for read consistency of point queries.
+    /// <para>
+    /// Defaults to <see cref="DefaultDigestCoalescingWindowMs"/> (<c>5</c>,
+    /// the c2-xxviii measured sweet spot at the c2-iii operating point -
+    /// a 27% drop in caller-visible <c>SetAsync</c> p50 vs the synchronous
+    /// shape with no observable change to digest correctness). Set to
+    /// <c>0</c> to restore the historical synchronous-publish shape if a
+    /// consumer depends on the read-after-write digest invariant. The
+    /// resolver forces the window to <c>0</c> when
+    /// <see cref="MaintainProjectionDigest"/> is <c>false</c>.
+    /// </para>
+    /// </summary>
+    public int DigestCoalescingWindowMs { get; set; } = DefaultDigestCoalescingWindowMs;
+
+    /// <summary>Default value for <see cref="DigestCoalescingWindowMs"/> (<c>5</c>, c2-xxviii measured sweet spot).</summary>
+    public const int DefaultDigestCoalescingWindowMs = 5;
+
+    /// <summary>
     /// Number of WAL partitions per tree. Each partition is an independent
     /// per-shard append-only log; the foreground commit-log writer hashes
     /// the mutation key modulo this value to pick the partition. Defaults
@@ -857,16 +911,20 @@ public class LatticeOptions
     /// flush before being enqueued; this provides natural back-pressure
     /// under sustained burst load without changing the dense-offset
     /// invariant. Defaults to <see cref="DefaultWalMaxPendingBatches"/>
-    /// (1) - bit-identical to the original single-in-flight behaviour.
-    /// Raise to pipeline writer-side burst absorption against a
-    /// higher-latency durable provider. Must be at least <c>1</c>; the
-    /// registered options validator rejects non-positive values at
-    /// first-resolve time.
+    /// (8) - the measured Azure Tables Standard sweet spot at the
+    /// c2-iii operating point. Set to <c>1</c> for the historical
+    /// single-in-flight shape (strict ordering against the provider;
+    /// no pipeline depth). Raising the cap above what the storage
+    /// provider can usefully serve in parallel degrades latency without
+    /// improving throughput (more concurrent flushes compete for the
+    /// same provider budget and grow each flush's slow-tail wait). Must
+    /// be at least <c>1</c>; the registered options validator rejects
+    /// non-positive values at first-resolve time.
     /// </summary>
     public int WalMaxPendingBatches { get; set; } = DefaultWalMaxPendingBatches;
 
-    /// <summary>Default value for <see cref="WalMaxPendingBatches"/> (1, wire-compat).</summary>
-    public const int DefaultWalMaxPendingBatches = 1;
+    /// <summary>Default value for <see cref="WalMaxPendingBatches"/> (8, measured Azure Tables sweet spot).</summary>
+    public const int DefaultWalMaxPendingBatches = 8;
 
     /// <summary>
     /// Optional per-tree <see cref="IWalStorageProvider"/> resolver. When

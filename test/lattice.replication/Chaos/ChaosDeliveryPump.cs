@@ -28,7 +28,13 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
     private readonly string _treeName;
     private readonly TimeSpan _pollInterval;
     private readonly bool[,] _partitioned;
-    private readonly HybridLogicalClock[,] _cursors;
+    // Phase D1c: cursor storage migrated from HybridLogicalClock to
+    // ChangeFeedCursor (per-partition WAL offset). The HLC cursor
+    // shape silently dropped low-HLC entries arriving after higher-HLC
+    // entries on the same WAL partition under parallel cross-leaf
+    // appends; the offset cursor is monotonic-per-partition by
+    // construction and survives those interleavings.
+    private readonly ChangeFeedCursor[,] _cursors;
     private readonly Task[,] _tasks;
     private readonly CancellationTokenSource _cts = new();
     private readonly object _gate = new();
@@ -71,14 +77,14 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
 
         var n = fixture.SiteCount;
         _partitioned = new bool[n, n];
-        _cursors = new HybridLogicalClock[n, n];
+        _cursors = new ChangeFeedCursor[n, n];
         _tasks = new Task[n, n];
 
         for (var i = 0; i < n; i++)
         {
             for (var j = 0; j < n; j++)
             {
-                _cursors[i, j] = HybridLogicalClock.Zero;
+                _cursors[i, j] = ChangeFeedCursor.Initial;
             }
         }
     }
@@ -203,11 +209,14 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
             var drained = true;
             for (var i = 0; i < n && drained; i++)
             {
-                // Ask each sender for its WAL tail HLC. A simple proxy is
-                // "the highest entry timestamp returned by Subscribe(..., Zero)";
-                // for chaos tests this is acceptable because authoring stops
-                // before drain begins.
-                var tailHlc = await GetTailHlcAsync(i);
+                // Phase D1c: drain predicate is now "every edge's
+                // ChangeFeedCursor equals the sender's current WAL
+                // high-water-mark cursor". The HLC-based comparison
+                // (cursor < tailHlc) is unsafe under the offset cursor
+                // shape; we capture the sender's current cursor via
+                // IChangeFeed.GetCurrentCursorAsync and structural-equal
+                // it against each edge's reported cursor.
+                var tailCursor = await _fixture.ChangeFeedOf(i).GetCurrentCursorAsync(_treeName);
                 for (var j = 0; j < n; j++)
                 {
                     if (i == j)
@@ -216,7 +225,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     }
 
                     bool partitioned;
-                    HybridLogicalClock cursor;
+                    ChangeFeedCursor cursor;
                     lock (_gate)
                     {
                         partitioned = _partitioned[i, j];
@@ -229,7 +238,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                         continue;
                     }
 
-                    if (cursor < tailHlc)
+                    if (cursor != tailCursor)
                     {
                         drained = false;
                         break;
@@ -266,20 +275,6 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
     /// </summary>
     private const int DrainStabilityWindow = 3;
 
-    private async Task<HybridLogicalClock> GetTailHlcAsync(int senderIdx)
-    {
-        var feed = _fixture.ChangeFeedOf(senderIdx);
-        var tail = HybridLogicalClock.Zero;
-        await foreach (var entry in feed.Subscribe(_treeName, HybridLogicalClock.Zero, includeLocalOrigin: true))
-        {
-            if (entry.Timestamp > tail)
-            {
-                tail = entry.Timestamp;
-            }
-        }
-        return tail;
-    }
-
     private async Task RunPumpAsync(int senderIdx, int receiverIdx, CancellationToken ct)
     {
         var feed = _fixture.ChangeFeedOf(senderIdx);
@@ -290,7 +285,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
             try
             {
                 bool partitioned;
-                HybridLogicalClock cursor;
+                ChangeFeedCursor cursor;
                 lock (_gate)
                 {
                     partitioned = _partitioned[senderIdx, receiverIdx];
@@ -303,8 +298,30 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     continue;
                 }
 
-                var newCursor = cursor;
+                // Phase D1c: capture the sender's current cursor BEFORE
+                // we start consuming, so we know what to advance to
+                // after Subscribe drains the snapshot. Using the captured
+                // cursor (rather than the highest per-entry offset we
+                // saw) is safe because Subscribe takes a WAL snapshot
+                // at call time; entries committed after the capture
+                // simply land in the next poll iteration.
+                var nextCursor = await feed.GetCurrentCursorAsync(_treeName, ct).ConfigureAwait(false);
                 var receiverClusterId = MultiSiteClusterFixture.ClusterIdFor(receiverIdx);
+                // Truncation guard: track whether the inner foreach
+                // exited via the mid-iteration partition check so the
+                // post-loop cursor advance only fires when Subscribe
+                // ran to completion. Advancing the cursor to
+                // `nextCursor` on a partition-truncated iteration
+                // would silently drop every entry between the last
+                // applied entry and the captured `nextCursor`, which
+                // is exactly the data-loss shape that motivated
+                // Phase D1c (the regression here: under the old
+                // per-entry HLC-advance model, a mid-stream break
+                // left `newCursor` at the last applied entry's HLC,
+                // so partition cycles never skipped entries; the
+                // pre-captured `nextCursor` model needs an explicit
+                // guard).
+                var truncatedByPartition = false;
                 await foreach (var entry in feed.Subscribe(_treeName, cursor, includeLocalOrigin: true, ct).ConfigureAwait(false))
                 {
                     // Re-check the partition gate per entry so a partition that
@@ -318,6 +335,7 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
 
                     if (partitionedNow)
                     {
+                        truncatedByPartition = true;
                         break;
                     }
 
@@ -325,14 +343,9 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     // to the cluster that originally authored it. Mirrors
                     // the production ship loop's per-peer origin filter.
                     // The receiver-side ReplicationApplier also enforces
-                    // this as defence-in-depth, but advancing the cursor
-                    // past skipped entries avoids needless grain churn.
+                    // this as defence-in-depth.
                     if (string.Equals(entry.OriginClusterId, receiverClusterId, StringComparison.Ordinal))
                     {
-                        if (entry.Timestamp > newCursor)
-                        {
-                            newCursor = entry.Timestamp;
-                        }
                         continue;
                     }
 
@@ -362,10 +375,6 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                         && _lastAppliedBytes.TryGetValue((receiverIdx, entry.Key), out var lastBytes)
                         && BytesEqual(lastBytes, incomingBytes))
                     {
-                        if (entry.Timestamp > newCursor)
-                        {
-                            newCursor = entry.Timestamp;
-                        }
                         continue;
                     }
 
@@ -374,20 +383,31 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
                     {
                         _lastAppliedBytes[(receiverIdx, entry.Key)] = applied;
                     }
-                    if (entry.Timestamp > newCursor)
-                    {
-                        newCursor = entry.Timestamp;
-                    }
                 }
 
-                if (newCursor > cursor)
+                // Phase D1c: advance the edge cursor to the pre-loop
+                // captured nextCursor (the sender's WAL high-water-mark
+                // at the time we started the Subscribe call). Entries
+                // that landed in the WAL during our consume are picked
+                // up on the next poll iteration. Using the captured
+                // snapshot avoids edge cases where an entry was skipped
+                // (origin-filter or value-bytes dedupe) and we never
+                // saw its offset to advance to.
+                //
+                // Skip the advance entirely when the inner foreach
+                // exited via the mid-iteration partition check: the
+                // captured `nextCursor` is necessarily AT OR AFTER the
+                // entry that triggered the truncation, so advancing
+                // would skip every still-unshipped entry between the
+                // last applied entry and `nextCursor`. The next
+                // iteration (after the partition heals) re-runs
+                // Subscribe from the unchanged cursor and re-delivers
+                // the truncated tail.
+                if (!truncatedByPartition && !nextCursor.Equals(cursor))
                 {
                     lock (_gate)
                     {
-                        if (newCursor > _cursors[senderIdx, receiverIdx])
-                        {
-                            _cursors[senderIdx, receiverIdx] = newCursor;
-                        }
+                        _cursors[senderIdx, receiverIdx] = nextCursor;
                     }
                 }
 

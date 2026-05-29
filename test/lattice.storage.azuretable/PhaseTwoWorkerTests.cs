@@ -643,4 +643,92 @@ public class PhaseTwoWorkerTests
             Assert.Fail($"task faulted with {actual.GetType().Name}: {actual.Message}, expected {expected.GetType().Name}: {expected.Message}");
         }
     }
+
+    [Test]
+    public async Task CoalescingWindow_zero_preserves_drain_on_first_signal_behaviour()
+    {
+        // Regression guard: with window=Zero the worker MUST keep the
+        // historical behaviour. We send three commits with explicit
+        // awaits between them; each one drains the channel on its own
+        // iteration and fires as a separate submit. This is the exact
+        // shape that produced provider.phase2.batch_size = 1.00 in U8/U9.
+        var submitter = new RecordingSubmitter();
+        await using var worker = new PhaseTwoWorker(submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero);
+
+        await worker.EnqueueAsync(0L, 4L).ConfigureAwait(false);
+        await worker.EnqueueAsync(5L, 9L).ConfigureAwait(false);
+        await worker.EnqueueAsync(10L, 14L).ConfigureAwait(false);
+
+        Assert.That(submitter.Calls.Count, Is.EqualTo(3),
+            "Zero window must preserve the one-commit-per-submit baseline");
+    }
+
+    [Test]
+    public async Task CoalescingWindow_positive_coalesces_arrivals_within_the_window_into_one_submit()
+    {
+        // With a positive window, two commits enqueued in quick
+        // succession (well inside the window) must coalesce into a
+        // single phase-2 transaction. The window is generous enough
+        // (100 ms) that the test does not race the scheduler on slow
+        // CI runners; the second enqueue happens after a tiny yield
+        // so the worker is already inside the coalescing delay when
+        // the second arrival lands. The post-coalesce verification
+        // checks one submit with two M-rows + TAIL.
+        var submitter = new RecordingSubmitter();
+        await using var worker = new PhaseTwoWorker(submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.FromMilliseconds(100));
+
+        // Use TryWrite-equivalent direct enqueues so neither caller
+        // awaits the first commit before the second arrives. The
+        // worker's WaitToReadAsync resolves on the first arrival,
+        // drains it, then awaits the coalescing window; the second
+        // enqueue lands inside that window and is folded in by the
+        // post-delay re-drain.
+        var first = worker.EnqueueAsync(0L, 4L);
+        var second = worker.EnqueueAsync(5L, 9L);
+
+        await Task.WhenAll(first, second).ConfigureAwait(false);
+
+        Assert.That(submitter.Calls.Count, Is.EqualTo(1),
+            "Positive window must coalesce simultaneous arrivals into a single submit");
+
+        var actions = submitter.Calls[0];
+        var adds = actions
+            .Where(a => a.ActionType == TableTransactionActionType.Add)
+            .Select(a => ((AzureTableWalEntity)a.Entity).RowKey)
+            .ToArray();
+        Assert.That(adds, Is.EqualTo(new[]
+        {
+            AzureTableWalStorageProvider.BuildManifestRowKey(0L),
+            AzureTableWalStorageProvider.BuildManifestRowKey(5L),
+        }), "Coalesced submit must contain M-rows for both start offsets in ascending order");
+
+        var tail = actions.Single(a =>
+            a.ActionType == TableTransactionActionType.UpsertReplace &&
+            ((AzureTableWalEntity)a.Entity).RowKey == AzureTableWalStorageProvider.TailRowKey);
+        Assert.That(((AzureTableWalEntity)tail.Entity).Offset, Is.EqualTo(9L),
+            "TAIL of the coalesced submit must be the highest endOffsetInclusive");
+    }
+
+    [Test]
+    public async Task CoalescingWindow_positive_isolated_arrival_still_commits_after_one_window()
+    {
+        // An isolated arrival (no follow-up inside the window) must
+        // still commit; the window only delays - it does not require
+        // additional traffic. Wall-time bound on the test is generous
+        // so it does not flake on slow CI. Allow a small slop on the
+        // lower bound because Task.Delay can return a millisecond or
+        // two early on Windows.
+        var submitter = new RecordingSubmitter();
+        var window = TimeSpan.FromMilliseconds(20);
+        var slop = TimeSpan.FromMilliseconds(5);
+        await using var worker = new PhaseTwoWorker(submitter.SubmitAsync, ManifestPartitionKey, window);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await worker.EnqueueAsync(0L, 4L).ConfigureAwait(false);
+        sw.Stop();
+
+        Assert.That(submitter.Calls.Count, Is.EqualTo(1), "Isolated arrival must still commit");
+        Assert.That(sw.Elapsed, Is.GreaterThanOrEqualTo(window - slop),
+            "Isolated arrival must wait at least the coalescing window (minus a small scheduler-precision slop) before committing");
+    }
 }

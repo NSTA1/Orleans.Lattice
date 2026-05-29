@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -46,19 +47,21 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// into a single phase-2 transaction. The strict-offset drain order
 /// makes TAIL unconditionally monotonic regardless of phase-1
 /// completion order, and the coalescing collapses N round-trips into
-/// one under burst load. By default <see cref="AppendBatchAsync"/>
-/// awaits the phase-2 completion so post-append
-/// <see cref="GetHighestOffsetAsync"/> observes the new TAIL. When
+/// one under burst load. The v6.0.1 default
 /// <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
-/// is <see langword="true"/>, <see cref="AppendBatchAsync"/> instead
-/// awaits the <i>previous</i> append's phase-2 task on the same
+/// = <see langword="true"/> makes <see cref="AppendBatchAsync"/>
+/// await the <i>previous</i> append's phase-2 task on the same
 /// shard before returning - phase 2 of batch N runs in parallel with
 /// phase 0+1 of batch N+1, halving the steady-state request-path
-/// latency under <c>WalMaxPendingBatches = 1</c> while preserving
-/// every durability and ordering invariant the synchronous mode
-/// enforces (sticky failure still surfaces, just on the next call;
-/// reconciliation still rolls forward any phase-1-durable batch
-/// after a crash).
+/// latency while preserving every durability and ordering invariant
+/// the synchronous mode enforces (sticky failure still surfaces, just
+/// on the next call; reconciliation still rolls forward any
+/// phase-1-durable batch after a crash). Set the option to
+/// <see langword="false"/> to restore the pre-v6.0.1 synchronous
+/// shape where each <see cref="AppendBatchAsync"/> awaits its own
+/// phase-2 commit (the rare host that needs failure-on-the-failing-
+/// call semantics, or that runs against a single-writer backend
+/// where overlapping writes contend rather than overlap).
 /// </para>
 /// <para>
 /// <b>Capacity.</b> Azure Tables caps a single transaction at 100
@@ -75,11 +78,13 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// across distinct partitions. Concurrent calls into the same shard
 /// land in distinct batch partitions during phase 1 (no contention)
 /// and serialise through the per-shard phase-2 worker for phase 2.
-/// With the default <c>WalMaxPendingBatches = 1</c>, only one
-/// <see cref="AppendBatchAsync"/> is in-flight per shard. With
-/// <c>&gt; 1</c>, a phase-1 failure on an earlier offset while a later
-/// offset has already enqueued phase 2 will be caught by activation
-/// reconciliation (stage 2c) and surfaced on next activation.
+/// With the v6.0.1 default <c>WalMaxPendingBatches = 8</c>, up to
+/// eight <see cref="AppendBatchAsync"/> calls can be in-flight per
+/// shard; the worker's phase-2 coalescing window collapses
+/// overlapping commits into one Azure-Tables transaction. A phase-1
+/// failure on an earlier offset while a later offset has already
+/// enqueued phase 2 will be caught by activation reconciliation
+/// (stage 2c) and surfaced on next activation.
 /// </para>
 /// </summary>
 public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, IAsyncDisposable
@@ -215,6 +220,20 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     private readonly AzureTableWalStorageOptions _options;
     private readonly Serializer<WalRecord> _serializer;
 
+    /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagPipelinePhaseTwo"/> tag
+    /// bound to this provider instance's effective
+    /// <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// setting. The provider is a singleton in DI so the value is
+    /// fixed for the lifetime of the host; caching at construction
+    /// time keeps the Phase A provider hot path allocation-free. The
+    /// tag is emitted on <see cref="LatticeMetrics.ProviderCommitDuration"/>
+    /// and <see cref="LatticeMetrics.ProviderRetryExhausted"/> so the
+    /// attribution sweep can pivot between synchronous (default) and
+    /// pipelined phase-2 modes in a single dashboard query.
+    /// </summary>
+    private readonly KeyValuePair<string, object?> _pipelinePhaseTwoTag;
+
     // Per-shard phase-2 workers, lazily created on first append for a
     // given (treeId, shardIndex). Each worker owns a single Task plus
     // a bounded SortedSet drain buffer; shards are bounded by Orleans
@@ -261,6 +280,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             $"{nameof(IOptions<AzureTableWalStorageOptions>)}.{nameof(IOptions<AzureTableWalStorageOptions>.Value)} returned null.",
             nameof(options));
         _serializer = serializer;
+        _pipelinePhaseTwoTag = new KeyValuePair<string, object?>(
+            LatticeMetrics.TagPipelinePhaseTwo,
+            _options.PipelinePhaseTwoCommits);
     }
 
     /// <inheritdoc />
@@ -343,7 +365,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
         var phaseOneActions = new List<TableTransactionAction>(entries.Count);
         EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions);
-        var phaseOneTask = table.SubmitTransactionAsync(phaseOneActions, cancellationToken);
+        var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
 
         // Await both before enqueueing phase 2 so a failure in either
         // surfaces synchronously to the caller and the worker never
@@ -415,12 +437,78 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             ? Task.CompletedTask
             : WriteCandidateRowAsync(
                 table, manifestPartitionKey, firstOffset, endOffsetInclusive, cancellationToken);
-        var phaseOneTask = table.SubmitTransactionAsync(phaseOneActions, cancellationToken);
+        var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
         await candidateTask.ConfigureAwait(false);
         await phaseOneTask.ConfigureAwait(false);
 
         await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Submits a phase-1 transaction against the batch partition and
+    /// records the wall-clock duration on
+    /// <see cref="LatticeMetrics.ProviderCommitDuration"/>. Surfacing
+    /// a retry exhaustion failure also emits
+    /// <see cref="LatticeMetrics.ProviderRetryExhausted"/> with the
+    /// HTTP status string so dashboards can attribute throttling /
+    /// 429 / 5xx storms to the affected shard. Internal so the
+    /// callers in <see cref="AppendBatchAsync"/> and
+    /// <see cref="AppendEncodedBatchAsync"/> share a single timed
+    /// path; not exposed beyond the provider.
+    /// </summary>
+    private async Task SubmitPhaseOneAsync(
+        TableClient table,
+        IReadOnlyList<TableTransactionAction> actions,
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex);
+        var startTicks = Stopwatch.GetTimestamp();
+        try
+        {
+            await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LatticeMetrics.ProviderRetryExhausted.Add(1,
+                treeTag,
+                shardTag,
+                LatticeMetrics.PhasePhase1Tag,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)));
+            throw;
+        }
+        finally
+        {
+            var elapsedMs = Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
+            // The pipeline-phase2 tag is identical for every call from
+            // this provider instance (the option is read once at
+            // construction), so the four-tag overload stays allocation-
+            // free and the dashboards can still pivot the per-phase
+            // duration series between sync and pipelined modes in a
+            // single query.
+            LatticeMetrics.ProviderCommitDuration.Record(elapsedMs,
+                treeTag,
+                shardTag,
+                LatticeMetrics.PhasePhase1Tag,
+                _pipelinePhaseTwoTag);
+        }
+    }
+
+    /// <summary>
+    /// Maps a provider exception to a low-cardinality
+    /// <see cref="LatticeMetrics.TagStatus"/> tag value. The Azure
+    /// Tables SDK surfaces transient and exhausted retries as
+    /// <see cref="RequestFailedException"/>; everything else maps to
+    /// the catch-all <c>unknown</c> bucket so the tag's cardinality
+    /// stays bounded.
+    /// </summary>
+    private static string ResolveProviderStatusTag(Exception ex) => ex switch
+    {
+        RequestFailedException rfe => rfe.Status.ToString(CultureInfo.InvariantCulture),
+        _ => "unknown",
+    };
 
     /// <summary>
     /// Enqueues the phase-2 commit for the just-completed batch and
@@ -1416,7 +1504,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
         var created = new PhaseTwoWorker(
             EnsureTableAsync,
-            manifestPartitionKey);
+            manifestPartitionKey,
+            treeId,
+            shardIndex,
+            _pipelinePhaseTwoTag,
+            _options.PhaseTwoCoalescingWindow);
         if (_phaseTwoWorkers.TryAdd(manifestPartitionKey, created))
         {
             return created;

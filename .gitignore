@@ -381,3 +381,13 @@ benchmark/history/grafana-data/
 
 # PR bodies
 .scratch/
+
+# Phase A diagnostic reports
+#
+# Markdown reports (one per run) are tracked: they are short, sortable by
+# UTC timestamp, and serve as the committable evidence trail for Phase A/B
+# decisions. Any sidecar JSON dumps remain local-only.
+benchmark/diagnostic-reports/*.json
+benchmark/diagnostic-report.md
+benchmark/diagnostic-report.pilot.md
+

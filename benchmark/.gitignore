@@ -2,3 +2,7 @@
 .run/
 grafana/dashboards/*.json
 results-*.json
+
+# azure-throughput ladder sweep results (local run history; one CSV per
+# WalPartitions sweep). Mirrors the policy for `results-*.json` and `.run/`.
+azure-throughput/scripts/.ladder-*.csv

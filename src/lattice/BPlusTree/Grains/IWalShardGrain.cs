@@ -1,3 +1,5 @@
+using Orleans.Concurrency;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -60,10 +62,28 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// transparently split across flushes by the same cutover protocol
     /// <see cref="AppendAsync"/> uses when the batch exceeds the limit.
     /// </para>
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so multiple producer
+    /// leaves / shard roots can enter the WAL grain concurrently and have
+    /// their entries coalesce into the same in-flight flush window. Without
+    /// this attribute the grain's default non-reentrant scheduling forces
+    /// each caller to fully complete (assign offsets, kick a flush, await
+    /// every per-entry TCS) before the next caller's turn starts, which
+    /// pins the in-flight chain depth at 1 even when
+    /// <see cref="LatticeOptions.WalMaxPendingBatches"/> is well above 1
+    /// and starves the per-batch packer of concurrent entries. All
+    /// mutable state inside the implementation is serialised by an
+    /// internal state gate (offset assignment, pending-list mutation,
+    /// in-flight cap enforcement), so concurrent interleaved turns are
+    /// safe by construction and the dense / strictly-ascending offset
+    /// invariant inside a single returned batch is preserved by the
+    /// per-iteration gate hold.
+    /// </para>
     /// </summary>
     /// <param name="entries">The captured mutation records to append, in caller-defined order. The returned offsets are parallel to this list.</param>
     /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
     /// <returns>An immutable list of per-shard sequence numbers, one per input entry, in input order.</returns>
+    [AlwaysInterleave]
     Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken);
 
     /// <summary>

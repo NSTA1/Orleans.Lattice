@@ -81,6 +81,28 @@ var deadlineTicks = duration > 0
 var tickIntervalMs = Math.Max(1, 1000 / tickHz);
 var nextTick = DateTimeOffset.UtcNow;
 
+// U9o producer-side instrumentation. The U9m ladder run showed the
+// producer offered only ~3.3k msg/s against a target of 25k msg/s, so
+// the missing throughput is on the producer side of the wire, not in
+// the silo. To disambiguate "CPU on the inner loop" from "TCP back-
+// pressure on the flush" we keep three per-second aggregates:
+//
+//   innerLoopMs - sum of wall-clock spent in the per-vehicle for-loop
+//                 (JSON serialize + buffered write).
+//   flushMs     - sum of wall-clock spent in writer.FlushAsync.
+//   tickSlipMs  - max of (actualTickEntry - scheduledTick), where
+//                 scheduledTick advances strictly by tickIntervalMs
+//                 regardless of how late each tick fires.
+//
+// scheduledTick advances independently of nextTick so the producer's
+// existing self-resetting tick clock is preserved (no behavior change);
+// the slippage is a measurement, not a feedback signal.
+var scheduledTick = DateTimeOffset.UtcNow;
+double innerLoopMsThisReport = 0.0;
+double flushMsThisReport = 0.0;
+double tickSlipMaxMsThisReport = 0.0;
+long ticksThisReport = 0;
+
 long totalSent = 0;
 long sentSinceReport = 0;
 var lastReport = Stopwatch.GetTimestamp();
@@ -98,6 +120,12 @@ while (Stopwatch.GetTimestamp() < deadlineTicks)
     }
     nextTick = now + TimeSpan.FromMilliseconds(tickIntervalMs);
 
+    var slip = (now - scheduledTick).TotalMilliseconds;
+    if (slip > tickSlipMaxMsThisReport) tickSlipMaxMsThisReport = slip;
+    scheduledTick = scheduledTick.AddMilliseconds(tickIntervalMs);
+    ticksThisReport++;
+
+    var innerStart = Stopwatch.GetTimestamp();
     for (var i = 0; i < vehicles.Length; i++)
     {
         var ev = new VehicleTelemetryEvent(
@@ -119,15 +147,25 @@ while (Stopwatch.GetTimestamp() < deadlineTicks)
         totalSent++;
         sentSinceReport++;
     }
+    innerLoopMsThisReport += (Stopwatch.GetTimestamp() - innerStart) * 1000.0 / Stopwatch.Frequency;
 
     var sinceReport = Stopwatch.GetTimestamp() - lastReport;
     if (sinceReport >= Stopwatch.Frequency)
     {
+        var flushStart = Stopwatch.GetTimestamp();
         await writer.FlushAsync();
+        flushMsThisReport += (Stopwatch.GetTimestamp() - flushStart) * 1000.0 / Stopwatch.Frequency;
+
         var rate = sentSinceReport / (sinceReport / (double)Stopwatch.Frequency);
         var elapsed = (Stopwatch.GetTimestamp() - startedAt) / (double)Stopwatch.Frequency;
-        Console.WriteLine($"[producer] t={elapsed,7:0.0}s sent={totalSent,12:N0} rate={rate,10:N0} msg/s");
+        var innerAvgMs = ticksThisReport > 0 ? innerLoopMsThisReport / ticksThisReport : 0.0;
+        var flushAvgMs = ticksThisReport > 0 ? flushMsThisReport / ticksThisReport : 0.0;
+        Console.WriteLine($"[producer] t={elapsed,7:0.0}s sent={totalSent,12:N0} rate={rate,10:N0} msg/s ticks={ticksThisReport,3} innerAvgMs={innerAvgMs,7:0.00} flushAvgMs={flushAvgMs,7:0.00} slipMaxMs={tickSlipMaxMsThisReport,8:0.0}");
         sentSinceReport = 0;
+        ticksThisReport = 0;
+        innerLoopMsThisReport = 0.0;
+        flushMsThisReport = 0.0;
+        tickSlipMaxMsThisReport = 0.0;
         lastReport = Stopwatch.GetTimestamp();
     }
 }

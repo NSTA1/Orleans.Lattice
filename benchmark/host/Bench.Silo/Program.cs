@@ -210,6 +210,44 @@ builder.Host.UseOrleans(silo =>
     {
         silo.AddLattice((s, name) => s.AddMemoryGrainStorage(name));
 
+        // ─── Lattice horizontal-scaling knobs (Phase A attribution sweep) ────
+        //
+        // The horizontal-scaling diagnostic plan sweeps two LatticeOptions
+        // knobs across the local docker-compose scenarios: WalPartitions
+        // (per-tree WAL shard count) and WalMaxPendingBatches (per-shard
+        // in-flight flush ceiling). Without this ConfigureLattice block
+        // the scenarios all run at the library defaults (1, 1) and the
+        // sweep has nothing to observe.
+        //
+        // Both keys are optional and fall through to the LatticeOptions
+        // defaults when unset. The env-var spelling matches what
+        // benchmark-attribution.ps1 emits when it invokes benchmark.ps1
+        // through docker-compose:
+        //
+        //   Lattice:WalPartitions=4
+        //   Lattice:WalMaxPendingBatches=8
+        //
+        // Parsing is tolerant - a missing or unparseable value leaves
+        // the default in place so a malformed override does not silently
+        // disable the silo.
+        var walPartitionsRaw = builder.Configuration["Lattice:WalPartitions"];
+        var walMaxPendingBatchesRaw = builder.Configuration["Lattice:WalMaxPendingBatches"];
+        if (!string.IsNullOrWhiteSpace(walPartitionsRaw)
+            || !string.IsNullOrWhiteSpace(walMaxPendingBatchesRaw))
+        {
+            silo.ConfigureLattice(o =>
+            {
+                if (int.TryParse(walPartitionsRaw, out var p) && p >= 1)
+                {
+                    o.WalPartitions = p;
+                }
+                if (int.TryParse(walMaxPendingBatchesRaw, out var b) && b >= 1)
+                {
+                    o.WalMaxPendingBatches = b;
+                }
+            });
+        }
+
         // ─── WAL storage provider switch (Lattice:Wal:Provider) ────────────────
         //
         //   "memory"      → default. The library falls through to InMemoryWalStorageProvider;
@@ -253,12 +291,37 @@ builder.Host.UseOrleans(silo =>
                 builder.Configuration["Lattice:Wal:EliminateCandidateRowOnHotPath"]?.Trim(),
                 "true",
                 StringComparison.OrdinalIgnoreCase);
+
+            // ─── C4 retry-budget tuning knobs (scaling.md Phase C / step C4) ─
+            //
+            // Five optional overrides that map onto
+            // AzureTableWalStorageOptions.Retry* and ultimately
+            // TableClientOptions.Retry. Each is null when its
+            // configuration key is absent/blank/unparseable - which leaves
+            // the Azure SDK default in place, matching the library's
+            // additive contract. Used by the bench-attribution driver to
+            // A/B the Phase-C tuning cohort against the SDK-default
+            // baseline. Spelled in milliseconds for delay/timeouts so
+            // operators do not need to ship a parser for TimeSpan strings.
+            int? walRetryMaxAttempts = TryParseInt(
+                builder.Configuration["Lattice:Wal:RetryMaxAttempts"]);
+            TimeSpan? walRetryDelay = TryParseMilliseconds(
+                builder.Configuration["Lattice:Wal:RetryDelayMs"]);
+            TimeSpan? walRetryMaxDelay = TryParseMilliseconds(
+                builder.Configuration["Lattice:Wal:RetryMaxDelayMs"]);
+            TimeSpan? walRetryNetworkTimeout = TryParseMilliseconds(
+                builder.Configuration["Lattice:Wal:RetryNetworkTimeoutMs"]);
+
             silo.AddAzureTableWalStorage(o =>
             {
                 o.ConnectionString = azuriteConnection;
                 o.TableName = walTableName;
                 o.PipelinePhaseTwoCommits = walPipelinePhaseTwo;
                 o.EliminateCandidateRowOnHotPath = walEliminateCRow;
+                if (walRetryMaxAttempts is { } ma) { o.RetryMaxAttempts = ma; }
+                if (walRetryDelay is { } d) { o.RetryDelay = d; }
+                if (walRetryMaxDelay is { } md) { o.RetryMaxDelay = md; }
+                if (walRetryNetworkTimeout is { } nt) { o.RetryNetworkTimeout = nt; }
             });
         }
     }
@@ -469,6 +532,25 @@ if (grpcServerEnabled)
 }
 
 await app.RunAsync();
+
+// ─── Local helper bridge (top-level statements + nested types) ─────────────
+//
+// These two parsers are referenced from the top-level statement region (the
+// WAL provider wiring block above) but C# does not allow local methods to be
+// declared above the await chain, so they are reached through a static
+// shim. Both are intentionally tolerant: a missing, blank, or unparseable
+// value returns null so the caller leaves the SDK / library default in
+// place. Negative values are intentionally surfaced as-is; the option's
+// Validate() catches them on first use of the provider.
+static int? TryParseInt(string? raw)
+    => string.IsNullOrWhiteSpace(raw)
+        ? null
+        : int.TryParse(raw.Trim(), out var v) ? v : null;
+
+static TimeSpan? TryParseMilliseconds(string? raw)
+    => string.IsNullOrWhiteSpace(raw)
+        ? null
+        : int.TryParse(raw.Trim(), out var v) ? TimeSpan.FromMilliseconds(v) : null;
 
 internal sealed class AzuriteTableHealthCheck(string connectionString) : IHealthCheck
 {

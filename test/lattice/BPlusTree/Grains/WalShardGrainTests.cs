@@ -230,9 +230,16 @@ public partial class WalShardGrainTests
         // completes (size 1) and the follow-on flush captures the
         // accumulated pending entries (size 3) - exactly the
         // coalescing the batching protocol exists to provide.
+        //
+        // The invariant under test is the single-in-flight coalescing
+        // shape, so pin WalMaxPendingBatches = 1 explicitly: under the
+        // library default of 8 each arrival kick-flushes its own batch
+        // because there is spare in-flight capacity and never sees a
+        // mid-flight peer to coalesce with. The multi-in-flight shape
+        // is covered by WalShardGrainTests.MultiBatch.cs.
         var gated = new GatedWalStorageProvider(new InMemoryWalStorageProvider());
         var capturing = new CapturingWalStorageProvider(gated);
-        var grain = await CreateGrainAsync(capturing);
+        var grain = await CreateGrainAsync(capturing, new LatticeOptions { WalMaxPendingBatches = 1 });
 
         var t1 = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
         var t2 = grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
@@ -265,6 +272,12 @@ public partial class WalShardGrainTests
         var options = new LatticeOptions
         {
             WalMaxBatchEntries = 2,
+            // The "wait for in-flight then follow-on flush" shape this
+            // test asserts only holds when there is a single in-flight
+            // slot. Under the library default of 8 each arrival
+            // observes spare capacity and kicks its own flush, so no
+            // pending overflow ever happens. Pin to 1 explicitly.
+            WalMaxPendingBatches = 1,
         };
         var grain = await CreateGrainAsync(capturing, options);
 

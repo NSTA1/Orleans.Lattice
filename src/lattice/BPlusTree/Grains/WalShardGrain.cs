@@ -32,8 +32,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// by construction, but each flush's <c>AppendBatchAsync</c> call runs
 /// independently so the writer-side burst absorption is no longer capped
 /// at <c>1 / provider_latency</c>. The default
-/// (<see cref="LatticeOptions.DefaultWalMaxPendingBatches"/> = 1) is
-/// bit-identical to the single-in-flight protocol.
+/// (<see cref="LatticeOptions.DefaultWalMaxPendingBatches"/> = 8) is the
+/// measured Azure Tables Standard sweet spot at the c2-iii operating
+/// point; setting it to <c>1</c> restores the historical single-in-flight
+/// protocol bit-for-bit.
 /// On flush failure the affected batch's offsets are rolled back, every
 /// TCS in the failed batch is faulted, and every later in-flight + the
 /// currently-accumulating pending batch is faulted with the same
@@ -57,6 +59,43 @@ internal sealed class WalShardGrain(
     private IWalStorageProvider _provider = null!;
     private long _nextOffset;
     private bool _initialized;
+
+    /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagTree"/> tag bound to this
+    /// activation's <see cref="_treeId"/>. Reused on every WAL hot-path
+    /// metric record to avoid per-record <see cref="KeyValuePair{TKey, TValue}"/>
+    /// construction. Initialised in <see cref="OnActivateAsync"/> once
+    /// the key has been parsed.
+    /// </summary>
+    private KeyValuePair<string, object?> _treeTag;
+
+    /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagShard"/> tag bound to this
+    /// activation's <see cref="_shardIndex"/>. Same allocation-free
+    /// rationale as <see cref="_treeTag"/>.
+    /// </summary>
+    private KeyValuePair<string, object?> _shardTag;
+
+    /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagWalPartitions"/> tag bound
+    /// to this activation's effective <see cref="LatticeOptions.WalPartitions"/>
+    /// setting. Resolved once on activation rather than per record so
+    /// the WAL hot-path metric calls remain allocation-free. The plan's
+    /// Phase A attribution sweep pivots on this tag (and on
+    /// <see cref="_walMaxPendingBatchesTag"/>) to distinguish runs in
+    /// a single Prometheus / dashboard query.
+    /// </summary>
+    private KeyValuePair<string, object?> _walPartitionsTag;
+
+    /// <summary>
+    /// Cached <see cref="LatticeMetrics.TagWalMaxPendingBatches"/> tag
+    /// bound to this activation's effective
+    /// <see cref="LatticeOptions.WalMaxPendingBatches"/> setting. Same
+    /// activation-cached, allocation-free pattern as
+    /// <see cref="_walPartitionsTag"/>; pivots the Phase A WAL
+    /// instruments across in-flight-flush ceilings.
+    /// </summary>
+    private KeyValuePair<string, object?> _walMaxPendingBatchesTag;
 
     // Pending state shape after the zero-copy provider hand-off:
     // each pending entry contributes one pre-encoded payload segment
@@ -196,7 +235,24 @@ internal sealed class WalShardGrain(
                 $"{nameof(WalShardGrain)} activation key '{key}' has a non-integer or negative shard index suffix.");
         }
 
+        _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeId);
+        _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
+
         var options = optionsMonitor.Get(_treeId);
+        // Phase A attribution tags. The values are captured once at
+        // activation; if the operator retunes WalPartitions or
+        // WalMaxPendingBatches through IOptionsMonitor while activations
+        // are live, existing activations continue to emit the value
+        // they activated under (the WAL hot-path code already resolves
+        // WalMaxBatchEntries / WalMaxBatchBytes per call, which is the
+        // documented dynamic-tunability contract; the activation-cached
+        // tag is a deliberate cardinality bound that prevents a high-
+        // frequency option toggle from polluting the metric series).
+        _walPartitionsTag = new KeyValuePair<string, object?>(
+            LatticeMetrics.TagWalPartitions, options.WalPartitions);
+        _walMaxPendingBatchesTag = new KeyValuePair<string, object?>(
+            LatticeMetrics.TagWalMaxPendingBatches, options.WalMaxPendingBatches);
+
         _provider = options.WalStorageProvider?.Invoke(_treeId)
             ?? services.GetRequiredService<IWalStorageProvider>();
         // Reconcile any half-committed state a multi-phase backend
@@ -267,6 +323,14 @@ internal sealed class WalShardGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
+
+        // Phase A horizontal-scaling diagnostic: stamp the wall-clock
+        // entry timestamp so we can attribute caller-visible append
+        // latency to (queue wait + cutover wait + provider duration).
+        // The timestamp is cheap (Stopwatch.GetTimestamp) and recorded
+        // unconditionally - the histogram is published on the shared
+        // Lattice meter so it costs nothing when no listener subscribes.
+        var appendStartTicks = Stopwatch.GetTimestamp();
 
         // If a previous flush in the chain failed, every subsequent
         // append fails fast with the same exception until the post-
@@ -356,6 +420,7 @@ internal sealed class WalShardGrain(
 
         TaskCompletionSource<long> tcs;
         bool kickFlush;
+        int queueDepth;
         lock (_stateGate)
         {
             var offset = _nextOffset++;
@@ -367,8 +432,17 @@ internal sealed class WalShardGrain(
             _pendingAcks.Add(tcs);
 
             // Decide whether to start a flush right now. Three triggers:
-            //   1. _inFlight.Count == 0: a lone entry must not wait for a
-            //      future cutover to make progress (latency floor).
+            //   1. _inFlight.Count < maxPending: there is spare capacity
+            //      in the in-flight chain, so admitting this entry into
+            //      its own flush keeps the latency floor flat while
+            //      pipelining against any slots already in motion. The
+            //      original protocol used `== 0` here, which made the
+            //      pipelined cap unreachable under steady fan-in (every
+            //      caller arriving while one flush was in motion parked
+            //      on `acks[i].Task` and the chain depth never grew past
+            //      one). With cap = 1 (the wire-compat default)
+            //      `< maxPending` collapses back to `== 0`, so the
+            //      single-in-flight protocol is unchanged.
             //   2. pending is full (reached WalMaxBatchEntries): kick a
             //      flush to fan out under multi-batch caps; otherwise the
             //      next entry's cutover would block on the head.
@@ -376,18 +450,30 @@ internal sealed class WalShardGrain(
             //      byte limit. Compared with the cutover loop's check,
             //      this is the "exact-fit" boundary - the next entry would
             //      definitely cut over.
-            // Always honour the cap: never kick when at it.
-            kickFlush = _inFlight.Count < maxPending
-                && (_inFlight.Count == 0
-                    || _pendingSegments.Count >= maxEntries
-                    || _pendingBatchSizeBytes >= maxBytes);
+            // Always honour the cap: never kick when at it. Once we
+            // are under the cap the lone-entry latency floor (1) alone
+            // is sufficient to admit this caller's flush; the pack
+            // clauses (2) and (3) are subsumed by it. Keeping them out
+            // of the predicate avoids re-evaluating the same boolean
+            // twice on the hot path.
+            kickFlush = _inFlight.Count < maxPending;
+            queueDepth = _pendingSegments.Count;
         }
+        LatticeMetrics.WalAppendQueueDepth.Record(queueDepth, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
         if (kickFlush)
         {
             StartFlush();
         }
 
-        return await tcs.Task.ConfigureAwait(true);
+        try
+        {
+            return await tcs.Task.ConfigureAwait(true);
+        }
+        finally
+        {
+            var elapsedMs = Stopwatch.GetElapsedTime(appendStartTicks).TotalMilliseconds;
+            LatticeMetrics.WalAppendTurnWait.Record(elapsedMs, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+        }
     }
 
     /// <inheritdoc />
@@ -531,20 +617,24 @@ internal sealed class WalShardGrain(
                 _pendingAcks.Add(tcs);
 
                 // Only kick a flush mid-batch when the per-batch caps
-                // are saturated; deferring the "_inFlight.Count == 0"
-                // single-entry trigger to the final entry of the batch
-                // is what gives the batched path its win - the whole
-                // batch shares a single flush window when it fits under
-                // the caps.
+                // are saturated; deferring the latency-floor trigger to
+                // the final entry of the batch is what gives the batched
+                // path its win - the whole batch shares a single flush
+                // window when it fits under the caps.
                 // The final-entry branch reproduces the AppendAsync
                 // protocol's latency-floor guarantee (a lone entry must
                 // not wait for a future cutover) once the entire batch
-                // has been enqueued.
+                // has been enqueued, and now also opens a new flush when
+                // the chain has spare capacity below WalMaxPendingBatches
+                // so the cap is actually reachable under steady fan-in.
+                // With cap = 1 the outer `_inFlight.Count < maxPending`
+                // guard collapses to `_inFlight.Count == 0`, so the
+                // single-in-flight protocol is preserved bit-for-bit.
                 var isLast = i == count - 1;
                 kickFlush = _inFlight.Count < maxPending
                     && (_pendingSegments.Count >= maxEntries
                         || _pendingBatchSizeBytes >= maxBytes
-                        || (isLast && _inFlight.Count == 0));
+                        || isLast);
             }
             if (kickFlush)
             {
@@ -752,6 +842,9 @@ internal sealed class WalShardGrain(
         List<long> offsets;
         LinkedListNode<InFlightFlush> node;
         InFlightFlush slot;
+        int batchEntries;
+        long batchBytes;
+        int inFlightBefore;
         lock (_stateGate)
         {
             if (_pendingSegments.Count == 0)
@@ -762,6 +855,9 @@ internal sealed class WalShardGrain(
             segments = _pendingSegments;
             offsets = _pendingOffsets;
             var acks = _pendingAcks;
+            batchBytes = _pendingBatchSizeBytes;
+            batchEntries = segments.Count;
+            inFlightBefore = _inFlight.Count;
             _pendingSegments = RentSegmentList();
             _pendingOffsets = RentOffsetList();
             _pendingAcks = RentAckList();
@@ -777,6 +873,17 @@ internal sealed class WalShardGrain(
             };
             node = _inFlight.AddLast(slot);
         }
+        // Phase A horizontal-scaling diagnostics: published once per
+        // captured flush, outside the gate to keep the lock window
+        // tight. Three observations make it possible to distinguish
+        // grain-side queueing from provider-side latency:
+        //   * batch_entries / batch_bytes - how full is each flush?
+        //   * in_flight - how parallel is this shard against the
+        //     provider, given WalMaxPendingBatches?
+        // The matching provider duration is recorded inside FlushAsync.
+        LatticeMetrics.WalAppendBatchEntries.Record(batchEntries, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+        LatticeMetrics.WalAppendBatchBytes.Record(batchBytes, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+        LatticeMetrics.WalAppendInFlight.Record(inFlightBefore, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
         slot.Task = FlushAsync(node);
     }
 
@@ -814,13 +921,26 @@ internal sealed class WalShardGrain(
             // walk per flush, not per entry.
             var encodedArray = segments.ToArray();
             var offsetsArray = offsets.ToArray();
-            await _provider.AppendEncodedBatchAsync(
-                _treeId,
-                _shardIndex,
-                encodedArray.AsMemory(),
-                offsetsArray.AsMemory(),
-                encoder,
-                CancellationToken.None).ConfigureAwait(true);
+            var providerStartTicks = Stopwatch.GetTimestamp();
+            try
+            {
+                await _provider.AppendEncodedBatchAsync(
+                    _treeId,
+                    _shardIndex,
+                    encodedArray.AsMemory(),
+                    offsetsArray.AsMemory(),
+                    encoder,
+                    CancellationToken.None).ConfigureAwait(true);
+            }
+            finally
+            {
+                // Record provider duration on both success and fault
+                // so the histogram covers the throttled / faulted tail
+                // as well as the happy path. The HandleFlushFailureAsync
+                // catch below subsumes the fault accounting downstream.
+                var providerMs = Stopwatch.GetElapsedTime(providerStartTicks).TotalMilliseconds;
+                LatticeMetrics.WalAppendProviderDuration.Record(providerMs, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+            }
 
             // If a predecessor already failed and faulted us, our acks
             // were faulted in HandleFailureAsync; do not try to satisfy
@@ -887,13 +1007,19 @@ internal sealed class WalShardGrain(
         // Drain a follow-on batch that accumulated while we were in
         // flight. Done outside the try/finally so a fresh flush failure
         // is observed cleanly by its own callers. Snapshot the relevant
-        // state under the gate to make the trigger decision; only kick
-        // a flush when the chain has fully drained and a pending batch
-        // is waiting.
+        // state under the gate to make the trigger decision; kick a
+        // flush whenever the chain has spare capacity below
+        // WalMaxPendingBatches and a pending batch is waiting. With
+        // cap = 1 `< maxPending` is identical to the previous
+        // "chain fully drained" predicate (the slot that just settled
+        // is already removed above, so _inFlight.Count == 0 holds at
+        // this point under cap = 1).
         bool kickFollowOn;
         lock (_stateGate)
         {
-            kickFollowOn = _stickyFailure is null && _pendingSegments.Count > 0 && _inFlight.Count == 0;
+            kickFollowOn = _stickyFailure is null
+                && _pendingSegments.Count > 0
+                && _inFlight.Count < Options.WalMaxPendingBatches;
         }
         if (kickFollowOn)
         {

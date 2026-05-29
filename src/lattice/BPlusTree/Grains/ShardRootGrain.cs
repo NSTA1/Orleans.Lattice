@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
@@ -17,8 +18,22 @@ internal sealed partial class ShardRootGrain(
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
     ILogger<ShardRootGrain> logger,
-    MutationObserverDispatcher mutationObservers) : IShardRootGrain
+    MutationObserverDispatcher mutationObservers) : IShardRootGrain, IGrainBase
 {
+    IGrainContext IGrainBase.GrainContext => context;
+
+    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    {
+        // Coalesced dirty-leaf flush on clean shutdown: ensure any pending
+        // in-memory marks reach storage so the next activation observes
+        // the same dirty-set the compaction coordinator already expects.
+        // Best-effort - a failure here is logged inside the helper and
+        // the next routed Delete will re-mark the leaf.
+        await FlushPendingDirtyMarksOnDeactivateAsync(cancellationToken);
+    }
+
     private string? _treeId;
     private string TreeId => _treeId ??= ComputeTreeId();
     private string ComputeTreeId()
@@ -93,6 +108,63 @@ internal sealed partial class ShardRootGrain(
     }
 
     private const int MaxRetries = 2;
+
+    /// <summary>
+    /// Per-activation gate that serialises every shard-root
+    /// <c>state.WriteStateAsync()</c> call. <see cref="IShardRootGrain.SetManyAsync"/>
+    /// is annotated <see cref="AlwaysInterleaveAttribute"/> for throughput, which
+    /// allows two concurrent <c>SetManyAsync</c> turns on the same activation to
+    /// race the underlying <see cref="IPersistentState{TState}.WriteStateAsync"/>
+    /// call. The second writer observes a stale etag and the storage provider
+    /// throws <see cref="Orleans.Storage.InconsistentStateException"/> -
+    /// the exact "Etag mismatch during Update" signal the U9g real-Azure
+    /// ladder captured against the shard-root state. The gate guards
+    /// storage only, not compute: callers continue to do their sort /
+    /// route / lookup work in parallel, only the single storage write
+    /// is serialised. Every shard-root persistence site routes through
+    /// <see cref="WriteShardStateAsync"/> so admin paths (split,
+    /// shadow-forward, bulk-load, lifecycle, dirty-leaves) cannot
+    /// collide with a concurrent <c>SetManyAsync</c> turn either.
+    /// </summary>
+    private readonly SemaphoreSlim _stateWriteGate = new(1, 1);
+
+    /// <summary>
+    /// Per-activation gate that serialises the full root-promotion
+    /// sequence (Phase 1 persist of <see cref="ShardRootState.PendingPromotion"/>
+    /// + cross-grain <c>InitializeAsync</c> on the new root + Phase 2
+    /// persist that clears the pending intent). Two interleaved
+    /// <see cref="IShardRootGrain.SetManyAsync"/> turns can both invoke
+    /// the promotion path on the same activation; without this gate,
+    /// turn B's assignment to <c>state.State.PendingPromotion</c> can
+    /// overwrite turn A's still-in-flight intent before A's
+    /// <c>CompletePromotionAsync</c> observes it, silently dropping
+    /// A's promotion and leaving a dangling sibling grain. The
+    /// existing <see cref="_stateWriteGate"/> only serialises
+    /// individual storage writes; promotion is a multi-await
+    /// sequence with cross-grain calls between two persistence
+    /// sites and so needs its own gate.
+    /// </summary>
+    private readonly SemaphoreSlim _promotionGate = new(1, 1);
+
+    /// <summary>
+    /// Serialised replacement for <c>state.WriteStateAsync()</c>. All
+    /// shard-root <see cref="IPersistentState{TState}.WriteStateAsync"/>
+    /// call sites must route through this helper so the per-activation
+    /// <see cref="_stateWriteGate"/> serialises storage writes across
+    /// interleaved turns.
+    /// </summary>
+    private async Task WriteShardStateAsync()
+    {
+        await _stateWriteGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        finally
+        {
+            _stateWriteGate.Release();
+        }
+    }
 
     public async Task<byte[]?> GetAsync(string key)
     {
@@ -423,6 +495,7 @@ internal sealed partial class ShardRootGrain(
         // so when the local loop throws we rethrow its exception and let
         // the continuation log the forward side separately.
         System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
+        var localApplyTs = Stopwatch.GetTimestamp();
         try
         {
             await SetManyLocalOnlyAsync(entries);
@@ -431,11 +504,24 @@ internal sealed partial class ShardRootGrain(
         {
             localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
         }
+        LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
+            Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
 
         if (localFailure is null)
         {
             // Local succeeded - surface any forward failure to the caller.
-            await forwardTask;
+            var forwardTs = Stopwatch.GetTimestamp();
+            try
+            {
+                await forwardTask;
+            }
+            finally
+            {
+                LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
+                    Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            }
             return;
         }
 
@@ -461,6 +547,18 @@ internal sealed partial class ShardRootGrain(
     /// split at the top of the path is promoted to a new root via
     /// <see cref="PromoteRootAsync"/>.
     /// <para>
+    /// Per-leaf dispatch runs in parallel via <see cref="Task.WhenAll{TResult}(Task{TResult}[])"/>
+    /// (mirroring the per-shard fan-out <c>LatticeGrain.SetManyAsyncCore</c>
+    /// already does across shards). The shard-root grain is
+    /// single-activation so the parallel awaits all resume on the same
+    /// grain turn; the leaf-grain and routing caches are only mutated
+    /// in the sequential resolve and split-promotion passes bracketing
+    /// the <c>Task.WhenAll</c>. Split promotion is walked sequentially
+    /// per leaf because <see cref="IBPlusInternalGrain.AcceptSplitAsync"/>
+    /// and <see cref="PromoteRootAsync"/> mutate shared routing tables
+    /// and this shard's root respectively.
+    /// </para>
+    /// <para>
     /// After the batched leaf apply completes, every input key is fed
     /// through <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>. This
     /// is the per-key adaptive-split shadow-forward path (distinct from
@@ -479,9 +577,7 @@ internal sealed partial class ShardRootGrain(
         if (state.State.RootIsLeaf)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(rootLeafId))
-                ? existing
-                : ResolveLeafGrainSlow(rootLeafId);
+            var leaf = ResolveLeafGrain(rootLeafId);
             await RecordAffectedLeafIfPreparedAsync(rootLeafId);
             var split = await DispatchLeafBatchWithRetryAsync(leaf, entries);
             while (split is not null)
@@ -496,38 +592,73 @@ internal sealed partial class ShardRootGrain(
         // root-to-immediate-parent path the first time each leaf is
         // seen so split promotion has the same shape as the
         // single-key TraverseForWriteAsync path-pop loop.
-        var buckets = new Dictionary<GrainId, (List<KeyValuePair<string, byte[]>> Slice, List<GrainId> Parents)>(capacity: 4);
+        var buckets = new Dictionary<GrainId, LeafBucket>(capacity: 4);
         foreach (var entry in entries)
         {
             var leafId = await TraverseToLeafAsync(entry.Key);
             if (!buckets.TryGetValue(leafId, out var bucket))
             {
                 var parents = await CaptureLeafParentPathAsync(entry.Key);
-                bucket = (new List<KeyValuePair<string, byte[]>>(), parents);
+                bucket = new LeafBucket(new List<KeyValuePair<string, byte[]>>(), parents);
                 buckets[leafId] = bucket;
             }
             bucket.Slice.Add(entry);
         }
 
+        // Resolve each leaf grain reference and (when the saga's prepared
+        // context is active) register the affected leaf with the per-tree
+        // tx registry. Done in one sequential pass so the per-tx dedup
+        // gate inside RecordAffectedLeafIfPreparedAsync is observed in
+        // deterministic order before any concurrent leaf dispatch begins.
+        // The bucket order is also frozen here so the parallel-dispatch
+        // index and the split-promotion index agree on which parent path
+        // belongs to which leaf result.
+        var orderedBuckets = new List<(GrainId LeafId, LeafBucket Bucket)>(buckets.Count);
         foreach (var (leafId, bucket) in buckets)
         {
-            var leaf = (_cachedLeaf is { } existing && _cachedLeafKey.Equals(leafId))
-                ? existing
-                : ResolveLeafGrainSlow(leafId);
+            bucket.Leaf = ResolveLeafGrain(leafId);
             await RecordAffectedLeafIfPreparedAsync(leafId);
-            var split = await DispatchLeafBatchWithRetryAsync(leaf, bucket.Slice);
+            orderedBuckets.Add((leafId, bucket));
+        }
 
-            // Walk the captured parent path bottom-up exactly like the
-            // single-key TraverseForWriteAsync split-pop loop. The path
-            // is ordered root-to-parent so we iterate in reverse.
-            var parents = bucket.Parents;
+        // Dispatch the per-leaf batched RPCs in parallel. SetManyAsync is
+        // marked [AlwaysInterleave], so this shard-root activation can
+        // have multiple in-flight turns concurrently; the per-activation
+        // grain-reference caches are ConcurrentDictionary instances so
+        // those interleaved turns cannot corrupt them. Within a single
+        // turn, the cache is only written by the sequential resolve loop
+        // above and consulted (read-only) by the split-promotion loop
+        // below.
+        // The original shape awaited each leaf sequentially, which
+        // collapsed N leaves of useful concurrency per shard turn into
+        // one. Provider commit p50 ~16 ms means that with B buckets
+        // per shard, the wall-clock cost drops from B x commit_p50 to
+        // ~commit_p50, multiplying effective shard-root throughput by
+        // B on the bulk-write path.
+        var leafDispatchTasks = new Task<SplitResult?>[orderedBuckets.Count];
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var bucket = orderedBuckets[i].Bucket;
+            leafDispatchTasks[i] = DispatchLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice);
+        }
+        var splitResults = await Task.WhenAll(leafDispatchTasks);
+
+        // Walk split promotion sequentially per leaf. Parent
+        // AcceptSplitAsync calls mutate shared internal-node routing
+        // tables (and PromoteRootAsync rewrites this shard's root),
+        // both of which must be serialised. Each leaf's parent path
+        // was captured before dispatch, so the order is well-defined.
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var split = splitResults[i];
+            if (split is null) continue;
+
+            var parents = orderedBuckets[i].Bucket.Parents;
             var parentCursor = parents.Count;
             while (split is not null && parentCursor > 0)
             {
                 var parentId = parents[--parentCursor];
-                var parentGrain = (_cachedInternal is { } existingParent && _cachedInternalKey.Equals(parentId))
-                    ? existingParent
-                    : ResolveInternalGrainSlow(parentId);
+                var parentGrain = ResolveInternalGrain(parentId);
                 split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
                 InvalidateRoutingTable(parentId);
             }
@@ -542,6 +673,21 @@ internal sealed partial class ShardRootGrain(
         }
 
         await ForwardLocalWritesToShadowIfNeededAsync(entries);
+    }
+
+    /// <summary>
+    /// Mutable per-leaf record used by <see cref="SetManyLocalOnlyAsync"/>
+    /// to group routed entries, the captured parent path for split
+    /// promotion, and the resolved leaf grain reference. Reference type
+    /// (not <c>struct</c>) because <see cref="Leaf"/> is filled in by a
+    /// second pass after the dictionary is populated, and a value-type
+    /// dictionary value would require a get-modify-set update per entry.
+    /// </summary>
+    private sealed class LeafBucket(List<KeyValuePair<string, byte[]>> slice, List<GrainId> parents)
+    {
+        public List<KeyValuePair<string, byte[]>> Slice { get; } = slice;
+        public List<GrainId> Parents { get; } = parents;
+        public IBPlusLeafGrain? Leaf { get; set; }
     }
 
     /// <summary>
@@ -576,12 +722,20 @@ internal sealed partial class ShardRootGrain(
     {
         for (int attempt = 0; ; attempt++)
         {
+            var rpcTs = Stopwatch.GetTimestamp();
             try
             {
-                return await leaf.SetManyAsync(slice);
+                var result = await leaf.SetManyAsync(slice);
+                LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
+                    Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                return result;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
+                LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
+                    Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
             }
         }
     }
@@ -890,7 +1044,7 @@ internal sealed partial class ShardRootGrain(
         state.State.RootIsLeaf = true;
         try
         {
-            await state.WriteStateAsync();
+            await WriteShardStateAsync();
         }
         catch
         {
@@ -925,7 +1079,27 @@ internal sealed partial class ShardRootGrain(
     private async Task ResumePendingPromotionAsync()
     {
         if (state.State.PendingPromotion is null) return;
-        await CompletePromotionAsync();
+
+        // Re-check under the promotion gate. Two interleaved
+        // PrepareForOperationSlowAsync turns could both observe a
+        // non-null PendingPromotion on the unguarded peek above; the
+        // first one through the gate clears it and the second one
+        // would otherwise replay CompletePromotionAsync against a
+        // null pending intent (NRE) or, worse, against a fresh
+        // pending intent published by an unrelated mid-flight
+        // PromoteRootAsync sequence. The gate guarantees only one
+        // CompletePromotionAsync call observes any given pending
+        // intent.
+        await _promotionGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            if (state.State.PendingPromotion is null) return;
+            await CompletePromotionAsync();
+        }
+        finally
+        {
+            _promotionGate.Release();
+        }
     }
 
     /// <summary>

@@ -91,8 +91,8 @@ public class ShardRootGrainSplitShadowForwardTests
         var shadowTarget = Substitute.For<IShardRootGrain>();
         shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
         shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>()).Returns(Task.CompletedTask);
-        shadowTarget.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+        shadowTarget.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
+            .Returns(Task.FromResult<WalRecord?>(null));
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
 
         var grain = new ShardRootGrain(

@@ -1246,8 +1246,9 @@ internal sealed partial class BPlusLeafGrain
         // internal node so the chained subtree fold stays current.
         // No-op when this terminal landed on the abort path or
         // alreadyFlipped short-circuit branch (no StoreEntry calls
-        // ran, so _digestDirty is still false).
-        await PublishDigestUpwardAsync();
+        // ran, so _digestDirty is still false). Saga terminal is a
+        // structural event - bypass the c2-xxviii coalescing window.
+        await PublishDigestUpwardInlineAsync();
     }
 
     /// <summary>
