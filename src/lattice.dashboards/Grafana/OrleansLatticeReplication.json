@@ -478,7 +478,8 @@
     },
     {
       "id": 11,
-      "title": "Per-peer last contact (seconds ago)",
+      "title": "Per-peer last outbound ship (seconds ago)",
+      "description": "Wall-clock seconds since the local sender last successfully shipped a batch to the named peer. Outbound-only: the gauge is updated by ReplicationShipperGrain.SendBatchAsync's success path and reflects time-since-last-ship-with-entries - an empty pump tick that finds no work does not refresh the timestamp, so a quiet but healthy link will see the value climb between local-write bursts. A symmetric inbound view (time-since-this-silo-last-received-a-batch-from-the-named-peer) is tracked on the replication roadmap as a future enhancement; until it ships, an idle gauge on this silo does NOT imply the peer is unreachable - it implies the local sender has had nothing to send.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
