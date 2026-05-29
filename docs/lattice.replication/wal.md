@@ -39,7 +39,7 @@ For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequen
 siloBuilder.AddLatticeReplication(opts =>
 {
     opts.ClusterId = "site-a";
-    opts.ReplogPartitions = 8; // default 1
+    opts.ReplogPartitions = 8; // default 8
 });
 ```
 
