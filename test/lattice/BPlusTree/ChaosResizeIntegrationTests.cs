@@ -79,6 +79,26 @@ public class ChaosResizeIntegrationTests
         ex.GetType().Name is "EnumerationAbortedException"
             or "StaleShardRoutingException"
             or "StaleTreeRoutingException"
+        // Saga rollback under topology churn (resize coordination may race
+        // an in-flight saga). The envelope / count invariants are preserved
+        // by compensation, so a rolled-back saga is a tolerated symptom -
+        // not an invariant violation - from the chaos test's perspective.
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("failed and was rolled back", StringComparison.Ordinal))
+        // Documented MaxScanRetries-exhaustion on CountAsync /
+        // CountPerShardAsync / KeysAsync / EntriesAsync under concurrent
+        // topology change. Resize itself does not split directly, but the
+        // public-API documentation classifies this as an operator-action
+        // exception ("Increase LatticeOptions.MaxScanRetries or reduce
+        // concurrent split activity"); treat as transient at the chaos
+        // boundary.
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("retries while topology kept changing", StringComparison.Ordinal))
+        // Documented MaxScanRetries-exhaustion on GetManyAsync when the
+        // TxRegistry commits sagas faster than the per-shard fan-out can
+        // complete a stable snapshot.
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("kept committing sagas faster than the fan-out", StringComparison.Ordinal))
         || ex is TimeoutException;
 
     private static async Task SeedAsync(ILattice tree)

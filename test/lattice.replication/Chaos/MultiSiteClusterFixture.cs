@@ -43,6 +43,7 @@ internal sealed class MultiSiteClusterFixture
     private readonly TestCluster[] _sites;
     private readonly IChangeFeed[] _changeFeeds;
     private readonly ReplicationApplier[] _appliers;
+    private readonly ReplicationPeerStats[] _peerStats;
     private readonly LatticeMergeMode _mode;
     private readonly Action<LatticeReplicationOptions>? _siloCustomizer;
     private readonly Action<LatticeReplicationOptions>? _clientCustomizer;
@@ -92,6 +93,7 @@ internal sealed class MultiSiteClusterFixture
         _sites = new TestCluster[siteCount];
         _changeFeeds = new IChangeFeed[siteCount];
         _appliers = new ReplicationApplier[siteCount];
+        _peerStats = new ReplicationPeerStats[siteCount];
         _siloCustomizer = configureSilo;
         _clientCustomizer = configureClient;
     }
@@ -104,6 +106,41 @@ internal sealed class MultiSiteClusterFixture
 
     /// <summary>Returns the replication applier for site <paramref name="index"/>.</summary>
     public ReplicationApplier ApplierOf(int index) => _appliers[index];
+
+    /// <summary>
+    /// Returns the per-site <see cref="ReplicationPeerStats"/> the
+    /// fixture injects into <see cref="ApplierOf(int)"/>. Chaos tests
+    /// that pin receiver-side observability (e.g. the bidirectional
+    /// <c>peer.consecutive_errors{direction="inbound"}</c> gauge) read
+    /// from this sink.
+    /// </summary>
+    public ReplicationPeerStats PeerStatsOf(int index) => _peerStats[index];
+
+    /// <summary>
+    /// Registers a per-test OR-Map shape on every site's silo-side
+    /// <see cref="Orleans.Lattice.CrdtShapeRegistry"/>. The OR-Map
+    /// dispatch path (both producer and receiver) looks the descriptor
+    /// up at runtime, so chaos tests that exercise
+    /// <see cref="LatticeMergeMode.OrMap"/> must register the
+    /// <c>(TKey, TValue)</c> pair for their tree id before issuing any
+    /// writes. Mirrors <c>FourShardClusterFixture.RegisterOrMapShape</c>;
+    /// runs after silo startup so tests can pick fresh tree ids per
+    /// test method without re-deploying the fixture.
+    /// </summary>
+    public void RegisterOrMapShape<TKey, TValue>(string treeId)
+        where TKey : notnull
+        where TValue : Orleans.Lattice.Primitives.ICrdt<TValue>, new()
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        for (var i = 0; i < SiteCount; i++)
+        {
+            foreach (var silo in _sites[i].Silos.OfType<InProcessSiloHandle>())
+            {
+                var registry = silo.SiloHost.Services.GetRequiredService<Orleans.Lattice.CrdtShapeRegistry>();
+                registry.Register(treeId, Orleans.Lattice.CrdtShape.ForOrMap<TKey, TValue>());
+            }
+        }
+    }
 
     /// <summary>Stands up every site and prepares per-site change feeds and appliers.</summary>
     public async Task InitializeAsync()
@@ -141,7 +178,14 @@ internal sealed class MultiSiteClusterFixture
             resolver.Resolve(Arg.Any<string>()).Returns(_mode);
 
             _changeFeeds[i] = new ChangeFeed(_sites[i].Client, options, resolver);
-            _appliers[i] = new ReplicationApplier(_sites[i].Client, options, new LocalVectorClockCache(_sites[i].Client));
+            _peerStats[i] = new ReplicationPeerStats();
+            _appliers[i] = new ReplicationApplier(
+                _sites[i].Client,
+                options,
+                new LocalVectorClockCache(_sites[i].Client),
+                crdtShapes: null,
+                logger: null,
+                peerStats: _peerStats[i]);
         }
     }
 
