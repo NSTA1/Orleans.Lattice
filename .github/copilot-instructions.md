@@ -29,7 +29,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 `LatticeScopedCursor`, `ILatticeCompressor`, `LatticeCompression`, `ZstdLatticeCompressor`, `LatticeCompressionServiceCollectionExtensions` |
 | Internal namespace | `Orleans.Lattice.{Area}` | `Orleans.Lattice.BPlusTree.Grains` |
 | Test namespace | `Orleans.Lattice.Tests.{Area}` | `Orleans.Lattice.Tests.BPlusTree.Grains` |
-`IReceiverFlowControlPolicy`, `ReceiverFlowControlContext`, `ReceiverFlowControlHint`, `NoOpReceiverFlowControlPolicy`, `ITypedReplicationTransport` |
+`IReceiverFlowControlPolicy`, `ReceiverFlowControlContext`, `ReceiverFlowControlHint`, `NoOpReceiverFlowControlPolicy`, `ITypedReplicationTransport`, `ReplicationContactDirection` |
 | Replication internal namespace | `Orleans.Lattice.Replication.{Area}` | `Orleans.Lattice.Replication.Grains` |
 | Replication test namespace | `Orleans.Lattice.Replication.Tests.{Area}` | `Orleans.Lattice.Replication.Tests` |
 | gRPC transport public API namespace | `Orleans.Lattice.Replication.Grpc` | `LatticeReplicationGrpcOptions`, `LatticeReplicationGrpcServiceCollectionExtensions` |

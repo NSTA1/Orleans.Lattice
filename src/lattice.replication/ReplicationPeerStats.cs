@@ -4,19 +4,49 @@ using System.Diagnostics.Metrics;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
+/// Direction of a recorded per-peer contact. Carried by every
+/// <see cref="ReplicationPeerSnapshot"/> and stamped onto the
+/// <c>direction</c> tag of the bidirectional observable gauges
+/// (<see cref="LatticeReplicationMetrics.ConsecutiveErrorsName"/>,
+/// <see cref="LatticeReplicationMetrics.LastContactSecondsName"/>).
+/// </summary>
+[GenerateSerializer]
+[Alias(ReplicationTypeAliases.ReplicationContactDirection)]
+public enum ReplicationContactDirection
+{
+    /// <summary>
+    /// Local sender to remote peer. Recorded by the per-<c>(tree, peer)</c>
+    /// shipper grain after a peer accepts a shipped batch (including the
+    /// periodic empty liveness probe).
+    /// </summary>
+    Outbound = 0,
+
+    /// <summary>
+    /// Remote peer to local receiver. Recorded by the inbound apply
+    /// pipeline after a per-origin run of entries authored by the
+    /// named peer applies (or fails) on the local cluster.
+    /// </summary>
+    Inbound = 1,
+}
+
+/// <summary>
 /// Per-peer replication telemetry state. Backs the observable gauges declared
-/// on <see cref="LatticeReplicationMetrics"/>: <c>entries_behind</c>,
-/// <c>bytes_behind</c>, <c>consecutive_errors</c>, and
-/// <c>last_contact_seconds</c>. Instances are designed to be registered as a
-/// singleton by <c>AddLatticeReplication</c> - the constructor wires the
-/// observable gauges, so a single instance is sufficient per silo.
+/// on <see cref="LatticeReplicationMetrics"/>:
+/// <c>entries_behind</c> and <c>bytes_behind</c> (outbound-only - the
+/// receiver does not track a per-peer backlog into itself), plus
+/// <c>consecutive_errors</c> and <c>last_contact_seconds</c>
+/// (bidirectional, tagged with <see cref="LatticeReplicationMetrics.TagDirection"/>).
+/// Instances are designed to be registered as a singleton by
+/// <c>AddLatticeReplication</c> - the constructor wires the observable
+/// gauges, so a single instance is sufficient per silo.
 /// </summary>
 /// <remarks>
-/// Updates are recorded by the ship / apply paths in subsequent replication
-/// phases. The class is thread-safe: concurrent updates to different
-/// <c>(tree, peer)</c> pairs do not contend, and updates to the same pair use
-/// per-entry locks. <see cref="GetTimestamp"/> is overridable to support
-/// deterministic tests of <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>.
+/// Updates are recorded by the ship / apply paths. The class is
+/// thread-safe: concurrent updates to different
+/// <c>(tree, peer, direction)</c> triples do not contend, and updates
+/// to the same triple use per-entry locks. <see cref="GetTimestamp"/>
+/// is overridable to support deterministic tests of
+/// <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>.
 /// </remarks>
 public class ReplicationPeerStats
 {
@@ -75,27 +105,29 @@ public class ReplicationPeerStats
             LatticeReplicationMetrics.ConsecutiveErrorsName,
             static () => _current?.ObserveConsecutiveErrors() ?? Array.Empty<Measurement<long>>(),
             unit: "{error}",
-            description: "Consecutive ship-attempt failures since the last successful contact.");
+            description: "Consecutive contact-attempt failures since the last successful contact, tagged by direction.");
 
         meter.CreateObservableGauge<double>(
             LatticeReplicationMetrics.LastContactSecondsName,
             static () => _current?.ObserveLastContactSeconds() ?? Array.Empty<Measurement<double>>(),
             unit: "s",
-            description: "Wall-clock seconds elapsed since the last successful contact with the named peer.");
+            description: "Wall-clock seconds elapsed since the last successful contact with the named peer, tagged by direction.");
     }
 
     /// <summary>
-    /// Records the current per-peer backlog. Called by the sender each time
-    /// the WAL cursor advances or the peer cursor moves so the
-    /// <c>entries_behind</c> / <c>bytes_behind</c> gauges report a current
-    /// view.
+    /// Records the current per-peer outbound backlog. Called by the
+    /// sender each time the WAL cursor advances or the peer cursor moves
+    /// so the <c>entries_behind</c> / <c>bytes_behind</c> gauges report
+    /// a current view. Backlog is outbound-only by design - the receiver
+    /// does not track a per-peer backlog into itself - so this method
+    /// has no inbound counterpart.
     /// </summary>
     public void RecordBacklog(string tree, string peer, long entriesBehind, long bytesBehind)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(peer);
 
-        var entry = state.GetOrAdd(new PeerKey(tree, peer), static _ => new PeerState());
+        var entry = state.GetOrAdd(new PeerKey(tree, peer, ReplicationContactDirection.Outbound), static _ => new PeerState());
         lock (entry)
         {
             entry.EntriesBehind = entriesBehind;
@@ -104,16 +136,47 @@ public class ReplicationPeerStats
     }
 
     /// <summary>
-    /// Records a successful contact with the named peer. Resets the
-    /// consecutive-error counter to zero and stamps the last-contact
-    /// timestamp.
+    /// Records a successful outbound contact with the named peer (the
+    /// local sender shipped a batch and the peer acknowledged it,
+    /// including the periodic empty liveness probe). Resets the
+    /// outbound consecutive-error counter to zero and stamps the
+    /// outbound last-contact timestamp.
     /// </summary>
-    public void RecordSuccess(string tree, string peer)
+    public void RecordSuccess(string tree, string peer) =>
+        RecordSuccessCore(tree, peer, ReplicationContactDirection.Outbound);
+
+    /// <summary>
+    /// Records a failed outbound ship attempt against the named peer.
+    /// Increments the outbound consecutive-error counter; does not
+    /// update the outbound last-contact timestamp.
+    /// </summary>
+    public void RecordError(string tree, string peer) =>
+        RecordErrorCore(tree, peer, ReplicationContactDirection.Outbound);
+
+    /// <summary>
+    /// Records a successful inbound contact with the named peer (a
+    /// per-origin run of entries authored by the peer applied
+    /// successfully on the local receiver). Resets the inbound
+    /// consecutive-error counter to zero and stamps the inbound
+    /// last-contact timestamp.
+    /// </summary>
+    public void RecordInboundSuccess(string tree, string originPeer) =>
+        RecordSuccessCore(tree, originPeer, ReplicationContactDirection.Inbound);
+
+    /// <summary>
+    /// Records a failed inbound apply attempt for entries authored by
+    /// the named peer. Increments the inbound consecutive-error
+    /// counter; does not update the inbound last-contact timestamp.
+    /// </summary>
+    public void RecordInboundError(string tree, string originPeer) =>
+        RecordErrorCore(tree, originPeer, ReplicationContactDirection.Inbound);
+
+    private void RecordSuccessCore(string tree, string peer, ReplicationContactDirection direction)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(peer);
 
-        var entry = state.GetOrAdd(new PeerKey(tree, peer), static _ => new PeerState());
+        var entry = state.GetOrAdd(new PeerKey(tree, peer, direction), static _ => new PeerState());
         lock (entry)
         {
             entry.ConsecutiveErrors = 0;
@@ -121,16 +184,12 @@ public class ReplicationPeerStats
         }
     }
 
-    /// <summary>
-    /// Records a failed ship attempt against the named peer. Increments the
-    /// consecutive-error counter; does not update the last-contact timestamp.
-    /// </summary>
-    public void RecordError(string tree, string peer)
+    private void RecordErrorCore(string tree, string peer, ReplicationContactDirection direction)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(peer);
 
-        var entry = state.GetOrAdd(new PeerKey(tree, peer), static _ => new PeerState());
+        var entry = state.GetOrAdd(new PeerKey(tree, peer, direction), static _ => new PeerState());
         lock (entry)
         {
             entry.ConsecutiveErrors++;
@@ -138,8 +197,9 @@ public class ReplicationPeerStats
     }
 
     /// <summary>
-    /// Returns a point-in-time snapshot of every recorded peer's state.
-    /// Useful for diagnostics and for asserting on metric inputs in tests.
+    /// Returns a point-in-time snapshot of every recorded
+    /// <c>(tree, peer, direction)</c> triple's state. Useful for
+    /// diagnostics and for asserting on metric inputs in tests.
     /// </summary>
     public IReadOnlyCollection<ReplicationPeerSnapshot> Snapshot()
     {
@@ -167,7 +227,10 @@ public class ReplicationPeerStats
                 entries,
                 bytes,
                 errors,
-                elapsed));
+                elapsed)
+            {
+                Direction = kv.Key.Direction,
+            });
         }
         return list;
     }
@@ -183,9 +246,13 @@ public class ReplicationPeerStats
     {
         foreach (var kv in state)
         {
+            if (kv.Key.Direction != ReplicationContactDirection.Outbound)
+            {
+                continue;
+            }
             long value;
             lock (kv.Value) { value = kv.Value.EntriesBehind; }
-            yield return Measure(value, kv.Key);
+            yield return MeasureOutbound(value, kv.Key);
         }
     }
 
@@ -193,9 +260,13 @@ public class ReplicationPeerStats
     {
         foreach (var kv in state)
         {
+            if (kv.Key.Direction != ReplicationContactDirection.Outbound)
+            {
+                continue;
+            }
             long value;
             lock (kv.Value) { value = kv.Value.BytesBehind; }
-            yield return Measure(value, kv.Key);
+            yield return MeasureOutbound(value, kv.Key);
         }
     }
 
@@ -205,7 +276,7 @@ public class ReplicationPeerStats
         {
             long value;
             lock (kv.Value) { value = kv.Value.ConsecutiveErrors; }
-            yield return Measure(value, kv.Key);
+            yield return MeasureDirectional(value, kv.Key);
         }
     }
 
@@ -221,16 +292,28 @@ public class ReplicationPeerStats
                 : (now - lastContact.Value).TotalSeconds;
             yield return new Measurement<double>(elapsed,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, kv.Key.Tree),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, kv.Key.Peer));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, kv.Key.Peer),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDirection, DirectionTag(kv.Key.Direction)));
         }
     }
 
-    private static Measurement<long> Measure(long value, PeerKey key) =>
+    private static Measurement<long> MeasureOutbound(long value, PeerKey key) =>
         new(value,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, key.Tree),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer));
 
-    private readonly record struct PeerKey(string Tree, string Peer);
+    private static Measurement<long> MeasureDirectional(long value, PeerKey key) =>
+        new(value,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, key.Tree),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDirection, DirectionTag(key.Direction)));
+
+    private static string DirectionTag(ReplicationContactDirection direction) =>
+        direction == ReplicationContactDirection.Inbound
+            ? LatticeReplicationMetrics.DirectionInbound
+            : LatticeReplicationMetrics.DirectionOutbound;
+
+    private readonly record struct PeerKey(string Tree, string Peer, ReplicationContactDirection Direction);
 
     private sealed class PeerState
     {
@@ -242,16 +325,18 @@ public class ReplicationPeerStats
 }
 
 /// <summary>
-/// Point-in-time snapshot of a single peer's replication telemetry state.
+/// Point-in-time snapshot of a single peer's replication telemetry state
+/// for one <see cref="ReplicationContactDirection"/>.
 /// </summary>
 /// <param name="Tree">The replicated tree id.</param>
 /// <param name="Peer">The remote peer cluster id.</param>
-/// <param name="EntriesBehind">WAL entries yet to ship to the peer.</param>
-/// <param name="BytesBehind">Cumulative payload bytes yet to ship to the peer.</param>
-/// <param name="ConsecutiveErrors">Consecutive ship-attempt failures since the last success.</param>
+/// <param name="EntriesBehind">WAL entries yet to ship to the peer (outbound rows only; zero on inbound rows).</param>
+/// <param name="BytesBehind">Cumulative payload bytes yet to ship to the peer (outbound rows only; zero on inbound rows).</param>
+/// <param name="ConsecutiveErrors">Consecutive contact-attempt failures since the last success in this direction.</param>
 /// <param name="LastContactSeconds">
-/// Wall-clock seconds elapsed since the last successful contact, or
-/// <see cref="double.NaN"/> if the peer has never been contacted.
+/// Wall-clock seconds elapsed since the last successful contact in this
+/// direction, or <see cref="double.NaN"/> if the peer has never been
+/// contacted in this direction.
 /// </param>
 public readonly record struct ReplicationPeerSnapshot(
     string Tree,
@@ -259,4 +344,13 @@ public readonly record struct ReplicationPeerSnapshot(
     long EntriesBehind,
     long BytesBehind,
     long ConsecutiveErrors,
-    double LastContactSeconds);
+    double LastContactSeconds)
+{
+    /// <summary>
+    /// Direction of the recorded contact. Defaults to
+    /// <see cref="ReplicationContactDirection.Outbound"/> so existing
+    /// positional-constructor call sites continue to compile and
+    /// describe the historically outbound-only telemetry.
+    /// </summary>
+    public ReplicationContactDirection Direction { get; init; } = ReplicationContactDirection.Outbound;
+}

@@ -80,7 +80,7 @@ internal sealed class LatticeReplicationHealthCheck(
 
         foreach (var peer in snapshot)
         {
-            var key = new PeerKey(peer.Tree, peer.Peer);
+            var key = new PeerKey(peer.Tree, peer.Peer, peer.Direction);
             observed.Add(key);
 
             var perPeer = Classify(peer, options);
@@ -104,7 +104,9 @@ internal sealed class LatticeReplicationHealthCheck(
                 _degradedSince.TryRemove(key, out _);
             }
 
-            var label = $"{peer.Tree}/{peer.Peer}";
+            var label = peer.Direction == ReplicationContactDirection.Outbound
+                ? $"{peer.Tree}/{peer.Peer}"
+                : $"{peer.Tree}/{peer.Peer} (inbound)";
             if (perPeer == HealthStatus.Degraded)
             {
                 degradedPeers.Add(label);
@@ -172,44 +174,78 @@ internal sealed class LatticeReplicationHealthCheck(
     {
         var worst = HealthStatus.Healthy;
 
-        if (options.EntriesBehind is { } entries)
+        // entries_behind / bytes_behind and the outbound contact /
+        // error tiers apply only to outbound rows (the receiver does
+        // not track an outbound backlog from itself). Inbound rows
+        // carry zero EntriesBehind and zero ConsecutiveErrors by
+        // construction so the existing tier comparisons would never
+        // trigger on them anyway, but skipping the comparison up
+        // front keeps the intent legible.
+        if (peer.Direction == ReplicationContactDirection.Outbound)
         {
-            if (peer.EntriesBehind > entries.Unhealthy)
+            if (options.EntriesBehind is { } entries)
             {
-                worst = HealthStatus.Unhealthy;
+                if (peer.EntriesBehind > entries.Unhealthy)
+                {
+                    worst = HealthStatus.Unhealthy;
+                }
+                else if (peer.EntriesBehind > entries.Degraded && worst > HealthStatus.Degraded)
+                {
+                    worst = HealthStatus.Degraded;
+                }
             }
-            else if (peer.EntriesBehind > entries.Degraded && worst > HealthStatus.Degraded)
+
+            if (options.LastContactSeconds is { } contact && !double.IsNaN(peer.LastContactSeconds))
             {
-                worst = HealthStatus.Degraded;
+                if (peer.LastContactSeconds > contact.Unhealthy)
+                {
+                    worst = HealthStatus.Unhealthy;
+                }
+                else if (peer.LastContactSeconds > contact.Degraded && worst > HealthStatus.Degraded)
+                {
+                    worst = HealthStatus.Degraded;
+                }
+            }
+
+            if (options.ConsecutiveErrors is { } errors)
+            {
+                if (peer.ConsecutiveErrors > errors.Unhealthy)
+                {
+                    worst = HealthStatus.Unhealthy;
+                }
+                else if (peer.ConsecutiveErrors > errors.Degraded && worst > HealthStatus.Degraded)
+                {
+                    worst = HealthStatus.Degraded;
+                }
             }
         }
-
-        if (options.LastContactSeconds is { } contact && !double.IsNaN(peer.LastContactSeconds))
+        else
         {
-            if (peer.LastContactSeconds > contact.Unhealthy)
+            // Inbound row. Only the optional inbound-silence tier is
+            // meaningful; EntriesBehind / BytesBehind are zero by
+            // construction and ConsecutiveErrors on inbound is
+            // covered by a future inbound-error tier (not in this
+            // option set).
+            var crit = options.InboundCriticalAfter;
+            var degr = options.InboundDegradedAfter;
+            if (!double.IsNaN(peer.LastContactSeconds))
             {
-                worst = HealthStatus.Unhealthy;
-            }
-            else if (peer.LastContactSeconds > contact.Degraded && worst > HealthStatus.Degraded)
-            {
-                worst = HealthStatus.Degraded;
-            }
-        }
-
-        if (options.ConsecutiveErrors is { } errors)
-        {
-            if (peer.ConsecutiveErrors > errors.Unhealthy)
-            {
-                worst = HealthStatus.Unhealthy;
-            }
-            else if (peer.ConsecutiveErrors > errors.Degraded && worst > HealthStatus.Degraded)
-            {
-                worst = HealthStatus.Degraded;
+                if (crit != System.Threading.Timeout.InfiniteTimeSpan
+                    && peer.LastContactSeconds > crit.TotalSeconds)
+                {
+                    worst = HealthStatus.Unhealthy;
+                }
+                else if (degr != System.Threading.Timeout.InfiniteTimeSpan
+                    && peer.LastContactSeconds > degr.TotalSeconds
+                    && worst > HealthStatus.Degraded)
+                {
+                    worst = HealthStatus.Degraded;
+                }
             }
         }
 
         return worst;
     }
 
-    private readonly record struct PeerKey(string Tree, string Peer);
+    private readonly record struct PeerKey(string Tree, string Peer, ReplicationContactDirection Direction);
 }

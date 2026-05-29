@@ -55,6 +55,38 @@ public static class LatticeReplicationMetrics
     public const string TagOutcome = "outcome";
 
     /// <summary>
+    /// Tag key for the direction of a per-peer contact - <see cref="DirectionOutbound"/>
+    /// when recorded by the local sender after a successful ship to the
+    /// named peer, <see cref="DirectionInbound"/> when recorded by the
+    /// local receiver after a successful apply of a batch authored by the
+    /// named peer. Carried by the <see cref="ConsecutiveErrorsName"/> and
+    /// <see cref="LastContactSecondsName"/> observable gauges - both of
+    /// which are now bidirectional - so dashboards can split or aggregate
+    /// the outbound and inbound timelines per <c>(tree, peer)</c> pair.
+    /// The <see cref="EntriesBehindName"/> and <see cref="BytesBehindName"/>
+    /// gauges remain outbound-only (the receiver does not track a per-peer
+    /// backlog into itself) and emit a single series per
+    /// <c>(tree, peer)</c> pair without the direction tag.
+    /// </summary>
+    public const string TagDirection = "direction";
+
+    /// <summary>
+    /// <see cref="TagDirection"/> value stamped on the outbound recordings -
+    /// the local sender's <see cref="ReplicationPeerStats.RecordSuccess(string, string)"/>
+    /// and <see cref="ReplicationPeerStats.RecordError(string, string)"/>
+    /// call sites in <c>ReplicationShipperGrain</c>.
+    /// </summary>
+    public const string DirectionOutbound = "outbound";
+
+    /// <summary>
+    /// <see cref="TagDirection"/> value stamped on the inbound recordings -
+    /// the local receiver's <see cref="ReplicationPeerStats.RecordInboundSuccess(string, string)"/>
+    /// and <see cref="ReplicationPeerStats.RecordInboundError(string, string)"/>
+    /// call sites in <c>ReplicationApplier</c>'s per-origin run path.
+    /// </summary>
+    public const string DirectionInbound = "inbound";
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was applied successfully
     /// (point apply or range delete). Recorded by
     /// <see cref="ApplyDuration"/> for both directly applied entries and
@@ -310,31 +342,43 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// Canonical name of the <c>consecutive_errors</c> observable gauge.
-    /// Reports the number of consecutive ship attempts that have failed
-    /// since the last success. Resets to zero on the first success.
+    /// Reports the number of consecutive contact attempts that have
+    /// failed since the last success in each direction. Resets to zero
+    /// on the first success in that direction.
+    /// <para>
+    /// <b>Bidirectional.</b> Every measurement is tagged with
+    /// <see cref="TagDirection"/> = <see cref="DirectionOutbound"/>
+    /// (sender-side ship attempts) or
+    /// <see cref="TagDirection"/> = <see cref="DirectionInbound"/>
+    /// (receiver-side per-origin apply attempts). Dashboards that
+    /// previously matched the gauge without filtering by direction
+    /// must add <c>direction="outbound"</c> to preserve the
+    /// pre-bidirectional shape.
+    /// </para>
     /// </summary>
     public const string ConsecutiveErrorsName = "orleans.lattice.replication.peer.consecutive_errors";
 
     /// <summary>
     /// Canonical name of the <c>last_contact_seconds</c> observable gauge.
-    /// Reports the wall-clock seconds elapsed since the local sender last
-    /// successfully <em>shipped a non-empty batch</em> to the named peer.
-    /// <c>NaN</c> indicates the peer has never been contacted.
+    /// Reports the wall-clock seconds elapsed since the most recent
+    /// successful contact with the named peer in each direction.
+    /// <c>NaN</c> indicates the peer has never been contacted in that
+    /// direction.
     /// <para>
-    /// <b>Outbound-only by design.</b> Recorded exclusively by
-    /// <c>ReplicationShipperGrain.SendBatchAsync</c> after a peer accepts a
-    /// shipped batch; the receiver-side apply path does NOT update this
-    /// gauge. An idle but healthy link therefore sees the value climb
-    /// between local-write bursts (the pump tick has nothing to ship and
-    /// short-circuits before the success-recording call), and a peer that
-    /// only ever <em>receives</em> from this silo never records a contact
-    /// in the reverse direction. The bundled Grafana dashboard exposes
-    /// this gauge as "Per-peer last outbound ship (seconds ago)" so the
-    /// directional scope is explicit at the operator-visible surface. A
-    /// future enhancement to add an inbound twin (recorded by the
-    /// receiver-side apply path) is tracked on the replication roadmap;
-    /// the same instrument will gain a <c>direction</c> tag at that point
-    /// to keep outbound and inbound timelines distinguishable.
+    /// <b>Bidirectional.</b> Every measurement is tagged with
+    /// <see cref="TagDirection"/> = <see cref="DirectionOutbound"/>
+    /// (recorded by the local sender after a peer accepts a shipped
+    /// batch - including the periodic empty liveness probe so the
+    /// outbound gauge no longer climbs unbounded between local-write
+    /// bursts on a healthy idle link) or
+    /// <see cref="TagDirection"/> = <see cref="DirectionInbound"/>
+    /// (recorded by the local receiver after a per-origin run of
+    /// inbound entries applies successfully). A host that opts into
+    /// both directions sees two series per <c>(tree, peer)</c> pair;
+    /// dashboards that previously matched the gauge without filtering
+    /// by direction must add <c>direction="outbound"</c> to the matcher
+    /// to preserve the pre-bidirectional shape, or accept the doubled
+    /// series.
     /// </para>
     /// </summary>
     public const string LastContactSecondsName = "orleans.lattice.replication.peer.last_contact_seconds";

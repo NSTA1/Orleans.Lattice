@@ -479,7 +479,7 @@
     {
       "id": 11,
       "title": "Per-peer last outbound ship (seconds ago)",
-      "description": "Wall-clock seconds since the local sender last successfully shipped a batch to the named peer. Outbound-only: the gauge is updated by ReplicationShipperGrain.SendBatchAsync's success path and reflects time-since-last-ship-with-entries - an empty pump tick that finds no work does not refresh the timestamp, so a quiet but healthy link will see the value climb between local-write bursts. A symmetric inbound view (time-since-this-silo-last-received-a-batch-from-the-named-peer) is tracked on the replication roadmap as a future enhancement; until it ships, an idle gauge on this silo does NOT imply the peer is unreachable - it implies the local sender has had nothing to send.",
+      "description": "Wall-clock seconds since the local sender last successfully shipped a batch (or an empty liveness probe) to the named peer. Filters on direction=outbound; the inbound twin panel renders the receiver-side timeline.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -500,7 +500,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (peer) (orleans_lattice_replication_peer_last_contact_seconds{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "max by (peer) (orleans_lattice_replication_peer_last_contact_seconds{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\",direction=\"outbound\"})",
           "legendFormat": "{{peer}}"
         }
       ]
@@ -544,8 +544,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (peer) (orleans_lattice_replication_peer_consecutive_errors{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
-          "legendFormat": "{{peer}}"
+          "expr": "max by (peer, direction) (orleans_lattice_replication_peer_consecutive_errors{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{peer}} ({{direction}})"
         }
       ]
     },
@@ -654,6 +654,35 @@
         {
           "refId": "A",
           "expr": "sum by (peer) (orleans_lattice_replication_peer_bytes_behind_bytes{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Per-peer last inbound apply (seconds ago)",
+      "description": "Wall-clock seconds since the local receiver last successfully applied a batch authored by the named peer. Filters on direction=inbound; symmetric twin of the outbound ship panel.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (peer) (orleans_lattice_replication_peer_last_contact_seconds{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\",direction=\"inbound\"})",
           "legendFormat": "{{peer}}"
         }
       ]

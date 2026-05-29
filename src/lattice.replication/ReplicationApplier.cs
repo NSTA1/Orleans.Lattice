@@ -29,10 +29,27 @@ internal sealed partial class ReplicationApplier(
     IOptionsMonitor<LatticeReplicationOptions> options,
     LocalVectorClockCache localVectorClockCache,
     CrdtShapeRegistry? crdtShapes = null,
-    ILogger<ReplicationApplier>? logger = null) : IReplicationApplier
+    ILogger<ReplicationApplier>? logger = null,
+    ReplicationPeerStats? peerStats = null) : IReplicationApplier
 {
     private readonly ILogger<ReplicationApplier> _logger =
         logger ?? NullLogger<ReplicationApplier>.Instance;
+
+    /// <summary>
+    /// Optional per-peer telemetry sink. When non-<see langword="null"/>
+    /// the batch-apply path records an inbound success
+    /// (<see cref="ReplicationPeerStats.RecordInboundSuccess(string, string)"/>)
+    /// or failure
+    /// (<see cref="ReplicationPeerStats.RecordInboundError(string, string)"/>)
+    /// per per-origin run keyed by the entries'
+    /// <see cref="WalRecord.OriginClusterId"/>, so the bidirectional
+    /// <c>peer.last_contact_seconds{direction="inbound"}</c> and
+    /// <c>peer.consecutive_errors{direction="inbound"}</c> observable
+    /// gauges surface receiver-side liveness. Optional so existing
+    /// call sites (and tests) that construct the applier without a
+    /// stats sink continue to compile.
+    /// </summary>
+    private readonly ReplicationPeerStats? _peerStats = peerStats;
 
     /// <summary>
     /// Per-tree causal-apply buffers, lazily created on first park.

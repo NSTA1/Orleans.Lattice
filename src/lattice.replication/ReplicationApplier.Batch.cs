@@ -38,10 +38,25 @@ internal sealed partial class ReplicationApplier
         // Single-entry: defer to the per-entry path so behaviour is
         // bit-identical with the legacy receiver. The per-entry path
         // already covers every classification (range delete, local-origin
-        // defence, dedup, causal-park, success).
+        // defence, dedup, causal-park, success). Inbound-direction
+        // peer-stats recording still fires here so a transport that
+        // ships one-entry batches surfaces the same
+        // <c>peer.last_contact_seconds{direction="inbound"}</c> signal
+        // as multi-entry batches.
         if (entries.Count == 1)
         {
-            return await ApplyAsync(entries[0], cancellationToken).ConfigureAwait(false);
+            var single = entries[0];
+            try
+            {
+                var r = await ApplyAsync(single, cancellationToken).ConfigureAwait(false);
+                RecordInboundContact(single, success: true);
+                return r;
+            }
+            catch
+            {
+                RecordInboundContact(single, success: false);
+                throw;
+            }
         }
 
         // Walk contiguous same-(treeId, origin) runs. The receiver
@@ -64,7 +79,17 @@ internal sealed partial class ReplicationApplier
                 j++;
             }
 
-            var runResult = await ApplyOriginRunAsync(entries, i, j, cancellationToken).ConfigureAwait(false);
+            ApplyResult runResult;
+            try
+            {
+                runResult = await ApplyOriginRunAsync(entries, i, j, cancellationToken).ConfigureAwait(false);
+                RecordInboundContact(entries[i], success: true);
+            }
+            catch
+            {
+                RecordInboundContact(entries[i], success: false);
+                throw;
+            }
             if (runResult.Applied)
             {
                 anyApplied = true;
@@ -77,6 +102,46 @@ internal sealed partial class ReplicationApplier
         }
 
         return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+    }
+
+    /// <summary>
+    /// Records an inbound per-peer contact against the bidirectional
+    /// <see cref="ReplicationPeerStats"/> using the entry's
+    /// <see cref="WalRecord.OriginClusterId"/> as the peer key.
+    /// Range-delete entries and any other system-internal records that
+    /// carry no <see cref="WalRecord.OriginClusterId"/> are skipped:
+    /// inbound contact only makes sense for entries authored by a
+    /// remote peer. Local-origin entries (the loopback defence path)
+    /// are similarly excluded - they describe a same-cluster mutation
+    /// that bounced through the apply pipeline and have no inbound
+    /// peer to attribute. The recording is best-effort and never
+    /// throws into the apply pipeline.
+    /// </summary>
+    private void RecordInboundContact(WalRecord representative, bool success)
+    {
+        if (_peerStats is null)
+        {
+            return;
+        }
+        if (string.IsNullOrEmpty(representative.OriginClusterId)
+            || string.IsNullOrEmpty(representative.TreeId))
+        {
+            return;
+        }
+        var resolved = options.Get(representative.TreeId);
+        if (string.Equals(representative.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
+        {
+            // Local-origin defence path - no inbound peer to attribute.
+            return;
+        }
+        if (success)
+        {
+            _peerStats.RecordInboundSuccess(representative.TreeId, representative.OriginClusterId!);
+        }
+        else
+        {
+            _peerStats.RecordInboundError(representative.TreeId, representative.OriginClusterId!);
+        }
     }
 
     /// <summary>
