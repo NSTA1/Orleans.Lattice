@@ -105,6 +105,32 @@ internal sealed class MultiSiteClusterFixture
     /// <summary>Returns the replication applier for site <paramref name="index"/>.</summary>
     public ReplicationApplier ApplierOf(int index) => _appliers[index];
 
+    /// <summary>
+    /// Registers a per-test OR-Map shape on every site's silo-side
+    /// <see cref="Orleans.Lattice.CrdtShapeRegistry"/>. The OR-Map
+    /// dispatch path (both producer and receiver) looks the descriptor
+    /// up at runtime, so chaos tests that exercise
+    /// <see cref="LatticeMergeMode.OrMap"/> must register the
+    /// <c>(TKey, TValue)</c> pair for their tree id before issuing any
+    /// writes. Mirrors <c>FourShardClusterFixture.RegisterOrMapShape</c>;
+    /// runs after silo startup so tests can pick fresh tree ids per
+    /// test method without re-deploying the fixture.
+    /// </summary>
+    public void RegisterOrMapShape<TKey, TValue>(string treeId)
+        where TKey : notnull
+        where TValue : Orleans.Lattice.Primitives.ICrdt<TValue>, new()
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        for (var i = 0; i < SiteCount; i++)
+        {
+            foreach (var silo in _sites[i].Silos.OfType<InProcessSiloHandle>())
+            {
+                var registry = silo.SiloHost.Services.GetRequiredService<Orleans.Lattice.CrdtShapeRegistry>();
+                registry.Register(treeId, Orleans.Lattice.CrdtShape.ForOrMap<TKey, TValue>());
+            }
+        }
+    }
+
     /// <summary>Stands up every site and prepares per-site change feeds and appliers.</summary>
     public async Task InitializeAsync()
     {
