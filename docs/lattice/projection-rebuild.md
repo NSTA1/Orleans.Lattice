@@ -308,32 +308,48 @@ all.
 ## Recovery: fall-off-log triggers and `ProjectionRebuildPolicy`
 
 When a leaf grain reactivates it consults its persisted
-`ProjectionCheckpointOffset` and decides how to recover. Three triggers
-classify the activation as **fall-off-log** - the leaf cannot or should
-not resume by tail-replay alone:
+per-partition `ProjectionCheckpointOffsetsByPartition[p]` (and the
+legacy scalar `ProjectionCheckpointOffset` for the partition-0
+back-compat slot) and decides how to recover. The classifier runs
+**once per partition** in `[0, WalPartitions)`; the leaf is treated
+as fall-off-log if **any** partition's classifier raises a non-
+`TailReplay` decision. Three triggers classify an individual
+partition as fall-off-log - the leaf cannot or should not resume
+that partition by tail-replay alone:
 
-1. **WAL trimmed past checkpoint.** The per-shard WAL has GC'd entries
-   the leaf still considers unapplied. A tail replay would skip those
-   entries and converge to the wrong state. Skipped when
-   `ProjectionCheckpointOffset` is the -1 "nothing applied" sentinel,
-   because a leaf with no in-memory state has nothing to lose to a
-   trimmed prefix.
-2. **Replay budget exceeded.** The gap `walHead - checkpoint` exceeds
-   `LatticeOptions.MaxLeafReplayEntries` (default `10 000`). Replaying
-   in the activation path would produce a long cold-start; the operator
-   has elected to take the snapshot-then-WAL path instead. Also skipped
-   for the -1 sentinel: a fresh leaf has nothing in cache to recover,
-   and the per-leaf range filter inside the materialiser
-   (`ShouldApplyDuringReplay`) drops every WAL entry outside the leaf's
-   ownership range on iteration, so the effective work is bounded by
-   the leaf's own range rather than by the apparent gap. The
-   per-slice `ReplaySliceBudget` still bounds individual coordinator
-   reads on this path.
+1. **WAL trimmed past checkpoint.** Partition `p`'s per-shard WAL
+   has GC'd entries the leaf still considers unapplied. A tail
+   replay would skip those entries and converge to the wrong state.
+   Skipped when the partition's checkpoint is the -1 "nothing
+   applied" sentinel, because a leaf with no in-memory state has
+   nothing to lose to a trimmed prefix on that partition.
+2. **Replay budget exceeded.** The gap `walHead[p] - checkpoint[p]`
+   exceeds `LatticeOptions.MaxLeafReplayEntries` (default `10 000`).
+   Replaying in the activation path would produce a long cold-start;
+   the operator has elected to take the snapshot-then-WAL path
+   instead. Also skipped for the -1 sentinel: a fresh leaf has
+   nothing in cache to recover, and the per-leaf range filter inside
+   the materialiser (`ShouldApplyDuringReplay`) drops every WAL
+   entry outside the leaf's ownership range on iteration, so the
+   effective work is bounded by the leaf's own range rather than by
+   the apparent gap. The per-slice `ReplaySliceBudget` still bounds
+   individual coordinator reads on this path.
 3. **Cold past retention.** The persisted projection age exceeds
    `LatticeOptions.LeafProjectionRetention` (default 7 days) - long
-   enough that even a healthy WAL has likely been trimmed beneath the
-   leaf's checkpoint. Forcing a snapshot-based recovery here avoids a
-   silent miss of trim-induced gaps.
+   enough that even a healthy WAL has likely been trimmed beneath
+   the leaf's checkpoint. Forcing a snapshot-based recovery here
+   avoids a silent miss of trim-induced gaps. Evaluated once for
+   the leaf as a whole (age is a property of the leaf, not of any
+   one partition).
+
+On the healthy multi-partition path every partition's classifier
+returns `TailReplay`, and the leaf executes a two-pass replay across
+all partitions (per-partition Set / Delete absorption with
+`TxCommit` / `TxAbort` / `DeleteRange` deferred until every partition
+has populated its pending-tx record, then drained) followed by a
+post-pass per-partition checkpoint reconciliation that advances each
+partition's `ProjectionCheckpointOffsetsByPartition[p]` to the
+highest applied offset once the saga-prepare clamp lifts.
 
 The `ProjectionRebuildPolicy` enum on `LatticeOptions` selects what
 the leaf does once a trigger fires:
@@ -368,24 +384,26 @@ The three activation-time triggers above react to a fall-off-log
 condition *after* it has already happened. The snapshot-on-fall-off
 path is the preventative safety net: while a leaf is still healthy,
 it captures a canonical-row image of its in-memory cache to a
-dedicated snapshot grain whenever the WAL tail approaches the leaf's
-persisted checkpoint. On the next activation, if the snapshot's
-offset is strictly newer than the persisted `ProjectionCheckpointOffset`,
+dedicated snapshot grain whenever any partition's WAL tail
+approaches that partition's persisted checkpoint. On the next
+activation, if the snapshot's per-partition offsets are strictly
+newer than the persisted `ProjectionCheckpointOffsetsByPartition`,
 the leaf rehydrates its cache from the blob rows and tail-replays
-the WAL forward from the snapshot offset. The activation thus
+each partition forward from its captured offset.
 proceeds without ever needing to fail back into
 `SnapshotThenWal` / `FullRebuildFromWal` / `Fail` recovery, even
 when the WAL has been trimmed past the original checkpoint.
 
 The capture path is **leaf-driven**, not maintenance-driven:
 
-- At activation, the leaf runs the fall-off-log detector. When no
-  hard trigger has fired but the gap `walHead - checkpoint` is
-  within `LeafSnapshotMargin` (default `0.30`) of the WAL tail, the
-  detector returns the non-fatal `SnapshotPending` advisory. The
-  leaf latches the advisory, finishes its tail replay, and then
-  fires a single `CaptureSnapshotAsync` call before yielding the
-  activation turn.
+- At activation, the leaf runs the fall-off-log detector once per
+  partition. When no hard trigger has fired but any partition's gap
+  `walHead[p] - checkpoint[p]` is within `LeafSnapshotMargin`
+  (default `0.30`) of that partition's WAL tail, the detector
+  returns the non-fatal `SnapshotPending` advisory. The leaf
+  latches the advisory, finishes its tail replay across every
+  partition, and then fires a single `CaptureSnapshotAsync` call
+  before yielding the activation turn.
 - While the leaf remains hot, every
   `LeafSnapshotReClassifyEveryNCheckpoints` (default `64`)
   successful checkpoint persist re-runs the classifier and drives
