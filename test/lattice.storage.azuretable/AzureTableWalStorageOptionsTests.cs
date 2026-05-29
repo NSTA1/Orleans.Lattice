@@ -583,11 +583,17 @@ public class AzureTableWalStorageOptionsTests
     }
 
     [Test]
-    public void PhaseTwoCoalescingWindow_defaults_to_Zero()
+    public void PhaseTwoCoalescingWindow_defaults_to_five_ms()
     {
+        // The default carries the throughput campaign's measured
+        // Azure-Tables sweet spot - the highest-impact entry on the
+        // library-default-flip ladder. The constant exists so a future
+        // re-tune happens in exactly one place.
         var options = new AzureTableWalStorageOptions();
 
-        Assert.That(options.PhaseTwoCoalescingWindow, Is.EqualTo(TimeSpan.Zero));
+        Assert.That(options.PhaseTwoCoalescingWindow, Is.EqualTo(TimeSpan.FromMilliseconds(5)));
+        Assert.That(AzureTableWalStorageOptions.DefaultPhaseTwoCoalescingWindow,
+            Is.EqualTo(TimeSpan.FromMilliseconds(5)));
     }
 
     [Test]

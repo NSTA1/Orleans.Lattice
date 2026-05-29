@@ -122,7 +122,7 @@ public sealed class AzureTableWalStorageOptions
     /// leaves the SDK default (3 retries) in place; <c>0</c>
     /// disables retries entirely. Must be non-negative.
     /// <para>
-    /// Phase A (see <c>scaling.md</c>) observed a 5–100x gap between
+    /// Phase A observed a 5–100x gap between
     /// wall p99 (700–1,700 ms) and Azure Tables server-timing p99
     /// (10–130 ms) on the WAL hot path, which is consistent with the
     /// SDK's default 4-attempt × 0.8 s base-delay exponential backoff
@@ -198,22 +198,24 @@ public sealed class AzureTableWalStorageOptions
     /// the previous call's phase-2 task before returning, so failures
     /// remain sticky and a caller can never advance past an
     /// unrecovered phase-2 fault undetected. Default is
-    /// <see langword="false"/> - the safe, simple behaviour where
-    /// every <c>AppendBatchAsync</c> awaits its own phase-2 commit
-    /// before returning.
+    /// <see langword="true"/> - the throughput campaign's measured
+    /// Azure-Tables operating-point default and the second-highest-
+    /// impact entry on the library-default-flip ladder (synchronous
+    /// phase-2 forces every commit to await its own manifest+TAIL
+    /// update, halving the steady-state per-shard request-path
+    /// latency). Set to <see langword="false"/> to restore the
+    /// pre-v6.0 historical behaviour (every <c>AppendBatchAsync</c>
+    /// awaits its own phase-2 commit before returning).
     /// <para>
-    /// <b>Why pipeline.</b> With the default
-    /// <c>LatticeOptions.WalMaxPendingBatches = 1</c> the WAL grain
-    /// serialises append calls per shard. Each call's request-path
-    /// latency is then
-    /// <c>max(phase0, phase1) + phase2</c>, and the per-shard worker's
-    /// coalescing window (up to 49 phase-2 commits collapsed into one
-    /// transaction) is wasted because it never sees more than one
-    /// pending commit at a time. Enabling this option overlaps phase
-    /// 2 of batch <c>N</c> with phase 0+1 of batch <c>N+1</c>, which
-    /// halves the steady-state request-path latency per shard and
-    /// turns the worker's coalescing window from "never used" to
-    /// "saturates under burst".
+    /// <b>Why pipeline.</b> Each call's request-path latency without
+    /// pipelining is <c>max(phase0, phase1) + phase2</c>, and the
+    /// per-shard worker's coalescing window (up to 49 phase-2
+    /// commits collapsed into one transaction) is wasted because it
+    /// never sees more than one pending commit at a time. Pipelining
+    /// overlaps phase 2 of batch <c>N</c> with phase 0+1 of batch
+    /// <c>N+1</c>, which halves the steady-state request-path
+    /// latency per shard and turns the worker's coalescing window
+    /// from "never used" to "saturates under burst".
     /// </para>
     /// <para>
     /// <b>What changes.</b> The WAL's all-or-nothing durability
@@ -251,7 +253,10 @@ public sealed class AzureTableWalStorageOptions
     /// invisible to the canonical replication path.
     /// </para>
     /// </summary>
-    public bool PipelinePhaseTwoCommits { get; set; }
+    public bool PipelinePhaseTwoCommits { get; set; } = DefaultPipelinePhaseTwoCommits;
+
+    /// <summary>Default value for <see cref="PipelinePhaseTwoCommits"/> (<c>true</c>; the throughput-campaign operating-point default).</summary>
+    public const bool DefaultPipelinePhaseTwoCommits = true;
 
     /// <summary>
     /// When <see langword="true"/>, <c>AppendBatchAsync</c> and
@@ -353,7 +358,7 @@ public sealed class AzureTableWalStorageOptions
     /// the commit's own duration).
     /// <para>
     /// <b>Why a coalescing window.</b> Phase A observations (see
-    /// <c>scaling.md</c>) showed <c>provider.phase2.batch_size</c>
+    /// <c></c>) showed <c>provider.phase2.batch_size</c>
     /// pinned at exactly <c>1.00</c> across hundreds of thousands of
     /// samples even when producer-side knobs
     /// (<c>WalMaxPendingBatches</c>, <c>WalPartitions</c>) were swept
@@ -387,8 +392,23 @@ public sealed class AzureTableWalStorageOptions
     /// duration p50 so the steady-state-loss case stays bounded.
     /// Must be non-negative.
     /// </para>
+    /// <para>
+    /// <b>Default.</b> 5 ms - the measured Azure-Tables sweet spot
+    /// the throughput campaign settled on as the operating-point
+    /// default and the highest-impact entry on the campaign's
+    /// library-default-flip ladder (a probe at
+    /// <c>PhaseTwoCoalescingWindow = 0</c> measured a -57% throughput
+    /// regression vs <c>= 5 ms</c> on the same baseline; a probe at
+    /// <c>= 2 ms</c> measured -28% vs <c>= 5 ms</c>). Set to
+    /// <see cref="TimeSpan.Zero"/> to restore the pre-v6.0 historical
+    /// behaviour (commit-on-first-arrival) when the workload's
+    /// arrival shape makes any window-induced delay net-negative.
+    /// </para>
     /// </summary>
-    public TimeSpan PhaseTwoCoalescingWindow { get; set; } = TimeSpan.Zero;
+    public TimeSpan PhaseTwoCoalescingWindow { get; set; } = DefaultPhaseTwoCoalescingWindow;
+
+    /// <summary>Default value for <see cref="PhaseTwoCoalescingWindow"/> (5 ms - the throughput-campaign sweet spot).</summary>
+    public static readonly TimeSpan DefaultPhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(5);
 
     /// <summary>
     /// Validates that exactly one authentication mode is configured and

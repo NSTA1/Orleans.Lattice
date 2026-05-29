@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Unit tests for the <see cref="LatticeOptions.DigestCoalescingWindowMs"/>
-/// opt-in shipped under scaling.md's c2-xxviii memo. The window defers the
+/// opt-in. The window defers the
 /// per-call <c>OnChildDigestPublishedAsync</c> hop behind a one-shot grain
 /// timer so mutations arriving within the window share a single publish.
 /// </summary>

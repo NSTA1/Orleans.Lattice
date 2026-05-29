@@ -184,9 +184,11 @@ The activation seam itself - `IWalStorageProvider.ReconcileAsync` - ships with a
 
 Setting `AzureTableWalStorageOptions.PipelinePhaseTwoCommits = true` opts the provider into a **pipelined phase-2** mode in which `AppendBatchAsync` returns as soon as the **previous** batch's phase-2 commit lands, rather than waiting for the **current** batch's own phase-2. Phase 0 (candidate-row stamp) and phase 1 (entry-row transactional batch) remain synchronous and durable on every call, so a crash at any point still produces a state the activation-time reconciler can roll forward or roll back deterministically. Pipelining only changes when the caller of the *current* `AppendBatchAsync` learns that phase-2 succeeded - it does not relax atomicity, ordering, or recovery.
 
-The mode is off by default and is purely a throughput-vs-latency knob:
+**As of v6.0.1 the default is `PipelinePhaseTwoCommits = true`** (the operating-point default selected by the throughput campaign). The mode is now opt-out rather than opt-in; hosts that need the pre-v6.0 strict-serial-phase-2 behaviour (phase-2 failure surfaces on the failing call rather than the next one) set it back to `false` explicitly. The default flip is paired with `PhaseTwoCoalescingWindow = 5 ms` (also flipped in v6.0.1) so the worker's 49-row coalescing window actually engages under burst load instead of committing one-row transactions every call.
 
-| Property | Default | Pipelined |
+The mode is purely a throughput-vs-latency knob:
+
+| Property | Pre-v6.0.1 / opt-out (`= false`) | v6.0.1 default / pipelined (`= true`) |
 |---|---|---|
 | Caller-visible append latency | own phase-0+1+2 | own phase-0+1 + previous phase-2 |
 | Phase-2 commit ordering on a shard | strict ascending start-offset | strict ascending start-offset (unchanged) |
@@ -230,7 +232,7 @@ A representative single-silo Azurite measurement (current-state-no-replication s
 Two practical rules follow:
 
 - Enable pipelining only on backends that scale write concurrency (e.g. real Azure Tables with multiple WAL shards spreading across partitions). On a single-writer backend - Azurite, a single-shard configuration, or any WAL whose effective write width is one - pipelining can amplify saturation rather than relieve it.
-- Treat `PipelinePhaseTwoCommits` as a per-deployment knob, not a default. Validate it with the workload's actual sustained offered rate against the actual backend; the win regime is bounded both above and below.
+- **As of v6.0.1 the default is `PipelinePhaseTwoCommits = true`** because the throughput campaign measured a large, sustained win at the Azure-Tables operating point - the single highest-impact entry on the campaign's library-default-flip ladder - with the recovery contract unchanged and failures still sticky on the next call. Hosts running against a single-writer backend (Azurite, single-shard configurations, or any WAL whose effective write width is one) should explicitly opt **out** (`PipelinePhaseTwoCommits = false`) - the table above's "past knee" row applies. The same rule covers any host that wants the pre-v6.0 behaviour where a phase-2 failure surfaces on the failing call rather than the next one.
 
 #### Eliminating the phase-0 candidate row
 

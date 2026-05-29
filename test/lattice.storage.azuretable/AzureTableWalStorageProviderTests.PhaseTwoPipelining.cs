@@ -63,14 +63,17 @@ public class AzureTableWalStorageProviderPhaseTwoPipeliningTests
     }
 
     [Test]
-    public void PipelinePhaseTwoCommits_default_value_is_false()
+    public void PipelinePhaseTwoCommits_default_value_is_true()
     {
-        // The option flips an observable durability characteristic
-        // (phase-2 failure surfaces on the *next* AppendBatchAsync
-        // rather than the failing one), so the default must be off
-        // until a host explicitly opts in.
+        // The throughput campaign's measured Azure-Tables operating-
+        // point flip: pipelining halves the steady-state per-shard
+        // request-path latency by overlapping phase-2 of batch N with
+        // phase 0+1 of batch N+1. Hosts that require the pre-v6.0
+        // strict-serial-phase-2 shape (failure surfaces on the failing
+        // call instead of the next one) opt out explicitly.
         var options = new AzureTableWalStorageOptions();
-        Assert.That(options.PipelinePhaseTwoCommits, Is.False);
+        Assert.That(options.PipelinePhaseTwoCommits, Is.True);
+        Assert.That(AzureTableWalStorageOptions.DefaultPipelinePhaseTwoCommits, Is.True);
     }
 
     [Test]
