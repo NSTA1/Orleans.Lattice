@@ -345,4 +345,147 @@ public partial class BPlusInternalGrainTests
         Assert.That(digest.Hash.Length, Is.EqualTo(16));
         Assert.That(legacyState.State.SubtreeProjectionHash, Is.Not.Null);
     }
+
+    // --- Drift regression: prior snapshot with null/wrong-length Hash ---
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_replaces_prior_entry_count_when_prior_hash_is_null()
+    {
+        // Repro for the post-v6.0.0 CI-only flake on
+        // DigestCoalescingClusterIntegrationTests.DigestCoalescingWindow_eventually_publishes_aggregate_to_parent
+        // ("expected 12, observed 15" - +1 per split).
+        //
+        // The pre-shipping ApplyChildSnapshotAsync gated the
+        // EntryCount subtraction on the prior snapshot having a
+        // well-formed (length-16) hash:
+        //   if (hadPrior && prior.Hash is { Length: 16 } priorHash) {
+        //       hash ^= priorHash;
+        //       SubtreeEntryCount -= prior.EntryCount;   <-- skipped
+        //                                                    when Hash
+        //                                                    is null /
+        //                                                    wrong length
+        //   }
+        //   SubtreeEntryCount += newSnapshot.EntryCount;
+        //
+        // Result: a child whose stored prior snapshot had a
+        // null-or-wrong-length Hash (e.g. a default snapshot inserted
+        // by a topology-rewrite seam, a legacy persisted state, or a
+        // never-published-by-this-child slot) re-publishes with a
+        // valid hash and the new count is ADDED to a stale count
+        // that should have been subtracted. Each re-publish compounds
+        // the drift.
+        //
+        // The fix re-derives SubtreeEntryCount from
+        // state.State.ChildDigests on every apply (single source of
+        // truth) instead of maintaining it incrementally. This test
+        // is the deterministic repro: stash a prior snapshot with
+        // EntryCount=4 and Hash=null directly into the persisted
+        // dictionary, then publish a fresh snapshot with
+        // EntryCount=7 - the resulting SubtreeEntryCount must be 7
+        // (the new value), not 11 (4 + 7 from the skipped subtract)
+        // and not 4 (no update at all).
+        var (grain, state, _) = CreateDigestGrain();
+        state.State.ChildDigests[DigestChild0] = new ChildDigestSnapshot
+        {
+            Hash = null,           // the load-bearing condition
+            EntryCount = 4,
+            CheckpointOffset = 0,
+        };
+        state.State.SubtreeEntryCount = 4;  // mirror the dictionary so the
+                                            // invariant pre-condition holds.
+
+        await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x42),
+            EntryCount = 7,
+            CheckpointOffset = 99,
+        });
+
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(7),
+            "SubtreeEntryCount must reflect the new per-child sum (the table is the source of truth); "
+            + "a skipped subtract on a null/wrong-length prior hash silently double-counts the prior entries.");
+        Assert.That(state.State.SubtreeHighestCheckpointOffset, Is.EqualTo(99));
+        Assert.That(state.State.ChildDigests[DigestChild0].Hash, Is.EqualTo(Bytes16(0x42)));
+    }
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_replaces_prior_entry_count_when_prior_hash_has_wrong_length()
+    {
+        // Sibling case of the null-prior-hash test above: an existing
+        // entry whose Hash is non-null but the wrong length (e.g.
+        // legacy persisted state from an older hash algorithm) must
+        // also have its EntryCount subtracted on re-publish.
+        var (grain, state, _) = CreateDigestGrain();
+        state.State.ChildDigests[DigestChild0] = new ChildDigestSnapshot
+        {
+            Hash = new byte[8],  // wrong length triggers the same skip
+            EntryCount = 4,
+            CheckpointOffset = 0,
+        };
+        state.State.SubtreeEntryCount = 4;  // mirror the dictionary.
+
+        await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x42),
+            EntryCount = 7,
+            CheckpointOffset = 99,
+        });
+
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(7),
+            "SubtreeEntryCount must reflect the new per-child sum even when the prior snapshot's "
+            + "Hash has the wrong byte width; the entry-count is independent of hash-width gating.");
+    }
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_subtree_entry_count_equals_sum_of_child_entry_counts()
+    {
+        // Strong invariant: after any apply,
+        //   SubtreeEntryCount == sum over ChildDigests of EntryCount
+        // Exercises a deliberate mix of valid / null / wrong-length
+        // prior hashes so a future regression that re-introduces the
+        // incremental shape (and silently skips a subtract on a
+        // null/wrong-length prior) trips here even when each
+        // individual test passes in isolation.
+        var (grain, state, _) = CreateDigestGrain();
+
+        // Seed three children with three different prior-hash shapes.
+        state.State.ChildDigests[DigestChild0] = new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x11), EntryCount = 2, CheckpointOffset = 0,
+        };
+        state.State.ChildDigests[DigestChild1] = new ChildDigestSnapshot
+        {
+            Hash = null, EntryCount = 3, CheckpointOffset = 0,
+        };
+        var DigestChild2 = GrainId.Create("leaf", "digest-child-2");
+        state.State.ChildDigests[DigestChild2] = new ChildDigestSnapshot
+        {
+            Hash = new byte[8], EntryCount = 5, CheckpointOffset = 0,
+        };
+
+        // Re-publish each in turn with a fresh count.
+        await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 4, CheckpointOffset = 1,
+        });
+        await grain.OnChildDigestPublishedAsync(DigestChild1, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x33), EntryCount = 6, CheckpointOffset = 2,
+        });
+        await grain.OnChildDigestPublishedAsync(DigestChild2, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x44), EntryCount = 8, CheckpointOffset = 3,
+        });
+
+        var expected = 4 + 6 + 8;
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(expected),
+            "SubtreeEntryCount must equal the sum of the current per-child EntryCount values; "
+            + $"observed {state.State.SubtreeEntryCount}, expected {expected}");
+
+        // Cross-check the invariant directly against the dictionary.
+        long fromTable = 0;
+        foreach (var kvp in state.State.ChildDigests)
+            fromTable += kvp.Value.EntryCount;
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(fromTable));
+    }
 }
