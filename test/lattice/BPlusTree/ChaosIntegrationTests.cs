@@ -103,6 +103,16 @@ public class ChaosIntegrationTests
         // pre-saga values which also satisfy the v-{idx}-* envelope).
         || (ex is InvalidOperationException
             && ex.Message.Contains("failed and was rolled back", StringComparison.Ordinal))
+        // Documented MaxScanRetries-exhaustion on CountAsync / CountPerShardAsync /
+        // GetManyAsync under aggressive concurrent split churn. The exception
+        // message itself instructs the operator to "Increase
+        // LatticeOptions.MaxScanRetries or reduce concurrent split activity",
+        // and this chaos test deliberately drives both at the documented
+        // edge. Treat as transient so the rate shows up in transient-counts /
+        // transient-splits stats counters rather than as an invariant
+        // violation.
+        || (ex is InvalidOperationException
+            && ex.Message.Contains("retries while topology kept changing", StringComparison.Ordinal))
         // Orleans call timeout under saturated load ( sagas serialise 8+
         // round-trips per call). The saga's own reminder-driven recovery will
         // finish the write; from the chaos test's perspective this is a
