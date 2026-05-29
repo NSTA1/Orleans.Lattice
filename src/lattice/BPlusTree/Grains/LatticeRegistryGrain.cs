@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -15,7 +16,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// </summary>
 internal sealed class LatticeRegistryGrain(
-    IGrainFactory grainFactory) : ILatticeRegistry
+    IGrainFactory grainFactory,
+    IOptionsMonitor<LatticeOptions> optionsMonitor) : ILatticeRegistry
 {
     private static readonly byte[] EmptyEntry = SerializeEntry(new TreeRegistryEntry());
 
@@ -57,12 +59,12 @@ internal sealed class LatticeRegistryGrain(
         // not special-cased - they use the same defaults so their leaves,
         // internals, and shard maps share the same invariants as user
         // trees.
-        var seeded = SeedStructuralDefaults(entry);
+        var seeded = SeedStructuralDefaults(entry, optionsMonitor.Get(treeId).WalPartitions);
 #if LATTICE_DIAG
         try
         {
             DiagSink.Write(
-                $"RegisterAsync seeding treeId={treeId} seeded={{mlk={seeded.MaxLeafKeys},mic={seeded.MaxInternalChildren},sc={seeded.ShardCount}}}");
+                $"RegisterAsync seeding treeId={treeId} seeded={{mlk={seeded.MaxLeafKeys},mic={seeded.MaxInternalChildren},sc={seeded.ShardCount},wp={seeded.WalPartitions}}}");
         }
         catch { }
 #endif
@@ -71,7 +73,7 @@ internal sealed class LatticeRegistryGrain(
         await Registry.SetAsync(treeId, bytes);
     }
 
-    private static TreeRegistryEntry SeedStructuralDefaults(TreeRegistryEntry? entry)
+    private static TreeRegistryEntry SeedStructuralDefaults(TreeRegistryEntry? entry, int siloDefaultWalPartitions)
     {
         entry ??= new TreeRegistryEntry();
         return entry with
@@ -79,6 +81,14 @@ internal sealed class LatticeRegistryGrain(
             MaxLeafKeys = entry.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys,
             MaxInternalChildren = entry.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,
             ShardCount = entry.ShardCount ?? LatticeConstants.DefaultShardCount,
+            // WalPartitions is pinned at first-register from the
+            // silo's then-current LatticeOptions.WalPartitions. Once
+            // stamped the value is tree-immutable - LatticeOptionsResolver
+            // reads from this slot in preference to the live options-
+            // monitor value so the foreground commit-log writer and
+            // the activation-time materialiser always agree on the
+            // partition fan-out shape for the lifetime of the tree.
+            WalPartitions = entry.WalPartitions ?? siloDefaultWalPartitions,
         };
     }
 

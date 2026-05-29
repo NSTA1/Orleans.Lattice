@@ -63,6 +63,20 @@ internal static class LatticeConstants
     public const int DefaultShardCount = 64;
 
     /// <summary>
+    /// WAL partition count used by every system tree (the registry,
+    /// the WAL-writer cursor tree, the tx-registry, the dead-letter
+    /// queue, etc.). System trees are silo-internal metadata with low
+    /// key cardinality and low write churn; fanning their WAL out
+    /// across multiple partition grains multiplies activation cost
+    /// for zero throughput win. The registry tree in particular
+    /// cannot consult itself to resolve its own
+    /// <see cref="LatticeOptions.WalPartitions"/> pin without a
+    /// bootstrap cycle, so the resolver's system-tree branch reads
+    /// this constant directly and never consults the registry.
+    /// </summary>
+    public const int DefaultSystemTreeWalPartitions = 1;
+
+    /// <summary>
     /// Size of the virtual shard space used for key routing. Keys are hashed
     /// into one of <see cref="DefaultVirtualShardCount"/> virtual slots, and a
     /// per-tree <c>ShardMap</c> collapses those virtual slots onto the physical

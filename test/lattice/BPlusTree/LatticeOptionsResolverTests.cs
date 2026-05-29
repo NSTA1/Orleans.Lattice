@@ -427,4 +427,72 @@ public class LatticeOptionsResolverTests
                 && level == Microsoft.Extensions.Logging.LogLevel.Warning);
         Assert.That(warningCalls, Is.EqualTo(0));
     }
+
+    // ---- WalPartitions pin precedence ------------------------------
+
+    [Test]
+    public async Task User_tree_resolves_WalPartitions_from_registry_pin_when_set()
+    {
+        // Pinned registry entry carries WalPartitions = 4; the silo's
+        // LatticeOptions says 8. The pin must win for the lifetime of
+        // the tree so the foreground commit-log writer and the
+        // activation-time materialiser always agree on the partition
+        // fan-out shape.
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 8 });
+        registry.GetEntryAsync("pinned-tree").Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+                WalPartitions = 4,
+            }));
+
+        var resolved = await resolver.ResolveAsync("pinned-tree");
+
+        Assert.That(resolved.WalPartitions, Is.EqualTo(4));
+    }
+
+    [Test]
+    public async Task User_tree_falls_back_to_silo_default_when_pin_is_null()
+    {
+        // Legacy registry rows persisted before the WalPartitions slot
+        // was added decode the slot as null; the resolver falls back
+        // to the live LatticeOptions.WalPartitions value. This is the
+        // upgrade path: the next RegisterAsync stamps the pin and
+        // subsequent resolves read from it.
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 8 });
+        registry.GetEntryAsync("legacy-tree").Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+                WalPartitions = null,
+            }));
+
+        var resolved = await resolver.ResolveAsync("legacy-tree");
+
+        Assert.That(resolved.WalPartitions, Is.EqualTo(8));
+    }
+
+    [Test]
+    public async Task System_tree_resolves_WalPartitions_to_constant_regardless_of_silo_default()
+    {
+        // System trees are silo-internal metadata with low key
+        // cardinality and low write churn. The resolver's system-tree
+        // branch never touches the registry (the registry tree
+        // cannot consult the registry to resolve its own pin without
+        // a bootstrap cycle) and hardcodes WalPartitions to the
+        // dedicated constant. Even with a silo-wide override of 64,
+        // the system tree must observe the constant.
+        var (resolver, _) = Build(new LatticeOptions { WalPartitions = 64 });
+
+        var resolved = await resolver.ResolveAsync(
+            LatticeConstants.SystemTreePrefix + "anything");
+
+        Assert.That(resolved.WalPartitions,
+            Is.EqualTo(LatticeConstants.DefaultSystemTreeWalPartitions));
+        Assert.That(LatticeConstants.DefaultSystemTreeWalPartitions, Is.EqualTo(1));
+    }
 }

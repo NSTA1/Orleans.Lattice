@@ -94,4 +94,34 @@ internal sealed record TreeRegistryEntry
     /// </para>
     /// </summary>
     [Id(8)] public bool? ProjectionDigestPermanentlyDisabled { get; init; }
+
+    /// <summary>
+    /// Pinned WAL partition count for this tree. Stamped at first
+    /// <see cref="ILatticeRegistry.RegisterAsync"/> from the silo's
+    /// then-current <see cref="LatticeOptions.WalPartitions"/> value;
+    /// never mutated thereafter. <see cref="LatticeOptionsResolver"/>
+    /// prefers this slot over the live <see cref="IOptionsMonitor{T}"/>
+    /// value so the resolved <c>WalPartitions</c> seen by every grain
+    /// is tree-immutable for the lifetime of the tree.
+    /// <para>
+    /// Tree-structural pinning is required because the foreground
+    /// commit-log writer hashes each mutation key modulo this value to
+    /// route the write to a WAL partition grain; flipping the value
+    /// after the tree has accepted writes would silently re-route new
+    /// writes into grains that the activation-time materialiser is
+    /// not configured to read from. The pin protects both the
+    /// single-silo "operator retuned the value" case and the multi-
+    /// silo "two silos in the cluster disagree" case.
+    /// </para>
+    /// <para>
+    /// <see langword="null"/> on registry rows persisted before this
+    /// slot was introduced; the resolver falls back to the live
+    /// <see cref="IOptionsMonitor{T}"/> value in that case, exactly
+    /// matching the legacy pre-pin behaviour. Once any first-class
+    /// caller of <see cref="ILatticeRegistry.RegisterAsync"/> runs
+    /// against the upgraded library, the slot is stamped and every
+    /// subsequent resolve reads from the pin.
+    /// </para>
+    /// </summary>
+    [Id(9)] public int? WalPartitions { get; init; }
 }

@@ -79,8 +79,14 @@ public class LatticeOptionsResolverPropagationGuardTests
         {
             // WAL configuration: WalShardGrain reads these directly from
             // IOptionsMonitor at activation time; the resolver is not
-            // on the WAL hot path.
-            "WalPartitions",
+            // on the WAL hot path. WalPartitions is the exception -
+            // it is pinned per-tree in TreeRegistryEntry.WalPartitions
+            // and surfaced through the resolver so the foreground
+            // commit-log writer and the activation-time materialiser
+            // always agree on the partition fan-out shape for the
+            // lifetime of the tree; the propagation guard exercises
+            // its pass-through behaviour when the registry entry
+            // carries a null pin.
             "WalMaxBatchEntries",
             "WalMaxBatchBytes",
             "WalMaxPendingBatches",

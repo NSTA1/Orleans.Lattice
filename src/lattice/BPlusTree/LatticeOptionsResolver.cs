@@ -76,12 +76,23 @@ internal sealed class LatticeOptionsResolver(
         var baseOptions = optionsMonitor.Get(treeId);
 
         int mlk, mic, sc;
+        int walPartitions;
         bool maintainDigest;
         if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             mlk = LatticeConstants.DefaultMaxLeafKeys;
             mic = LatticeConstants.DefaultMaxInternalChildren;
             sc = LatticeConstants.DefaultShardCount;
+            // System trees pin their WAL fan-out at the dedicated
+            // constant (1) regardless of the silo-wide default. System
+            // trees are silo-internal metadata with low key cardinality
+            // and low write churn; fanning their WAL out across
+            // multiple partition grains multiplies activation cost for
+            // zero throughput win. The registry tree in particular
+            // cannot consult the registry to resolve its own pin
+            // without a bootstrap cycle - this branch therefore never
+            // touches the registry.
+            walPartitions = LatticeConstants.DefaultSystemTreeWalPartitions;
             // System trees are silo-internal metadata that is never
             // replicated across clusters. The digest is a cross-silo
             // drift canary; for system trees it has no consumer, so
@@ -126,6 +137,22 @@ internal sealed class LatticeOptionsResolver(
             mlk = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys;
             mic = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren;
             sc = entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
+            // WAL partition pin precedence:
+            //   1. Registry pin (entry.WalPartitions): tree-immutable,
+            //      stamped at first RegisterAsync from the silo's
+            //      then-current LatticeOptions.WalPartitions.
+            //   2. Live IOptionsMonitor<LatticeOptions> value: fallback
+            //      for legacy registry rows persisted before the
+            //      WalPartitions slot was added. These rows resolve to
+            //      the live value once; the next RegisterAsync stamps
+            //      the pin and subsequent resolves read from it.
+            // The pin is required because the foreground commit-log
+            // writer hashes each mutation key modulo this value to
+            // route the write to a WAL partition grain - flipping the
+            // value after the tree has accepted writes would silently
+            // re-route new writes into grains that the activation-time
+            // materialiser is not configured to read from.
+            walPartitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
 
             // Effective MaintainProjectionDigest precedence:
             //   1. Latch (ProjectionDigestPermanentlyDisabled == true) forces false.
@@ -241,14 +268,16 @@ internal sealed class LatticeOptionsResolver(
             // to false. See LatticeOptionsResolverPropagationGuardTests
             // for the regression gate.
             DigestCoalescingWindowMs = baseOptions.DigestCoalescingWindowMs,
-            // WalPartitions must propagate through the resolver so the
-            // leaf-grain activation-time materialiser fans out its
-            // per-partition replay over the configured number of
-            // partitions. Without this projection the materialiser
-            // silently reads the LatticeOptions default (1) regardless
-            // of the operator's configured value, exactly mirroring the
-            // c2-xxix DigestCoalescingWindowMs leak above.
-            WalPartitions = baseOptions.WalPartitions,
+            // WalPartitions sourced from the per-tree pin (registry
+            // entry) for user trees and from LatticeConstants for
+            // system trees. The pin is established at first
+            // RegisterAsync from the silo's then-current
+            // LatticeOptions.WalPartitions; once stamped it is
+            // tree-immutable so the foreground commit-log writer and
+            // the activation-time materialiser always agree on the
+            // partition fan-out shape regardless of what the silo's
+            // live IOptionsMonitor<LatticeOptions> value is.
+            WalPartitions = walPartitions,
         };
     }
 
