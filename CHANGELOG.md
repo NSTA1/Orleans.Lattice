@@ -8,7 +8,21 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.0.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v6.1.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+
+### Candidate themes for a future major
+
+- Loosen the LWW-by-default contract on `ILattice.SetAsync` / `GetAsync` via an opt-in per-tree `DefaultMergeMode` (so `MvRegister` and other CRDT shapes can be the default for trees that want concurrency-preserving semantics).
+- Retire any deprecated seams that accumulate across the v6.x series.
+- Migration guide (core roadmap **F-021**) to accompany any breaking changes.
+
+Outstanding work is tracked in [`src/lattice/roadmap.md`](src/lattice/roadmap.md) and [`src/lattice.replication/roadmap.md`](src/lattice.replication/roadmap.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.1.0] - 2026-05-29
+
+Minor release. **Backwards-compatible at the compiled-API level**, with one observability shape change documented under `### Breaking` below. Adds bidirectional per-peer health observability and an opt-in idle-link liveness probe to the replication package; promotes the silo-wide WAL fan-out default from `1` to `8` partitions (per-tree-pinned so already-registered trees are unaffected); and expands the chaos-test suite across all four test projects with twelve new fixtures.
 
 ### Added
 
@@ -24,14 +38,6 @@ Items merged into `main` after the v6.0.1 cut accumulate here under the `### Add
 ### Breaking
 
 - **Doubled series on `peer.last_contact_seconds` and `peer.consecutive_errors`.** Hosts that opt into both directions see two series per `(tree, peer)` pair (one outbound, one inbound). Dashboards that previously matched these gauges without filtering by `direction` must add `direction="outbound"` to preserve the pre-bidirectional shape, or accept the doubled series. Metric names and units are unchanged. `peer.entries_behind` / `peer.bytes_behind` are unaffected.
-
-### Candidate themes for a future major
-
-- Loosen the LWW-by-default contract on `ILattice.SetAsync` / `GetAsync` via an opt-in per-tree `DefaultMergeMode` (so `MvRegister` and other CRDT shapes can be the default for trees that want concurrency-preserving semantics).
-- Retire any deprecated seams that accumulate across the v6.x series.
-- Migration guide (core roadmap **F-021**) to accompany any breaking changes.
-
-Outstanding work is tracked in [`src/lattice/roadmap.md`](src/lattice/roadmap.md) and [`src/lattice.replication/roadmap.md`](src/lattice.replication/roadmap.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
 ---
 
