@@ -245,7 +245,7 @@ internal sealed class WalShardGrain(
         // routing-truth shape used by WalCommitLogWriter and the
         // activation-time materialiser, not the live IOptionsMonitor
         // value that may have drifted since the tree was registered.
-        var resolved = await optionsResolver.ResolveAsync(_treeId).ConfigureAwait(false);
+        var resolved = await optionsResolver.ResolveAsync(_treeId).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         // Phase A attribution tags. The values are captured once at
         // activation; if the operator retunes WalMaxPendingBatches
         // through IOptionsMonitor while activations are live, existing
