@@ -22,23 +22,19 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Storage durability across silo restart.</b> Memory grain storage
-/// is per-silo: a restarted silo comes back with an empty in-memory
-/// dictionary. To keep the test meaningful we anchor every Lattice
-/// grain activation (registry, leaves, shard-roots) on the primary
-/// silo's storage by configuring memory storage only on the primary
-/// silo - secondary-silo activations resolve their state via the
-/// in-cluster <c>IGrainStorage</c> lookup, which Orleans routes through
-/// the storage provider registration shared at the cluster level. In
-/// practice the storage providers are registered per-silo, so the
-/// secondary's storage truly disappears on restart; but every shard /
-/// leaf activation re-pins to a placement target via the catalog, and
-/// the registry's stable per-tree placement steers reactivations back
-/// to the primary's storage on the next miss. For the assertions to
-/// hold under this constraint we deliberately keep the workload's
-/// universe small (50 keys) so any reactivation gap is short, and we
-/// drive the chaos window long enough (8 s) that the cluster re-converges
-/// after the restart.
+/// <b>Storage durability across silo restart.</b> The fixture uses
+/// <see cref="PublicApiContract.ProcessScopeMemoryGrainStorage"/>
+/// (a static-dictionary-backed <c>IGrainStorage</c> shared across
+/// every silo in the cluster) instead of the Orleans-shipped
+/// <c>AddMemoryGrainStorage</c>. The Orleans-shipped provider is
+/// per-silo and dies with the silo, so a SecondarySilo restart
+/// wipes any <c>ShardRootGrain</c> / <c>ILatticeRegistry</c> /
+/// leaf state that was anchored there; the next reactivation
+/// would read empty state and re-run <c>EnsureRootAsync</c>,
+/// overwriting the live tree topology with a single-leaf root.
+/// That storage-isolation regression is unrelated to silo
+/// membership churn and would mask the actual invariant this
+/// test exists to verify.
 /// </para>
 /// <para>
 /// <b>Acceptance.</b> Post-window CountAsync must match the seeded
@@ -49,13 +45,6 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 [TestFixture]
 [NonParallelizable]
 [Category("Chaos")]
-[Ignore(
-    "Tracked on the core roadmap as 'Grain-type discrimination on B+ leaf/internal grain ids (silo-restart safety)'. " +
-    "Reproducibly throws System.InvalidCastException (BPlusInternalGrain to IBPlusLeafGrain) in roughly 1 of 3 runs " +
-    "on the post-window CountAsync call after a secondary-silo restart - the Orleans grain-directory catalog can resolve a " +
-    "leaf-vs-internal grain reference to the wrong impl when both grain kinds share the Guid-only id derivation seam. " +
-    "Re-enable once the typed grain-id discriminator lands (per the roadmap entry's scope: [GrainType] attributes or a " +
-    "leaf/internal prefix in the Guid derivation so the two grain kinds occupy disjoint key spaces).")]
 public class MultiSiloRestartChaosTests
 {
     private TestCluster _cluster = null!;
@@ -272,7 +261,25 @@ public class MultiSiloRestartChaosTests
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // Use a process-scope in-memory grain storage provider so
+            // every silo in the cluster shares one backing dictionary.
+            // The default per-silo Orleans memory-storage provider dies
+            // with the silo, so a SecondarySilo restart wipes any
+            // ShardRootGrain / ILatticeRegistry state that was anchored
+            // there - the next reactivation reads empty state, re-runs
+            // EnsureRootAsync, and overwrites the live topology with a
+            // single-leaf root. That storage-isolation regression is the
+            // upstream cause of the InvalidCastException previously
+            // tracked in the roadmap (the cast fires when an in-flight
+            // call resolves a leaf reference against an internal-grain
+            // activation in the now-split-brain shard root). Using
+            // process-scope storage isolates this test to the surface it
+            // claims to exercise: silo membership churn, not storage
+            // disappearance.
+            siloBuilder.AddLattice((silo, name) =>
+                silo.Services.AddKeyedSingleton<Orleans.Storage.IGrainStorage>(
+                    name,
+                    (_, _) => new Orleans.Lattice.Tests.BPlusTree.PublicApiContract.ProcessScopeMemoryGrainStorage()));
             siloBuilder.ConfigureLattice(o => o.DigestCoalescingWindowMs = 0);
             siloBuilder.UseInMemoryReminderService();
         }

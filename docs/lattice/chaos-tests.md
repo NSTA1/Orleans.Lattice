@@ -42,7 +42,7 @@ Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests
 | Range delete under load | `ChaosRangeDeleteIntegrationTests.cs` | `DeleteRangeAsync` under concurrent writer load preserves range exclusivity (no key inside the deleted range survives a quiescent re-read) and never tombstones a key outside the range. Includes the cross-shard range case and the empty / single-key boundary cases. |
 | Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Many concurrent `SetIfVersionAsync` (CAS) callers racing on a small key universe produce exactly one observed `success=true` per logical CAS round; lost-update rounds report `success=false` with the actual current envelope so the call-site retry loop can make progress. |
 | Scan cancellation under load | `ScanCancellationChaosTests.cs` | An in-flight `ScanKeysAsync` / `ScanEntriesAsync` enumerator that observes a cancellation token transition surfaces `OperationCanceledException` within a bounded delay and leaks no grain-side resources; subsequent scans against the same range succeed normally. |
-| Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | _Currently `[Ignore]`'d - the underlying gap (grain-type discrimination on B+ leaf / internal grain ids) is tracked in `roadmap.md`._ Two-silo `TestCluster`, sustained write/read load, secondary silo restart every ~2.5 s; flips to a live `[Test]` once the leaf / internal grain-key discriminator lands.
+| Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | Two-silo `TestCluster`, sustained write/read load on an `ILattice` tree, secondary silo restarted every ~2.5 s via `TestCluster.RestartSiloAsync`. Post-window invariants: pinned `CountAsync`, envelope-valid value on every key, no caller-visible exception outside the documented transient class. Uses `ProcessScopeMemoryGrainStorage` (a static-dictionary-backed `IGrainStorage` shared across every silo in the test process) so secondary-silo restart does not wipe the shard-root / registry topology - per-silo Orleans memory storage would otherwise let a re-placed `ShardRootGrain` activation read empty state and overwrite the live topology with a fresh leaf root (the underlying split-brain that previously surfaced as `InvalidCastException`). |
 
 ### Cross-cluster chaos suite (`test/lattice.replication/Chaos/`)
 
@@ -648,12 +648,11 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 The chaos tests below target surfaces that the four full-workload
 topology grids above do not cover: per-call public-API invariants
 (range delete, CAS, scan cancellation), Orleans membership churn
-(multi-silo restart, currently `[Ignore]`'d), the production
-replication pipeline (WAL trim, liveness + inbound stats, OR-Map
-convergence currently `[Ignore]`'d, compaction + shipping), and the
-two downstream-package suites (gRPC transport, Azure Table WAL).
-Columns map to the test rows in the suite tables at the top of this
-document.
+(multi-silo restart), the production replication pipeline (WAL trim,
+liveness + inbound stats, OR-Map convergence currently `[Ignore]`'d,
+compaction + shipping), and the two downstream-package suites (gRPC
+transport, Azure Table WAL). Columns map to the test rows in the
+suite tables at the top of this document.
 
 | Surface | Range delete | CAS | Scan cancel | Multi-silo restart | WAL trim | Liveness + inbound | OR-Map | Compaction + shipping | gRPC transport | Azure Table WAL |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -663,8 +662,8 @@ document.
 | `SetIfVersionAsync` (CAS) lost-update returns current envelope | - | ✅ | - | - | - | - | - | - | - | - |
 | `ScanKeysAsync` / `ScanEntriesAsync` cooperative cancellation surfaces `OperationCanceledException` within bounded delay | - | - | ✅ | - | - | - | - | - | - | - |
 | Cancelled scan leaks no grain-side enumerator state | - | - | ✅ | - | - | - | - | - | - | - |
-| `TestCluster.RestartSiloAsync` mid-workload preserves universe | - | - | - | ⏭ | - | - | - | - | - | - |
-| Grain-type discrimination on B+ leaf / internal grain ids (silo-restart safety) | - | - | - | ⏭ | - | - | - | - | - | - |
+| `TestCluster.RestartSiloAsync` mid-workload preserves universe (count, envelope) | - | - | - | ✅ | - | - | - | - | - | - |
+| Process-shared `IGrainStorage` isolates membership churn from storage disappearance | - | - | - | ✅ | - | - | - | - | - | - |
 | Producer-side WAL trim cannot prune un-acked entries | - | - | - | - | ✅ | - | - | - | - | - |
 | Real `AddLatticeReplication` + loopback transport under sustained writes | - | - | - | - | ✅ | ✅ | ⏭ | ✅ | - | - |
 | Per-peer `IPeerStats` liveness probe flips Unhealthy on isolation and Healthy on heal | - | - | - | - | - | ✅ | - | - | - | - |
@@ -678,9 +677,9 @@ document.
 | Azurite-backed WAL trim correctness under transient storage faults | - | - | - | - | - | - | - | - | - | ✅ |
 
 Legend: ✅ = covered by a live test; ⏭ = covered by an `[Ignore]`'d test
-pending the tracked roadmap fix (the multi-silo restart and OR-Map
-entries are both tracked in the respective `roadmap.md` files). The
-`[Ignore]` flips to a live `[Test]` once the underlying gap closes.
+pending the tracked roadmap fix (the OR-Map entry is tracked in the
+replication `roadmap.md`). The `[Ignore]` flips to a live `[Test]` once
+the underlying gap closes.
 
 ## Runtime characteristics
 
