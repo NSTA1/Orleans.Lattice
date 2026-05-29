@@ -958,7 +958,7 @@ constraints, and per-tree overrides via the
 | `MaintainProjectionDigest` | `bool` | `true` | When `false`, `GetLeafProjectionDigestAsync` fast-fails with `InvalidOperationException`. Disabling is a **one-way operation per tree** - the first mutation under the disabled setting stamps an irreversible registry latch. System trees (`_lattice_*`) always resolve as `false`. |
 | `PublishEvents` | `bool` | `false` | Opt-in publication of `LatticeTreeEvent` notifications onto an Orleans stream. See [Events](events.md). |
 | `EventStreamProviderName` | `string` | `"Default"` | Stream provider Lattice publishes events onto. |
-| `WalPartitions` | `int` | 1 | Number of independent WAL partitions per tree. Pinned per-tree on first WAL write. |
+| `WalPartitions` | `int` | 8 | Number of independent WAL partitions per tree. Pinned per-tree on first WAL write. |
 | `WalMaxBatchEntries` | `int` | 100 | Maximum WAL entries coalesced into a single flush. |
 | `WalMaxBatchBytes` | `long` | 4 MiB | Maximum byte budget coalesced into a single flush. |
 | `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. `null` means retention is bounded purely by consumer cursors. |

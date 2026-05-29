@@ -128,30 +128,22 @@ benefits from per-silo cache layers that the write path cannot use.
 - **Multi-silo.** A second silo with shard fan-out is the next campaign
   axis and is not yet measured. Numbers for a 2-, 4-, or N-silo cluster
   will appear in a follow-up document once that work lands.
-- **`WalPartitions > 1` is not currently usable, coming soon.** The
-  Layer 2 write-path numbers above (`SetAsync`, `SetManyAsync`,
+- **`WalPartitions = 8` is now the shipping default.** The Layer 2
+  write-path numbers above (`SetAsync`, `SetManyAsync`,
   `SetManyAtomicAsync`) were measured with `LatticeOptions.WalPartitions
-  = 8`, which is **not** the shipping default and is **not** a
-  supported configuration today: the foreground commit-log writer
-  already fans appends across every configured partition, but the
-  activation-time WAL replay loop on `BPlusLeafGrain` is pinned to a
-  single partition, so a cold leaf reactivation under `WalPartitions >
-  1` silently misses every mutation that hashed away from partition
-  `0` and the rebuild-from-WAL invariant breaks. The shipping default
-  is therefore `WalPartitions = 1`, and the Layer 2 cells above are
-  **not reproducible against a default-configured silo today** - the
-  same workload at `WalPartitions = 1` will deliver materially lower
-  sustained write throughput because every commit serialises through
-  one WAL partition's per-Azure-Tables-partition flush envelope.
-  Tracked on the [core roadmap](../../src/lattice/roadmap.md) as
-  "multi-partition WAL replay on leaf activation", which will ship the
-  per-partition replay paths behind the existing `WalPartitions = 1`
-  default and then flip the default to `8` in a follow-up `breaking`
-  release. The Layer 2 cells will be re-baselined against the
-  default-configured silo once that lands; until then the numbers
-  above should be read as **"what the silo will deliver once
-  multi-partition WAL replay ships"**, not "what you get out of the
-  box on this branch".
+  = 8`, which matches the shipping default. Both the foreground
+  commit-log writer and the activation-time WAL replay loop on
+  `BPlusLeafGrain` fan across every configured partition (two-pass
+  replay with a post-pass reconciliation that advances every
+  partition's checkpoint to the highest applied offset once deferred
+  terminal mutations are drained), so a cold leaf reactivation under
+  `WalPartitions > 1` rebuilds correctly. Reducing `WalPartitions` to
+  `1` will deliver materially lower sustained write throughput
+  because every commit serialises through one WAL partition's
+  per-Azure-Tables-partition flush envelope.
+  The multi-partition WAL replay work on the [core roadmap](../../src/lattice/roadmap.md)
+  has shipped, so the Layer 2 cells above reflect what the
+  default-configured silo delivers.
 - **Your specific workload.** Key size, value size, fan-out shape,
   read/write mix, durability requirements, and storage-provider tier
   all matter. **Run the benchmark harness against your own workload

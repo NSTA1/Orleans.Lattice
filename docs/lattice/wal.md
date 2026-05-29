@@ -149,7 +149,7 @@ follow:
 
 The per-shard WAL is owned by the internal `IWalShardGrain`, keyed
 `{treeId}/{partition}` where `partition` is `WalPartitionHash.Compute(key, partitions) %
-LatticeOptions.WalPartitions` (default `1`). The grain is in the core
+LatticeOptions.WalPartitions` (default `8`). The grain is in the core
 `Orleans.Lattice.BPlusTree.Grains` namespace and is the single producer-side
 entry point for foreground commits and the read-back source for the
 replication change feed.

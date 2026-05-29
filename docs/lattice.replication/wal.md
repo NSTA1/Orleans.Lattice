@@ -8,7 +8,7 @@ Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per
 
 A WAL grain is keyed by `{treeId}/{partition}` and persists an append-only list of `WalShardSequencedEntry` records. Each entry has a dense, monotonically increasing `Sequence` (starts at 0 and increments by one per append) and the captured `WalRecord`.
 
-Routing of a mutation to a partition is deterministic and process-independent: a stable FNV-1a 32-bit hash of the entry's key, modulo `LatticeReplicationOptions.ReplogPartitions` (default `1`). A `null` key hashes as the empty string.
+Routing of a mutation to a partition is deterministic and process-independent: a stable FNV-1a 32-bit hash of the entry's key, modulo `LatticeReplicationOptions.ReplogPartitions` (default `8`, kept in lockstep with `LatticeOptions.WalPartitions` so the shipper reads every partition the commit-log writer fanned across). A `null` key hashes as the empty string.
 
 ```text
         commit (BPlusLeafGrain / ShardRootGrain)
