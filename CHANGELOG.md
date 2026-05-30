@@ -10,6 +10,10 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Items merged into `main` after the v6.1.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
+### Fixed
+
+- **WAL hot-path throughput regression introduced by the v6.1.0 multi-partition WAL replay work.** The foreground commit-log writer (`WalCommitLogWriter.RouteAsync`) resolved `WalPartitions` through the full `LatticeOptionsResolver.ResolveAsync` on every `IWalShardGrain.AppendAsync` / `AppendBatchAsync`. The resolver had no per-tree result cache and issued an `ILatticeRegistry.GetEntryAsync` grain RPC each call, so every write serialised through the cluster-singleton registry activation before the writer could fan out across partitions. Sustained `set-many` throughput at the canonical c2-iii operating point collapsed from ~13,574 entries/s to ~1,000-2,000 entries/s on Azure Tables. `LatticeOptionsResolver` now exposes a `GetWalPartitionsAsync(treeId)` fast path that memoises the tree-immutable pin per-resolver-instance and returns an already-completed `ValueTask<int>` on a cache hit; `WalCommitLogWriter.RouteAsync` calls it instead of the full resolver. `ResolveAsync` populates the same cache as a side effect so any tree touched by any caller is warm for subsequent writer calls.
+
 ### Candidate themes for a future major
 
 - Loosen the LWW-by-default contract on `ILattice.SetAsync` / `GetAsync` via an opt-in per-tree `DefaultMergeMode` (so `MvRegister` and other CRDT shapes can be the default for trees that want concurrency-preserving semantics).

@@ -495,4 +495,165 @@ public class LatticeOptionsResolverTests
             Is.EqualTo(LatticeConstants.DefaultSystemTreeWalPartitions));
         Assert.That(LatticeConstants.DefaultSystemTreeWalPartitions, Is.EqualTo(1));
     }
+
+    // ===== WalPartitions hot-path cache =====
+    // The foreground commit-log writer (WalCommitLogWriter.RouteAsync)
+    // resolves WalPartitions on every append. Per-tree memoisation of
+    // the registry-pinned value ensures the writer no longer
+    // serialises through the cluster-singleton ILatticeRegistry
+    // activation on the hot path. These tests pin the cache contract.
+
+    [Test]
+    public async Task GetWalPartitionsAsync_returns_registry_pinned_value_on_first_call()
+    {
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 8 });
+        registry.GetEntryAsync("hot-tree").Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+                WalPartitions = 16,
+            }));
+
+        var partitions = await resolver.GetWalPartitionsAsync("hot-tree");
+
+        Assert.That(partitions, Is.EqualTo(16));
+    }
+
+    [Test]
+    public async Task GetWalPartitionsAsync_caches_pin_so_second_call_does_not_hit_registry()
+    {
+        // Hot-path contract: every WAL commit on the foreground path
+        // goes through GetWalPartitionsAsync. The second-and-subsequent
+        // call on any tree must serve from cache without a grain RPC,
+        // otherwise the WalCommitLogWriter throughput regression
+        // (sustained throughput collapsing by an order of magnitude
+        // on multi-partition `set-many`) reappears.
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 8 });
+        registry.GetEntryAsync("hot-tree").Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+                WalPartitions = 8,
+            }));
+
+        await resolver.GetWalPartitionsAsync("hot-tree");
+        await resolver.GetWalPartitionsAsync("hot-tree");
+        await resolver.GetWalPartitionsAsync("hot-tree");
+
+        await registry.Received(1).GetEntryAsync("hot-tree");
+    }
+
+    [Test]
+    public async Task GetWalPartitionsAsync_serves_from_cache_after_ResolveAsync_warms_it()
+    {
+        // ResolveAsync (used by admin grains and activation-time
+        // materialisers) also populates the cache so a tree touched
+        // by any caller becomes fast-path-eligible for subsequent
+        // writer calls.
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 8 });
+        registry.GetEntryAsync("warmed-tree").Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+                WalPartitions = 8,
+            }));
+
+        await resolver.ResolveAsync("warmed-tree");
+        await registry.Received(1).GetEntryAsync("warmed-tree");
+
+        // GetWalPartitionsAsync must now serve from cache without
+        // adding a second GetEntryAsync to the receive count.
+        var partitions = await resolver.GetWalPartitionsAsync("warmed-tree");
+
+        Assert.That(partitions, Is.EqualTo(8));
+        await registry.Received(1).GetEntryAsync("warmed-tree");
+    }
+
+    [Test]
+    public async Task GetWalPartitionsAsync_system_tree_returns_constant_without_touching_registry()
+    {
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 64 });
+
+        var partitions = await resolver.GetWalPartitionsAsync(
+            LatticeConstants.SystemTreePrefix + "registry");
+
+        Assert.That(partitions, Is.EqualTo(LatticeConstants.DefaultSystemTreeWalPartitions));
+        await registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task GetWalPartitionsAsync_falls_back_to_live_silo_option_when_pin_missing()
+    {
+        // Legacy registry rows persisted before the WalPartitions
+        // slot was added present a null pin. The fast path mirrors
+        // ResolveAsync's behaviour: fall back to the live
+        // IOptionsMonitor value rather than a hardcoded default.
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 8 });
+        registry.GetEntryAsync("legacy-tree").Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+                WalPartitions = null,
+            }));
+
+        var partitions = await resolver.GetWalPartitionsAsync("legacy-tree");
+
+        Assert.That(partitions, Is.EqualTo(8));
+    }
+
+    [Test]
+    public void GetWalPartitionsAsync_returns_synchronously_on_cache_hit()
+    {
+        // The fast path returns ValueTask<int>; on a cache hit the
+        // task must be already-completed so the WalCommitLogWriter
+        // hot path does not pay a state-machine allocation per
+        // append.
+        var (resolver, registry) = Build(new LatticeOptions { WalPartitions = 8 });
+        registry.GetEntryAsync("hot-tree").Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = LatticeConstants.DefaultShardCount,
+                WalPartitions = 8,
+            }));
+
+        // Warm the cache.
+        resolver.GetWalPartitionsAsync("hot-tree").AsTask().GetAwaiter().GetResult();
+
+        var second = resolver.GetWalPartitionsAsync("hot-tree");
+
+        Assert.That(second.IsCompletedSuccessfully, Is.True,
+            "Cache hit must produce an already-completed ValueTask so the writer hot path is allocation-free.");
+        Assert.That(second.Result, Is.EqualTo(8));
+    }
+
+    [Test]
+    public void GetWalPartitionsAsync_system_tree_returns_synchronously()
+    {
+        var (resolver, _) = Build();
+
+        var task = resolver.GetWalPartitionsAsync(LatticeConstants.SystemTreePrefix + "registry");
+
+        Assert.That(task.IsCompletedSuccessfully, Is.True);
+        Assert.That(task.Result, Is.EqualTo(LatticeConstants.DefaultSystemTreeWalPartitions));
+    }
+
+    [Test]
+    public void GetWalPartitionsAsync_null_treeId_throws()
+    {
+        var (resolver, _) = Build();
+
+        Assert.That(
+            () => resolver.GetWalPartitionsAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
 }

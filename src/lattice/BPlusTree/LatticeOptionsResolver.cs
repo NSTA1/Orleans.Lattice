@@ -46,6 +46,30 @@ internal sealed class LatticeOptionsResolver(
     private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
 
     /// <summary>
+    /// Per-tree cache of the registry-pinned <see cref="LatticeOptions.WalPartitions"/>
+    /// value. The pin is established at first <see cref="ILatticeRegistry.RegisterAsync"/>
+    /// from the silo's then-current <see cref="LatticeOptions.WalPartitions"/> and is
+    /// documented as tree-immutable thereafter (see <see cref="State.TreeRegistryEntry.WalPartitions"/>),
+    /// so process-local memoisation is safe even though other resolved fields
+    /// remain dynamic via <see cref="IOptionsMonitor{TOptions}"/>.
+    /// <para>
+    /// The cache exists to elide the per-call <see cref="ILatticeRegistry.GetEntryAsync"/>
+    /// grain RPC on the foreground WAL commit path. Without it, every
+    /// <see cref="Grains.WalCommitLogWriter.AppendAsync"/> serialises through
+    /// one turn on the cluster-singleton registry activation before the writer
+    /// can fan its append across <c>WalPartitions</c> WAL shards, collapsing
+    /// the realised throughput by an order of magnitude on multi-partition
+    /// configurations (the WAL-hot-path registry-RPC attribution).
+    /// </para>
+    /// <para>
+    /// Cache is per-resolver-instance (not static) so each silo's activation
+    /// owns its own memoisation; tests that instantiate the resolver directly
+    /// get a clean cache per fixture without needing a reset hook.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, int> _walPartitionsCache = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Trees for which a "configured = true but latched-disabled" warning
     /// has already been logged. Re-resolving the same tree must not spam
     /// the log on every grain activation; the warning is informational
@@ -68,6 +92,70 @@ internal sealed class LatticeOptionsResolver(
     /// and the clamp is unconditional.
     /// </summary>
     private static readonly ConcurrentDictionary<string, byte> WarnedClampedLeafBatchSizeTrees = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Fast-path resolver for the WAL <see cref="LatticeOptions.WalPartitions"/>
+    /// pin only. Returns the cached value when present; on a miss, performs the
+    /// one-shot registry lookup, caches the resulting pin, and returns it.
+    /// <para>
+    /// Intended for hot-path producers (the foreground commit-log writer)
+    /// that need the partition count to route an append and nothing else.
+    /// Callers that need the full <see cref="ResolvedLatticeOptions"/> record
+    /// (admin grains, activation-time materialiser) continue to use
+    /// <see cref="ResolveAsync"/>; that method also populates this cache as a
+    /// side effect so a tree that has been touched by any caller becomes
+    /// fast-path-eligible for subsequent writer calls.
+    /// </para>
+    /// <para>
+    /// System trees (IDs beginning with <see cref="LatticeConstants.SystemTreePrefix"/>)
+    /// resolve synchronously to <see cref="LatticeConstants.DefaultSystemTreeWalPartitions"/>
+    /// without touching the registry or the cache - matching the
+    /// <see cref="ResolveAsync"/> branch and avoiding bootstrap cycles for the
+    /// registry tree's own routing.
+    /// </para>
+    /// </summary>
+    public ValueTask<int> GetWalPartitionsAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return new ValueTask<int>(LatticeConstants.DefaultSystemTreeWalPartitions);
+        }
+        if (_walPartitionsCache.TryGetValue(treeId, out var cached))
+        {
+            return new ValueTask<int>(cached);
+        }
+        return new ValueTask<int>(LoadWalPartitionsSlowAsync(treeId));
+    }
+
+    private async Task<int> LoadWalPartitionsSlowAsync(string treeId)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var baseOptions = optionsMonitor.Get(treeId);
+        var partitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
+        // First writer wins the cache slot; if a racing ResolveAsync
+        // populates it concurrently with a structurally identical value
+        // (the pin is tree-immutable, so it MUST be identical) the
+        // GetOrAdd here is a no-op and we return the racing winner's
+        // value. Using TryAdd avoids overwriting a value installed by
+        // ResolveAsync that may have run the lazy-register seam.
+        _walPartitionsCache.TryAdd(treeId, partitions);
+        return _walPartitionsCache.TryGetValue(treeId, out var afterRace) ? afterRace : partitions;
+    }
+
+    /// <summary>
+    /// Test-only seam to drop a tree's cached
+    /// <see cref="LatticeOptions.WalPartitions"/> pin so a subsequent
+    /// <see cref="GetWalPartitionsAsync"/> or <see cref="ResolveAsync"/>
+    /// call re-hits the registry. Production code does not need this -
+    /// the pin is tree-immutable for the lifetime of the tree by design.
+    /// </summary>
+    internal void InvalidateWalPartitionsCacheForTests(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        _walPartitionsCache.TryRemove(treeId, out _);
+    }
 
     /// <summary>Resolves the effective options for <paramref name="treeId"/>.</summary>
     public async Task<ResolvedLatticeOptions> ResolveAsync(string treeId)
@@ -153,6 +241,13 @@ internal sealed class LatticeOptionsResolver(
             // re-route new writes into grains that the activation-time
             // materialiser is not configured to read from.
             walPartitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
+            // Populate the hot-path WalPartitions cache as a side effect
+            // of any full ResolveAsync. The pin is tree-immutable, so
+            // repeating the assignment under racing resolvers is harmless
+            // (TryAdd: first writer wins). This keeps the cache warm for
+            // every tree that has been touched by any caller, not just by
+            // the writer's GetWalPartitionsAsync fast path.
+            _walPartitionsCache.TryAdd(treeId, walPartitions);
 
             // Effective MaintainProjectionDigest precedence:
             //   1. Latch (ProjectionDigestPermanentlyDisabled == true) forces false.
