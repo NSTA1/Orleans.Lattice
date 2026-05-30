@@ -14,7 +14,7 @@ invariants under concurrent contention; that `SetManyAtomicAsync`
 remains atomically visible (zero-or-all keys per poll) on the
 authoring site and on every receiver site; and that the per-merge-mode
 CRDT dispatch paths (`LwwRegister`, `OrSet`, `PnCounter`, `MvRegister`,
-and - once the tracked gap closes - `OrMap`) converge across
+and `OrMap`) converge across
 partitioned sites. The single-cluster suite also exercises the
 recovery protocols (resumable splits, two-phase root promotion,
 shadow-write atomicity, shadow-forwarding, registry version stamping,
@@ -42,7 +42,7 @@ Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests
 | Range delete under load | `ChaosRangeDeleteIntegrationTests.cs` | `DeleteRangeAsync` under concurrent writer load preserves range exclusivity (no key inside the deleted range survives a quiescent re-read) and never tombstones a key outside the range. Includes the cross-shard range case and the empty / single-key boundary cases. |
 | Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Many concurrent `SetIfVersionAsync` (CAS) callers racing on a small key universe produce exactly one observed `success=true` per logical CAS round; lost-update rounds report `success=false` with the actual current envelope so the call-site retry loop can make progress. |
 | Scan cancellation under load | `ScanCancellationChaosTests.cs` | An in-flight `ScanKeysAsync` / `ScanEntriesAsync` enumerator that observes a cancellation token transition surfaces `OperationCanceledException` within a bounded delay and leaks no grain-side resources; subsequent scans against the same range succeed normally. |
-| Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | _Currently `[Ignore]`'d - the underlying gap (grain-type discrimination on B+ leaf / internal grain ids) is tracked in `roadmap.md`._ Two-silo `TestCluster`, sustained write/read load, secondary silo restart every ~2.5 s; flips to a live `[Test]` once the leaf / internal grain-key discriminator lands.
+| Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | Two-silo `TestCluster`, sustained write/read load on an `ILattice` tree, secondary silo restarted every ~2.5 s via `TestCluster.RestartSiloAsync`. Post-window invariants: pinned `CountAsync`, envelope-valid value on every key, no caller-visible exception outside the documented transient class. Uses `ProcessScopeMemoryGrainStorage` (a static-dictionary-backed `IGrainStorage` shared across every silo in the test process) so secondary-silo restart does not wipe the shard-root / registry topology - per-silo Orleans memory storage would otherwise let a re-placed `ShardRootGrain` activation read empty state and overwrite the live topology with a fresh leaf root (the underlying split-brain that previously surfaced as `InvalidCastException`). |
 
 ### Cross-cluster chaos suite (`test/lattice.replication/Chaos/`)
 
@@ -54,7 +54,7 @@ Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests
 | PN-Counter convergence | `PnCounterConvergenceChaosTests.cs` | Three sites issue concurrent increments and decrements against a single counter under partition; after drain, every site reads the same algebraic sum. |
 | MV-Register convergence | `MvRegisterConvergenceChaosTests.cs` | Three sites issue concurrent `Set` operations against a single MV-Register key under partition; after drain, every site observes the same dot-tagged multi-value set with concurrent writes preserved and observed predecessors collapsed. |
 | Multi-site fixture smoke | `MultiSiteClusterFixtureSmokeTests.cs` | Diagnostic smoke tests for `MultiSiteClusterFixture` + `ChaosDeliveryPump`. Not chaos tests themselves - they pin the simpler invariants the convergence suite relies on (per-site WAL capture, per-site change feed yield, end-to-end pump delivery). Tagged `[Category("Chaos")]` so they ship alongside the suite they diagnose. |
-| OR-Map convergence | `OrMapConvergenceChaosTests.cs` | _Currently `[Ignore]`'d - the underlying gap (chaos-pump byte-cache dedupe on OR-Map post-merge bytes) is tracked in `roadmap.md`._ Three sites concurrently mutate an OR-Map key under partition; flips to a live `[Test]` once the pump's post-merge byte cache treats OR-Map entries the way it already treats OR-Set entries.
+| OR-Map convergence | `OrMapConvergenceChaosTests.cs` | Three sites concurrently mutate an `OrMap<string, PnCounter>` key (each site authors a disjoint family of map keys, each value PnCounter-incremented) under a partition that isolates one site mid-workload, then heals. After drain, every site converges to the union of authored map keys and every per-key PnCounter equals the algebraic sum of authored deltas. Exercises the producer-side typed-delta dispatch (`OrMapAccessor.SetAsync` -> `BPlusLeafGrain.CrdtApply` -> WAL CRDT-Set with `Delta` slot populated) and the receiver-side `ReplicationApplier.ApplyStateMergeAsync<OrMap<TKey, TValue>>` dispatch, both consulting the per-tree `CrdtShape` registered via `MultiSiteClusterFixture.RegisterOrMapShape<TKey, TValue>`. |
 | WAL trim under shipping | `WalTrimUnderShippingChaosTests.cs` | Producer-side WAL trim cannot prune entries the per-peer shipper has not yet acknowledged. Uses `ProductionShipperFixture` (real `AddLatticeReplication` + in-process loopback transport) to drive sustained writes while invoking trim against an artificially low retention bound; asserts every authored entry that the shipper has not yet acked remains readable from the WAL after trim. |
 | Liveness probe + inbound error under partition | `LivenessProbeAndInboundStatsChaosTests.cs` | Real partition-then-heal cycle against `ProductionShipperFixture`'s loopback transport with a `FaultInjectingReplicationApplier` decorator injecting receiver-side throws on the healed path; asserts the per-peer `IPeerStats` liveness probe flips to `Unhealthy` during isolation and back to `Healthy` after heal, and that the inbound-error counter records every injected receiver fault without inflating the success counter. |
 | Compaction + shipping | `CompactionShippingChaosTests.cs` | Sustained write+delete churn against site A with explicit `RunCompactionPassAsync` calls between phases. The producer-side `ReplicationShipperGrain.ShouldShip` filter must keep every maintenance-tagged tombstone-reap envelope (`MutationKind.Tombstone`) off the wire, since per-cluster compaction is local structural cleanup with no defined cross-cluster semantics; asserts the observed wire stream contains zero `Tombstone` entries while the workload itself shipped non-trivial traffic and the receiver converged on the live key set. |
@@ -648,12 +648,11 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 The chaos tests below target surfaces that the four full-workload
 topology grids above do not cover: per-call public-API invariants
 (range delete, CAS, scan cancellation), Orleans membership churn
-(multi-silo restart, currently `[Ignore]`'d), the production
-replication pipeline (WAL trim, liveness + inbound stats, OR-Map
-convergence currently `[Ignore]`'d, compaction + shipping), and the
-two downstream-package suites (gRPC transport, Azure Table WAL).
-Columns map to the test rows in the suite tables at the top of this
-document.
+(multi-silo restart), the production replication pipeline (WAL trim,
+liveness + inbound stats, OR-Map convergence,
+compaction + shipping), and the two downstream-package suites (gRPC
+transport, Azure Table WAL). Columns map to the test rows in the
+suite tables at the top of this document.
 
 | Surface | Range delete | CAS | Scan cancel | Multi-silo restart | WAL trim | Liveness + inbound | OR-Map | Compaction + shipping | gRPC transport | Azure Table WAL |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -663,13 +662,14 @@ document.
 | `SetIfVersionAsync` (CAS) lost-update returns current envelope | - | ✅ | - | - | - | - | - | - | - | - |
 | `ScanKeysAsync` / `ScanEntriesAsync` cooperative cancellation surfaces `OperationCanceledException` within bounded delay | - | - | ✅ | - | - | - | - | - | - | - |
 | Cancelled scan leaks no grain-side enumerator state | - | - | ✅ | - | - | - | - | - | - | - |
-| `TestCluster.RestartSiloAsync` mid-workload preserves universe | - | - | - | ⏭ | - | - | - | - | - | - |
-| Grain-type discrimination on B+ leaf / internal grain ids (silo-restart safety) | - | - | - | ⏭ | - | - | - | - | - | - |
+| `TestCluster.RestartSiloAsync` mid-workload preserves universe (count, envelope) | - | - | - | ✅ | - | - | - | - | - | - |
+| Process-shared `IGrainStorage` isolates membership churn from storage disappearance | - | - | - | ✅ | - | - | - | - | - | - |
 | Producer-side WAL trim cannot prune un-acked entries | - | - | - | - | ✅ | - | - | - | - | - |
 | Real `AddLatticeReplication` + loopback transport under sustained writes | - | - | - | - | ✅ | ✅ | ⏭ | ✅ | - | - |
 | Per-peer `IPeerStats` liveness probe flips Unhealthy on isolation and Healthy on heal | - | - | - | - | - | ✅ | - | - | - | - |
 | Receiver-side fault-injection records inbound-error counter without inflating success counter | - | - | - | - | - | ✅ | - | - | - | - |
-| OR-Map convergence under concurrent multi-site mutation + partition | - | - | - | - | - | - | ⏭ | - | - | - |
+| OR-Map convergence under concurrent multi-site mutation + partition | - | - | - | - | - | - | ✅ | - | - | - |
+| Per-tree typed-CRDT shape resolution end-to-end on producer + receiver dispatch | - | - | - | - | - | - | ✅ | - | - | - |
 | `ReplicationShipperGrain.ShouldShip` keeps `MutationKind.Tombstone` envelopes off the wire | - | - | - | - | - | - | - | ✅ | - | - |
 | `ITombstoneCompactionGrain.RunCompactionPassAsync` mid-shipment preserves receiver convergence | - | - | - | - | - | - | - | ✅ | - | - |
 | gRPC server restart mid-shipment converges with no batch loss / no duplicate apply | - | - | - | - | - | - | - | - | ✅ | - |
@@ -677,10 +677,9 @@ document.
 | Azurite-backed WAL append-batch atomicity + monotone offset assignment under concurrent load | - | - | - | - | - | - | - | - | - | ✅ |
 | Azurite-backed WAL trim correctness under transient storage faults | - | - | - | - | - | - | - | - | - | ✅ |
 
-Legend: ✅ = covered by a live test; ⏭ = covered by an `[Ignore]`'d test
-pending the tracked roadmap fix (the multi-silo restart and OR-Map
-entries are both tracked in the respective `roadmap.md` files). The
-`[Ignore]` flips to a live `[Test]` once the underlying gap closes.
+Legend: ✅ = covered by a live test. Every previously-`[Ignore]`'d
+fixture in this suite (multi-silo restart, OR-Map convergence) is now
+live against the underlying fix.
 
 ## Runtime characteristics
 

@@ -179,11 +179,22 @@ internal sealed class MultiSiteClusterFixture
 
             _changeFeeds[i] = new ChangeFeed(_sites[i].Client, options, resolver);
             _peerStats[i] = new ReplicationPeerStats();
+
+            // Pass the silo-side CrdtShapeRegistry into the applier so
+            // per-tree shape registrations performed via
+            // RegisterOrMapShape (which register on the silo's registry)
+            // are visible to the receiver-side OR-Map dispatch. Without
+            // this, the applier resolves crdtShapes=null and every
+            // OR-Map entry faults with "no CrdtShape is registered" on
+            // every site - the chaos pump captures the throw on PumpErrors
+            // but the convergence loop never makes progress.
+            var siloShapes = _sites[i].Silos.OfType<InProcessSiloHandle>().First()
+                .SiloHost.Services.GetRequiredService<Orleans.Lattice.CrdtShapeRegistry>();
             _appliers[i] = new ReplicationApplier(
                 _sites[i].Client,
                 options,
                 new LocalVectorClockCache(_sites[i].Client),
-                crdtShapes: null,
+                crdtShapes: siloShapes,
                 logger: null,
                 peerStats: _peerStats[i]);
         }
