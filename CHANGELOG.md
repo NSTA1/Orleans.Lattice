@@ -8,11 +8,7 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.1.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
-
-### Fixed
-
-- **WAL hot-path throughput regression introduced by the v6.1.0 multi-partition WAL replay work.** The foreground commit-log writer (`WalCommitLogWriter.RouteAsync`) resolved `WalPartitions` through the full `LatticeOptionsResolver.ResolveAsync` on every `IWalShardGrain.AppendAsync` / `AppendBatchAsync`. The resolver had no per-tree result cache and issued an `ILatticeRegistry.GetEntryAsync` grain RPC each call, so every write serialised through the cluster-singleton registry activation before the writer could fan out across partitions. Sustained `set-many` throughput at the canonical c2-iii operating point collapsed from ~13,574 entries/s to ~1,000-2,000 entries/s on Azure Tables. `LatticeOptionsResolver` now exposes a `GetWalPartitionsAsync(treeId)` fast path that memoises the tree-immutable pin per-resolver-instance and returns an already-completed `ValueTask<int>` on a cache hit; `WalCommitLogWriter.RouteAsync` calls it instead of the full resolver. `ResolveAsync` populates the same cache as a side effect so any tree touched by any caller is warm for subsequent writer calls.
+Items merged into `main` after the v6.1.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 ### Candidate themes for a future major
 
@@ -21,6 +17,16 @@ Items merged into `main` after the v6.1.0 cut accumulate here under the `### Add
 - Migration guide (core roadmap **F-021**) to accompany any breaking changes.
 
 Outstanding work is tracked in [`src/lattice/roadmap.md`](src/lattice/roadmap.md) and [`src/lattice.replication/roadmap.md`](src/lattice.replication/roadmap.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.1.1] - 2026-05-30
+
+Core-library patch release (`Orleans.Lattice` only). Fixes a foreground-write throughput regression introduced by the v6.1.0 multi-partition WAL replay work. No public-API changes; safe drop-in upgrade from v6.1.0.
+
+### Fixed
+
+- **WAL hot-path throughput regression introduced by the v6.1.0 multi-partition WAL replay work.** The foreground commit-log writer (`WalCommitLogWriter.RouteAsync`) resolved `WalPartitions` through the full `LatticeOptionsResolver.ResolveAsync` on every `IWalShardGrain.AppendAsync` / `AppendBatchAsync`. The resolver had no per-tree result cache and issued an `ILatticeRegistry.GetEntryAsync` grain RPC each call, so every write serialised through the cluster-singleton registry activation before the writer could fan out across partitions. Sustained `set-many` throughput at the canonical c2-iii operating point collapsed from ~13,574 entries/s to ~1,000-2,000 entries/s on Azure Tables. `LatticeOptionsResolver` now exposes a `GetWalPartitionsAsync(treeId)` fast path that memoises the tree-immutable pin per-resolver-instance and returns an already-completed `ValueTask<int>` on a cache hit; `WalCommitLogWriter.RouteAsync` calls it instead of the full resolver. `ResolveAsync` populates the same cache as a side effect so any tree touched by any caller is warm for subsequent writer calls.
 
 ---
 
@@ -199,6 +205,7 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.0.1...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.1...HEAD
+[6.1.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.0...v6.1.1
 [6.0.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/NSTA1/Orleans.Lattice/compare/lattice-v5.1.0...v6.0.0
