@@ -219,14 +219,22 @@ internal sealed class WalCommitLogWriter(
     /// </summary>
     private async Task<(WalRecord Entry, int Partition, int WalPartitions, LatticeOptions PerTree)> RouteAsync(WalRecord entry)
     {
-        // Resolve through LatticeOptionsResolver so WalPartitions comes
-        // from the per-tree registry pin (tree-immutable) rather than
-        // the live IOptionsMonitor value. Other per-tree options not
-        // covered by the resolver are still read from the live
-        // IOptionsMonitor here - they are dynamic-tunable by design.
-        var resolved = await optionsResolver.ResolveAsync(entry.TreeId).ConfigureAwait(false);
+        // Resolve WalPartitions through the resolver's per-tree fast-path
+        // cache so the foreground commit path does not pay a
+        // ILatticeRegistry grain RPC per append. The pin is established
+        // at first RegisterAsync and is tree-immutable thereafter, so
+        // the cache is correct by construction (see the resolver's
+        // GetWalPartitionsAsync docstring); the resolver's
+        // GetWalPartitionsAsync returns a synchronously-completed
+        // ValueTask on a cache hit and falls back to the registry only
+        // on a cold tree's first hit.
+        //
+        // Other per-tree options not covered by the registry pin
+        // (WalMaxPendingBatches and friends used by the dispatch
+        // histogram below) are still read from the live IOptionsMonitor
+        // here - they are dynamic-tunable by design.
+        var partitions = await optionsResolver.GetWalPartitionsAsync(entry.TreeId).ConfigureAwait(false);
         var perTree = options.Get(entry.TreeId);
-        var partitions = resolved.WalPartitions;
 
         var resolvedMode = modeResolver.Resolve(entry.TreeId) ?? LatticeMergeMode.LwwRegister;
 

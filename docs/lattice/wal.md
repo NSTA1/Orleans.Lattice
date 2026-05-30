@@ -171,6 +171,24 @@ count, multiple shards collapse onto the same WAL partition; receivers
 dedupe by `TransactionId`, so multiple terminal appends with the same id
 are idempotent on the apply side.
 
+### Per-tree `WalPartitions` pin resolution on the hot path
+
+`LatticeOptions.WalPartitions` is **pinned per tree** in the tree
+registry at first `RegisterAsync` and is tree-immutable thereafter, so
+the writer-side routing and the activation-time materialiser can never
+disagree on the partition fan-out shape. The pinned value is exposed
+through `LatticeOptionsResolver.GetWalPartitionsAsync(treeId)`, a
+hot-path-optimised entry point that returns an already-completed
+`ValueTask<int>` on a cache hit and falls back to a one-shot
+`ILatticeRegistry.GetEntryAsync` grain RPC only on the first call per
+tree per silo. The foreground commit-log writer uses this fast path on
+every `AppendAsync` / `AppendBatchAsync`, so `WalCommitLogWriter` never
+serialises through the cluster-singleton registry activation on the
+write path. The full `LatticeOptionsResolver.ResolveAsync` (used by
+admin grains and the activation-time materialiser) also populates the
+fast-path cache as a side effect, so any tree touched by any caller
+becomes cache-warm for subsequent writer calls.
+
 ### Activation-time replay under `WalPartitions > 1`
 
 The leaf grain's activation-time materialiser is partition-aware. When
