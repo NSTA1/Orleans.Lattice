@@ -93,6 +93,14 @@ public class AzureTableWalStorageProviderReconcileIntegrationTests
             {
                 ConnectionString = AzuriteConnectionString,
                 TableName = tableName,
+                // Pin synchronous phase-2 commits so a committed batch's
+                // TAIL and manifest rows are durable the instant
+                // AppendBatchAsync returns. The reconciliation tests
+                // synthesise orphans and then assert on the post-commit
+                // tail directly; the throughput default
+                // (PipelinePhaseTwoCommits = true) would defer a real
+                // batch's phase-2 commit and race the assertions.
+                PipelinePhaseTwoCommits = false,
             }),
             _serializer);
 
