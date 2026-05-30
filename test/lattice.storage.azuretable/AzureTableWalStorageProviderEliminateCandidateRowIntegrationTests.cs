@@ -92,6 +92,13 @@ public class AzureTableWalStorageProviderEliminateCandidateRowIntegrationTests
                 ConnectionString = AzuriteConnectionString,
                 TableName = tableName,
                 EliminateCandidateRowOnHotPath = eliminateCandidateRow,
+                // Pin synchronous phase-2 commits so TAIL and the
+                // manifest are durable the instant AppendBatchAsync
+                // returns; these tests assert read-your-writes
+                // semantics, which the throughput default
+                // (PipelinePhaseTwoCommits = true) defers to the next
+                // append on the shard.
+                PipelinePhaseTwoCommits = false,
             }),
             _serializer);
 

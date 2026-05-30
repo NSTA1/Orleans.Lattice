@@ -98,6 +98,17 @@ public class AzureTableWalStorageProviderIntegrationTests
             {
                 ConnectionString = AzuriteConnectionString,
                 TableName = tableName,
+                // These end-to-end tests assert read-your-writes
+                // durability: TAIL has advanced and the entries are
+                // readable the instant AppendBatchAsync returns. That
+                // contract only holds in synchronous phase-2 mode; the
+                // throughput default (PipelinePhaseTwoCommits = true)
+                // defers a batch's phase-2 commit until the next append
+                // on the shard, so an immediate GetHighestOffsetAsync
+                // would observe the pre-batch TAIL. The pipelined path
+                // has its own white-box coverage in
+                // AzureTableWalStorageProviderPhaseTwoPipeliningTests.
+                PipelinePhaseTwoCommits = false,
             }),
             _serializer);
 
