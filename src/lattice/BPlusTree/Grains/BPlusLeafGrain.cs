@@ -1370,9 +1370,26 @@ internal sealed partial class BPlusLeafGrain(
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
+
+        // Honor the in-progress split boundary exactly as GetKeysAsync
+        // does. During CompleteSplitAsync the donor's NextSibling already
+        // points at the new sibling (which holds the right half) while the
+        // donor's own cache still holds those same rows; the right half is
+        // not removed until later in the same activation. A secondary-silo
+        // restart that interrupts the split persists this in-between state,
+        // so a chain-walk counter (ShardRootGrain.CountAsync ->
+        // SimpleSumCountAsync) would visit the right half on both leaves and
+        // over-count. Skipping rows >= SplitKey while a split is in progress
+        // makes the donor report only the keys it still owns.
+        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitKey = state.State.SplitKey;
         var count = 0;
         foreach (var (key, lww) in Cache.EnumerateRows())
         {
+            if (splitInProgress && splitKey is not null &&
+                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                break;
+
             if (pendingKeys.TryGetValue(key, out var pending))
             {
                 var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
@@ -1393,6 +1410,9 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, pending) in pendingKeys)
         {
             if (Cache.ContainsKey(key)) continue;
+            if (splitInProgress && splitKey is not null &&
+                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                continue;
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
@@ -1406,10 +1426,22 @@ internal sealed partial class BPlusLeafGrain(
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
+
+        // Honor the in-progress split boundary as CountAsync / GetKeysAsync
+        // do, so a donor mid-split (or durably stuck mid-split after a
+        // secondary-silo restart) reports stats for only the keys it still
+        // owns rather than double-counting the right half that already lives
+        // on the new sibling.
+        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        var splitKey = state.State.SplitKey;
         var live = 0;
         var tombstones = 0;
         foreach (var (key, lww) in Cache.EnumerateRows())
         {
+            if (splitInProgress && splitKey is not null &&
+                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                break;
+
             if (pendingKeys.TryGetValue(key, out var pending))
             {
                 var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
@@ -1430,6 +1462,9 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, pending) in pendingKeys)
         {
             if (Cache.ContainsKey(key)) continue;
+            if (splitInProgress && splitKey is not null &&
+                string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                continue;
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
