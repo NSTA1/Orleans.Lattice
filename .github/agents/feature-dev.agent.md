@@ -196,6 +196,7 @@ Only when the user explicitly asks:
    - A title matching the commit convention: `feat: <description> (F-XXX)`
    - At least one label: `enhancement`, `bug`, `documentation`, `ci`, `dependencies`, or `breaking`
    - A body written to a tracked scratch file (`.scratch/pr-body.md` - `.scratch/` is gitignored) and passed via `--body-file`. **Never** use `New-TemporaryFile` or inline heredocs piped into `gh`. See "PR body file write path" below.
+   - **An issue-closing keyword for every tracked issue the PR resolves.** When the work ships a tracked item, the PR body **must** contain a GitHub closing keyword (`Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN`) referencing the issue number, so the issue auto-closes when the PR squash-merges into `main`. A bare mention of the issue number or the tracker id (`FX-NNN`) in prose does **not** trigger auto-close - only the keyword forms do, and only when the PR targets the default branch (`main`, which is always the case here). Put the keyword in the `## Summary` section. This is the only reliable way the Phase 7 feature-index sync ("close the GitHub issue as part of delivery") actually happens on merge rather than requiring a manual `gh issue close`.
 6. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
 
    ```powershell
@@ -212,6 +213,8 @@ Only when the user explicitly asks:
 ## Summary
 
 One-paragraph description of what the feature does and why.
+
+Closes #NNN
 
 ## Changes
 

@@ -97,8 +97,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-- [FX-020](https://github.com/NSTA1/Orleans.Lattice/issues/538) - `EnsureRootAsync` clobbers live topology on concurrent shard-root reactivation after a secondary-silo restart
-
 ### Shipped
 
 - [FX-001](https://github.com/NSTA1/Orleans.Lattice/issues/401) - Leaf split publish ordering
@@ -118,6 +116,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-017](https://github.com/NSTA1/Orleans.Lattice/issues/415) - Bound saga-terminal RPC chain depth under cascading mid-saga splits
 - [FX-018](https://github.com/NSTA1/Orleans.Lattice/issues/416) - Close residual orphan-pending-tx visibility-race on `ReshardTopologyTests` chaos surface
 - [FX-019](https://github.com/NSTA1/Orleans.Lattice/issues/417) - Shadow-forward race during ShardSplitPhase Reject and post-Complete transitions
+- [FX-020](https://github.com/NSTA1/Orleans.Lattice/issues/538) - `EnsureRootAsync` clobbers live topology on concurrent shard-root reactivation after a secondary-silo restart
 
 ## Gaps & potential additions
 

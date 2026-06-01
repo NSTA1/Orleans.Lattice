@@ -64,6 +64,18 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     /// </summary>
     public Exception? ThrowOnWrite { get; set; }
 
+    /// <summary>Number of times <see cref="ReadStateAsync"/> has been called.</summary>
+    public int ReadCount { get; private set; }
+
+    /// <summary>
+    /// When set, every call to <see cref="ReadStateAsync"/> invokes this
+    /// hook after incrementing <see cref="ReadCount"/>. Lets a test
+    /// simulate storage delivering a topology on a re-read that the
+    /// in-memory copy did not yet have (the reactivation-against-stale-
+    /// state window), by mutating <see cref="State"/> from the hook.
+    /// </summary>
+    public Action<FakePersistentState<T>>? OnReadState { get; set; }
+
     public Task ClearStateAsync()
     {
         if (ThrowOnClear is { } ex)
@@ -75,7 +87,12 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
         return Task.CompletedTask;
     }
 
-    public Task ReadStateAsync() => Task.CompletedTask;
+    public Task ReadStateAsync()
+    {
+        ReadCount++;
+        OnReadState?.Invoke(this);
+        return Task.CompletedTask;
+    }
 
     public async Task WriteStateAsync()
     {

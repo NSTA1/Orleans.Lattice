@@ -147,6 +147,25 @@ internal sealed partial class ShardRootGrain(
     private readonly SemaphoreSlim _promotionGate = new(1, 1);
 
     /// <summary>
+    /// Per-activation gate that serialises the lazy single-leaf root
+    /// seed in <see cref="EnsureRootAsync"/>. Public operations are
+    /// annotated <see cref="AlwaysInterleaveAttribute"/>, so two turns
+    /// can both observe a null in-memory <c>RootNodeId</c> on a
+    /// freshly-activated shard and race into the seed path. Without this
+    /// gate, both would re-read storage, both would find it empty, and
+    /// both would create-and-persist a single-leaf root - the second
+    /// write overwriting the first turn's already-published leaf id and
+    /// orphaning its leaf. The gate guarantees only one turn performs the
+    /// storage re-read + seed sequence; the loser re-checks the (now
+    /// non-null) <c>RootNodeId</c> under the gate and returns without
+    /// seeding. This is the activation-local complement to the
+    /// cross-cluster defence: the re-read closes the "reactivated against
+    /// stale empty state" window, and the gate closes the "two
+    /// interleaved turns both seed" window.
+    /// </summary>
+    private readonly SemaphoreSlim _ensureRootGate = new(1, 1);
+
+    /// <summary>
     /// Serialised replacement for <c>state.WriteStateAsync()</c>. All
     /// shard-root <see cref="IPersistentState{TState}.WriteStateAsync"/>
     /// call sites must route through this helper so the per-activation
@@ -1017,6 +1036,50 @@ internal sealed partial class ShardRootGrain(
 
     private async Task EnsureRootAsync()
     {
+        // Steady-state fast path: once a root exists, short-circuit with
+        // zero storage I/O and no gate acquisition. This is the only path
+        // every hot-path read/write pays after the shard is initialised.
+        if (state.State.RootNodeId is not null) return;
+
+        // Slow path: this activation believes the shard is brand new.
+        // Serialise the re-read + seed behind the init gate so two
+        // interleaved turns cannot both seed a single-leaf root.
+        await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            await EnsureRootSlowAsync();
+        }
+        finally
+        {
+            _ensureRootGate.Release();
+        }
+    }
+
+    private async Task EnsureRootSlowAsync()
+    {
+        // Re-check under the gate: a turn that lost the race to the gate
+        // observes the winner's published RootNodeId and returns without
+        // seeding.
+        if (state.State.RootNodeId is not null) return;
+
+        // Defensive re-read before seeding a fresh single-leaf root.
+        //
+        // We only reach here when this activation believes the shard is
+        // brand new (RootNodeId is null in memory). That belief can be
+        // WRONG on a reactivation that raced a concurrent write or
+        // activated against not-yet-visible state during a membership
+        // change / silo restart: storage already holds a live topology
+        // (a promoted internal root and a populated leaf chain) for this
+        // shard while the freshly-activated grain's in-memory copy is
+        // still empty. Seeding a single-leaf root in that window would
+        // overwrite the persisted topology and silently drop every key
+        // that lived under the rest of the tree. Re-read once from
+        // storage and re-check; if storage already has a root we adopt it
+        // and return without seeding. The re-read only ever ADDS
+        // information here - a newer in-memory write would already have
+        // set RootNodeId and tripped the fast-path guard above - so it
+        // cannot clobber a pending in-memory mutation.
+        await state.ReadStateAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         if (state.State.RootNodeId is not null) return;
 
         // Register the tree in the registry before creating the root node.
