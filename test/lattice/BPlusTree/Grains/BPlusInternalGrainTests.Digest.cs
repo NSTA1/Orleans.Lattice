@@ -488,4 +488,182 @@ public partial class BPlusInternalGrainTests
             fromTable += kvp.Value.EntryCount;
         Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(fromTable));
     }
+
+    // --- PruneMovedChildDigests: internal-node split stale-row repro ---
+
+    [Test]
+    public async Task PruneMovedChildDigests_drops_moved_rows_and_recomputes_entry_count()
+    {
+        // An internal-node split hands half its children to a new
+        // sibling. Before this fix the donor trimmed state.State.Children
+        // but never pruned state.State.ChildDigests, so its
+        // SubtreeEntryCount kept summing the moved children's counts
+        // while the new sibling also counted them - a permanent
+        // double-count across the chained fold. This is the deterministic
+        // repro: fold three children in, prune two of them (as a split
+        // would), and assert the donor's aggregate reflects only the
+        // retained child.
+        var (grain, state, _) = CreateDigestGrain();
+        var child2 = GrainId.Create("leaf", "digest-child-2");
+
+        await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x11), EntryCount = 2, CheckpointOffset = 5,
+        });
+        await grain.OnChildDigestPublishedAsync(DigestChild1, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 3, CheckpointOffset = 9,
+        });
+        await grain.OnChildDigestPublishedAsync(child2, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x44), EntryCount = 7, CheckpointOffset = 2,
+        });
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(2 + 3 + 7),
+            "pre-condition: all three children counted before the prune");
+
+        var removed = grain.PruneMovedChildDigests(new[] { DigestChild1, child2 });
+
+        Assert.That(removed, Is.True, "rows that exist must report as removed");
+        Assert.That(state.State.ChildDigests.ContainsKey(DigestChild1), Is.False);
+        Assert.That(state.State.ChildDigests.ContainsKey(child2), Is.False);
+        Assert.That(state.State.ChildDigests.ContainsKey(DigestChild0), Is.True);
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(2),
+            "donor's SubtreeEntryCount must reflect only the retained child after the split prune");
+        // The retained child's hash is the only surviving XOR contribution.
+        Assert.That(state.State.SubtreeProjectionHash, Is.EqualTo(Bytes16(0x11)));
+    }
+
+    [Test]
+    public async Task PruneMovedChildDigests_recomputes_max_reduced_checkpoint_offset()
+    {
+        // The checkpoint offset is max-reduced, not summed. Pruning the
+        // child that held the maximum must drop the aggregate back to the
+        // highest offset among the retained children.
+        var (grain, state, _) = CreateDigestGrain();
+
+        await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x11), EntryCount = 1, CheckpointOffset = 4,
+        });
+        await grain.OnChildDigestPublishedAsync(DigestChild1, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 1, CheckpointOffset = 42,
+        });
+        Assert.That(state.State.SubtreeHighestCheckpointOffset, Is.EqualTo(42));
+
+        grain.PruneMovedChildDigests(new[] { DigestChild1 });
+
+        Assert.That(state.State.SubtreeHighestCheckpointOffset, Is.EqualTo(4),
+            "max-reduced checkpoint offset must drop to the highest retained child after the prune");
+    }
+
+    [Test]
+    public async Task PruneMovedChildDigests_no_matching_rows_is_a_noop()
+    {
+        var (grain, state, _) = CreateDigestGrain();
+        await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x11), EntryCount = 2, CheckpointOffset = 5,
+        });
+        var hashBefore = (byte[])state.State.SubtreeProjectionHash!.Clone();
+
+        var removed = grain.PruneMovedChildDigests(new[] { DigestChild1 });
+
+        Assert.That(removed, Is.False, "pruning ids that are not present must report no removal");
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(2),
+            "a no-op prune must not alter the aggregate");
+        Assert.That(state.State.SubtreeProjectionHash, Is.EqualTo(hashBefore));
+    }
+
+    [Test]
+    public void PruneMovedChildDigests_null_argument_throws()
+    {
+        var (grain, _, _) = CreateDigestGrain();
+
+        Assert.That(
+            () => grain.PruneMovedChildDigests(null!),
+            Throws.TypeOf<ArgumentNullException>());
+    }
+
+    // --- ApplyChildSnapshotAsync ownership guard ---
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_ignores_snapshot_from_non_owned_child()
+    {
+        // Once a node has recorded its children, a digest publish from a
+        // child it does not own (e.g. a child that was re-parented to a
+        // new sibling during a split but still has an in-flight publish
+        // targeting this former parent) must be rejected rather than
+        // folded. Folding it would re-add the moved child's contribution
+        // while the new sibling also counts it, double-counting the moved
+        // subtree across the chained fold.
+        var owned = GrainId.Create("leaf", "owned-child");
+        var stranger = GrainId.Create("leaf", "stranger-child");
+        var state = new FakePersistentState<InternalNodeState>();
+        state.State.Children =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = owned },
+        ];
+        var (grain, _, _) = CreateDigestGrain(state);
+
+        await grain.OnChildDigestPublishedAsync(owned, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x11), EntryCount = 4, CheckpointOffset = 1,
+        });
+        await grain.OnChildDigestPublishedAsync(stranger, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 9, CheckpointOffset = 1,
+        });
+
+        Assert.That(state.State.ChildDigests.ContainsKey(stranger), Is.False,
+            "a snapshot from a non-owned child must not create a row");
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(4),
+            "only the owned child contributes to the subtree aggregate");
+    }
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_drops_stale_row_when_child_no_longer_owned()
+    {
+        // A child that was previously folded in, then removed from the
+        // Children list (re-parented away), must have its lingering
+        // ChildDigests row dropped on its next stale publish so the
+        // aggregate self-heals back to the owned set.
+        var owned = GrainId.Create("leaf", "owned-child");
+        var moved = GrainId.Create("leaf", "moved-child");
+        var state = new FakePersistentState<InternalNodeState>();
+        state.State.Children =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = owned },
+            new ChildEntry { SeparatorKey = "m", ChildId = moved },
+        ];
+        var (grain, _, _) = CreateDigestGrain(state);
+
+        await grain.OnChildDigestPublishedAsync(owned, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x11), EntryCount = 4, CheckpointOffset = 1,
+        });
+        await grain.OnChildDigestPublishedAsync(moved, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 5, CheckpointOffset = 1,
+        });
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(9),
+            "pre-condition: both children counted while owned");
+
+        // The child is handed to a new sibling: drop it from Children.
+        state.State.Children =
+        [
+            new ChildEntry { SeparatorKey = null, ChildId = owned },
+        ];
+
+        // A stale publish from the now-moved child arrives.
+        await grain.OnChildDigestPublishedAsync(moved, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 5, CheckpointOffset = 1,
+        });
+
+        Assert.That(state.State.ChildDigests.ContainsKey(moved), Is.False,
+            "the stale row must be dropped on the next non-owned publish");
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(4),
+            "the aggregate must self-heal to the owned set");
+    }
 }

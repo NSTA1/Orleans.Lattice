@@ -366,10 +366,23 @@ internal sealed partial class BPlusInternalGrain(
         }
 
         // The new child has just been grafted under this node, so its
-        // parent slot must point at us. Idempotent - if the child was
-        // already pointing here (e.g. crash recovery), this is a no-op
-        // aside from a refresher publish.
-        await SeedChildParentAsync(newChild, state.State.ChildrenAreLeaves);
+        // parent slot must point at us - but only if we still own it.
+        // When the insert above pushed our child count over the limit,
+        // SplitAsync ran and may have handed newChild to the new sibling
+        // as part of the moved right half. In that case the sibling's
+        // CompleteSplitAsync re-parents newChild to itself; seeding it
+        // back to us here would corrupt the moved child's parent pointer
+        // so it keeps publishing its digest to this donor (which no
+        // longer owns it) forever, and the donor's ownership guard
+        // rejects every such publish - permanently under-counting the
+        // moved child in the chained fold. Only seed when we are still
+        // the owner. Idempotent - if the child was already pointing here
+        // (e.g. crash recovery), this is a no-op aside from a refresher
+        // publish.
+        if (OwnsChild(newChild))
+        {
+            await SeedChildParentAsync(newChild, state.State.ChildrenAreLeaves);
+        }
 
         return pendingRecovery ?? splitResult;
     }
@@ -416,8 +429,36 @@ internal sealed partial class BPlusInternalGrain(
 
         // Trim our children to the left half.
         state.State.Children.RemoveRange(mid, state.State.Children.Count - mid);
+
+        // Prune the per-child digest rows for the children we just handed
+        // to the new sibling, then re-derive our subtree aggregates from
+        // the retained rows. Without this, the donor keeps summing the
+        // moved children's EntryCount / hash contributions into its own
+        // SubtreeProjectionHash and SubtreeEntryCount while the new
+        // sibling also counts them - double-counting the moved subtree
+        // across the chained fold. ChildDigests is the single source of
+        // truth for the aggregate, so dropping the rows and recomputing
+        // is sufficient and is folded into the split-intent persist
+        // below. The new sibling rebuilds its own rows via
+        // SeedChildParentAsync as each moved child is grafted in
+        // CompleteSplitAsync.
+        PruneMovedChildDigests(rightChildren.Select(c => c.ChildId));
+
         TracePersist(nameof(SplitAsync));
         await state.WriteStateAsync();
+
+        // Republish our now-reduced subtree digest to the parent so it
+        // refreshes its stored snapshot for us. The prune above recomputed
+        // our local aggregate, but the parent still holds the pre-split
+        // (inflated) snapshot; without this push the parent permanently
+        // sums our old count plus the new sibling's count when the sibling
+        // is grafted, double-counting the moved subtree one level up. When
+        // we are the root (no parent), the shard root rebuilds the digest
+        // chain from the promoted SplitResult, so there is nothing to push.
+        if (state.State.ParentId is { } parentId)
+        {
+            await PublishUpwardAsync(parentId);
+        }
 
         // Phase 2: Execute cross-grain operations using the persisted identity.
         return await CompleteSplitAsync();

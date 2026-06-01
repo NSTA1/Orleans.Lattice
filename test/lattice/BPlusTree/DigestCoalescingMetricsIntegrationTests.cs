@@ -518,19 +518,7 @@ public class DigestCoalescingMetricsIntegrationTests
             {
                 siloBuilder.AddLattice((silo, name)
                     => silo.AddMemoryGrainStorage(name));
-                siloBuilder.ConfigureLattice(o =>
-                {
-                    o.DigestCoalescingWindowMs = LongWindowMs;
-                    // The byte-accurate storage-usage poller fires immediately
-                    // on startup and fans a cluster-wide roll-up across every
-                    // registered tree, touching leaf/shard grains mid-test and
-                    // republishing projection digests - which perturbs the
-                    // exact per-publish (scheduled / skipped / fired / inline)
-                    // counts these metrics tests assert. Pin it off; the poller
-                    // has its own dedicated test surface. Zero is the
-                    // documented opt-out.
-                    o.StorageUsagePollInterval = TimeSpan.Zero;
-                });
+                siloBuilder.ConfigureLattice(o => o.DigestCoalescingWindowMs = LongWindowMs);
                 siloBuilder.UseInMemoryReminderService();
             }
         }

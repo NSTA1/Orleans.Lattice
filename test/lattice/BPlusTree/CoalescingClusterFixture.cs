@@ -97,14 +97,6 @@ public sealed class CoalescingClusterFixture
             {
                 o.DigestCoalescingWindowMs = CoalescingWindowMs;
                 o.WalPartitions = 1;
-                // The byte-accurate storage-usage poller fires immediately on
-                // startup and fans a cluster-wide roll-up across every
-                // registered tree, touching leaf/shard grains mid-test and
-                // republishing projection digests - which breaks the exact
-                // entry-count digest convergence assertions these coalescing
-                // tests make. Pin it off; the poller has its own dedicated
-                // test surface. Zero is the documented opt-out.
-                o.StorageUsagePollInterval = TimeSpan.Zero;
             });
             siloBuilder.UseInMemoryReminderService();
         }

@@ -118,6 +118,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-019](https://github.com/NSTA1/Orleans.Lattice/issues/417) - Shadow-forward race during ShardSplitPhase Reject and post-Complete transitions
 - [FX-020](https://github.com/NSTA1/Orleans.Lattice/issues/538) - `EnsureRootAsync` clobbers live topology on concurrent shard-root reactivation after a secondary-silo restart
 - [FX-021](https://github.com/NSTA1/Orleans.Lattice/issues/544) - Leaf-level `CountAsync` / `GetStatsAsync` over-count during an in-progress (or restart-interrupted) leaf split
+- [FX-022](https://github.com/NSTA1/Orleans.Lattice/issues/564) - Internal-node split leaves stale per-child digest rows, double-counting subtree entry totals
 
 ## Gaps & potential additions
 
