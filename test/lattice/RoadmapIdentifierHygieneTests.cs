@@ -4,12 +4,15 @@ using System.Text.RegularExpressions;
 namespace Orleans.Lattice.Tests;
 
 /// <summary>
-/// Regression: feature-tracker identifiers (<c>F-XXX</c>, <c>FX-XXX</c>, and
-/// the compact <c>FxNNN</c> / <c>fxNNN</c> identifier forms) must appear only
-/// in <c>roadmap.md</c>. They are meaningless outside of that file - docs,
-/// XML doc comments, inline comments, test fixture names, and tree-id string
-/// literals must describe the behaviour by name and effect instead. See the
-/// "Documentation" section of <c>.github/copilot-instructions.md</c>.
+/// Regression: feature-tracker identifiers (<c>F-XXX</c>, <c>FX-XXX</c>,
+/// <c>G-XXX</c>, and the compact <c>FxNNN</c> / <c>fxNNN</c> identifier forms)
+/// must not appear anywhere except <c>CHANGELOG.md</c> and the
+/// <c>features.md</c> issue indexes. They are meaningless outside of those
+/// locations - docs, XML doc comments, inline comments, test fixture names,
+/// and tree-id string literals must describe the behaviour by name and effect,
+/// or link directly to the GitHub issue, instead. Feature planning lives on
+/// GitHub Issues; see the "Documentation" section of
+/// <c>.github/copilot-instructions.md</c>.
 /// </summary>
 [TestFixture]
 public class RoadmapIdentifierHygieneTests
@@ -18,17 +21,18 @@ public class RoadmapIdentifierHygieneTests
     // not contain a literal tracker-id and therefore is not self-flagged.
     private const string H = "-";
     private static readonly Regex TrackerIdPattern = new(
-        @$"F{H}\d{{3}}[a-z]?|FX{H}\d{{3}}|\bFx\d{{3}}\b|\bfx\d{{3}}\b",
+        @$"F{H}\d{{3}}[a-z]?|FX{H}\d{{3}}|G{H}\d{{3}}|\bFx\d{{3}}\b|\bfx\d{{3}}\b",
         RegexOptions.Compiled);
 
     /// <summary>
     /// Scans every <c>.cs</c> file under <c>src/</c> and <c>test/</c> plus
     /// every <c>.md</c> file under <c>docs/</c> and <c>.github/</c> and
-    /// fails if any tracker identifier is present. <c>roadmap.md</c> and
-    /// this test file are the only permitted locations.
+    /// fails if any tracker identifier is present. <c>CHANGELOG.md</c>, the
+    /// <c>features.md</c> issue indexes, and this test file are the only
+    /// permitted locations.
     /// </summary>
     [Test]
-    public void Tracker_identifiers_appear_only_in_roadmap()
+    public void Tracker_identifiers_appear_only_in_changelog_and_feature_index()
     {
         var repoRoot = FindRepoRoot();
         var thisFile = Path.GetFullPath(
@@ -40,32 +44,19 @@ public class RoadmapIdentifierHygieneTests
         scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, "docs"), "*.md"));
         scanned.AddRange(EnumerateFiles(Path.Combine(repoRoot, ".github"), "*.md"));
 
-        // Exempt files: this test, every roadmap.md, and the replication
-        // causal+ design note. The causal+ doc cross-references in-flight
-        // replication / core tracker ids by design as part of its narrative
-        // dependency table; rewriting those references to "name and effect"
-        // would erase the structural mapping the doc is built around.
-        var exemptFullPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            Path.GetFullPath(Path.Combine(
-                repoRoot, "docs", "lattice", "wal-causal-plus.md")),
-        };
-
         var violations = new List<string>();
         foreach (var file in scanned)
         {
             var full = Path.GetFullPath(file);
             if (string.Equals(full, thisFile, StringComparison.OrdinalIgnoreCase)) continue;
-            // Any file whose name starts with "roadmap" and ends with ".md"
-            // is treated as a roadmap file. The canonical entry is
-            // `roadmap.md`; scoped follow-ons (e.g.
-            // `roadmap-cross-cluster-bootstrap.md` in the replication
-            // package) are also legitimate locations for tracker
-            // identifiers, so they share the exemption.
+            // CHANGELOG.md, the issue trackers, and the per-package
+            // `features.md` issue indexes are the only legitimate homes for
+            // tracker identifiers. In the feature indexes the id appears only
+            // as the link text on its GitHub issue link; the whole file is
+            // exempted rather than asserting link structure line-by-line.
             var fileName = Path.GetFileName(full);
-            if (fileName.StartsWith("roadmap", StringComparison.OrdinalIgnoreCase)
-                && fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) continue;
-            if (exemptFullPaths.Contains(full)) continue;
+            if (fileName.Equals("CHANGELOG.md", StringComparison.OrdinalIgnoreCase)) continue;
+            if (fileName.Equals("features.md", StringComparison.OrdinalIgnoreCase)) continue;
 
             var lines = File.ReadAllLines(full);
             for (int i = 0; i < lines.Length; i++)
@@ -80,8 +71,9 @@ public class RoadmapIdentifierHygieneTests
         }
 
         Assert.That(violations, Is.Empty,
-            "Feature-tracker identifiers must appear only in roadmap.md. "
-            + "Rewrite these references to describe the behaviour by name and effect "
+            "Feature-tracker identifiers must appear only in CHANGELOG.md and the "
+            + "features.md issue indexes. Rewrite these references to describe the "
+            + "behaviour by name and effect, or link directly to the GitHub issue "
             + "(see .github/copilot-instructions.md -> Documentation)." + Environment.NewLine
             + string.Join(Environment.NewLine, violations));
     }

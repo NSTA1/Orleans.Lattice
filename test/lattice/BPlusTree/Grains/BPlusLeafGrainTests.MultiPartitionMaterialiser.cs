@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="ILatticeFallOffLogDetector"/>, then activates the grain
 /// and asserts on the per-partition projection checkpoint, the per-
 /// partition saga-prepare clamp, and the split-time per-partition
-/// WAL-head capture - the three roadmap-mandated assertions for
+/// WAL-head capture - the three required assertions for
 /// multi-partition WAL replay that the cluster-level integration
 /// suite covers behaviourally but does not pin individually.
 /// </summary>

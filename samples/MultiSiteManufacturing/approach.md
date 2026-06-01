@@ -177,16 +177,16 @@ Three sample-specific seams sit alongside the package:
   strip; without it, a Blazor circuit pinned to one silo would only
   see that silo's slice of replication activity.
 
-> **Known limitation - cross-cluster receiver catch-up.** When one
-> cluster has been running long enough to GC old WAL entries and the
-> peer's cursor has fallen behind that point, auto-bootstrap fires
-> against the package's default `ISnapshotProvider` (which reads the
-> local tree), copies nothing, and loops. Fresh demo boots and short
-> Tier-4b/Tier-5 disconnects stay safely inside the retention window.
-> See [`README.md`](./README.md#known-limitation-cross-cluster-receiver-catch-up)
-> for the running-sample framing, and
-> [`src/lattice.replication/roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md)
-> for the planned fix.
+> **Receiver catch-up after WAL GC.** When one cluster has been
+> running long enough to GC old WAL entries and the peer's cursor has
+> fallen behind that point, auto-bootstrap fires and drains a
+> point-in-time snapshot from the sender cluster over the gRPC
+> remote-snapshot transport (`AddLatticeReplicationGrpc` registers the
+> `IRemoteSnapshotTransport` binding, and `AddLatticeReplication`
+> auto-wires the receiver-side `RemoteSnapshotProvider`), so a
+> long-disconnected or freshly-wiped receiver catches up automatically.
+> See the [snapshot &amp; bootstrap](../../docs/lattice.replication/snapshot-bootstrap.md)
+> docs for the cross-cluster bootstrap pipeline.
 
 ## 7. UI design
 

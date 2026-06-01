@@ -141,7 +141,7 @@ The wire-format layout of the compressed tail (length prefixes, alignment with t
 
 `ILatticeCompressor` lives in the core `Orleans.Lattice` package precisely so non-replication layers can reuse it. Planned consumers:
 
-- **Azure Table WAL row payloads.** A future per-row compression path on the Azure Table WAL provider (tracked on the core roadmap) will dispatch through the same DI registration, using the same `LatticeCompression` tag stored as Azure Table metadata on each row. Hosts that have already registered a compressor for replication get WAL compression for free.
+- **Azure Table WAL row payloads.** A future per-row compression path on the Azure Table WAL provider (tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice)) will dispatch through the same DI registration, using the same `LatticeCompression` tag stored as Azure Table metadata on each row. Hosts that have already registered a compressor for replication get WAL compression for free.
 - **Snapshots / cold-storage tiers.** Reserved for future work; the seam shape is byte-in / byte-out specifically so these layers do not need a fresh contract.
 
 ## Testing

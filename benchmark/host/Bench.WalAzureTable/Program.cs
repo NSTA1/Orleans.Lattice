@@ -1,8 +1,8 @@
 // Azurite-backed concurrency-sweep probe for the per-batch Azure Table
 // WAL partitioning design.
 //
-// Roadmap acceptance text the probe targets, from the per-batch
-// partition-keys + manifest-driven-reads roadmap entry:
+// Acceptance text the probe targets, from the per-batch
+// partition-keys + manifest-driven-reads feature:
 //
 //   With WalMaxPendingBatches = 4 against the Azure Tables emulator,
 //   a 1024-entry burst spread across 8 shards shows throughput-uplift
@@ -65,7 +65,7 @@ const int EntriesPerBatch = 8;
 const int ValueBytes = 128;
 const int WarmupBatchesPerShard = 2;
 
-// Concurrency sweep - one burst per level. The roadmap entry's
+// Concurrency sweep - one burst per level. The feature's
 // headline value is WalMaxPendingBatches = 4, so 4 is in the
 // middle of the swept range; 1 is the "no in-flight parallelism"
 // baseline; 8 = batches-per-shard /2, so half the shard's batches

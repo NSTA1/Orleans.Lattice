@@ -24,7 +24,7 @@ WAL trim, per-peer liveness, tombstone-reap filtering, and the gRPC
 transport; the Azure Table WAL suite pins append-batch atomicity and
 offset monotonicity against a real Azurite-backed provider.
 
-Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests live under `test/lattice.replication/Chaos/`; transport-specific chaos tests live under `test/lattice.replication.grpc/Chaos/`; WAL-provider chaos tests live under `test/lattice.storage.azuretable/Chaos/`. Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to itself, and is tagged `[Category("Chaos")]` so the iterative-development test filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them. Tests that are currently [Ignore]'d are still listed below with their tracking roadmap entry; they flip back to live when the underlying gap is closed.
+Core chaos tests live under `test/lattice/BPlusTree/`; cross-cluster chaos tests live under `test/lattice.replication/Chaos/`; transport-specific chaos tests live under `test/lattice.replication.grpc/Chaos/`; WAL-provider chaos tests live under `test/lattice.storage.azuretable/Chaos/`. Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to itself, and is tagged `[Category("Chaos")]` so the iterative-development test filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them. Tests that are currently [Ignore]'d are still listed below with their tracking GitHub issue; they flip back to live when the underlying gap is closed.
 
 ### Core chaos suite (`test/lattice/BPlusTree/`)
 

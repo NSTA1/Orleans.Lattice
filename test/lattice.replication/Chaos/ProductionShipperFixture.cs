@@ -24,7 +24,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// in-process <see cref="ChaosDeliveryPump"/> for chaos tests that
 /// need real WAL-cursor / shipper-grain behaviour - in particular
 /// chaos tests that assert on per-peer cursor visibility into
-/// <see cref="IWalCursorRegistry"/> (production-shipper-fixture prerequisite tracked on the replication roadmap) or that
+/// <see cref="IWalCursorRegistry"/> (production-shipper-fixture prerequisite tracked on GitHub Issues) or that
 /// drive WAL GC against an actively-shipping pipeline.
 /// </summary>
 /// <remarks>

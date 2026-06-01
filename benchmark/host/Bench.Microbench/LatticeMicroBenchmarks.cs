@@ -1579,7 +1579,7 @@ public class LatticeMicroBenchmarks
     //
     // Parameter sweep: 16 / 64 / 256 / 1024 entries at 64 B / 1 KB /
     // 16 KB payload. The 1024 x 64 B and 16 x 16 KB corners answer the
-    // roadmap acceptance row's small-payload-dominated and
+    // acceptance row's small-payload-dominated and
     // payload-bytes-dominated extremes respectively.
 
     private Serializer<ReplicationBatchEnvelope> _shipEnvelopeSerializer = null!;
@@ -1779,7 +1779,7 @@ public class LatticeMicroBenchmarks
     /// Sweep over (entryCount x payloadBytes) used by both
     /// <see cref="Ship_TypedEnvelope"/> and <see cref="Ship_FramingOnly"/>.
     /// 12 corners covers the small-payload-dominated and
-    /// payload-bytes-dominated extremes the roadmap calls for.
+    /// payload-bytes-dominated extremes the tracked feature calls for.
     /// </summary>
     public IEnumerable<object[]> ShipArguments()
     {

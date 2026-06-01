@@ -17,8 +17,9 @@ namespace Orleans.Lattice.Tests;
 /// <c>ApplyPreparedDeleteAsync</c> / <c>ApplyTxTerminalAsync</c>).
 ///
 /// This test fails the build if any of the doomed identifiers reappear in
-/// source or test code. Roadmap files are exempt because tracker entries
-/// legitimately reference retired identifiers as part of the audit trail.
+/// source or test code. Only <c>.cs</c> files under <c>src/</c> and
+/// <c>test/</c> are scanned, so historical references in the changelog or
+/// other markdown are unaffected.
 /// </summary>
 [TestFixture]
 public class DeletionMandateHygieneTests

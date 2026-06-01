@@ -141,7 +141,7 @@ benefits from per-silo cache layers that the write path cannot use.
   `1` will deliver materially lower sustained write throughput
   because every commit serialises through one WAL partition's
   per-Azure-Tables-partition flush envelope.
-  The multi-partition WAL replay work on the [core roadmap](../../src/lattice/roadmap.md)
+  The multi-partition WAL replay work (tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice))
   has shipped, so the Layer 2 cells above reflect what the
   default-configured silo delivers.
 - **Your specific workload.** Key size, value size, fan-out shape,
