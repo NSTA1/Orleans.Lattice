@@ -339,6 +339,7 @@ internal sealed class LatticeOptionsResolver(
             VersionVectorRetention = baseOptions.VersionVectorRetention,
             DiagnosticsCacheTtl = baseOptions.DiagnosticsCacheTtl,
             StorageUsageCacheTtl = baseOptions.StorageUsageCacheTtl,
+            StorageUsagePollInterval = baseOptions.StorageUsagePollInterval,
             WalMaxRetainedBytes = baseOptions.WalMaxRetainedBytes,
             WalBytePressureReclaimTarget = baseOptions.WalBytePressureReclaimTarget,
             MaterialiserCheckpointInterval = baseOptions.MaterialiserCheckpointInterval,

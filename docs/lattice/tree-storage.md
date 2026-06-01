@@ -291,6 +291,8 @@ WAL retention is normally bounded by consumer cursors and an optional wall-clock
 
 `WalBytePressureReclaimTarget` (default `0.8`) is the low-water fraction of the ceiling that disarms the policy, providing hysteresis so a tree hovering near the ceiling does not thrash: byte pressure arms when retained crosses the full ceiling and keeps re-triggering until a trim drives retained at or below `WalBytePressureReclaimTarget * WalMaxRetainedBytes`, after which growth inside the band does not re-trigger until the ceiling is crossed again. Leaving `WalMaxRetainedBytes` at its default `null` disables the policy entirely with zero hot-path cost.
 
+> **Production caution - set at least one absolute cap.** With every retention knob at its default (`WalRetention = null`, `WalMaxRetainedBytes = null`), the only active bound on WAL size is the consumer cursor frontier. The log shrinks as consumers catch up, but a **permanently lagging or dead consumer pins it and grows it without limit** - and `WalMaxRetainedBytes` will *not* rescue you, because it is advisory and never trims past a live cursor. Only `WalRetention` (a wall-clock floor on consumer lag) trims past a stuck consumer. Any deployment where unbounded growth is unacceptable should set `WalRetention`, and where a hard size budget matters, `WalMaxRetainedBytes` as well. See [How the retention bounds interact](wal.md#how-the-retention-bounds-interact) in the WAL reference for the full bound-by-bound breakdown.
+
 ## Key trade-offs
 
 | Direction | Effect |

@@ -32,4 +32,12 @@ public sealed class StorageUsageOptionsDefaultsTests
         Assert.That(options.StorageUsageCacheTtl, Is.EqualTo(TimeSpan.FromSeconds(10)));
         Assert.That(LatticeOptions.DefaultStorageUsageCacheTtl, Is.EqualTo(TimeSpan.FromSeconds(10)));
     }
+
+    [Test]
+    public void StorageUsagePollInterval_defaults_to_fifteen_seconds()
+    {
+        var options = new LatticeOptions();
+        Assert.That(options.StorageUsagePollInterval, Is.EqualTo(TimeSpan.FromSeconds(15)));
+        Assert.That(LatticeOptions.DefaultStorageUsagePollInterval, Is.EqualTo(TimeSpan.FromSeconds(15)));
+    }
 }

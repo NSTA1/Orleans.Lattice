@@ -229,23 +229,7 @@ internal sealed partial class LatticeGrain(
     private async ValueTask<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys)
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
-
-        // Group keys by shard.
-        var shardBuckets = new Dictionary<int, List<string>>();
-        foreach (var key in keys)
-        {
-            var idx = shardMap.Resolve(key);
-            if (!shardBuckets.TryGetValue(idx, out var bucket))
-            {
-                bucket = [];
-                shardBuckets[idx] = bucket;
-            }
-            bucket.Add(key);
-        }
-
-#if LATTICE_DIAG
-        DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} keyCount={keys.Count} bucketCount={shardBuckets.Count} buckets=[{string.Join(';', shardBuckets.Select(kv => $"s{kv.Key}:[{string.Join(',', kv.Value)}]"))}]");
-#endif
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
         // Double-checked snapshot retry: pre-fetch a TxRegistry snapshot
         // (snap1), fan out under that ambient view, then re-fetch
@@ -263,9 +247,56 @@ internal sealed partial class LatticeGrain(
         // observe the saga as Committed everywhere, so undrained
         // leaves surface pending.value (post) and drained leaves'
         // Entries=post are consistent.
+        //
+        // A topology change is the second source of split observation:
+        // grouping keys by a shard map that is then swapped mid-fan-out
+        // routes some keys to a source shard that has already
+        // shadow-forwarded its slots to the new owner (post) while
+        // sibling keys still resolve to undrained owners (pre). Like the
+        // CountAsync path, we therefore capture the map version at the
+        // start of each attempt, re-group under the current map, and
+        // discard-and-retry if the version moves while the fan-out is in
+        // flight, re-resolving routing under the fresh map.
+        //
+        // This map-version guard is a strict improvement but does not
+        // close the full mid-reshard atomic-visibility window: a
+        // writer/reader map-cache split-brain across the swap, plus a
+        // destination shard that holds a migrating slot's drained
+        // historical value before the in-flight saga's prepare-forward
+        // has landed, can still surface a mixed-round batch within a
+        // single observed map version. That residual race is a
+        // migration-layer (Swap-phase ordering) gap tracked in
+        // https://github.com/NSTA1/Orleans.Lattice/issues/551 and cannot
+        // be closed from the reader side alone.
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
+            if (attempt > 0)
+            {
+                InvalidateShardMap();
+                (physicalTreeId, shardMap) = await GetRoutingAsync();
+            }
+
+            var versionAtStart = shardMap.Version;
+
+            // Group keys by shard under the map snapshot captured for
+            // this attempt.
+            var shardBuckets = new Dictionary<int, List<string>>();
+            foreach (var key in keys)
+            {
+                var idx = shardMap.Resolve(key);
+                if (!shardBuckets.TryGetValue(idx, out var bucket))
+                {
+                    bucket = [];
+                    shardBuckets[idx] = bucket;
+                }
+                bucket.Add(key);
+            }
+
+#if LATTICE_DIAG
+            DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} bucketCount={shardBuckets.Count} buckets=[{string.Join(';', shardBuckets.Select(kv => $"s{kv.Key}:[{string.Join(',', kv.Value)}]"))}]");
+#endif
+
             var snap1Pair = await FetchRegistrySnapshotAsync();
             var snap1 = snap1Pair.Snap;
             var concurrent = new ConcurrentDictionary<string, byte[]>();
@@ -278,6 +309,20 @@ internal sealed partial class LatticeGrain(
                     tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
                 }
                 await Task.WhenAll(tasks);
+            }
+
+            // Unconditional topology-stability check: if the shard-map
+            // version moved while the fan-out was in flight, the per-shard
+            // reads may have spanned an inconsistent snapshot (some keys
+            // routed to a shadow-forwarded source owner, others to the new
+            // owner). Discard and retry against the fresh map.
+            var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
+            if (shardMapNow.Version != versionAtStart)
+            {
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG reader-topology-retry] tree={physicalTreeId} attempt={attempt} versionAtStart={versionAtStart} versionNow={shardMapNow.Version}");
+#endif
+                continue;
             }
 
             if (await IsSnap2StableAsync(snap1, snap1Pair.Revision))

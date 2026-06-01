@@ -193,6 +193,27 @@ public class LatticeOptionsResolverPropagationGuardTests
             string.Join("\n", failures));
     }
 
+    /// <summary>
+    /// Explicit, behaviour-named pin for the storage-usage poll interval:
+    /// the resolver previously dropped <see cref="LatticeOptions.StorageUsagePollInterval"/>
+    /// on the floor, so the per-silo storage-usage gauge poller observed
+    /// the inherited default instead of the operator's configured cadence.
+    /// The reflective guard above catches this too, but this case names the
+    /// regression directly so a failure points straight at the resolver's
+    /// copy block rather than at a generic property-name mismatch.
+    /// </summary>
+    [Test]
+    public async Task ResolveAsync_propagates_StorageUsagePollInterval()
+    {
+        var configured = TimeSpan.FromSeconds(42);
+        var baseOptions = new LatticeOptions { StorageUsagePollInterval = configured };
+        var resolver = BuildResolverFor(baseOptions);
+
+        var resolved = await resolver.ResolveAsync("user-tree-storage-poll");
+
+        Assert.That(resolved.StorageUsagePollInterval, Is.EqualTo(configured));
+    }
+
     private static LatticeOptionsResolver BuildResolverFor(LatticeOptions options)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();

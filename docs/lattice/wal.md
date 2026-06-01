@@ -591,6 +591,36 @@ await registry.ReportCursorAsync(
 The registry takes a defensive clone of the supplied vector, so callers may
 continue to mutate their local frontier after the report returns.
 
+### How the retention bounds interact
+
+WAL retention is governed by **three layered bounds**. The GC only ever
+removes entries that all applicable bounds agree are safe to drop, so the
+effective trim frontier is whichever bound binds first.
+
+| Bound | Knob | Default | What it caps | Can it trim past a live consumer? |
+|---|---|---|---|---|
+| Consumer frontier | *(none - always on)* | always on | The hard floor: `min(cursor)` across every registered consumer, intersected with the causal-stable frontier. | **No.** This is the durability invariant. |
+| Wall-clock TTL | `WalRetention` | `null` (disabled) | Entries older than `now - WalRetention` fall off the log even if a consumer still pins them. | **Yes** - this is the only bound that does. |
+| Advisory byte ceiling | `WalMaxRetainedBytes` | `null` (disabled) | Schedules byte-pressure trim work when retained bytes exceed the ceiling, but only *within* the consumer frontier. | **No** - it surfaces an over-threshold signal instead. |
+
+`WalBytePressureReclaimTarget` (default `0.8`) is not itself a bound: it is the
+low-water hysteresis fraction of `WalMaxRetainedBytes` that disarms the
+byte-pressure policy once a trim has reclaimed enough, so a tree hovering near
+the ceiling is not trimmed on every pass. It is inert unless
+`WalMaxRetainedBytes` is set.
+
+> **Production caution - set at least one absolute cap.** With every knob at
+> its default (`WalRetention = null`, `WalMaxRetainedBytes = null`), the *only*
+> active bound is the consumer frontier. The WAL shrinks as consumers catch up,
+> but a **permanently lagging or dead consumer pins the log and grows it without
+> limit** - the advisory byte ceiling deliberately will not rescue you, because
+> it never trims past a live cursor. `WalRetention` is the only knob that trims
+> past a stuck consumer, so any deployment where unbounded growth is
+> unacceptable should set `WalRetention` (a wall-clock floor on consumer lag)
+> and, where a hard size budget matters, `WalMaxRetainedBytes` as well. A
+> consumer that falls off the log re-bootstraps via the fall-off-log path in
+> [`projection-rebuild.md`](projection-rebuild.md).
+
 ### Scheduling
 
 `ILatticeWalGc.RunOnceAsync(treeName)` is a single-pass GC invocation.
@@ -649,6 +679,9 @@ suit most workloads.
 | `MaxLeafReplayEntries` | `10_000` | Upper bound on the entries `ILeafReplayCoordinatorGrain` streams in a single tail replay. A leaf whose backlog exceeds this falls back to the rebuild path indicated by `ProjectionRebuildPolicy`. The budget is skipped for a freshly-created leaf whose persisted `ProjectionCheckpointOffset` is the -1 "nothing applied" sentinel: a fresh leaf has no projection state to lose, and the per-leaf range filter inside the materialiser bounds the actual work by the leaf's own range rather than by the WAL head. |
 | `LeafProjectionRetention` | 7 days | Age beyond which a persisted checkpoint is considered stale; the next activation falls off-log and rebuilds. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger. |
 | `ProjectionRebuildPolicy` | `SnapshotThenWal` | Recovery strategy when a fall-off-log trigger fires (snapshot + WAL tail, or full rebuild from the authoritative source). |
+| `WalRetention` | `null` (disabled) | Wall-clock hard ceiling on retention: entries older than `now - WalRetention` fall off the log even if a consumer still pins them. The only knob that trims past a stuck consumer - set it where unbounded growth is unacceptable. See [How the retention bounds interact](#how-the-retention-bounds-interact). |
+| `WalMaxRetainedBytes` | `null` (disabled) | Advisory per-tree byte ceiling that schedules byte-pressure trim work, but only within the safe consumer frontier. See [Tree Storage](tree-storage.md#advisory-byte-pressure-wal-retention). |
+| `WalBytePressureReclaimTarget` | `0.8` | Low-water hysteresis fraction of `WalMaxRetainedBytes` that disarms the byte-pressure policy after a trim. Inert unless `WalMaxRetainedBytes` is set. |
 
 The WAL provider itself is registered separately via
 `siloBuilder.AddWalStorage(...)` (single-cluster) or via
