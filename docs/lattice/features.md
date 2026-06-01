@@ -117,6 +117,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-018](https://github.com/NSTA1/Orleans.Lattice/issues/416) - Close residual orphan-pending-tx visibility-race on `ReshardTopologyTests` chaos surface
 - [FX-019](https://github.com/NSTA1/Orleans.Lattice/issues/417) - Shadow-forward race during ShardSplitPhase Reject and post-Complete transitions
 - [FX-020](https://github.com/NSTA1/Orleans.Lattice/issues/538) - `EnsureRootAsync` clobbers live topology on concurrent shard-root reactivation after a secondary-silo restart
+- [FX-021](https://github.com/NSTA1/Orleans.Lattice/issues/544) - Leaf-level `CountAsync` / `GetStatsAsync` over-count during an in-progress (or restart-interrupted) leaf split
 
 ## Gaps & potential additions
 

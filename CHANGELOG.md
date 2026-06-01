@@ -26,7 +26,7 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 ## [6.1.2] - 2026-06-01
 
-Core-library patch release (`Orleans.Lattice` only). Fixes a silent topology-loss defect on shard-root reactivation after a secondary-silo restart, plus two lower-allocation CRDT primitive optimizations. No public-API or behavioral changes; safe drop-in upgrade from v6.1.1.
+Core-library patch release (`Orleans.Lattice` only). Fixes two topology-integrity defects on the multi-silo restart surface - a silent topology-loss on shard-root reactivation and a `CountAsync` over-count when a restart interrupts a leaf split - plus two lower-allocation CRDT primitive optimizations. No public-API or behavioral changes; safe drop-in upgrade from v6.1.1.
 
 ### Changed
 
@@ -36,6 +36,7 @@ Core-library patch release (`Orleans.Lattice` only). Fixes a silent topology-los
 ### Fixed
 
 - **Shard-root reactivation no longer clobbers a live persisted topology after a secondary-silo restart.** When a `ShardRootGrain` reactivated against not-yet-visible (empty) in-memory state during a membership change or silo restart, the first-touch root materialisation could seed a fresh single-leaf root over a shard that already held a promoted internal root and a populated leaf chain in storage, silently dropping every key under the rest of the tree (observed as a universe collapsing from 50 keys to 29 in the multi-silo restart chaos surface). The lazy root-seed path now re-reads persistent state and adopts any already-persisted topology before seeding, and serialises the seed sequence behind a per-activation gate so two interleaved first-touch turns cannot both create a root. Steady-state operations keep the zero-I/O fast path. Internal fix - no public API change.
+- **`CountAsync` / per-leaf stats no longer over-count after a silo restart interrupts a leaf split.** A donor leaf stuck mid-split (its right-half rows already wired onto the new sibling but not yet removed from its own cache) is now counted only for the keys it still owns, so `ILattice.CountAsync` returns the true live key count after the cluster converges instead of double-counting the split half (observed as a universe over-counting from 50 keys to 89 in the multi-silo restart chaos surface). Internal fix - no public API change.
 
 ---
 

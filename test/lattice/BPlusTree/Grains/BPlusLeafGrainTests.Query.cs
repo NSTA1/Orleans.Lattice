@@ -644,4 +644,73 @@ public partial class BPlusLeafGrainTests
         var count = await grain.CountAsync();
         Assert.That(count, Is.EqualTo(0));
     }
+
+    [Test]
+    public async Task Count_excludes_keys_at_or_above_split_key_while_split_in_progress()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
+
+        // Simulate a donor stuck mid-split (e.g. interrupted by a silo
+        // restart): the right half (>= "m") still lives in this leaf's
+        // cache while it has already been wired onto the new sibling.
+        // CountAsync must report only the keys this leaf still owns.
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+
+        var count = await grain.CountAsync();
+        Assert.That(count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Count_includes_all_keys_when_no_split_in_progress()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
+
+        // SplitKey set but SplitState not SplitInProgress: the boundary
+        // must not be applied, so every live key is counted.
+        state.State.SplitKey = "m";
+
+        var count = await grain.CountAsync();
+        Assert.That(count, Is.EqualTo(3));
+    }
+
+    // --- GetStatsAsync ---
+
+    [Test]
+    public async Task Stats_excludes_keys_at_or_above_split_key_while_split_in_progress()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
+
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+
+        var stats = await grain.GetStatsAsync();
+        Assert.That(stats.LiveKeys, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Stats_includes_all_keys_when_no_split_in_progress()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("3"));
+
+        var stats = await grain.GetStatsAsync();
+        Assert.That(stats.LiveKeys, Is.EqualTo(3));
+    }
 }
