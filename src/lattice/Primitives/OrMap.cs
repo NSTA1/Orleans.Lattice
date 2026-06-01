@@ -470,7 +470,15 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// <summary>Creates a deep copy of this map (every per-key list is duplicated; value snapshots are referenced as-is).</summary>
     public OrMap<TKey, TValue> Clone()
     {
-        var copy = new OrMap<TKey, TValue>();
+        var copy = new OrMap<TKey, TValue>
+        {
+            // Presize both backing dictionaries to the source key counts so the
+            // entry-by-entry fill below never triggers an intermediate rehash
+            // grow. Mirrors the VersionVector.Clone presize; the per-key list
+            // copies are unchanged.
+            Adds = new Dictionary<TKey, List<OrMapEntry<TValue>>>(Adds.Count),
+            Tombstones = new Dictionary<TKey, List<OrSetDot>>(Tombstones.Count),
+        };
         foreach (var (key, entries) in Adds)
         {
             copy.Adds[key] = new List<OrMapEntry<TValue>>(entries);
