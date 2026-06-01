@@ -178,4 +178,50 @@ public sealed class LeafSnapshotStorageGrainTests
 
         Assert.That(await grain.LoadAsync(CancellationToken.None), Is.Null);
     }
+
+    [Test]
+    public async Task GetSnapshotByteSizeAsync_returns_zero_when_no_snapshot_captured()
+    {
+        var (grain, _) = CreateGrain();
+
+        var bytes = await grain.GetSnapshotByteSizeAsync(CancellationToken.None);
+
+        Assert.That(bytes, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task GetSnapshotByteSizeAsync_sums_key_and_value_bytes_across_rows()
+    {
+        var (grain, _) = CreateGrain();
+        // "a" (1) + value [1,2] (2) = 3; "bb" (2) + value [9] (1) = 3. Total 6.
+        await grain.SaveAsync(NewBlob(7, ("a", [1, 2]), ("bb", [9])), CancellationToken.None);
+
+        var bytes = await grain.GetSnapshotByteSizeAsync(CancellationToken.None);
+
+        Assert.That(bytes, Is.EqualTo(6));
+    }
+
+    [Test]
+    public async Task GetSnapshotByteSizeAsync_returns_zero_after_clear()
+    {
+        var (grain, _) = CreateGrain();
+        await grain.SaveAsync(NewBlob(2, ("k", [1, 2, 3])), CancellationToken.None);
+
+        await grain.ClearAsync(CancellationToken.None);
+
+        Assert.That(await grain.GetSnapshotByteSizeAsync(CancellationToken.None), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void GetSnapshotByteSizeAsync_honors_cancellation()
+    {
+        var (grain, _) = CreateGrain();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await grain.GetSnapshotByteSizeAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
 }
+

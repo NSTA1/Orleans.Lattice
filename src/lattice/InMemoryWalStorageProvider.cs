@@ -77,6 +77,7 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
                     for (var i = 0; i < entries.Count; i++)
                     {
                         shard.Entries.Add(entries[i]);
+                        shard.RetainedBytes += EntryBytes(entries[i]);
                     }
                     return Task.CompletedTask;
                 }
@@ -92,16 +93,54 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
                         + $"{shard.Entries[insertAt].Offset} is already persisted.");
                 }
                 shard.Entries.InsertRange(insertAt, entries);
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    shard.RetainedBytes += EntryBytes(entries[i]);
+                }
                 return Task.CompletedTask;
             }
 
             for (var i = 0; i < entries.Count; i++)
             {
                 shard.Entries.Add(entries[i]);
+                shard.RetainedBytes += EntryBytes(entries[i]);
             }
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Approximates the retained payload byte footprint of a single
+    /// <see cref="WalEntry"/> - the value byte length plus the UTF-8
+    /// length of the key and optional end-exclusive key. This mirrors the
+    /// dominant on-wire payload terms a durable provider would store per
+    /// entry; it deliberately excludes per-row framing overhead, matching
+    /// the <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>
+    /// contract that the figure is a logical payload total, not a physical
+    /// row total.
+    /// </summary>
+    private static long EntryBytes(in WalEntry entry)
+    {
+        var mutation = entry.Mutation;
+        long bytes = 0;
+        if (mutation.Value is { } value)
+        {
+            bytes += value.Length;
+        }
+        if (mutation.Delta is { } delta)
+        {
+            bytes += delta.Length;
+        }
+        if (mutation.Key is { } key)
+        {
+            bytes += System.Text.Encoding.UTF8.GetByteCount(key);
+        }
+        if (mutation.EndExclusiveKey is { } end)
+        {
+            bytes += System.Text.Encoding.UTF8.GetByteCount(end);
+        }
+        return bytes;
     }
 
     /// <summary>
@@ -268,11 +307,35 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
 
             if (firstSurvivor > 0)
             {
+                for (var i = 0; i < firstSurvivor; i++)
+                {
+                    shard.RetainedBytes -= EntryBytes(entries[i]);
+                }
                 entries.RemoveRange(0, firstSurvivor);
             }
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<long> GetRetainedByteSizeAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_shards.TryGetValue(Key(treeId, shardIndex), out var shard))
+        {
+            return Task.FromResult(0L);
+        }
+
+        lock (shard.Gate)
+        {
+            return Task.FromResult(shard.RetainedBytes);
+        }
     }
 
     private static string Key(string treeId, int shardIndex) => $"{treeId}/{shardIndex}";
@@ -281,5 +344,13 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
     {
         public List<WalEntry> Entries { get; } = new();
         public object Gate { get; } = new();
+
+        /// <summary>
+        /// Running sum of <see cref="EntryBytes"/> across every live
+        /// entry, maintained at append and trim time so
+        /// <see cref="GetRetainedByteSizeAsync"/> is O(1) and never scans
+        /// the log. Guarded by <see cref="Gate"/>.
+        /// </summary>
+        public long RetainedBytes { get; set; }
     }
 }

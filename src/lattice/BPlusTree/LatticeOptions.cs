@@ -988,6 +988,78 @@ public class LatticeOptions
     public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
+    /// Optional advisory per-tree ceiling, in bytes, on retained WAL size.
+    /// When set and the byte-accounting core reports that a tree's retained
+    /// WAL exceeds this value, the host-scheduled WAL garbage collector
+    /// (<see cref="ILatticeWalGc"/>) lowers its effective trim frontier
+    /// toward <see cref="WalBytePressureReclaimTarget"/> of the ceiling -
+    /// but <b>only within the already-safe frontier</b> (the minimum
+    /// consumer cursor intersected with the causal-stable frontier). The
+    /// ceiling never blocks the write path and never trims past a live
+    /// consumer's cursor: it is guidance that schedules safe trim work, not
+    /// a hard quota that rejects mutations. When the bytes cannot be safely
+    /// reclaimed (a consumer is lagging), the policy surfaces an advisory
+    /// over-threshold signal and leaves the data intact.
+    /// <para>
+    /// <see langword="null"/> (the default) disables the policy entirely: the
+    /// byte-pressure evaluator short-circuits with zero hot-path cost. When
+    /// set, the value must be strictly positive.
+    /// </para>
+    /// </summary>
+    public long? WalMaxRetainedBytes { get; set; }
+
+    /// <summary>
+    /// Low-water fraction of <see cref="WalMaxRetainedBytes"/> that disarms the
+    /// advisory byte-pressure policy, providing hysteresis so a tree hovering
+    /// near the ceiling does not trigger a trim on every pass. The policy arms
+    /// when retained WAL crosses the full ceiling (high-water) and re-triggers
+    /// a byte-pressure trim on each pass until a trim drives retained bytes at
+    /// or below <c>WalMaxRetainedBytes x WalBytePressureReclaimTarget</c>
+    /// (low-water), at which point it disarms; growth that then stays inside the
+    /// <c>(low-water, ceiling]</c> band does not re-trigger until the ceiling is
+    /// crossed again. Defaults to <see cref="DefaultWalBytePressureReclaimTarget"/>
+    /// (0.8). Must be in the open-closed interval <c>(0, 1]</c>; values outside
+    /// that range are clamped at evaluation time. Ignored when
+    /// <see cref="WalMaxRetainedBytes"/> is <see langword="null"/>.
+    /// </summary>
+    public double WalBytePressureReclaimTarget { get; set; } = DefaultWalBytePressureReclaimTarget;
+
+    /// <summary>Default value for <see cref="WalBytePressureReclaimTarget"/> (0.8).</summary>
+    public const double DefaultWalBytePressureReclaimTarget = 0.8;
+
+    /// <summary>
+    /// How long a <see cref="TreeStorageUsageReport"/> is cached by the
+    /// per-tree storage-usage aggregator before the next call re-fans out
+    /// across the tree's shards and partitions. Coalesces repeat dashboard
+    /// scrapes so the observable-gauge measurement callbacks never fan out
+    /// more than once per window. Defaults to
+    /// <see cref="DefaultStorageUsageCacheTtl"/> (10 seconds). Set to
+    /// <see cref="TimeSpan.Zero"/> to disable caching (every call fans out).
+    /// </summary>
+    public TimeSpan StorageUsageCacheTtl { get; set; } = DefaultStorageUsageCacheTtl;
+
+    /// <summary>Default value for <see cref="StorageUsageCacheTtl"/> (10 seconds).</summary>
+    public static readonly TimeSpan DefaultStorageUsageCacheTtl = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Cadence at which the background storage-usage poller drives every
+    /// registered tree's aggregator so the observable storage gauges populate
+    /// without any caller invoking <see cref="ILattice.GetStorageUsageAsync"/>.
+    /// The poller runs once per cluster (it is gated on the per-silo poller
+    /// only acting when it can reach the registry) and fans the publish out to
+    /// whichever silo currently hosts each tree's aggregator, so the gauges
+    /// are populated cluster-wide. This is a global knob read from the default
+    /// (unnamed) options; per-tree overrides do not apply. Defaults to
+    /// <see cref="DefaultStorageUsagePollInterval"/> (15 seconds). Set to
+    /// <see cref="TimeSpan.Zero"/> or a negative value to disable the poller
+    /// (the gauges then only populate when the public API is called).
+    /// </summary>
+    public TimeSpan StorageUsagePollInterval { get; set; } = DefaultStorageUsagePollInterval;
+
+    /// <summary>Default value for <see cref="StorageUsagePollInterval"/> (15 seconds).</summary>
+    public static readonly TimeSpan DefaultStorageUsagePollInterval = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's

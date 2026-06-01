@@ -107,4 +107,80 @@ internal sealed partial class ShardRootGrain
             BulkOperationPending = bulkPending,
         };
     }
+
+    /// <inheritdoc />
+    public async Task<ShardStorageUsage> GetStorageUsageAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var rootNodeId = state.State.RootNodeId;
+        if (rootNodeId is null)
+        {
+            // No root yet - empty shard contributes nothing.
+            return default;
+        }
+
+        if (state.State.RootIsLeaf)
+        {
+            return await AccumulateLeafUsageAsync(rootNodeId.Value.GetGuidKey(), cancellationToken);
+        }
+
+        // Descend the leftmost path to the first leaf, then walk the leaf
+        // chain via sibling pointers - same traversal shape as
+        // GetDiagnosticsAsync's deep mode so the aggregation is consistent.
+        var currentId = rootNodeId.Value;
+        var childrenAreLeaves = false;
+        while (!childrenAreLeaves)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId.GetGuidKey());
+            var next = await internalGrain.GetLeftmostChildWithMetadataAsync();
+            currentId = next.ChildId;
+            childrenAreLeaves = next.ChildrenAreLeaves;
+        }
+
+        long leafStateBytes = 0;
+        long snapshotBytes = 0;
+        var leafId = currentId;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var usage = await AccumulateLeafUsageAsync(leafId.GetGuidKey(), cancellationToken);
+            leafStateBytes += usage.LeafStateBytes;
+            snapshotBytes += usage.SnapshotBytes;
+
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
+            var next = await leaf.GetNextSiblingAsync();
+            if (next is null) break;
+            leafId = next.Value;
+        }
+
+        return new ShardStorageUsage
+        {
+            LeafStateBytes = leafStateBytes,
+            SnapshotBytes = snapshotBytes,
+        };
+    }
+
+    /// <summary>
+    /// Reads a single leaf's state-byte footprint and its persisted-snapshot
+    /// footprint, returning them as a one-leaf <see cref="ShardStorageUsage"/>.
+    /// The leaf-state figure comes from the leaf grain's
+    /// <see cref="LeafStats.StateBytes"/>; the snapshot figure comes from the
+    /// per-leaf snapshot storage grain keyed by the same <see cref="System.Guid"/>.
+    /// </summary>
+    private async Task<ShardStorageUsage> AccumulateLeafUsageAsync(Guid leafKey, CancellationToken cancellationToken)
+    {
+        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafKey);
+        var stats = await leaf.GetStatsAsync();
+
+        var snapshot = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey);
+        var snapshotBytes = await snapshot.GetSnapshotByteSizeAsync(cancellationToken);
+
+        return new ShardStorageUsage
+        {
+            LeafStateBytes = stats.StateBytes,
+            SnapshotBytes = snapshotBytes,
+        };
+    }
 }

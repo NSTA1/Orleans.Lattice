@@ -364,7 +364,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // same shard get true parallelism.
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
         var phaseOneActions = new List<TableTransactionAction>(entries.Count);
-        EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions);
+        EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions, out var payloadBytes);
         var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
 
         // Await both before enqueueing phase 2 so a failure in either
@@ -380,7 +380,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // Azure Tables transaction cap) into one manifest-partition
         // transaction in strict ascending start-offset order, then
         // upserts TAIL to the group's highest endOffsetInclusive.
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, cancellationToken).ConfigureAwait(false);
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, payloadBytes, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -426,7 +426,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var firstOffset = offsets.Span[0];
         var endOffsetInclusive = firstOffset + offsets.Length - 1;
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
-        var phaseOneActions = BuildEncodedBatchActions(batchPartitionKey, encodedEntries.Span, offsets.Span);
+        var phaseOneActions = BuildEncodedBatchActions(batchPartitionKey, encodedEntries.Span, offsets.Span, out var payloadBytes);
 
         // Phase 0 / phase 1 / phase 2 split mirrors AppendBatchAsync;
         // see the comments there for the parallelism, candidate-row,
@@ -441,7 +441,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         await candidateTask.ConfigureAwait(false);
         await phaseOneTask.ConfigureAwait(false);
 
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, cancellationToken).ConfigureAwait(false);
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, payloadBytes, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -555,10 +555,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         long firstOffset,
         long endOffsetInclusive,
         bool hasCandidateRow,
+        long payloadBytes,
         CancellationToken cancellationToken)
     {
         var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
-        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive, hasCandidateRow);
+        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive, hasCandidateRow, payloadBytes);
 
         if (!_options.PipelinePhaseTwoCommits)
         {
@@ -754,9 +755,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     private List<TableTransactionAction> BuildEncodedBatchActions(
         string partitionKey,
         ReadOnlySpan<ArraySegment<byte>> segments,
-        ReadOnlySpan<long> offsetSpan)
+        ReadOnlySpan<long> offsetSpan,
+        out long payloadBytes)
     {
         var actions = new List<TableTransactionAction>(segments.Length);
+        payloadBytes = 0L;
 
         // Hand each segment straight to the row's Payload column - no
         // re-encode. ToArray() materialises the segment's bytes into a
@@ -766,6 +769,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // once the producer's batch completes.
         for (var i = 0; i < segments.Length; i++)
         {
+            payloadBytes += segments[i].Count;
             actions.Add(new TableTransactionAction(
                 TableTransactionActionType.Add,
                 new AzureTableWalEntity
@@ -802,15 +806,31 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     internal void EncodeEntriesForBatch(
         string partitionKey,
         IReadOnlyList<WalEntry> entries,
-        List<TableTransactionAction> actions)
+        List<TableTransactionAction> actions) =>
+        EncodeEntriesForBatch(partitionKey, entries, actions, out _);
+
+    /// <summary>
+    /// Encode overload that also reports the summed encoded payload
+    /// byte length across the batch via <paramref name="payloadBytes"/>.
+    /// The byte-accurate storage-usage aggregator records this total on
+    /// the batch's manifest M-row so a shard's retained WAL footprint is
+    /// summable in O(manifest-rows) without reading any entry payload.
+    /// </summary>
+    internal void EncodeEntriesForBatch(
+        string partitionKey,
+        IReadOnlyList<WalEntry> entries,
+        List<TableTransactionAction> actions,
+        out long payloadBytes)
     {
         var writer = new ArrayBufferWriter<byte>();
+        payloadBytes = 0L;
         for (var i = 0; i < entries.Count; i++)
         {
             writer.ResetWrittenCount();
             actions.Add(new TableTransactionAction(
                 TableTransactionActionType.Add,
                 BuildEntryEntity(partitionKey, entries[i], writer)));
+            payloadBytes += writer.WrittenCount;
         }
     }
 
@@ -1086,6 +1106,41 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         }
 
         return -1L;
+    }
+
+    /// <inheritdoc />
+    public async Task<long> GetRetainedByteSizeAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
+        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+
+        // Sum the PayloadBytes column across the shard's live manifest
+        // M-rows. Trim deletes a fully-covered batch's M-row together
+        // with its entry rows, so a summed M-row total tracks the
+        // retained payload footprint within one batch's worth of slack
+        // (the partially-trimmed boundary batch keeps its M-row and its
+        // full PayloadBytes until it is itself fully trimmed). This is
+        // the bounded over-report the interface contract permits for the
+        // advisory uses of the figure, and it costs one ascending
+        // manifest scan rather than reading any entry payload.
+        var manifestFilter =
+            $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}'";
+
+        long total = 0L;
+        await foreach (var manifestRow in table
+            .QueryAsync<AzureTableWalEntity>(manifestFilter, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            total += manifestRow.PayloadBytes;
+        }
+
+        return total;
     }
 
     /// <inheritdoc />

@@ -127,6 +127,14 @@ internal static class TypeAliases
     internal const string RecentSplit = "ol.rsp";
     internal const string LeafStats = "ol.lst";
 
+    // Per-shard byte-accurate storage usage rollup (leaf-state + snapshot
+    // bytes summed across a shard's leaf chain in a single walk).
+    internal const string ShardStorageUsage = "ol.ssu";
+
+    // Storage-usage accounting (byte-accurate retained footprint)
+    internal const string TreeStorageUsageReport = "ol.tsu";
+    internal const string ClusterStorageUsageReport = "ol.csu";
+
     // Event stream
     internal const string LatticeTreeEvent = "ol.lte";
     internal const string LatticeTreeEventKind = "ol.ltk";
@@ -175,6 +183,8 @@ internal static class TypeAliases
     internal const string ITreeSnapshotGrain = "ol.gsn";
     internal const string ITreeReshardGrain = "ol.gtx";
     internal const string ILatticeStats = "ol.gls";
+    internal const string ILatticeStorageUsage = "ol.gsu";
+    internal const string ILatticeAdmin = "ol.gad";
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
     internal const string ITxRegistryGrain = "ol.gxr";

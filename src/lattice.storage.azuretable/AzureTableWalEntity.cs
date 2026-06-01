@@ -42,4 +42,19 @@ internal sealed class AzureTableWalEntity : ITableEntity
     /// <see cref="AzureTableWalStorageProvider.HeadRowKey"/>).
     /// </summary>
     public byte[]? Payload { get; set; }
+
+    /// <summary>
+    /// Summed encoded payload byte length of every entry in the batch
+    /// this row records. Carried only on manifest M-rows
+    /// (<see cref="AzureTableWalStorageProvider.ManifestRowKeyPrefix"/>);
+    /// zero on entry rows, the TAIL pointer, and candidate rows. The
+    /// byte-accurate storage-usage aggregator sums this column across a
+    /// shard's live M-rows to report the shard's retained WAL footprint
+    /// in O(manifest-rows) without reading any entry payload. A legacy
+    /// M-row written before this column existed decodes to <c>0</c>,
+    /// which under-reports that batch's bytes until it is trimmed - an
+    /// acceptable, monotonically-self-healing approximation for the
+    /// advisory uses of the figure.
+    /// </summary>
+    public long PayloadBytes { get; set; }
 }

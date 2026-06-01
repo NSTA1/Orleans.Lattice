@@ -1436,6 +1436,7 @@ internal sealed partial class BPlusLeafGrain(
         var splitKey = state.State.SplitKey;
         var live = 0;
         var tombstones = 0;
+        var stateBytes = 0L;
         foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (splitInProgress && splitKey is not null &&
@@ -1449,6 +1450,7 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
                     else live++;
+                    stateBytes += EntryStateBytes(key, pending.value.Value);
                     continue;
                 }
                 // InFlight or Aborted - fall through to Entries
@@ -1456,6 +1458,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             if (lww.IsTombstone || lww.IsExpired(nowTicks)) tombstones++;
             else live++;
+            stateBytes += EntryStateBytes(key, lww.Value);
         }
 
         // Fresh committed pending keys not yet in Entries.
@@ -1469,10 +1472,21 @@ internal sealed partial class BPlusLeafGrain(
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
             else live++;
+            stateBytes += EntryStateBytes(key, pending.value.Value);
         }
 
-        return new LeafStats { LiveKeys = live, Tombstones = tombstones };
+        return new LeafStats { LiveKeys = live, Tombstones = tombstones, StateBytes = stateBytes };
     }
+
+    /// <summary>
+    /// Approximate retained state byte footprint of a single leaf entry:
+    /// the UTF-8 byte length of <paramref name="key"/> plus the stored
+    /// value byte length. Feeds <see cref="LeafStats.StateBytes"/>;
+    /// counts the logical key/value payload only and excludes per-entry
+    /// CRDT metadata and persistence framing.
+    /// </summary>
+    private static long EntryStateBytes(string key, byte[]? value) =>
+        System.Text.Encoding.UTF8.GetByteCount(key) + (value?.Length ?? 0);
 
     public Task<GrainId?> GetNextSiblingAsync() =>
         Task.FromResult(state.State.NextSibling);

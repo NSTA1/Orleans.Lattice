@@ -713,4 +713,41 @@ public partial class BPlusLeafGrainTests
         var stats = await grain.GetStatsAsync();
         Assert.That(stats.LiveKeys, Is.EqualTo(3));
     }
+
+    [Test]
+    public async Task Stats_state_bytes_is_zero_for_empty_leaf()
+    {
+        var grain = CreateGrain();
+
+        var stats = await grain.GetStatsAsync();
+
+        Assert.That(stats.StateBytes, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Stats_state_bytes_sums_utf8_key_and_value_lengths()
+    {
+        var grain = CreateGrain();
+        // "ab" (2) + value [1,2,3] (3) = 5; "c" (1) + value [9] (1) = 2. Total 7.
+        await grain.SetAsync("ab", new byte[] { 1, 2, 3 });
+        await grain.SetAsync("c", new byte[] { 9 });
+
+        var stats = await grain.GetStatsAsync();
+
+        Assert.That(stats.StateBytes, Is.EqualTo(7));
+    }
+
+    [Test]
+    public async Task Stats_state_bytes_excludes_tombstone_values()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("k", new byte[] { 1, 2, 3, 4 });
+        await grain.DeleteAsync("k");
+
+        var stats = await grain.GetStatsAsync();
+
+        // The tombstone retains the key bytes ("k" = 1) but carries no value.
+        Assert.That(stats.StateBytes, Is.EqualTo(1));
+    }
 }
+

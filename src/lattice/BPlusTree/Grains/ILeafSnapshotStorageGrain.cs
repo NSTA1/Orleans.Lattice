@@ -48,6 +48,18 @@ internal interface ILeafSnapshotStorageGrain : IGrainWithGuidKey
     Task<LeafSnapshotBlob?> LoadAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the approximate persisted snapshot footprint for this
+    /// leaf in bytes - the summed key-plus-value lengths of every row in
+    /// the captured <see cref="LeafSnapshotBlob"/> - or <c>0</c> when no
+    /// snapshot has been captured. Used by the byte-accurate storage-usage
+    /// aggregator (<see cref="ILattice.GetStorageUsageAsync"/>) to report a
+    /// tree's snapshot footprint without forcing a full blob load on the
+    /// caller's behalf beyond the already-activated state row.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token observed before the read.</param>
+    Task<long> GetSnapshotByteSizeAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Drops the persisted snapshot. Idempotent: clearing a leaf
     /// that has no snapshot is a no-op. Used by the operator-driven
     /// projection rebuild seam so a forced rebuild does not silently

@@ -368,4 +368,65 @@ public class InMemoryWalStorageProviderTests
             Assert.That(head1, Is.EqualTo(0L));
         });
     }
+
+    [Test]
+    public async Task GetRetainedByteSizeAsync_returns_zero_for_empty_shard()
+    {
+        var sut = new InMemoryWalStorageProvider();
+
+        var bytes = await sut.GetRetainedByteSizeAsync(Tree, 0, CancellationToken.None);
+
+        Assert.That(bytes, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public async Task GetRetainedByteSizeAsync_sums_payload_value_and_key_bytes()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        // Each Entry has a 1-byte value plus a UTF-8 key. Use an
+        // explicit key whose byte length is known.
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0, "ab"), Entry(1, "cde") }, CancellationToken.None);
+
+        var bytes = await sut.GetRetainedByteSizeAsync(Tree, 0, CancellationToken.None);
+
+        // value(1) + key("ab" = 2) + value(1) + key("cde" = 3) = 7.
+        Assert.That(bytes, Is.EqualTo(7L));
+    }
+
+    [Test]
+    public async Task GetRetainedByteSizeAsync_decreases_after_trim()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0, "ab"), Entry(1, "cde") }, CancellationToken.None);
+
+        await sut.TrimAsync(Tree, 0, throughOffsetInclusive: 0, CancellationToken.None);
+
+        var bytes = await sut.GetRetainedByteSizeAsync(Tree, 0, CancellationToken.None);
+
+        // Only entry 1 survives: value(1) + key("cde" = 3) = 4.
+        Assert.That(bytes, Is.EqualTo(4L));
+    }
+
+    [Test]
+    public async Task GetRetainedByteSizeAsync_returns_zero_after_full_trim()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0, "ab"), Entry(1, "cde") }, CancellationToken.None);
+
+        await sut.TrimAsync(Tree, 0, throughOffsetInclusive: 1, CancellationToken.None);
+
+        var bytes = await sut.GetRetainedByteSizeAsync(Tree, 0, CancellationToken.None);
+
+        Assert.That(bytes, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void GetRetainedByteSizeAsync_throws_on_null_tree_id()
+    {
+        var sut = new InMemoryWalStorageProvider();
+
+        Assert.That(
+            async () => await sut.GetRetainedByteSizeAsync(null!, 0, CancellationToken.None),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
 }

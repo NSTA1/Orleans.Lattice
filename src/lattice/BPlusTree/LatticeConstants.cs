@@ -39,6 +39,15 @@ internal static class LatticeConstants
     public const string RegistryTreeId = "_lattice_trees";
 
     /// <summary>
+    /// Well-known singleton grain key for the cluster-wide
+    /// <see cref="ILatticeAdmin"/> grain. Uses the
+    /// <see cref="SystemTreePrefix"/> so it inherits the same registry /
+    /// monitor / routing bypasses as other system surfaces; the admin grain
+    /// is a single activation per cluster keyed by this constant.
+    /// </summary>
+    public const string AdminGrainKey = "_lattice_admin";
+
+    /// <summary>
     /// Canonical default maximum number of keys per leaf node before a split
     /// is triggered. Seeded into the registry entry on first tree creation
     /// and thereafter mutable only through

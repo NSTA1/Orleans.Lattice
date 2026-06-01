@@ -345,4 +345,47 @@ public interface IWalStorageProvider
         cancellationToken.ThrowIfCancellationRequested();
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Returns the approximate number of retained on-wire payload bytes
+    /// currently persisted for <paramref name="treeId"/> /
+    /// <paramref name="shardIndex"/> - the summed encoded length of every
+    /// live WAL entry between the lowest and highest still-stored offset
+    /// (post-trim). Used by the byte-accurate storage-usage aggregator
+    /// (<c>ILattice.GetStorageUsageAsync</c>) and the advisory
+    /// byte-pressure WAL retention policy to report and bound a tree's
+    /// physical footprint without scanning the log on the hot path.
+    /// <para>
+    /// The figure is the retained <b>payload</b> byte total: it counts the
+    /// encoded mutation bytes a provider stores per entry and deliberately
+    /// excludes backend-specific per-row framing overhead (partition keys,
+    /// row keys, column names), which varies by provider and is not part
+    /// of the logical WAL size. Providers may compute it from a running
+    /// counter maintained at append/trim time (the recommended O(1) path)
+    /// or by a bounded metadata read; they must not scan the full log on
+    /// every call. A provider whose trim leaves a partially-trimmed
+    /// boundary batch may over-report by at most one batch's payload, which
+    /// is bounded and acceptable for the advisory uses above.
+    /// </para>
+    /// <para>
+    /// The default implementation returns <c>-1</c> to signal "byte
+    /// accounting unsupported" - the aggregator renders the affected
+    /// surface as partial rather than reporting a wrong zero. Providers
+    /// that can account bytes cheaply override this method to return a
+    /// non-negative total (<c>0</c> for an empty or fully-trimmed shard).
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree id. Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">Per-tree shard index.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any read.</param>
+    /// <returns>The retained payload byte total (>= 0), or <c>-1</c> when the provider does not support byte accounting.</returns>
+    Task<long> GetRetainedByteSizeAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(-1L);
+    }
 }

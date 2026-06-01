@@ -205,10 +205,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// pointer. The task faults with the underlying
     /// <see cref="Exception"/> on transaction failure.
     /// </summary>
-    public Task EnqueueAsync(long startOffset, long endOffsetInclusive, bool hasCandidateRow = true)
+    public Task EnqueueAsync(long startOffset, long endOffsetInclusive, bool hasCandidateRow = true, long payloadBytes = 0L)
     {
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, hasCandidateRow, tcs);
+        var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, hasCandidateRow, payloadBytes, tcs);
         if (!_arrivals.Writer.TryWrite(commit))
         {
             // Unbounded channel - this is only reachable if the
@@ -394,6 +394,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                         PartitionKey = _manifestPartitionKey,
                         RowKey = AzureTableWalStorageProvider.BuildManifestRowKey(commits[i].StartOffset),
                         Offset = commits[i].EndOffsetInclusive,
+                        PayloadBytes = commits[i].PayloadBytes,
                         Payload = null,
                     }));
             }
@@ -506,6 +507,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         long StartOffset,
         long EndOffsetInclusive,
         bool HasCandidateRow,
+        long PayloadBytes,
         TaskCompletionSource Completion);
 
     /// <summary>

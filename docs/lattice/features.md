@@ -21,7 +21,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
 - [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
-- [F-081](https://github.com/NSTA1/Orleans.Lattice/issues/535) - Byte-accurate storage-usage visibility + advisory byte-pressure WAL retention policy
 
 ### Shipped
 
@@ -92,6 +91,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-077](https://github.com/NSTA1/Orleans.Lattice/issues/397) - Multi-partition WAL replay on leaf activation
 - [F-079](https://github.com/NSTA1/Orleans.Lattice/issues/399) - Multi-silo restart chaos test
 - [F-080](https://github.com/NSTA1/Orleans.Lattice/issues/400) - Drop the per-append registry RPC from the WAL hot path (F-077 throughput regression)
+- [F-081](https://github.com/NSTA1/Orleans.Lattice/issues/535) - Byte-accurate storage-usage visibility + advisory byte-pressure WAL retention policy
 
 ## Follow-up fixes
 

@@ -185,6 +185,9 @@ public class ShipperPersistenceIntegrationTests
         public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);
 
+        public Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(-1L);
+
 #pragma warning disable LATTICE0001 // GetEntryCountAsync is an obsolete forwarder retained for one minor version.
         public Task<long> GetEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);

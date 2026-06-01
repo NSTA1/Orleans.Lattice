@@ -61,6 +61,22 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.AddSingleton<MutationObserverDispatcher>();
         builder.Services.AddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
 
+        // Storage-usage observable-gauge sink. Constructing the singleton
+        // registers the byte-accurate storage gauges on the shared meter
+        // (idempotent, process-wide); the per-tree aggregator pushes the
+        // latest report here so a meter scrape never fans out to grains.
+        builder.Services.AddSingleton<LatticeStorageUsageMetrics>();
+
+        // Per-silo background poller that drives every registered tree's
+        // storage-usage aggregator on a cadence so the gauges populate
+        // without any caller invoking ILattice.GetStorageUsageAsync. Each
+        // aggregator publishes to its own host silo's sink, so a tree's
+        // series appears on exactly one silo and a cross-silo sum counts it
+        // once; the sink's staleness horizon clears a migrated tree from the
+        // old silo. Safe to run on every silo (redundant polls hit the
+        // aggregator's cache).
+        builder.Services.AddSingleton<IHostedService, LatticeStorageUsagePoller>();
+
         // Core WAL durability seams: in-memory provider as the singleton
         // default (hosts replace via AddWalStorage), commit-log writer
         // and reader, and a null-returning mode resolver. The replication

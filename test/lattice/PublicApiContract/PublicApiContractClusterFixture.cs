@@ -190,6 +190,26 @@ public sealed class PublicApiContractClusterFixture
                 // coalescing shape itself live in
                 // CoalescingClusterFixture's dedicated suite.
                 opts.DigestCoalescingWindowMs = 0;
+
+                // Disable the per-silo storage-usage poller in this
+                // fixture. The fixture's registry and grain storage are
+                // process-scope statics that survive RestartClusterAsync,
+                // so every tree created by any test in this large contract
+                // suite accumulates in the shared registry. The always-on
+                // poller (default 15 s, fires immediately on startup) then
+                // fans a cluster-wide storage roll-up out across ALL of
+                // those accumulated trees - hundreds of concurrent
+                // shard-root + WAL grain calls on a single-silo test
+                // cluster - which starves the host enough that a
+                // cross-grain KeysAsync/EntriesAsync enumerator activation
+                // can be collected mid-iteration, surfacing as a flaky
+                // EnumerationAbortedException in the WAL-reactivation
+                // tests. The poller is exercised on its own dedicated
+                // surface (LatticeStorageUsagePollerTests and the
+                // PublicApiContractTests.StorageUsage cases call the API
+                // directly), so pinning it off here is a no-op for
+                // coverage. Zero is the poller's documented opt-out.
+                opts.StorageUsagePollInterval = TimeSpan.Zero;
             });
 
             // In-fixture mutation observer so observer tests do not need
