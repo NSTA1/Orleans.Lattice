@@ -588,6 +588,69 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
             description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
 
+    // --- Storage-usage instruments (byte-accurate retained footprint) ------
+    //
+    // The four byte gauges and the over-threshold gauge are observable gauges
+    // registered lazily by LatticeStorageUsageMetrics (so they cost nothing
+    // when no listener is attached and are not created at all when the host
+    // never wires the storage-usage singleton). Their canonical names are
+    // exposed here as `...Name` constants so the dashboards drift-guard test
+    // recognises the PromQL token forms even though the instruments are not
+    // statically constructed on this meter. The two policy counters are
+    // ordinary counters constructed on the meter below.
+
+    /// <summary>Canonical name of the observable gauge reporting per-tree retained WAL bytes (tagged <see cref="TagTree"/>).</summary>
+    public const string StorageWalBytesName = "orleans.lattice.storage.wal_bytes";
+
+    /// <summary>Canonical name of the observable gauge reporting per-tree snapshot blob bytes (tagged <see cref="TagTree"/>).</summary>
+    public const string StorageSnapshotBytesName = "orleans.lattice.storage.snapshot_bytes";
+
+    /// <summary>Canonical name of the observable gauge reporting per-tree summed leaf/shard-root state bytes (tagged <see cref="TagTree"/>).</summary>
+    public const string StorageLeafStateBytesName = "orleans.lattice.storage.leaf_state_bytes";
+
+    /// <summary>Canonical name of the observable gauge reporting the per-tree sum of the three storage surfaces (tagged <see cref="TagTree"/>).</summary>
+    public const string StorageTotalBytesName = "orleans.lattice.storage.total_bytes";
+
+    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree whose retained WAL bytes currently breach the advisory ceiling (tagged <see cref="TagTree"/>).</summary>
+    public const string StoragePolicyOverThresholdName = "orleans.lattice.storage.policy.over_threshold";
+
+    /// <summary>
+    /// Counter incremented once per <see cref="ILatticeWalGc.RunOnceAsync"/>
+    /// pass that observes a tree's pre-trim retained WAL bytes exceeding the
+    /// configured advisory ceiling
+    /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) and therefore
+    /// schedules a byte-pressure trim, tagged with <see cref="TagTree"/> and
+    /// <see cref="TagReason"/> (<c>byte_pressure</c>). The trim itself never
+    /// crosses the safe frontier; this counter records that the policy acted,
+    /// not that the ceiling was met. Not emitted when the policy is disabled
+    /// or the WAL provider does not support byte accounting.
+    /// </summary>
+    public static readonly Counter<long> StoragePolicyTrimTriggered =
+        Meter.CreateCounter<long>(StoragePolicyTrimTriggeredName, unit: "{trim}",
+            description: "Byte-pressure trim passes scheduled by the advisory storage policy, tagged by tree and reason.");
+
+    /// <summary>Canonical name of <see cref="StoragePolicyTrimTriggered"/>.</summary>
+    public const string StoragePolicyTrimTriggeredName = "orleans.lattice.storage.policy.trim_triggered";
+
+    /// <summary>
+    /// Counter of WAL bytes freed by a byte-pressure-triggered trim pass
+    /// (pre-trim retained bytes minus post-trim retained bytes), tagged with
+    /// <see cref="TagTree"/>. Emitted alongside
+    /// <see cref="StoragePolicyTrimTriggered"/>; zero-reclaim passes (a
+    /// lagging consumer pinned every byte) do not emit so a perpetually
+    /// over-ceiling tree with no caught-up consumer produces no reclaim
+    /// traffic.
+    /// </summary>
+    public static readonly Counter<long> StoragePolicyBytesReclaimed =
+        Meter.CreateCounter<long>(StoragePolicyBytesReclaimedName, unit: "By",
+            description: "WAL bytes freed by byte-pressure-triggered trim passes, tagged by tree.");
+
+    /// <summary>Canonical name of <see cref="StoragePolicyBytesReclaimed"/>.</summary>
+    public const string StoragePolicyBytesReclaimedName = "orleans.lattice.storage.policy.bytes_reclaimed";
+
+    /// <summary><see cref="TagReason"/> = <c>byte_pressure</c> (advisory storage-policy trim attribution).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonBytePressure = new(TagReason, "byte_pressure");
+
     // --- WAL append diagnostic instruments (WalShardGrain) ------------------
     //
     // Phase A horizontal-scaling diagnostics. These instruments are *only*

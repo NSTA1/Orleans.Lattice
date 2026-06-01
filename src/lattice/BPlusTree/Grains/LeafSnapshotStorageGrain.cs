@@ -51,6 +51,29 @@ internal sealed class LeafSnapshotStorageGrain(
     }
 
     /// <inheritdoc />
+    public Task<long> GetSnapshotByteSizeAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (state.State.SnapshotOffset < 0)
+        {
+            return Task.FromResult(0L);
+        }
+
+        long bytes = 0;
+        foreach (var row in state.State.Rows)
+        {
+            // Mirror the leaf-state byte accounting (key UTF-8 length plus
+            // stored value length) so the snapshot surface and the leaf
+            // surface report on the same logical-payload basis.
+            bytes += System.Text.Encoding.UTF8.GetByteCount(row.Key)
+                + (row.Value.Value?.Length ?? 0);
+        }
+
+        return Task.FromResult(bytes);
+    }
+
+    /// <inheritdoc />
     public async Task ClearAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

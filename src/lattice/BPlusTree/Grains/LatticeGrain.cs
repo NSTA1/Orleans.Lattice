@@ -1538,6 +1538,15 @@ internal sealed partial class LatticeGrain(
         return stats.GetReportAsync(deep, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        cancellationToken.ThrowIfCancellationRequested();
+        var usage = grainFactory.GetGrain<ILatticeStorageUsage>(TreeId);
+        return usage.GetReportAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Returns <c>true</c> if the cached alias was stale and has been invalidated,
     /// allowing a retry with a fresh resolution. Returns <c>false</c> if no alias

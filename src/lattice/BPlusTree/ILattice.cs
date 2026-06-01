@@ -480,6 +480,33 @@ public interface ILattice : IGrainWithStringKey
     Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns a byte-accurate <see cref="TreeStorageUsageReport"/> for this
+    /// tree - the retained on-wire footprint across the three physical
+    /// surfaces a tree occupies: write-ahead-log (WAL) rows, persisted
+    /// snapshot blobs, and leaf/shard-root grain state. Unlike
+    /// <see cref="DiagnoseAsync"/> (which reports entry counts), this surface
+    /// reports exact retained bytes so operators can size storage and drive
+    /// retention policy.
+    /// <para>
+    /// Repeated calls are served from a short in-memory cache configured via
+    /// <see cref="LatticeOptions.StorageUsageCacheTtl"/> (default 10 seconds).
+    /// A cache-miss fans out to every physical shard root (leaf-state and
+    /// snapshot bytes) and every WAL partition (retained WAL bytes).
+    /// </para>
+    /// <para>
+    /// When the configured <see cref="IWalStorageProvider"/> does not support
+    /// byte accounting (it does not override
+    /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>), the WAL
+    /// surface contributes <c>0</c> and
+    /// <see cref="TreeStorageUsageReport.Partial"/> is set - the reported
+    /// total is then a lower bound. The default in-memory provider and the
+    /// Azure Table provider both support byte accounting.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the storage-usage fan-out before it begins.</param>
+    Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Pre-activates every <see cref="IShardRootGrain"/> for this tree so the
     /// first hot-path write does not pay first-touch Orleans activation cost
     /// (placement-directory round-trip, grain-storage <c>ReadStateAsync</c>,

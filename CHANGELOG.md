@@ -10,6 +10,10 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Items merged into `main` after the v6.1.3 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
+### Added
+
+- **Byte-accurate storage usage and advisory WAL byte-pressure retention.** You can now query the retained storage footprint of a tree (WAL, snapshot, and leaf-state bytes) via `ILattice.GetStorageUsageAsync`, and roll the figures up across every registered tree in the cluster via the new `ILatticeAdmin.GetTotalStorageUsageAsync`. The same totals are exposed as OpenTelemetry observable gauges (`orleans.lattice.storage.wal_bytes`, `storage.snapshot_bytes`, `storage.leaf_state_bytes`, `storage.total_bytes`) plus a `storage.policy.over_threshold` 0/1 gauge, with two new counters (`storage.policy.trim_triggered`, `storage.policy.bytes_reclaimed`) and four new panels on the bundled Grafana overview dashboard. A new advisory `LatticeOptions.WalMaxRetainedBytes` ceiling lets the WAL garbage collector prioritise byte-pressure trims without ever crossing the safe consumer frontier - an over-threshold tree held up by a lagging consumer is surfaced for diagnosis rather than silently growing unbounded.
+
 ### Fixed
 
 - **WAL flush deadline now recovers even when a storage-provider hang ignores cancellation (G-019).** The `LatticeOptions.WalFlushTimeout` deadline previously only fired if the provider observed the deadline's cancellation token; a provider call that hangs in a non-cancellable wait - a half-activated partition from a placement/reshard race, or an SDK retry loop that swallows cancellation - left the grain awaiting forever even after the deadline elapsed, so the in-flight slot never drained and the shard's append pipeline stayed wedged at `WalMaxPendingBatches`. The grain now also bounds its own wait on the provider task, so the deadline recovers the shard regardless of whether the provider honours cancellation. This closes the residual real-Azure saturation-rung wedge that survived the initial v6.1.3 fix.

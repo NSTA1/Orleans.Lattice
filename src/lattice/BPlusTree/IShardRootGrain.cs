@@ -407,6 +407,20 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep);
 
     /// <summary>
+    /// Returns this shard's byte-accurate storage-usage rollup - the summed
+    /// serialized leaf-state byte footprint and the summed persisted-snapshot
+    /// byte footprint across every leaf in the shard's chain - used by the
+    /// byte-accurate storage-usage aggregator
+    /// (<see cref="ILattice.GetStorageUsageAsync"/>). Walks the leaf chain
+    /// once and sums each leaf's <see cref="LeafStats.StateBytes"/> together
+    /// with each leaf's persisted-snapshot footprint (both computed without
+    /// extra storage I/O beyond the already-activated state rows). An empty
+    /// shard returns a zeroed rollup.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk between leaves.</param>
+    Task<ShardStorageUsage> GetStorageUsageAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
     /// for this entire shard - chains every leaf's digest through XxHash128
     /// in leaf-chain order so two silos with the same applied WAL prefix

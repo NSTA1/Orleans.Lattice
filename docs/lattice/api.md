@@ -524,7 +524,35 @@ foreach (var shard in report.Shards)
 }
 ```
 
+#### Storage usage
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `GetStorageUsageAsync` | `Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default)` | Returns a byte-accurate breakdown of the tree's on-disk footprint: retained WAL bytes, captured leaf-snapshot bytes, and live leaf-state bytes, plus their sum (`TotalBytes`). The aggregator fans out to every physical shard and WAL partition, then caches the assembled report for `LatticeOptions.StorageUsageCacheTtl` (default 10 s). `Partial` is `true` when the configured `IWalStorageProvider` does not support byte accounting (the in-memory and Azure Table providers both do). Diagnostic / capacity-planning use only - not a hot-path API. |
+
+```csharp verify
+var usage = await tree.GetStorageUsageAsync(cancellationToken);
+Console.WriteLine($"Tree {usage.TreeId}: {usage.TotalBytes} bytes total " +
+    $"(WAL={usage.WalRetainedBytes}, snapshots={usage.SnapshotBytes}, leaf-state={usage.LeafStateBytes})");
+```
+
+The `TreeStorageUsageReport` fields are:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `TreeId` | `string` | The tree the report covers. |
+| `WalRetainedBytes` | `long` | Retained (un-trimmed) WAL payload bytes summed across every partition. |
+| `SnapshotBytes` | `long` | Captured leaf-snapshot key + value bytes summed across every leaf. |
+| `LeafStateBytes` | `long` | Live leaf-state key + value bytes summed across every leaf in every shard. |
+| `TotalBytes` | `long` | `WalRetainedBytes + SnapshotBytes + LeafStateBytes`. |
+| `Partial` | `bool` | `true` when WAL byte accounting was unavailable, so `WalRetainedBytes` is best-effort. |
+| `SampledAt` | `DateTimeOffset` | When the underlying fan-out was sampled. |
+
+For a cluster-wide roll-up across every registered tree, resolve the
+`ILatticeAdmin` grain (see [`ILatticeAdmin`](#ilatticeadmin)).
+
 #### Lifecycle
+
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
@@ -554,7 +582,42 @@ For subscribing to published events on the cluster client, see
 `SubscribeToEventsAsync` under
 [`LatticeExtensions`](#latticeextensions).
 
+## `ILatticeAdmin`
+
+`ILatticeAdmin` is the cluster-wide administrative surface. Resolve the
+singleton with `grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin")`
+(the admin grain uses a fixed string key).
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `GetTotalStorageUsageAsync` | `Task<ClusterStorageUsageReport> GetTotalStorageUsageAsync(CancellationToken cancellationToken = default)` | Enumerates every registered tree, fans out to each tree's `GetStorageUsageAsync`, and aggregates the per-tree `TreeStorageUsageReport`s into a single cluster-wide roll-up. `Partial` is `true` when any tree's report was partial. Diagnostic / capacity-planning use only. |
+
+```csharp verify
+var admin = grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin");
+var cluster = await admin.GetTotalStorageUsageAsync(cancellationToken);
+Console.WriteLine($"{cluster.TreeCount} trees, {cluster.TotalBytes} bytes total " +
+    $"(WAL={cluster.WalRetainedBytes}, snapshots={cluster.SnapshotBytes}, leaf-state={cluster.LeafStateBytes})");
+foreach (var t in cluster.Trees)
+{
+    Console.WriteLine($"  {t.TreeId}: {t.TotalBytes} bytes");
+}
+```
+
+The `ClusterStorageUsageReport` fields are:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `TreeCount` | `int` | Number of trees included in the roll-up. |
+| `WalRetainedBytes` | `long` | Sum of every tree's `WalRetainedBytes`. |
+| `SnapshotBytes` | `long` | Sum of every tree's `SnapshotBytes`. |
+| `LeafStateBytes` | `long` | Sum of every tree's `LeafStateBytes`. |
+| `TotalBytes` | `long` | Sum of every tree's `TotalBytes`. |
+| `Partial` | `bool` | `true` when any tree's report was partial. |
+| `Trees` | `IReadOnlyList<TreeStorageUsageReport>` | The per-tree reports that were aggregated. |
+| `SampledAt` | `DateTimeOffset` | When the roll-up was assembled. |
+
 ## Mutation observers
+
 
 `IMutationObserver` is a grain-side extensibility hook invoked
 synchronously after every durably-committed mutation, before the
@@ -963,6 +1026,9 @@ constraints, and per-tree overrides via the
 | `WalMaxBatchBytes` | `long` | 4 MiB | Maximum byte budget coalesced into a single flush. |
 | `WalFlushTimeout` | `TimeSpan` | 15 s | Hard ceiling on a single per-shard WAL flush (the provider append plus the post-failure tail resync). A flush that exceeds it is cancelled and surfaced as a `TimeoutException` routed through the normal failure handler, preventing a hung provider call from pinning its in-flight slot and wedging the in-flight chain. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. `null` means retention is bounded purely by consumer cursors. |
+| `WalMaxRetainedBytes` | `long?` | `null` | Optional advisory ceiling on retained WAL bytes per tree. When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (`BytePressureTriggered`), and `BytePressureOverThreshold` reports whether the tree is still over after the trim. Advisory only - the GC never trims past the safe frontier to honour it. `null` disables the policy. |
+| `WalBytePressureReclaimTarget` | `double` | 0.8 | Fraction of `WalMaxRetainedBytes` a byte-pressure trim aims to reclaim toward. Ignored when `WalMaxRetainedBytes` is `null`. |
+| `StorageUsageCacheTtl` | `TimeSpan` | 10 s | Cache lifetime for `ILattice.GetStorageUsageAsync` reports. `TimeSpan.Zero` disables caching. |
 | `RetryPolicy` | `ILatticeRetryPolicy?` | `null` | Optional opt-in retry policy applied at the boundary of every public `ILattice` mutating method. Only consulted under an active `LatticeIdempotencyContext` scope. `null` preserves the throw-and-revert default. See [Retry Policy](retry-policy.md). |
 
 ## Idempotency keys and retry policy
@@ -1031,6 +1097,9 @@ they are implementation details not intended for direct use.
 | `LeafProjectionDigest` | `ol.lpd` | public | `readonly record struct` returned by `ILattice.GetLeafProjectionDigestAsync`. Carries the 16-byte XxHash128 hash, entry count, summed checkpoint offset, and a `Version` field stamping the contribution-function shape. Digests with different `Version` values must not be byte-compared. See [Projection Rebuild](projection-rebuild.md). |
 | `ChildDigestSnapshot` | `ol.cds` | internal | `readonly record struct` propagating digest contributions up the tree. |
 | `ProjectionRebuildPolicy` | - | public | Enum: `SnapshotThenWal` (default), `FullRebuildFromWal`, `Fail`. See [Configuration](configuration.md#projectionrebuildpolicy). |
+| `TreeStorageUsageReport` | `ol.tsu` | public | `readonly record struct` returned by `ILattice.GetStorageUsageAsync`. Byte-accurate per-tree storage footprint. |
+| `ClusterStorageUsageReport` | `ol.csu` | public | `readonly record struct` returned by `ILatticeAdmin.GetTotalStorageUsageAsync`. Cluster-wide storage roll-up. |
+| `ShardStorageUsage` | `ol.ssu` | internal | `readonly record struct` per-shard leaf-state + snapshot byte roll-up. |
 
 ## Public but not usable
 

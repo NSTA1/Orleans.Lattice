@@ -88,6 +88,25 @@ public sealed class LatticeWalGc(
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
+    // Resolved lazily so a host that never registered the storage-usage
+    // sink (or replaced the WAL GC in isolation in a unit test) still works;
+    // the over-threshold gauge is simply not driven by the GC in that case.
+    private LatticeStorageUsageMetrics? _storageMetricsCache;
+    private bool _storageMetricsResolved;
+
+    private LatticeStorageUsageMetrics? _storageMetrics
+    {
+        get
+        {
+            if (!_storageMetricsResolved)
+            {
+                _storageMetricsCache = services.GetService<LatticeStorageUsageMetrics>();
+                _storageMetricsResolved = true;
+            }
+            return _storageMetricsCache;
+        }
+    }
+
     /// <inheritdoc />
     public async Task<LatticeWalGcReport> RunOnceAsync(
         string treeName,
@@ -128,6 +147,20 @@ public sealed class LatticeWalGc(
         var hasCursorPredicate = minCursor is { } mc && mc > HybridLogicalClock.Zero;
         var hasTtlPredicate = ttlCeiling is not null;
 
+        // Sample retained bytes once up front so a byte-pressure trigger is
+        // decided against the pre-trim footprint. Returns null when the
+        // policy is disabled or the provider does not support byte accounting.
+        var (ceiling, retainedBefore) = await SampleRetainedBytesAsync(
+            provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+        var triggered = retainedBefore is { } before && ceiling is { } cap && before > cap;
+        if (triggered)
+        {
+            LatticeMetrics.StoragePolicyTrimTriggered.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+                LatticeMetrics.ReasonBytePressure);
+        }
+
         if (!hasCursorPredicate && !hasTtlPredicate)
         {
             // Nothing to do: no consumer has reported a cursor and no
@@ -137,8 +170,15 @@ public sealed class LatticeWalGc(
             // blocked-floor alone permits trimming - they only block
             // entries that the HLC-shaped clauses would otherwise
             // allow. So a present-but-unused frontier or floor is
-            // still reported in the diagnostic for transparency.
-            return new LatticeWalGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0);
+            // still reported in the diagnostic for transparency. The
+            // byte-pressure policy is still evaluated: a tree over its
+            // ceiling with no consumer cursor is the canonical
+            // "lagging consumer pins the WAL" advisory case where the
+            // breach is published but no bytes are reclaimed.
+            var over0 = FinishBytePressure(treeName, ceiling, retainedBefore, retainedBefore);
+            return new LatticeWalGcReport(
+                treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
+                ceiling, retainedBefore, retainedBefore, triggered, over0);
         }
 
         long totalTrimmed = 0;
@@ -155,7 +195,85 @@ public sealed class LatticeWalGc(
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
         }
 
-        return new LatticeWalGcReport(treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed);
+        var (_, retainedAfter) = await SampleRetainedBytesAsync(
+            provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+        var overThreshold = FinishBytePressure(treeName, ceiling, retainedBefore, retainedAfter);
+
+        return new LatticeWalGcReport(
+            treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
+            ceiling, retainedBefore, retainedAfter, triggered, overThreshold);
+    }
+
+    /// <summary>
+    /// Emits the byte-pressure reclaim and over-threshold signals after a
+    /// trim pass and returns whether the post-trim footprint still breaches
+    /// the ceiling. When a byte-pressure trigger reclaimed bytes
+    /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),
+    /// increments <see cref="LatticeMetrics.StoragePolicyBytesReclaimed"/> by
+    /// the freed byte count. Also pushes the over-threshold flag to the
+    /// observable storage gauge so the 0/1 series tracks the WAL GC's own
+    /// sampling between aggregator scrapes. Returns <see langword="false"/>
+    /// when the policy is disabled or byte accounting is unsupported.
+    /// </summary>
+    private bool FinishBytePressure(string treeName, long? ceiling, long? retainedBefore, long? retainedAfter)
+    {
+        if (ceiling is not { } cap || retainedAfter is not { } after)
+        {
+            return false;
+        }
+
+        if (retainedBefore is { } before && before > after)
+        {
+            LatticeMetrics.StoragePolicyBytesReclaimed.Add(
+                before - after,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
+        }
+
+        var over = after > cap;
+        _storageMetrics?.PublishOverThreshold(treeName, over);
+        return over;
+    }
+
+    /// <summary>
+    /// Samples the advisory WAL byte-pressure inputs: the configured ceiling
+    /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) and the retained-byte
+    /// total summed across every partition. Returns <c>(null, null)</c> when
+    /// the policy is disabled and <c>(ceiling, null)</c> when the provider does
+    /// not support byte accounting (every partition returned the <c>-1</c>
+    /// sentinel). The policy never trims past the safe frontier; the sampled
+    /// total only feeds the advisory report and metrics.
+    /// </summary>
+    private static async Task<(long? Ceiling, long? Retained)> SampleRetainedBytesAsync(
+        IWalStorageProvider provider,
+        LatticeOptions resolved,
+        string treeName,
+        int partitions,
+        CancellationToken cancellationToken)
+    {
+        if (resolved.WalMaxRetainedBytes is not { } ceiling || ceiling <= 0)
+        {
+            // Policy disabled - zero hot-path cost.
+            return (null, null);
+        }
+
+        long retained = 0;
+        var anySupported = false;
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var bytes = await provider.GetRetainedByteSizeAsync(treeName, partition, cancellationToken).ConfigureAwait(false);
+            if (bytes < 0)
+            {
+                // -1 sentinel: this partition's provider does not support
+                // byte accounting. Skip it; if every partition is
+                // unsupported the policy reports "no data".
+                continue;
+            }
+            anySupported = true;
+            retained += bytes;
+        }
+
+        return anySupported ? (ceiling, retained) : (ceiling, null);
     }
 
     private static async Task<long> TrimShardAsync(

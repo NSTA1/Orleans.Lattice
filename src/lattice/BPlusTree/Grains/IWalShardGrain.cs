@@ -145,6 +145,20 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the approximate number of retained on-wire payload bytes
+    /// currently persisted in this WAL shard, or <c>-1</c> when the
+    /// configured <see cref="IWalStorageProvider"/> does not support byte
+    /// accounting. Trim-aware: <see cref="IWalStorageProvider.TrimAsync"/>
+    /// reduces the figure as a prefix is removed. The byte-accurate
+    /// storage-usage aggregator (<see cref="ILattice.GetStorageUsageAsync"/>)
+    /// sums this across a tree's WAL shards to report the tree's retained
+    /// WAL footprint. Forwards directly to
+    /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Diagnostic helper: returns the number of entries currently
     /// persisted in this WAL shard. <b>Trim-unaware</b> -
     /// <see cref="IWalStorageProvider.TrimAsync"/> reduces the

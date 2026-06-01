@@ -266,6 +266,23 @@ SafeMaxLeafKeys = floor(788 * 0.75) = 591
 
 > **Applying the result:** to change `MaxLeafKeys` / `MaxInternalChildren` on a live tree, call [`ResizeAsync`](api.md#resize) (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize)). To grow the physical shard count, call [`ReshardAsync`](api.md#resize) (online, grow-only). For a brand-new tree, either call these on the empty tree (fast path - no coordinator) or pre-register the pin via `ILatticeRegistry.RegisterAsync`. See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree) and [Online Reshard](online-reshard.md).
 
+## Measuring retained storage at runtime
+
+The three sizing surfaces above are *design-time* models. To read the **exact retained on-wire bytes** a tree is costing right now - not an entry-count estimate - call [`ILattice.GetStorageUsageAsync`](api.md#storage-usage). It fans out across the tree's shards and WAL partitions and returns a `TreeStorageUsageReport` with `WalRetainedBytes`, `SnapshotBytes`, `LeafStateBytes`, and their `TotalBytes` sum. A cluster-wide roll-up across every registered tree is available via [`ILatticeAdmin.GetTotalStorageUsageAsync`](api.md#latticeadmin).
+
+Reports are coalesced behind a short TTL cache (`LatticeOptions.StorageUsageCacheTtl`, default 10 s) so repeated dashboard scrapes stay cheap. A WAL provider that does not implement byte accounting (`IWalStorageProvider.GetRetainedByteSizeAsync` returns the `-1` "unsupported" sentinel) sets `Partial = true`; consumers should render that as "n/a" rather than a misleading zero.
+
+The same figures are published as observable gauges on the `orleans.lattice` meter (`storage.wal_bytes`, `storage.snapshot_bytes`, `storage.leaf_state_bytes`, `storage.total_bytes`) and surfaced on the bundled **Overview** Grafana dashboard. See [Metrics](metrics.md) for the full instrument list.
+
+### Advisory byte-pressure WAL retention
+
+WAL retention is normally bounded by consumer cursors and an optional wall-clock TTL (`LatticeOptions.WalRetention`). For a size-based safety valve, set `LatticeOptions.WalMaxRetainedBytes` - an **advisory** per-tree ceiling on retained WAL bytes. When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim:
+
+- If the pre-trim total exceeds the ceiling, the policy schedules a byte-pressure trim and increments `orleans.lattice.storage.policy.trim_triggered` (tagged `reason=byte_pressure`). The bytes actually freed are reported on `orleans.lattice.storage.policy.bytes_reclaimed` and on the report's `RetainedBytesBefore` / `RetainedBytesAfter` fields.
+- The trim **never crosses the safe frontier** (the minimum consumer cursor intersected with the causal-stable frontier). If a lagging consumer pins the bytes, the data is preserved, `orleans.lattice.storage.policy.over_threshold` reports `1`, and the write path is unaffected. The breach is advisory; the durability invariant wins.
+
+`WalBytePressureReclaimTarget` (default `0.8`) expresses the fraction of the ceiling a trim aims to reclaim toward, providing hysteresis so a tree hovering near the ceiling does not thrash. Leaving `WalMaxRetainedBytes` at its default `null` disables the policy entirely with zero hot-path cost.
+
 ## Key trade-offs
 
 | Direction | Effect |

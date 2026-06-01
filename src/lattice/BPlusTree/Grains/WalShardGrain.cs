@@ -839,6 +839,16 @@ internal sealed class WalShardGrain(
         return Task.FromResult(_nextOffset);
     }
 
+    /// <inheritdoc />
+    public async Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+        return await _provider
+            .GetRetainedByteSizeAsync(_treeId, _shardIndex, cancellationToken)
+            .ConfigureAwait(true);
+    }
+
     /// <summary>
     /// Captures the current pending batch as a new in-flight flush at
     /// the tail of <see cref="_inFlight"/> and resets the pending

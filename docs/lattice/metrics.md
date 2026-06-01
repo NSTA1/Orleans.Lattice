@@ -96,6 +96,13 @@ drives autonomic splitting.
 | Name | Kind | Unit | Description |
 |---|---|---|---|
 | `orleans.lattice.wal.entries_trimmed` | `Counter<long>` | `{entry}` | WAL entries removed by the per-tree garbage collector. Emitted only after a pass that trims at least one entry (a zero-trim pass produces no measurement). Tagged `tree`. |
+| `orleans.lattice.storage.wal_bytes` | `ObservableGauge<long>` | `By` | Retained WAL bytes for the tree. Observed lazily from the per-tree storage-usage aggregator's last-known report (coalesced behind `StorageUsageCacheTtl`); a tree on a provider that does not support byte accounting reports no data rather than `0`. Tagged `tree`. |
+| `orleans.lattice.storage.snapshot_bytes` | `ObservableGauge<long>` | `By` | Snapshot blob bytes for the tree. Tagged `tree`. |
+| `orleans.lattice.storage.leaf_state_bytes` | `ObservableGauge<long>` | `By` | Summed leaf/shard-root state bytes for the tree. Tagged `tree`. |
+| `orleans.lattice.storage.total_bytes` | `ObservableGauge<long>` | `By` | Sum of the three storage surfaces (`wal_bytes` + `snapshot_bytes` + `leaf_state_bytes`) for the tree. Tagged `tree`. |
+| `orleans.lattice.storage.policy.over_threshold` | `ObservableGauge<long>` | `{tree}` | `1` when the tree's retained WAL bytes currently breach the advisory ceiling (`LatticeOptions.WalMaxRetainedBytes`), else `0`. Advisory only - the byte-pressure policy never trims past the safe consumer frontier, so the gauge stays at `1` while a lagging consumer pins the bytes. Tagged `tree`. |
+| `orleans.lattice.storage.policy.trim_triggered` | `Counter<long>` | `{trim}` | Incremented once per WAL GC pass whose pre-trim retained bytes exceed the advisory ceiling, so the policy schedules a byte-pressure trim. Tagged `tree` and `reason` (`byte_pressure`). Not emitted when the policy is disabled or the WAL provider does not support byte accounting. |
+| `orleans.lattice.storage.policy.bytes_reclaimed` | `Counter<long>` | `By` | WAL bytes freed by a byte-pressure-triggered trim pass (pre-trim minus post-trim retained bytes). Zero-reclaim passes (a lagging consumer pinned every byte) do not emit. Tagged `tree`. |
 
 ### Cache (sourced from `LeafCacheGrain`)
 

@@ -841,6 +841,99 @@
           "legendFormat": "{{tree}} p95"
         }
       ]
+    },
+    {
+      "id": 23,
+      "title": "Storage footprint by tree",
+      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "WAL",
+          "expr": "sum by (tree) (orleans_lattice_storage_wal_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} wal"
+        },
+        {
+          "refId": "SNAP",
+          "expr": "sum by (tree) (orleans_lattice_storage_snapshot_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} snapshot"
+        },
+        {
+          "refId": "LEAF",
+          "expr": "sum by (tree) (orleans_lattice_storage_leaf_state_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} leaf-state"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Cluster total retained bytes",
+      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "TOTAL",
+          "expr": "sum(orleans_lattice_storage_total_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "cluster total"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "title": "Trees over advisory threshold",
+      "description": "Trees whose retained WAL bytes currently breach the advisory ceiling (LatticeOptions.WalMaxRetainedBytes). The 0/1 over_threshold gauge stays at 1 while a lagging consumer pins bytes the byte-pressure policy cannot safely reclaim - the breach is advisory and the durability invariant wins.",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "OVER",
+          "expr": "max by (tree) (orleans_lattice_storage_policy_over_threshold{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) == 1",
+          "legendFormat": "{{tree}}",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "title": "Byte-pressure trim activity",
+      "description": "Rate of advisory byte-pressure trim passes (policy.trim_triggered, reason=byte_pressure) and the WAL bytes those passes reclaimed (policy.bytes_reclaimed). A non-zero trigger rate with a flat reclaim rate means consumers are lagging and the bytes could not be safely freed.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 75 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "TRIG",
+          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_trim_triggered_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} triggered/s"
+        },
+        {
+          "refId": "RECLAIM",
+          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_bytes_reclaimed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} reclaimed bytes/s"
+        }
+      ]
     }
   ]
 }
