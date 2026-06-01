@@ -1004,6 +1004,7 @@ constraints, and per-tree overrides via the
 | `MaxConcurrentMigrations` | `int` | 4 | Maximum concurrent active-tombstone migrations per tree. |
 | `MaxConcurrentDrains` | `int` | 4 | Maximum concurrent shadow-write drains per tree. |
 | `SplitDrainBatchSize` | `int` | 1024 | Entries per batch during the drain phase of a split. |
+| `ShardForwardTimeout` | `TimeSpan` | 15 s | Hard ceiling on a single outbound shard-to-shard write forward (the online-resize shadow forward and the adaptive-split migration forward). A forward that exceeds it is cancelled and surfaced as a `TimeoutException`, which the normal stale-routing retry envelope re-runs against refreshed routing - preventing a forward parked against a shard whose ownership is changing during a reshard swap from pinning the foreground write turn and wedging the per-shard fan-out. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `AutoSplitMinTreeAge` | `TimeSpan` | 60 s | Minimum tree age before the hot-shard monitor begins sampling. |
 | `MaxScanRetries` | `int` | 3 | Maximum bounded-retry passes for `CountAsync` / `ScanKeysAsync` / `ScanEntriesAsync` when topology changes mid-scan. |
 | `CursorIdleTtl` | `TimeSpan` | 48 h | Sliding idle timeout for stateful cursors. `InfiniteTimeSpan` disables auto-cleanup. |

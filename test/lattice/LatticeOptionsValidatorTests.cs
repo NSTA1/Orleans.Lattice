@@ -159,4 +159,41 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalFlushTimeout)));
     }
+
+    [Test]
+    public void ShardForwardTimeout_default_is_fifteen_seconds()
+    {
+        Assert.That(new LatticeOptions().ShardForwardTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
+        Assert.That(LatticeOptions.DefaultShardForwardTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
+    }
+
+    [Test]
+    public void ShardForwardTimeout_positive_passes()
+    {
+        var result = Validate(o => o.ShardForwardTimeout = TimeSpan.FromSeconds(5));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void ShardForwardTimeout_infinite_passes()
+    {
+        var result = Validate(o => o.ShardForwardTimeout = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void ShardForwardTimeout_zero_fails()
+    {
+        var result = Validate(o => o.ShardForwardTimeout = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ShardForwardTimeout)));
+    }
+
+    [Test]
+    public void ShardForwardTimeout_negative_fails()
+    {
+        var result = Validate(o => o.ShardForwardTimeout = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ShardForwardTimeout)));
+    }
 }

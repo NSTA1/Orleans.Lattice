@@ -146,4 +146,5 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-016](https://github.com/NSTA1/Orleans.Lattice/issues/433) - Operator dashboards package (`Orleans.Lattice.Dashboards`)
 - [G-019](https://github.com/NSTA1/Orleans.Lattice/issues/546) - Bimodal phase-1/activation wedge on the Azure-Tables WAL hot path (investigative)
 - [G-020](https://github.com/NSTA1/Orleans.Lattice/issues/551) - Non-atomic `GetManyAsync` snapshot across mid-saga reshard (migration Swap-phase ordering)
+- [G-021](https://github.com/NSTA1/Orleans.Lattice/issues/552) - Reshard swap-phase write-path wedge: bounded outbound shard-forward deadline
 

@@ -1113,6 +1113,23 @@ public static class LatticeMetrics
             description: "Wall-clock ms awaiting the shadow-forward task at the tail of ShardRootGrain.SetManyAsync.");
 
     /// <summary>
+    /// Count of outbound shard-to-shard write forwards that were abandoned
+    /// because they exceeded
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.ShardForwardTimeout"/>.
+    /// Tagged with <see cref="TagTree"/>. A non-zero value indicates a
+    /// forward parked against a sibling shard whose ownership was changing
+    /// during a reshard swap - the parked forward was faulted as a
+    /// <see cref="TimeoutException"/> so the foreground write pipeline could
+    /// make forward progress and the operation be retried against refreshed
+    /// routing. Expected to be zero in steady state; sustained non-zero
+    /// counts during a resize indicate the swap phase is taking longer than
+    /// the configured forward deadline.
+    /// </summary>
+    public static readonly Counter<long> ShardForwardTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.forward.timeouts", unit: "{timeout}",
+            description: "Count of outbound shard-to-shard write forwards abandoned after exceeding ShardForwardTimeout.");
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via
