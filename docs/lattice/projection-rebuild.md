@@ -124,6 +124,41 @@ The digest is byte-stable across silos because every input is canonicalised:
 - `VersionVector` keys are sorted with `StringComparer.Ordinal` before
   feeding so dictionary insertion order does not perturb the output.
 
+### Topology changes and the aggregate
+
+The internal-node aggregate is maintained incrementally as children
+publish `ChildDigestSnapshot` updates upward, so the aggregate's
+correctness depends on a single invariant: **each child contributes to
+exactly one parent at any instant**. A B+ tree split moves a contiguous
+half of a node's children to a new sibling, which transiently violates
+that invariant if the moved children's per-child digest rows are left
+behind on the donor or if a moved child keeps publishing to its former
+parent. Both would double-count the moved subtree's entries in the
+shard total.
+
+The split path preserves the one-parent invariant in two steps:
+
+1. **Prune on the donor.** When an internal node splits, it removes the
+   moved children's rows from its persisted per-child digest table and
+   recomputes its `SubtreeProjectionHash`, `SubtreeEntryCount`, and
+   `SubtreeHighestCheckpointOffset` from the remaining rows before
+   publishing the corrected aggregate upward. The XOR fold's
+   self-inverse algebra makes the recompute exact - the moved rows
+   cancel cleanly out of the running hash.
+2. **Reject stale publishes.** Each internal node folds a
+   `ChildDigestSnapshot` only from a child it currently owns. A
+   snapshot arriving from a child that has already been re-parented to
+   the new sibling is rejected and its stale row (if any) dropped, so a
+   moved child that races a publish against its re-parenting cannot
+   reintroduce a double count. A donor likewise re-seeds a child's
+   parent pointer only for children it still owns, so a moved child is
+   never pointed back at the node it left.
+
+The net effect is that `EntryCount` stays exactly equal to the number
+of distinct entries (live plus tombstoned) under the shard across an
+arbitrary sequence of internal-node splits, with no transient
+over- or under-count visible to a quiescent digest read.
+
 ### Cost and where to call it
 
 Because the per-entry XOR fold is maintained incrementally on every

@@ -104,6 +104,37 @@ internal sealed partial class BPlusInternalGrain
     {
         EnsureSubtreeHashInitialized();
 
+        // Ownership guard. Only fold a snapshot for a child this node
+        // currently owns in its Children list. A child that has been
+        // re-parented away - for example a child handed to a new sibling
+        // during an internal-node split - can still have an in-flight (or
+        // coalesced) publish targeting this, its former parent. Folding
+        // that stale snapshot would re-add the moved child's entry count
+        // and hash contribution here while the new sibling also counts it,
+        // permanently double-counting the moved subtree across the chained
+        // fold (the proactive PruneMovedChildDigests on split is otherwise
+        // undone by the next stale publish). When the publish is for a
+        // child we no longer own, drop any lingering row, recompute, and
+        // republish the corrected aggregate upward rather than folding.
+        // The guard is skipped while Children is empty: a node that has
+        // not yet recorded any children cannot make an ownership decision
+        // (the seeding race and the isolated-fold unit tests both rely on
+        // this), and in production a child is always present in Children
+        // before its snapshot is folded here.
+        if (state.State.Children.Count > 0 && !OwnsChild(childId))
+        {
+            if (state.State.ChildDigests.Remove(childId))
+            {
+                RecomputeSubtreeAggregatesFromChildDigests();
+                await state.WriteStateAsync();
+                if (state.State.ParentId is { } staleParentId)
+                {
+                    await PublishUpwardAsync(staleParentId);
+                }
+            }
+            return;
+        }
+
         // Update the per-child snapshot table first - it is the single
         // source of truth for every aggregate derived below.
         state.State.ChildDigests[childId] = newSnapshot;
@@ -157,6 +188,89 @@ internal sealed partial class BPlusInternalGrain
         {
             await PublishUpwardAsync(parentId);
         }
+    }
+
+    /// <summary>
+    /// Re-derives <c>SubtreeProjectionHash</c>, <c>SubtreeEntryCount</c>,
+    /// and <c>SubtreeHighestCheckpointOffset</c> from the current
+    /// <c>ChildDigests</c> table. The XOR fold is the single source of
+    /// truth, so this is safe to call after any structural mutation that
+    /// adds or removes rows from the table (e.g. pruning the children
+    /// moved to a new sibling during an internal-node split). Does not
+    /// persist or publish - the caller owns those side effects so the
+    /// recompute can be batched into a single write.
+    /// </summary>
+    private void RecomputeSubtreeAggregatesFromChildDigests()
+    {
+        EnsureSubtreeHashInitialized();
+        var hash = state.State.SubtreeProjectionHash!;
+        Array.Clear(hash, 0, SubtreeHashSize);
+        long entryCount = 0;
+        long maxCheckpoint = 0;
+        foreach (var kvp in state.State.ChildDigests)
+        {
+            entryCount += kvp.Value.EntryCount;
+            if (kvp.Value.CheckpointOffset > maxCheckpoint)
+                maxCheckpoint = kvp.Value.CheckpointOffset;
+            if (kvp.Value.Hash is { Length: SubtreeHashSize } childHash)
+            {
+                for (var i = 0; i < SubtreeHashSize; i++) hash[i] ^= childHash[i];
+            }
+        }
+        state.State.SubtreeEntryCount = entryCount;
+        state.State.SubtreeHighestCheckpointOffset = maxCheckpoint;
+    }
+
+    /// <summary>
+    /// Drops the per-child digest snapshot rows for
+    /// <paramref name="movedChildIds"/> from this node's
+    /// <c>ChildDigests</c> table and re-derives the subtree aggregates
+    /// from what remains. Called from the internal-node split path so a
+    /// donor that hands half its children to a new sibling stops summing
+    /// the moved children's entry counts and hash contributions into its
+    /// own subtree digest. Without this prune the donor permanently
+    /// double-counts those children (the new sibling counts them too),
+    /// inflating the chained-fold aggregate by the moved subtree's entry
+    /// total. Returns <see langword="true"/> if any row was removed so
+    /// the caller can decide whether a persist is warranted.
+    /// </summary>
+    internal bool PruneMovedChildDigests(IEnumerable<GrainId> movedChildIds)
+    {
+        ArgumentNullException.ThrowIfNull(movedChildIds);
+        var removedAny = false;
+        foreach (var childId in movedChildIds)
+        {
+            if (state.State.ChildDigests.Remove(childId))
+            {
+                removedAny = true;
+            }
+        }
+        if (removedAny)
+        {
+            RecomputeSubtreeAggregatesFromChildDigests();
+        }
+        return removedAny;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="childId"/> is
+    /// one of this node's currently-owned children. Used by
+    /// <see cref="ApplyChildSnapshotAsync"/> as an ownership guard so a
+    /// stale digest publish from a child that has since been re-parented
+    /// away (e.g. moved to a new sibling during an internal-node split)
+    /// is rejected rather than folded back into this node's aggregate.
+    /// </summary>
+    private bool OwnsChild(GrainId childId)
+    {
+        var children = state.State.Children;
+        for (var i = 0; i < children.Count; i++)
+        {
+            if (children[i].ChildId == childId)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <inheritdoc />

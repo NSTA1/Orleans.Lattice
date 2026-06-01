@@ -92,4 +92,43 @@ public partial class PublicApiContractTests
         // total entry count across the two shards equals the keys we wrote.
         Assert.That(d0.EntryCount + d1.EntryCount, Is.GreaterThanOrEqualTo(10));
     }
+
+    [Test]
+    public async Task GetLeafProjectionDigestAsync_entry_count_exact_after_internal_node_splits()
+    {
+        // Regression for the internal-node split digest double-count.
+        // The fixture pins a 4/4 leaf/internal-children layout, so writing
+        // well past 4 * 4 = 16 keys into a single shard forces the leaf
+        // tier to split repeatedly and then drives the internal tier to
+        // split too (an internal node exceeding 4 children promotes a new
+        // sibling). Two defects conspired to corrupt the chained-fold
+        // entry total across an internal split:
+        //   1. The donor trimmed its Children list but never pruned the
+        //      matching ChildDigests rows, so it kept summing the moved
+        //      children while the new sibling also counted them.
+        //   2. After SplitAsync handed a child to the new sibling,
+        //      AcceptSplitCoreAsync unconditionally re-seeded that child's
+        //      parent slot back to the donor, so the moved child kept
+        //      publishing its digest to a node that no longer owned it.
+        // The fix prunes the moved rows, guards the fold against snapshots
+        // from non-owned children, and only re-seeds the parent slot of a
+        // child the node still owns. The chained-fold digest must report
+        // EXACTLY the number of distinct keys written. A >= assertion
+        // would not catch either an over- or under-count, so this test
+        // pins the exact value.
+        var treeId = "pac-digest-internalsplit-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        const int keyCount = 60;
+        for (var i = 0; i < keyCount; i++)
+        {
+            await tree.SetAsync($"k{i:D4}", Bytes($"v{i}"));
+        }
+
+        var digest = await tree.GetLeafProjectionDigestAsync(shardIndex: 0);
+        Assert.That(digest.EntryCount, Is.EqualTo(keyCount),
+            "the chained-fold shard digest must report the exact distinct key count; "
+            + "stale ChildDigests rows or a misdirected parent pointer after an "
+            + "internal-node split skew the subtree total.");
+    }
 }

@@ -97,6 +97,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
+- [FX-022](https://github.com/NSTA1/Orleans.Lattice/issues/564) - Internal-node split leaves stale per-child digest rows, double-counting subtree entry totals
+
 ### Shipped
 
 - [FX-001](https://github.com/NSTA1/Orleans.Lattice/issues/401) - Leaf split publish ordering
