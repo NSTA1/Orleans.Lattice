@@ -488,7 +488,7 @@ This option can be changed freely at any time.
 
 ### `WalBytePressureReclaimTarget`
 
-Fraction of `WalMaxRetainedBytes` a byte-pressure trim aims to reclaim toward (default: `0.8`). When the advisory retained-byte ceiling is exceeded, the WAL garbage collector trims toward `WalMaxRetainedBytes * WalBytePressureReclaimTarget` so the tree settles below the ceiling with headroom rather than oscillating just under it. Ignored when `WalMaxRetainedBytes` is `null`. See [WAL](wal.md) and [Tree Storage](tree-storage.md).
+Low-water fraction of `WalMaxRetainedBytes` that disarms the advisory byte-pressure policy (default: `0.8`), providing hysteresis so a tree hovering near the ceiling is not trimmed on every GC pass. The policy *arms* when retained WAL crosses the full ceiling (high-water) and re-triggers a byte-pressure trim on each pass until a trim drives retained bytes at or below `WalMaxRetainedBytes * WalBytePressureReclaimTarget` (low-water), at which point it disarms. While disarmed, growth that stays inside the `(low-water, ceiling]` band does not re-trigger. The value is clamped to the interval `(0, 1]`. Ignored when `WalMaxRetainedBytes` is `null`. See [WAL](wal.md) and [Tree Storage](tree-storage.md).
 
 This option can be changed freely at any time. The new value takes effect on the next GC tick.
 

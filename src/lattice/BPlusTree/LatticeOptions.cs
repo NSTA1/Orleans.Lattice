@@ -1009,12 +1009,17 @@ public class LatticeOptions
     public long? WalMaxRetainedBytes { get; set; }
 
     /// <summary>
-    /// Fraction of <see cref="WalMaxRetainedBytes"/> a byte-pressure trim
-    /// pass aims to bring retained WAL back to, providing hysteresis so a
-    /// tree hovering near the ceiling does not trigger a trim on every pass.
-    /// Defaults to <see cref="DefaultWalBytePressureReclaimTarget"/> (0.8).
-    /// Must be in the open-closed interval <c>(0, 1]</c>; values outside that
-    /// range are clamped at evaluation time. Ignored when
+    /// Low-water fraction of <see cref="WalMaxRetainedBytes"/> that disarms the
+    /// advisory byte-pressure policy, providing hysteresis so a tree hovering
+    /// near the ceiling does not trigger a trim on every pass. The policy arms
+    /// when retained WAL crosses the full ceiling (high-water) and re-triggers
+    /// a byte-pressure trim on each pass until a trim drives retained bytes at
+    /// or below <c>WalMaxRetainedBytes x WalBytePressureReclaimTarget</c>
+    /// (low-water), at which point it disarms; growth that then stays inside the
+    /// <c>(low-water, ceiling]</c> band does not re-trigger until the ceiling is
+    /// crossed again. Defaults to <see cref="DefaultWalBytePressureReclaimTarget"/>
+    /// (0.8). Must be in the open-closed interval <c>(0, 1]</c>; values outside
+    /// that range are clamped at evaluation time. Ignored when
     /// <see cref="WalMaxRetainedBytes"/> is <see langword="null"/>.
     /// </summary>
     public double WalBytePressureReclaimTarget { get; set; } = DefaultWalBytePressureReclaimTarget;

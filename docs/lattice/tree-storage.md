@@ -289,7 +289,7 @@ WAL retention is normally bounded by consumer cursors and an optional wall-clock
 - If the pre-trim total exceeds the ceiling, the policy schedules a byte-pressure trim and increments `orleans.lattice.storage.policy.trim_triggered` (tagged `reason=byte_pressure`). The bytes actually freed are reported on `orleans.lattice.storage.policy.bytes_reclaimed` and on the report's `RetainedBytesBefore` / `RetainedBytesAfter` fields.
 - The trim **never crosses the safe frontier** (the minimum consumer cursor intersected with the causal-stable frontier). If a lagging consumer pins the bytes, the data is preserved, `orleans.lattice.storage.policy.over_threshold` reports `1`, and the write path is unaffected. The breach is advisory; the durability invariant wins.
 
-`WalBytePressureReclaimTarget` (default `0.8`) expresses the fraction of the ceiling a trim aims to reclaim toward, providing hysteresis so a tree hovering near the ceiling does not thrash. Leaving `WalMaxRetainedBytes` at its default `null` disables the policy entirely with zero hot-path cost.
+`WalBytePressureReclaimTarget` (default `0.8`) is the low-water fraction of the ceiling that disarms the policy, providing hysteresis so a tree hovering near the ceiling does not thrash: byte pressure arms when retained crosses the full ceiling and keeps re-triggering until a trim drives retained at or below `WalBytePressureReclaimTarget * WalMaxRetainedBytes`, after which growth inside the band does not re-trigger until the ceiling is crossed again. Leaving `WalMaxRetainedBytes` at its default `null` disables the policy entirely with zero hot-path cost.
 
 ## Key trade-offs
 

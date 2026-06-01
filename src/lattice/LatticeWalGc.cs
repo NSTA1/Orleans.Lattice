@@ -88,6 +88,16 @@ public sealed class LatticeWalGc(
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
+    // Per-tree byte-pressure latch for the advisory policy's hysteresis band.
+    // A tree is "armed" (in pressure) once its retained WAL crosses the full
+    // ceiling (high-water), and stays armed - re-triggering a trim on each
+    // pass - until a trim drives retained below WalBytePressureReclaimTarget x
+    // ceiling (low-water). While disarmed, growth between the low- and high-
+    // water marks does not re-trigger, so a tree hovering near the ceiling is
+    // not trimmed on every pass. The singleton lifetime of this GC carries the
+    // latch across passes for the life of the silo.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _bytePressureArmed = new(StringComparer.Ordinal);
+
     // Resolved lazily so a host that never registered the storage-usage
     // sink (or replaced the WAL GC in isolation in a unit test) still works;
     // the over-threshold gauge is simply not driven by the GC in that case.
@@ -152,7 +162,7 @@ public sealed class LatticeWalGc(
         // policy is disabled or the provider does not support byte accounting.
         var (ceiling, retainedBefore) = await SampleRetainedBytesAsync(
             provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
-        var triggered = retainedBefore is { } before && ceiling is { } cap && before > cap;
+        var triggered = EvaluateBytePressureTrigger(treeName, resolved, ceiling, retainedBefore);
         if (triggered)
         {
             LatticeMetrics.StoragePolicyTrimTriggered.Add(
@@ -175,7 +185,7 @@ public sealed class LatticeWalGc(
             // ceiling with no consumer cursor is the canonical
             // "lagging consumer pins the WAL" advisory case where the
             // breach is published but no bytes are reclaimed.
-            var over0 = FinishBytePressure(treeName, ceiling, retainedBefore, retainedBefore);
+            var over0 = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedBefore);
             return new LatticeWalGcReport(
                 treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
                 ceiling, retainedBefore, retainedBefore, triggered, over0);
@@ -197,7 +207,7 @@ public sealed class LatticeWalGc(
 
         var (_, retainedAfter) = await SampleRetainedBytesAsync(
             provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
-        var overThreshold = FinishBytePressure(treeName, ceiling, retainedBefore, retainedAfter);
+        var overThreshold = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedAfter);
 
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
@@ -210,12 +220,16 @@ public sealed class LatticeWalGc(
     /// the ceiling. When a byte-pressure trigger reclaimed bytes
     /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),
     /// increments <see cref="LatticeMetrics.StoragePolicyBytesReclaimed"/> by
-    /// the freed byte count. Also pushes the over-threshold flag to the
-    /// observable storage gauge so the 0/1 series tracks the WAL GC's own
-    /// sampling between aggregator scrapes. Returns <see langword="false"/>
-    /// when the policy is disabled or byte accounting is unsupported.
+    /// the freed byte count. Updates the per-tree hysteresis latch against the
+    /// post-trim footprint: a trim that drove retained below the low-water mark
+    /// (<see cref="LatticeOptions.WalBytePressureReclaimTarget"/> of the ceiling)
+    /// disarms the policy so it does not re-trigger until retained crosses the
+    /// ceiling again. Also pushes the over-threshold flag to the observable
+    /// storage gauge so the 0/1 series tracks the WAL GC's own sampling between
+    /// aggregator scrapes. Returns <see langword="false"/> when the policy is
+    /// disabled or byte accounting is unsupported.
     /// </summary>
-    private bool FinishBytePressure(string treeName, long? ceiling, long? retainedBefore, long? retainedAfter)
+    private bool FinishBytePressure(string treeName, LatticeOptions resolved, long? ceiling, long? retainedBefore, long? retainedAfter)
     {
         if (ceiling is not { } cap || retainedAfter is not { } after)
         {
@@ -229,9 +243,83 @@ public sealed class LatticeWalGc(
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
         }
 
+        // Resolve the hysteresis latch against the post-trim footprint so the
+        // next pass sees consistent armed state.
+        if (after <= LowWater(cap, resolved.WalBytePressureReclaimTarget))
+        {
+            _bytePressureArmed[treeName] = false;
+        }
+        else if (after > cap)
+        {
+            _bytePressureArmed[treeName] = true;
+        }
+
         var over = after > cap;
         _storageMetrics?.PublishOverThreshold(treeName, over);
         return over;
+    }
+
+    /// <summary>
+    /// Decides whether this pass triggers a byte-pressure trim, applying the
+    /// hysteresis band defined by
+    /// <see cref="LatticeOptions.WalBytePressureReclaimTarget"/>. A tree arms
+    /// (enters pressure) only when its retained WAL crosses the full ceiling
+    /// (high-water) and stays armed - re-triggering on every pass - until a
+    /// trim drives retained at or below the low-water mark
+    /// (<c>reclaimTarget x ceiling</c>). While disarmed, growth between the
+    /// low- and high-water marks does not re-trigger, so a tree hovering just
+    /// under the ceiling is not trimmed on every pass. Returns
+    /// <see langword="false"/> when the policy is disabled or byte accounting
+    /// is unsupported.
+    /// </summary>
+    private bool EvaluateBytePressureTrigger(string treeName, LatticeOptions resolved, long? ceiling, long? retained)
+    {
+        if (ceiling is not { } cap || retained is not { } bytes)
+        {
+            // Policy disabled or byte accounting unsupported: clear any latch
+            // so a re-enable starts from a clean disarmed state.
+            _bytePressureArmed.TryRemove(treeName, out _);
+            return false;
+        }
+
+        if (bytes > cap)
+        {
+            // Crossed the high-water mark: arm and trigger.
+            _bytePressureArmed[treeName] = true;
+            return true;
+        }
+
+        if (bytes <= LowWater(cap, resolved.WalBytePressureReclaimTarget))
+        {
+            // At or below the low-water mark: disarm. No trigger.
+            _bytePressureArmed[treeName] = false;
+            return false;
+        }
+
+        // In the hysteresis band (lowWater < bytes <= ceiling): keep
+        // re-triggering only while already armed, otherwise stay quiet.
+        return _bytePressureArmed.TryGetValue(treeName, out var armed) && armed;
+    }
+
+    /// <summary>
+    /// Computes the low-water byte mark a byte-pressure trim aims to bring
+    /// retained WAL at or below, from the ceiling and the configured reclaim
+    /// target. The target is clamped to the open-closed interval <c>(0, 1]</c>;
+    /// out-of-range or non-finite values fall back to the default.
+    /// </summary>
+    private static long LowWater(long ceiling, double reclaimTarget)
+    {
+        var target = reclaimTarget;
+        if (double.IsNaN(target) || target <= 0)
+        {
+            target = LatticeOptions.DefaultWalBytePressureReclaimTarget;
+        }
+        else if (target > 1)
+        {
+            target = 1;
+        }
+
+        return (long)(ceiling * target);
     }
 
     /// <summary>

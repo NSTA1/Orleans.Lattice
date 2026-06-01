@@ -179,4 +179,63 @@ public sealed class LatticeWalGcBytePressureTests
             Assert.That(report.BytePressureOverThreshold, Is.False);
         });
     }
+
+    [Test]
+    public async Task RunOnceAsync_hysteresis_band_does_not_retrigger_after_disarm()
+    {
+        // ceiling = 100, reclaim target = 0.8 -> low-water = 80. Once a trim
+        // drives retained at/below 80 the policy disarms, and growth that
+        // stays inside the (80, 100] band must NOT re-trigger a trim pass.
+        var provider = new InMemoryWalStorageProvider();
+        var registry = new InMemoryWalCursorRegistry();
+        var sut = new LatticeWalGc(
+            Services(provider),
+            registry,
+            Monitor(new LatticeOptions
+            {
+                WalPartitions = 1,
+                WalMaxRetainedBytes = 100,
+                WalBytePressureReclaimTarget = 0.8,
+            }));
+
+        // Pass 1: retained = 122 (> ceiling). Arm and trigger; a caught-up
+        // consumer lets the GC reclaim everything, dropping retained to 0,
+        // which is below the 80-byte low-water mark -> the policy disarms.
+        await SeedAsync(provider, 0,
+            Entry(0, "a", new byte[60], Hlc(10)),
+            Entry(1, "b", new byte[60], Hlc(20)));
+        await registry.ReportCursorAsync(Tree, "peer", Hlc(20));
+
+        var pass1 = await sut.RunOnceAsync(Tree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(pass1.BytePressureTriggered, Is.True);
+            Assert.That(pass1.RetainedBytesAfter, Is.EqualTo(0));
+            Assert.That(pass1.BytePressureOverThreshold, Is.False);
+        });
+
+        // Pass 2: append a single entry (88-byte value + 1-byte key = 89 bytes)
+        // the consumer has not advanced past. Retained sits in the (80, 100]
+        // band but stays disarmed, so no trim is triggered: hysteresis
+        // suppresses the thrash.
+        await SeedAsync(provider, 0, Entry(2, "c", new byte[88], Hlc(40)));
+
+        var pass2 = await sut.RunOnceAsync(Tree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(pass2.RetainedBytesBefore, Is.GreaterThan(80));
+            Assert.That(pass2.RetainedBytesBefore, Is.LessThanOrEqualTo(100));
+            Assert.That(pass2.BytePressureTriggered, Is.False);
+        });
+
+        // Pass 3: append enough to cross the ceiling again -> re-arm and trigger.
+        await SeedAsync(provider, 0, Entry(3, "d", new byte[50], Hlc(50)));
+
+        var pass3 = await sut.RunOnceAsync(Tree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(pass3.RetainedBytesBefore, Is.GreaterThan(100));
+            Assert.That(pass3.BytePressureTriggered, Is.True);
+        });
+    }
 }
