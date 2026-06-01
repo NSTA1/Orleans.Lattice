@@ -74,6 +74,13 @@ if (options.ShardForwardTimeout <= TimeSpan.Zero
         $"{nameof(LatticeOptions.ShardForwardTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the outbound shard-forward deadline that prevents a parked forward during reshard swap from wedging the write pipeline).");
 }
+if (options.ActivationReadyTimeout <= TimeSpan.Zero
+    && options.ActivationReadyTimeout != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.ActivationReadyTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the shard-root activation-readiness seed deadline that prevents a parked first-activation RPC from wedging the write pipeline).");
+}
 return ValidateOptionsResult.Success;
     }
 }

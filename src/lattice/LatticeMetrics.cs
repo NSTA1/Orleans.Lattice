@@ -1130,6 +1130,25 @@ public static class LatticeMetrics
             description: "Count of outbound shard-to-shard write forwards abandoned after exceeding ShardForwardTimeout.");
 
     /// <summary>
+    /// Count of <c>ShardRootGrain</c> activation-readiness seeds that were
+    /// abandoned because they exceeded
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.ActivationReadyTimeout"/>.
+    /// Tagged with <see cref="TagTree"/>. A non-zero value indicates a
+    /// first-activation seed (registry registration or root-leaf
+    /// initialization) parked - typically because a startup reshard or
+    /// membership change left the target activation not-yet-visible - and
+    /// was faulted as a <see cref="TimeoutException"/> so the held
+    /// activation gate could release and the foreground write pipeline make
+    /// progress, with the seed retried against refreshed routing. Expected
+    /// to be zero in steady state; sustained non-zero counts during silo
+    /// startup or a reshard indicate the seed envelope is exceeding the
+    /// configured deadline.
+    /// </summary>
+    public static readonly Counter<long> ActivationReadyTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.activation_ready.timeouts", unit: "{timeout}",
+            description: "Count of shard-root activation-readiness seeds abandoned after exceeding ActivationReadyTimeout.");
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via

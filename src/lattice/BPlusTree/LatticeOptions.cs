@@ -1095,6 +1095,44 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultShardForwardTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Hard ceiling on how long a <c>ShardRootGrain</c>'s one-time
+    /// activation-readiness seed (the cross-grain awaits a brand-new or
+    /// freshly-reactivated shard runs the first time it prepares for an
+    /// operation: the defensive state re-read, the tree-registry
+    /// registration, the deterministic root-leaf initialization, and the
+    /// initial shard-state write) may run before it is abandoned and
+    /// surfaced to the preparing turn as a <see cref="TimeoutException"/>.
+    /// Bounding the seed is what keeps a half-activated shard - one whose
+    /// registry or leaf RPC Orleans rejected or parked during a startup
+    /// reshard / membership change, leaving the caller-side await neither
+    /// completing nor faulting - from holding the non-reentrant
+    /// activation gate indefinitely: without a ceiling the seeding turn
+    /// never returns, every interleaved read/write on that activation
+    /// parks behind the held gate, the lattice grain's per-shard fan-out
+    /// saturates at its in-flight limit, and the whole write pipeline
+    /// wedges with no fault and no activation recycle until the
+    /// caller-side Orleans response deadline (default 3 minutes) expires.
+    /// With the ceiling the parked seed faults cleanly, the gate's
+    /// <c>finally</c> releases, and the existing transient-exception retry
+    /// envelope on every mutation path re-runs the seed against refreshed
+    /// routing / registration once the startup reshard has settled. The
+    /// seed's cross-grain steps are each idempotent on retry, so
+    /// abandoning a parked seed never loses data or double-registers.
+    /// Defaults to <see cref="DefaultActivationReadyTimeout"/> (15
+    /// seconds) - above the worst-case legitimate first-activation RPC
+    /// envelope under a healthy cluster, yet well below the caller-side
+    /// budget so a true park is caught and the wedged pipeline self-heals
+    /// promptly. Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable
+    /// the ceiling and restore the historical unbounded-await behaviour;
+    /// the registered options validator rejects any other non-positive
+    /// value at first-resolve time.
+    /// </summary>
+    public TimeSpan ActivationReadyTimeout { get; set; } = DefaultActivationReadyTimeout;
+
+    /// <summary>Default value for <see cref="ActivationReadyTimeout"/> (15 seconds).</summary>
+    public static readonly TimeSpan DefaultActivationReadyTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's
