@@ -125,4 +125,70 @@ public sealed class LatticeStorageUsageMetricsTests
 
         Assert.That(() => sut.PublishOverThreshold(null!, true), Throws.TypeOf<ArgumentNullException>());
     }
+
+    [Test]
+    public void Byte_gauge_drops_series_after_staleness_horizon_elapses()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        var sut = new LatticeStorageUsageMetrics(clock) { StalenessHorizon = TimeSpan.FromSeconds(30) };
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25));
+        Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(100),
+            "freshly published series should be observed");
+
+        // Advance past the horizon without re-publishing: this models the
+        // tree's aggregator migrating to another silo so this silo stops
+        // refreshing the series.
+        clock.Advance(TimeSpan.FromSeconds(31));
+
+        Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.Null,
+            "a series not refreshed within the horizon must stop being observed so a migrated tree is not double-counted across silos");
+    }
+
+    [Test]
+    public void Byte_gauge_keeps_series_refreshed_within_horizon()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        var sut = new LatticeStorageUsageMetrics(clock) { StalenessHorizon = TimeSpan.FromSeconds(30) };
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25));
+        clock.Advance(TimeSpan.FromSeconds(20));
+        // Re-publish before the horizon elapses (the poller's next tick).
+        sut.Publish(Report(tree, wal: 110, snap: 40, leaf: 25));
+        clock.Advance(TimeSpan.FromSeconds(20));
+
+        Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(110),
+            "a series refreshed within the horizon keeps reporting the latest value");
+    }
+
+    [Test]
+    public void Policy_gauge_drops_series_after_staleness_horizon_elapses()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        var sut = new LatticeStorageUsageMetrics(clock) { StalenessHorizon = TimeSpan.FromSeconds(30) };
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.PublishOverThreshold(tree, overThreshold: true);
+        Assert.That(Read(LatticeMetrics.StoragePolicyOverThresholdName, tree), Is.EqualTo(1));
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+
+        Assert.That(Read(LatticeMetrics.StoragePolicyOverThresholdName, tree), Is.Null,
+            "a stale over-threshold series must expire so a migrated tree is not reported by two silos");
+    }
+
+    /// <summary>
+    /// Minimal mutable <see cref="TimeProvider"/> for driving the sink's
+    /// staleness horizon deterministically without a package dependency.
+    /// </summary>
+    private sealed class MutableTimeProvider(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public void Advance(TimeSpan by) => _now += by;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
 }

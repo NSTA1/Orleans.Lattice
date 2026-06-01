@@ -274,6 +274,14 @@ Reports are coalesced behind a short TTL cache (`LatticeOptions.StorageUsageCach
 
 The same figures are published as observable gauges on the `orleans.lattice` meter (`storage.wal_bytes`, `storage.snapshot_bytes`, `storage.leaf_state_bytes`, `storage.total_bytes`) and surfaced on the bundled **Overview** Grafana dashboard. See [Metrics](metrics.md) for the full instrument list.
 
+### Self-populating gauges in a multi-silo cluster
+
+The storage gauges are driven by a per-silo background poller (`StorageUsagePollInterval`, default 15 s), so they populate automatically as soon as a silo starts - no caller has to invoke `GetStorageUsageAsync` to make a dashboard light up. On each tick the poller calls `ILatticeAdmin.GetTotalStorageUsageAsync`, which fans out to every registered tree's storage-usage aggregator.
+
+Each aggregator is a single cluster-wide activation, so its publish lands on **its own host silo's** metrics sink. That means a tree contributes its byte series on exactly one silo, and a cross-silo `sum by (tree)` counts it once regardless of how many silos run the poller. Running the poller on every silo is intentional and needs no leader election: the aggregator's `StorageUsageCacheTtl` coalesces redundant polls from sibling silos, and if the silo that would "own" a poll dies the survivors keep the gauges fresh.
+
+Migration is handled by a staleness horizon. When a tree's aggregator moves to another silo, the old silo stops refreshing that tree's series; after the horizon (four poll intervals, floored at 60 s) the stale series stops being observed on the old silo, so the tree never appears on two scrape targets at once. Set `StorageUsagePollInterval` to `TimeSpan.Zero` (or a negative value) to disable the poller, in which case the gauges populate only when the public storage-usage API is called.
+
 ### Advisory byte-pressure WAL retention
 
 WAL retention is normally bounded by consumer cursors and an optional wall-clock TTL (`LatticeOptions.WalRetention`). For a size-based safety valve, set `LatticeOptions.WalMaxRetainedBytes` - an **advisory** per-tree ceiling on retained WAL bytes. When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim:

@@ -86,13 +86,17 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`PublishEvents`](#publishevents) | `bool` | `false` | Yes |
 | [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
 | [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |
+| [`StorageUsageCacheTtl`](#storageusagecachettl) | `TimeSpan` | 10 seconds | Yes |
+| [`StorageUsagePollInterval`](#storageusagepollinterval) | `TimeSpan` | 15 seconds | No (global; read from the default options) |
 | [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
 | [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
+| [`WalBytePressureReclaimTarget`](#walbytepressurereclaimtarget) | `double` | 0.8 | Yes |
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
 | [`WalFlushTimeout`](#walflushtimeout) | `TimeSpan` | 15 seconds | Yes |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 8 | Yes |
+| [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 
@@ -420,6 +424,33 @@ Number of entries per batch during the shadow-write drain phase of an adaptive s
 
 This option can be changed freely at any time.
 
+### `StorageUsageCacheTtl`
+
+Cache lifetime for `ILattice.GetStorageUsageAsync` reports (default: 10 seconds). The per-tree storage-usage aggregator fans out across the tree's shards and WAL partitions to assemble a byte-accurate `TreeStorageUsageReport`; this TTL coalesces repeat callers (dashboard scrapes, the background poller, and direct API calls) so a single fan-out serves a whole window. Set to `TimeSpan.Zero` to disable caching - every call fans out fresh. See [Tree Storage](tree-storage.md#runtime-measurement).
+
+```csharp verify
+// Hold storage reports for 30 s to cut dashboard fan-out cost
+siloBuilder.ConfigureLattice("metrics-tree", o => o.StorageUsageCacheTtl = TimeSpan.FromSeconds(30));
+```
+
+This option can be changed freely at any time.
+
+### `StorageUsagePollInterval`
+
+Cadence at which every silo's background storage-usage poller calls `ILatticeAdmin.GetTotalStorageUsageAsync` so the byte-accurate storage gauges (`lattice.storage.*`) populate automatically, without any caller having to invoke `ILattice.GetStorageUsageAsync`. Default 15 seconds. The poll fans out to every registered tree's aggregator; because each aggregator is a single cluster-wide activation, its publish lands on its own host silo's metrics sink, so a tree contributes its series on exactly one silo and a cross-silo `sum by (tree)` counts it once. Running the poller on every silo is intentional - it needs no leader election, and the aggregator's `StorageUsageCacheTtl` coalesces redundant polls from sibling silos. When a tree's aggregator migrates to another silo, the old silo stops refreshing that series and it expires from its sink after a staleness horizon (four poll intervals, floored at 60 seconds), so the tree never double-counts across scrape targets.
+
+This is a **global** knob read from the default (unnamed) options; per-tree overrides do not apply. Set to `TimeSpan.Zero` or a negative value to disable the poller - the gauges then populate only when the public storage-usage API is called.
+
+```csharp verify
+// Poll every 5 s for tighter dashboard freshness
+siloBuilder.ConfigureLattice(o => o.StorageUsagePollInterval = TimeSpan.FromSeconds(5));
+
+// Disable the poller (gauges populate only on explicit API calls)
+siloBuilder.ConfigureLattice(o => o.StorageUsagePollInterval = TimeSpan.Zero);
+```
+
+This option is read once when the poller starts on each silo.
+
 ### `TombstoneGracePeriod`
 
 How long a deleted key's tombstone is retained before it becomes eligible for permanent removal by the compaction process. The grace period exists so that all cache replicas (`LeafCacheGrain` activations across silos) have time to observe the delete via delta replication before the tombstone disappears.
@@ -455,9 +486,13 @@ How long to retain version vectors for deleted keys (default: `InfiniteTimeSpan`
 
 This option can be changed freely at any time.
 
-### `WalMaxBatchBytes`
+### `WalBytePressureReclaimTarget`
 
-Maximum byte budget the partition grain coalesces into a single storage flush (default: 4 MiB). Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
+Fraction of `WalMaxRetainedBytes` a byte-pressure trim aims to reclaim toward (default: `0.8`). When the advisory retained-byte ceiling is exceeded, the WAL garbage collector trims toward `WalMaxRetainedBytes * WalBytePressureReclaimTarget` so the tree settles below the ceiling with headroom rather than oscillating just under it. Ignored when `WalMaxRetainedBytes` is `null`. See [WAL](wal.md) and [Tree Storage](tree-storage.md).
+
+This option can be changed freely at any time. The new value takes effect on the next GC tick.
+
+### `WalMaxBatchBytes`
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
@@ -487,9 +522,13 @@ The flush-cap-reached cutover backs off the calling task by awaiting the in-flig
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
-### `WalPartitions`
+### `WalMaxRetainedBytes`
 
-Number of independent WAL partitions per tree (default: 8). The foreground commit-log writer hashes the mutation key modulo this value to pick the partition, fanning WAL throughput across multiple `IWalShardGrain` activations.
+Optional advisory ceiling on retained WAL bytes per tree (default: `null`, disabled). When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (surfaced as the `lattice.storage.policy.trim.triggered` counter and `LatticeWalGcReport.BytePressureTriggered`), trimming toward `WalMaxRetainedBytes * WalBytePressureReclaimTarget`. The policy is **advisory only**: the GC never trims past the safe frontier (the slowest consumer's cursor and any `WalRetention` floor) to honour it, so a tree pinned by a lagging consumer can remain over the ceiling - `LatticeWalGcReport.BytePressureOverThreshold` and the `lattice.storage.policy.over_threshold` gauge report that condition. `null` disables the policy. See [WAL](wal.md) and [Tree Storage](tree-storage.md).
+
+This option can be changed freely at any time. The new value takes effect on the next GC tick.
+
+### `WalPartitions`
 
 **Per-tree, pinned on first WAL write.** Existing trees pin the value in force at first WAL write into the tree registry, so a silo-wide default change is non-breaking for already-registered trees - they continue to fan across whatever partition count they were created with. New trees pick up the current default unless an operator override is configured.
 

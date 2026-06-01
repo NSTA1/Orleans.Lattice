@@ -1037,6 +1037,24 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultStorageUsageCacheTtl = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// Cadence at which the background storage-usage poller drives every
+    /// registered tree's aggregator so the observable storage gauges populate
+    /// without any caller invoking <see cref="ILattice.GetStorageUsageAsync"/>.
+    /// The poller runs once per cluster (it is gated on the per-silo poller
+    /// only acting when it can reach the registry) and fans the publish out to
+    /// whichever silo currently hosts each tree's aggregator, so the gauges
+    /// are populated cluster-wide. This is a global knob read from the default
+    /// (unnamed) options; per-tree overrides do not apply. Defaults to
+    /// <see cref="DefaultStorageUsagePollInterval"/> (15 seconds). Set to
+    /// <see cref="TimeSpan.Zero"/> or a negative value to disable the poller
+    /// (the gauges then only populate when the public API is called).
+    /// </summary>
+    public TimeSpan StorageUsagePollInterval { get; set; } = DefaultStorageUsagePollInterval;
+
+    /// <summary>Default value for <see cref="StorageUsagePollInterval"/> (15 seconds).</summary>
+    public static readonly TimeSpan DefaultStorageUsagePollInterval = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's

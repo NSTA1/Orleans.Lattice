@@ -33,16 +33,43 @@ public sealed class LatticeStorageUsageMetrics
     private static volatile LatticeStorageUsageMetrics? _current;
     private static bool _gaugesRegistered;
 
-    private readonly ConcurrentDictionary<string, TreeStorageUsageReport> _reports = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, bool> _overThreshold = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (TreeStorageUsageReport Report, DateTimeOffset PublishedAt)> _reports = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (bool OverThreshold, DateTimeOffset PublishedAt)> _overThreshold = new(StringComparer.Ordinal);
+    private readonly TimeProvider _time;
+
+    /// <summary>Default <see cref="StalenessHorizon"/> (60 seconds).</summary>
+    public static readonly TimeSpan DefaultStalenessHorizon = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long a published per-tree series keeps contributing a measurement
+    /// after the last <see cref="Publish"/> / <see cref="PublishOverThreshold"/>
+    /// that touched it. A series not refreshed within this window stops being
+    /// observed, so when a tree's storage-usage aggregator migrates to another
+    /// silo the <i>old</i> silo's sink stops emitting that tree's now-stale
+    /// value and a cross-silo <c>sum by (tree)</c> does not double-count it.
+    /// Set by the background poller to a small multiple of its poll interval;
+    /// defaults to <see cref="DefaultStalenessHorizon"/>. Must be positive.
+    /// </summary>
+    public TimeSpan StalenessHorizon { get; set; } = DefaultStalenessHorizon;
 
     /// <summary>
     /// Initialises a new instance and ensures the observable storage-usage
     /// gauges declared on <see cref="LatticeMetrics"/> are registered on the
     /// shared meter. Gauge registration is process-wide and idempotent.
     /// </summary>
-    public LatticeStorageUsageMetrics()
+    public LatticeStorageUsageMetrics() : this(null)
     {
+    }
+
+    /// <summary>
+    /// Initialises a new instance with an explicit <paramref name="timeProvider"/>
+    /// (used by tests to drive the staleness horizon deterministically) and
+    /// ensures the observable storage-usage gauges are registered on the shared
+    /// meter. Gauge registration is process-wide and idempotent.
+    /// </summary>
+    public LatticeStorageUsageMetrics(TimeProvider? timeProvider)
+    {
+        _time = timeProvider ?? TimeProvider.System;
         lock (RegistrationLock)
         {
             _current = this;
@@ -92,12 +119,15 @@ public sealed class LatticeStorageUsageMetrics
     /// <summary>
     /// Publishes the latest storage-usage report for a tree so the byte
     /// gauges reflect it on the next scrape. Called by the per-tree aggregator
-    /// after it assembles (or serves from cache) a report.
+    /// after it assembles (or serves from cache) a report, and by the
+    /// background poller on its cadence. Stamps the publish time so a series
+    /// the poller stops refreshing (because the aggregator migrated to another
+    /// silo) expires from this silo's sink after <see cref="StalenessHorizon"/>.
     /// </summary>
     public void Publish(TreeStorageUsageReport report)
     {
         ArgumentNullException.ThrowIfNull(report.TreeId);
-        _reports[report.TreeId] = report;
+        _reports[report.TreeId] = (report, _time.GetUtcNow());
     }
 
     /// <summary>
@@ -106,18 +136,31 @@ public sealed class LatticeStorageUsageMetrics
     /// 0/1 gauge. Pushed by the per-tree aggregator and by the WAL garbage
     /// collector after each byte-pressure evaluation so the gauge tracks the
     /// most recent observation regardless of which subsystem sampled it.
+    /// Stamps the publish time so a stale series expires after
+    /// <see cref="StalenessHorizon"/> once it stops being refreshed.
     /// </summary>
     public void PublishOverThreshold(string treeId, bool overThreshold)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        _overThreshold[treeId] = overThreshold;
+        _overThreshold[treeId] = (overThreshold, _time.GetUtcNow());
     }
 
     private IEnumerable<Measurement<long>> Observe(Func<TreeStorageUsageReport, long> selector)
     {
+        var cutoff = _time.GetUtcNow() - StalenessHorizon;
         foreach (var kv in _reports)
         {
-            var report = kv.Value;
+            var (report, publishedAt) = kv.Value;
+            if (publishedAt < cutoff)
+            {
+                // Series not refreshed within the horizon: the aggregator
+                // for this tree has migrated away (or the host stopped
+                // polling). Drop it so a migrated tree is reported by
+                // exactly one silo and a cross-silo sum is not doubled.
+                _reports.TryRemove(kv.Key, out _);
+                continue;
+            }
+
             if (report.Partial)
             {
                 // A partial report means at least one surface reported the
@@ -132,10 +175,17 @@ public sealed class LatticeStorageUsageMetrics
 
     private IEnumerable<Measurement<long>> ObserveOverThreshold()
     {
+        var cutoff = _time.GetUtcNow() - StalenessHorizon;
         foreach (var kv in _overThreshold)
         {
+            var (overThreshold, publishedAt) = kv.Value;
+            if (publishedAt < cutoff)
+            {
+                _overThreshold.TryRemove(kv.Key, out _);
+                continue;
+            }
             yield return new Measurement<long>(
-                kv.Value ? 1L : 0L,
+                overThreshold ? 1L : 0L,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key));
         }
     }
