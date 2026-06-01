@@ -48,10 +48,21 @@ public enum ProfileMode
 /// addition to the aggregated <c>profile.json</c>. Useful for offline analysis
 /// in PerfView / dotnet-trace. <see langword="null"/> disables the sidecar.
 /// </param>
+/// <param name="FilterNoiseFrames">
+/// When <see langword="true"/> (the default), the symbolicator skips
+/// measurement-substrate frames (NSubstitute / Castle mock thunks, the BDN
+/// engine, async-builder plumbing) and attributes each event to the nearest
+/// <em>product</em> frame instead - see <see cref="FrameFilter.IsProductFrame"/>.
+/// Set to <see langword="false"/> via
+/// <c>BENCH_MICROBENCH_PROFILE_FILTER_NOISE=false</c> to attribute to the
+/// deepest named managed frame regardless of classification (the legacy
+/// behaviour, useful when diagnosing the harness itself).
+/// </param>
 public readonly record struct ProfilerOptions(
     ProfileMode Mode,
     int TopN,
-    string? NetTraceOutputPath)
+    string? NetTraceOutputPath,
+    bool FilterNoiseFrames = true)
 {
     /// <summary>Default <see cref="TopN"/> when the env var is unset or unparseable.</summary>
     public const int DefaultTopN = 50;
@@ -65,6 +76,7 @@ public readonly record struct ProfilerOptions(
     ///   <item><c>BENCH_MICROBENCH_PROFILE</c> = <c>off</c> | <c>alloc</c> | <c>cpu</c> | <c>both</c> (default <c>off</c>; unknown values fall back to <c>off</c> with a stderr warning).</item>
     ///   <item><c>BENCH_MICROBENCH_PROFILE_TOPN</c> = positive integer (default <see cref="DefaultTopN"/>; non-positive or unparseable falls back to default).</item>
     ///   <item><c>BENCH_MICROBENCH_PROFILE_NETTRACE_PATH</c> = filesystem path or empty.</item>
+    ///   <item><c>BENCH_MICROBENCH_PROFILE_FILTER_NOISE</c> = <c>true</c> (default) | <c>false</c>; when false, attributes to the deepest named managed frame regardless of mock/engine classification.</item>
     /// </list>
     /// </summary>
     public static ProfilerOptions FromEnvironment()
@@ -87,7 +99,29 @@ public readonly record struct ProfilerOptions(
             nettrace = null;
         }
 
-        return new ProfilerOptions(mode, topN, nettrace);
+        var filterRaw = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_PROFILE_FILTER_NOISE");
+        var filterNoise = ParseFilterNoise(filterRaw);
+
+        return new ProfilerOptions(mode, topN, nettrace, filterNoise);
+    }
+
+    /// <summary>
+    /// Parses the <c>BENCH_MICROBENCH_PROFILE_FILTER_NOISE</c> toggle.
+    /// Defaults to <see langword="true"/> (filtering on) when unset; recognises
+    /// <c>false</c> / <c>0</c> / <c>no</c> / <c>off</c> (case-insensitive) as
+    /// the opt-out. Any other value falls back to the on default.
+    /// </summary>
+    public static bool ParseFilterNoise(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return true;
+        }
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "false" or "0" or "no" or "off" => false,
+            _ => true,
+        };
     }
 
     /// <summary>
