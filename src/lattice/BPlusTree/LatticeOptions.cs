@@ -928,6 +928,39 @@ public class LatticeOptions
     public const int DefaultWalMaxPendingBatches = 8;
 
     /// <summary>
+    /// Hard ceiling on how long a single per-shard WAL flush (the
+    /// <see cref="IWalStorageProvider.AppendEncodedBatchAsync"/> call,
+    /// and the post-failure tail resync against
+    /// <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>) may run
+    /// before it is cancelled and surfaced to callers as a
+    /// <see cref="TimeoutException"/>. Bounding the flush is what keeps
+    /// a provider call that hangs indefinitely (for example against a
+    /// partition left half-activated by a placement/reshard race) from
+    /// pinning its in-flight slot forever: without a ceiling the slot is
+    /// never removed from the in-flight chain, the chain saturates at
+    /// <see cref="WalMaxPendingBatches"/>, and every subsequent append
+    /// back-pressures behind a flush that will never settle - a
+    /// steady-state stall with no fault and no activation recycle. With
+    /// the ceiling the hung flush faults cleanly, the existing failure
+    /// handler resynchronises the dense-offset tail from the provider,
+    /// drains the chain, and callers retry. Defaults to
+    /// <see cref="DefaultWalFlushTimeout"/> (15 seconds) - above the
+    /// Azure Tables SDK's worst-case legitimate retry envelope under
+    /// sustained throttling (~10 seconds: three exponential backoffs
+    /// plus the call times), so a healthy flush never trips it, yet
+    /// well below the SDK's per-try network timeout so a true hang is
+    /// still caught and the wedged shard self-heals promptly. Set to
+    /// <see cref="Timeout.InfiniteTimeSpan"/> to disable the ceiling and
+    /// restore the historical unbounded-await behaviour; the registered
+    /// options validator rejects any other non-positive value at
+    /// first-resolve time.
+    /// </summary>
+    public TimeSpan WalFlushTimeout { get; set; } = DefaultWalFlushTimeout;
+
+    /// <summary>Default value for <see cref="WalFlushTimeout"/> (15 seconds).</summary>
+    public static readonly TimeSpan DefaultWalFlushTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Optional per-tree <see cref="IWalStorageProvider"/> resolver. When
     /// supplied, takes precedence over the DI-registered default for the
     /// matching tree id. <c>null</c> falls back to the singleton default

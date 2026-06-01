@@ -934,13 +934,42 @@ internal sealed class WalShardGrain(
             var providerStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await _provider.AppendEncodedBatchAsync(
-                    _treeId,
-                    _shardIndex,
-                    encodedArray.AsMemory(),
-                    offsetsArray.AsMemory(),
-                    encoder,
-                    CancellationToken.None).ConfigureAwait(true);
+                // Bound the provider call with the configured flush
+                // deadline. A provider call that hangs indefinitely (for
+                // example against a partition left half-activated by a
+                // placement/reshard race) would otherwise never settle,
+                // so this slot would never be removed from _inFlight, the
+                // chain would saturate at WalMaxPendingBatches, and every
+                // subsequent append would back-pressure behind a flush
+                // that can never complete - a steady-state stall with no
+                // fault and no activation recycle. Cancelling the call on
+                // the deadline turns that hang into a TimeoutException
+                // that the catch below routes through the normal failure
+                // handler, which resynchronises the tail and drains the
+                // chain.
+                var flushTimeout = Options.WalFlushTimeout;
+                using var deadline = flushTimeout == Timeout.InfiniteTimeSpan
+                    ? null
+                    : new CancellationTokenSource(flushTimeout);
+                try
+                {
+                    await _provider.AppendEncodedBatchAsync(
+                        _treeId,
+                        _shardIndex,
+                        encodedArray.AsMemory(),
+                        offsetsArray.AsMemory(),
+                        encoder,
+                        deadline?.Token ?? CancellationToken.None).ConfigureAwait(true);
+                }
+                catch (OperationCanceledException oce)
+                    when (deadline is not null && deadline.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        $"WAL flush for shard {_shardIndex} of tree '{_treeId}' "
+                        + $"offsets [{slot.StartOffset},{slot.EndOffsetExclusive}) "
+                        + $"exceeded the {flushTimeout} flush deadline "
+                        + $"({nameof(LatticeOptions.WalFlushTimeout)}).", oce);
+                }
             }
             finally
             {
@@ -1108,7 +1137,20 @@ internal sealed class WalShardGrain(
         // window's start.
         try
         {
-            var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, CancellationToken.None).ConfigureAwait(true);
+            // Bound the resync with the same flush deadline. If the
+            // original flush hung against a wedged partition, the tail
+            // read can hang the same way; without a ceiling the failure
+            // handler itself would never complete, the later in-flight
+            // slots it is draining would stay parked, and the recovery
+            // would wedge in place of the flush it was meant to rescue.
+            var resyncTimeout = Options.WalFlushTimeout;
+            using var deadline = resyncTimeout == Timeout.InfiniteTimeSpan
+                ? null
+                : new CancellationTokenSource(resyncTimeout);
+            var highest = await _provider.GetHighestOffsetAsync(
+                _treeId,
+                _shardIndex,
+                deadline?.Token ?? CancellationToken.None).ConfigureAwait(true);
             lock (_stateGate)
             {
                 _nextOffset = highest + 1;
