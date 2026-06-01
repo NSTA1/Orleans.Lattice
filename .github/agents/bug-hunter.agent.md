@@ -363,7 +363,7 @@ Append a row to the ledger:
 
 If the bug was confirmed and fixed:
 
-1. Re-read `.github/agents/feature-dev.agent.md`. The shipment workflow (Phase 6 build/hygiene gates, Phase 7 review with the mandatory memory-allocation pass and dep cross-reference flip, Phase 8 deliver) is non-negotiable - this agent does **not** ship PRs directly. Hand the branch off.
+1. Re-read `.github/agents/feature-dev.agent.md`. The shipment workflow (Phase 6 build/hygiene gates, Phase 7 review with the mandatory memory-allocation pass and feature-index sync, Phase 8 deliver) is non-negotiable - this agent does **not** ship PRs directly. Hand the branch off.
 2. The PR body must include:
    - The bug class and sub-class from the catalogue.
    - The minimal reproduction (inputs / sequence) from the finding file.

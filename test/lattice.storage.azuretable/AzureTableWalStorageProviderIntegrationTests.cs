@@ -816,7 +816,7 @@ public class AzureTableWalStorageProviderIntegrationTests
     [Test]
     public async Task ReadEncodedAsync_1024_entries_round_trip_through_decode_match_ReadAsync()
     {
-        // The roadmap acceptance row pins 1024-entry round-trip
+        // The acceptance row pins 1024-entry round-trip
         // equivalence between ReadAsync and ReadEncodedAsync.
         var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
 

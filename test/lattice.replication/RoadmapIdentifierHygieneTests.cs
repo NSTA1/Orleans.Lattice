@@ -5,10 +5,12 @@ namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
 /// Regression: replication feature-tracker identifiers (<c>R-XXX</c>) must
-/// appear only in roadmap files. They are meaningless outside of those
-/// files - source, tests, docs, XML doc comments, inline comments, test
-/// fixture names, and string literals must describe the behaviour by
-/// name and effect instead. See the "Documentation" section of
+/// not appear anywhere except <c>CHANGELOG.md</c> and the <c>features.md</c>
+/// issue indexes. They are meaningless outside of those locations - source,
+/// tests, docs, XML doc comments, inline comments, test fixture names, and
+/// string literals must describe the behaviour by name and effect, or link
+/// directly to the GitHub issue, instead. Feature planning lives on GitHub
+/// Issues; see the "Documentation" section of
 /// <c>.github/copilot-instructions.md</c>.
 /// </summary>
 [TestFixture]
@@ -24,12 +26,12 @@ public class RoadmapIdentifierHygieneTests
     /// <summary>
     /// Scans every <c>.cs</c> file under <c>src/</c> and <c>test/</c> plus
     /// every <c>.md</c> file under <c>docs/</c> and <c>.github/</c> and
-    /// fails if any replication tracker identifier is present. Any
-    /// <c>roadmap*.md</c> file and the few forward-looking design notes
-    /// listed below are the only permitted locations.
+    /// fails if any replication tracker identifier is present.
+    /// <c>CHANGELOG.md</c>, the <c>features.md</c> issue indexes, and this
+    /// test file are the only permitted locations.
     /// </summary>
     [Test]
-    public void Replication_tracker_identifiers_appear_only_in_roadmap()
+    public void Replication_tracker_identifiers_appear_only_in_changelog_and_feature_index()
     {
         var repoRoot = FindRepoRoot();
         var thisFile = Path.GetFullPath(
@@ -46,25 +48,14 @@ public class RoadmapIdentifierHygieneTests
         {
             var full = Path.GetFullPath(file);
             if (string.Equals(full, thisFile, StringComparison.OrdinalIgnoreCase)) continue;
-            // Any file whose name starts with "roadmap" and ends with ".md"
-            // is treated as a roadmap file. The canonical entry is
-            // `roadmap.md`; scoped follow-ons (e.g.
-            // `roadmap-cross-cluster-bootstrap.md`) are also legitimate
-            // locations for tracker identifiers, so they share the
-            // exemption.
+            // CHANGELOG.md, the issue trackers, and the per-package
+            // `features.md` issue indexes are the only legitimate homes for
+            // tracker identifiers. In the feature indexes the id appears only
+            // as the link text on its GitHub issue link; the whole file is
+            // exempted rather than asserting link structure line-by-line.
             var fileName = Path.GetFileName(full);
-            if (fileName.StartsWith("roadmap", StringComparison.OrdinalIgnoreCase)
-                && fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) continue;
-            // wal-design.md is a forward-looking design document that legitimately
-            // references tracker identifiers when discussing how design decisions
-            // map onto specific upcoming roadmap items. Exempted by convention.
-            if (string.Equals(Path.GetFileName(full), "wal-design.md", StringComparison.OrdinalIgnoreCase)) continue;
-            // wal-causal-plus.md is a forward-looking design note whose
-            // dependency tables explicitly map replication R-### items onto
-            // their core-side F-### prerequisites; rewriting those references
-            // to "name and effect" would erase the structural mapping the doc
-            // is built around. Exempted by convention.
-            if (string.Equals(Path.GetFileName(full), "wal-causal-plus.md", StringComparison.OrdinalIgnoreCase)) continue;
+            if (fileName.Equals("CHANGELOG.md", StringComparison.OrdinalIgnoreCase)) continue;
+            if (fileName.Equals("features.md", StringComparison.OrdinalIgnoreCase)) continue;
 
             var lines = File.ReadAllLines(full);
             for (int i = 0; i < lines.Length; i++)
@@ -79,8 +70,9 @@ public class RoadmapIdentifierHygieneTests
         }
 
         Assert.That(violations, Is.Empty,
-            "Replication tracker identifiers must appear only in roadmap.md. "
-            + "Rewrite these references to describe the behaviour by name and effect "
+            "Replication tracker identifiers must appear only in CHANGELOG.md and the "
+            + "features.md issue indexes. Rewrite these references to describe the "
+            + "behaviour by name and effect, or link directly to the GitHub issue "
             + "(see .github/copilot-instructions.md -> Documentation)." + Environment.NewLine
             + string.Join(Environment.NewLine, violations));
     }

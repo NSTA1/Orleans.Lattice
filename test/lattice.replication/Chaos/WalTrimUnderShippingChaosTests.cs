@@ -33,7 +33,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// fall-off-the-log scenario - one where the partition is so long
 /// the WAL retention window expires and B's cursor falls behind the
 /// oldest available entry - would require the snapshot transport
-/// and is tracked as a separate roadmap follow-up.
+/// and is tracked as a separate follow-up on GitHub Issues.
 /// </para>
 /// </remarks>
 [TestFixture]

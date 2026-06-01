@@ -62,8 +62,8 @@ snapshots a tree and restores it later in the same cluster, where the
 local tree is the authoritative source) but pays a per-key version
 round-trip on top of the leaf-chain enumeration. A future revision
 will swap to a single-pass streaming HLC-threshold scan once the core
-library exposes a version-bearing leaf-scan primitive (tracked on the
-[core roadmap](../../src/lattice/roadmap.md)); hosts that need a
+library exposes a version-bearing leaf-scan primitive (tracked on
+[GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice)); hosts that need a
 faster export today can register their own `ISnapshotProvider` via DI.
 
 **Cross-cluster bootstrap uses a separate receiver-side seam.**
