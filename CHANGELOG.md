@@ -10,14 +10,8 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Items merged into `main` after the v6.1.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
-### Changed
-
-- **Lower-allocation `VersionVector.Merge` / `VersionVector.Clone`.** Both now seed their backing dictionary via the `Dictionary` copy constructor (exact-capacity bulk-copy) instead of filling an empty dictionary entry-by-entry, eliminating the incremental resize churn on this hot CRDT path. `Merge` allocates ~15% less and `Clone` ~31% less per call, with `Merge` also ~18% faster at steady state. No public-API or behavioral change.
-- **Lower-allocation `OrMap.Clone` (and the `OrMap.Merge` / `OrMap.MergeFrom` paths that fold through it).** `Clone` now presizes its `Adds` / `Tombstones` backing dictionaries to the source key counts before the per-key list copy, eliminating the intermediate rehash-grow allocation. Each of clone, merge, and merge-from allocates ~224 bytes less per call. No public-API or behavioral change.
-
 ### Fixed
 
-- **Shard-root reactivation no longer clobbers a live persisted topology after a secondary-silo restart.** When a `ShardRootGrain` reactivated against not-yet-visible (empty) in-memory state during a membership change or silo restart, the first-touch root materialisation could seed a fresh single-leaf root over a shard that already held a promoted internal root and a populated leaf chain in storage, silently dropping every key under the rest of the tree (observed as a universe collapsing from 50 keys to 29 in the multi-silo restart chaos surface). The lazy root-seed path now re-reads persistent state and adopts any already-persisted topology before seeding, and serialises the seed sequence behind a per-activation gate so two interleaved first-touch turns cannot both create a root. Steady-state operations keep the zero-I/O fast path. Internal fix - no public API change.
 - **Azure Table storage-provider durability integration tests under the pipelined phase-2 default.**
 
 ### Candidate themes for a future major
@@ -27,6 +21,21 @@ Items merged into `main` after the v6.1.1 cut accumulate here under the `### Add
 - Migration guide (core roadmap **F-021**) to accompany any breaking changes.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.1.2] - 2026-06-01
+
+Core-library patch release (`Orleans.Lattice` only). Fixes a silent topology-loss defect on shard-root reactivation after a secondary-silo restart, plus two lower-allocation CRDT primitive optimizations. No public-API or behavioral changes; safe drop-in upgrade from v6.1.1.
+
+### Changed
+
+- **Lower-allocation `VersionVector.Merge` / `VersionVector.Clone`.** Both now seed their backing dictionary via the `Dictionary` copy constructor (exact-capacity bulk-copy) instead of filling an empty dictionary entry-by-entry, eliminating the incremental resize churn on this hot CRDT path. `Merge` allocates ~15% less and `Clone` ~31% less per call, with `Merge` also ~18% faster at steady state. No public-API or behavioral change.
+- **Lower-allocation `OrMap.Clone` (and the `OrMap.Merge` / `OrMap.MergeFrom` paths that fold through it).** `Clone` now presizes its `Adds` / `Tombstones` backing dictionaries to the source key counts before the per-key list copy, eliminating the intermediate rehash-grow allocation. Each of clone, merge, and merge-from allocates ~224 bytes less per call. No public-API or behavioral change.
+
+### Fixed
+
+- **Shard-root reactivation no longer clobbers a live persisted topology after a secondary-silo restart.** When a `ShardRootGrain` reactivated against not-yet-visible (empty) in-memory state during a membership change or silo restart, the first-touch root materialisation could seed a fresh single-leaf root over a shard that already held a promoted internal root and a populated leaf chain in storage, silently dropping every key under the rest of the tree (observed as a universe collapsing from 50 keys to 29 in the multi-silo restart chaos surface). The lazy root-seed path now re-reads persistent state and adopts any already-persisted topology before seeding, and serialises the seed sequence behind a per-activation gate so two interleaved first-touch turns cannot both create a root. Steady-state operations keep the zero-I/O fast path. Internal fix - no public API change.
 
 ---
 
@@ -215,7 +224,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.1...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.2...HEAD
+[6.1.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.1...v6.1.2
 [6.1.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.0...v6.1.1
 [6.0.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/NSTA1/Orleans.Lattice/compare/lattice-v5.1.0...v6.0.0
