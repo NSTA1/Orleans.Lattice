@@ -461,6 +461,7 @@ public class LatticeMicroBenchmarks
         BuildWalEncodeFixture();
         BuildShipFramingFixture();
         BuildVersionVectorFixture();
+        BuildOrMapFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -1606,6 +1607,15 @@ public class LatticeMicroBenchmarks
     private VersionVector _vvLeft = null!;
     private VersionVector _vvRight = null!;
 
+    // ===== OrMap primitive micro-suite operands =====
+    // Two same-shape OrMap<string, PnCounter> operands. PnCounter is an
+    // alloc-free value CRDT with a parameterless ctor, so the suite measures
+    // OrMap's own structural allocation (the per-key Adds/Tombstones lists and
+    // the backing dictionaries) rather than value-CRDT noise. Sized by
+    // BENCH_MICROBENCH_ORMAP_KEYS (default 16).
+    private OrMap<string, PnCounter> _orMapLeft = null!;
+    private OrMap<string, PnCounter> _orMapRight = null!;
+
     private void BuildShipFramingFixture()
     {
         // Self-contained ServiceProvider for the two Orleans serializers
@@ -1861,6 +1871,75 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "VersionVector clone")]
     public VersionVector VersionVector_Clone() => _vvLeft.Clone();
+
+    /// <summary>
+    /// Builds the two operand OR-maps for the <see cref="OrMap_Merge"/> /
+    /// <see cref="OrMap_Clone"/> / <see cref="OrMap_MergeFrom"/> micro-suite.
+    /// Both maps carry <c>BENCH_MICROBENCH_ORMAP_KEYS</c> keys (default 16),
+    /// each with a single live dot. The right map shares the upper half of its
+    /// key range with the left (forcing the per-key list-union branch in
+    /// <see cref="OrMap{TKey, TValue}.MergeFrom"/>) and the lower half is fresh
+    /// (forcing the whole-list copy branch). Values are alloc-free
+    /// <see cref="PnCounter"/>s so the measured allocation is OrMap's own
+    /// structural state (per-key lists + the Adds/Tombstones dictionaries),
+    /// not value-CRDT churn.
+    /// </summary>
+    private void BuildOrMapFixture()
+    {
+        var keys = ReadIntEnv("BENCH_MICROBENCH_ORMAP_KEYS", 16);
+        if (keys < 1) keys = 1;
+
+        _orMapLeft = new OrMap<string, PnCounter>();
+        _orMapRight = new OrMap<string, PnCounter>();
+
+        for (var i = 0; i < keys; i++)
+        {
+            var counter = new PnCounter();
+            counter.Increment("replica-left", i + 1);
+            _orMapLeft.Set($"key-{i:D4}", "replica-left", counter);
+        }
+
+        // Right map: upper half of the key range overlaps the left (distinct
+        // author dot => the union branch keeps both entries), lower half is a
+        // fresh key range (=> the new-key whole-list-copy branch).
+        var overlapStart = keys / 2;
+        for (var i = overlapStart; i < overlapStart + keys; i++)
+        {
+            var counter = new PnCounter();
+            counter.Increment("replica-right", i + 1);
+            _orMapRight.Set($"key-{i:D4}", "replica-right", counter);
+        }
+    }
+
+    /// <summary>
+    /// Allocating lattice merge: <see cref="OrMap{TKey, TValue}.Merge"/> clones
+    /// the left operand (the locus under test - the per-key list + dictionary
+    /// fill) then folds the right in. This is the allocation surface the
+    /// replication apply path pays on every OR-map reconcile.
+    /// </summary>
+    [Benchmark(Description = "OrMap merge (allocating)")]
+    public OrMap<string, PnCounter> OrMap_Merge() => OrMap<string, PnCounter>.Merge(_orMapLeft, _orMapRight);
+
+    /// <summary>
+    /// In-place merge: folds the right operand into a fresh clone of the left.
+    /// The clone is the control for the <see cref="OrMap_Merge"/> allocation;
+    /// each iteration mutates a throwaway copy, not the shared fixture.
+    /// </summary>
+    [Benchmark(Description = "OrMap mergeFrom (in-place)")]
+    public OrMap<string, PnCounter> OrMap_MergeFrom()
+    {
+        var target = _orMapLeft.Clone();
+        target.MergeFrom(_orMapRight);
+        return target;
+    }
+
+    /// <summary>
+    /// Deep copy: the per-key list-fill + Adds/Tombstones dictionary-fill
+    /// allocation that <see cref="OrMap{TKey, TValue}.Merge"/> pays on every
+    /// fold via its internal <c>left.Clone()</c>.
+    /// </summary>
+    [Benchmark(Description = "OrMap clone")]
+    public OrMap<string, PnCounter> OrMap_Clone() => _orMapLeft.Clone();
 }
 
 /// <summary>
