@@ -16,7 +16,8 @@ Items merged into `main` after the v6.1.3 cut accumulate here under the `### Add
 
 ### Fixed
 
-- **WAL flush deadline now recovers even when a storage-provider hang ignores cancellation (G-019).** The `LatticeOptions.WalFlushTimeout` deadline previously only fired if the provider observed the deadline's cancellation token; a provider call that hangs in a non-cancellable wait - a half-activated partition from a placement/reshard race, or an SDK retry loop that swallows cancellation - left the grain awaiting forever even after the deadline elapsed, so the in-flight slot never drained and the shard's append pipeline stayed wedged at `WalMaxPendingBatches`. The grain now also bounds its own wait on the provider task, so the deadline recovers the shard regardless of whether the provider honours cancellation. This closes the residual real-Azure saturation-rung wedge that survived the initial v6.1.3 fix.
+- **`GetManyAsync` now returns an all-or-nothing snapshot across a mid-saga reshard (G-020).** A batched read that spanned virtual slots migrating between shards could previously surface a mix of pre-saga and post-saga values for different keys in the same call - one key showing its old value while the rest showed the new - if the read landed in the narrow window where the registry shard map had already flipped to the destination but the destination had not yet received the source's final committed values for those slots. The shard-split coordinator now performs a final authoritative drain of the migrating slots *after* the source shard freezes its writes and *before* the registry map flips, so the destination provably owns every committed value before any reader can route to it. A batched read across a mid-saga reshard now observes either all old values or all new values, never a mix.
+- **WAL flush deadline now recovers even when a storage-provider hang ignores cancellation (G-019).**
 
 ### Candidate themes for a future major
 

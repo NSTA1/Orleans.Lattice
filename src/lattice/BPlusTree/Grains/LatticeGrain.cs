@@ -258,16 +258,20 @@ internal sealed partial class LatticeGrain(
         // discard-and-retry if the version moves while the fan-out is in
         // flight, re-resolving routing under the fresh map.
         //
-        // This map-version guard is a strict improvement but does not
-        // close the full mid-reshard atomic-visibility window: a
-        // writer/reader map-cache split-brain across the swap, plus a
-        // destination shard that holds a migrating slot's drained
-        // historical value before the in-flight saga's prepare-forward
-        // has landed, can still surface a mixed-round batch within a
-        // single observed map version. That residual race is a
-        // migration-layer (Swap-phase ordering) gap tracked in
-        // https://github.com/NSTA1/Orleans.Lattice/issues/551 and cannot
-        // be closed from the reader side alone.
+        // This map-version guard is the reader-side half of the
+        // mid-reshard atomic-visibility defense. It catches the case
+        // where the shard map is swapped while this fan-out is in flight,
+        // forcing a re-fan under the fresh map. The authoritative half
+        // lives in the split coordinator's Swap phase
+        // (TreeShardSplitGrain.SwapAsync), which performs a final
+        // moved-slot drain after the source freezes its writes and BEFORE
+        // the registry map flips, so the destination provably holds every
+        // committed value for a migrating slot by the time any reader can
+        // route to it. Together they close the window in which a reader
+        // could observe a migrating slot's drained historical value
+        // (IsMigrated=true, no shadow marker) for some keys while other
+        // keys show the post-saga value within a single observed map
+        // version.
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {

@@ -109,7 +109,18 @@ public sealed class FourShardClusterFixture
             // applies to every named options instance the resolver
             // pulls from IOptionsMonitor; this is the correct seam to
             // override the silo's default before any per-tree register.
-            siloBuilder.ConfigureLattice(o => o.DigestCoalescingWindowMs = 0);
+            siloBuilder.ConfigureLattice(o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                // The byte-accurate storage-usage poller fires immediately on
+                // startup and fans a cluster-wide roll-up across every
+                // registered tree, touching leaf/shard grains mid-test and
+                // republishing projection digests - which perturbs the
+                // synchronous read-after-write digest oracles this fixture
+                // serves. Pin it off; the poller has its own dedicated test
+                // surface. Zero is the documented opt-out.
+                o.StorageUsagePollInterval = TimeSpan.Zero;
+            });
             siloBuilder.UseInMemoryReminderService();
         }
     }

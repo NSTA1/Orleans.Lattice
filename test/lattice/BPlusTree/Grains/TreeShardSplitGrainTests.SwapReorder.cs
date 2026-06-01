@@ -2,6 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -56,5 +57,49 @@ public partial class TreeShardSplitGrainTests
         // and the source-side method is documented as idempotent. From
         // SwapAsync's own perspective the call count is exactly 1.
         await source.Received(1).EnterRejectPhaseAsync();
+    }
+
+    [Test]
+    public async Task Swap_runs_final_drain_after_reject_and_before_shard_map_flip()
+    {
+        var (grain, state, grainFactory, registry, source, _) = CreateGrain();
+        var original = ShardMap.CreateDefault(8, 2);
+        state.State.InProgress = true;
+        state.State.Phase = ShardSplitPhase.Swap;
+        state.State.SourceShardIndex = 0;
+        state.State.TargetShardIndex = 2;
+        state.State.MovedSlots = [2, 4, 6];
+        state.State.OriginalShardMap = original;
+
+        // The final drain scans the source leaf chain via GetLeftmostLeafIdAsync.
+        // A non-null leaf id with an empty next chain makes the drain do a single
+        // bounded pass so the ordering can be observed without a full leaf graph.
+        var leafId = GrainId.Create("bplusleaf", $"{TreeId}/0/leaf-0");
+        source.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
+
+        var leaf = Substitute.For<IBPlusLeafGrain>();
+        grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
+        leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(Task.FromResult(new StateDelta
+            {
+                Entries = new Dictionary<string, LwwValue<byte[]>>(),
+                Version = new VersionVector(),
+            }));
+        leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
+
+        await grain.SwapAsync();
+
+        // Final-drain invariant: the source must freeze its writes
+        // (EnterRejectPhaseAsync) and the destination must be re-synchronised
+        // by the final drain (GetLeftmostLeafIdAsync kicks the leaf-chain scan)
+        // BEFORE the registry map flips. If the drain ran after the flip, a
+        // reader could route to a destination that has not yet received the
+        // source's final committed values.
+        Received.InOrder(() =>
+        {
+            source.EnterRejectPhaseAsync();
+            source.GetLeftmostLeafIdAsync();
+            registry.SetShardMapAsync(Arg.Any<string>(), Arg.Any<ShardMap>());
+        });
     }
 }
