@@ -1047,11 +1047,79 @@ internal sealed partial class ShardRootGrain(
         await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            await EnsureRootSlowAsync();
+            await EnsureRootSlowWithDeadlineAsync();
         }
         finally
         {
             _ensureRootGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Bounds the one-time activation-readiness seed
+    /// (<see cref="EnsureRootSlowAsync"/>) with the per-tree
+    /// <see cref="LatticeOptions.ActivationReadyTimeout"/> deadline.
+    /// <para>
+    /// The seed runs a chain of cross-grain awaits the first time a
+    /// brand-new or freshly-reactivated shard prepares for an operation:
+    /// the defensive <c>state.ReadStateAsync</c> re-read, the tree-registry
+    /// <c>RegisterAsync</c>, the deterministic root-leaf init pair, and the
+    /// initial <c>WriteShardStateAsync</c>. During a startup reshard or a
+    /// membership change Orleans can reject or park one of those messages
+    /// (the target registry / leaf activation is not yet visible) and leave
+    /// the caller-side <c>await</c> neither completing nor faulting. Because
+    /// this seed runs while <c>_ensureRootGate</c> is held, a parked seed
+    /// pins the gate, every interleaved read/write turn on the activation
+    /// stalls behind it, the lattice grain's per-shard fan-out saturates at
+    /// its in-flight limit, and the whole write pipeline wedges with no
+    /// fault and no activation recycle until the caller-side Orleans
+    /// response deadline (default 3 minutes) expires. The deadline abandons
+    /// the parked seed (its eventual completion is harmlessly unobserved)
+    /// and faults the turn with a <see cref="TimeoutException"/>, which the
+    /// existing transient-exception retry envelope on every mutation path
+    /// catches and re-runs against refreshed routing / registration once
+    /// the startup reshard has settled.
+    /// </para>
+    /// <para>
+    /// Abandoning a parked seed never loses data or double-registers: every
+    /// cross-grain step in <see cref="EnsureRootSlowAsync"/> is idempotent
+    /// on retry (the registry registration by contract; the leaf-init pair
+    /// by its own cycle-1 guard; the shard-state write by the
+    /// re-read-and-recheck at the top of the slow path), and a failed
+    /// <c>WriteShardStateAsync</c> reverts the in-memory seed so a retry
+    /// re-runs cleanly.
+    /// </para>
+    /// <para>
+    /// When the configured timeout is <see cref="Timeout.InfiniteTimeSpan"/>
+    /// the seed is awaited unbounded, restoring the historical behaviour.
+    /// </para>
+    /// </summary>
+    private async Task EnsureRootSlowWithDeadlineAsync()
+    {
+        var timeout = (await GetOptionsAsync()).ActivationReadyTimeout;
+        if (timeout == Timeout.InfiniteTimeSpan)
+        {
+            await EnsureRootSlowAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            return;
+        }
+
+        using var deadline = new CancellationTokenSource(timeout);
+        try
+        {
+            await EnsureRootSlowAsync().WaitAsync(deadline.Token)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
+        {
+            LatticeMetrics.ActivationReadyTimeouts.Add(
+                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            throw new TimeoutException(
+                $"Activation-readiness seed for shard {MyShardIndex} of tree '{TreeId}' "
+                + $"exceeded the {timeout} seed deadline "
+                + $"({nameof(LatticeOptions.ActivationReadyTimeout)}); a registry or "
+                + "root-leaf RPC is likely parked because the target activation is not "
+                + "yet visible during a startup reshard or membership change. The seed is "
+                + "abandoned and the operation will be retried against refreshed routing.", oce);
         }
     }
 

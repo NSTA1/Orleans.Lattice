@@ -407,6 +407,14 @@ During a reshard swap the destination shard's ownership is changing, and Orleans
 
 Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
 
+### `ActivationReadyTimeout`
+
+Hard ceiling on how long a `ShardRootGrain`'s one-time activation-readiness seed may run before it is abandoned and surfaced to the preparing turn as a `TimeoutException` (default: 15 seconds). The seed is the chain of cross-grain awaits a brand-new or freshly-reactivated shard runs the first time it prepares for an operation: the defensive `state.ReadStateAsync` re-read, the tree-registry `RegisterAsync`, the deterministic root-leaf init pair, and the initial shard-state write.
+
+This seed runs while the shard holds its non-reentrant activation gate. During a startup reshard or a membership change Orleans can reject or park one of those messages (the target registry or leaf activation is not yet visible) and leave the caller-side `await` neither completing nor faulting. Without a ceiling the parked seed pins the gate, every interleaved read/write turn on the activation stalls behind it, the lattice grain's per-shard fan-out saturates at its in-flight limit, and the whole write pipeline wedges with no fault and no activation recycle until the caller-side Orleans response deadline (default 3 minutes) expires. With the ceiling the parked seed is abandoned and the turn faults cleanly with a `TimeoutException`, which the existing transient-exception retry envelope on every mutation path catches and re-runs against refreshed routing or registration once the startup reshard has settled. Abandoning a parked seed never loses data or double-registers: every cross-grain step is idempotent on retry, and a failed shard-state write reverts the in-memory seed so the retry re-runs cleanly.
+
+Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
 This option can be changed freely at any time. The new value takes effect on the next forward.
 
 ### `SoftDeleteDuration`

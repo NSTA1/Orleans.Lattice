@@ -196,4 +196,41 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ShardForwardTimeout)));
     }
+
+    [Test]
+    public void ActivationReadyTimeout_default_is_fifteen_seconds()
+    {
+        Assert.That(new LatticeOptions().ActivationReadyTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
+        Assert.That(LatticeOptions.DefaultActivationReadyTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
+    }
+
+    [Test]
+    public void ActivationReadyTimeout_positive_passes()
+    {
+        var result = Validate(o => o.ActivationReadyTimeout = TimeSpan.FromSeconds(5));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void ActivationReadyTimeout_infinite_passes()
+    {
+        var result = Validate(o => o.ActivationReadyTimeout = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void ActivationReadyTimeout_zero_fails()
+    {
+        var result = Validate(o => o.ActivationReadyTimeout = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ActivationReadyTimeout)));
+    }
+
+    [Test]
+    public void ActivationReadyTimeout_negative_fails()
+    {
+        var result = Validate(o => o.ActivationReadyTimeout = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ActivationReadyTimeout)));
+    }
 }
