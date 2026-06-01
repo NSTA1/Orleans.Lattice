@@ -162,4 +162,100 @@ public class ShardRootGrainEnsureRootTests
                 + "routing against a root id storage never accepted.");
         });
     }
+
+    [Test]
+    public async Task EnsureRoot_adopts_persisted_topology_revealed_on_reread_without_seeding()
+    {
+        // Regression for the reactivation topology-clobber bug: a shard
+        // root that reactivates against not-yet-visible (empty) in-memory
+        // state must NOT seed a single-leaf root over a live persisted
+        // topology. EnsureRootAsync re-reads storage before seeding; this
+        // test simulates storage revealing a promoted internal-root
+        // topology on that re-read.
+        var (grain, state) = CreateGrain();
+
+        var persistedRoot = GrainId.Create("internal", "persisted-internal-root");
+        // The grain activates believing the shard is brand new
+        // (RootNodeId null). Storage, however, already holds a promoted
+        // internal root + populated leaf chain. The defensive re-read in
+        // EnsureRootAsync surfaces it.
+        state.OnReadState = s =>
+        {
+            s.State.RootNodeId = persistedRoot;
+            s.State.RootIsLeaf = false;
+            s.State.IsRegistered = true;
+        };
+
+        // Act: trigger EnsureRootAsync via the cheapest public operation.
+        await grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.RootNodeId, Is.EqualTo(persistedRoot),
+                "EnsureRootAsync overwrote the persisted internal root "
+                + "with a freshly-seeded leaf id - the exact topology-loss "
+                + "mode that drops every key under the rest of the tree.");
+            Assert.That(state.State.RootIsLeaf, Is.False,
+                "EnsureRootAsync reset RootIsLeaf to true, collapsing a "
+                + "promoted internal root back to a single leaf.");
+            Assert.That(state.ReadCount, Is.GreaterThanOrEqualTo(1),
+                "EnsureRootAsync did not re-read storage before deciding "
+                + "to seed, so it cannot have observed the live topology.");
+            Assert.That(state.WriteCount, Is.Zero,
+                "EnsureRootAsync persisted a fresh root over an already-"
+                + "populated shard; adopting the persisted topology must "
+                + "not write.");
+        });
+    }
+
+    [Test]
+    public async Task EnsureRoot_seeds_single_leaf_when_storage_is_genuinely_empty()
+    {
+        // Counterpart to the adoption test: when the re-read confirms
+        // storage is genuinely empty (no prior root), EnsureRootAsync
+        // proceeds to seed the deterministic single-leaf root exactly as
+        // before. The defensive re-read must not suppress legitimate
+        // first-touch initialisation.
+        var (grain, state) = CreateGrain();
+
+        // Re-read finds nothing (default no-op hook leaves State empty).
+        await grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.RootNodeId, Is.Not.Null,
+                "EnsureRootAsync failed to seed a root on a genuinely "
+                + "empty shard; first-touch initialisation regressed.");
+            Assert.That(state.State.RootIsLeaf, Is.True,
+                "A freshly-seeded root must be a leaf.");
+            Assert.That(state.State.IsRegistered, Is.True,
+                "EnsureRootAsync did not register the tree on first touch.");
+            Assert.That(state.WriteCount, Is.EqualTo(1),
+                "First-touch seed must persist exactly one shard-root write.");
+        });
+    }
+
+    [Test]
+    public async Task EnsureRoot_under_concurrent_first_touch_seeds_exactly_one_root()
+    {
+        // The seed sequence runs behind a per-activation init gate so two
+        // interleaved [AlwaysInterleave] turns that both observe a null
+        // in-memory RootNodeId cannot both create-and-persist a leaf root
+        // (the second write would orphan the first turn's leaf). Drive two
+        // concurrent first-touch operations and assert a single seed.
+        var (grain, state) = CreateGrain();
+
+        var t1 = grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>());
+        var t2 = grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>());
+        await Task.WhenAll(t1, t2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.RootNodeId, Is.Not.Null,
+                "Concurrent first-touch left the shard with no root.");
+            Assert.That(state.WriteCount, Is.EqualTo(1),
+                "Concurrent first-touch seeded the root more than once; "
+                + "the init gate did not serialise the seed sequence.");
+        });
+    }
 }

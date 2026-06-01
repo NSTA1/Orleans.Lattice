@@ -16,7 +16,8 @@ Items merged into `main` after the v6.1.1 cut accumulate here under the `### Add
 
 ### Fixed
 
-- **Azure Table storage-provider durability integration tests under the pipelined phase-2 default.** The three Azurite-backed integration fixtures assert read-your-writes durability (TAIL advanced and entries readable the instant `AppendBatchAsync` returns), but the v6.0.1 throughput default `PipelinePhaseTwoCommits = true` defers a batch's phase-2 commit until the next append on the shard, so an immediate `GetHighestOffsetAsync` observed the pre-batch TAIL. The fixtures now pin `PipelinePhaseTwoCommits = false` so they keep asserting the synchronous durability contract; the pipelined path retains its dedicated white-box coverage. Test-only change - no production behavior or public API change.
+- **Shard-root reactivation no longer clobbers a live persisted topology after a secondary-silo restart.** When a `ShardRootGrain` reactivated against not-yet-visible (empty) in-memory state during a membership change or silo restart, the first-touch root materialisation could seed a fresh single-leaf root over a shard that already held a promoted internal root and a populated leaf chain in storage, silently dropping every key under the rest of the tree (observed as a universe collapsing from 50 keys to 29 in the multi-silo restart chaos surface). The lazy root-seed path now re-reads persistent state and adopts any already-persisted topology before seeding, and serialises the seed sequence behind a per-activation gate so two interleaved first-touch turns cannot both create a root. Steady-state operations keep the zero-I/O fast path. Internal fix - no public API change.
+- **Azure Table storage-provider durability integration tests under the pipelined phase-2 default.**
 
 ### Candidate themes for a future major
 
