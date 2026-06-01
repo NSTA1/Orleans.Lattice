@@ -95,6 +95,10 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ## Follow-up fixes
 
+### Planned / open
+
+- [FX-020](https://github.com/NSTA1/Orleans.Lattice/issues/538) - `EnsureRootAsync` clobbers live topology on concurrent shard-root reactivation after a secondary-silo restart
+
 ### Shipped
 
 - [FX-001](https://github.com/NSTA1/Orleans.Lattice/issues/401) - Leaf split publish ordering
