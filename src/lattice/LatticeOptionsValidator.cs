@@ -60,6 +60,13 @@ if (options.SnapshotLeafIdleTtl <= TimeSpan.Zero
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.SnapshotLeafIdleTtl)} must be positive or {nameof(Timeout.InfiniteTimeSpan)}.");
 }
+if (options.WalFlushTimeout <= TimeSpan.Zero
+    && options.WalFlushTimeout != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalFlushTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the in-flight flush deadline that prevents a hung provider call from wedging the in-flight chain).");
+}
 return ValidateOptionsResult.Success;
     }
 }

@@ -8,11 +8,7 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.1.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
-
-### Fixed
-
-- **Azure Table storage-provider durability integration tests under the pipelined phase-2 default.**
+Items merged into `main` after the v6.1.3 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 ### Candidate themes for a future major
 
@@ -21,6 +17,17 @@ Items merged into `main` after the v6.1.1 cut accumulate here under the `### Add
 - Migration guide (core roadmap **F-021**) to accompany any breaking changes.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.1.3] - 2026-06-02
+
+Core-library patch release (`Orleans.Lattice` only). Fixes a severe WAL durability-path defect where a hung storage-provider call could permanently wedge a shard's append pipeline, plus stabilises the Azure Table durability integration tests under the pipelined phase-2 default. No public-API breaks; adds the opt-out `LatticeOptions.WalFlushTimeout` knob. Safe drop-in upgrade from v6.1.2.
+
+### Fixed
+
+- **Azure Table storage-provider durability integration tests under the pipelined phase-2 default.**
+- **WAL flush no longer wedges a shard when a storage-provider call hangs (G-019).** A per-shard WAL flush now runs under a bounded `LatticeOptions.WalFlushTimeout` deadline (default 15 seconds): a provider append that hangs indefinitely - for example against a partition left half-activated by a placement/reshard race - is cancelled and surfaced as a `TimeoutException` routed through the normal failure handler, which resynchronises the dense-offset tail and drains the in-flight chain. Previously such a hang pinned its in-flight slot forever, saturating the chain at `WalMaxPendingBatches` and freezing every subsequent append on that shard with no fault and no activation recycle. Set `WalFlushTimeout` to `InfiniteTimeSpan` to restore the historical unbounded await.
 
 ---
 

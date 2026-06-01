@@ -91,6 +91,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
+| [`WalFlushTimeout`](#walflushtimeout) | `TimeSpan` | 15 seconds | Yes |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 8 | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
@@ -465,6 +466,16 @@ This option can be changed freely at any time. The new value takes effect on the
 Maximum number of WAL entries the partition grain coalesces into a single storage flush (default: 100). Lower values reduce per-entry flush latency at the cost of throughput. Whichever of `WalMaxBatchEntries` or `WalMaxBatchBytes` is reached first triggers the flush.
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
+
+### `WalFlushTimeout`
+
+Hard ceiling on how long a single per-shard WAL flush may run before it is cancelled and surfaced to callers as a `TimeoutException` (default: 15 seconds). The ceiling covers both the storage-provider append and the post-failure tail resync.
+
+Bounding the flush is what keeps a provider call that hangs indefinitely - for example against a partition left half-activated by a placement/reshard race - from pinning its in-flight slot forever. Without a ceiling the hung slot is never removed from the in-flight chain, the chain saturates at `WalMaxPendingBatches`, and every subsequent append back-pressures behind a flush that can never settle (a steady-state stall with no fault and no activation recycle). With the ceiling the hung flush faults cleanly, the existing failure handler resynchronises the dense-offset tail from the provider, drains the chain, and callers retry.
+
+The default of 15 seconds sits above the Azure Tables SDK's worst-case legitimate retry envelope under sustained throttling (~10 seconds: three exponential backoffs plus the call times), so a healthy flush never trips it, yet well below the SDK's per-try network timeout so a true hang is still caught and the wedged shard self-heals promptly. Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. The new value takes effect on the next flush.
 
 ### `WalMaxPendingBatches`
 

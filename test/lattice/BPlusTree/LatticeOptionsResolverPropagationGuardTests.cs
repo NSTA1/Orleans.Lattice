@@ -90,6 +90,7 @@ public class LatticeOptionsResolverPropagationGuardTests
             "WalMaxBatchEntries",
             "WalMaxBatchBytes",
             "WalMaxPendingBatches",
+            "WalFlushTimeout",
             // Per-tree-registry-driven gates with their own resolver
             // logic outside LatticeOptionsResolver.
             "PublishEvents",                // PublishEventsGate consults registry entry

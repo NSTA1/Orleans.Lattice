@@ -122,4 +122,41 @@ public class LatticeOptionsValidatorTests
         Assert.That(new LatticeOptions().WalPartitions, Is.EqualTo(8));
         Assert.That(LatticeOptions.DefaultWalPartitions, Is.EqualTo(8));
     }
+
+    [Test]
+    public void WalFlushTimeout_default_is_fifteen_seconds()
+    {
+        Assert.That(new LatticeOptions().WalFlushTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
+        Assert.That(LatticeOptions.DefaultWalFlushTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));
+    }
+
+    [Test]
+    public void WalFlushTimeout_positive_passes()
+    {
+        var result = Validate(o => o.WalFlushTimeout = TimeSpan.FromSeconds(5));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalFlushTimeout_infinite_passes()
+    {
+        var result = Validate(o => o.WalFlushTimeout = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalFlushTimeout_zero_fails()
+    {
+        var result = Validate(o => o.WalFlushTimeout = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalFlushTimeout)));
+    }
+
+    [Test]
+    public void WalFlushTimeout_negative_fails()
+    {
+        var result = Validate(o => o.WalFlushTimeout = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalFlushTimeout)));
+    }
 }
