@@ -55,10 +55,12 @@ public sealed class VersionVector : ICrdt<VersionVector>
         ArgumentNullException.ThrowIfNull(right);
         var result = new VersionVector();
 
-        foreach (var (id, clock) in left.Entries)
-        {
-            result.Entries[id] = clock;
-        }
+        // Seed the result from the left vector via the dictionary copy
+        // constructor: it presizes the backing store to left.Entries.Count
+        // exactly and bulk-copies, avoiding the 2-3 incremental Resize() grows
+        // the previous entry-by-entry fill paid. The right-hand fold below then
+        // only grows the dictionary for replica ids unique to the right.
+        result.Entries = new Dictionary<string, HybridLogicalClock>(left.Entries);
 
         foreach (var (id, clock) in right.Entries)
         {
@@ -129,12 +131,14 @@ public sealed class VersionVector : ICrdt<VersionVector>
     /// <summary>Creates a deep copy of this version vector.</summary>
     public VersionVector Clone()
     {
-        var copy = new VersionVector();
-        foreach (var (id, clock) in Entries)
+        // The dictionary copy constructor presizes to Entries.Count exactly and
+        // bulk-copies the entries, eliminating the incremental Resize() grows
+        // the previous entry-by-entry fill paid. HybridLogicalClock is an
+        // immutable value type, so a shallow per-entry copy is a deep copy.
+        return new VersionVector
         {
-            copy.Entries[id] = clock;
-        }
-        return copy;
+            Entries = new Dictionary<string, HybridLogicalClock>(Entries),
+        };
     }
 
     /// <summary>
