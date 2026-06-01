@@ -13,6 +13,7 @@ Items merged into `main` after the v6.1.1 cut accumulate here under the `### Add
 ### Changed
 
 - **Lower-allocation `VersionVector.Merge` / `VersionVector.Clone`.** Both now seed their backing dictionary via the `Dictionary` copy constructor (exact-capacity bulk-copy) instead of filling an empty dictionary entry-by-entry, eliminating the incremental resize churn on this hot CRDT path. `Merge` allocates ~15% less and `Clone` ~31% less per call, with `Merge` also ~18% faster at steady state. No public-API or behavioral change.
+- **Lower-allocation `OrMap.Clone` (and the `OrMap.Merge` / `OrMap.MergeFrom` paths that fold through it).** `Clone` now presizes its `Adds` / `Tombstones` backing dictionaries to the source key counts before the per-key list copy, eliminating the intermediate rehash-grow allocation. Each of clone, merge, and merge-from allocates ~224 bytes less per call. No public-API or behavioral change.
 
 ### Fixed
 
