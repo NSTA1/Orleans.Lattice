@@ -121,4 +121,57 @@ public sealed class ProfilerOptionsTests
         Assert.That(new ProfilerOptions(ProfileMode.Both, 10, null).CapturesAllocations, Is.True);
         Assert.That(new ProfilerOptions(ProfileMode.Both, 10, null).CapturesCpu, Is.True);
     }
+
+    [Test]
+    public void FilterNoiseFrames_defaults_to_true()
+    {
+        Assert.That(new ProfilerOptions(ProfileMode.Alloc, 10, null).FilterNoiseFrames, Is.True);
+    }
+
+    [Test]
+    public void ParseFilterNoise_defaults_to_true_when_unset()
+    {
+        Assert.That(ProfilerOptions.ParseFilterNoise(null), Is.True);
+        Assert.That(ProfilerOptions.ParseFilterNoise(string.Empty), Is.True);
+        Assert.That(ProfilerOptions.ParseFilterNoise("   "), Is.True);
+    }
+
+    [Test]
+    public void ParseFilterNoise_recognises_opt_out_values_case_insensitive()
+    {
+        Assert.That(ProfilerOptions.ParseFilterNoise("false"), Is.False);
+        Assert.That(ProfilerOptions.ParseFilterNoise("FALSE"), Is.False);
+        Assert.That(ProfilerOptions.ParseFilterNoise("0"), Is.False);
+        Assert.That(ProfilerOptions.ParseFilterNoise("no"), Is.False);
+        Assert.That(ProfilerOptions.ParseFilterNoise("off"), Is.False);
+    }
+
+    [Test]
+    public void ParseFilterNoise_unknown_value_falls_back_to_true()
+    {
+        Assert.That(ProfilerOptions.ParseFilterNoise("true"), Is.True);
+        Assert.That(ProfilerOptions.ParseFilterNoise("garbage"), Is.True);
+    }
+
+    [Test]
+    public void FromEnvironment_resolves_filter_noise_opt_out()
+    {
+        var priorMode = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_PROFILE");
+        var priorFilter = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_PROFILE_FILTER_NOISE");
+        try
+        {
+            Environment.SetEnvironmentVariable("BENCH_MICROBENCH_PROFILE", "alloc");
+
+            Environment.SetEnvironmentVariable("BENCH_MICROBENCH_PROFILE_FILTER_NOISE", "false");
+            Assert.That(ProfilerOptions.FromEnvironment().FilterNoiseFrames, Is.False);
+
+            Environment.SetEnvironmentVariable("BENCH_MICROBENCH_PROFILE_FILTER_NOISE", null);
+            Assert.That(ProfilerOptions.FromEnvironment().FilterNoiseFrames, Is.True);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BENCH_MICROBENCH_PROFILE", priorMode);
+            Environment.SetEnvironmentVariable("BENCH_MICROBENCH_PROFILE_FILTER_NOISE", priorFilter);
+        }
+    }
 }

@@ -328,12 +328,21 @@ internal sealed class EventPipeProfilerSession : IDisposable
     }
 
     /// <summary>
-    /// Resolves the deepest named managed frame on the event's call stack,
-    /// returning <c>(method, module)</c>. Falls back to
-    /// <c>("[unknown]", "")</c> when the stack is empty or contains only
-    /// unmanaged / unresolved frames.
+    /// Resolves the most relevant named managed frame on the event's call
+    /// stack, returning <c>(method, module)</c>.
+    /// <para>
+    /// When noise-frame filtering is enabled (the default, see
+    /// <see cref="ProfilerOptions.FilterNoiseFrames"/>), the walker skips
+    /// measurement-substrate frames (test mocks, the BDN engine, async-builder
+    /// plumbing) per <see cref="FrameFilter.IsProductFrame"/> and attributes
+    /// the cost to the nearest <em>product</em> frame instead. If the stack
+    /// contains only noise / unresolved frames, it falls back to the deepest
+    /// named managed frame so the cost is never silently dropped.
+    /// </para>
+    /// Falls back to <c>("[unknown]", "")</c> only when the stack is empty or
+    /// contains no named managed frame at all.
     /// </summary>
-    private static (string Method, string Module) ResolveDeepestManagedFrame(TraceEvent data)
+    private (string Method, string Module) ResolveDeepestManagedFrame(TraceEvent data)
     {
         TraceCallStack? stack;
         try
@@ -344,6 +353,11 @@ internal sealed class EventPipeProfilerSession : IDisposable
         {
             return ("[unknown]", string.Empty);
         }
+
+        // First named managed frame regardless of product/noise classification;
+        // used as the fallback when filtering rejects the entire stack.
+        (string Method, string Module)? deepestNamed = null;
+
         while (stack is not null)
         {
             var address = stack.CodeAddress;
@@ -353,10 +367,15 @@ internal sealed class EventPipeProfilerSession : IDisposable
                 && !fullName.StartsWith("?", StringComparison.Ordinal))
             {
                 var module = address?.ModuleFile?.Name ?? string.Empty;
-                return (fullName, module);
+                deepestNamed ??= (fullName, module);
+
+                if (!_options.FilterNoiseFrames || FrameFilter.IsProductFrame(fullName))
+                {
+                    return (fullName, module);
+                }
             }
             stack = stack.Caller;
         }
-        return ("[unknown]", string.Empty);
+        return deepestNamed ?? ("[unknown]", string.Empty);
     }
 }

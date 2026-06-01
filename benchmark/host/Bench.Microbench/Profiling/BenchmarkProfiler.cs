@@ -88,7 +88,7 @@ public sealed class BenchmarkProfiler : IDisposable
         }
 
         Console.WriteLine(
-            $"[microbench] profiler started (mode={options.Mode.ToString().ToLowerInvariant()}, topN={options.TopN})"
+            $"[microbench] profiler started (mode={options.Mode.ToString().ToLowerInvariant()}, topN={options.TopN}, filterNoise={options.FilterNoiseFrames.ToString().ToLowerInvariant()})"
             + (string.IsNullOrEmpty(options.NetTraceOutputPath) ? string.Empty : $", nettrace={options.NetTraceOutputPath}"));
 
         return new BenchmarkProfiler(options, aggregator, session, profileJsonOutputPath, runId, gitSha);

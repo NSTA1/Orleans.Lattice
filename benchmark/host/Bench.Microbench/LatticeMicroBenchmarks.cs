@@ -460,6 +460,7 @@ public class LatticeMicroBenchmarks
         BuildAtomicReadFixture();
         BuildWalEncodeFixture();
         BuildShipFramingFixture();
+        BuildVersionVectorFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -1593,6 +1594,18 @@ public class LatticeMicroBenchmarks
     private static readonly int[] ShipPayloadBytes = [64, 1024, 16 * 1024];
     private static readonly int[] ShipEntryCounts = [16, 64, 256, 1024];
 
+    // ===== VersionVector primitive micro-suite =====
+    // Pure-compute CRDT fixtures that route through NO mock IGrainFactory and
+    // NO BDN-driven async chain - so the EventPipe profiler attributes every
+    // allocation directly to Orleans.Lattice.Primitives.VersionVector frames
+    // with zero mock/Castle contamination. Two same-size operand vectors with
+    // a controllable overlap fraction exercise the pointwise-max Merge/Clone
+    // allocation surface. Sized by BENCH_MICROBENCH_VV_ENTRIES (default 16),
+    // which mirrors a typical replica-fan vector in the bidirectional-
+    // replication scenario (a handful of clusters x a few shards each).
+    private VersionVector _vvLeft = null!;
+    private VersionVector _vvRight = null!;
+
     private void BuildShipFramingFixture()
     {
         // Self-contained ServiceProvider for the two Orleans serializers
@@ -1778,6 +1791,76 @@ public class LatticeMicroBenchmarks
             }
         }
     }
+
+    /// <summary>
+    /// Builds the two operand version vectors for the
+    /// <see cref="VersionVector_Merge"/> / <see cref="VersionVector_Clone"/> /
+    /// <see cref="VersionVector_MergeFrom"/> micro-suite. Both vectors carry
+    /// <c>BENCH_MICROBENCH_VV_ENTRIES</c> entries (default 16). The right
+    /// vector shares half its replica ids with the left (so the pointwise-max
+    /// merge exercises both the "key present, compare clocks" and "key absent,
+    /// insert" branches) and carries strictly newer clocks on the overlap so
+    /// the comparison branch actually replaces.
+    /// </summary>
+    private void BuildVersionVectorFixture()
+    {
+        var entries = ReadIntEnv("BENCH_MICROBENCH_VV_ENTRIES", 16);
+        if (entries < 1) entries = 1;
+
+        _vvLeft = new VersionVector();
+        _vvRight = new VersionVector();
+
+        // Left replicas: replica-00 .. replica-(n-1), each ticked once.
+        for (var i = 0; i < entries; i++)
+        {
+            _vvLeft.Tick($"replica-{i:D2}");
+        }
+
+        // Right replicas: the upper half overlaps the left key range (forcing
+        // the compare-and-replace branch with a strictly newer clock), the
+        // lower half is fresh (forcing the insert branch).
+        var overlapStart = entries / 2;
+        for (var i = overlapStart; i < overlapStart + entries; i++)
+        {
+            var id = $"replica-{i:D2}";
+            // Tick twice so overlap clocks are strictly greater than the left's
+            // single tick, guaranteeing Merge takes the replace path.
+            _vvRight.Tick(id);
+            _vvRight.Tick(id);
+        }
+    }
+
+    /// <summary>
+    /// Allocating pointwise-max merge: returns a fresh <see cref="VersionVector"/>
+    /// whose <c>Entries</c> dictionary is populated from both operands. This is
+    /// the allocation surface the replication apply path pays on every digest
+    /// reconcile; isolating it here attributes the dictionary-grow and
+    /// per-vector allocation directly to the primitive with zero mock noise.
+    /// </summary>
+    [Benchmark(Description = "VersionVector merge (allocating)")]
+    public VersionVector VersionVector_Merge() => VersionVector.Merge(_vvLeft, _vvRight);
+
+    /// <summary>
+    /// In-place pointwise-max merge: folds the right operand into a fresh clone
+    /// of the left without allocating a result vector. The clone is the control
+    /// for the <see cref="VersionVector_Merge"/> allocation - it keeps the
+    /// benchmark idempotent (each iteration mutates a throwaway copy, not the
+    /// shared fixture) while measuring the <c>MergeFrom</c> per-entry cost.
+    /// </summary>
+    [Benchmark(Description = "VersionVector mergeFrom (in-place)")]
+    public VersionVector VersionVector_MergeFrom()
+    {
+        var target = _vvLeft.Clone();
+        target.MergeFrom(_vvRight);
+        return target;
+    }
+
+    /// <summary>
+    /// Deep copy: the per-entry dictionary-fill allocation the apply path pays
+    /// when snapshotting a vector before a speculative merge.
+    /// </summary>
+    [Benchmark(Description = "VersionVector clone")]
+    public VersionVector VersionVector_Clone() => _vvLeft.Clone();
 }
 
 /// <summary>
