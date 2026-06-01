@@ -127,4 +127,104 @@ public partial class WalShardGrainTests
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
     }
+
+    [Test]
+    public async Task AppendAsync_uncancellable_hung_provider_flush_faults_with_timeout()
+    {
+        // The wedge this targets: a provider whose hang does NOT observe
+        // the flush deadline's cancellation token (a non-cancellable SDK
+        // wait, an internal retry loop that swallows cancellation, or a
+        // genuinely wedged half-activated partition). The token-only bound
+        // could not break such a hang - the CTS would fire but the grain's
+        // own await would never return, so the slot would never leave the
+        // in-flight chain. The grain must bound its OWN await so recovery
+        // still fires.
+        var hanging = new UncancellableHangingWalStorageProvider(new InMemoryWalStorageProvider());
+        var grain = await CreateGrainAsync(hanging, new LatticeOptions
+        {
+            WalMaxBatchEntries = 1,
+            WalMaxPendingBatches = 1,
+            WalFlushTimeout = TimeSpan.FromMilliseconds(100),
+        });
+
+        Assert.That(
+            async () => await grain.AppendAsync(MakeEntry("a"), CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5)),
+            Throws.TypeOf<TimeoutException>());
+    }
+
+    [Test]
+    public async Task AppendAsync_uncancellable_hung_flush_does_not_wedge_the_in_flight_chain()
+    {
+        // After a flush hangs in a token-ignoring provider call and the
+        // grain's own deadline trips, the in-flight chain must still drain
+        // so a subsequent append succeeds. Without the grain bounding its
+        // own await, the abandoned provider task would pin the slot at the
+        // cap forever and this second append would never complete - the
+        // exact 'inFlight pinned at WalMaxPendingBatches, no recovery'
+        // wedge observed on the real-Azure saturation rung.
+        var inner = new InMemoryWalStorageProvider();
+        var hanging = new UncancellableHangingWalStorageProvider(inner, hangCount: 1);
+        var grain = await CreateGrainAsync(hanging, new LatticeOptions
+        {
+            WalMaxBatchEntries = 1,
+            WalMaxPendingBatches = 1,
+            WalFlushTimeout = TimeSpan.FromMilliseconds(100),
+        });
+
+        Assert.That(
+            async () => await grain.AppendAsync(MakeEntry("a"), CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5)),
+            Throws.TypeOf<TimeoutException>());
+
+        // The chain has drained even though the first provider call is
+        // still hung; the next append flows through to the inner provider.
+        var offset = await grain.AppendAsync(MakeEntry("b"), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(offset, Is.EqualTo(0L));
+    }
+
+    /// <summary>
+    /// Provider whose first <paramref name="hangCount"/> append calls
+    /// block forever and deliberately <b>ignore</b> the supplied
+    /// cancellation token; subsequent calls forward to the inner
+    /// provider. Models a wedged half-activated partition whose hang the
+    /// flush deadline's token cannot break, so only the grain bounding its
+    /// own await can recover. The parked task is intentionally never
+    /// released; the grain abandons it on the deadline exactly as the
+    /// production path does, and it is harmlessly collected at process
+    /// exit.
+    /// </summary>
+    private sealed class UncancellableHangingWalStorageProvider(
+        IWalStorageProvider inner,
+        int hangCount = int.MaxValue) : IWalStorageProvider
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+
+        public async Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
+        {
+            var ordinal = Interlocked.Increment(ref _calls);
+            if (ordinal <= hangCount)
+            {
+                // Hang on a TCS that the flush deadline's token cannot
+                // cancel - the wait observes no token at all.
+                await _release.Task.ConfigureAwait(false);
+                return;
+            }
+            await inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken).ConfigureAwait(false);
+        }
+
+        public IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken)
+            => inner.ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken);
+
+        public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
+            => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
+    }
 }
