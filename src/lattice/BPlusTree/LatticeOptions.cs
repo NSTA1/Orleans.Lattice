@@ -1060,6 +1060,41 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultStorageUsagePollInterval = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Hard ceiling on how long a single outbound shard-to-shard write
+    /// forward (the shadow-forward and cross-shard migration forwards a
+    /// <c>ShardRootGrain</c> issues to a sibling shard while an adaptive
+    /// split or online resize is in flight) may run before it is
+    /// abandoned and surfaced to the forwarding turn as a
+    /// <see cref="TimeoutException"/>. Bounding the forward is what keeps
+    /// a forwarded write that targets a shard whose ownership is changing
+    /// during the reshard swap phase - where Orleans can reject the
+    /// outbound message and leave the caller-side await neither completing
+    /// nor faulting - from pinning the foreground write pipeline
+    /// indefinitely: without a ceiling the forwarding turn never returns,
+    /// the lattice grain's per-shard fan-out saturates at its in-flight
+    /// limit, and every subsequent write back-pressures behind a forward
+    /// that will never settle - a steady-state stall with no fault and no
+    /// activation recycle. With the ceiling the parked forward faults
+    /// cleanly; convergence on the destination shard is already guaranteed
+    /// by last-writer-wins plus the split coordinator's background drain,
+    /// so the foreground write commits locally and the existing
+    /// stale-routing retry loop re-runs the operation against refreshed
+    /// routing once the swap has settled. Defaults to
+    /// <see cref="DefaultShardForwardTimeout"/> (15 seconds) - above the
+    /// worst-case legitimate cross-shard RPC envelope under a healthy
+    /// split, yet well below the caller-side budget so a true park is
+    /// caught and the wedged pipeline self-heals promptly. Set to
+    /// <see cref="Timeout.InfiniteTimeSpan"/> to disable the ceiling and
+    /// restore the historical unbounded-await behaviour; the registered
+    /// options validator rejects any other non-positive value at
+    /// first-resolve time.
+    /// </summary>
+    public TimeSpan ShardForwardTimeout { get; set; } = DefaultShardForwardTimeout;
+
+    /// <summary>Default value for <see cref="ShardForwardTimeout"/> (15 seconds).</summary>
+    public static readonly TimeSpan DefaultShardForwardTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's

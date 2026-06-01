@@ -67,6 +67,13 @@ if (options.WalFlushTimeout <= TimeSpan.Zero
         $"{nameof(LatticeOptions.WalFlushTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the in-flight flush deadline that prevents a hung provider call from wedging the in-flight chain).");
 }
+if (options.ShardForwardTimeout <= TimeSpan.Zero
+    && options.ShardForwardTimeout != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.ShardForwardTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the outbound shard-forward deadline that prevents a parked forward during reshard swap from wedging the write pipeline).");
+}
 return ValidateOptionsResult.Success;
     }
 }

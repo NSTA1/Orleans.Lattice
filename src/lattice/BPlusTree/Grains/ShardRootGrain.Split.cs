@@ -297,7 +297,8 @@ internal sealed partial class ShardRootGrain
         if (!sip.IsMovedSlot(slot)) return;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
-        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = value }, isCrossShardMigration: true);
+        await ForwardWithDeadlineAsync(() =>
+            target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = value }, isCrossShardMigration: true));
     }
 
     /// <summary>
@@ -436,9 +437,9 @@ internal sealed partial class ShardRootGrain
         if (LatticePreparedContext.Current && LatticeTransactionContext.Current != Guid.Empty)
         {
             if (expiresAtTicks > 0L)
-                await target.SetAsync(key, value, expiresAtTicks);
+                await ForwardWithDeadlineAsync(() => target.SetAsync(key, value, expiresAtTicks));
             else
-                await target.SetAsync(key, value);
+                await ForwardWithDeadlineAsync(() => target.SetAsync(key, value));
             return;
         }
 
@@ -453,7 +454,8 @@ internal sealed partial class ShardRootGrain
         var raw = await leaf.GetRawEntryAsync(key);
         if (raw is null || raw.Value.IsTombstone) return; // deleted/missing - handled by cleanup phase.
 
-        await target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() }, isCrossShardMigration: true);
+        await ForwardWithDeadlineAsync(() =>
+            target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() }, isCrossShardMigration: true));
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)

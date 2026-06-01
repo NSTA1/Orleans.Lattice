@@ -512,6 +512,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (path) (rate(orleans_lattice_leaf_digest_publishes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{path}}" }
       ]
+    },
+    {
+      "id": 113,
+      "title": "Shard-forward timeouts (ops/s) - reshard swap-phase wedge guard",
+      "description": "shard_root.forward.timeouts is the rate of outbound shard-to-shard write forwards abandoned after exceeding ShardForwardTimeout. Zero in steady state. A sustained non-zero rate during a resize means a forward parked against a sibling shard whose ownership was changing during the reshard swap; the forward was faulted as a TimeoutException so the foreground write pipeline could make progress and the write retried against refreshed routing. A persistent non-zero rate outside a resize window indicates the swap phase is outlasting the configured forward deadline.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_shard_root_forward_timeouts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+      ]
     }
   ]
 }

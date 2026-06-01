@@ -1,7 +1,6 @@
 using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
-
 /// <summary>
 /// Online shadow-forwarding primitive for the shard root.
 /// <para>
@@ -91,7 +90,71 @@ internal sealed partial class ShardRootGrain
     private Task ForwardShadowAsync<TState>(TState state, Func<IShardRootGrain, TState, Task> forwardAction)
     {
         var target = TryGetShadowTarget();
-        return target is null ? Task.CompletedTask : forwardAction(target, state);
+        // Bound the outbound forward with the per-tree ShardForwardTimeout so a
+        // forward parked against a shard whose ownership is changing during the
+        // reshard swap phase cannot pin the foreground write turn indefinitely.
+        // The no-forward fast path stays synchronous (Task.CompletedTask) so
+        // TrackShadowForward's IsCompleted check still short-circuits.
+        return target is null
+            ? Task.CompletedTask
+            : ForwardWithDeadlineAsync(() => forwardAction(target, state));
+    }
+
+    /// <summary>
+    /// Bounds <paramref name="forwardCall"/> - a single outbound shard-to-shard
+    /// write forward (online-resize shadow forward or adaptive-split migration
+    /// forward) - with the per-tree
+    /// <see cref="LatticeOptions.ShardForwardTimeout"/> deadline.
+    /// <para>
+    /// During the reshard swap phase the destination shard's ownership is
+    /// changing, and Orleans can reject the outbound forward message and leave
+    /// the caller-side <c>await</c> neither completing nor faulting. Without a
+    /// ceiling the forwarding turn never returns, the lattice grain's per-shard
+    /// fan-out saturates at its in-flight limit, and the whole write pipeline
+    /// wedges with no fault and no activation recycle. The deadline abandons
+    /// the parked forward (its eventual completion is harmlessly unobserved)
+    /// and faults the turn with a <see cref="TimeoutException"/>, which the
+    /// existing transient-exception retry envelope on every mutation path
+    /// catches and re-runs against refreshed routing once the swap has settled.
+    /// </para>
+    /// <para>
+    /// Abandoning a forward never loses data: convergence on the destination
+    /// shard is independently guaranteed by last-writer-wins plus the split
+    /// coordinator's authoritative leaf-chain drain (Drain phase and the
+    /// Complete-phase final drain), so the entry reaches the destination via
+    /// the background sweep even when this per-write forward is dropped.
+    /// </para>
+    /// <para>
+    /// When the configured timeout is <see cref="Timeout.InfiniteTimeSpan"/>
+    /// the call is awaited unbounded, restoring the historical behaviour.
+    /// </para>
+    /// </summary>
+    private async Task ForwardWithDeadlineAsync(Func<Task> forwardCall)
+    {
+        var timeout = (await GetOptionsAsync()).ShardForwardTimeout;
+        if (timeout == Timeout.InfiniteTimeSpan)
+        {
+            await forwardCall().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            return;
+        }
+
+        using var deadline = new CancellationTokenSource(timeout);
+        try
+        {
+            await forwardCall().WaitAsync(deadline.Token)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
+        {
+            LatticeMetrics.ShardForwardTimeouts.Add(
+                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            throw new TimeoutException(
+                $"Outbound shard forward from shard {MyShardIndex} of tree '{TreeId}' "
+                + $"exceeded the {timeout} forward deadline "
+                + $"({nameof(LatticeOptions.ShardForwardTimeout)}); the destination shard's "
+                + "ownership is likely changing during a reshard swap. The forward is "
+                + "abandoned and the write will be retried against refreshed routing.", oce);
+        }
     }
 
     /// <inheritdoc />

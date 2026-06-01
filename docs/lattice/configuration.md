@@ -399,6 +399,16 @@ When `true`, Lattice publishes `LatticeTreeEvent` notifications on the Orleans s
 
 This option can be changed freely at any time. Per-tree overrides take effect on the publishing activation immediately; other activations refresh within a few seconds.
 
+### `ShardForwardTimeout`
+
+Hard ceiling on how long a single outbound shard-to-shard write forward may run before it is cancelled and surfaced to callers as a `TimeoutException` (default: 15 seconds). It bounds both the online-resize shadow forward and the adaptive-split migration forward.
+
+During a reshard swap the destination shard's ownership is changing, and Orleans can reject the outbound forward message and leave the caller-side `await` neither completing nor faulting. Without a ceiling the forwarding turn never returns, the lattice grain's per-shard fan-out saturates at its in-flight limit, and the whole write pipeline wedges with no fault and no activation recycle. With the ceiling the parked forward is abandoned and the turn faults cleanly with a `TimeoutException`, which the existing transient-exception retry envelope on every mutation path catches and re-runs against refreshed routing once the swap has settled. Abandoning a forward never loses data: convergence on the destination shard is independently guaranteed by last-writer-wins plus the split coordinator's authoritative leaf-chain drain (the Drain phase and the Complete-phase final drain).
+
+Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. The new value takes effect on the next forward.
+
 ### `SoftDeleteDuration`
 
 How long a soft-deleted tree's data is retained in storage before being permanently purged. During this window the tree is inaccessible - all reads and writes throw `InvalidOperationException` - but its grain state still exists in the storage provider. After the duration elapses, a grain reminder triggers a full purge that walks every shard, clears all leaf and internal node state, and deactivates each grain.
