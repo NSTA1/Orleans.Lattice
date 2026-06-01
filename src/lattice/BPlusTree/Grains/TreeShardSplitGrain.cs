@@ -382,6 +382,20 @@ internal sealed class TreeShardSplitGrain(
     /// <see cref="IShardRootGrain.EnterRejectPhaseAsync"/> is idempotent
     /// (returns immediately when the source is already in Reject).
     /// </para>
+    /// <para>
+    /// <b>Final-drain invariant.</b> After the source enters Reject (which
+    /// freezes moved-slot writes) and BEFORE the registry map flips, a final
+    /// <see cref="ForwardMovedSlotEntriesAsync"/> pass re-synchronises the
+    /// destination with the source's now-frozen committed state. Without it,
+    /// a moved-slot write that committed on the source in the window between
+    /// the Drain-phase scan and the source entering Reject - whose best-effort
+    /// shadow-forward lagged or missed the destination - would leave the
+    /// destination serving the drained pre-saga value (<c>IsMigrated=true</c>,
+    /// no shadow marker) for that key after the map flips, producing the
+    /// non-atomic mixed-round batch the reshard chaos fixture catches. The
+    /// final drain is LWW-idempotent, so a crash-recovery re-entry into
+    /// <see cref="SwapAsync"/> re-drains harmlessly.
+    /// </para>
     /// </summary>
     internal async Task SwapAsync()
     {
@@ -408,6 +422,34 @@ internal sealed class TreeShardSplitGrain(
         // this call and the registry flip below finds the source
         // already in Reject and the call returns immediately.
         await source.EnterRejectPhaseAsync();
+
+        // Final authoritative drain BEFORE the registry map flips.
+        //
+        // The Drain phase already forwarded every moved-slot entry the
+        // source held at that time, but the source kept accepting and
+        // committing moved-slot writes through the Swap phase (the
+        // write gate only rejects at Reject - see ThrowIfRejectedForKey).
+        // Those interim commits are mirrored to the destination by the
+        // shadow-forward pipeline, but that mirror is best-effort under
+        // LWW and can lag or miss a commit that lands in the narrow
+        // window between the Drain-phase scan and the source entering
+        // Reject. If the map flips while the destination still holds the
+        // drained pre-saga value for such a key, a reader that routes to
+        // the destination surfaces a stale historical value (IsMigrated
+        // =true, no shadow marker) for that key while every other key
+        // shows the post-saga value - the non-atomic mixed-round batch
+        // the reshard chaos fixture catches.
+        //
+        // EnterRejectPhaseAsync above has now frozen moved-slot writes on
+        // the source, so the source's authoritative committed state for
+        // the migrating slots can no longer change. Re-running the drain
+        // here therefore provably synchronises the destination with the
+        // source's final committed state before any reader can route to
+        // the destination. The drain scans the source leaf chain directly
+        // (bypassing the shard read gate) so the post-reject freeze does
+        // not block it, and MergeManyAsync is LWW-idempotent so a crash-
+        // recovery re-entry into SwapAsync re-drains harmlessly.
+        await ForwardMovedSlotEntriesAsync();
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         // Re-read the current map so concurrent splits compose correctly:
