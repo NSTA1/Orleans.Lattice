@@ -270,7 +270,7 @@ public class MultiSiloRestartChaosTests
             // EnsureRootAsync, and overwrites the live topology with a
             // single-leaf root. That storage-isolation regression is the
             // upstream cause of the InvalidCastException previously
-            // tracked in the roadmap (the cast fires when an in-flight
+            // tracked on GitHub Issues (the cast fires when an in-flight
             // call resolves a leaf reference against an internal-grain
             // activation in the now-split-brain shard root). Using
             // process-scope storage isolates this test to the surface it

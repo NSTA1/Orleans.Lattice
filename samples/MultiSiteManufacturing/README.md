@@ -68,47 +68,6 @@ each modelling a distinct real-world failure class:
 | 4b | App-level cross-cluster replication pause | `IReplicationDisconnectGrain` |
 | 5 | Genuine cross-cluster transport partition | `docker network disconnect` against the peer Traefik |
 
-## Known limitation: cross-cluster receiver catch-up
-
-In normal operation cross-cluster replication works exactly as designed.
-Facts created on the US silo arrive on the EU silo over the gRPC push
-transport within seconds, and OR-Set deltas on `mfg-part-labels`
-reconcile across clusters as typed CRDT merges. The seeded inventory
-visible on both dashboards on first boot is the live-incremental path
-doing its job - nothing special has to happen for a fresh boot.
-
-The known limitation only bites when one side's per-peer cursor lags
-far enough behind the peer that the peer has GC'd write-ahead-log
-entries the receiver still needs. That happens in two scenarios:
-
-- **Asymmetric uptime.** One cluster runs long enough for TTL-driven
-  WAL compaction to age out old entries, then the other cluster is
-  brought up fresh, or its Azurite volume is wiped while the first
-  keeps running.
-- **Long-disconnected receiver.** A receiver stays disconnected long
-  enough that the peer prunes ahead of where the receiver's saved
-  cursor is.
-
-In both cases the receiver detects the WAL gap, triggers
-auto-bootstrap, and falls back to `ISnapshotProvider.ExportAsync`. The
-underlying replication library ships only the seam there, not a
-default cross-cluster implementation, so on a receiver the default
-provider reads the local (empty) tree and copies nothing - the
-receiver loops, never catching up.
-
-When booting both clusters fresh together (the supported demo path),
-this loop is never entered: neither side has compacted any WAL, both
-shippers stream the live tail from the beginning, and replication
-"just works". The Tier-4b and Tier-5 chaos toggles also stay safely
-inside the WAL retention window for the demo's purposes - pause for a
-minute, the WAL accumulates, replication catches up on resume.
-
-The planned fix is tracked in
-[`roadmap-cross-cluster-bootstrap.md`](../../src/lattice.replication/roadmap-cross-cluster-bootstrap.md).
-When those items land, the auto-bootstrap path will copy the missing
-state from the canonical sender so a long-disconnected or
-freshly-wiped receiver catches up automatically.
-
 ## Running
 
 The supported local topology is Docker Compose: two Azurite containers,

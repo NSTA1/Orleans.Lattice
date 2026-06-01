@@ -12,7 +12,7 @@ The user has been burned in the past by surface-level "I checked and it's fine" 
 
 - **Source is the only authority.** A doc claim is correct only if it matches the current source. Prior commit messages, prior doc reviews, and your own memory are not authority - open the `.cs` file, read the relevant lines, paste the evidence.
 - **The corpus is `git ls-files "*.md"`.** Everything under version control is in scope unless the user names a narrower scope. The `.scratch/` folder is gitignored and naturally excluded; do not waste time grepping it.
-- **Roadmap files are retrospective records, not present-tense claims.** A roadmap entry describing what was true before a fix landed is correct as a historical statement even if it conflicts with current source. Leave them alone unless the user asks otherwise. Roadmap items in the **own-entry body** of an unshipped feature are present-tense and *are* in scope.
+- **`CHANGELOG.md` is a retrospective record, not a present-tense claim.** A changelog entry describing what was true before a fix landed is correct as a historical statement even if it conflicts with current source. Leave it alone unless the user asks otherwise. It is also the only file (besides the issue trackers and the `features.md` index link-text) where tracker ids (`F-XXX`, `R-XXX`, `FX-XXX`, `G-XXX`) may legitimately appear.
 - **Edit deterministically, not by similarity.** Every markdown edit goes through verbatim `replace_string_in_file` anchors per the byte-level rule in `.github/copilot-instructions.md`. No `// ...existing code...` placeholders on long markdown files; long markdown is fragile and silently collapses neighbouring near-identical bullets.
 - **Produce evidence in the chat reply.** Every fix lists: the false claim, the source-of-truth file:line, the corrected wording. Every "verified accurate" claim lists the source location. Silent "I checked" is a protocol violation.
 
@@ -25,7 +25,7 @@ When the user requests a documentation review, settle these four parameters befo
 | **File scope** | every `git ls-files "*.md"` | "just `docs/lattice/`", "just `replication`", "this one file" |
 | **Depth** | every prose claim | "structural only", "defaults table only" |
 | **Broken-link pass** | included | "skip links", "links only" |
-| **Roadmap files** | retrospective body excluded; present-tense entries in scope | "include roadmap dep-flips", "audit own-entry bodies" |
+| **Feature-index docs** | `features.md` index bullets in scope; verify each still links to its issue | "skip the feature indexes", "only check issue links" |
 
 If the user is ambiguous, ask once, then proceed. State the resolved scope at the top of your reply so the user can correct it before the work begins.
 
@@ -99,7 +99,7 @@ Documentation edits trip three repo-wide gates. Run them, paste the tail of each
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-3. **Feature-tracker leak scan** - `F-NNN` / `R-NNN` / `FX-NNN` / `G-NNN` identifiers may not leak outside `roadmap.md`. Doc edits that paraphrase a roadmap entry by name (not by id) keep this green:
+3. **Feature-tracker leak scan** - `F-NNN` / `R-NNN` / `FX-NNN` / `G-NNN` identifiers may not leak outside `CHANGELOG.md`, the issue trackers, and the `features.md` index link-text. Doc edits that paraphrase a tracked item by name (not by id) keep this green:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~RoadmapIdentifierHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
@@ -166,7 +166,7 @@ Produce a single chat reply with these sections, in this order:
 2. **Broken-link check** - command run, total links checked, broken count, post-fix re-run result. If 0, say so explicitly.
 3. **Stale claims found and fixed** - numbered list, one entry per file. Each entry lists: the file, the false claim (quoted), the source-of-truth citation (`src/...:line`), the corrected wording (quoted). Group multi-edit files under a single numbered entry with sub-bullets.
 4. **Claims verified accurate (depth pass)** - axis-by-axis evidence summary. Cite source files and the specific values (e.g. "`AtomicWriteRetention=48h`" from `LatticeOptions.cs:NN"). The user reads this section to gauge sweep coverage; missing axes here means missing coverage.
-5. **Roadmap historical narrative** - explicit note of any roadmap hits surfaced by greps that were intentionally left alone, with a one-line reason ("retrospective record of pre-fix behaviour").
+5. **Changelog historical narrative** - explicit note of any tracker-id hits surfaced by greps that were intentionally left alone, with a one-line reason ("retrospective record of pre-fix behaviour in `CHANGELOG.md`").
 6. **Verification** - one line each for: hygiene gates (`Failed: 0`), link scan (`0 broken across N`), file count touched. Cite gate transcripts by name.
 7. **Files modified** - flat list. Note any scratch script left in place (gitignored; preserved for future runs).
 

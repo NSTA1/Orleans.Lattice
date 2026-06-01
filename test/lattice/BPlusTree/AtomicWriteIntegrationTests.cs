@@ -114,7 +114,7 @@ public class AtomicWriteIntegrationTests
         Assert.That(await tree.GetAsync<int>("y"), Is.EqualTo(7));
     }
 
-    // --- Caller-supplied idempotency key (G-011) ---
+    // --- Caller-supplied idempotency key ---
 
     [Test]
     public async Task SetManyAtomicAsync_with_operationId_is_idempotent()

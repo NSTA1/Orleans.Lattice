@@ -518,7 +518,7 @@ public partial class AtomicWriteGrainTests
         await registry.Received().UnregisterReminder(Arg.Any<GrainId>(), reminder);
     }
 
-    // --- Caller-supplied idempotency key (G-011) ---
+    // --- Caller-supplied idempotency key ---
 
     [Test]
     public void ComputeKeyFingerprint_returns_same_digest_for_reordered_keys()
@@ -683,7 +683,8 @@ public partial class AtomicWriteGrainTests
     [Test]
     public void ExecuteAsync_accepts_reentry_when_legacy_state_has_no_fingerprint()
     {
-        // Pre-G-011 persisted state has KeyFingerprint == null. The fingerprint
+        // Legacy persisted state authored before the caller-supplied idempotency
+        // key existed has KeyFingerprint == null. The fingerprint
         // check must be skipped in that case so the grain remains wire-compatible.
         var original = MakeEntries(("k1", [1]));
         var seeded = new FakePersistentState<AtomicWriteState>

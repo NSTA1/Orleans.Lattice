@@ -3,9 +3,9 @@
 Azurite-backed concurrency-sweep probe for the per-batch Azure Table WAL
 partitioning design.
 
-## What the roadmap entry actually asks for
+## What the tracked feature actually asks for
 
-The replication roadmap entry on per-batch Azure Table partition keys and
+The replication feature on per-batch Azure Table partition keys and
 manifest-driven reads carries this acceptance text:
 
 > With WalMaxPendingBatches = 4 against the Azure Tables emulator, a

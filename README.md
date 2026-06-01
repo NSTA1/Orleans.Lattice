@@ -113,6 +113,13 @@ For internals (the "how"):
 - [WAL Causal+](docs/lattice/wal-causal-plus.md) - causal+ entry-schema extension, dependency satisfaction, snapshot semantics.
 - [WAL Storage Providers](docs/lattice/wal-storage-providers.md) - `IWalStorageProvider` durability seam, in-memory default, optional Azure Table backend.
 
+For feature tracking (the "what's planned / what shipped"):
+
+- [Core Feature Index](docs/lattice/features.md) - grouped, issue-linked index of the core `Orleans.Lattice` package's tracked features, fixes, and gaps.
+- [Replication Feature Index](docs/lattice.replication/features.md) - grouped, issue-linked index of the `Orleans.Lattice.Replication` package's tracked features, fixes, and gaps.
+
+Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files. The feature-index pages above summarize and link to those issues.
+
 ## Releases
 
 See [CHANGELOG.md](CHANGELOG.md) for the per-version notes and [docs/RELEASING.md](docs/RELEASING.md) for the per-package tag-and-publish protocol.

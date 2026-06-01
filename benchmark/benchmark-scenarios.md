@@ -43,7 +43,7 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   `IMutationObserver` overhead (compare write-path p99 vs.
   `current-state-no-replication`), WAL append rate, ship-loop throughput,
   ack RTT, and per-peer HLC cursor lag (`hlc.now - cursor`). Validates the
-  roadmap''s sub-second flush-latency claim and the F-035 "zero-cost when no
+  sub-second flush-latency claim and the mutation-observer "zero-cost when no
   observer registered" guarantee.
 
 - [x] **skewed-key-shard-splits: Skewed-key variant to force adaptive shard splits.**
@@ -295,7 +295,7 @@ write latency, contaminating every scenario. Implementations MUST:
 ### 5. Replication wiring (`current-state-single-peer` onward)
 
 `Orleans.Lattice.Replication` is configured at the silo level, independently
-of the sink. Per the package''s roadmap:
+of the sink. Per the package's replication model:
 
 - Replication is per-tree opt-in. The `LatticeSink` decides which `TreeId`
   it writes to, and the silo opts that tree into replication via

@@ -478,8 +478,8 @@ recording.MapPost("/{id:guid}/replay", async (Guid id, RecordingService rec, IGr
     // Replay is intentionally simple: spawn one fresh vehicle per distinct vehicle id observed in
     // the recording, starting from each vehicle's first telemetry city. The sim drives them with
     // newly-generated routes from there -- this is "re-create the same scene", not "re-emit the
-    // same ticks". A true tick-replay would require a non-driving VehicleGrain mode, which the
-    // roadmap calls out as a bigger lift; this lighter shape is sufficient for the demo flow.
+    // same ticks". A true tick-replay would require a non-driving VehicleGrain mode, which is
+    // a bigger lift; this lighter shape is sufficient for the demo flow.
     var distinct = dump.Telemetry
         .GroupBy(t => t.VehicleId)
         .Select(g => g.OrderBy(t => t.TimestampUtc).First())

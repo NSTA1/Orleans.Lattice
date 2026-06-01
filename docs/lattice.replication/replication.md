@@ -31,7 +31,7 @@ It supports:
 ## Core Properties
 
 - **Convergent under concurrent writes.** Two clusters writing to the same key arrive at the same final state, deterministically, without coordination.
-- **Causally consistent.** A receiver never observes a write before the writes it causally depends on - across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards. See the [roadmap](../../src/lattice.replication/roadmap.md) for scope details.
+- **Causally consistent.** A receiver never observes a write before the writes it causally depends on - across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards. See the [feature index](features.md) for scope details.
 - **Cycle-safe.** Origin attribution is durable metadata on every record, not ambient context - replicating into and back out of a peer cluster never loops a mutation back to its source.
 - **At-most-once apply.** Re-delivery of the same `(origin, hlc, key, op)` is idempotent. Counters do not double-increment, sets do not re-add.
 - **No host-level coupling.** Replication is produced by the silo at commit time. Hosts neither install outgoing-call filters nor route mutations through their own pipeline.
@@ -124,6 +124,6 @@ For internals (the "how"):
 - [Deltas](deltas.md) - typed CRDT delta records on the wire.
 - [WAL](wal.md) - per-shard replication write-ahead log, turn-safe batching, causal+ entry schema.
 
-## Roadmap
+## Feature tracking
 
-The feature plan - including the items still ahead and the satisfied dependencies - lives in [`src/lattice.replication/roadmap.md`](../../src/lattice.replication/roadmap.md).
+Feature planning - including the items still ahead and the ones already shipped - is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication). The [feature index](features.md) is a grouped, human-readable summary that links each tracked item to its issue.

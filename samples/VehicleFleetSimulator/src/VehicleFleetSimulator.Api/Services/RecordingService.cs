@@ -19,7 +19,7 @@ namespace VehicleFleetSimulator.Api.Services;
 /// </summary>
 /// <remarks>
 /// Recordings live in process memory only - restarting the API loses them. That's an intentional
-/// scope limitation called out in the roadmap as "bigger lift" before adding a persistent sink.
+/// scope limitation - a persistent sink is a bigger lift left out of the demo.
 /// </remarks>
 public sealed class RecordingService : IHostedService, IAsyncDisposable
 {
