@@ -286,11 +286,50 @@ Two batch limits are enforced at append time:
 | `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
 | `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain measures every captured `WalRecord` through the registered `IWalRecordSizer` (default: `OrleansBinaryWalRecordSizer`, which serialises through the canonical Orleans-binary codec via a counting `IBufferWriter<byte>` so no payload buffer is materialised). The budget is an exact ceiling, suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). |
 | `WalMaxPendingBatches` | `8` | Maximum number of in-flight + just-started flushes the grain holds against the provider concurrently. The pre-6.1.0 default was `1`, which reproduced the original single-in-flight protocol bit-for-bit; the post-6.1.0 default of `8` raises pipeline depth so writer-side bursts coalesce against higher-latency durable providers (e.g. Azure Tables). The cap is the only synchronisation point new appends see, so cap values above the steady-state burst depth do not buy further throughput. Set explicitly to `1` to opt back into the legacy strict-serial-per-shard shape. |
+| `WalFlushTimeout` | `15 s` | Upper bound on how long a single flush may take before the grain abandons the wait, faults the flush, resynchronises the dense-offset tail from the provider, and drains the chain so callers retry. Set to `Timeout.InfiniteTimeSpan` to restore the historical unbounded await. See [Flush deadline](#flush-deadline). |
 
 Cutovers below the in-flight cap start a fresh flush immediately;
 cutovers at the cap await the oldest in-flight flush before starting
 another, which provides natural back-pressure under sustained burst
 load.
+
+### Flush deadline
+
+Each in-flight flush is bounded by `WalMaxPendingBatches`; the cap is the
+only synchronisation point new appends see. If one flush never settles,
+its slot never leaves the in-flight chain, the chain saturates at the
+cap, and every subsequent append back-pressures behind a flush that can
+never complete - a steady-state stall with no fault and no activation
+recycle. A provider call can fail to settle for reasons outside the
+grain's control: a partition left half-activated by a placement/reshard
+race, an SDK retry loop that never gives up, or a backend that simply
+stops responding.
+
+`WalFlushTimeout` (default 15 s) bounds the flush so that hang becomes a
+recoverable `TimeoutException` routed through the normal
+[append-failure path](#append-failure-semantics): the tail is
+resynchronised from the provider and the chain drains, so callers that
+retry observe a healthy grain.
+
+The bound is enforced in two places, deliberately:
+
+1. The deadline's cancellation token is passed to the provider call, so a
+   co-operative provider stops its own work promptly when the deadline
+   trips.
+2. The grain **also** bounds its own `await` on the provider task with
+   `Task.WaitAsync(deadline)`. A provider whose hang does not observe the
+   token - a non-cancellable SDK wait, a retry loop that swallows
+   cancellation, or a genuinely wedged half-activated partition - would
+   otherwise leave the grain awaiting forever even though the deadline has
+   fired. Bounding the grain's own wait abandons the un-cancellable
+   provider task (its slot is removed and its eventual completion is
+   harmlessly unobserved) so the chain drains regardless of whether the
+   provider honours cancellation.
+
+Bounding only the *call* (passing the token) is not sufficient on its own;
+bounding the *wait* is what makes the deadline wedge-proof against
+uncooperative providers.
+
 
 ### Batched leaf write path
 

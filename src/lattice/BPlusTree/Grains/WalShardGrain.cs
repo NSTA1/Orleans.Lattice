@@ -942,24 +942,48 @@ internal sealed class WalShardGrain(
                 // chain would saturate at WalMaxPendingBatches, and every
                 // subsequent append would back-pressure behind a flush
                 // that can never complete - a steady-state stall with no
-                // fault and no activation recycle. Cancelling the call on
-                // the deadline turns that hang into a TimeoutException
-                // that the catch below routes through the normal failure
-                // handler, which resynchronises the tail and drains the
-                // chain.
+                // fault and no activation recycle. The deadline turns that
+                // hang into a TimeoutException that the catch below routes
+                // through the normal failure handler, which resynchronises
+                // the tail and drains the chain.
+                //
+                // The bound is enforced *twice*, deliberately. The
+                // deadline token is passed to the provider so a
+                // co-operative provider stops its own work promptly. But
+                // the grain ALSO bounds its own await with
+                // Task.WaitAsync(token): a provider whose hang does not
+                // observe the token - a non-cancellable SDK wait, an
+                // internal retry loop that swallows cancellation, or a
+                // genuinely wedged half-activated partition - would
+                // otherwise leave the grain awaiting forever even though
+                // the CTS has fired. WaitAsync abandons the un-cancellable
+                // provider task (its slot is removed by the finally and
+                // its eventual completion is harmlessly unobserved) so the
+                // chain drains and recovery runs regardless of whether the
+                // provider honours cancellation. This is the difference
+                // between bounding the *call* and bounding the *wait*; only
+                // the latter is wedge-proof.
                 var flushTimeout = Options.WalFlushTimeout;
                 using var deadline = flushTimeout == Timeout.InfiniteTimeSpan
                     ? null
                     : new CancellationTokenSource(flushTimeout);
                 try
                 {
-                    await _provider.AppendEncodedBatchAsync(
+                    var providerCall = _provider.AppendEncodedBatchAsync(
                         _treeId,
                         _shardIndex,
                         encodedArray.AsMemory(),
                         offsetsArray.AsMemory(),
                         encoder,
-                        deadline?.Token ?? CancellationToken.None).ConfigureAwait(true);
+                        deadline?.Token ?? CancellationToken.None);
+                    if (deadline is null)
+                    {
+                        await providerCall.ConfigureAwait(true);
+                    }
+                    else
+                    {
+                        await providerCall.WaitAsync(deadline.Token).ConfigureAwait(true);
+                    }
                 }
                 catch (OperationCanceledException oce)
                     when (deadline is not null && deadline.IsCancellationRequested)

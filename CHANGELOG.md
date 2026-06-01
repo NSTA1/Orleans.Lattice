@@ -10,6 +10,10 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Items merged into `main` after the v6.1.3 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
+### Fixed
+
+- **WAL flush deadline now recovers even when a storage-provider hang ignores cancellation (G-019).** The `LatticeOptions.WalFlushTimeout` deadline previously only fired if the provider observed the deadline's cancellation token; a provider call that hangs in a non-cancellable wait - a half-activated partition from a placement/reshard race, or an SDK retry loop that swallows cancellation - left the grain awaiting forever even after the deadline elapsed, so the in-flight slot never drained and the shard's append pipeline stayed wedged at `WalMaxPendingBatches`. The grain now also bounds its own wait on the provider task, so the deadline recovers the shard regardless of whether the provider honours cancellation. This closes the residual real-Azure saturation-rung wedge that survived the initial v6.1.3 fix.
+
 ### Candidate themes for a future major
 
 - Loosen the LWW-by-default contract on `ILattice.SetAsync` / `GetAsync` via an opt-in per-tree `DefaultMergeMode` (so `MvRegister` and other CRDT shapes can be the default for trees that want concurrency-preserving semantics).
