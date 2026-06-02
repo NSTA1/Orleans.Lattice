@@ -64,6 +64,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
 | [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 5 (measured sweet spot) | Yes |
+| [`DigestPublishTimeout`](#digestpublishtimeout) | `TimeSpan` | 15 seconds | Yes (on next publish) |
 | [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
 | [`HotShardOpsPerSecondThreshold`](#hotshardopspersecondthreshold) | `int` | 200 | Yes |
 | [`HotShardSampleInterval`](#hotshardsampleinterval) | `TimeSpan` | 30 seconds | Yes |
@@ -416,6 +417,16 @@ This seed runs while the shard holds its non-reentrant activation gate. During a
 Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
 
 This option can be changed freely at any time. The new value takes effect on the next forward.
+
+### `DigestPublishTimeout`
+
+Hard ceiling on how long a single internal-node upward digest publish may run before it is abandoned and surfaced to the holding turn as a `TimeoutException` (default: 15 seconds). It bounds the `ChildDigestSnapshot` propagation that a `BPlusInternalGrain` issues to its parent after folding a child's digest.
+
+The publish is a cross-grain RPC awaited while the internal node holds its non-reentrant split gate, and it recurses up the internal-node chain toward the shard root. A parent that is itself mid-mutation can leave the await neither completing nor faulting, pinning the gate on that activation with no ceiling so every subsequent mutating turn back-pressures behind it. With the ceiling the parked publish is abandoned and the turn faults with a `TimeoutException`, releasing the gate. Abandoning a publish never drifts the digest count: the publish never partially applied at the parent, the digest is staleness-tolerant, and the next mutation's dirty-flag publish re-drives convergence. A non-zero `orleans.lattice.internal.digest_publish.timeouts` counter surfaces the condition.
+
+Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. The new value takes effect on the next publish.
 
 ### `SoftDeleteDuration`
 

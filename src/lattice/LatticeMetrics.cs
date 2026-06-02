@@ -1149,6 +1149,23 @@ public static class LatticeMetrics
             description: "Count of shard-root activation-readiness seeds abandoned after exceeding ActivationReadyTimeout.");
 
     /// <summary>
+    /// Count of internal-node digest publishes (the upward
+    /// <c>ChildDigestSnapshot</c> propagation from a <c>BPlusInternalGrain</c>
+    /// to its parent) that were abandoned because they exceeded
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.DigestPublishTimeout"/>.
+    /// Tagged with <see cref="TagTree"/>. A non-zero value indicates a
+    /// publish parked against a parent internal node that was mid-mutation -
+    /// the parked publish was faulted as a <see cref="TimeoutException"/> so
+    /// the holding turn released the non-reentrant split gate rather than
+    /// pinning it indefinitely. The digest is staleness-tolerant, so the next
+    /// mutation's publish re-drives convergence; sustained non-zero counts
+    /// indicate a contended internal-node chain worth investigating.
+    /// </summary>
+    public static readonly Counter<long> DigestPublishTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.internal.digest_publish.timeouts", unit: "{timeout}",
+            description: "Count of internal-node upward digest publishes abandoned after exceeding DigestPublishTimeout.");
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via

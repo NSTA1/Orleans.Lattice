@@ -342,6 +342,7 @@ internal sealed class LatticeOptionsResolver(
             StorageUsagePollInterval = baseOptions.StorageUsagePollInterval,
             ShardForwardTimeout = baseOptions.ShardForwardTimeout,
             ActivationReadyTimeout = baseOptions.ActivationReadyTimeout,
+            DigestPublishTimeout = baseOptions.DigestPublishTimeout,
             WalMaxRetainedBytes = baseOptions.WalMaxRetainedBytes,
             WalBytePressureReclaimTarget = baseOptions.WalBytePressureReclaimTarget,
             MaterialiserCheckpointInterval = baseOptions.MaterialiserCheckpointInterval,

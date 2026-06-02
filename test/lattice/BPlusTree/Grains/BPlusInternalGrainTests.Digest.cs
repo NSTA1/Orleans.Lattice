@@ -32,6 +32,17 @@ public partial class BPlusInternalGrainTests
         return (new BPlusInternalGrain(context, state, grainFactory, optionsResolver), state, grainFactory);
     }
 
+    private static (BPlusInternalGrain Grain, FakePersistentState<InternalNodeState> State, IGrainFactory Factory)
+        CreateDigestGrain(LatticeOptions baseOptions, FakePersistentState<InternalNodeState>? state = null)
+    {
+        state ??= new FakePersistentState<InternalNodeState>();
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("internal", "digest-self"));
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var optionsResolver = TestOptionsResolver.Create(baseOptions: baseOptions, factory: grainFactory);
+        return (new BPlusInternalGrain(context, state, grainFactory, optionsResolver), state, grainFactory);
+    }
+
     private static byte[] Bytes16(byte fill)
     {
         var b = new byte[16];
@@ -665,5 +676,106 @@ public partial class BPlusInternalGrainTests
             "the stale row must be dropped on the next non-owned publish");
         Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(4),
             "the aggregate must self-heal to the owned set");
+    }
+
+    // --- DigestPublishTimeout (parked upward publish) ---
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_parked_parent_publish_faults_with_timeout()
+    {
+        // A parent that never returns from OnChildDigestPublishedAsync
+        // simulates a parent mid-mutation. The upward publish must fault
+        // with a TimeoutException once the DigestPublishTimeout elapses,
+        // rather than parking the holding turn (and the split gate)
+        // forever.
+        var options = new LatticeOptions { DigestPublishTimeout = TimeSpan.FromMilliseconds(50) };
+        var fakeState = new FakePersistentState<InternalNodeState>
+        {
+            State = { ParentId = DigestParent }
+        };
+        var (grain, _, factory) = CreateDigestGrain(options, fakeState);
+        var parentStub = Substitute.For<IBPlusInternalGrain>();
+        parentStub.OnChildDigestPublishedAsync(Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>())
+            .Returns(new TaskCompletionSource().Task); // never completes
+        factory.GetGrain<IBPlusInternalGrain>(DigestParent).Returns(parentStub);
+
+        Assert.That(async () => await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 2, CheckpointOffset = 5,
+        }), Throws.TypeOf<TimeoutException>());
+    }
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_releases_gate_after_parked_publish_times_out()
+    {
+        // After a parked publish faults, the non-reentrant split gate must
+        // be released so the next mutating turn on the activation can run.
+        // A second publish with a parent that returns promptly proves the
+        // gate is free.
+        var options = new LatticeOptions { DigestPublishTimeout = TimeSpan.FromMilliseconds(50) };
+        var fakeState = new FakePersistentState<InternalNodeState>
+        {
+            State = { ParentId = DigestParent }
+        };
+        var (grain, state, factory) = CreateDigestGrain(options, fakeState);
+        var parkingParent = Substitute.For<IBPlusInternalGrain>();
+        parkingParent.OnChildDigestPublishedAsync(Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>())
+            .Returns(new TaskCompletionSource().Task);
+        factory.GetGrain<IBPlusInternalGrain>(DigestParent).Returns(parkingParent);
+
+        Assert.That(async () => await grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x11), EntryCount = 3, CheckpointOffset = 1,
+        }), Throws.TypeOf<TimeoutException>());
+
+        // Swap in a parent that returns immediately and confirm the next
+        // publish completes (the gate was released).
+        var promptParent = Substitute.For<IBPlusInternalGrain>();
+        promptParent.OnChildDigestPublishedAsync(Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>())
+            .Returns(Task.CompletedTask);
+        factory.GetGrain<IBPlusInternalGrain>(DigestParent).Returns(promptParent);
+
+        await grain.OnChildDigestPublishedAsync(DigestChild1, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 4, CheckpointOffset = 2,
+        });
+
+        await promptParent.Received(1).OnChildDigestPublishedAsync(
+            Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>());
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(7),
+            "both children's contributions persist; only the upward publish was abandoned");
+    }
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_infinite_timeout_awaits_parent_unbounded()
+    {
+        // With DigestPublishTimeout = InfiniteTimeSpan the publish must be
+        // awaited without a ceiling. A parent that completes after a short
+        // delay (longer than any finite test deadline we would otherwise
+        // set) is awaited to completion rather than abandoned.
+        var options = new LatticeOptions { DigestPublishTimeout = Timeout.InfiniteTimeSpan };
+        var fakeState = new FakePersistentState<InternalNodeState>
+        {
+            State = { ParentId = DigestParent }
+        };
+        var (grain, _, factory) = CreateDigestGrain(options, fakeState);
+        var parentStub = Substitute.For<IBPlusInternalGrain>();
+        var tcs = new TaskCompletionSource();
+        parentStub.OnChildDigestPublishedAsync(Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>())
+            .Returns(tcs.Task);
+        factory.GetGrain<IBPlusInternalGrain>(DigestParent).Returns(parentStub);
+
+        var publish = grain.OnChildDigestPublishedAsync(DigestChild0, new ChildDigestSnapshot
+        {
+            Hash = Bytes16(0x22), EntryCount = 2, CheckpointOffset = 5,
+        });
+
+        Assert.That(publish.IsCompleted, Is.False,
+            "the publish must remain pending while the parent has not returned");
+        tcs.SetResult();
+        await publish; // completes without timing out
+
+        await parentStub.Received(1).OnChildDigestPublishedAsync(
+            Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>());
     }
 }
