@@ -20,7 +20,22 @@
     <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />
     <PackageReference Include="Microsoft.Orleans.Server" Version="10.1.0" />
     <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.1.0" />
-    <PackageReference Include="Azure.Identity" Version="1.13.1" />
+    <!--
+      Bumped from 1.13.1 to satisfy the Microsoft.Diagnostics.Runtime 4.0
+      transitive floor (>= 1.21.0); the diagnostics package is referenced
+      below by the StallWatchdog.
+    -->
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <!--
+      In-process stall watchdog (StallWatchdog.cs): when the WAL write
+      pipeline wedges at WalMaxPendingBatches the only ACI exfil channel
+      is stdout (the deploy script streams it to .run/silo-*.log), so the
+      watchdog self-snapshots with ClrMD and prints the parked async
+      state-machine chain - the in-process equivalent of `dumpasync` /
+      `dotnet-stack` - rather than writing a core dump we have no mount to
+      retrieve.
+    -->
+    <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.726401" />
   </ItemGroup>
 
 </Project>

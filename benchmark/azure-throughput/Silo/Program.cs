@@ -268,7 +268,7 @@ builder.Logging.AddFilter("Orleans.Runtime.Placement.PlacementService", LogLevel
 
 builder.Services.AddHostedService<TcpIngestService>();
 builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.PhaseADiagnosticReporter>();
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending));
 
 builder.UseOrleans(silo =>
 {
@@ -376,6 +376,25 @@ builder.UseOrleans(silo =>
         o.DigestCoalescingWindowMs = digestCoalescingMs;
     });
 
+    // Disable the per-silo storage-usage poller for the throughput run.
+    // The poller is a GLOBAL knob read from the default (unnamed) options,
+    // so the per-tree ConfigureLattice above does not reach it - it must be
+    // turned off via the global ConfigureLattice overload. On its 15s
+    // cadence the poller drives ILatticeAdmin.GetTotalStorageUsageAsync,
+    // which fans out across every registered tree and walks each shard's
+    // entire leaf chain (ShardRootGrain.GetStorageUsageAsync ->
+    // AccumulateLeafUsageAsync -> leaf.GetStatsAsync). Under the 25k-vehicle
+    // saturation rung that forces mass cold-leaf activations + WAL replays
+    // that monopolise the single-threaded ShardRootGrain turn and saturate
+    // the Azure Table connection pool, starving live ingest of a turn -
+    // the foreground SetManyAsync fan-out parks and writtenTotal freezes.
+    // Setting the interval to zero disables the poller entirely so the
+    // metering scan never competes with the ingest hot path.
+    silo.ConfigureLattice(o =>
+    {
+        o.StorageUsagePollInterval = TimeSpan.Zero;
+    });
+
     silo.AddAzureTableWalStorage(o =>
     {
         if (!string.IsNullOrWhiteSpace(storageConn))
@@ -481,7 +500,7 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
 // TcpIngestService class methods. Top-level local functions cannot
 // be referenced from non-top-level types per CS8801.
 
-internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount);
+internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount, int WalMaxPendingBatches);
 
 /// <summary>
 /// Selects which <c>ILattice</c> operation the benchmark silo dispatches
@@ -1030,6 +1049,24 @@ internal sealed class TcpIngestService(
             catch (OperationCanceledException) { }
         }, CancellationToken.None);
 
+        // Stall watchdog: when the WAL write pipeline wedges (writtenTotal
+        // frozen while inFlight stays pinned at the WalMaxPendingBatches
+        // ceiling), self-snapshot with ClrMD and print the parked async
+        // state-machine chain + thread stacks to stdout - the in-process
+        // equivalent of `dumpasync` / `dotnet-stack`, exfiltrated through
+        // the one channel ACI preserves across teardown (the streamed silo
+        // log). Three prior `TimeoutException`-based fixes each fired zero
+        // times on the wedge, so this captures the actually-parked await
+        // instead of bounding another guessed one. Shares the reporter's
+        // cancellation so it stops cleanly at end of run.
+        var stallWatchdog = new StallWatchdog(
+            writtenTotalSnapshot: () => Interlocked.Read(ref writtenTotal),
+            inFlightSnapshot: () => Interlocked.Read(ref inFlight),
+            pinnedInFlightThreshold: settings.WalMaxPendingBatches,
+            stallWindow: TimeSpan.FromSeconds(20),
+            pollInterval: TimeSpan.FromSeconds(1));
+        var stallWatchdogTask = Task.Run(() => stallWatchdog.RunAsync(reporterCts.Token), CancellationToken.None);
+
         var batch = new List<KeyValuePair<string, byte[]>>(settings.BatchSize);
         var nextFlush = Stopwatch.GetTimestamp() + (long)(settings.FlushInterval.TotalSeconds * Stopwatch.Frequency);
 
@@ -1103,6 +1140,7 @@ internal sealed class TcpIngestService(
 
         reporterCts.Cancel();
         try { await reporterTask; } catch { /* shutdown */ }
+        try { await stallWatchdogTask; } catch { /* shutdown */ }
         reporterCts.Dispose();
 
         var totalElapsed = (Stopwatch.GetTimestamp() - startedAt) / (double)Stopwatch.Frequency;
