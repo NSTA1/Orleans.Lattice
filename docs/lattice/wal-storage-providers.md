@@ -283,6 +283,26 @@ The knobs are applied to `clientOptions.Retry` **before** the host's `ConfigureC
 
 The motivation is the diagnostic finding that the WAL hot path's wall-time p99 sat 5–100x above Azure Tables' server-timing p99 - the canonical signature of a retry storm whose retries ultimately succeed. The `orleans.lattice.provider.retry.attempts` counter from the observability section above is the diagnostic that tells operators whether to reach for these knobs, and `RetryNetworkTimeout` in particular is the per-attempt deadline budget that prevents a single stuck request from holding a WAL slot for the full SDK default of 100 s.
 
+#### Bounding a wedged phase-2 commit
+
+`RetryNetworkTimeout` bounds each *attempt* the SDK makes, but it does not bound the per-shard `PhaseTwoWorker`'s manifest commit as a whole: the worker commits phase-2 transactions one coalesced group at a time, and the next group cannot start until the current `SubmitTransactionAsync` returns (the strict offset-FIFO ordering invariant requires it). The grain-side `WalShardGrain` back-pressure and flush deadline bound the *foreground* append path, but neither timer covers this *background* commit. If a commit's Azure Tables transaction stops making progress (a hung socket, a server-side partition stall, or an SDK retry loop that keeps re-issuing past the network timeout) the drain loop blocks indefinitely and every later pending commit on that shard wedges behind it.
+
+`AzureTableWalStorageOptions.PhaseTwoCommitTimeout` is a finite per-commit deadline for exactly this case. It defaults to `AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout` (3 seconds), so a wedged manifest commit faults instead of stalling the per-shard drain loop indefinitely out of the box. Set it to `null` to restore the historical unbounded behaviour, or to a different positive `TimeSpan` to tune the deadline:
+
+```csharp verify
+var options = new AzureTableWalStorageOptions
+{
+    ConnectionString = "UseDevelopmentStorage=true",
+    // Abandon a phase-2 manifest commit that has not returned within
+    // 30 s. The faulted batch (and every later pending commit on the
+    // shard) is recovered by the same sticky-failure resync path that
+    // already handles a phase-2 transaction error.
+    PhaseTwoCommitTimeout = TimeSpan.FromSeconds(30),
+};
+```
+
+When the deadline fires, the commit's batch and every later still-pending commit on the shard fault with a `TimeoutException` (the same fault-the-window semantics as a transaction error, because their tail offsets are now stale relative to the recovered `TAIL`), the worker keeps draining new arrivals, and the `orleans.lattice.provider.phase2.commit.timeouts` counter increments once - tagged `tree` and `shard` - so operators can prove whether the deadline ever fired. Size it comfortably above the observed phase-2 commit p99 (so healthy commits never trip it) but below the silo-level activation / request timeout (so a wedged shard is broken before it cascades). `Validate()` rejects a zero or negative value.
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.

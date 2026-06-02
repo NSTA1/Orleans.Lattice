@@ -640,6 +640,67 @@ public class AzureTableWalStorageOptionsTests
         });
     }
 
+    [Test]
+    public void PhaseTwoCommitTimeout_defaults_to_three_seconds()
+    {
+        // The library default bounds the phase-2 commit seam at 3 s so a
+        // wedged manifest commit faults instead of stalling the per-shard
+        // drain loop indefinitely. null remains an explicit opt-out for the
+        // historical unbounded behaviour. The constant exists so a future
+        // re-tune happens in exactly one place.
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.That(options.PhaseTwoCommitTimeout, Is.EqualTo(TimeSpan.FromSeconds(3)));
+        Assert.That(AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout,
+            Is.EqualTo(TimeSpan.FromSeconds(3)));
+    }
+
+    [Test]
+    public void Validate_throws_when_PhaseTwoCommitTimeout_is_zero()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            PhaseTwoCommitTimeout = TimeSpan.Zero,
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_throws_when_PhaseTwoCommitTimeout_is_negative()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            PhaseTwoCommitTimeout = TimeSpan.FromMilliseconds(-1),
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_PhaseTwoCommitTimeout_is_null_or_positive()
+    {
+        var unset = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            PhaseTwoCommitTimeout = null,
+        };
+
+        var positive = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            PhaseTwoCommitTimeout = TimeSpan.FromSeconds(30),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unset.Validate, Throws.Nothing);
+            Assert.That(positive.Validate, Throws.Nothing);
+        });
+    }
+
     /// <summary>
     /// Minimal Azure.Core <see cref="Azure.Core.TokenCredential"/>
     /// stand-in for tests that need a non-null credential reference

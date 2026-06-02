@@ -198,6 +198,22 @@ var walConnectionReuse = ReadBool("BENCH_WAL_CONNECTION_REUSE", false);
 // finite value bounds every individual HTTP attempt so a hung request
 // fails and releases its pending-batch slot. The wedge fix sets this > 0.
 var walNetworkTimeoutSec = ReadIntAllowZero("BENCH_WAL_NETWORK_TIMEOUT_SEC", 0);
+// Finite per-commit deadline (seconds) for the per-shard PhaseTwoWorker's
+// manifest commit, mapped to AzureTableWalStorageOptions.PhaseTwoCommitTimeout.
+// When the env var is ABSENT the option is left at the library default
+// (AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout, 3 s) - the deploy
+// script only emits this var when the operator overrides it. When SUPPLIED the
+// value is honoured verbatim: 0 explicitly disables the deadline (null - the
+// historical unbounded behaviour), > 0 sets that finite deadline. A finite
+// deadline converts a hung commit into a bounded TimeoutException the
+// sticky-failure resync path recovers, and increments the
+// orleans.lattice.provider.phase2.commit.timeouts counter once per abandoned
+// commit so the wedge fix is directly observable pre/post.
+int? walPhaseTwoCommitTimeoutSec =
+    Environment.GetEnvironmentVariable("BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC") is { } rawPhase2Timeout
+    && int.TryParse(rawPhase2Timeout, out var parsedPhase2Timeout) && parsedPhase2Timeout >= 0
+        ? parsedPhase2Timeout
+        : null;
 // Finite pooled-connection lifetime (seconds) for the reuse transport so
 // ACI SNAT-killed sockets are recycled instead of reused into a hang.
 var walConnLifetimeSec = ReadInt("BENCH_WAL_CONN_LIFETIME_SEC", 90);
@@ -262,7 +278,16 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
 var preseedWillFire = preseedKeyCount > 0
     && (workloadMode == BenchWorkloadMode.GetPoint
         || workloadMode == BenchWorkloadMode.GetMany);
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
+// Banner descriptor for the phase-2 commit deadline: "default(3s)" when the
+// operator left it unset (library DefaultPhaseTwoCommitTimeout applies),
+// "off" when explicitly disabled (supplied 0), or the supplied second-count.
+var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
+{
+    null => $"default({AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout.TotalSeconds:0.##}s)",
+    0 => "off",
+    var s => $"{s}s",
+};
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -459,6 +484,28 @@ builder.UseOrleans(silo =>
         if (walNetworkTimeoutSec > 0)
         {
             o.RetryNetworkTimeout = TimeSpan.FromSeconds(walNetworkTimeoutSec);
+        }
+        // Wedge fix part 2: bound the per-shard PhaseTwoWorker's whole
+        // manifest commit, not just each HTTP attempt. RetryNetworkTimeout
+        // caps a single attempt, but the worker's background drain loop
+        // commits phase-2 transactions one coalesced group at a time and
+        // the next group cannot start until the current commit returns -
+        // so a commit that keeps re-issuing past the network timeout (or
+        // parks in a state the SDK never surfaces) still wedges every later
+        // commit on the shard. PhaseTwoCommitTimeout is the finite deadline
+        // covering the whole commit; on expiry the worker faults the batch
+        // and every later pending commit (recovered by the sticky-failure
+        // resync path) and increments
+        // orleans.lattice.provider.phase2.commit.timeouts so the fix is
+        // directly observable pre/post. Only overridden when the operator
+        // supplied BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC; absent leaves the
+        // library default (DefaultPhaseTwoCommitTimeout). A supplied 0 maps
+        // to null (explicitly unbounded); a supplied > 0 sets that deadline.
+        if (walPhaseTwoCommitTimeoutSec is { } phase2TimeoutSec)
+        {
+            o.PhaseTwoCommitTimeout = phase2TimeoutSec > 0
+                ? TimeSpan.FromSeconds(phase2TimeoutSec)
+                : null;
         }
         // Connection-reuse transport (fix/wedge). When BENCH_WAL_CONNECTION_REUSE
         // is set, replace the default Azure.Core transport with one that reuses

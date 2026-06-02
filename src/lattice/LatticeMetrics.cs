@@ -827,6 +827,25 @@ public static class LatticeMetrics
             description: "Provider commit calls that exhausted the SDK retry budget and surfaced an exception.");
 
     /// <summary>
+    /// Counter incremented once per phase-2 manifest commit that
+    /// exceeded the per-commit deadline and was abandoned by the
+    /// per-shard worker. Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagShard"/>. A non-zero rate is the direct signal
+    /// that the phase-2 drain loop would otherwise have wedged: the
+    /// commit's underlying Azure Tables transaction stopped making
+    /// progress (a hung socket, a server-side partition stall, or an
+    /// SDK retry storm running past the deadline) and the worker
+    /// bounded it instead of blocking every later commit on the same
+    /// shard indefinitely. Zero on a healthy shard; the pre-fix
+    /// behaviour (no deadline) is recoverable by leaving
+    /// <c>PhaseTwoCommitTimeout</c> unset, in which case this counter
+    /// never increments because no deadline is enforced.
+    /// </summary>
+    public static readonly Counter<long> ProviderPhase2CommitTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.provider.phase2.commit.timeouts", unit: "{commit}",
+            description: "Phase-2 manifest commits abandoned by the per-shard worker after exceeding the configured per-commit deadline.");
+
+    /// <summary>
     /// Counter incremented once per individual retry attempt the
     /// storage SDK performs on a provider call, regardless of whether
     /// the retry ultimately succeeds. Tagged with <see cref="TagStatus"/>
