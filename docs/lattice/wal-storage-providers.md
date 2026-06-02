@@ -238,9 +238,9 @@ Two practical rules follow:
 
 Setting `AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath = true` opts the provider into a hot-path shape that **skips the phase-0 candidate-row write entirely** and shrinks the phase-2 transaction from three actions (`{delete C, insert M, upsert TAIL}`) to two (`{insert M, upsert TAIL}`). Orphans are still recovered, but recovery now discovers them by enumerating batch partitions whose start offset sits above `TAIL` instead of by scanning candidate-rows in the manifest partition.
 
-The mode is off by default. It is a throughput knob that trades the per-batch C-row round-trip for a different recovery-scan shape:
+**As of v6.0.1 the default is `EliminateCandidateRowOnHotPath = true`.** An A/B against real Azure Tables at the 25k-writer saturation rung moved the sustained-ingest watermark from ~58k entries (C-row written inline) to ~1.38M entries (C-row elided) - a ~24x capacity gain - because the phase-0 upsert no longer contends with the per-shard `PhaseTwoWorker` on the shared manifest partition (Azure Tables serialises writes within a `PartitionKey` server-side). Hosts that need the pre-v6.0 recovery contract - the C-row written inline and orphans discovered via the manifest-partition C-row scan - should explicitly opt **out** (`EliminateCandidateRowOnHotPath = false`). It is a throughput knob that trades the per-batch C-row round-trip for a different recovery-scan shape:
 
-| Property | Default (legacy) | `EliminateCandidateRowOnHotPath = true` |
+| Property | Legacy (`= false`) | Default (`= true`) |
 |---|---|---|
 | Hot-path Azure Tables round-trips per append | phase-0 C-row write + phase-1 entry transaction + phase-2 transaction | phase-1 entry transaction + phase-2 transaction |
 | Phase-2 transaction shape | `{delete C, insert M, upsert TAIL}` per coalesced commit, plus one TAIL | `{insert M}` per coalesced commit, plus one TAIL |
@@ -250,9 +250,9 @@ The mode is off by default. It is a throughput knob that trades the per-batch C-
 
 The reconciler always performs both scans when the flag is on, so a silo started with the flag enabled recovers **both** legacy orphans (left by a previous flag-off activation) and D-mode orphans (left by a previous flag-on activation) - upgrading from flag-off to flag-on is safe and lossless.
 
-**Downgrade is not symmetric.** A silo started with the flag *off* runs the legacy C-row scan only; D-mode orphans (which by construction carry no C-row) are invisible to it and remain on disk above `TAIL` until a future flag-on activation observes them. The orphan entry rows are not lost - a subsequent flag-on activation rolls them forward or rolls them back as appropriate - but the downgraded silo will not advance `TAIL` past them, and any `AppendBatchAsync` from `TAIL + 1` will start writing at an offset already occupied by an unreconciled orphan. **Always drain pending appends and let `ReconcileAsync` complete on a flag-on silo before flipping the flag back to off.** This is the load-bearing reason the legacy code path is retained even when the flag defaults on in a future release.
+**Always drain pending appends and let `ReconcileAsync` complete on a flag-on silo before flipping the flag back to off.** This is the load-bearing reason the legacy code path is retained now that the flag defaults on.
 
-The mode is opt-in for the same reason as `PipelinePhaseTwoCommits`: it is a change in the recovery contract, not just a perf tweak. Bake it into a representative workload before defaulting it on per deployment.
+Like `PipelinePhaseTwoCommits`, this default flip is a change in the recovery contract, not just a perf tweak - which is why the legacy C-row code path is retained behind `EliminateCandidateRowOnHotPath = false`. Before opting out in production, bake the chosen arm into a representative workload.
 
 The `benchmark/azure-throughput/` harness exposes this flag via the `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` environment variable so the same single-silo, real-Azure-Tables deployment can drive both arms of an A/B run with no code change. See `benchmark/azure-throughput/README.md` for the A/B runbook.
 

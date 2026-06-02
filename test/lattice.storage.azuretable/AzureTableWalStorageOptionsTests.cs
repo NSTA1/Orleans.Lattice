@@ -305,27 +305,37 @@ public class AzureTableWalStorageOptionsTests
     }
 
     [Test]
-    public void EliminateCandidateRowOnHotPath_defaults_to_false()
+    public void EliminateCandidateRowOnHotPath_defaults_to_true()
     {
-        // Pin the default so callers continue to receive the legacy
-        // two-phase WAL contract (C-row written inline; reconciliation
-        // discovers orphans via the manifest-partition C-row scan).
-        // Variant D is opt-in only - existing deployments must change
-        // nothing to keep their current crash-recovery semantics.
+        // Pin the default to the throughput-campaign operating point.
+        // Eliding the phase-0 C-row removes a server-side-serialised
+        // round-trip on the shared per-shard manifest partition from
+        // every batch's hot path; an A/B against real Azure Tables at
+        // the 25k-writer saturation rung moved the sustained-ingest
+        // watermark ~24x (from ~58k to ~1.38M entries). Reconciliation
+        // falls back to the cross-partition discovery scan, and the
+        // legacy C-row scan still runs first so pre-upgrade orphans
+        // remain recoverable.
         var options = new AzureTableWalStorageOptions();
 
-        Assert.That(options.EliminateCandidateRowOnHotPath, Is.False);
+        Assert.That(options.EliminateCandidateRowOnHotPath, Is.True);
     }
 
     [Test]
-    public void EliminateCandidateRowOnHotPath_round_trips_when_set_to_true()
+    public void EliminateCandidateRowOnHotPath_default_constant_is_true()
+    {
+        Assert.That(AzureTableWalStorageOptions.DefaultEliminateCandidateRowOnHotPath, Is.True);
+    }
+
+    [Test]
+    public void EliminateCandidateRowOnHotPath_round_trips_when_set_to_false()
     {
         var options = new AzureTableWalStorageOptions
         {
-            EliminateCandidateRowOnHotPath = true,
+            EliminateCandidateRowOnHotPath = false,
         };
 
-        Assert.That(options.EliminateCandidateRowOnHotPath, Is.True);
+        Assert.That(options.EliminateCandidateRowOnHotPath, Is.False);
     }
 
     [Test]

@@ -268,7 +268,17 @@ public sealed class AzureTableWalStorageOptions
     /// partitions for the shard with a partition-key range filter
     /// anchored at <c>TAIL + 1</c>; the C-row scan still runs first so
     /// any pre-upgrade orphans stamped while the option was off are
-    /// still reconciled. Default is <see langword="false"/>.
+    /// still reconciled. Default is <see langword="true"/> - the
+    /// throughput campaign's measured Azure-Tables operating-point
+    /// default. An A/B against real Azure Tables at the 25k-writer
+    /// saturation rung moved the sustained-ingest watermark from
+    /// ~58k entries (C-row inline) to ~1.38M entries (C-row elided),
+    /// a ~24x capacity gain, because the phase-0 upsert no longer
+    /// contends with the per-shard <c>PhaseTwoWorker</c> on the shared
+    /// manifest partition. Set to <see langword="false"/> to restore
+    /// the pre-v6.0 historical behaviour (C-row written inline on
+    /// every batch; reconciliation discovers orphans via the
+    /// manifest-partition C-row scan).
     /// <para>
     /// <b>Why elide.</b> The C-row sits in the per-shard manifest
     /// partition, which is the same partition the per-shard
@@ -308,7 +318,10 @@ public sealed class AzureTableWalStorageOptions
     /// pre- and post-upgrade orphans.
     /// </para>
     /// </summary>
-    public bool EliminateCandidateRowOnHotPath { get; set; }
+    public bool EliminateCandidateRowOnHotPath { get; set; } = DefaultEliminateCandidateRowOnHotPath;
+
+    /// <summary>Default value for <see cref="EliminateCandidateRowOnHotPath"/> (<c>true</c>; the throughput-campaign operating-point default that elides the contended per-shard manifest-partition C-row write from the hot path).</summary>
+    public const bool DefaultEliminateCandidateRowOnHotPath = true;
 
     /// <summary>
     /// Optional observer invoked when a pipelined phase-2 task faults.

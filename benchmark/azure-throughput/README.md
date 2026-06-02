@@ -150,8 +150,8 @@ When `producer rate` >> `silo Entries written per second`, the silo is the bottl
 | `BENCH_FLUSH_CONCURRENCY` | silo | `8` | Max in-flight `SetManyAsync` calls. |
 | `BENCH_WAL_PARTITIONS` | silo + scripts | `8` | WAL partitions per tree. Honoured by both `20-build-and-deploy.ps1` (passed through to the ACI YAML) and `Silo/Program.cs` (read at startup). Set to `1` for a single-partition arm of an A/B run. |
 | `BENCH_WAL_MAX_PENDING_BATCHES` | silo + scripts | `8` | Per-WalShardGrain pipeline depth. Honoured by both the deploy script and the silo. |
-| `BENCH_PIPELINE_PHASE2` | silo | `1` | Overlap phase-2 commit with the next batch (`AzureTableWalStorageOptions.PipelinePhaseTwoCommits`). |
-| `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` | silo | `false` | Opt in to the phase-0 candidate-row elision optimisation (`AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath`). Set to `true` for the optimised arm of an A/B run. |
+| `BENCH_PIPELINE_PHASE2` | silo | library default | Overlap phase-2 commit with the next batch (`AzureTableWalStorageOptions.PipelinePhaseTwoCommits`). Unset inherits `AzureTableWalStorageOptions.DefaultPipelinePhaseTwoCommits` (on). |
+| `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` | silo + scripts | library default | Elide the phase-0 candidate-row write (`AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath`). Unset inherits `AzureTableWalStorageOptions.DefaultEliminateCandidateRowOnHotPath` (on). Set to `false` for the legacy inline-C-row arm of an A/B run. |
 | `BENCH_TREE_ID` | silo | `azure-throughput-{utc}` | Pin to re-use an existing WAL partition; default rotates per run. |
 | `BENCH_SHARD_COUNT` | silo | `0` | Override the tree's shard count via `ILattice.ReshardAsync` at startup (`0` = library default). |
 | `BENCH_REPORT_SEC` | silo | `1` | Stdout report cadence. |
@@ -159,13 +159,13 @@ When `producer rate` >> `silo Entries written per second`, the silo is the bottl
 ## A/B-ing a WAL optimisation
 
 ```powershell
-# Baseline arm.
+# Legacy arm (inline C-row).
 $env:BENCH_TREE_ID = 'azure-throughput-baseline'
 $env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'false'
 ./benchmark/azure-throughput/scripts/20-build-and-deploy.ps1
 ./benchmark/azure-throughput/scripts/30-tail-logs.ps1  # capture FINAL line
 
-# Optimised arm.
+# Default arm (C-row elided).
 $env:BENCH_TREE_ID = 'azure-throughput-optimised'
 $env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'true'
 ./benchmark/azure-throughput/scripts/20-build-and-deploy.ps1

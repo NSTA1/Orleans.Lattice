@@ -81,11 +81,13 @@ $treeId        = if ($PSBoundParameters.ContainsKey('TreeId') -and $TreeId) { $T
 $tag          = if ($PSBoundParameters.ContainsKey('Tag'))          { $Tag }
                 elseif ($env:BENCH_IMAGE_TAG) { $env:BENCH_IMAGE_TAG }
                 else { 'latest' }
-# WAL phase-0 candidate-row elision. Off by default to match the library's
-# wire-compat default; set BENCH_WAL_ELIMINATE_CANDIDATE_ROW=true to A/B
-# the optimisation against a real Azure Tables account.
+# WAL phase-0 candidate-row elision. Left empty by default so the silo
+# inherits the library default (AzureTableWalStorageOptions
+# .DefaultEliminateCandidateRowOnHotPath = true); set
+# BENCH_WAL_ELIMINATE_CANDIDATE_ROW=false to A/B the legacy inline C-row
+# write against a real Azure Tables account.
 $walElimCRow  = if ($env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW) { $env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW }
-                else { 'false' }
+                else { '' }
 # WAL partition count per tree. Default 8 (matches Silo/Program.cs default).
 # Operator override path is honoured so a P=1 vs P=8 A/B can be driven from the
 # host env without editing the inline YAML below.
