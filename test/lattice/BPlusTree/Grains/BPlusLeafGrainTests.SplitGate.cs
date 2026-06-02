@@ -120,12 +120,8 @@ public sealed class BPlusLeafGrainSplitGateTests
         ((IGrainBase)sibling).GrainContext.Returns(siblingContext);
         sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
-        sibling.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
-        sibling.SetNextSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
-        sibling.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
-        sibling.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
-        sibling.SetKeyRangeAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.CompletedTask);
-        sibling.SetCheckpointOffsetHintAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
+        sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>()).Returns(Task.CompletedTask);
+        sibling.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", "split-gate-leaf"));
