@@ -74,6 +74,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.leaf.commit.duration",
         "orleans.lattice.provider.commit.duration",
         "orleans.lattice.provider.phase2.batch_size",
+        "orleans.lattice.provider.retry.attempts",
         "orleans.lattice.provider.retry.exhausted",
         "orleans.lattice.saga.fanout.size",
         "orleans.lattice.saga.perkey.duration",
