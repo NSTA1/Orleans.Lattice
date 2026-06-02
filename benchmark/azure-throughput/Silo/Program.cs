@@ -179,18 +179,28 @@ var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", 8);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", 8);
-// Connection-REUSE experiment (perf/wal-connection-reuse). The 25k wedge
-// stalls at TCP/TLS connection establishment (StallWatchdog showed sends
-// parked at HttpConnectionPool.InjectNewHttp11ConnectionAsync await#0),
-// the ACI outbound SNAT-port-exhaustion signature - NOT pool saturation
-// (capping MaxConnectionsPerServer only moved the stall down a layer and
-// did not lift the wedge; see POSTMORTEM-2026-06-02-wal-connection-pool-cap).
-// When enabled, swap the default Azure Tables transport for one whose
-// SocketsHttpHandler maximises connection reuse so the startup reshard
-// burst rides existing connections instead of opening new ones: an
-// effectively-infinite pooled-connection lifetime, no idle eviction, and
-// HTTP/2 request multiplexing over a single connection per server.
+// Connection-REUSE transport (fix/wedge). The 25k wedge root cause is a
+// single Azure Tables request that hangs forever (StallWatchdog showed all
+// snapshots parked at TableClient.AddEntityAsync @ await#0) and pins a
+// WalMaxPendingBatches slot, cascading into a pipeline-wide deadlock at
+// inFlight=WalMaxPendingBatches. On ACI the SNAT gateway silently resets
+// idle outbound sockets; an *infinite* PooledConnectionLifetime never
+// recycles the dead socket, so a request dispatched onto it never returns.
+// When enabled, this transport REUSES connections (to avoid the SNAT
+// establishment stall) but with a FINITE pooled-connection lifetime and
+// idle timeout so ACI-killed sockets are torn down rather than reused into
+// a hang. Paired with a bounded RetryNetworkTimeout (below) so any request
+// that does hang fails per-attempt and the retry policy recovers the slot
+// instead of deadlocking the pipeline.
 var walConnectionReuse = ReadBool("BENCH_WAL_CONNECTION_REUSE", false);
+// Per-attempt network timeout for the WAL Azure Tables client. Default 0
+// leaves the SDK default (100s, effectively unbounded for the wedge). A
+// finite value bounds every individual HTTP attempt so a hung request
+// fails and releases its pending-batch slot. The wedge fix sets this > 0.
+var walNetworkTimeoutSec = ReadIntAllowZero("BENCH_WAL_NETWORK_TIMEOUT_SEC", 0);
+// Finite pooled-connection lifetime (seconds) for the reuse transport so
+// ACI SNAT-killed sockets are recycled instead of reused into a hang.
+var walConnLifetimeSec = ReadInt("BENCH_WAL_CONN_LIFETIME_SEC", 90);
 var shardCountOverride = ReadIntAllowZero("BENCH_SHARD_COUNT", 0);
 var pipelinePhase2 = ReadBool("BENCH_PIPELINE_PHASE2", AzureTableWalStorageOptions.DefaultPipelinePhaseTwoCommits);
 var eliminateCandidateRow = ReadBool("BENCH_WAL_ELIMINATE_CANDIDATE_ROW", AzureTableWalStorageOptions.DefaultEliminateCandidateRowOnHotPath);
@@ -439,30 +449,42 @@ builder.UseOrleans(silo =>
         // per-partition arrival inter-spacing exceeds the commit's own
         // duration.
         o.PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(phaseTwoCoalescingMs);
-        // Connection-reuse transport (perf/wal-connection-reuse). When
-        // BENCH_WAL_CONNECTION_REUSE is set, replace the default Azure.Core
-        // transport with one tuned to never churn connections, so the
-        // reshard burst does not demand hundreds of fresh TCP/TLS handshakes
-        // against an exhausted ACI SNAT pool. BuildServiceClient honours this
-        // callback only in connection-string / credential mode (the path this
-        // silo uses); the provider re-attaches RetryAttemptTrackingPolicy
-        // afterwards so provider.retry.attempts{status=...} still records.
+        // Wedge fix part 1: bound every individual HTTP attempt. Without a
+        // finite per-attempt timeout, a request dispatched onto an
+        // ACI-SNAT-killed socket hangs at TableClient.AddEntityAsync forever,
+        // holds a WalMaxPendingBatches slot, and the back-pressure await in
+        // WalShardGrain deadlocks the whole pipeline at inFlight=cap. A
+        // finite RetryNetworkTimeout turns that hang into a per-attempt
+        // failure the retry policy can recover from, releasing the slot.
+        if (walNetworkTimeoutSec > 0)
+        {
+            o.RetryNetworkTimeout = TimeSpan.FromSeconds(walNetworkTimeoutSec);
+        }
+        // Connection-reuse transport (fix/wedge). When BENCH_WAL_CONNECTION_REUSE
+        // is set, replace the default Azure.Core transport with one that reuses
+        // connections (dodging the SNAT establishment stall) but with a FINITE
+        // lifetime/idle timeout so ACI-killed sockets are recycled rather than
+        // reused into a hang. BuildServiceClient honours this callback only in
+        // connection-string / credential mode (the path this silo uses); the
+        // provider re-attaches RetryAttemptTrackingPolicy afterwards so
+        // provider.retry.attempts{status=...} still records.
         if (walConnectionReuse)
         {
             o.ConfigureClientOptions = clientOptions =>
             {
                 var handler = new SocketsHttpHandler
                 {
-                    // Never recycle a live pooled connection mid-run, and
-                    // never evict an idle one: the reshard burst must reuse
-                    // whatever connections the warm-up established rather than
-                    // opening new sockets that block on SNAT establishment.
-                    PooledConnectionLifetime = Timeout.InfiniteTimeSpan,
-                    PooledConnectionIdleTimeout = Timeout.InfiniteTimeSpan,
-                    // Allow many concurrent in-flight requests to multiplex
-                    // over a single HTTP/2 connection per server instead of
-                    // fanning out onto a connection-per-request, which is what
-                    // drives the InjectNewHttp11Connection establishment stall.
+                    // Wedge fix part 2: FINITE lifetime/idle so an ACI SNAT-
+                    // killed socket is torn down and re-established on next use
+                    // instead of being reused into a request that hangs forever.
+                    PooledConnectionLifetime = TimeSpan.FromSeconds(walConnLifetimeSec),
+                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(walConnLifetimeSec),
+                    // Bound connection establishment too, so a wedged handshake
+                    // fails fast rather than parking a request indefinitely.
+                    ConnectTimeout = TimeSpan.FromSeconds(15),
+                    // Multiplex concurrent requests over a single HTTP/2
+                    // connection per server rather than fanning out onto a
+                    // connection-per-request.
                     EnableMultipleHttp2Connections = false,
                 };
                 clientOptions.Transport = new HttpClientTransport(new HttpClient(handler));
