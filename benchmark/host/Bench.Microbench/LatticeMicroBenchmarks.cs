@@ -462,6 +462,7 @@ public class LatticeMicroBenchmarks
         BuildShipFramingFixture();
         BuildVersionVectorFixture();
         BuildOrMapFixture();
+        BuildLeafQueueFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -1449,6 +1450,21 @@ public class LatticeMicroBenchmarks
     private WalEntry[] _walEncodeEntries = null!;
     private string _walEncodePartitionKey = null!;
 
+    // ===== Leaf-queue (leaf-write-batching investigation, #418) profiling fixture =====
+    //
+    // A real WalShardGrain backed by a latency-injecting storage
+    // provider, used by the LeafQueue_* workloads to measure how the
+    // leaf-grain commit-turn dispatch shape interacts with WAL-ack
+    // latency. The grain's own TaskCompletionSource ack-chain is the
+    // production pipelining ceiling; driving it three ways (serialized,
+    // pipelined, batched) isolates the cost the non-reentrant leaf turn
+    // pays versus the cost a reentrant / batched leaf would pay. See
+    // BuildLeafQueueFixture for the full rationale.
+    private WalShardGrain _leafQueueWal = null!;
+    private LatencyInjectingWalStorageProvider _leafQueueStorage = null!;
+    private WalRecord[] _leafQueueRecords = null!;
+    private int _leafQueueNextOffset;
+
     private void BuildWalEncodeFixture()
     {
         // Build a self-contained ServiceProvider that exposes the Orleans
@@ -1554,6 +1570,181 @@ public class LatticeMicroBenchmarks
         var actions = new List<global::Azure.Data.Tables.TableTransactionAction>(entryCount + 1);
         _walProvider.EncodeEntriesForBatch(_walEncodePartitionKey, slice, actions);
         return actions;
+    }
+
+    // ===== Leaf-queue commit-turn dispatch probe (leaf-write-batching, #418) =====
+    //
+    // The leaf-write-batching investigation (issue #418) is gated on a
+    // profiling
+    // pre-condition: only pursue in-grain write coalescing if the leaf
+    // grain's own commit turn - not the WAL layer, not key skew - is the
+    // bottleneck under realistic WAL-ack latency. These three workloads
+    // answer that directly. They drive a real WalShardGrain (whose
+    // TaskCompletionSource ack-chain is the production pipelining
+    // ceiling) behind a latency-injecting storage provider, three ways:
+    //
+    //   * LeafQueue_SerializedAppends - awaits each AppendAsync before
+    //     issuing the next. This is exactly what a NON-reentrant leaf
+    //     grain does today: every foreground commit awaits its WAL ack
+    //     inside the grain turn, so write N+1 cannot begin until write N
+    //     has durably landed. Expected cost ~ N x latency.
+    //
+    //   * LeafQueue_PipelinedAppends - issues all N AppendAsync calls
+    //     concurrently and awaits the batch. This models a [Reentrant]
+    //     leaf (or any design that releases the turn before the ack)
+    //     letting the WAL grain's ack-chain coalesce the N appends into
+    //     a handful of flushes. Expected cost ~ 1-2 x latency.
+    //
+    //   * LeafQueue_BatchedAppend - one AppendBatchAsync(N). This models
+    //     the existing SetManyAsync coalescing path already on the public
+    //     surface. Expected cost ~ 1 x latency.
+    //
+    // Interpretation: if Pipelined / Batched dramatically beat
+    // Serialized at a realistic latency (single-digit ms for a remote
+    // WAL store), the leaf-turn serialization is the proven bottleneck
+    // and the reentrant-leaf / FlushAsync / WriteMode work (#418) is
+    // justified. If they are close, the WAL ack-chain already absorbs
+    // the latency and the lower-risk remedy (sharding, key-design
+    // guidance) wins. The probe deliberately uses ONE WalShardGrain so
+    // the measured contention is the single hot-leaf case the issue
+    // describes, not the post-split fanned-out steady state.
+    private void BuildLeafQueueFixture()
+    {
+        var sp = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSerializer()
+            .BuildServiceProvider();
+        var serializer = (Serializer<WalRecord>)sp.GetService(typeof(Serializer<WalRecord>))!;
+        var encoder = new OrleansBinaryWalRecordEncoder(serializer);
+
+        // Simulated per-flush WAL-ack latency. Default 4 ms approximates a
+        // same-region Azure Table round-trip; override via env for a
+        // latency sweep without recompiling.
+        var latencyMs = ReadIntEnv("BENCH_MICROBENCH_LEAFQUEUE_LATENCY_MS", 4);
+        _leafQueueStorage = new LatencyInjectingWalStorageProvider(
+            new InMemoryWalStorageProvider(),
+            TimeSpan.FromMilliseconds(latencyMs));
+
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var grainContext = Substitute.For<IGrainContext>();
+        grainContext.GrainId.Returns(GrainId.Create("wal", "leafqueue-tree/0"));
+        var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
+        modeResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        clusterIdResolver.Resolve(Arg.Any<string>()).Returns(string.Empty);
+
+        _leafQueueWal = new WalShardGrain(
+            grainContext,
+            Substitute.For<IServiceProvider>(),
+            monitor,
+            new LatticeOptionsResolver(_grainFactory, monitor),
+            modeResolver,
+            clusterIdResolver,
+            encoder);
+        _leafQueueWal
+            .InitializeForTestingAsync("leafqueue-tree", 0, _leafQueueStorage, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+
+        // Pre-build a pool of distinct WalRecords so neither dispatch
+        // shape pays record-construction cost inside the measured loop.
+        const int PoolSize = 256;
+        var valueBytes = ReadIntEnv("BENCH_MICROBENCH_VALUE_BYTES", 128);
+        var payload = new byte[valueBytes];
+        for (var i = 0; i < payload.Length; i++)
+        {
+            payload[i] = (byte)(i & 0xFF);
+        }
+
+        _leafQueueRecords = new WalRecord[PoolSize];
+        var hlc = HybridLogicalClock.Zero;
+        for (var i = 0; i < PoolSize; i++)
+        {
+            hlc = HybridLogicalClock.Tick(hlc);
+            _leafQueueRecords[i] = new WalRecord
+            {
+                TreeId = "leafqueue-tree",
+                Op = MutationKind.Set,
+                Key = "k-" + i.ToString("D6", CultureInfo.InvariantCulture),
+                Value = payload,
+                Timestamp = hlc,
+                OriginClusterId = "microbench-source",
+            };
+        }
+        _leafQueueNextOffset = 0;
+    }
+
+    /// <summary>
+    /// Returns the next pre-built <see cref="WalRecord"/> from the pool,
+    /// cycling so the measured loop never constructs records. The pool is
+    /// large enough that a single batch never reuses a record within one
+    /// invocation.
+    /// </summary>
+    private WalRecord NextLeafQueueRecord()
+    {
+        var record = _leafQueueRecords[_leafQueueNextOffset % _leafQueueRecords.Length];
+        _leafQueueNextOffset++;
+        return record;
+    }
+
+    /// <summary>
+    /// Serialized commit-turn dispatch: awaits each
+    /// <see cref="WalShardGrain.AppendAsync"/> before issuing the next,
+    /// modelling today's non-reentrant leaf grain where every foreground
+    /// commit blocks the grain turn on its own WAL ack. Expected cost
+    /// scales ~linearly with the batch size times the injected latency.
+    /// </summary>
+    [Benchmark(Description = "LeafQueue serialized appends (non-reentrant leaf)")]
+    [Arguments(8)]
+    [Arguments(32)]
+    public async Task LeafQueue_SerializedAppends(int writes)
+    {
+        for (var i = 0; i < writes; i++)
+        {
+            await _leafQueueWal.AppendAsync(NextLeafQueueRecord(), CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// Pipelined commit-turn dispatch: issues all
+    /// <paramref name="writes"/> appends concurrently and awaits the
+    /// batch, modelling a reentrant / turn-releasing leaf that lets the
+    /// WAL grain's ack-chain coalesce the appends into a handful of
+    /// flushes. Expected to be near-constant in the batch size up to the
+    /// configured pending-flush cap.
+    /// </summary>
+    [Benchmark(Description = "LeafQueue pipelined appends (reentrant leaf)")]
+    [Arguments(8)]
+    [Arguments(32)]
+    public async Task LeafQueue_PipelinedAppends(int writes)
+    {
+        var tasks = new Task<long>[writes];
+        for (var i = 0; i < writes; i++)
+        {
+            tasks[i] = _leafQueueWal.AppendAsync(NextLeafQueueRecord(), CancellationToken.None);
+        }
+        await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Batched commit-turn dispatch: one
+    /// <see cref="WalShardGrain.AppendBatchAsync"/> of
+    /// <paramref name="writes"/> records, modelling the existing
+    /// SetManyAsync coalescing path already on the public surface.
+    /// Expected to pay a single flush latency regardless of batch size
+    /// (subject to the per-flush entry cap).
+    /// </summary>
+    [Benchmark(Description = "LeafQueue batched append (SetMany path)")]
+    [Arguments(8)]
+    [Arguments(32)]
+    public async Task LeafQueue_BatchedAppend(int writes)
+    {
+        var batch = new WalRecord[writes];
+        for (var i = 0; i < writes; i++)
+        {
+            batch[i] = NextLeafQueueRecord();
+        }
+        await _leafQueueWal.AppendBatchAsync(batch, CancellationToken.None);
     }
 
     // ===== Composite ship-path A/B (typed envelope vs framing-only) =====
@@ -1965,4 +2156,76 @@ internal sealed class BenchFramingEncoder : IReplicationBatchEncoder
 
     public ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload)
         => throw new NotSupportedException("Stub does not implement the typed envelope path; use the default framing methods only.");
+}
+
+/// <summary>
+/// <see cref="IWalStorageProvider"/> decorator that injects a fixed
+/// asynchronous delay on the flush write seam
+/// (<see cref="AppendEncodedBatchAsync"/>) before forwarding to an inner
+/// provider, and forwards every other member verbatim. Used by the
+/// leaf-queue commit-turn dispatch probe (leaf-write-batching, #418) so a real
+/// <c>WalShardGrain</c> pays a realistic per-flush WAL-ack latency while
+/// keeping the rest of the storage contract (offset assignment, read,
+/// reconcile) at the cheap in-memory cost. The delay models the round
+/// trip to a remote durable store (Azure Table Storage, Cosmos DB) that
+/// the in-memory provider does not otherwise pay, which is the latency
+/// the leaf-turn serialization question turns on.
+/// <para>
+/// Only the write seam the grain's flush path actually calls
+/// (<see cref="AppendEncodedBatchAsync"/>) is delayed. The grain never
+/// invokes <see cref="AppendBatchAsync"/> on the provider directly - its
+/// own <c>AppendBatchAsync</c> entry point still funnels through the
+/// same flush ack-chain - so a single delayed seam is sufficient to make
+/// all three dispatch shapes observe the same per-flush cost.
+/// </para>
+/// </summary>
+internal sealed class LatencyInjectingWalStorageProvider(
+    IWalStorageProvider inner,
+    TimeSpan flushLatency) : IWalStorageProvider
+{
+    /// <inheritdoc />
+    public Task AppendBatchAsync(
+        string treeId,
+        int shardIndex,
+        IReadOnlyList<WalEntry> entries,
+        CancellationToken cancellationToken)
+        => inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task AppendEncodedBatchAsync(
+        string treeId,
+        int shardIndex,
+        ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
+        ReadOnlyMemory<long> offsets,
+        IWalRecordEncoder encoder,
+        CancellationToken cancellationToken)
+    {
+        if (flushLatency > TimeSpan.Zero)
+        {
+            await Task.Delay(flushLatency, cancellationToken).ConfigureAwait(false);
+        }
+        await inner.AppendEncodedBatchAsync(treeId, shardIndex, encodedEntries, offsets, encoder, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<WalEntry> ReadAsync(
+        string treeId,
+        int shardIndex,
+        long fromOffsetExclusive,
+        int maxEntries,
+        CancellationToken cancellationToken)
+        => inner.ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+    /// <inheritdoc />
+    public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
+        => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
 }
