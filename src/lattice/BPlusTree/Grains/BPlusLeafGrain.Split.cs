@@ -158,14 +158,27 @@ internal sealed partial class BPlusLeafGrain
     {
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
-        var heads = new long[partitionCount];
+        if (partitionCount == 1)
+        {
+            // Common single-partition shape: skip the WhenAll plumbing.
+            var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+                $"{treeId}/0");
+            return [await coordinator.GetHeadOffsetAsync(CancellationToken.None)];
+        }
+
+        // Each partition's head lives on an independent coordinator grain,
+        // so the reads have no ordering dependency - fan them out in
+        // parallel instead of awaiting each one serially. On the split
+        // fast-path this turns an O(WalPartitions) round-trip chain into a
+        // single round-trip's worth of wall-clock latency.
+        var tasks = new Task<long>[partitionCount];
         for (var p = 0; p < partitionCount; p++)
         {
             var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                 $"{treeId}/{p}");
-            heads[p] = await coordinator.GetHeadOffsetAsync(CancellationToken.None);
+            tasks[p] = coordinator.GetHeadOffsetAsync(CancellationToken.None);
         }
-        return heads;
+        return await Task.WhenAll(tasks);
     }
 
     /// <summary>
@@ -194,12 +207,33 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        await newLeaf.SetTreeIdAsync(state.State.TreeId!);
-        if (state.State.ShardIndex is { } parentShardIndex)
+        var oldNextId = state.State.OldNextSibling;
+
+        // The old-next leaf's back-pointer fixup targets a different grain
+        // than the sibling-seeding chain below, so it has no ordering
+        // dependency on it - kick it off now and await it alongside the
+        // sibling work to overlap the two cross-grain round-trips.
+        Task oldNextFixup = Task.CompletedTask;
+        if (oldNextId is not null)
         {
-            await newLeaf.SetShardIndexAsync(parentShardIndex);
+            var oldNext = grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId.Value);
+            oldNextFixup = oldNext.SetPrevSiblingAsync(siblingId);
         }
-        await newLeaf.SetKeyRangeAsync(splitKey, donorPreSplitHigh);
+
+        // Seed every birth-time metadata slot on the sibling in one
+        // round-trip: tree id, shard index, ownership key range, and the
+        // next/prev sibling pointers. This replaces five separate gated
+        // setter RPCs (each its own gate acquire + WriteStateAsync) with a
+        // single gate acquire and a single persist on the sibling.
+        await newLeaf.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = state.State.TreeId!,
+            ShardIndex = state.State.ShardIndex,
+            LowKeyInclusive = splitKey,
+            HighKeyExclusive = donorPreSplitHigh,
+            NextSibling = oldNextId,
+            PrevSibling = context.GrainId,
+        });
 
         var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
         foreach (var (key, lww) in Cache.EnumerateRows())
@@ -215,34 +249,19 @@ internal sealed partial class BPlusLeafGrain
             await newLeaf.MergeEntriesAsync(rightEntries);
         }
 
-        // Per-partition projection-checkpoint hint on the sibling.
-        // Each partition's hint must be scoped to that partition so the
-        // sibling's clamp targets the right partition's offset space.
+        // Per-partition projection-checkpoint hints on the sibling, applied
+        // in a single round-trip. Each partition's hint is scoped to that
+        // partition inside the callee so the sibling's clamp targets the
+        // right offset space - replacing the per-partition RPC fan-out.
         if (resolvedHeads is not null)
         {
-            for (var p = 0; p < resolvedHeads.Length; p++)
-            {
-                var siblingHead = resolvedHeads[p];
-                if (siblingHead > 0)
-                {
-                    using (LatticeApplyOffsetContext.BeginScope(p, siblingHead))
-                    {
-                        await newLeaf.SetCheckpointOffsetHintAsync(siblingHead);
-                    }
-                }
-            }
+            await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
         }
 
-        var oldNextId = state.State.OldNextSibling;
-
-        await newLeaf.SetNextSiblingAsync(oldNextId);
-        await newLeaf.SetPrevSiblingAsync(context.GrainId);
-
-        if (oldNextId is not null)
-        {
-            var oldNext = grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId.Value);
-            await oldNext.SetPrevSiblingAsync(siblingId);
-        }
+        // Join the back-pointer fixup before mutating the donor's own
+        // state so a thrown fixup surfaces here (and not on a later
+        // unobserved-task path).
+        await oldNextFixup;
 
         foreach (var key in rightEntries.Keys)
         {

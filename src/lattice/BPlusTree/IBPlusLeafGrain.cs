@@ -290,6 +290,37 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetCheckpointOffsetHintAsync(long offset);
 
     /// <summary>
+    /// Seeds every birth-time metadata slot on a freshly created split
+    /// sibling in a single round-trip: tree id, shard index, ownership
+    /// key range, and the next/prev sibling pointers. Replaces the five
+    /// separate gated setter RPCs (<see cref="SetTreeIdAsync"/>,
+    /// <see cref="SetShardIndexAsync"/>, <see cref="SetKeyRangeAsync"/>,
+    /// <see cref="SetNextSiblingAsync"/>, <see cref="SetPrevSiblingAsync"/>)
+    /// the donor used to issue serially, each behind its own gate acquire
+    /// and its own <c>WriteStateAsync</c>. Carries the same idempotent
+    /// semantics as the individual setters - the write-once slots
+    /// (tree id, shard index, key-range low bound) are skipped when
+    /// already seeded - but acquires the per-activation split gate once
+    /// and persists once for the whole batch, collapsing the split
+    /// fast-path's sibling-seeding cost from five cross-grain
+    /// persist round-trips to one.
+    /// </summary>
+    Task InitializeSiblingAsync(SiblingInitialization init);
+
+    /// <summary>
+    /// Applies a batch of per-partition projection-checkpoint hints in a
+    /// single round-trip. <paramref name="offsetsByPartition"/> index
+    /// <c>p</c> is the WAL head offset to hint for partition <c>p</c>;
+    /// a non-positive entry is skipped. Replaces the per-partition
+    /// <see cref="SetCheckpointOffsetHintAsync"/> fan-out the split
+    /// donor used to issue once per WAL partition, each a separate
+    /// cross-grain round-trip. Each partition's hint is still applied
+    /// under that partition's <c>LatticeApplyOffsetContext</c> scope so
+    /// the sibling's clamp targets the correct offset space.
+    /// </summary>
+    Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition);
+
+    /// <summary>
     /// Records that ownership of the given <paramref name="sortedMovedSlots"/>
     /// has migrated away from this leaf's owning shard. Subsequent read
     /// entrypoints on this leaf (<see cref="GetAsync"/>,
