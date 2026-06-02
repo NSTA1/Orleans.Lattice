@@ -308,8 +308,25 @@ internal sealed partial class BPlusInternalGrain
     /// fresh copy of <c>SubtreeProjectionHash</c> so subsequent XOR
     /// updates on this activation do not retroactively mutate the bytes
     /// the parent's table has captured.
+    /// <para>
+    /// The upward publish is a cross-grain RPC that is awaited while this
+    /// activation holds its non-reentrant <c>_splitGate</c>, and it
+    /// recurses up the internal-node chain toward the shard root. A parent
+    /// that is itself mid-mutation can leave the await neither completing
+    /// nor faulting, pinning the gate with no ceiling and wedging every
+    /// subsequent mutating turn on this activation. The await is therefore
+    /// bounded by <see cref="LatticeOptions.DigestPublishTimeout"/>: on a
+    /// park the publish is abandoned (its eventual completion is harmlessly
+    /// unobserved) and the turn faults with a <see cref="TimeoutException"/>
+    /// so the gate releases via the caller's <c>finally</c>. The digest is
+    /// staleness-tolerant - the next mutation's dirty-flag publish
+    /// re-drives convergence - and the abandoned publish never partially
+    /// applied at the parent, so the exact-count invariant is preserved.
+    /// When the timeout is <see cref="Timeout.InfiniteTimeSpan"/> the call
+    /// is awaited unbounded, restoring the historical behaviour.
+    /// </para>
     /// </summary>
-    private Task PublishUpwardAsync(GrainId parentId)
+    private async Task PublishUpwardAsync(GrainId parentId)
     {
         EnsureSubtreeHashInitialized();
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
@@ -319,7 +336,31 @@ internal sealed partial class BPlusInternalGrain
             EntryCount = state.State.SubtreeEntryCount,
             CheckpointOffset = state.State.SubtreeHighestCheckpointOffset,
         };
-        return parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);
+
+        var timeout = (await GetOptionsAsync()).DigestPublishTimeout;
+        if (timeout == Timeout.InfiniteTimeSpan)
+        {
+            await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);
+            return;
+        }
+
+        using var deadline = new CancellationTokenSource(timeout);
+        try
+        {
+            await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot)
+                .WaitAsync(deadline.Token);
+        }
+        catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
+        {
+            LatticeMetrics.DigestPublishTimeouts.Add(
+                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty));
+            throw new TimeoutException(
+                $"Internal-node digest publish from '{context.GrainId}' of tree "
+                + $"'{state.State.TreeId ?? "<unknown>"}' to parent '{parentId}' exceeded the "
+                + $"{timeout} publish deadline ({nameof(LatticeOptions.DigestPublishTimeout)}); the "
+                + "parent is likely mid-mutation. The publish is abandoned and the split gate "
+                + "released; the next mutation's digest publish re-drives convergence.", oce);
+        }
     }
 
     /// <summary>

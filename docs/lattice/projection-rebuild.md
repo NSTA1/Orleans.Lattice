@@ -159,6 +159,20 @@ of distinct entries (live plus tombstoned) under the shard across an
 arbitrary sequence of internal-node splits, with no transient
 over- or under-count visible to a quiescent digest read.
 
+The upward `ChildDigestSnapshot` publish that maintains the aggregate
+is a cross-grain RPC awaited while the publishing node holds its
+non-reentrant split gate, and it recurses up the internal-node chain.
+A parent that is itself mid-mutation could leave that await neither
+completing nor faulting, pinning the gate with no ceiling. The publish
+is therefore bounded by `LatticeOptions.DigestPublishTimeout` (default
+15 s): a parked publish is abandoned and the holding turn faults with a
+`TimeoutException` so the gate releases, with no count drift (the
+abandoned publish never partially applied at the parent and the next
+mutation's publish re-drives convergence). Set the option to
+`InfiniteTimeSpan` to restore the historical unbounded await. A
+non-zero `orleans.lattice.internal.digest_publish.timeouts` counter
+surfaces the condition.
+
 ### Cost and where to call it
 
 Because the per-entry XOR fold is maintained incrementally on every

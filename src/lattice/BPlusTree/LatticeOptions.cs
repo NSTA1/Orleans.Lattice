@@ -1133,6 +1133,36 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultActivationReadyTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Maximum time an internal-node digest publish (the upward
+    /// <c>ChildDigestSnapshot</c> propagation that a
+    /// <c>BPlusInternalGrain</c> issues to its parent after folding a
+    /// child's digest) may park before it is abandoned. The publish is a
+    /// cross-grain RPC held under the internal node's non-reentrant split
+    /// gate while it recurses up the internal-node chain toward the shard
+    /// root; a parent that is itself mid-mutation can leave the await
+    /// neither completing nor faulting, pinning the gate on this
+    /// activation with no ceiling and wedging every subsequent mutating
+    /// turn behind it. With the ceiling the parked publish faults cleanly
+    /// and the gate is released; the digest is staleness-tolerant, so the
+    /// next mutation's dirty-flag publish re-drives convergence and no
+    /// data or digest-count accuracy is lost (the exact-count invariant is
+    /// preserved because the abandoned publish never partially applied at
+    /// the parent). Defaults to
+    /// <see cref="DefaultDigestPublishTimeout"/> (15 seconds) - above the
+    /// worst-case legitimate per-hop digest-fold RPC envelope, yet well
+    /// below the Orleans response timeout so a true park is caught before
+    /// the activation wedges. Set to
+    /// <see cref="Timeout.InfiniteTimeSpan"/> to disable the ceiling and
+    /// restore the historical unbounded-await behaviour; the registered
+    /// options validator rejects any other non-positive value at
+    /// first-resolve time.
+    /// </summary>
+    public TimeSpan DigestPublishTimeout { get; set; } = DefaultDigestPublishTimeout;
+
+    /// <summary>Default value for <see cref="DigestPublishTimeout"/> (15 seconds).</summary>
+    public static readonly TimeSpan DefaultDigestPublishTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's
