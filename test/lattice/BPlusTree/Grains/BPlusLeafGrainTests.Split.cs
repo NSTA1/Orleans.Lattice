@@ -246,7 +246,8 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
 
-        await siblingMock.Received().SetPrevSiblingAsync(grainId);
+        await siblingMock.Received().InitializeSiblingAsync(
+            Arg.Is<SiblingInitialization>(init => init.PrevSibling == grainId));
     }
 
     [Test]
@@ -281,7 +282,8 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
 
-        await siblingMock.Received().SetNextSiblingAsync(oldNextId);
+        await siblingMock.Received().InitializeSiblingAsync(
+            Arg.Is<SiblingInitialization>(init => init.NextSibling == oldNextId));
     }
 
     [Test]
@@ -382,7 +384,8 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
 
-        await siblingMock.Received().SetNextSiblingAsync(null);
+        await siblingMock.Received().InitializeSiblingAsync(
+            Arg.Is<SiblingInitialization>(init => init.NextSibling == null));
     }
 
     [Test]
@@ -529,7 +532,8 @@ public partial class BPlusLeafGrainTests
         Assert.That(result, Is.Not.Null, "split should have occurred");
         // Sibling received the WAL-head hint so its first activation can
         // skip replaying the entire shard history.
-        await siblingMock.Received(1).SetCheckpointOffsetHintAsync(42L);
+        await siblingMock.Received(1).SetCheckpointOffsetHintsAsync(
+            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 42L));
     }
 
     [Test]
@@ -584,7 +588,9 @@ public partial class BPlusLeafGrainTests
         // Sibling's range = [splitKey, donor.preSplitHigh). Donor's
         // preSplitHigh was "z", and the split happens before donor's
         // own HighKeyExclusive is narrowed to splitKey.
-        await siblingMock.Received(1).SetKeyRangeAsync(splitKey, "z");
+        await siblingMock.Received(1).InitializeSiblingAsync(
+            Arg.Is<SiblingInitialization>(init =>
+                init.LowKeyInclusive == splitKey && init.HighKeyExclusive == "z"));
         // Donor narrows its own high to splitKey.
         Assert.That(state.State.HighKeyExclusive, Is.EqualTo(splitKey));
         // Donor's low is unchanged.
