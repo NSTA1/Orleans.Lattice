@@ -1417,6 +1417,52 @@ public static class LatticeMetrics
             description: "Per-WAL-writer-partition pending-append-dispatch count sampled at every append entry.");
 
     /// <summary>
+    /// Count of <c>WalCommitLogWriter</c> append dispatches that failed
+    /// to acquire a per-partition admission slot before
+    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> expired.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Reliability intent: the per-partition admission semaphore caps
+    /// <c>PartitionTracker._inFlight</c> depth at
+    /// <see cref="LatticeOptions.WalMaxPendingBatches"/>, mirroring the
+    /// shard-side ceiling. When the shard cannot drain, callers
+    /// awaiting an admission slot are released with a typed
+    /// <see cref="TimeoutException"/> at the deadline rather than
+    /// silently parking forever in an unbounded writer queue. A
+    /// non-zero counter under steady-state operation is the signal that
+    /// the offered rate exceeds the shard's drain rate - the
+    /// saturation regime previously hidden as a silent wedge. Pair with
+    /// <see cref="WalAppendAdmissionWait"/> to distinguish "saturation
+    /// hit but absorbed cleanly" (wait p99 elevated, zero timeouts)
+    /// from "saturation exceeded the deadline" (non-zero timeouts).
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalAppendAdmissionTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.admission_timeouts", unit: "{timeout}",
+            description: "Count of WalCommitLogWriter append dispatches whose per-partition admission wait exceeded WalAppendDispatchTimeout.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent waiting for a per-partition
+    /// admission slot before the <c>WalCommitLogWriter</c> dispatch was
+    /// allowed to link a new <c>PendingAppend</c> stamp. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Reliability intent: under healthy operation this histogram sits
+    /// at the floor (a sub-microsecond uncontended semaphore acquire).
+    /// A spreading distribution indicates the per-partition tracker is
+    /// approaching its <see cref="LatticeOptions.WalMaxPendingBatches"/>
+    /// ceiling, surfacing back-pressure as an honest tail-latency
+    /// signal long before any caller hits the
+    /// <see cref="WalAppendAdmissionTimeouts"/> deadline. Recorded for
+    /// every dispatch that successfully acquired a slot (timed-out
+    /// dispatches feed the counter only).
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalAppendAdmissionWait =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.writer.append.admission_wait", unit: "ms",
+            description: "Wall-clock ms a WalCommitLogWriter dispatch waited for a per-partition admission slot.");
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via

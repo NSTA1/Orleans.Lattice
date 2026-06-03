@@ -154,4 +154,5 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-023](https://github.com/NSTA1/Orleans.Lattice/issues/572) - Bound and attribute the residual phase-1/activation WAL wedge (post-#568 diagnostic pack)
 - [G-024](https://github.com/NSTA1/Orleans.Lattice/issues/574) - Per-shard FlushAsync lifecycle / StartFlush / reshard diagnostics to attribute the residual phase-1/activation WAL wedge
 - [G-025](https://github.com/NSTA1/Orleans.Lattice/issues/575) - Writer-layer pending-append dispatch lifecycle diagnostics to attribute the Mode B WAL wedge upstream of the shard grain
+- [G-026](https://github.com/NSTA1/Orleans.Lattice/issues/577) - Symmetric writer-layer back-pressure: cap PartitionTracker depth at WalMaxPendingBatches with a typed admission timeout to surface saturation as honest slowness instead of a silent wedge
 

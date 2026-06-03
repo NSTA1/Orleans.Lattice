@@ -204,6 +204,14 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // RPC is not draining).
         "orleans.lattice.wal.writer.append.dispatched",
         "orleans.lattice.wal.writer.partition.pending_appends",
+        // Writer-layer admission instruments. The timeouts counter is the
+        // "saturation surfaced as a typed failure" signal; the
+        // admission_wait histogram is the "saturation surfacing as
+        // tail-latency before any hard timeout" signal. Reading the
+        // two together separates "back-pressured cleanly" from
+        // "back-pressure exceeded the deadline".
+        "orleans.lattice.wal.writer.append.admission_timeouts",
+        "orleans.lattice.wal.writer.append.admission_wait",
     };
 
     /// <summary>

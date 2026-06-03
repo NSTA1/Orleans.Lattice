@@ -82,10 +82,32 @@ internal sealed class WalCommitLogWriter(
         // names the dominant stuck stage per partition. See
         // WalAppendStage and PendingAppend for the lifecycle details.
         var tracker = GetTracker(stamped.TreeId, partition);
-        var pending = new PendingAppend(stamped.TreeId, partition, entryCount: 1, batchBytes: 0);
-        var preDepth = tracker.LinkReturningPreDepth(pending);
         var treeTagWriter = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId);
         var partitionTagWriter = new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition);
+
+        // Writer-side admission: cap PartitionTracker._inFlight at
+        // WalMaxPendingBatches so the writer back-pressures honestly
+        // when the downstream shard cannot drain. The acquire bound is
+        // the same WalAppendDispatchTimeout that bounds the shard RPC
+        // below - a single deadline covers admission + dispatch, so a
+        // wedged downstream surfaces a typed TimeoutException to the
+        // caller in bounded time rather than silently absorbing into
+        // an unbounded writer queue.
+        double admissionWaitMs;
+        try
+        {
+            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            System.Console.WriteLine($"[wal-admission-timeout] tree={stamped.TreeId} partition={partition} entries=1 cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
+            LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTagWriter, partitionTagWriter);
+            throw;
+        }
+        LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTagWriter, partitionTagWriter);
+
+        var pending = new PendingAppend(stamped.TreeId, partition, entryCount: 1, batchBytes: 0);
+        var preDepth = tracker.LinkReturningPreDepth(pending);
         LatticeMetrics.WalAppendDispatched.Add(1, treeTagWriter, partitionTagWriter);
         LatticeMetrics.WalAppendPendingDispatches.Record(preDepth, treeTagWriter, partitionTagWriter);
 
@@ -177,6 +199,7 @@ internal sealed class WalCommitLogWriter(
         finally
         {
             tracker.Unlink(pending);
+            tracker.ReleaseAdmission();
             RecordDispatchOutcome(stamped.TreeId, partition, walPartitions, perTree, entryCount: 1, dispatchStartTicks);
         }
     }
@@ -276,10 +299,27 @@ internal sealed class WalCommitLogWriter(
         // entry stamp/unlink so a wedged batched dispatch is visible in
         // the StallWatchdog [wal-append] output too.
         var tracker = GetTracker(treeId, partition);
-        var pending = new PendingAppend(treeId, partition, entryCount: entries.Count, batchBytes: 0);
-        var preDepth = tracker.LinkReturningPreDepth(pending);
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         var partitionTag = new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition);
+
+        // Writer-side admission (batched path): same shape as the
+        // single-entry overload above. The acquire bound is the same
+        // WalAppendDispatchTimeout that bounds the shard RPC below.
+        double admissionWaitMs;
+        try
+        {
+            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            System.Console.WriteLine($"[wal-admission-timeout] tree={treeId} partition={partition} entries={entries.Count} cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
+            LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTag, partitionTag);
+            throw;
+        }
+        LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTag, partitionTag);
+
+        var pending = new PendingAppend(treeId, partition, entryCount: entries.Count, batchBytes: 0);
+        var preDepth = tracker.LinkReturningPreDepth(pending);
         LatticeMetrics.WalAppendDispatched.Add(1, treeTag, partitionTag);
         LatticeMetrics.WalAppendPendingDispatches.Record(preDepth, treeTag, partitionTag);
         try
@@ -340,6 +380,7 @@ internal sealed class WalCommitLogWriter(
         finally
         {
             tracker.Unlink(pending);
+            tracker.ReleaseAdmission();
             RecordDispatchOutcome(treeId, partition, walPartitions, perTree, entryCount: entries.Count, dispatchStartTicks);
         }
     }
@@ -543,6 +584,21 @@ internal sealed class WalCommitLogWriter(
     /// (the same walker helpers apply). The internal lock serialises
     /// link / unlink across concurrent dispatches; metric emission
     /// happens outside the lock to keep the critical section small.
+    /// <para>
+    /// Also owns the per-partition admission semaphore that caps
+    /// <see cref="_inFlight"/> depth at
+    /// <see cref="LatticeOptions.WalMaxPendingBatches"/>, mirroring the
+    /// shard-side ceiling so the writer back-pressures honestly when
+    /// the downstream shard cannot drain. The semaphore is initialised
+    /// lazily at first dispatch with the first per-tree options
+    /// snapshot the partition observes; per-tree
+    /// <see cref="LatticeOptions.WalMaxPendingBatches"/> changes after
+    /// first activation do not retune the cap (matches the existing
+    /// per-tree-immutable convention for the shard-side ceiling and
+    /// keeps the cap stable across the lifetime of one
+    /// <see cref="PartitionTracker"/> so attribution of admission
+    /// timeouts to a single configured cap is unambiguous).
+    /// </para>
     /// </summary>
     internal sealed class PartitionTracker
     {
@@ -550,11 +606,94 @@ internal sealed class WalCommitLogWriter(
         public readonly int Partition;
         public readonly LinkedList<PendingAppend> _inFlight = new();
         private readonly object _gate = new();
+        // Semaphore initialised on first AcquireAsync call; null
+        // when the per-tree options resolved at that moment opted
+        // out via WalMaxPendingBatches <= 0 (the unbounded shape,
+        // for parity with the historical pre-cap writer). Once
+        // initialised, the cap is stable for the tracker's lifetime;
+        // subsequent option changes do not re-tune the semaphore.
+        private SemaphoreSlim? _admission;
+        private int _admissionCap;
 
         public PartitionTracker(string treeId, int partition)
         {
             TreeId = treeId;
             Partition = partition;
+        }
+
+        /// <summary>
+        /// Acquires a per-partition admission slot, bounding writer-side
+        /// pending-dispatch depth at the per-tree
+        /// <see cref="LatticeOptions.WalMaxPendingBatches"/> ceiling.
+        /// Returns the wall-clock ms spent waiting (zero on the uncontended
+        /// fast path; non-zero when the partition was at the cap and the
+        /// caller had to wait for a peer dispatch to release its slot).
+        /// Throws <see cref="TimeoutException"/> on
+        /// <paramref name="timeout"/> expiry; the catch site is responsible
+        /// for recording <see cref="LatticeMetrics.WalAppendAdmissionTimeouts"/>
+        /// with the appropriate tags before re-throwing.
+        /// </summary>
+        public async Task<double> AcquireAsync(int maxPending, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            // Lazy first-use initialisation under the link-gate so the
+            // cap is set at most once even under concurrent first
+            // dispatches. WalMaxPendingBatches <= 0 is treated as the
+            // opt-out / unbounded shape; the semaphore stays null and
+            // every dispatch admits immediately.
+            if (_admission is null && maxPending > 0)
+            {
+                lock (_gate)
+                {
+                    if (_admission is null)
+                    {
+                        _admissionCap = maxPending;
+                        _admission = new SemaphoreSlim(initialCount: maxPending, maxCount: maxPending);
+                    }
+                }
+            }
+            if (_admission is null)
+            {
+                return 0d; // opt-out / unbounded path
+            }
+
+            // Fast path: if the semaphore is uncontended, WaitAsync
+            // completes synchronously and the elapsed measurement is
+            // sub-microsecond. Only the contended path pays the await
+            // suspension cost.
+            var startTicks = Stopwatch.GetTimestamp();
+            var deadlineCts = (CancellationTokenSource?)null;
+            try
+            {
+                bool acquired;
+                if (timeout == Timeout.InfiniteTimeSpan)
+                {
+                    await _admission.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    acquired = true;
+                }
+                else
+                {
+                    acquired = await _admission.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+                }
+                if (!acquired)
+                {
+                    throw new TimeoutException(
+                        $"WAL append admission to writer partition {Partition} of tree '{TreeId}' exceeded the {timeout} admission deadline ({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the partition's pending-append tracker was saturated at cap={_admissionCap} ({nameof(LatticeOptions.WalMaxPendingBatches)}) and no slot freed within the deadline, indicating a wedged downstream shard.");
+                }
+                return Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
+            }
+            finally
+            {
+                deadlineCts?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Releases a previously-acquired admission slot. Safe to call
+        /// even when the semaphore was opted-out (no-op).
+        /// </summary>
+        public void ReleaseAdmission()
+        {
+            _admission?.Release();
         }
 
         /// <summary>
