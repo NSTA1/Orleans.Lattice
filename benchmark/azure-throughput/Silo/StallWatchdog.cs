@@ -365,6 +365,19 @@ internal sealed class StallWatchdog
             var observedCount = countField is not null ? countField.Read<int>(inFlightObj.Address, interior: false) : 0;
             var safetyCap = Math.Max(observedCount, 1) + 8; // small headroom against torn read
 
+            // Per-grain diagnostic line: emits even when we walk 0 slots so a
+            // future cohort can distinguish "head was null" from "head was
+            // populated but slot detection missed". The 2026-06-03 cohort
+            // showed "0 in-flight slot(s) across 9 WalShardGrain activations"
+            // even though 335 callers were parked at WalShardGrain.AppendBatchAsync
+            // await#0 (line 585 await headTask reads _inFlight.First!.Value.Task,
+            // proving _inFlight was populated) - so the prior literal type-name
+            // check was the bug. The walker below now detects InFlightFlush by
+            // its (Stage, StageStartedTicks) field signature rather than by a
+            // hardcoded fully-qualified nested-type-name string, which has
+            // varied across ClrMD versions and .NET nested-generic name formats.
+            line($"[wal-slot-grain] tree={treeId} shard={shardIndex} inFlight.count={observedCount} head.IsNull={headObj.IsNull}");
+
             var node = headObj;
             for (var i = 0; i < safetyCap; i++)
             {
@@ -372,31 +385,47 @@ internal sealed class StallWatchdog
                 var itemField = node.Type.Fields.FirstOrDefault(f => f.Name == "item");
                 if (itemField is null) { break; }
                 var slotObj = itemField.ReadObject(node.Address, interior: false);
-                if (!slotObj.IsNull && slotObj.Type?.Name == "Orleans.Lattice.BPlusTree.Grains.WalShardGrain+InFlightFlush")
+                // Detect InFlightFlush by the field signature (Stage:byte +
+                // StageStartedTicks:long) rather than by the nested-type name
+                // literal - ClrMD's nested-type Name format varies across
+                // versions and .NET runtime updates, and the previous literal
+                // match silently dropped every slot in the 2026-06-03 cohort.
+                if (!slotObj.IsNull && slotObj.Type is not null)
                 {
                     var stageField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "Stage");
                     var stageStartedField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "StageStartedTicks");
-                    var startOffsetField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "<StartOffset>k__BackingField")
-                                          ?? slotObj.Type.Fields.FirstOrDefault(f => f.Name == "StartOffset");
-                    var endOffsetField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "<EndOffsetExclusive>k__BackingField")
-                                        ?? slotObj.Type.Fields.FirstOrDefault(f => f.Name == "EndOffsetExclusive");
-                    var stageByte = stageField is not null ? stageField.Read<byte>(slotObj.Address, interior: false) : (byte)255;
-                    var stageStarted = stageStartedField is not null ? stageStartedField.Read<long>(slotObj.Address, interior: false) : 0L;
-                    var startOffset = startOffsetField is not null ? startOffsetField.Read<long>(slotObj.Address, interior: false) : -1L;
-                    var endOffset = endOffsetField is not null ? endOffsetField.Read<long>(slotObj.Address, interior: false) : -1L;
-                    var stageName = stageByte switch
+                    if (stageField is not null && stageStartedField is not null)
                     {
-                        0 => "Created",
-                        1 => "Yielded",
-                        2 => "ProviderCallIssued",
-                        3 => "ProviderCallReturned",
-                        4 => "AcksApplied",
-                        5 => "FailureHandled",
-                        _ => $"?{stageByte}",
-                    };
-                    var stuckMs = stageStarted > 0 ? (long)((nowTicks - stageStarted) * 1000.0 / tickFreq) : -1L;
-                    line($"[wal-slot] tree={treeId} shard={shardIndex} slot=[{startOffset},{endOffset}) stage={stageName} stuck={stuckMs}ms");
-                    slotCount++;
+                        var startOffsetField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "<StartOffset>k__BackingField")
+                                              ?? slotObj.Type.Fields.FirstOrDefault(f => f.Name == "StartOffset");
+                        var endOffsetField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "<EndOffsetExclusive>k__BackingField")
+                                            ?? slotObj.Type.Fields.FirstOrDefault(f => f.Name == "EndOffsetExclusive");
+                        var stageByte = stageField.Read<byte>(slotObj.Address, interior: false);
+                        var stageStarted = stageStartedField.Read<long>(slotObj.Address, interior: false);
+                        var startOffset = startOffsetField is not null ? startOffsetField.Read<long>(slotObj.Address, interior: false) : -1L;
+                        var endOffset = endOffsetField is not null ? endOffsetField.Read<long>(slotObj.Address, interior: false) : -1L;
+                        var stageName = stageByte switch
+                        {
+                            0 => "Created",
+                            1 => "Yielded",
+                            2 => "ProviderCallIssued",
+                            3 => "ProviderCallReturned",
+                            4 => "AcksApplied",
+                            5 => "FailureHandled",
+                            _ => $"?{stageByte}",
+                        };
+                        var stuckMs = stageStarted > 0 ? (long)((nowTicks - stageStarted) * 1000.0 / tickFreq) : -1L;
+                        line($"[wal-slot] tree={treeId} shard={shardIndex} slot=[{startOffset},{endOffset}) stage={stageName} stuck={stuckMs}ms");
+                        slotCount++;
+                    }
+                    else if (i == 0)
+                    {
+                        // First-node sanity diagnostic: report what type the
+                        // item field carried so the next cohort tells us if
+                        // the slot is shaped differently than expected (e.g.
+                        // boxed-generic name surprise).
+                        line($"[wal-slot-debug] tree={treeId} shard={shardIndex} first item type='{slotObj.Type.Name}' hasStageField={stageField is not null} hasStageStartedField={stageStartedField is not null}");
+                    }
                 }
                 var nextField = node.Type.Fields.FirstOrDefault(f => f.Name == "next");
                 if (nextField is null) { break; }
