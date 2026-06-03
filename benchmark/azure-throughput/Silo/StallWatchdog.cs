@@ -165,6 +165,7 @@ internal sealed class StallWatchdog
             using var runtime = target.ClrVersions[0].CreateRuntime();
 
             EmitSuspendedAsyncStateMachines(runtime, Line);
+            EmitWalShardSlotLifecycle(runtime, Line);
             EmitThreadStacks(runtime, Line);
         }
         catch (Exception ex)
@@ -291,6 +292,127 @@ internal sealed class StallWatchdog
             line($"count={kvp.Value,6:N0}  {kvp.Key}");
         }
         line($"---- {counts.Count} distinct suspend points across {scanned:N0} state-machine objects ----");
+    }
+
+    /// <summary>
+    /// Enumerates every live <c>Orleans.Lattice.BPlusTree.Grains.WalShardGrain</c>
+    /// activation on the heap, follows its <c>_inFlight</c> linked list,
+    /// and prints each in-flight flush slot's lifecycle stage and
+    /// stuck-at-stage duration. A wedge cohort whose <c>WalAppendInFlight</c>
+    /// histogram pins at <c>WalMaxPendingBatches</c> for 120+ seconds with
+    /// no shipped deadline tripping can be attributed here to the exact
+    /// stage of <c>FlushAsync</c> the head slot is parked at, with the
+    /// <c>(tree, shard)</c> the grain owns. Mirrors the production code's
+    /// <c>WalFlushStage</c> enum value-by-name; an unrecognised stage byte
+    /// is printed as <c>?N</c> so a future enum addition surfaces cleanly
+    /// in the log without a watchdog-side rebuild.
+    /// </summary>
+    private static void EmitWalShardSlotLifecycle(ClrRuntime runtime, Action<string> line)
+    {
+        line("==== WalShardGrain in-flight flush slot lifecycle ====");
+        var heap = runtime.Heap;
+        if (!heap.CanWalkHeap)
+        {
+            line("heap not walkable in snapshot; skipping WAL slot lifecycle scan.");
+            return;
+        }
+
+        var nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        var tickFreq = System.Diagnostics.Stopwatch.Frequency;
+        var grainCount = 0;
+        var slotCount = 0;
+
+        foreach (var obj in heap.EnumerateObjects())
+        {
+            if (obj.Type?.Name != "Orleans.Lattice.BPlusTree.Grains.WalShardGrain")
+            {
+                continue;
+            }
+
+            grainCount++;
+            var treeIdField = obj.Type.Fields.FirstOrDefault(f => f.Name == "_treeId");
+            var shardIndexField = obj.Type.Fields.FirstOrDefault(f => f.Name == "_shardIndex");
+            var inFlightField = obj.Type.Fields.FirstOrDefault(f => f.Name == "_inFlight");
+            if (treeIdField is null || shardIndexField is null || inFlightField is null)
+            {
+                line($"WalShardGrain instance at 0x{obj.Address:x} missing one of _treeId/_shardIndex/_inFlight - schema drift?");
+                continue;
+            }
+
+            var treeIdObj = treeIdField.ReadObject(obj.Address, interior: false);
+            var treeId = treeIdObj.IsNull ? "<null>" : treeIdObj.AsString() ?? "<empty>";
+            var shardIndex = shardIndexField.Read<int>(obj.Address, interior: false);
+            var inFlightObj = inFlightField.ReadObject(obj.Address, interior: false);
+            if (inFlightObj.IsNull || inFlightObj.Type is null)
+            {
+                continue;
+            }
+
+            // LinkedList<T>.head is the head node; each LinkedListNode<T>
+            // has 'next' and 'item' fields. Walk the chain (bounded by the
+            // observed Count so a torn read can't infinite-loop).
+            var headField = inFlightObj.Type.Fields.FirstOrDefault(f => f.Name == "head");
+            var countField = inFlightObj.Type.Fields.FirstOrDefault(f => f.Name == "count");
+            if (headField is null)
+            {
+                continue;
+            }
+            var headObj = headField.ReadObject(inFlightObj.Address, interior: false);
+            if (headObj.IsNull)
+            {
+                continue;
+            }
+            var observedCount = countField is not null ? countField.Read<int>(inFlightObj.Address, interior: false) : 0;
+            var safetyCap = Math.Max(observedCount, 1) + 8; // small headroom against torn read
+
+            var node = headObj;
+            for (var i = 0; i < safetyCap; i++)
+            {
+                if (node.IsNull || node.Type is null) { break; }
+                var itemField = node.Type.Fields.FirstOrDefault(f => f.Name == "item");
+                if (itemField is null) { break; }
+                var slotObj = itemField.ReadObject(node.Address, interior: false);
+                if (!slotObj.IsNull && slotObj.Type?.Name == "Orleans.Lattice.BPlusTree.Grains.WalShardGrain+InFlightFlush")
+                {
+                    var stageField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "Stage");
+                    var stageStartedField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "StageStartedTicks");
+                    var startOffsetField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "<StartOffset>k__BackingField")
+                                          ?? slotObj.Type.Fields.FirstOrDefault(f => f.Name == "StartOffset");
+                    var endOffsetField = slotObj.Type.Fields.FirstOrDefault(f => f.Name == "<EndOffsetExclusive>k__BackingField")
+                                        ?? slotObj.Type.Fields.FirstOrDefault(f => f.Name == "EndOffsetExclusive");
+                    var stageByte = stageField is not null ? stageField.Read<byte>(slotObj.Address, interior: false) : (byte)255;
+                    var stageStarted = stageStartedField is not null ? stageStartedField.Read<long>(slotObj.Address, interior: false) : 0L;
+                    var startOffset = startOffsetField is not null ? startOffsetField.Read<long>(slotObj.Address, interior: false) : -1L;
+                    var endOffset = endOffsetField is not null ? endOffsetField.Read<long>(slotObj.Address, interior: false) : -1L;
+                    var stageName = stageByte switch
+                    {
+                        0 => "Created",
+                        1 => "Yielded",
+                        2 => "ProviderCallIssued",
+                        3 => "ProviderCallReturned",
+                        4 => "AcksApplied",
+                        5 => "FailureHandled",
+                        _ => $"?{stageByte}",
+                    };
+                    var stuckMs = stageStarted > 0 ? (long)((nowTicks - stageStarted) * 1000.0 / tickFreq) : -1L;
+                    line($"[wal-slot] tree={treeId} shard={shardIndex} slot=[{startOffset},{endOffset}) stage={stageName} stuck={stuckMs}ms");
+                    slotCount++;
+                }
+                var nextField = node.Type.Fields.FirstOrDefault(f => f.Name == "next");
+                if (nextField is null) { break; }
+                var nextObj = nextField.ReadObject(node.Address, interior: false);
+                if (nextObj.IsNull || nextObj.Address == headObj.Address)
+                {
+                    // LinkedList<T> is a circular ring; head's prev points
+                    // back to the last node and next traversal eventually
+                    // returns to head. Break on that loop closure.
+                    break;
+                }
+                node = nextObj;
+            }
+        }
+
+        line($"---- {slotCount} in-flight slot(s) across {grainCount} WalShardGrain activation(s) ----");
     }
 
     /// <summary>

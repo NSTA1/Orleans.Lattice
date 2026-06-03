@@ -192,4 +192,95 @@ public partial class WalShardGrainTests
         Assert.That(capture.Count("orleans.lattice.wal.flush.preflight.timeouts"), Is.EqualTo(0L),
             "infinite preflight must never trip the deadline counter");
     }
+
+    // ----------------------------------------------------------------------
+    // Diagnostic pack (per-shard FlushAsync lifecycle + reshard counters)
+    // ----------------------------------------------------------------------
+
+    [Test]
+    public async Task StartFlush_increments_start_flush_calls_counter_per_invocation()
+    {
+        using var capture = new MeterCapture();
+        var grain = await CreateGrainAsync();
+
+        // A single AppendAsync triggers exactly one StartFlush on the
+        // healthy path (one batch, no cap-cutover).
+        var offset = await grain.AppendAsync(MakeEntry("a"), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(offset, Is.EqualTo(0L));
+
+        var startFlushCalls = capture.Count("orleans.lattice.wal.shard.start_flush.calls");
+        Assert.That(startFlushCalls, Is.GreaterThanOrEqualTo(1L),
+            "StartFlush counter diagnostic: at least one StartFlush invocation must be observed for a single AppendAsync");
+        var sample = capture.FirstFor("orleans.lattice.wal.shard.start_flush.calls");
+        Assert.That(sample, Is.Not.Null);
+        Assert.That(
+            sample!.Value.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (string?)t.Value == TreeId),
+            Is.True,
+            "StartFlush counter diagnostic: start_flush.calls must be tagged with the affected tree id");
+        Assert.That(
+            sample.Value.Tags.Any(t => t.Key == LatticeMetrics.TagShard && (int?)t.Value == ShardIndex),
+            Is.True,
+            "StartFlush counter diagnostic: start_flush.calls must be tagged with the affected shard index");
+    }
+
+    [Test]
+    public async Task StartFlush_records_pending_segments_histogram_per_invocation()
+    {
+        using var capture = new MeterCapture();
+        var grain = await CreateGrainAsync();
+
+        var offset = await grain.AppendAsync(MakeEntry("a"), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(offset, Is.EqualTo(0L));
+
+        var pendingSegments = capture.FirstFor("orleans.lattice.wal.shard.pending_segments");
+        Assert.That(pendingSegments, Is.Not.Null,
+            "StartFlush counter diagnostic: pending_segments observation must be emitted at StartFlush entry");
+        Assert.That(pendingSegments!.Value.Value, Is.EqualTo(1L),
+            "StartFlush counter diagnostic: a single-entry AppendAsync captures _pendingSegments.Count=1 at the moment StartFlush runs");
+    }
+
+    [Test]
+    public void WalFlushStage_enum_layout_is_contract_with_StallWatchdog()
+    {
+        // lifecycle-stage diagnostic: the StallWatchdog reads WalFlushStage as a raw byte
+        // via ClrMD and maps it to a stage name through a hardcoded
+        // switch (Created=0, Yielded=1, ProviderCallIssued=2, ...). A
+        // future enum renumber would silently mislabel every wedged slot
+        // in the watchdog log; this contract test catches it.
+        var enumType = typeof(Orleans.Lattice.BPlusTree.Grains.WalShardGrain).Assembly
+            .GetType("Orleans.Lattice.BPlusTree.Grains.WalShardGrain+WalFlushStage", throwOnError: true)!;
+        Assert.That(enumType.GetEnumUnderlyingType(), Is.EqualTo(typeof(byte)),
+            "lifecycle-stage diagnostic: WalFlushStage underlying type must be byte (StallWatchdog reads it as byte)");
+        var values = Enum.GetValues(enumType).Cast<object>()
+            .ToDictionary(v => v.ToString()!, v => (byte)v);
+        Assert.Multiple(() =>
+        {
+            Assert.That(values["Created"], Is.EqualTo((byte)0));
+            Assert.That(values["Yielded"], Is.EqualTo((byte)1));
+            Assert.That(values["ProviderCallIssued"], Is.EqualTo((byte)2));
+            Assert.That(values["ProviderCallReturned"], Is.EqualTo((byte)3));
+            Assert.That(values["AcksApplied"], Is.EqualTo((byte)4));
+            Assert.That(values["FailureHandled"], Is.EqualTo((byte)5));
+        });
+    }
+
+    [Test]
+    public void InFlightFlush_carries_Stage_and_StageStartedTicks_fields()
+    {
+        // lifecycle-stage diagnostic: the StallWatchdog walks the heap for InFlightFlush
+        // instances and reads Stage / StageStartedTicks by name via
+        // ClrMD. A field rename (refactor or accidental) would silently
+        // break the watchdog's wedged-slot attribution; this contract
+        // test catches it.
+        var inFlightType = typeof(Orleans.Lattice.BPlusTree.Grains.WalShardGrain).Assembly
+            .GetType("Orleans.Lattice.BPlusTree.Grains.WalShardGrain+InFlightFlush", throwOnError: true)!;
+        var stageField = inFlightType.GetField("Stage", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        var stageStartedField = inFlightType.GetField("StageStartedTicks", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        Assert.That(stageField, Is.Not.Null, "lifecycle-stage diagnostic: InFlightFlush must carry a Stage field of type WalFlushStage");
+        Assert.That(stageStartedField, Is.Not.Null, "lifecycle-stage diagnostic: InFlightFlush must carry a StageStartedTicks field of type long");
+        Assert.That(stageField!.FieldType.Name, Is.EqualTo("WalFlushStage"));
+        Assert.That(stageStartedField!.FieldType, Is.EqualTo(typeof(long)));
+    }
 }

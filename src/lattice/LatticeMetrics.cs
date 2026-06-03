@@ -1250,6 +1250,116 @@ public static class LatticeMetrics
             description: "Per-WAL-shard in-flight slot count observed at OnDeactivateAsync time.");
 
     /// <summary>
+    /// Count of <c>WalShardGrain.StartFlush</c> invocations per
+    /// <c>(tree, shard)</c>. Incremented once at the top of every
+    /// <c>StartFlush</c> call, including the follow-on flushes a
+    /// completing flush kicks off. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagShard"/>.
+    /// <para>
+    /// Diagnostic intent: under the residual phase-1/activation WAL
+    /// wedge, the in-flight chain pins at <c>WalMaxPendingBatches</c>
+    /// for 120+ seconds with no shipped deadline tripping. This counter
+    /// distinguishes two of the three remaining wedge-mechanism classes
+    /// in one cohort: if <c>start_flush.calls</c> keeps incrementing
+    /// throughout the wedge then new flushes ARE being kicked off, so
+    /// the wedge is a slot-leak in the in-flight chain's <c>finally</c>
+    /// (slots never removed even after the flush's task settles). If
+    /// <c>start_flush.calls</c> stops incrementing during the wedge then
+    /// the cap-cutover loop in <c>AppendBatchAsync</c> is itself blocked
+    /// and no new flush ever kicks off. Either signal narrows the
+    /// remaining investigation to a small handful of code regions.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalShardStartFlushCalls =
+        Meter.CreateCounter<long>("orleans.lattice.wal.shard.start_flush.calls", unit: "{call}",
+            description: "Count of WalShardGrain.StartFlush invocations per (tree, shard).");
+
+    /// <summary>
+    /// Histogram of <c>_pendingSegments.Count</c> observed at every
+    /// <c>WalShardGrain.StartFlush</c> entry, sampled <i>before</i> the
+    /// pending list is captured into the new in-flight slot. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// <para>
+    /// Diagnostic intent: under the wedge, a growing distribution
+    /// indicates callers are still arriving and enqueueing into
+    /// <c>_pendingSegments</c> even though the chain cannot drain - a
+    /// signature of back-pressure absorbing everything but never
+    /// releasing. A stuck-at-zero distribution combined with a
+    /// <see cref="WalShardStartFlushCalls"/> trickle indicates the
+    /// cap-cutover loop blocked itself; combined with a healthy
+    /// <c>start_flush.calls</c> rate it indicates the wedge is downstream
+    /// of the flush kick-off. Mirrors the existing <c>WalAppendInFlight</c>
+    /// histogram's allocation-free emission shape.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalShardPendingSegments =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.shard.pending_segments", unit: "{segment}",
+            description: "Per-WAL-shard pending-segment count sampled at every StartFlush entry.");
+
+    /// <summary>
+    /// Count of <c>TreeReshardGrain.ReshardAsync</c> invocations that
+    /// progressed past argument / interlock validation and started a
+    /// reshard coordinator. Tagged with <see cref="TagTree"/>.
+    /// <para>
+    /// Diagnostic intent: the residual WAL wedge is correlated with the
+    /// <c>reshard ... REJECTED (Forwarding failed)</c> log storm
+    /// (228-540 occurrences per wedged run). This counter is the
+    /// Lattice-side initiation signal; pairing it with
+    /// <see cref="ShardRootReshardCompleted"/> and
+    /// <see cref="ShardRootReshardRejected"/> lets a dashboard correlate
+    /// reshard activity with wedge onset directly, without depending on
+    /// grep over a rotated silo log. Note: Orleans-side message-routing
+    /// rejections ("Forwarding failed") are emitted by Orleans's own
+    /// router and are not captured here - they remain log-only until a
+    /// separate diagnostic source is added.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootReshardInitiated =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.initiated", unit: "{reshard}",
+            description: "Count of TreeReshardGrain.ReshardAsync invocations that started a reshard coordinator.");
+
+    /// <summary>
+    /// Count of <c>TreeReshardGrain.ReshardAsync</c> invocations that
+    /// were rejected at the Lattice layer before starting a coordinator.
+    /// Tagged with <see cref="TagTree"/> and a <c>reason</c> tag
+    /// enumerating the rejection cause (e.g. <c>argument_out_of_range</c>,
+    /// <c>resize_in_flight</c>, <c>state_write_failed</c>).
+    /// <para>
+    /// Excludes Orleans-side message-routing rejections, which the
+    /// Orleans runtime logs as "Forwarding failed" but does not surface
+    /// to <c>TreeReshardGrain</c> as a catchable exception inside
+    /// <c>ReshardAsync</c>. See <see cref="ShardRootReshardInitiated"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootReshardRejected =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.rejected", unit: "{rejection}",
+            description: "Count of TreeReshardGrain.ReshardAsync rejections, tagged by reason.");
+
+    /// <summary>
+    /// Count of <c>TreeReshardGrain</c> coordinator completions that
+    /// reached the terminal phase successfully. Tagged with
+    /// <see cref="TagTree"/>. The difference between this and
+    /// <see cref="ShardRootReshardInitiated"/> over a window is the
+    /// number of reshards still in flight or that failed mid-coordinator.
+    /// </summary>
+    public static readonly Counter<long> ShardRootReshardCompleted =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.completed", unit: "{reshard}",
+            description: "Count of TreeReshardGrain coordinator completions.");
+
+    /// <summary>
+    /// Histogram observation of the reshard in-flight state for a tree,
+    /// emitted at every <c>ReshardAsync</c> entry as either <c>0</c>
+    /// (idle) or <c>1</c> (a reshard is already in progress for this
+    /// tree). Tagged with <see cref="TagTree"/>. Bridges the gap left
+    /// by not registering an <c>ObservableGauge</c>: a non-zero
+    /// observation immediately preceding the wedge onset is the same
+    /// signal a periodically-polled gauge would provide.
+    /// </summary>
+    public static readonly Histogram<long> ShardRootReshardInFlight =
+        Meter.CreateHistogram<long>("orleans.lattice.shard_root.reshard.in_flight", unit: "{reshard}",
+            description: "Per-tree reshard in-flight (0/1) observation, recorded at ReshardAsync entry.");
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via

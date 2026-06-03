@@ -887,6 +887,7 @@ internal sealed class WalShardGrain(
         int batchEntries;
         long batchBytes;
         int inFlightBefore;
+        int pendingSegmentsBefore;
         lock (_stateGate)
         {
             if (_pendingSegments.Count == 0)
@@ -894,6 +895,7 @@ internal sealed class WalShardGrain(
                 return;
             }
 
+            pendingSegmentsBefore = _pendingSegments.Count;
             segments = _pendingSegments;
             offsets = _pendingOffsets;
             var acks = _pendingAcks;
@@ -912,6 +914,11 @@ internal sealed class WalShardGrain(
                 Segments = segments,
                 Offsets = offsets,
                 Acks = acks,
+                // Stamp the initial stage under _stateGate so
+                // the watchdog observes a slot in _inFlight that already
+                // has Stage=Created and a sensible StageStartedTicks.
+                Stage = WalFlushStage.Created,
+                StageStartedTicks = Stopwatch.GetTimestamp(),
             };
             node = _inFlight.AddLast(slot);
         }
@@ -926,6 +933,17 @@ internal sealed class WalShardGrain(
         LatticeMetrics.WalAppendBatchEntries.Record(batchEntries, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
         LatticeMetrics.WalAppendBatchBytes.Record(batchBytes, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
         LatticeMetrics.WalAppendInFlight.Record(inFlightBefore, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+        // StartFlush counter + pending-segments histogram. The counter
+        // is incremented per StartFlush call so a wedge cohort can
+        // distinguish "new flushes are being kicked off but slots never
+        // drain" (counter rises while inFlight stays pinned -> slot-leak
+        // class) from "the cap-cutover loop has stopped kicking flushes"
+        // (counter flat while inFlight stays pinned -> kick-stall class).
+        // The histogram observation of _pendingSegments.Count at the
+        // moment the flush is captured gives the cohort the matching
+        // back-pressure-absorption signal.
+        LatticeMetrics.WalShardStartFlushCalls.Add(1, _treeTag, _shardTag);
+        LatticeMetrics.WalShardPendingSegments.Record(pendingSegmentsBefore, _treeTag, _shardTag);
         slot.Task = FlushAsync(node);
     }
 
@@ -990,6 +1008,15 @@ internal sealed class WalShardGrain(
         var slot = node.Value;
         var segments = slot.Segments;
         var offsets = slot.Offsets;
+        // Post-yield lifecycle stamp. If the preflight CTS fired,
+        // skip the stamp - the failure path overwrites with FailureHandled
+        // below. Otherwise the slot has passed the preflight wedge
+        // window and is about to materialise the provider call.
+        if (preflightFailure is null)
+        {
+            slot.Stage = WalFlushStage.Yielded;
+            slot.StageStartedTicks = Stopwatch.GetTimestamp();
+        }
         Trace($"flush.enter [{slot.StartOffset},{slot.EndOffsetExclusive})");
         try
         {
@@ -1058,6 +1085,12 @@ internal sealed class WalShardGrain(
                         offsetsArray.AsMemory(),
                         encoder,
                         deadline?.Token ?? CancellationToken.None);
+                    // Provider Task is in hand and the matching
+                    // WalFlushTimeout deadline is armed; the wedge
+                    // candidate "stuck inside the provider call" is now
+                    // observable as Stage=ProviderCallIssued.
+                    slot.Stage = WalFlushStage.ProviderCallIssued;
+                    slot.StageStartedTicks = Stopwatch.GetTimestamp();
                     if (deadline is null)
                     {
                         await providerCall.ConfigureAwait(true);
@@ -1066,6 +1099,12 @@ internal sealed class WalShardGrain(
                     {
                         await providerCall.WaitAsync(deadline.Token).ConfigureAwait(true);
                     }
+                    // Provider await resumed (success path). The wedge
+                    // candidate "stuck after the provider returned but
+                    // before slot removal" is observable as
+                    // Stage=ProviderCallReturned.
+                    slot.Stage = WalFlushStage.ProviderCallReturned;
+                    slot.StageStartedTicks = Stopwatch.GetTimestamp();
                 }
                 catch (OperationCanceledException oce)
                     when (deadline is not null && deadline.IsCancellationRequested)
@@ -1100,6 +1139,13 @@ internal sealed class WalShardGrain(
                 {
                     slot.Acks[i].TrySetResult(offsets[i]);
                 }
+                // Success path's terminal lifecycle stamp. The slot is
+                // about to be removed by the outer finally; a slot
+                // observed at AcksApplied has fully discharged its
+                // contract and any subsequent wedge is in the outer
+                // remove-from-_inFlight finally region.
+                slot.Stage = WalFlushStage.AcksApplied;
+                slot.StageStartedTicks = Stopwatch.GetTimestamp();
             }
             else
             {
@@ -1110,6 +1156,11 @@ internal sealed class WalShardGrain(
         {
             Trace($"flush.fail  [{slot.StartOffset},{slot.EndOffsetExclusive}) ex={ex.GetType().Name}: {ex.Message}");
             await HandleFlushFailureAsync(node, ex).ConfigureAwait(true);
+            // Failure path's terminal lifecycle stamp. A slot observed
+            // at FailureHandled has had its sticky-failure published and
+            // is about to be removed by the outer finally.
+            slot.Stage = WalFlushStage.FailureHandled;
+            slot.StageStartedTicks = Stopwatch.GetTimestamp();
         }
         finally
         {
@@ -1308,6 +1359,71 @@ internal sealed class WalShardGrain(
         public required List<long> Offsets { get; init; }
         public required List<TaskCompletionSource<long>> Acks { get; init; }
         public Task Task { get; set; } = System.Threading.Tasks.Task.CompletedTask;
+
+        /// <summary>
+        /// Lifecycle stamp. Updated at every milestone in
+        /// <see cref="WalShardGrain.FlushAsync"/> so a wedged head slot
+        /// can be attributed to the exact code region it is stuck at via
+        /// an out-of-process ClrMD walk (e.g. the azure-throughput
+        /// silo's <c>StallWatchdog</c>). The default value is
+        /// <see cref="WalFlushStage.Created"/>, set when the slot is
+        /// constructed in <c>StartFlush</c> before the flush task is
+        /// kicked off; subsequent stages overwrite it as the flush
+        /// progresses. Read by the watchdog without grabbing
+        /// <see cref="_stateGate"/> - a torn read is acceptable because
+        /// any value the field carries names a real point in the state
+        /// machine the slot has visited, and the watchdog is
+        /// observation-only.
+        /// </summary>
+        public WalFlushStage Stage;
+
+        /// <summary>
+        /// Lifecycle stamp companion. <see cref="Stopwatch.GetTimestamp"/>
+        /// captured each time <see cref="Stage"/> is updated, so the
+        /// watchdog can report how long the slot has been stuck at its
+        /// current stage. Two writes per milestone, no allocations.
+        /// </summary>
+        public long StageStartedTicks;
+    }
+
+    /// <summary>
+    /// Lifecycle stage for an <see cref="InFlightFlush"/> slot.
+    /// Updated at every milestone in <see cref="FlushAsync"/> so an
+    /// out-of-process ClrMD walk can attribute a wedged head slot to
+    /// the exact code region it is stuck at.
+    /// <list type="bullet">
+    ///   <item><description><see cref="Created"/> - slot constructed in
+    ///   <see cref="StartFlush"/>, added to <c>_inFlight</c>, and
+    ///   <c>FlushAsync</c> kicked off but its body has not yet been
+    ///   reached.</description></item>
+    ///   <item><description><see cref="Yielded"/> - <c>FlushAsync</c>
+    ///   resumed after <c>await Task.Yield()</c> and passed the
+    ///   preflight-deadline check. Synchronous setup (array materialisation,
+    ///   provider-call CTS construction) follows.</description></item>
+    ///   <item><description><see cref="ProviderCallIssued"/> - the
+    ///   provider's <c>AppendEncodedBatchAsync</c> Task has been
+    ///   returned and the <c>await</c> is about to start. The matching
+    ///   <c>WalFlushTimeout</c> deadline is armed.</description></item>
+    ///   <item><description><see cref="ProviderCallReturned"/> - the
+    ///   provider call's await resumed (either successfully or via the
+    ///   flush-timeout catch). Ack-application or failure-handling
+    ///   follows.</description></item>
+    ///   <item><description><see cref="AcksApplied"/> - on the success
+    ///   path, every per-entry ack TCS has been satisfied with its
+    ///   offset.</description></item>
+    ///   <item><description><see cref="FailureHandled"/> - on the
+    ///   failure path, <c>HandleFlushFailureAsync</c> has run and the
+    ///   sticky failure has been published to every parked TCS.</description></item>
+    /// </list>
+    /// </summary>
+    internal enum WalFlushStage : byte
+    {
+        Created = 0,
+        Yielded = 1,
+        ProviderCallIssued = 2,
+        ProviderCallReturned = 3,
+        AcksApplied = 4,
+        FailureHandled = 5,
     }
 
     /// <summary>
