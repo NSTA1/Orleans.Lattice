@@ -119,6 +119,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-020](https://github.com/NSTA1/Orleans.Lattice/issues/538) - `EnsureRootAsync` clobbers live topology on concurrent shard-root reactivation after a secondary-silo restart
 - [FX-021](https://github.com/NSTA1/Orleans.Lattice/issues/544) - Leaf-level `CountAsync` / `GetStatsAsync` over-count during an in-progress (or restart-interrupted) leaf split
 - [FX-022](https://github.com/NSTA1/Orleans.Lattice/issues/564) - Internal-node split leaves stale per-child digest rows, double-counting subtree entry totals
+- [FX-023](https://github.com/NSTA1/Orleans.Lattice/issues/570) - Reshard to equal shard count throws instead of idempotent no-op (crashes host)
+- [FX-024](https://github.com/NSTA1/Orleans.Lattice/issues/573) - Scrub ConfigureAwait(false) from WalCommitLogWriter except the deliberate G-023 catch-to-threadpool sites
 
 ## Gaps & potential additions
 
@@ -138,6 +140,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-017](https://github.com/NSTA1/Orleans.Lattice/issues/434) - Snapshot blob size cap and oversized-row policy (investigative)
 - [G-018](https://github.com/NSTA1/Orleans.Lattice/issues/435) - Periodic recheck classifier-input cache (investigative)
 - [G-022](https://github.com/NSTA1/Orleans.Lattice/issues/567) - Bound internal-node digest publish held under the split gate to prevent a recursive publish-chain wedge
+- [G-027](https://github.com/NSTA1/Orleans.Lattice/issues/578) - Residual at-saturation wedge correlated with Orleans-rejected reshard forward storm
 
 ### Shipped
 
@@ -149,5 +152,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-019](https://github.com/NSTA1/Orleans.Lattice/issues/546) - Bimodal phase-1/activation wedge on the Azure-Tables WAL hot path (investigative)
 - [G-020](https://github.com/NSTA1/Orleans.Lattice/issues/551) - Non-atomic `GetManyAsync` snapshot across mid-saga reshard (migration Swap-phase ordering)
 - [G-021](https://github.com/NSTA1/Orleans.Lattice/issues/552) - Reshard swap-phase write-path wedge: bounded outbound shard-forward deadline
-- [G-022](https://github.com/NSTA1/Orleans.Lattice/issues/567) - Bound BPlusInternalGrain digest upward publish to prevent recursive publish-chain wedge
+- [G-023](https://github.com/NSTA1/Orleans.Lattice/issues/572) - Bound and attribute the residual phase-1/activation WAL wedge (post-#568 diagnostic pack)
+- [G-024](https://github.com/NSTA1/Orleans.Lattice/issues/574) - Per-shard FlushAsync lifecycle / StartFlush / reshard diagnostics to attribute the residual phase-1/activation WAL wedge
+- [G-025](https://github.com/NSTA1/Orleans.Lattice/issues/575) - Writer-layer pending-append dispatch lifecycle diagnostics to attribute the Mode B WAL wedge upstream of the shard grain
+- [G-026](https://github.com/NSTA1/Orleans.Lattice/issues/577) - Symmetric writer-layer back-pressure: cap PartitionTracker depth at WalMaxPendingBatches with a typed admission timeout to surface saturation as honest slowness instead of a silent wedge
 

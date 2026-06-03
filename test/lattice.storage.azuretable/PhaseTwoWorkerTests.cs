@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using Azure.Data.Tables;
 
 namespace Orleans.Lattice.Storage.AzureTable.Tests;
@@ -730,5 +731,281 @@ public class PhaseTwoWorkerTests
         Assert.That(submitter.Calls.Count, Is.EqualTo(1), "Isolated arrival must still commit");
         Assert.That(sw.Elapsed, Is.GreaterThanOrEqualTo(window - slop),
             "Isolated arrival must wait at least the coalescing window (minus a small scheduler-precision slop) before committing");
+    }
+
+    [Test]
+    public async Task CommitTimeout_unset_leaves_a_slow_commit_unbounded()
+    {
+        // Baseline / pre-fix behaviour: with no PhaseTwoCommitTimeout
+        // the worker waits on the submit task indefinitely (bounded
+        // only by its lifetime token). We model a "slow" commit with a
+        // gate that we release after asserting the commit has not yet
+        // completed, proving the worker did not impose its own deadline.
+        var gate = new TaskCompletionSource();
+        var submitter = new RecordingSubmitter((_, _) => gate.Task);
+        await using var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero, commitTimeout: null);
+
+        var commit = worker.EnqueueAsync(0L, 4L);
+        await WaitForCallsAsync(submitter, 1).ConfigureAwait(false);
+
+        // Give a generous window in which a (nonexistent) deadline
+        // would have fired, then assert the commit is still pending.
+        await Task.Delay(80).ConfigureAwait(false);
+        Assert.That(commit.IsCompleted, Is.False,
+            "With no PhaseTwoCommitTimeout the commit must remain pending until the underlying submit returns");
+
+        gate.SetResult();
+        await commit.ConfigureAwait(false);
+    }
+
+    [Test]
+    public async Task CommitTimeout_positive_faults_a_commit_that_exceeds_the_deadline()
+    {
+        // With a finite PhaseTwoCommitTimeout, a submit that never
+        // returns on its own must be abandoned with a TimeoutException
+        // rather than wedging the drain loop forever. The submit
+        // delegate parks on the cancellation token the worker passes,
+        // which the per-commit deadline cancels.
+        var submitter = new RecordingSubmitter((_, ct) =>
+        {
+            var tcs = new TaskCompletionSource();
+            ct.Register(() => tcs.TrySetCanceled(ct));
+            return tcs.Task;
+        });
+        await using var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero,
+            commitTimeout: TimeSpan.FromMilliseconds(50));
+
+        var commit = worker.EnqueueAsync(0L, 4L);
+
+        try
+        {
+            await commit.ConfigureAwait(false);
+            Assert.Fail("expected the commit to fault with TimeoutException");
+        }
+        catch (TimeoutException)
+        {
+            // expected
+        }
+    }
+
+    [Test]
+    public async Task CommitTimeout_positive_faults_every_later_pending_commit()
+    {
+        // A deadline-tripped commit faults the in-flight batch AND
+        // every later pending commit on the shard (their tail offsets
+        // are now stale), mirroring the transaction-failure semantics.
+        var submitter = new RecordingSubmitter((_, ct) =>
+        {
+            var tcs = new TaskCompletionSource();
+            ct.Register(() => tcs.TrySetCanceled(ct));
+            return tcs.Task;
+        });
+        await using var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero,
+            commitTimeout: TimeSpan.FromMilliseconds(50));
+
+        var inFlight = worker.EnqueueAsync(0L, 0L);
+        await WaitForCallsAsync(submitter, 1).ConfigureAwait(false);
+        var pending1 = worker.EnqueueAsync(1L, 1L);
+        var pending2 = worker.EnqueueAsync(2L, 2L);
+
+        await AssertEventuallyFaultsWithTimeoutAsync(inFlight);
+        await AssertEventuallyFaultsWithTimeoutAsync(pending1);
+        await AssertEventuallyFaultsWithTimeoutAsync(pending2);
+    }
+
+    [Test]
+    public async Task CommitTimeout_positive_does_not_fault_a_commit_that_completes_in_time()
+    {
+        // A healthy commit that returns well within the deadline must
+        // complete normally - the deadline only bounds the pathological
+        // case, it must not turn a fast commit into a timeout.
+        var submitter = new RecordingSubmitter();
+        await using var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero,
+            commitTimeout: TimeSpan.FromSeconds(5));
+
+        await worker.EnqueueAsync(0L, 4L).ConfigureAwait(false);
+
+        Assert.That(submitter.Calls.Count, Is.EqualTo(1),
+            "A commit that returns inside the deadline must complete normally");
+    }
+
+    [Test]
+    public async Task CommitTimeout_positive_continues_to_drain_new_arrivals_after_a_timeout()
+    {
+        // After a deadline-tripped round the worker must keep draining:
+        // the first submit parks until cancelled (tripping the
+        // deadline), subsequent submits complete immediately.
+        var primed = 0;
+        var submitter = new RecordingSubmitter((_, ct) =>
+        {
+            if (Interlocked.Increment(ref primed) == 1)
+            {
+                var tcs = new TaskCompletionSource();
+                ct.Register(() => tcs.TrySetCanceled(ct));
+                return tcs.Task;
+            }
+            return Task.CompletedTask;
+        });
+        await using var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero,
+            commitTimeout: TimeSpan.FromMilliseconds(50));
+
+        await AssertEventuallyFaultsWithTimeoutAsync(worker.EnqueueAsync(0L, 0L));
+
+        // A fresh arrival must drain and succeed.
+        await worker.EnqueueAsync(1L, 1L).ConfigureAwait(false);
+        Assert.That(submitter.Calls.Count, Is.EqualTo(2));
+    }
+
+    /// <summary>
+    /// Awaits <paramref name="task"/> and asserts it faults with a
+    /// <see cref="TimeoutException"/> (the deadline-tripped fault) or an
+    /// <see cref="OperationCanceledException"/> (the equivalent fault a
+    /// later pending commit observes when the worker propagates the
+    /// cancellation). Both are acceptable evidence the commit was
+    /// bounded rather than left to wedge.
+    /// </summary>
+    private static async Task AssertEventuallyFaultsWithTimeoutAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+            Assert.Fail("task should have faulted because the per-commit deadline elapsed");
+        }
+        catch (TimeoutException)
+        {
+            // expected: the in-flight commit that tripped the deadline
+        }
+        catch (OperationCanceledException)
+        {
+            // expected: a later pending commit faulted via cancellation propagation
+        }
+    }
+
+    [Test]
+    public async Task CommitTimeout_increments_the_phase2_commit_timeouts_counter_on_a_trip()
+    {
+        // The deadline-trip path increments
+        // LatticeMetrics.ProviderPhase2CommitTimeouts once for the
+        // single in-flight commit it abandons, stamping the tree and
+        // shard tags the dashboard groups by. The test constructor uses
+        // treeId = "" and shardIndex = 0, so we assert those exact tags.
+        // A single enqueue isolates the increment to exactly one
+        // abandoned submit (no later coalesced/pending arrivals that
+        // would each trip their own deadline).
+        using var recorder = new Phase2CommitTimeoutRecorder();
+        var submitter = new RecordingSubmitter((_, ct) =>
+        {
+            var tcs = new TaskCompletionSource();
+            ct.Register(() => tcs.TrySetCanceled(ct));
+            return tcs.Task;
+        });
+        await using var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero,
+            commitTimeout: TimeSpan.FromMilliseconds(50));
+
+        await AssertEventuallyFaultsWithTimeoutAsync(worker.EnqueueAsync(0L, 4L));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder.Total, Is.EqualTo(1L),
+                "one timeout increment for the single abandoned in-flight commit");
+            Assert.That(recorder.Records, Has.All.Matches<(long Value, string Tree, string Shard)>(
+                r => r.Value == 1L && r.Tree == string.Empty && r.Shard == "0"));
+        });
+    }
+
+    [Test]
+    public async Task CommitTimeout_does_not_increment_the_counter_on_a_healthy_commit()
+    {
+        // A commit that returns inside the deadline must not touch the
+        // timeout counter - the instrument is a pure wedge signal.
+        using var recorder = new Phase2CommitTimeoutRecorder();
+        var submitter = new RecordingSubmitter();
+        await using var worker = new PhaseTwoWorker(
+            submitter.SubmitAsync, ManifestPartitionKey, TimeSpan.Zero,
+            commitTimeout: TimeSpan.FromSeconds(5));
+
+        await worker.EnqueueAsync(0L, 4L).ConfigureAwait(false);
+
+        Assert.That(recorder.Total, Is.EqualTo(0L));
+    }
+
+    /// <summary>
+    /// Captures every emission of
+    /// <see cref="LatticeMetrics.ProviderPhase2CommitTimeouts"/>,
+    /// recording the value plus the <c>tree</c> and <c>shard</c> tag
+    /// values so a test can prove both the count and the grouping
+    /// dimension the dashboard relies on. Filters by instrument name
+    /// so unrelated metric activity on the shared meter is ignored.
+    /// </summary>
+    private sealed class Phase2CommitTimeoutRecorder : IDisposable
+    {
+        private const string CounterName = "orleans.lattice.provider.phase2.commit.timeouts";
+        private readonly MeterListener _listener;
+
+        public List<(long Value, string Tree, string Shard)> Records { get; } = new();
+
+        public long Total
+        {
+            get
+            {
+                lock (Records)
+                {
+                    long sum = 0;
+                    foreach (var r in Records)
+                    {
+                        sum += r.Value;
+                    }
+                    return sum;
+                }
+            }
+        }
+
+        public Phase2CommitTimeoutRecorder()
+        {
+            _listener = new MeterListener
+            {
+                InstrumentPublished = (inst, l) =>
+                {
+                    if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                        && inst.Name == CounterName)
+                    {
+                        l.EnableMeasurementEvents(inst);
+                    }
+                },
+            };
+            _listener.SetMeasurementEventCallback<long>(OnLong);
+            _listener.Start();
+        }
+
+        private void OnLong(Instrument instrument, long value,
+            ReadOnlySpan<KeyValuePair<string, object?>> tags, object? state)
+        {
+            string tree = "(missing)";
+            string shard = "(missing)";
+            foreach (var tag in tags)
+            {
+                if (tag.Key == LatticeMetrics.TagTree)
+                {
+                    tree = tag.Value as string ?? "(null)";
+                }
+                else if (tag.Key == LatticeMetrics.TagShard)
+                {
+                    shard = tag.Value?.ToString() ?? "(null)";
+                }
+            }
+
+            lock (Records)
+            {
+                Records.Add((value, tree, shard));
+            }
+        }
+
+        public void Dispose() => _listener.Dispose();
     }
 }

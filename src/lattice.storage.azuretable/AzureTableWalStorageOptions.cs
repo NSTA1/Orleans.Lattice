@@ -268,7 +268,17 @@ public sealed class AzureTableWalStorageOptions
     /// partitions for the shard with a partition-key range filter
     /// anchored at <c>TAIL + 1</c>; the C-row scan still runs first so
     /// any pre-upgrade orphans stamped while the option was off are
-    /// still reconciled. Default is <see langword="false"/>.
+    /// still reconciled. Default is <see langword="true"/> - the
+    /// throughput campaign's measured Azure-Tables operating-point
+    /// default. An A/B against real Azure Tables at the 25k-writer
+    /// saturation rung moved the sustained-ingest watermark from
+    /// ~58k entries (C-row inline) to ~1.38M entries (C-row elided),
+    /// a ~24x capacity gain, because the phase-0 upsert no longer
+    /// contends with the per-shard <c>PhaseTwoWorker</c> on the shared
+    /// manifest partition. Set to <see langword="false"/> to restore
+    /// the pre-v6.0 historical behaviour (C-row written inline on
+    /// every batch; reconciliation discovers orphans via the
+    /// manifest-partition C-row scan).
     /// <para>
     /// <b>Why elide.</b> The C-row sits in the per-shard manifest
     /// partition, which is the same partition the per-shard
@@ -308,7 +318,10 @@ public sealed class AzureTableWalStorageOptions
     /// pre- and post-upgrade orphans.
     /// </para>
     /// </summary>
-    public bool EliminateCandidateRowOnHotPath { get; set; }
+    public bool EliminateCandidateRowOnHotPath { get; set; } = DefaultEliminateCandidateRowOnHotPath;
+
+    /// <summary>Default value for <see cref="EliminateCandidateRowOnHotPath"/> (<c>true</c>; the throughput-campaign operating-point default that elides the contended per-shard manifest-partition C-row write from the hot path).</summary>
+    public const bool DefaultEliminateCandidateRowOnHotPath = true;
 
     /// <summary>
     /// Optional observer invoked when a pipelined phase-2 task faults.
@@ -411,6 +424,65 @@ public sealed class AzureTableWalStorageOptions
     public static readonly TimeSpan DefaultPhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(5);
 
     /// <summary>
+    /// When set, bounds the wall-time the per-shard
+    /// <c>PhaseTwoWorker</c> waits for any single coalesced phase-2
+    /// manifest commit (the Azure Tables
+    /// <c>SubmitTransactionAsync</c> round-trip) before abandoning it
+    /// and faulting that commit's batch. Defaults to
+    /// <see cref="DefaultPhaseTwoCommitTimeout"/> (3 s). Set to
+    /// <c>null</c> to disable the deadline and restore the historical
+    /// behaviour, in which the commit is bounded only by the worker's
+    /// lifetime token and the SDK's own
+    /// <see cref="RetryNetworkTimeout"/> per-attempt budget, so a
+    /// transaction that never returns - a hung socket, a server-side
+    /// partition stall, or an SDK retry loop that keeps re-issuing -
+    /// blocks the shard's strict offset-FIFO drain loop indefinitely
+    /// and every later pending commit on that shard wedges behind it.
+    /// Must be positive when set.
+    /// <para>
+    /// <b>Why a per-commit deadline.</b> The per-shard worker commits
+    /// phase-2 transactions one coalesced group at a time and the next
+    /// group cannot start until the current
+    /// <c>SubmitTransactionAsync</c> completes (the SortedSet ordering
+    /// invariant requires it). The grain-side <c>WalShardGrain</c>
+    /// back-pressure and flush deadline bound the <i>foreground</i>
+    /// append path, but they do not bound this <i>background</i>
+    /// commit: once the worker's await on the Azure call stops making
+    /// progress there is no other timer covering it. A finite
+    /// per-commit deadline converts an unbounded hang into a bounded
+    /// fault that the existing sticky-failure resync path
+    /// (<see cref="IWalStorageProvider.GetHighestOffsetAsync"/> +
+    /// <see cref="IWalStorageProvider.ReconcileAsync"/>) recovers,
+    /// exactly as it already recovers a phase-2 transaction failure.
+    /// </para>
+    /// <para>
+    /// <b>What changes on a timeout.</b> The commit's batch and every
+    /// later still-pending commit on the shard fault with a
+    /// <see cref="TimeoutException"/> (same fault-the-window semantics
+    /// as a transaction error, because their tail offsets are now
+    /// stale relative to the recovered <c>TAIL</c>). The worker
+    /// continues draining new arrivals. Each timeout increments the
+    /// <c>orleans.lattice.provider.phase2.commit.timeouts</c> counter
+    /// so operators can prove whether the deadline ever fired.
+    /// </para>
+    /// <para>
+    /// <b>Sizing.</b> Set comfortably above the observed phase-2
+    /// commit p99 so healthy commits never trip it, but below the
+    /// silo-level activation / request timeout so a wedged shard is
+    /// broken before it cascades. The 3 s default
+    /// (<see cref="DefaultPhaseTwoCommitTimeout"/>) sits well above the
+    /// observed real-Azure phase-2 commit p99 (sub-second) while still
+    /// breaking a wedged shard before the silo-level request timeout.
+    /// <c>null</c> leaves the seam unbounded (the pre-default
+    /// behaviour).
+    /// </para>
+    /// </summary>
+    public TimeSpan? PhaseTwoCommitTimeout { get; set; } = DefaultPhaseTwoCommitTimeout;
+
+    /// <summary>Default value for <see cref="PhaseTwoCommitTimeout"/> (3 s; comfortably above the observed real-Azure phase-2 commit p99 yet below the silo-level request timeout, so a wedged shard is broken before it cascades).</summary>
+    public static readonly TimeSpan DefaultPhaseTwoCommitTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
     /// Validates that exactly one authentication mode is configured and
     /// that <see cref="TableName"/> is non-empty. Called by the provider
     /// at first use.
@@ -498,6 +570,12 @@ public sealed class AzureTableWalStorageOptions
         {
             throw new InvalidOperationException(
                 $"{nameof(AzureTableWalStorageOptions)}.{nameof(PhaseTwoCoalescingWindow)} must be non-negative.");
+        }
+
+        if (PhaseTwoCommitTimeout is { } commitTimeout && commitTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(PhaseTwoCommitTimeout)} must be positive when set.");
         }
     }
 

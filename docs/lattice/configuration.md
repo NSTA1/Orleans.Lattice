@@ -92,9 +92,11 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
 | [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
+| [`WalAppendDispatchTimeout`](#walappenddispatchtimeout) | `TimeSpan` | 30 seconds | Yes |
 | [`WalBytePressureReclaimTarget`](#walbytepressurereclaimtarget) | `double` | 0.8 | Yes |
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
+| [`WalFlushPreflightTimeout`](#walflushpreflighttimeout) | `TimeSpan` | 5 seconds | Yes |
 | [`WalFlushTimeout`](#walflushtimeout) | `TimeSpan` | 15 seconds | Yes |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 8 | Yes |
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
@@ -538,6 +540,28 @@ Hard ceiling on how long a single per-shard WAL flush may run before it is cance
 Bounding the flush is what keeps a provider call that hangs indefinitely - for example against a partition left half-activated by a placement/reshard race - from pinning its in-flight slot forever. Without a ceiling the hung slot is never removed from the in-flight chain, the chain saturates at `WalMaxPendingBatches`, and every subsequent append back-pressures behind a flush that can never settle (a steady-state stall with no fault and no activation recycle). With the ceiling the hung flush faults cleanly, the existing failure handler resynchronises the dense-offset tail from the provider, drains the chain, and callers retry.
 
 The default of 15 seconds sits above the Azure Tables SDK's worst-case legitimate retry envelope under sustained throttling (~10 seconds: three exponential backoffs plus the call times), so a healthy flush never trips it, yet well below the SDK's per-try network timeout so a true hang is still caught and the wedged shard self-heals promptly. Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. The new value takes effect on the next flush.
+
+### `WalAppendDispatchTimeout`
+
+Hard ceiling on how long the per-tree WAL writer (`WalCommitLogWriter`) will wait on a single outbound `IWalShardGrain.AppendBatchAsync` / `AppendAsync` dispatch before abandoning the await and surfacing a `TimeoutException` to the caller (default: 30 seconds).
+
+The dispatch is the writer-side cross-grain RPC into the per-shard WAL grain - it is the outermost observable seam on the write pipeline and was historically unbounded on the writer side, so a wedged shard activation would hold every caller's dispatch parked until the Orleans response deadline (default 3 minutes) expired (a 180-second blind hang with no per-shard attribution). Bounding the dispatch converts that blind hang into a structured fault with per-shard counter attribution (the `orleans.lattice.wal.append_dispatch.timeouts` counter, tagged `tree` and `shard`), so a wedged shard surfaces immediately and the request pipeline releases its slot rather than back-filling behind the wedge.
+
+This option does **not** fix the wedge mechanism itself - the grain-side flush / activation deadlines already bound their own regions - it bounds the symptom on the writer side and makes every wedge attributable to a specific `(tree, shard)` in O(timeout) instead of O(response timeout) time.
+
+The default of 30 seconds sits above the legitimate envelope of a fully-saturated dispatch (one healthy flush + headroom), yet well below the Orleans response timeout so a true park is caught and surfaced promptly. Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. The new value takes effect on the next dispatch.
+
+### `WalFlushPreflightTimeout`
+
+Hard ceiling on how long a per-shard WAL `FlushAsync` may spend in its preflight region (the synchronous setup and initial scheduler yield that precede the bounded provider call) before the flush is abandoned and the slot drains (default: 5 seconds).
+
+The preflight region is normally microseconds, but if the activation's grain scheduler never resumes the post-yield continuation (e.g. a startup reshard / membership change parked the activation, a non-cooperative work item is hogging the scheduler, or the activation is being torn down mid-flush) the slot sits in `_inFlight` with no deadline armed - the existing `WalFlushTimeout` only covers the provider call, which has not yet been issued - and the chain saturates at `WalMaxPendingBatches` with no fault and no activation recycle. With the ceiling the parked preflight faults cleanly as a `TimeoutException` routed through the normal failure handler, the slot drains, and the `orleans.lattice.wal.flush.preflight.timeouts` counter (tagged `tree` and `shard`) attributes the trip to the affected partition.
+
+The default of 5 seconds is orders of magnitude above the legitimate microsecond envelope, yet small enough that a genuinely stalled scheduler is caught before the writer-side dispatch deadline (`WalAppendDispatchTimeout`) trips. Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
 
 This option can be changed freely at any time. The new value takes effect on the next flush.
 

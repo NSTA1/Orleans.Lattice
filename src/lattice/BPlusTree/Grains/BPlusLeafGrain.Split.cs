@@ -9,29 +9,49 @@ internal sealed partial class BPlusLeafGrain
 {
     /// <summary>
     /// Per-activation gated entry point for <see cref="SplitAsync"/>.
-    /// Acquires <c>_splitGate</c>, re-checks the overflow predicate
-    /// inside the gate (a concurrent interleaved turn may have already
-    /// split this leaf, in which case <c>Cache.Count</c> is now back
-    /// under the threshold), and runs the split only if still required.
-    /// Returns <see langword="null"/> when the in-flight split absorbed
-    /// the caller's overflow, mirroring the no-split branch of the
-    /// foreground commit paths.
+    /// Tries to acquire <c>_splitGate</c> <em>without blocking</em>; the
+    /// single turn that wins the gate owns the split and runs it, while
+    /// every concurrent overflowing turn returns immediately rather than
+    /// convoying on the gate. Inside the gate the overflow predicate is
+    /// re-checked (a just-completed in-flight split may have already
+    /// pushed <c>Cache.Count</c> back under the threshold), and the
+    /// split runs only if still required. Returns <see langword="null"/>
+    /// when the caller did not own the split (either the gate was held
+    /// by an in-flight split, or the re-check found nothing to do),
+    /// mirroring the no-split branch of the foreground commit paths.
     /// <para>
-    /// Required by U9p step 8c-c-iv-c2-iii: the mutation surface
+    /// Why non-blocking: the mutation surface
     /// (<see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/>,
     /// <see cref="IBPlusLeafGrain.SetManyAsync"/>,
     /// <see cref="IBPlusLeafGrain.DeleteAsync"/>,
     /// <see cref="IBPlusLeafGrain.MergeManyAsync"/>) is marked
-    /// <c>[AlwaysInterleave]</c>, so two interleaved turns can both
-    /// observe overflow before either flips
-    /// <see cref="Primitives.SplitState.SplitInProgress"/>; this gate
-    /// serialises every entry to <c>SplitAsync</c> and the re-check
-    /// drops the cascade caller without doing duplicate work.
+    /// <c>[AlwaysInterleave]</c>, so under a write burst many interleaved
+    /// turns observe overflow on the same hot leaf at once. Each turn's
+    /// data is already durable (WAL append + projection apply both run
+    /// <em>before</em> this predicate is evaluated), and an in-flight
+    /// split's cross-grain migration runs a long chain of Azure-Table
+    /// round-trips while holding the gate. A blocking
+    /// <c>WaitAsync()</c> here parks every concurrent producer slot on
+    /// the gate for the full migration duration only for each to
+    /// discover, via the re-check, that the in-flight split already
+    /// absorbed its overflow - a dead convoy that stalls ingest under
+    /// table saturation. Skipping when the gate is contended keeps those
+    /// slots flowing; the leaf is transiently over-full but correct (the
+    /// owning split, or the next write that wins the gate, migrates the
+    /// excess), and reads/writes against an over-full leaf are
+    /// unaffected.
     /// </para>
     /// </summary>
     private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys)
     {
-        await _splitGate.WaitAsync().ConfigureAwait(true);
+        // Non-blocking acquire: the loser of the race does NOT wait for
+        // the in-flight split's cross-grain migration to drain. Its
+        // write is already durable and the owning split (or a later
+        // write) will carry the leaf back under threshold, so returning
+        // null here is the same observable outcome the blocking re-check
+        // would have produced - minus the convoy wait.
+        if (!_splitGate.Wait(0))
+            return null;
         try
         {
             // Re-check inside the gate. A concurrent turn may have
@@ -64,6 +84,22 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="State.LeafNodeState.SplitSiblingId"/> fields to
     /// route its own write across the donor / sibling boundary, so
     /// the post-gate routing in the caller is correct either way.
+    /// <para>
+    /// This recovery acquire stays <em>blocking</em> (unlike the
+    /// non-blocking acquire in <see cref="SplitIfNeededUnderGateAsync"/>)
+    /// because it guards the migration-serialisation invariant: while a
+    /// split is mid-flight, <see cref="CompleteSplitAsync"/> snapshots
+    /// the donor's <c>&gt;= splitKey</c> entries into the sibling and
+    /// then removes them from the donor. A contended turn that skipped
+    /// the gate here would route its write to a sibling that is not yet
+    /// initialised (tree id / key range / entries unset) or race the
+    /// snapshot-then-remove window and lose the write. The thundering
+    /// herd that motivated the non-blocking split-predicate acquire is
+    /// the simultaneous-overflow case on a not-yet-splitting leaf, which
+    /// arrives through <see cref="SplitIfNeededUnderGateAsync"/>, not
+    /// here; mid-migration arrivals through this path are comparatively
+    /// few and must serialise for correctness.
+    /// </para>
     /// </summary>
     private async Task<SplitResult?> CompleteRecoverySplitUnderGateAsync()
     {
@@ -122,14 +158,27 @@ internal sealed partial class BPlusLeafGrain
     {
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
-        var heads = new long[partitionCount];
+        if (partitionCount == 1)
+        {
+            // Common single-partition shape: skip the WhenAll plumbing.
+            var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+                $"{treeId}/0");
+            return [await coordinator.GetHeadOffsetAsync(CancellationToken.None)];
+        }
+
+        // Each partition's head lives on an independent coordinator grain,
+        // so the reads have no ordering dependency - fan them out in
+        // parallel instead of awaiting each one serially. On the split
+        // fast-path this turns an O(WalPartitions) round-trip chain into a
+        // single round-trip's worth of wall-clock latency.
+        var tasks = new Task<long>[partitionCount];
         for (var p = 0; p < partitionCount; p++)
         {
             var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                 $"{treeId}/{p}");
-            heads[p] = await coordinator.GetHeadOffsetAsync(CancellationToken.None);
+            tasks[p] = coordinator.GetHeadOffsetAsync(CancellationToken.None);
         }
-        return heads;
+        return await Task.WhenAll(tasks);
     }
 
     /// <summary>
@@ -158,12 +207,33 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        await newLeaf.SetTreeIdAsync(state.State.TreeId!);
-        if (state.State.ShardIndex is { } parentShardIndex)
+        var oldNextId = state.State.OldNextSibling;
+
+        // The old-next leaf's back-pointer fixup targets a different grain
+        // than the sibling-seeding chain below, so it has no ordering
+        // dependency on it - kick it off now and await it alongside the
+        // sibling work to overlap the two cross-grain round-trips.
+        Task oldNextFixup = Task.CompletedTask;
+        if (oldNextId is not null)
         {
-            await newLeaf.SetShardIndexAsync(parentShardIndex);
+            var oldNext = grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId.Value);
+            oldNextFixup = oldNext.SetPrevSiblingAsync(siblingId);
         }
-        await newLeaf.SetKeyRangeAsync(splitKey, donorPreSplitHigh);
+
+        // Seed every birth-time metadata slot on the sibling in one
+        // round-trip: tree id, shard index, ownership key range, and the
+        // next/prev sibling pointers. This replaces five separate gated
+        // setter RPCs (each its own gate acquire + WriteStateAsync) with a
+        // single gate acquire and a single persist on the sibling.
+        await newLeaf.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = state.State.TreeId!,
+            ShardIndex = state.State.ShardIndex,
+            LowKeyInclusive = splitKey,
+            HighKeyExclusive = donorPreSplitHigh,
+            NextSibling = oldNextId,
+            PrevSibling = context.GrainId,
+        });
 
         var rightEntries = new Dictionary<string, LwwValue<byte[]>>();
         foreach (var (key, lww) in Cache.EnumerateRows())
@@ -179,34 +249,19 @@ internal sealed partial class BPlusLeafGrain
             await newLeaf.MergeEntriesAsync(rightEntries);
         }
 
-        // Per-partition projection-checkpoint hint on the sibling.
-        // Each partition's hint must be scoped to that partition so the
-        // sibling's clamp targets the right partition's offset space.
+        // Per-partition projection-checkpoint hints on the sibling, applied
+        // in a single round-trip. Each partition's hint is scoped to that
+        // partition inside the callee so the sibling's clamp targets the
+        // right offset space - replacing the per-partition RPC fan-out.
         if (resolvedHeads is not null)
         {
-            for (var p = 0; p < resolvedHeads.Length; p++)
-            {
-                var siblingHead = resolvedHeads[p];
-                if (siblingHead > 0)
-                {
-                    using (LatticeApplyOffsetContext.BeginScope(p, siblingHead))
-                    {
-                        await newLeaf.SetCheckpointOffsetHintAsync(siblingHead);
-                    }
-                }
-            }
+            await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
         }
 
-        var oldNextId = state.State.OldNextSibling;
-
-        await newLeaf.SetNextSiblingAsync(oldNextId);
-        await newLeaf.SetPrevSiblingAsync(context.GrainId);
-
-        if (oldNextId is not null)
-        {
-            var oldNext = grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId.Value);
-            await oldNext.SetPrevSiblingAsync(siblingId);
-        }
+        // Join the back-pointer fixup before mutating the donor's own
+        // state so a thrown fixup surfaces here (and not on a later
+        // unobserved-task path).
+        await oldNextFixup;
 
         foreach (var key in rightEntries.Keys)
         {

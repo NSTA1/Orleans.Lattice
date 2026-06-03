@@ -204,6 +204,13 @@ internal static class TypeAliases
     // by IBPlusInternalGrain.OnChildDigestPublishedAsync).
     internal const string ChildDigestSnapshot = "ol.cds";
 
+    // Batched leaf-split sibling-initialization payload. Collapses the
+    // five separate gated metadata-setter RPCs the donor used to issue
+    // against a freshly-created sibling (tree id, shard index, key
+    // range, next/prev sibling pointers) into one
+    // IBPlusLeafGrain.InitializeSiblingAsync round-trip.
+    internal const string SiblingInitialization = "ol.sib";
+
     // Write-ahead-log durability seam (consumed by the replication
     // package today; foreground commit-log adapter tomorrow)
     internal const string WalEntry = "ol.we";

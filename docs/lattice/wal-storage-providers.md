@@ -238,9 +238,9 @@ Two practical rules follow:
 
 Setting `AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath = true` opts the provider into a hot-path shape that **skips the phase-0 candidate-row write entirely** and shrinks the phase-2 transaction from three actions (`{delete C, insert M, upsert TAIL}`) to two (`{insert M, upsert TAIL}`). Orphans are still recovered, but recovery now discovers them by enumerating batch partitions whose start offset sits above `TAIL` instead of by scanning candidate-rows in the manifest partition.
 
-The mode is off by default. It is a throughput knob that trades the per-batch C-row round-trip for a different recovery-scan shape:
+**As of v6.0.1 the default is `EliminateCandidateRowOnHotPath = true`.** An A/B against real Azure Tables at the 25k-writer saturation rung moved the sustained-ingest watermark from ~58k entries (C-row written inline) to ~1.38M entries (C-row elided) - a ~24x capacity gain - because the phase-0 upsert no longer contends with the per-shard `PhaseTwoWorker` on the shared manifest partition (Azure Tables serialises writes within a `PartitionKey` server-side). Hosts that need the pre-v6.0 recovery contract - the C-row written inline and orphans discovered via the manifest-partition C-row scan - should explicitly opt **out** (`EliminateCandidateRowOnHotPath = false`). It is a throughput knob that trades the per-batch C-row round-trip for a different recovery-scan shape:
 
-| Property | Default (legacy) | `EliminateCandidateRowOnHotPath = true` |
+| Property | Legacy (`= false`) | Default (`= true`) |
 |---|---|---|
 | Hot-path Azure Tables round-trips per append | phase-0 C-row write + phase-1 entry transaction + phase-2 transaction | phase-1 entry transaction + phase-2 transaction |
 | Phase-2 transaction shape | `{delete C, insert M, upsert TAIL}` per coalesced commit, plus one TAIL | `{insert M}` per coalesced commit, plus one TAIL |
@@ -250,9 +250,9 @@ The mode is off by default. It is a throughput knob that trades the per-batch C-
 
 The reconciler always performs both scans when the flag is on, so a silo started with the flag enabled recovers **both** legacy orphans (left by a previous flag-off activation) and D-mode orphans (left by a previous flag-on activation) - upgrading from flag-off to flag-on is safe and lossless.
 
-**Downgrade is not symmetric.** A silo started with the flag *off* runs the legacy C-row scan only; D-mode orphans (which by construction carry no C-row) are invisible to it and remain on disk above `TAIL` until a future flag-on activation observes them. The orphan entry rows are not lost - a subsequent flag-on activation rolls them forward or rolls them back as appropriate - but the downgraded silo will not advance `TAIL` past them, and any `AppendBatchAsync` from `TAIL + 1` will start writing at an offset already occupied by an unreconciled orphan. **Always drain pending appends and let `ReconcileAsync` complete on a flag-on silo before flipping the flag back to off.** This is the load-bearing reason the legacy code path is retained even when the flag defaults on in a future release.
+**Always drain pending appends and let `ReconcileAsync` complete on a flag-on silo before flipping the flag back to off.** This is the load-bearing reason the legacy code path is retained now that the flag defaults on.
 
-The mode is opt-in for the same reason as `PipelinePhaseTwoCommits`: it is a change in the recovery contract, not just a perf tweak. Bake it into a representative workload before defaulting it on per deployment.
+Like `PipelinePhaseTwoCommits`, this default flip is a change in the recovery contract, not just a perf tweak - which is why the legacy C-row code path is retained behind `EliminateCandidateRowOnHotPath = false`. Before opting out in production, bake the chosen arm into a representative workload.
 
 The `benchmark/azure-throughput/` harness exposes this flag via the `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` environment variable so the same single-silo, real-Azure-Tables deployment can drive both arms of an A/B run with no code change. See `benchmark/azure-throughput/README.md` for the A/B runbook.
 
@@ -282,6 +282,26 @@ The provider surfaces five nullable knobs on `AzureTableWalStorageOptions` that 
 The knobs are applied to `clientOptions.Retry` **before** the host's `ConfigureClientOptions` callback runs, so a host that wants final say can override any of them inside that callback (or replace `clientOptions.Retry` wholesale). The provider's `Validate()` rejects negative values, `RetryDelay > RetryMaxDelay`, and a non-positive `RetryNetworkTimeout`. In pre-built `ServiceClient` mode the knobs are ignored: the host already owns the `TableClientOptions.Retry` on the client it constructed.
 
 The motivation is the diagnostic finding that the WAL hot path's wall-time p99 sat 5–100x above Azure Tables' server-timing p99 - the canonical signature of a retry storm whose retries ultimately succeed. The `orleans.lattice.provider.retry.attempts` counter from the observability section above is the diagnostic that tells operators whether to reach for these knobs, and `RetryNetworkTimeout` in particular is the per-attempt deadline budget that prevents a single stuck request from holding a WAL slot for the full SDK default of 100 s.
+
+#### Bounding a wedged phase-2 commit
+
+`RetryNetworkTimeout` bounds each *attempt* the SDK makes, but it does not bound the per-shard `PhaseTwoWorker`'s manifest commit as a whole: the worker commits phase-2 transactions one coalesced group at a time, and the next group cannot start until the current `SubmitTransactionAsync` returns (the strict offset-FIFO ordering invariant requires it). The grain-side `WalShardGrain` back-pressure and flush deadline bound the *foreground* append path, but neither timer covers this *background* commit. If a commit's Azure Tables transaction stops making progress (a hung socket, a server-side partition stall, or an SDK retry loop that keeps re-issuing past the network timeout) the drain loop blocks indefinitely and every later pending commit on that shard wedges behind it.
+
+`AzureTableWalStorageOptions.PhaseTwoCommitTimeout` is a finite per-commit deadline for exactly this case. It defaults to `AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout` (3 seconds), so a wedged manifest commit faults instead of stalling the per-shard drain loop indefinitely out of the box. Set it to `null` to restore the historical unbounded behaviour, or to a different positive `TimeSpan` to tune the deadline:
+
+```csharp verify
+var options = new AzureTableWalStorageOptions
+{
+    ConnectionString = "UseDevelopmentStorage=true",
+    // Abandon a phase-2 manifest commit that has not returned within
+    // 30 s. The faulted batch (and every later pending commit on the
+    // shard) is recovered by the same sticky-failure resync path that
+    // already handles a phase-2 transaction error.
+    PhaseTwoCommitTimeout = TimeSpan.FromSeconds(30),
+};
+```
+
+When the deadline fires, the commit's batch and every later still-pending commit on the shard fault with a `TimeoutException` (the same fault-the-window semantics as a transaction error, because their tail offsets are now stale relative to the recovered `TAIL`), the worker keeps draining new arrivals, and the `orleans.lattice.provider.phase2.commit.timeouts` counter increments once - tagged `tree` and `shard` - so operators can prove whether the deadline ever fired. Size it comfortably above the observed phase-2 commit p99 (so healthy commits never trip it) but below the silo-level activation / request timeout (so a wedged shard is broken before it cascades). `Validate()` rejects a zero or negative value.
 
 ## Testing
 

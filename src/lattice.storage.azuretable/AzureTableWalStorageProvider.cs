@@ -1563,7 +1563,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             treeId,
             shardIndex,
             _pipelinePhaseTwoTag,
-            _options.PhaseTwoCoalescingWindow);
+            _options.PhaseTwoCoalescingWindow,
+            _options.PhaseTwoCommitTimeout);
         if (_phaseTwoWorkers.TryAdd(manifestPartitionKey, created))
         {
             return created;

@@ -77,11 +77,11 @@ sequenceDiagram
 
     rect rgb(240, 255, 240)
     Note over Leaf: Phase 2 - cross-grain ops (CompleteSplitAsync)
-    Leaf->>New: SetTreeIdAsync / SetShardIndexAsync / SetKeyRangeAsync
-    Leaf->>New: MergeEntriesAsync(right-half entries)
-    Leaf->>New: SetNextSiblingAsync(oldNextSibling), SetPrevSiblingAsync(donor)
+    Leaf->>New: InitializeSiblingAsync seeds the sibling in one RPC
+    Leaf->>New: MergeEntriesAsync right-half entries
+    Leaf->>New: SetCheckpointOffsetHintsAsync sets partition heads in one RPC
     Leaf->>Leaf: Remove right-half keys from local cache
-    Leaf->>Leaf: HighKeyExclusive = splitKey; SplitState = SplitComplete
+    Leaf->>Leaf: HighKeyExclusive = splitKey then SplitState = SplitComplete
     end
 
     Leaf-->>Root: SplitResult { PromotedKey, NewSiblingId }
@@ -96,7 +96,7 @@ sequenceDiagram
 ```
 
 1. **Phase 1 (persist intent):** The leaf picks the **median key** from its in-memory cache, allocates the new sibling's `GrainId`, and persists the split metadata (`SplitState = SplitInProgress`, `SplitKey`, `SplitSiblingId`, `OldNextSibling`, and `NextSibling` redirected to the new sibling) in a single `WriteStateAsync` call. The donor's own key-range is *not* trimmed in Phase 1 - the right-half entries remain in the cache until Phase 2.
-2. **Phase 2 (cross-grain ops, `CompleteSplitAsync`):** The donor seeds the new sibling (`SetTreeIdAsync` / `SetShardIndexAsync` / `SetKeyRangeAsync`), populates it via `MergeEntriesAsync` (an idempotent bulk merge of every key `>= splitKey`), wires the sibling pointers, removes the right-half keys from its local cache, advances its own `HighKeyExclusive` to the split key, and transitions `SplitState` to `SplitComplete`.
+2. **Phase 2 (cross-grain ops, `CompleteSplitAsync`):** The donor seeds every birth-time metadata slot on the new sibling - tree id, shard index, ownership key range, and the next/prev sibling pointers - in a single `InitializeSiblingAsync` round-trip (one gate acquire and one `WriteStateAsync` on the sibling, replacing the five separate gated setter RPCs the donor used to issue serially). It then populates the sibling via `MergeEntriesAsync` (an idempotent bulk merge of every key `>= splitKey`), applies the per-partition projection-checkpoint hints in a single `SetCheckpointOffsetHintsAsync` round-trip (replacing the per-WAL-partition fan-out), removes the right-half keys from its local cache, advances its own `HighKeyExclusive` to the split key, and transitions `SplitState` to `SplitComplete`. The per-partition WAL-head capture that feeds the checkpoint hints is fanned out in parallel across the independent replay-coordinator grains rather than read serially. `InitializeSiblingAsync` keeps the same idempotent semantics as the individual setters - the write-once slots (tree id, shard index, key-range low bound) are skipped when already seeded - so a crash-recovery re-call against a partially seeded sibling is safe.
 3. A `SplitResult` containing the promoted key and new sibling's `GrainId` is returned up the call stack.
 4. The parent internal node inserts the new separator. If *it* overflows, the split cascades further (internal nodes use the same two-phase pattern).
 5. If the split reaches the shard root, a new internal root is created above the old one via a two-phase `PromoteRootAsync`, increasing tree depth by one.

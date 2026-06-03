@@ -81,11 +81,13 @@ $treeId        = if ($PSBoundParameters.ContainsKey('TreeId') -and $TreeId) { $T
 $tag          = if ($PSBoundParameters.ContainsKey('Tag'))          { $Tag }
                 elseif ($env:BENCH_IMAGE_TAG) { $env:BENCH_IMAGE_TAG }
                 else { 'latest' }
-# WAL phase-0 candidate-row elision. Off by default to match the library's
-# wire-compat default; set BENCH_WAL_ELIMINATE_CANDIDATE_ROW=true to A/B
-# the optimisation against a real Azure Tables account.
+# WAL phase-0 candidate-row elision. Left empty by default so the silo
+# inherits the library default (AzureTableWalStorageOptions
+# .DefaultEliminateCandidateRowOnHotPath = true); set
+# BENCH_WAL_ELIMINATE_CANDIDATE_ROW=false to A/B the legacy inline C-row
+# write against a real Azure Tables account.
 $walElimCRow  = if ($env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW) { $env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW }
-                else { 'false' }
+                else { '' }
 # WAL partition count per tree. Default 8 (matches Silo/Program.cs default).
 # Operator override path is honoured so a P=1 vs P=8 A/B can be driven from the
 # host env without editing the inline YAML below.
@@ -103,6 +105,26 @@ $walMaxPending = if ($env:BENCH_WAL_MAX_PENDING_BATCHES) { $env:BENCH_WAL_MAX_PE
 # operating-point baseline rather than the library default of 0.
 $phase2CoalescingMs = if ($env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS) { $env:BENCH_WAL_PHASE2_COALESCING_WINDOW_MS }
                       else { '5' }
+# Finite per-commit deadline (seconds) for the per-shard PhaseTwoWorker's
+# whole manifest commit, mapped to AzureTableWalStorageOptions.PhaseTwoCommitTimeout.
+# Only forwarded to the silo when the operator explicitly sets the env var; when
+# absent the silo inherits the library default
+# (AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout, 3 s) so the harness
+# and the public contract do not drift. A supplied 0 disables the deadline (the
+# historical unbounded behaviour); a supplied > 0 bounds the wedge and surfaces
+# the orleans.lattice.provider.phase2.commit.timeouts counter.
+$walPhase2CommitTimeoutSec = $env:BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC
+
+# Only inject the env var into the ACI silo container when the operator supplied
+# an override; otherwise the silo inherits the library default. The leading
+# newline keeps the indentation aligned when spliced into the env block.
+$walPhase2CommitTimeoutEnvBlock = if ($null -ne $walPhase2CommitTimeoutSec -and $walPhase2CommitTimeoutSec -ne '') {
+    @"
+
+          - name: BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC
+            value: '$walPhase2CommitTimeoutSec'
+"@
+} else { '' }
 # In-silo SetManyAsync flush concurrency cap (drainer semaphore size). Default 8
 # (matches Silo/Program.cs default). Surfaced as an env-var override so a U1b
 # A/B (e.g. 8 vs 16 vs 32) can be driven from the host without editing YAML.
@@ -194,7 +216,12 @@ $workloadMode = if ($env:BENCH_WORKLOAD_MODE) { $env:BENCH_WORKLOAD_MODE }
 $atomicBatchSize = if ($env:BENCH_ATOMIC_BATCH_SIZE) { $env:BENCH_ATOMIC_BATCH_SIZE }
                    else { '64' }
 
-Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec leafStorageKind=$leafStorageKind leafStorageTable=$leafStorageTable leafStorageNumGrains=$leafStorageNumGrains workloadMode=$workloadMode atomicBatchSize=$atomicBatchSize skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
+# Banner descriptor: "default(lib)" when no override was supplied (silo inherits
+# AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout), otherwise the value.
+$walPhase2CommitTimeoutBanner = if ($null -ne $walPhase2CommitTimeoutSec -and $walPhase2CommitTimeoutSec -ne '') { "${walPhase2CommitTimeoutSec}s" }
+                                else { 'default(lib)' }
+
+Write-Host "[deploy] knobs: vehicles=$vehicleCount tickHz=$tickHz duration=${duration}s totalDuration=${totalDuration}s tag=$tag treeId=$treeId walPartitions=$walPartitions walMaxPending=$walMaxPending phase2CoalescingMs=$phase2CoalescingMs walPhase2CommitTimeout=$walPhase2CommitTimeoutBanner flushConcurrency=$flushConcurrency flushMs=$flushMs shardCount=$shardCount batchSize=$batchSize walElimCRow=$walElimCRow phaseAReportSec=$phaseAReportSec responseTimeoutSec=$responseTimeoutSec leafStorageKind=$leafStorageKind leafStorageTable=$leafStorageTable leafStorageNumGrains=$leafStorageNumGrains workloadMode=$workloadMode atomicBatchSize=$atomicBatchSize skipBuild=$SkipBuild localBuild=$LocalBuild noWait=$NoWait" -ForegroundColor Cyan
 
 # Repo root is three levels up from this script (benchmark/azure-throughput/scripts).
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')
@@ -387,7 +414,7 @@ properties:
           - name: BENCH_WAL_MAX_PENDING_BATCHES
             value: '$walMaxPending'
           - name: BENCH_WAL_PHASE2_COALESCING_WINDOW_MS
-            value: '$phase2CoalescingMs'
+            value: '$phase2CoalescingMs'$walPhase2CommitTimeoutEnvBlock
           - name: BENCH_PIPELINE_PHASE2
             value: '1'
           - name: BENCH_WAL_ELIMINATE_CANDIDATE_ROW

@@ -270,4 +270,78 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.DigestPublishTimeout)));
     }
+
+    [Test]
+    public void WalAppendDispatchTimeout_default_is_thirty_seconds()
+    {
+        Assert.That(new LatticeOptions().WalAppendDispatchTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(LatticeOptions.DefaultWalAppendDispatchTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
+    }
+
+    [Test]
+    public void WalAppendDispatchTimeout_positive_passes()
+    {
+        var result = Validate(o => o.WalAppendDispatchTimeout = TimeSpan.FromSeconds(5));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalAppendDispatchTimeout_infinite_passes()
+    {
+        var result = Validate(o => o.WalAppendDispatchTimeout = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalAppendDispatchTimeout_zero_fails()
+    {
+        var result = Validate(o => o.WalAppendDispatchTimeout = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalAppendDispatchTimeout)));
+    }
+
+    [Test]
+    public void WalAppendDispatchTimeout_negative_fails()
+    {
+        var result = Validate(o => o.WalAppendDispatchTimeout = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalAppendDispatchTimeout)));
+    }
+
+    [Test]
+    public void WalFlushPreflightTimeout_default_is_five_seconds()
+    {
+        Assert.That(new LatticeOptions().WalFlushPreflightTimeout, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        Assert.That(LatticeOptions.DefaultWalFlushPreflightTimeout, Is.EqualTo(TimeSpan.FromSeconds(5)));
+    }
+
+    [Test]
+    public void WalFlushPreflightTimeout_positive_passes()
+    {
+        var result = Validate(o => o.WalFlushPreflightTimeout = TimeSpan.FromMilliseconds(50));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalFlushPreflightTimeout_infinite_passes()
+    {
+        var result = Validate(o => o.WalFlushPreflightTimeout = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalFlushPreflightTimeout_zero_fails()
+    {
+        var result = Validate(o => o.WalFlushPreflightTimeout = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalFlushPreflightTimeout)));
+    }
+
+    [Test]
+    public void WalFlushPreflightTimeout_negative_fails()
+    {
+        var result = Validate(o => o.WalFlushPreflightTimeout = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalFlushPreflightTimeout)));
+    }
 }

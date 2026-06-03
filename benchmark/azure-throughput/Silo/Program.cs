@@ -52,17 +52,17 @@
 //                           steady-state request-path latency under WalMaxPendingBatches=1
 //                           and lets the PhaseTwoWorker's coalescing window actually
 //                           collapse multiple commits into one Azure Tables transaction.
-//                           Default 1 (on) for the bench; the library default remains
-//                           off to preserve the existing wire-compat shape where every
-//                           AppendBatchAsync awaits its own phase 2.
+//                           Default inherits AzureTableWalStorageOptions
+//                           .DefaultPipelinePhaseTwoCommits (on).
 //   BENCH_WAL_PHASE2_COALESCING_WINDOW_MS
-//                           AzureTableWalStorageOptions.PhaseTwoCoalescingWindow in ms
-//                           (default 0 - drain-on-first-signal, matches the library
-//                           default). Set to a small positive value (e.g. 5-10 ms,
-//                           below the observed phase-2 commit duration p50) to let the
+//                           AzureTableWalStorageOptions.PhaseTwoCoalescingWindow in ms.
+//                           Default inherits AzureTableWalStorageOptions
+//                           .DefaultPhaseTwoCoalescingWindow (5 ms). Set to 0 for
+//                           drain-on-first-signal, or another small positive value
+//                           (below the observed phase-2 commit duration p50) to let the
 //                           per-shard PhaseTwoWorker wait briefly after the first arrival
 //                           so additional commits coalesce into the same Azure Tables
-//                           transaction. Probe lever for U9c.
+//                           transaction.
 //   BENCH_REPORT_SEC        stdout report interval in seconds (default 1)
 //   BENCH_PHASEA_REPORT_SEC stdout cadence for the Phase A diagnostic
 //                           reporter (default 10). Set to 0 to disable
@@ -131,10 +131,13 @@
 
 using System.Diagnostics;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Channels;
+using Azure.Core.Pipeline;
 using Azure.Data.Tables;
 using Azure.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -176,10 +179,48 @@ var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", 8);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", 8);
+// Connection-REUSE transport (fix/wedge). The 25k wedge root cause is a
+// single Azure Tables request that hangs forever (StallWatchdog showed all
+// snapshots parked at TableClient.AddEntityAsync @ await#0) and pins a
+// WalMaxPendingBatches slot, cascading into a pipeline-wide deadlock at
+// inFlight=WalMaxPendingBatches. On ACI the SNAT gateway silently resets
+// idle outbound sockets; an *infinite* PooledConnectionLifetime never
+// recycles the dead socket, so a request dispatched onto it never returns.
+// When enabled, this transport REUSES connections (to avoid the SNAT
+// establishment stall) but with a FINITE pooled-connection lifetime and
+// idle timeout so ACI-killed sockets are torn down rather than reused into
+// a hang. Paired with a bounded RetryNetworkTimeout (below) so any request
+// that does hang fails per-attempt and the retry policy recovers the slot
+// instead of deadlocking the pipeline.
+var walConnectionReuse = ReadBool("BENCH_WAL_CONNECTION_REUSE", false);
+// Per-attempt network timeout for the WAL Azure Tables client. Default 0
+// leaves the SDK default (100s, effectively unbounded for the wedge). A
+// finite value bounds every individual HTTP attempt so a hung request
+// fails and releases its pending-batch slot. The wedge fix sets this > 0.
+var walNetworkTimeoutSec = ReadIntAllowZero("BENCH_WAL_NETWORK_TIMEOUT_SEC", 0);
+// Finite per-commit deadline (seconds) for the per-shard PhaseTwoWorker's
+// manifest commit, mapped to AzureTableWalStorageOptions.PhaseTwoCommitTimeout.
+// When the env var is ABSENT the option is left at the library default
+// (AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout, 3 s) - the deploy
+// script only emits this var when the operator overrides it. When SUPPLIED the
+// value is honoured verbatim: 0 explicitly disables the deadline (null - the
+// historical unbounded behaviour), > 0 sets that finite deadline. A finite
+// deadline converts a hung commit into a bounded TimeoutException the
+// sticky-failure resync path recovers, and increments the
+// orleans.lattice.provider.phase2.commit.timeouts counter once per abandoned
+// commit so the wedge fix is directly observable pre/post.
+int? walPhaseTwoCommitTimeoutSec =
+    Environment.GetEnvironmentVariable("BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC") is { } rawPhase2Timeout
+    && int.TryParse(rawPhase2Timeout, out var parsedPhase2Timeout) && parsedPhase2Timeout >= 0
+        ? parsedPhase2Timeout
+        : null;
+// Finite pooled-connection lifetime (seconds) for the reuse transport so
+// ACI SNAT-killed sockets are recycled instead of reused into a hang.
+var walConnLifetimeSec = ReadInt("BENCH_WAL_CONN_LIFETIME_SEC", 90);
 var shardCountOverride = ReadIntAllowZero("BENCH_SHARD_COUNT", 0);
-var pipelinePhase2 = ReadBool("BENCH_PIPELINE_PHASE2", true);
-var eliminateCandidateRow = ReadBool("BENCH_WAL_ELIMINATE_CANDIDATE_ROW", false);
-var phaseTwoCoalescingMs = ReadIntAllowZero("BENCH_WAL_PHASE2_COALESCING_WINDOW_MS", 0);
+var pipelinePhase2 = ReadBool("BENCH_PIPELINE_PHASE2", AzureTableWalStorageOptions.DefaultPipelinePhaseTwoCommits);
+var eliminateCandidateRow = ReadBool("BENCH_WAL_ELIMINATE_CANDIDATE_ROW", AzureTableWalStorageOptions.DefaultEliminateCandidateRowOnHotPath);
+var phaseTwoCoalescingMs = ReadIntAllowZero("BENCH_WAL_PHASE2_COALESCING_WINDOW_MS", (int)AzureTableWalStorageOptions.DefaultPhaseTwoCoalescingWindow.TotalMilliseconds);
 var digestCoalescingMs = ReadIntAllowZero("BENCH_DIGEST_COALESCING_WINDOW_MS", 5);
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
@@ -237,7 +278,27 @@ if (string.IsNullOrWhiteSpace(storageUri) && string.IsNullOrWhiteSpace(storageCo
 var preseedWillFire = preseedKeyCount > 0
     && (workloadMode == BenchWorkloadMode.GetPoint
         || workloadMode == BenchWorkloadMode.GetMany);
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
+// Banner descriptor for the phase-2 commit deadline: "default(3s)" when the
+// operator left it unset (library DefaultPhaseTwoCommitTimeout applies),
+// "off" when explicitly disabled (supplied 0), or the supplied second-count.
+var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
+{
+    null => $"default({AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout.TotalSeconds:0.##}s)",
+    0 => "off",
+    var s => $"{s}s",
+};
+// Deployment-verification tokens: the residual phase-1/activation WAL
+// wedge diagnostic pack added two new bounded-deadline options on
+// LatticeOptions whose default values are emitted verbatim in the banner.
+// Their PRESENCE in the banner is the cheapest proof that the deployed
+// silo binary contains the diagnostic-pack code path - the symbols
+// referenced here do not exist on earlier binaries, so a stale image
+// would fail to compile / start. The values themselves are the library
+// defaults; the bench harness does not currently override them, but if
+// it later does the override path must update these tokens too.
+var walAppendDispatchTimeoutBanner = $"default({LatticeOptions.DefaultWalAppendDispatchTimeout.TotalSeconds:0.##}s)";
+var walFlushPreflightTimeoutBanner = $"default({LatticeOptions.DefaultWalFlushPreflightTimeout.TotalSeconds:0.##}s)";
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -268,7 +329,7 @@ builder.Logging.AddFilter("Orleans.Runtime.Placement.PlacementService", LogLevel
 
 builder.Services.AddHostedService<TcpIngestService>();
 builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.PhaseADiagnosticReporter>();
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending));
 
 builder.UseOrleans(silo =>
 {
@@ -376,6 +437,25 @@ builder.UseOrleans(silo =>
         o.DigestCoalescingWindowMs = digestCoalescingMs;
     });
 
+    // Disable the per-silo storage-usage poller for the throughput run.
+    // The poller is a GLOBAL knob read from the default (unnamed) options,
+    // so the per-tree ConfigureLattice above does not reach it - it must be
+    // turned off via the global ConfigureLattice overload. On its 15s
+    // cadence the poller drives ILatticeAdmin.GetTotalStorageUsageAsync,
+    // which fans out across every registered tree and walks each shard's
+    // entire leaf chain (ShardRootGrain.GetStorageUsageAsync ->
+    // AccumulateLeafUsageAsync -> leaf.GetStatsAsync). Under the 25k-vehicle
+    // saturation rung that forces mass cold-leaf activations + WAL replays
+    // that monopolise the single-threaded ShardRootGrain turn and saturate
+    // the Azure Table connection pool, starving live ingest of a turn -
+    // the foreground SetManyAsync fan-out parks and writtenTotal freezes.
+    // Setting the interval to zero disables the poller entirely so the
+    // metering scan never competes with the ingest hot path.
+    silo.ConfigureLattice(o =>
+    {
+        o.StorageUsagePollInterval = TimeSpan.Zero;
+    });
+
     silo.AddAzureTableWalStorage(o =>
     {
         if (!string.IsNullOrWhiteSpace(storageConn))
@@ -389,17 +469,85 @@ builder.UseOrleans(silo =>
         }
         o.TableName = walTable;
         o.PipelinePhaseTwoCommits = pipelinePhase2;
-        // Opt-in to the phase-0 candidate-row elision optimisation. The library
-        // default is off for wire-compat; enabling here lets the benchmark A/B
-        // the hot-path candidate-row write against real Azure Tables.
+        // Elide the phase-0 candidate-row write. Default inherits the
+        // library default (AzureTableWalStorageOptions
+        // .DefaultEliminateCandidateRowOnHotPath = true); the C-row
+        // contends with the per-shard PhaseTwoWorker on the shared
+        // manifest partition, so eliding it removes a server-side-
+        // serialised round-trip from every batch's hot path.
         o.EliminateCandidateRowOnHotPath = eliminateCandidateRow;
-        // U9c probe lever. Default 0 = drain-on-first-signal (library default).
-        // A small positive window lets the per-shard PhaseTwoWorker wait briefly
-        // after the first arrival so additional commits coalesce into the same
-        // Azure Tables transaction; without this, provider.phase2.batch_size
-        // stays pinned at 1.00 whenever per-partition arrival inter-spacing
-        // exceeds the commit's own duration.
+        // Default inherits AzureTableWalStorageOptions
+        // .DefaultPhaseTwoCoalescingWindow (5 ms). A small positive
+        // window lets the per-shard PhaseTwoWorker wait briefly after
+        // the first arrival so additional commits coalesce into the
+        // same Azure Tables transaction; without it,
+        // provider.phase2.batch_size stays pinned at 1.00 whenever
+        // per-partition arrival inter-spacing exceeds the commit's own
+        // duration.
         o.PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(phaseTwoCoalescingMs);
+        // Wedge fix part 1: bound every individual HTTP attempt. Without a
+        // finite per-attempt timeout, a request dispatched onto an
+        // ACI-SNAT-killed socket hangs at TableClient.AddEntityAsync forever,
+        // holds a WalMaxPendingBatches slot, and the back-pressure await in
+        // WalShardGrain deadlocks the whole pipeline at inFlight=cap. A
+        // finite RetryNetworkTimeout turns that hang into a per-attempt
+        // failure the retry policy can recover from, releasing the slot.
+        if (walNetworkTimeoutSec > 0)
+        {
+            o.RetryNetworkTimeout = TimeSpan.FromSeconds(walNetworkTimeoutSec);
+        }
+        // Wedge fix part 2: bound the per-shard PhaseTwoWorker's whole
+        // manifest commit, not just each HTTP attempt. RetryNetworkTimeout
+        // caps a single attempt, but the worker's background drain loop
+        // commits phase-2 transactions one coalesced group at a time and
+        // the next group cannot start until the current commit returns -
+        // so a commit that keeps re-issuing past the network timeout (or
+        // parks in a state the SDK never surfaces) still wedges every later
+        // commit on the shard. PhaseTwoCommitTimeout is the finite deadline
+        // covering the whole commit; on expiry the worker faults the batch
+        // and every later pending commit (recovered by the sticky-failure
+        // resync path) and increments
+        // orleans.lattice.provider.phase2.commit.timeouts so the fix is
+        // directly observable pre/post. Only overridden when the operator
+        // supplied BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC; absent leaves the
+        // library default (DefaultPhaseTwoCommitTimeout). A supplied 0 maps
+        // to null (explicitly unbounded); a supplied > 0 sets that deadline.
+        if (walPhaseTwoCommitTimeoutSec is { } phase2TimeoutSec)
+        {
+            o.PhaseTwoCommitTimeout = phase2TimeoutSec > 0
+                ? TimeSpan.FromSeconds(phase2TimeoutSec)
+                : null;
+        }
+        // Connection-reuse transport (fix/wedge). When BENCH_WAL_CONNECTION_REUSE
+        // is set, replace the default Azure.Core transport with one that reuses
+        // connections (dodging the SNAT establishment stall) but with a FINITE
+        // lifetime/idle timeout so ACI-killed sockets are recycled rather than
+        // reused into a hang. BuildServiceClient honours this callback only in
+        // connection-string / credential mode (the path this silo uses); the
+        // provider re-attaches RetryAttemptTrackingPolicy afterwards so
+        // provider.retry.attempts{status=...} still records.
+        if (walConnectionReuse)
+        {
+            o.ConfigureClientOptions = clientOptions =>
+            {
+                var handler = new SocketsHttpHandler
+                {
+                    // Wedge fix part 2: FINITE lifetime/idle so an ACI SNAT-
+                    // killed socket is torn down and re-established on next use
+                    // instead of being reused into a request that hangs forever.
+                    PooledConnectionLifetime = TimeSpan.FromSeconds(walConnLifetimeSec),
+                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(walConnLifetimeSec),
+                    // Bound connection establishment too, so a wedged handshake
+                    // fails fast rather than parking a request indefinitely.
+                    ConnectTimeout = TimeSpan.FromSeconds(15),
+                    // Multiplex concurrent requests over a single HTTP/2
+                    // connection per server rather than fanning out onto a
+                    // connection-per-request.
+                    EnableMultipleHttp2Connections = false,
+                };
+                clientOptions.Transport = new HttpClientTransport(new HttpClient(handler));
+            };
+        }
     });
 });
 
@@ -481,7 +629,7 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
 // TcpIngestService class methods. Top-level local functions cannot
 // be referenced from non-top-level types per CS8801.
 
-internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount);
+internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount, int WalMaxPendingBatches);
 
 /// <summary>
 /// Selects which <c>ILattice</c> operation the benchmark silo dispatches
@@ -1030,6 +1178,24 @@ internal sealed class TcpIngestService(
             catch (OperationCanceledException) { }
         }, CancellationToken.None);
 
+        // Stall watchdog: when the WAL write pipeline wedges (writtenTotal
+        // frozen while inFlight stays pinned at the WalMaxPendingBatches
+        // ceiling), self-snapshot with ClrMD and print the parked async
+        // state-machine chain + thread stacks to stdout - the in-process
+        // equivalent of `dumpasync` / `dotnet-stack`, exfiltrated through
+        // the one channel ACI preserves across teardown (the streamed silo
+        // log). Three prior `TimeoutException`-based fixes each fired zero
+        // times on the wedge, so this captures the actually-parked await
+        // instead of bounding another guessed one. Shares the reporter's
+        // cancellation so it stops cleanly at end of run.
+        var stallWatchdog = new StallWatchdog(
+            writtenTotalSnapshot: () => Interlocked.Read(ref writtenTotal),
+            inFlightSnapshot: () => Interlocked.Read(ref inFlight),
+            pinnedInFlightThreshold: settings.WalMaxPendingBatches,
+            stallWindow: TimeSpan.FromSeconds(20),
+            pollInterval: TimeSpan.FromSeconds(1));
+        var stallWatchdogTask = Task.Run(() => stallWatchdog.RunAsync(reporterCts.Token), CancellationToken.None);
+
         var batch = new List<KeyValuePair<string, byte[]>>(settings.BatchSize);
         var nextFlush = Stopwatch.GetTimestamp() + (long)(settings.FlushInterval.TotalSeconds * Stopwatch.Frequency);
 
@@ -1103,6 +1269,7 @@ internal sealed class TcpIngestService(
 
         reporterCts.Cancel();
         try { await reporterTask; } catch { /* shutdown */ }
+        try { await stallWatchdogTask; } catch { /* shutdown */ }
         reporterCts.Dispose();
 
         var totalElapsed = (Stopwatch.GetTimestamp() - startedAt) / (double)Stopwatch.Frequency;

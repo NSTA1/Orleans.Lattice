@@ -1657,6 +1657,117 @@ internal sealed partial class BPlusLeafGrain(
         return ((ILeafProjection)this).SetCheckpointOffsetAsync(offset, CancellationToken.None);
     }
 
+    public async Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition)
+    {
+        ArgumentNullException.ThrowIfNull(offsetsByPartition);
+
+        // Batched companion to SetCheckpointOffsetHintAsync: apply one
+        // hint per WAL partition under that partition's apply-offset
+        // scope so the per-partition clamp targets the right offset
+        // space. The donor used to issue one cross-grain RPC per
+        // partition with the scope stamped on the wire; folding the
+        // loop into the callee collapses the split fast-path's
+        // sibling-checkpoint cost to a single round-trip while keeping
+        // the per-partition scoping identical.
+        for (var p = 0; p < offsetsByPartition.Length; p++)
+        {
+            var offset = offsetsByPartition[p];
+            if (offset <= 0) continue;
+            using (LatticeApplyOffsetContext.BeginScope(p, offset))
+            {
+                await ((ILeafProjection)this).SetCheckpointOffsetAsync(offset, CancellationToken.None);
+            }
+        }
+    }
+
+    public async Task InitializeSiblingAsync(SiblingInitialization init)
+    {
+        // Batched birth-time seeding for a freshly created split sibling.
+        // Collapses the five separate gated setter RPCs (tree id, shard
+        // index, key range, next/prev sibling pointers) the donor used to
+        // issue serially into one gate acquire and one PersistAsync.
+        // Preserves each setter's idempotent semantics: the write-once
+        // slots (tree id, shard index, key-range low bound) are skipped
+        // when already seeded, so a recovery-path re-call against a
+        // partially-seeded sibling is safe.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            // Snapshot the pre-seed values so a thrown PersistAsync can
+            // revert the whole batch together (Class B revert; see the
+            // individual setters for the per-slot rationale). Reverting
+            // all-or-nothing matches the persist being all-or-nothing.
+            var prevTreeId = state.State.TreeId;
+            var prevShardIndex = state.State.ShardIndex;
+            var prevLowKey = state.State.LowKeyInclusive;
+            var prevHighKey = state.State.HighKeyExclusive;
+            var prevNext = state.State.NextSibling;
+            var prevPrev = state.State.PrevSibling;
+
+            var changed = false;
+
+            // Tree id: write-once.
+            if (state.State.TreeId is null && init.TreeId is not null)
+            {
+                state.State.TreeId = init.TreeId;
+                changed = true;
+            }
+
+            // Shard index: write-once.
+            if (state.State.ShardIndex is null && init.ShardIndex is { } shardIndex)
+            {
+                state.State.ShardIndex = shardIndex;
+                changed = true;
+            }
+
+            // Key range: the low bound is the seeded sentinel (every
+            // legitimate sibling-birth caller passes a non-null low
+            // bound). Both bounds move together so a range scan never
+            // observes a half-seeded range.
+            if (state.State.LowKeyInclusive is null)
+            {
+                state.State.LowKeyInclusive = init.LowKeyInclusive;
+                state.State.HighKeyExclusive = init.HighKeyExclusive;
+                changed = true;
+            }
+
+            // Sibling pointers: overwrite unconditionally (the split flow
+            // is the sole authority for the freshly created sibling's
+            // links at birth).
+            if (!Equals(state.State.NextSibling, init.NextSibling))
+            {
+                state.State.NextSibling = init.NextSibling;
+                changed = true;
+            }
+            if (!Equals(state.State.PrevSibling, init.PrevSibling))
+            {
+                state.State.PrevSibling = init.PrevSibling;
+                changed = true;
+            }
+
+            if (!changed) return;
+
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                state.State.TreeId = prevTreeId;
+                state.State.ShardIndex = prevShardIndex;
+                state.State.LowKeyInclusive = prevLowKey;
+                state.State.HighKeyExclusive = prevHighKey;
+                state.State.NextSibling = prevNext;
+                state.State.PrevSibling = prevPrev;
+                throw;
+            }
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
     public async Task<int> CompactTombstonesAsync(TimeSpan gracePeriod)
     {
         // Skip scan if nothing has changed since last compaction.

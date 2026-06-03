@@ -343,12 +343,18 @@ public partial class BPlusLeafGrainTests
                 | System.Reflection.BindingFlags.Instance)!;
         await (Task<SplitResult>)completeSplit.Invoke(donor, new object?[] { null })!;
 
-        // The sibling must have been hinted with each per-partition
-        // head exactly once - the capture-per-partition contract.
-        await siblingMock.Received(1).SetCheckpointOffsetHintAsync(10L);
-        await siblingMock.Received(1).SetCheckpointOffsetHintAsync(20L);
-        await siblingMock.Received(1).SetCheckpointOffsetHintAsync(30L);
-        await siblingMock.Received(1).SetCheckpointOffsetHintAsync(40L);
+        // The sibling must have been hinted with every per-partition
+        // head in a single batched round-trip - the
+        // capture-per-partition contract, now delivered via one
+        // SetCheckpointOffsetHintsAsync call carrying the full
+        // per-partition head vector.
+        await siblingMock.Received(1).SetCheckpointOffsetHintsAsync(
+            Arg.Is<long[]>(heads =>
+                heads.Length == 4
+                && heads[0] == 10L
+                && heads[1] == 20L
+                && heads[2] == 30L
+                && heads[3] == 40L));
 
         // The donor must have advanced its OWN per-partition
         // checkpoints to the same heads.

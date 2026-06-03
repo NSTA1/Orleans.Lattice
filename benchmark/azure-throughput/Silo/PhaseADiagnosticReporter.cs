@@ -74,6 +74,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.leaf.commit.duration",
         "orleans.lattice.provider.commit.duration",
         "orleans.lattice.provider.phase2.batch_size",
+        "orleans.lattice.provider.retry.attempts",
         "orleans.lattice.provider.retry.exhausted",
         "orleans.lattice.saga.fanout.size",
         "orleans.lattice.saga.perkey.duration",
@@ -176,6 +177,41 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // first-try success). Same rename rationale as the duration
         // histogram above.
         "azure.throughput.bench.lattice.op.retry_attempts",
+        // Residual phase-1/activation WAL wedge diagnostic pack. The
+        // first four are written via Counter<long>; the bench reporter
+        // currently records them as count-only rows in the [phaseA]
+        // output (same shape as provider.retry.exhausted). The
+        // remaining two are Histogram<long> samples that produce the
+        // usual p50/p90/p99 lines and let a saturation-rung cohort
+        // attribute the wedge mechanism to a specific (tree, shard)
+        // and FlushAsync stage without source-walking.
+        "orleans.lattice.wal.shard.start_flush.calls",
+        "orleans.lattice.wal.shard.pending_segments",
+        "orleans.lattice.wal.shard.deactivate.in_flight",
+        "orleans.lattice.shard_root.reshard.initiated",
+        "orleans.lattice.shard_root.reshard.rejected",
+        "orleans.lattice.shard_root.reshard.completed",
+        "orleans.lattice.shard_root.reshard.in_flight",
+        // Mode-B wedge diagnostic pack: writer-layer
+        // (WalCommitLogWriter) append-dispatch counter + per-partition
+        // pending-append-dispatch depth histogram. The dispatch counter
+        // localises a writer-layer kick-off stall (collapse to zero with
+        // shard-layer start_flush also at zero ranges the wedge upstream
+        // of the writer); the pending-dispatch histogram surfaces
+        // back-pressure absorbed inside the writer's per-partition
+        // tracker (growing p99 with sustained dispatched-rate means
+        // callers are enqueuing into a tracker that the awaited shard
+        // RPC is not draining).
+        "orleans.lattice.wal.writer.append.dispatched",
+        "orleans.lattice.wal.writer.partition.pending_appends",
+        // Writer-layer admission instruments. The timeouts counter is the
+        // "saturation surfaced as a typed failure" signal; the
+        // admission_wait histogram is the "saturation surfacing as
+        // tail-latency before any hard timeout" signal. Reading the
+        // two together separates "back-pressured cleanly" from
+        // "back-pressure exceeded the deadline".
+        "orleans.lattice.wal.writer.append.admission_timeouts",
+        "orleans.lattice.wal.writer.append.admission_wait",
     };
 
     /// <summary>

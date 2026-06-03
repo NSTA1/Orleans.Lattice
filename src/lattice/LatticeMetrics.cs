@@ -51,6 +51,17 @@ public static class LatticeMetrics
     /// <summary>Tag key for the physical shard index.</summary>
     public const string TagShard = "shard";
 
+    /// <summary>
+    /// Tag key for the WAL writer partition index. Distinct from
+    /// <see cref="TagShard"/>: the writer partition is the producer-side
+    /// routing key (one entry-batch per partition per call into
+    /// <c>WalCommitLogWriter.AppendForPartitionAsync</c>) and lines up
+    /// 1:1 with the destination shard's index, but is reported on the
+    /// writer-layer instruments so a future fan-out shape that decouples
+    /// the two does not silently overload <see cref="TagShard"/>.
+    /// </summary>
+    public const string TagPartition = "partition";
+
     /// <summary>Tag key for the operation kind (e.g. <c>keys</c> or <c>entries</c> on scan histograms).</summary>
     public const string TagOperation = "operation";
 
@@ -827,6 +838,25 @@ public static class LatticeMetrics
             description: "Provider commit calls that exhausted the SDK retry budget and surfaced an exception.");
 
     /// <summary>
+    /// Counter incremented once per phase-2 manifest commit that
+    /// exceeded the per-commit deadline and was abandoned by the
+    /// per-shard worker. Tagged with <see cref="TagTree"/> and
+    /// <see cref="TagShard"/>. A non-zero rate is the direct signal
+    /// that the phase-2 drain loop would otherwise have wedged: the
+    /// commit's underlying Azure Tables transaction stopped making
+    /// progress (a hung socket, a server-side partition stall, or an
+    /// SDK retry storm running past the deadline) and the worker
+    /// bounded it instead of blocking every later commit on the same
+    /// shard indefinitely. Zero on a healthy shard; the pre-fix
+    /// behaviour (no deadline) is recoverable by leaving
+    /// <c>PhaseTwoCommitTimeout</c> unset, in which case this counter
+    /// never increments because no deadline is enforced.
+    /// </summary>
+    public static readonly Counter<long> ProviderPhase2CommitTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.provider.phase2.commit.timeouts", unit: "{commit}",
+            description: "Phase-2 manifest commits abandoned by the per-shard worker after exceeding the configured per-commit deadline.");
+
+    /// <summary>
     /// Counter incremented once per individual retry attempt the
     /// storage SDK performs on a provider call, regardless of whether
     /// the retry ultimately succeeds. Tagged with <see cref="TagStatus"/>
@@ -1164,6 +1194,273 @@ public static class LatticeMetrics
     public static readonly Counter<long> DigestPublishTimeouts =
         Meter.CreateCounter<long>("orleans.lattice.internal.digest_publish.timeouts", unit: "{timeout}",
             description: "Count of internal-node upward digest publishes abandoned after exceeding DigestPublishTimeout.");
+
+    /// <summary>
+    /// Count of outbound <c>IWalShardGrain</c> dispatches
+    /// (<c>WalCommitLogWriter.AppendForPartitionAsync</c> /
+    /// <c>AppendAsync</c>) that were abandoned because they exceeded
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalAppendDispatchTimeout"/>.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// The dispatch is the writer-side cross-grain RPC into the per-shard
+    /// WAL grain; it was historically unbounded on the writer side, so a
+    /// wedged shard activation would hold every caller's dispatch parked
+    /// until the Orleans response deadline (default 3 minutes) expired.
+    /// A non-zero value attributes the wedge to a specific
+    /// <c>(tree, shard)</c> pair in O(<see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalAppendDispatchTimeout"/>)
+    /// time rather than O(response timeout) time, and the parked dispatch
+    /// is faulted as a <see cref="TimeoutException"/> so the request
+    /// pipeline releases its slot rather than back-filling behind the
+    /// wedge. Sustained non-zero counts on a specific
+    /// <c>(tree, shard)</c> identify the wedged shard for follow-up
+    /// investigation.
+    /// </summary>
+    public static readonly Counter<long> WalAppendDispatchTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_dispatch.timeouts", unit: "{timeout}",
+            description: "Count of writer-side WAL shard dispatches abandoned after exceeding WalAppendDispatchTimeout.");
+
+    /// <summary>
+    /// Count of per-shard WAL <c>FlushAsync</c> preflight regions (the
+    /// synchronous setup and initial scheduler yield that precede the
+    /// bounded provider call) that were abandoned because they exceeded
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushPreflightTimeout"/>.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// The preflight region is normally microseconds; a non-zero count
+    /// indicates the activation's grain scheduler did not resume the
+    /// flush's post-yield continuation within the deadline, leaving the
+    /// in-flight slot pinned with no provider-call deadline armed (the
+    /// existing <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushTimeout"/>
+    /// only covers the provider call itself, which has not yet been
+    /// issued). The faulted preflight surfaces as a
+    /// <see cref="TimeoutException"/> routed through the normal failure
+    /// handler, the slot drains, and this counter attributes the trip to
+    /// the affected <c>(tree, shard)</c>. Sustained non-zero counts
+    /// indicate the activation's scheduler is being held by a startup
+    /// reshard / membership change, a non-cooperative work item, or a
+    /// mid-flush activation tear-down.
+    /// </summary>
+    public static readonly Counter<long> WalFlushPreflightTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.wal.flush.preflight.timeouts", unit: "{timeout}",
+            description: "Count of WAL shard FlushAsync preflight regions abandoned after exceeding WalFlushPreflightTimeout.");
+
+    /// <summary>
+    /// Histogram of <c>_inFlight.Count</c> observed when a per-shard
+    /// <c>WalShardGrain</c> activation is being deactivated. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>. Recorded exactly
+    /// once per <c>OnDeactivateAsync</c> call. A zero observation is the
+    /// healthy steady-state shape (the grain drained cleanly); a non-zero
+    /// observation means the activation was torn down with in-flight
+    /// flushes still pending - the slot population that defines the
+    /// post-#568 residual phase-1/activation wedge fingerprint. Combined
+    /// with <see cref="WalFlushPreflightTimeouts"/>, a deactivation with
+    /// non-zero in-flight count immediately followed by a preflight
+    /// timeout on a successor activation is the smoking gun for the
+    /// "mid-call deactivation orphan" hypothesis.
+    /// </summary>
+    public static readonly Histogram<long> WalShardDeactivateInFlight =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.shard.deactivate.in_flight", unit: "{slot}",
+            description: "Per-WAL-shard in-flight slot count observed at OnDeactivateAsync time.");
+
+    /// <summary>
+    /// Count of <c>WalShardGrain.StartFlush</c> invocations per
+    /// <c>(tree, shard)</c>. Incremented once at the top of every
+    /// <c>StartFlush</c> call, including the follow-on flushes a
+    /// completing flush kicks off. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagShard"/>.
+    /// <para>
+    /// Diagnostic intent: under the residual phase-1/activation WAL
+    /// wedge, the in-flight chain pins at <c>WalMaxPendingBatches</c>
+    /// for 120+ seconds with no shipped deadline tripping. This counter
+    /// distinguishes two of the three remaining wedge-mechanism classes
+    /// in one cohort: if <c>start_flush.calls</c> keeps incrementing
+    /// throughout the wedge then new flushes ARE being kicked off, so
+    /// the wedge is a slot-leak in the in-flight chain's <c>finally</c>
+    /// (slots never removed even after the flush's task settles). If
+    /// <c>start_flush.calls</c> stops incrementing during the wedge then
+    /// the cap-cutover loop in <c>AppendBatchAsync</c> is itself blocked
+    /// and no new flush ever kicks off. Either signal narrows the
+    /// remaining investigation to a small handful of code regions.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalShardStartFlushCalls =
+        Meter.CreateCounter<long>("orleans.lattice.wal.shard.start_flush.calls", unit: "{call}",
+            description: "Count of WalShardGrain.StartFlush invocations per (tree, shard).");
+
+    /// <summary>
+    /// Histogram of <c>_pendingSegments.Count</c> observed at every
+    /// <c>WalShardGrain.StartFlush</c> entry, sampled <i>before</i> the
+    /// pending list is captured into the new in-flight slot. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// <para>
+    /// Diagnostic intent: under the wedge, a growing distribution
+    /// indicates callers are still arriving and enqueueing into
+    /// <c>_pendingSegments</c> even though the chain cannot drain - a
+    /// signature of back-pressure absorbing everything but never
+    /// releasing. A stuck-at-zero distribution combined with a
+    /// <see cref="WalShardStartFlushCalls"/> trickle indicates the
+    /// cap-cutover loop blocked itself; combined with a healthy
+    /// <c>start_flush.calls</c> rate it indicates the wedge is downstream
+    /// of the flush kick-off. Mirrors the existing <c>WalAppendInFlight</c>
+    /// histogram's allocation-free emission shape.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalShardPendingSegments =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.shard.pending_segments", unit: "{segment}",
+            description: "Per-WAL-shard pending-segment count sampled at every StartFlush entry.");
+
+    /// <summary>
+    /// Count of <c>TreeReshardGrain.ReshardAsync</c> invocations that
+    /// progressed past argument / interlock validation and started a
+    /// reshard coordinator. Tagged with <see cref="TagTree"/>.
+    /// <para>
+    /// Diagnostic intent: the residual WAL wedge is correlated with the
+    /// <c>reshard ... REJECTED (Forwarding failed)</c> log storm
+    /// (228-540 occurrences per wedged run). This counter is the
+    /// Lattice-side initiation signal; pairing it with
+    /// <see cref="ShardRootReshardCompleted"/> and
+    /// <see cref="ShardRootReshardRejected"/> lets a dashboard correlate
+    /// reshard activity with wedge onset directly, without depending on
+    /// grep over a rotated silo log. Note: Orleans-side message-routing
+    /// rejections ("Forwarding failed") are emitted by Orleans's own
+    /// router and are not captured here - they remain log-only until a
+    /// separate diagnostic source is added.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootReshardInitiated =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.initiated", unit: "{reshard}",
+            description: "Count of TreeReshardGrain.ReshardAsync invocations that started a reshard coordinator.");
+
+    /// <summary>
+    /// Count of <c>TreeReshardGrain.ReshardAsync</c> invocations that
+    /// were rejected at the Lattice layer before starting a coordinator.
+    /// Tagged with <see cref="TagTree"/> and a <c>reason</c> tag
+    /// enumerating the rejection cause (e.g. <c>argument_out_of_range</c>,
+    /// <c>resize_in_flight</c>, <c>state_write_failed</c>).
+    /// <para>
+    /// Excludes Orleans-side message-routing rejections, which the
+    /// Orleans runtime logs as "Forwarding failed" but does not surface
+    /// to <c>TreeReshardGrain</c> as a catchable exception inside
+    /// <c>ReshardAsync</c>. See <see cref="ShardRootReshardInitiated"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootReshardRejected =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.rejected", unit: "{rejection}",
+            description: "Count of TreeReshardGrain.ReshardAsync rejections, tagged by reason.");
+
+    /// <summary>
+    /// Count of <c>TreeReshardGrain</c> coordinator completions that
+    /// reached the terminal phase successfully. Tagged with
+    /// <see cref="TagTree"/>. The difference between this and
+    /// <see cref="ShardRootReshardInitiated"/> over a window is the
+    /// number of reshards still in flight or that failed mid-coordinator.
+    /// </summary>
+    public static readonly Counter<long> ShardRootReshardCompleted =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.completed", unit: "{reshard}",
+            description: "Count of TreeReshardGrain coordinator completions.");
+
+    /// <summary>
+    /// Histogram observation of the reshard in-flight state for a tree,
+    /// emitted at every <c>ReshardAsync</c> entry as either <c>0</c>
+    /// (idle) or <c>1</c> (a reshard is already in progress for this
+    /// tree). Tagged with <see cref="TagTree"/>. Bridges the gap left
+    /// by not registering an <c>ObservableGauge</c>: a non-zero
+    /// observation immediately preceding the wedge onset is the same
+    /// signal a periodically-polled gauge would provide.
+    /// </summary>
+    public static readonly Histogram<long> ShardRootReshardInFlight =
+        Meter.CreateHistogram<long>("orleans.lattice.shard_root.reshard.in_flight", unit: "{reshard}",
+            description: "Per-tree reshard in-flight (0/1) observation, recorded at ReshardAsync entry.");
+
+    /// <summary>
+    /// Count of <c>WalCommitLogWriter</c> append dispatches that started
+    /// (one increment per pending-append at the <c>Enqueued</c> stamp).
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Wedge-investigation intent: the saturation-rung wedge has a
+    /// dominant mode (cohort 2026-06-03, 5/7 wedged cohorts) where every
+    /// shard's in-flight chain is empty (<c>head.IsNull=True</c>) yet
+    /// 348+ callers are parked at <c>WalShardGrain.AppendBatchAsync</c>
+    /// and 375+ at <c>WalCommitLogWriter.AppendForPartitionAsync</c>.
+    /// The wedge mechanism for that mode is upstream of in-flight
+    /// insertion, inside this writer's per-partition dispatch plumbing.
+    /// This counter is the writer-layer kick-off signal: a healthy rate
+    /// rules out "writer never gets called"; a collapse to zero during a
+    /// wedge tail localises the stall to the writer's own routing /
+    /// option-resolver path; a sustained rate combined with stale
+    /// <see cref="WalAppendPendingDispatches"/> p99 readings localises it
+    /// to the awaited shard-grain RPC.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalAppendDispatched =
+        Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.dispatched", unit: "{dispatch}",
+            description: "Count of WalCommitLogWriter append dispatches that reached the Enqueued lifecycle stamp.");
+
+    /// <summary>
+    /// Histogram of per-partition pending-append depth observed at every
+    /// <c>WalCommitLogWriter</c> append entry, sampled <i>before</i> the
+    /// new pending stamp is added to the partition's tracker. Tagged
+    /// with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Wedge-investigation intent: the writer's per-partition pending
+    /// tracker holds one <c>PendingAppend</c> stamp per in-flight
+    /// <c>AppendForPartitionAsync</c> caller. A growing distribution
+    /// during the wedge confirms the writer is the choke (callers
+    /// enqueuing into a tracker that cannot drain); a stuck-at-zero
+    /// distribution combined with sustained
+    /// <see cref="WalAppendDispatched"/> rules out a writer-layer
+    /// dispatch lifecycle stall and points the next bisect downstream of
+    /// the <c>SentToShard</c> stage. Mirrors the
+    /// <see cref="WalShardPendingSegments"/> shape one layer up.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalAppendPendingDispatches =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.writer.partition.pending_appends", unit: "{dispatch}",
+            description: "Per-WAL-writer-partition pending-append-dispatch count sampled at every append entry.");
+
+    /// <summary>
+    /// Count of <c>WalCommitLogWriter</c> append dispatches that failed
+    /// to acquire a per-partition admission slot before
+    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> expired.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Reliability intent: the per-partition admission semaphore caps
+    /// <c>PartitionTracker._inFlight</c> depth at
+    /// <see cref="LatticeOptions.WalMaxPendingBatches"/>, mirroring the
+    /// shard-side ceiling. When the shard cannot drain, callers
+    /// awaiting an admission slot are released with a typed
+    /// <see cref="TimeoutException"/> at the deadline rather than
+    /// silently parking forever in an unbounded writer queue. A
+    /// non-zero counter under steady-state operation is the signal that
+    /// the offered rate exceeds the shard's drain rate - the
+    /// saturation regime previously hidden as a silent wedge. Pair with
+    /// <see cref="WalAppendAdmissionWait"/> to distinguish "saturation
+    /// hit but absorbed cleanly" (wait p99 elevated, zero timeouts)
+    /// from "saturation exceeded the deadline" (non-zero timeouts).
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalAppendAdmissionTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.admission_timeouts", unit: "{timeout}",
+            description: "Count of WalCommitLogWriter append dispatches whose per-partition admission wait exceeded WalAppendDispatchTimeout.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms spent waiting for a per-partition
+    /// admission slot before the <c>WalCommitLogWriter</c> dispatch was
+    /// allowed to link a new <c>PendingAppend</c> stamp. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Reliability intent: under healthy operation this histogram sits
+    /// at the floor (a sub-microsecond uncontended semaphore acquire).
+    /// A spreading distribution indicates the per-partition tracker is
+    /// approaching its <see cref="LatticeOptions.WalMaxPendingBatches"/>
+    /// ceiling, surfacing back-pressure as an honest tail-latency
+    /// signal long before any caller hits the
+    /// <see cref="WalAppendAdmissionTimeouts"/> deadline. Recorded for
+    /// every dispatch that successfully acquired a slot (timed-out
+    /// dispatches feed the counter only).
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalAppendAdmissionWait =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.writer.append.admission_wait", unit: "ms",
+            description: "Wall-clock ms a WalCommitLogWriter dispatch waited for a per-partition admission slot.");
 
     /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
