@@ -52,6 +52,18 @@
 //                              (the question this tests: does churn on
 //                              UNRELATED activations starve the timeout
 //                              callback of WORKING ones?).
+//                  messaging - runs the chained-shape WaitAsync test under
+//                              a silo configured with the production
+//                              messaging options (ResponseTimeout = 180s,
+//                              explicit ClusterOptions). Tests whether the
+//                              real silo's messaging configuration is the
+//                              missing condition. NOTE: this scenario
+//                              currently runs in the SAME host as the
+//                              other scenarios; the host's options are
+//                              fixed at startup. To exercise it, run as
+//                              `--scenario messaging` (single scenario);
+//                              the host will be built with the production
+//                              messaging options applied.
 //   --wall-clock-cap   Per-arm wall-clock cap in seconds. Default 30.
 //   --load-count       Concurrent dispatches in the `load` / `singleton` /
 //                      `chained` scenarios. Default 32 (rough match to
@@ -64,6 +76,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans;
+using Orleans.Configuration;
 using Orleans.Hosting;
 using System.Diagnostics;
 
@@ -337,6 +350,25 @@ internal static class Program
             .ConfigureLogging(l => l.ClearProviders()) // keep output focused on [repro] lines
             .UseOrleans(silo =>
             {
+                // If `messaging` is requested, apply the production silo's
+                // ClusterOptions + bumped ResponseTimeout (mirrors
+                // benchmark/azure-throughput/Silo/Program.cs lines 336-355).
+                if (config.Scenarios.Contains("messaging"))
+                {
+                    silo.Configure<ClusterOptions>(o =>
+                    {
+                        o.ClusterId = "wedge-repro";
+                        o.ServiceId = "wedge-repro";
+                    });
+                    silo.Configure<SiloMessagingOptions>(o =>
+                    {
+                        o.ResponseTimeout = TimeSpan.FromSeconds(180);
+                    });
+                    silo.Configure<ClientMessagingOptions>(o =>
+                    {
+                        o.ResponseTimeout = TimeSpan.FromSeconds(180);
+                    });
+                }
                 silo.UseLocalhostClustering();
                 silo.AddMemoryGrainStorageAsDefault();
                 silo.Services.AddSingleton<IBlockingDispatcher, BlockingDispatcher>();
@@ -359,6 +391,7 @@ internal static class Program
                 "singleton" => await RunSingletonAsync(factory, config),
                 "chained"   => await RunChainedAsync(factory, config),
                 "churn"     => await RunChurnAsync(factory, config),
+                "messaging" => await RunMessagingAsync(factory, config),
                 _ => HandleUnknown(scenario),
             };
             Console.WriteLine();
@@ -737,9 +770,68 @@ internal static class Program
         return sentinel == 0;
     }
 
+    /// <summary>
+    /// Production-messaging-config scenario. The host built when this
+    /// scenario is requested applies the same ClusterOptions /
+    /// SiloMessagingOptions / ClientMessagingOptions as the real
+    /// azure-throughput silo (ResponseTimeout = 180s, explicit ClusterId
+    /// / ServiceId). Runs the chained-shape WaitAsync test (same as the
+    /// `chained` scenario) underneath those options so the messaging-
+    /// config differential is the only thing that varies between the two
+    /// runs. Tests whether the production messaging configuration is the
+    /// missing condition.
+    /// </summary>
+    private static async Task<bool> RunMessagingAsync(IGrainFactory factory, ReproConfig config)
+    {
+        Console.WriteLine($"===== SCENARIO messaging (count={config.LoadCount}, capacity={config.ChainedCapacity}, ResponseTimeout=180s) =====");
+        Console.WriteLine($"[repro] silo built with production messaging options (ResponseTimeout=180s, explicit ClusterOptions, in-memory reminders).");
+        Console.WriteLine($"[repro] running the chained-shape test under those options ...");
+        // Reuse RunChainedAsync logic against an offset key range so the
+        // run is independent of any prior chained-scenario activations.
+        var startedAt = Stopwatch.StartNew();
+        var tasks = new Task<long>[config.LoadCount];
+        const long sharedBlockerKey = 6000L;
+        for (var i = 0; i < config.LoadCount; i++)
+        {
+            var wrapper = factory.GetGrain<IWrapperGrain>(6000 + i);
+            tasks[i] = wrapper.TryDispatchAgainstChainedAsync(sharedBlockerKey, config.ChainedCapacity, config.TimeoutBudget, config.WallClockCap);
+        }
+        var results = await Task.WhenAll(tasks);
+        startedAt.Stop();
+
+        var fired = 0;
+        var didNotFire = 0;
+        var sentinel = 0;
+        long minMs = long.MaxValue;
+        long maxMs = long.MinValue;
+        long sumMs = 0;
+        foreach (var ms in results)
+        {
+            if (ms == -1L) { didNotFire++; }
+            else if (ms < 0) { sentinel++; }
+            else
+            {
+                fired++;
+                if (ms < minMs) { minMs = ms; }
+                if (ms > maxMs) { maxMs = ms; }
+                sumMs += ms;
+            }
+        }
+        var meanMs = fired == 0 ? 0 : sumMs / fired;
+        Console.WriteLine($"[repro] messaging result: fired={fired}/{config.LoadCount} did-not-fire={didNotFire} sentinel={sentinel} fire-time min/mean/max={minMs}/{meanMs}/{maxMs}ms (wall {startedAt.ElapsedMilliseconds}ms)");
+
+        if (didNotFire > 0)
+        {
+            Console.WriteLine($"[repro] SCENARIO messaging - {didNotFire} dispatch(es) DID NOT FIRE within wall-clock cap ({config.WallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
+            return false;
+        }
+        Console.WriteLine($"[repro] SCENARIO messaging - all {fired} dispatches fired their deadlines. OK.");
+        return sentinel == 0;
+    }
+
     private static bool HandleUnknown(string scenario)
     {
-        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load, singleton, chained, churn.");
+        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load, singleton, chained, churn, messaging.");
         return false;
     }
 
