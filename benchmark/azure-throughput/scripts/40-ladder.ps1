@@ -60,6 +60,32 @@ if (-not (Test-Path $ctxPath)) {
 $ctx = Get-Content $ctxPath | ConvertFrom-Json
 $containerGroup = "$($ctx.Prefix)-bench"
 
+# Hermetic cohort hygiene. The ladder owns the whole cohort, so any per-run BENCH_*
+# override left in the operator's shell from a prior manual A/B (e.g.
+# BENCH_WAL_ELIMINATE_CANDIDATE_ROW=false from a candidate-row experiment, or a pinned
+# BENCH_TREE_ID) would silently leak into - and confound - every rung. 20-build-and-deploy.ps1
+# inherits those vars when the ladder does not pin them explicitly, which makes the cohort
+# a function of the operator's stale shell state rather than the rung definition. Clear the
+# knobs the ladder does NOT itself set per-rung so every rung inherits the LIBRARY default
+# unless changed in the rung loop. (Vehicles/TickHz/Duration ARE set per-rung below and are
+# cleared here too, so a leaked value can't shadow the rung's own argument.)
+$leakableEnv = @(
+    'BENCH_WAL_ELIMINATE_CANDIDATE_ROW',
+    'BENCH_TREE_ID',
+    'BENCH_VEHICLE_COUNT',
+    'BENCH_TICK_HZ',
+    'BENCH_DURATION_SEC',
+    'BENCH_TOTAL_DURATION_SEC',
+    'BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC'
+)
+foreach ($name in $leakableEnv) {
+    $existing = [Environment]::GetEnvironmentVariable($name)
+    if (-not [string]::IsNullOrWhiteSpace($existing)) {
+        Write-Host "[ladder] clearing leaked env $name='$existing' (would confound the cohort)" -ForegroundColor Yellow
+    }
+    Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
+}
+
 $results = New-Object System.Collections.Generic.List[object]
 $resultsCsv = Join-Path $PSScriptRoot '.ladder-results.csv'
 $phaseAResults = New-Object System.Collections.Generic.List[object]
