@@ -1,25 +1,32 @@
-// Minimal repro for the residual WAL wedge investigation (fix/wedge, 2026-06-03).
+// Repro for the residual WAL wedge investigation (fix/wedge, 2026-06-03).
 //
-// Hypothesis the wedge cohort observed: Task.WaitAsync(TimeSpan) on a Task
-// returned by an Orleans-generated grain RPC proxy (vanilla Task<T> via
-// .AsTask() on InvokeAsync<T>) does NOT fire its timeout when the callee
-// grain method blocks forever, even though the threadpool TimerThread is
-// alive and threadpool workers are idle.
+// The repro is incrementally extended: each new scenario adds one condition
+// the real Lattice wedge has that the previous scenarios did not, gated
+// behind a console-app argument so prior scenarios remain runnable. The
+// minimal `baseline` scenario does NOT reproduce the wedge - any future
+// scenario that DOES reproduce names the condition that was missing.
 //
-// Two arms:
-//   ARM 1 - caller in console Main, no grain context: if WaitAsync fires
-//           here, the wedge is something specifically about the caller
-//           grain context (i.e. our real wedge requires the caller to be
-//           on a wedged grain scheduler).
-//   ARM 2 - caller in a wrapper grain (caller IS on a grain context):
-//           more closely matches the real wedge shape. If WaitAsync does
-//           NOT fire here, we have an unambiguous report for dotnet/orleans.
+// See repro/wedge-orleans/wedge-plan.md for the full bisect plan and
+// candidate ranking. See repro/wedge-orleans/README.md for usage.
 //
-// Each arm tries BOTH WaitAsync(TimeSpan) AND the linked-CTS pattern that
-// the wedge investigation's Option B used.
+// Build : dotnet build repro/wedge-orleans/Orleans.Lattice.Repro.Wedge.csproj -c Release
+// Run   : dotnet run --project repro/wedge-orleans -c Release -- [--scenario <list>] [--wall-clock-cap <seconds>] [--load-count <N>]
 //
-// Build: dotnet build .scratch/probe/Probe.csproj
-// Run:   dotnet run --project .scratch/probe/Probe.csproj
+//   --scenario   Comma-separated list. Default: baseline. Known scenarios:
+//                  baseline  - 4 baseline arms (caller in Main vs caller in
+//                              wrapper grain) x (WaitAsync(TimeSpan) vs
+//                              linked CTS + WaitAsync(token)). Minimal
+//                              wedge-shape; does NOT reproduce.
+//                  load      - silo-wide load: N concurrent wrapper-grain
+//                              dispatches against N distinct blocker keys,
+//                              each using the WaitAsync(TimeSpan)-inside-a-
+//                              grain shape (closest match to the real wedge
+//                              caller pattern). Tests whether having many
+//                              simultaneously-parked turns is sufficient.
+//   --wall-clock-cap   Per-arm wall-clock cap in seconds. Default 30.
+//   --load-count       Concurrent dispatches in the `load` scenario.
+//                      Default 32 (rough match to the real cohort's parked-
+//                      frame counts; cheap to scale up).
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -49,18 +56,20 @@ public sealed class BlockingGrain : Grain, IBlockingGrain
 
 public interface IWrapperGrain : IGrainWithIntegerKey
 {
-    // Runs the WaitAsync(TimeSpan) test from INSIDE a grain context.
-    Task<long> TryDispatchWithWaitAsyncTimeoutAsync(TimeSpan timeout, TimeSpan wallClockCap);
+    // Runs the WaitAsync(TimeSpan) test from INSIDE a grain context against
+    // a specific blocker key, so the `load` scenario can fan many wrapper
+    // grains against many distinct blocker activations.
+    Task<long> TryDispatchWithWaitAsyncTimeoutAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap);
 
     // Runs the linked-CTS Option-B pattern from INSIDE a grain context.
-    Task<long> TryDispatchWithLinkedCtsAsync(TimeSpan timeout, TimeSpan wallClockCap);
+    Task<long> TryDispatchWithLinkedCtsAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap);
 }
 
 public sealed class WrapperGrain(IGrainFactory factory) : Grain, IWrapperGrain
 {
-    public async Task<long> TryDispatchWithWaitAsyncTimeoutAsync(TimeSpan timeout, TimeSpan wallClockCap)
+    public async Task<long> TryDispatchWithWaitAsyncTimeoutAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap)
     {
-        var blocker = factory.GetGrain<IBlockingGrain>(0);
+        var blocker = factory.GetGrain<IBlockingGrain>(blockerKey);
         var sw = Stopwatch.StartNew();
         var capTask = Task.Delay(wallClockCap);
         var grainCall = blocker.BlockForeverAsync(CancellationToken.None);
@@ -82,9 +91,9 @@ public sealed class WrapperGrain(IGrainFactory factory) : Grain, IWrapperGrain
         }
     }
 
-    public async Task<long> TryDispatchWithLinkedCtsAsync(TimeSpan timeout, TimeSpan wallClockCap)
+    public async Task<long> TryDispatchWithLinkedCtsAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap)
     {
-        var blocker = factory.GetGrain<IBlockingGrain>(0);
+        var blocker = factory.GetGrain<IBlockingGrain>(blockerKey);
         var sw = Stopwatch.StartNew();
         var capTask = Task.Delay(wallClockCap);
         using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
@@ -107,19 +116,26 @@ public sealed class WrapperGrain(IGrainFactory factory) : Grain, IWrapperGrain
     }
 }
 
+internal sealed record ReproConfig(
+    IReadOnlyList<string> Scenarios,
+    TimeSpan TimeoutBudget,
+    TimeSpan WallClockCap,
+    int LoadCount);
+
 internal static class Program
 {
-    private static readonly TimeSpan TimeoutBudget = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan WallClockCap = TimeSpan.FromSeconds(30);
-
     public static async Task<int> Main(string[] args)
     {
+        var config = ParseArgs(args);
+
         Console.WriteLine($"[repro] starting in-process Orleans silo (single host, LocalhostClustering, in-memory storage)");
-        Console.WriteLine($"[repro] WaitAsync timeout budget : {TimeoutBudget.TotalSeconds:0.##}s");
-        Console.WriteLine($"[repro] wall-clock cap per arm   : {WallClockCap.TotalSeconds:0.##}s");
+        Console.WriteLine($"[repro] scenarios               : {string.Join(",", config.Scenarios)}");
+        Console.WriteLine($"[repro] WaitAsync timeout budget: {config.TimeoutBudget.TotalSeconds:0.##}s");
+        Console.WriteLine($"[repro] wall-clock cap per arm  : {config.WallClockCap.TotalSeconds:0.##}s");
+        Console.WriteLine($"[repro] load-count              : {config.LoadCount}");
         Console.WriteLine();
 
-        using var host = Host.CreateDefaultBuilder(args)
+        using var host = Host.CreateDefaultBuilder()
             .ConfigureLogging(l => l.ClearProviders()) // keep output focused on [repro] lines
             .UseOrleans(silo =>
             {
@@ -135,65 +151,17 @@ internal static class Program
         var factory = host.Services.GetRequiredService<IGrainFactory>();
         var pass = true;
 
-        // --- ARM 1: caller is console Main (no grain context) ---
-        Console.WriteLine("===== ARM 1: caller in console Main (no grain context) =====");
-
-        pass &= await RunArmAsync(
-            label: "ARM 1.A - WaitAsync(TimeSpan)",
-            run: async () =>
+        foreach (var scenario in config.Scenarios)
+        {
+            pass &= scenario switch
             {
-                var blocker = factory.GetGrain<IBlockingGrain>(0);
-                var sw = Stopwatch.StartNew();
-                try
-                {
-                    await blocker.BlockForeverAsync(CancellationToken.None).WaitAsync(TimeoutBudget);
-                    return -2L;
-                }
-                catch (TimeoutException)
-                {
-                    return sw.ElapsedMilliseconds;
-                }
-            });
+                "baseline" => await RunBaselineAsync(factory, config),
+                "load"     => await RunLoadAsync(factory, config),
+                _ => HandleUnknown(scenario),
+            };
+            Console.WriteLine();
+        }
 
-        pass &= await RunArmAsync(
-            label: "ARM 1.B - linked-CTS + WaitAsync(token)",
-            run: async () =>
-            {
-                var blocker = factory.GetGrain<IBlockingGrain>(0);
-                var sw = Stopwatch.StartNew();
-                using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
-                deadlineCts.CancelAfter(TimeoutBudget);
-                try
-                {
-                    await blocker.BlockForeverAsync(deadlineCts.Token).WaitAsync(deadlineCts.Token);
-                    return -2L;
-                }
-                catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested)
-                {
-                    return sw.ElapsedMilliseconds;
-                }
-            });
-
-        // --- ARM 2: caller is itself a grain (grain context captured on await) ---
-        Console.WriteLine();
-        Console.WriteLine("===== ARM 2: caller in a wrapper grain (grain context captured on await) =====");
-
-        var wrapper = factory.GetGrain<IWrapperGrain>(1);
-        // Use a fresh blocker key per ARM-2 sub-test so the previous test's
-        // parked turn does not block the next test's first dispatch on the
-        // SAME activation (the blocker's grain context is now stuck).
-        // Single blocker key 0 is shared by all arms - acceptable here because
-        // each arm uses a wall-clock cap; a parked dispatch from a prior arm
-        // does not block this arm's WaitAsync timer.
-        pass &= await RunWrappedArmAsync(
-            label: "ARM 2.A - WaitAsync(TimeSpan) inside a grain",
-            run: () => wrapper.TryDispatchWithWaitAsyncTimeoutAsync(TimeoutBudget, WallClockCap));
-
-        pass &= await RunWrappedArmAsync(
-            label: "ARM 2.B - linked-CTS + WaitAsync(token) inside a grain",
-            run: () => wrapper.TryDispatchWithLinkedCtsAsync(TimeoutBudget, WallClockCap));
-
-        Console.WriteLine();
         Console.WriteLine($"[repro] ===== OVERALL: {(pass ? "ALL ARMS FIRED THEIR DEADLINES" : "AT LEAST ONE ARM DID NOT FIRE")} =====");
         Console.WriteLine();
 
@@ -212,16 +180,155 @@ internal static class Program
         return pass ? 0 : 1;
     }
 
-    private static async Task<bool> RunArmAsync(string label, Func<Task<long>> run)
+    // -------- Scenarios --------
+
+    private static async Task<bool> RunBaselineAsync(IGrainFactory factory, ReproConfig config)
+    {
+        var pass = true;
+        const long blockerKey = 0L;
+
+        Console.WriteLine("===== SCENARIO baseline =====");
+        Console.WriteLine("===== ARM 1: caller in console Main (no grain context) =====");
+
+        pass &= await RunArmAsync(
+            label: "ARM 1.A - WaitAsync(TimeSpan)",
+            wallClockCap: config.WallClockCap,
+            timeoutBudget: config.TimeoutBudget,
+            run: async () =>
+            {
+                var blocker = factory.GetGrain<IBlockingGrain>(blockerKey);
+                var sw = Stopwatch.StartNew();
+                try
+                {
+                    await blocker.BlockForeverAsync(CancellationToken.None).WaitAsync(config.TimeoutBudget);
+                    return -2L;
+                }
+                catch (TimeoutException)
+                {
+                    return sw.ElapsedMilliseconds;
+                }
+            });
+
+        pass &= await RunArmAsync(
+            label: "ARM 1.B - linked-CTS + WaitAsync(token)",
+            wallClockCap: config.WallClockCap,
+            timeoutBudget: config.TimeoutBudget,
+            run: async () =>
+            {
+                var blocker = factory.GetGrain<IBlockingGrain>(blockerKey);
+                var sw = Stopwatch.StartNew();
+                using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
+                deadlineCts.CancelAfter(config.TimeoutBudget);
+                try
+                {
+                    await blocker.BlockForeverAsync(deadlineCts.Token).WaitAsync(deadlineCts.Token);
+                    return -2L;
+                }
+                catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested)
+                {
+                    return sw.ElapsedMilliseconds;
+                }
+            });
+
+        Console.WriteLine();
+        Console.WriteLine("===== ARM 2: caller in a wrapper grain (grain context captured on await) =====");
+
+        var wrapper = factory.GetGrain<IWrapperGrain>(1);
+        pass &= await RunWrappedArmAsync(
+            label: "ARM 2.A - WaitAsync(TimeSpan) inside a grain",
+            wallClockCap: config.WallClockCap,
+            timeoutBudget: config.TimeoutBudget,
+            run: () => wrapper.TryDispatchWithWaitAsyncTimeoutAsync(blockerKey, config.TimeoutBudget, config.WallClockCap));
+
+        pass &= await RunWrappedArmAsync(
+            label: "ARM 2.B - linked-CTS + WaitAsync(token) inside a grain",
+            wallClockCap: config.WallClockCap,
+            timeoutBudget: config.TimeoutBudget,
+            run: () => wrapper.TryDispatchWithLinkedCtsAsync(blockerKey, config.TimeoutBudget, config.WallClockCap));
+
+        return pass;
+    }
+
+    /// <summary>
+    /// Silo-wide load scenario. Fans <see cref="ReproConfig.LoadCount"/>
+    /// concurrent wrapper-grain dispatches against <c>LoadCount</c> distinct
+    /// blocker keys (so every dispatch parks its own blocker activation,
+    /// matching the real cohort's "many simultaneously-parked turns across
+    /// many activations" load shape). Each dispatch uses the
+    /// WaitAsync(TimeSpan)-inside-a-grain shape (real-wedge caller match).
+    /// Passes only if EVERY concurrent dispatch fires its deadline.
+    /// </summary>
+    private static async Task<bool> RunLoadAsync(IGrainFactory factory, ReproConfig config)
+    {
+        Console.WriteLine($"===== SCENARIO load (count={config.LoadCount}) =====");
+        Console.WriteLine($"[repro] dispatching {config.LoadCount} concurrent wrapper-grain calls against {config.LoadCount} distinct blocker keys ...");
+
+        // One wrapper grain per dispatch so each grain's own scheduler is
+        // saturated independently (mirrors the real "many WalShardGrain
+        // activations parked simultaneously" shape rather than one grain
+        // making many calls serially).
+        var startedAt = Stopwatch.StartNew();
+        var tasks = new Task<long>[config.LoadCount];
+        for (var i = 0; i < config.LoadCount; i++)
+        {
+            // Wrapper-grain keys 1000+i, blocker keys 1000+i.
+            // Offset away from key 0/1 used by the baseline scenario so a
+            // mixed `--scenario baseline,load` run does not reuse parked
+            // activations across scenarios.
+            var wrapper = factory.GetGrain<IWrapperGrain>(1000 + i);
+            var blockerKey = (long)(1000 + i);
+            tasks[i] = wrapper.TryDispatchWithWaitAsyncTimeoutAsync(blockerKey, config.TimeoutBudget, config.WallClockCap);
+        }
+        var results = await Task.WhenAll(tasks);
+        startedAt.Stop();
+
+        var fired = 0;
+        var didNotFire = 0;
+        var sentinel = 0;
+        long minMs = long.MaxValue;
+        long maxMs = long.MinValue;
+        long sumMs = 0;
+        foreach (var ms in results)
+        {
+            if (ms == -1L) { didNotFire++; }
+            else if (ms < 0) { sentinel++; }
+            else
+            {
+                fired++;
+                if (ms < minMs) { minMs = ms; }
+                if (ms > maxMs) { maxMs = ms; }
+                sumMs += ms;
+            }
+        }
+        var meanMs = fired == 0 ? 0 : sumMs / fired;
+        Console.WriteLine($"[repro] load result: fired={fired}/{config.LoadCount} did-not-fire={didNotFire} sentinel={sentinel} fire-time min/mean/max={minMs}/{meanMs}/{maxMs}ms (wall {startedAt.ElapsedMilliseconds}ms)");
+
+        if (didNotFire > 0)
+        {
+            Console.WriteLine($"[repro] SCENARIO load - {didNotFire} dispatch(es) DID NOT FIRE within wall-clock cap ({config.WallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
+            return false;
+        }
+        Console.WriteLine($"[repro] SCENARIO load - all {fired} dispatches fired their deadlines. OK.");
+        return sentinel == 0;
+    }
+
+    private static bool HandleUnknown(string scenario)
+    {
+        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load.");
+        return false;
+    }
+
+    // -------- Reusable arm runners --------
+
+    private static async Task<bool> RunArmAsync(string label, TimeSpan wallClockCap, TimeSpan timeoutBudget, Func<Task<long>> run)
     {
         Console.WriteLine($"[repro] {label} - dispatching ...");
-        var capSw = Stopwatch.StartNew();
-        var capTask = Task.Delay(WallClockCap);
+        var capTask = Task.Delay(wallClockCap);
         var runTask = run();
         var winner = await Task.WhenAny(runTask, capTask);
         if (winner == capTask)
         {
-            Console.WriteLine($"[repro] {label} - DID NOT FIRE within wall-clock cap ({WallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
+            Console.WriteLine($"[repro] {label} - DID NOT FIRE within wall-clock cap ({wallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
             return false;
         }
         var elapsedMs = await runTask;
@@ -230,17 +337,17 @@ internal static class Program
             Console.WriteLine($"[repro] {label} - sentinel return ({elapsedMs}); unexpected.");
             return false;
         }
-        Console.WriteLine($"[repro] {label} - fired in {elapsedMs}ms (target {TimeoutBudget.TotalMilliseconds}ms). OK.");
+        Console.WriteLine($"[repro] {label} - fired in {elapsedMs}ms (target {timeoutBudget.TotalMilliseconds}ms). OK.");
         return true;
     }
 
-    private static async Task<bool> RunWrappedArmAsync(string label, Func<Task<long>> run)
+    private static async Task<bool> RunWrappedArmAsync(string label, TimeSpan wallClockCap, TimeSpan timeoutBudget, Func<Task<long>> run)
     {
         Console.WriteLine($"[repro] {label} - dispatching through wrapper grain ...");
         var elapsedMs = await run();
         if (elapsedMs == -1L)
         {
-            Console.WriteLine($"[repro] {label} - DID NOT FIRE within wall-clock cap ({WallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
+            Console.WriteLine($"[repro] {label} - DID NOT FIRE within wall-clock cap ({wallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
             return false;
         }
         if (elapsedMs < 0)
@@ -248,7 +355,44 @@ internal static class Program
             Console.WriteLine($"[repro] {label} - sentinel return ({elapsedMs}); unexpected.");
             return false;
         }
-        Console.WriteLine($"[repro] {label} - fired in {elapsedMs}ms (target {TimeoutBudget.TotalMilliseconds}ms). OK.");
+        Console.WriteLine($"[repro] {label} - fired in {elapsedMs}ms (target {timeoutBudget.TotalMilliseconds}ms). OK.");
         return true;
+    }
+
+    // -------- Args --------
+
+    private static ReproConfig ParseArgs(string[] args)
+    {
+        var scenarios = new List<string> { "baseline" };
+        var timeoutBudget = TimeSpan.FromSeconds(2);
+        var wallClockCap = TimeSpan.FromSeconds(30);
+        var loadCount = 32;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--scenario":
+                    if (i + 1 >= args.Length) { throw new ArgumentException("--scenario requires a comma-separated value."); }
+                    scenarios = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                    break;
+                case "--timeout-budget":
+                    if (i + 1 >= args.Length) { throw new ArgumentException("--timeout-budget requires a value in seconds."); }
+                    timeoutBudget = TimeSpan.FromSeconds(double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+                case "--wall-clock-cap":
+                    if (i + 1 >= args.Length) { throw new ArgumentException("--wall-clock-cap requires a value in seconds."); }
+                    wallClockCap = TimeSpan.FromSeconds(double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture));
+                    break;
+                case "--load-count":
+                    if (i + 1 >= args.Length) { throw new ArgumentException("--load-count requires an integer."); }
+                    loadCount = int.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture);
+                    break;
+                default:
+                    throw new ArgumentException($"unknown argument: '{args[i]}'");
+            }
+        }
+
+        return new ReproConfig(scenarios, timeoutBudget, wallClockCap, loadCount);
     }
 }
