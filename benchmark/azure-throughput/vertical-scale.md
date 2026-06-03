@@ -9,6 +9,20 @@ move the load-induced wedge onset to a higher offered rate?** The baseline below
 establishes *where the wedge starts on the current 2 vCPU / 4 GiB silo*; the scaled arm
 re-runs the identical ladder on a larger ACI container and compares the onset rung.
 
+> [!WARNING]
+> **n=1 results carry wedge-lottery risk.** The 4k rung sits at the saturation boundary
+> of a known **bimodal phase-1/activation wedge** previously tracked as
+> [issue #546](https://github.com/NSTA1/Orleans.Lattice/issues/546) (closed by PR #568,
+> which shipped `LatticeOptions.ActivationReadyTimeout`, 15 s default). Pre-PR-#568, the
+> wedge fired on ~1/3 to ~1/2 of runs at and above the saturation rung *independent of
+> the option under test*. PR #568 named the mechanism (an unbounded cross-grain await
+> under `_ensureRootGate` in `ShardRootGrain.EnsureRootSlowAsync`) and bounded it, but
+> the 4k wedge observed in the cohort below shows a **residual wedge still exists in the
+> tree after #568**. Single-run rung verdicts here therefore carry lottery risk. The
+> **categorical** finding ("vertical scaling does not move the onset") is robust because
+> both arms wedged at 4k; throughput deltas at sub-saturation rungs (2k/3k) should not be
+> read as a CPU effect at n=1.
+
 > [!IMPORTANT]
 > **Validity caveat - read before trusting the comparison.** The baseline wedge
 > (`inFlight=8`, rate collapses to 0) is pinned at the `BENCH_WAL_MAX_PENDING_BATCHES=8`
@@ -211,9 +225,22 @@ the 4k wedge persists regardless of core count.
 
 ### Next lever
 
-Not vertical scaling. The pending-batch ceiling itself: sweep
-`BENCH_WAL_MAX_PENDING_BATCHES` (8 -> 16 -> 32) at the 4k rung to test whether the wedge is
-the `inFlight=8` ceiling, and/or profile the Azure Tables phase-1/phase-2 transaction path.
+Not vertical scaling, and not (yet) the pending-batch ceiling either. The Phase 0
+continuity check on this cycle surfaced an existing wedge campaign under
+`benchmark/.run/azure-throughput/POSTMORTEM-*.md` whose carry-forward rule is explicit:
+**do not resume any Azure-Tables WAL throughput A/B at or above the saturation rung
+until the bimodal phase-1/activation wedge is fully resolved.** PR #568
+(`ActivationReadyTimeout`) named and bounded one cross-grain await on the activation
+hot path and closed [issue #546](https://github.com/NSTA1/Orleans.Lattice/issues/546),
+but the 4k wedge observed in the cohort above shows a **residual wedge survives on the
+current tree**. The next experiment is therefore not a throughput A/B but a **diagnostic
+attribution pass** at the 4k rung: re-attach the existing `StallWatchdog` (ClrMD parked-
+state dump) and the `ActivationReadyTimeouts` counter and confirm whether the residual
+stall has the same `_ensureRootGate` parked-state signature (in which case `#568` is
+incomplete) or a new signature (a different unbounded seam, requiring its own bounded-
+deadline fix). A `BENCH_WAL_MAX_PENDING_BATCHES` sweep is only meaningful once the
+residual wedge is resolved (otherwise the cohort is a function of the wedge lottery,
+not the ceiling).
 
 The silo container has been reverted to the baseline **2.0 vCPU / 4.0 GiB** since vertical
 scaling is falsified.
