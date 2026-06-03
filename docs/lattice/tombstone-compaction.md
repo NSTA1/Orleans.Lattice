@@ -149,6 +149,14 @@ The shard root dedupes repeated `Delete` mutations within a dirty-window in memo
 
 The active path is reported on `orleans.lattice.compaction.leaves.visited` via the `path` tag (`walk` or `dirty-set`), and the `orleans.lattice.compaction.shard.dirty_leaves` histogram records the per-shard dirty-leaf count at the moment the coordinator enters a shard.
 
+### `DirtyLeafFlushIntervalMs`
+
+Coalescing window for persisting the shard-root dirty-leaves dictionary (default: `50` ms). The `Delete` hot path never writes to storage directly: `ShardRootGrain.MarkLeafDirtyAsync` max-merges the destination leaf into the in-memory `DirtyLeavesSinceLastCompaction` map with a monotonically-advancing HLC, sets a pending-flush flag, and arms a one-shot grain timer scoped to this interval. The timer's tick drains the flag with one `WriteStateAsync` per window regardless of how many distinct leaves were marked - the per-`Delete` shard-root storage write that previously raced concurrent `SetManyAsync` turns is replaced by at most one persist per window.
+
+The compaction coordinator reads the in-memory dictionary directly via `IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync`, so an unpersisted mark is still routable within the same activation - the coalescing window matters only for crash survival. Admin-path flushes (`ClearDirtyLeavesUpToAsync`) and `OnDeactivateAsync` always drain pending marks in their own persist call, so clean shutdown loses nothing. An unclean silo crash that loses an in-memory mark causes the affected leaf to be re-discovered by the legacy chain-walk fallback on the next pass (the shard's empty post-restart snapshot triggers the fallback automatically), so the loss bound is one missed leaf per crashed activation per window - bounded and self-healing, never a correctness signal.
+
+Set to `0` to disable coalescing entirely: each `MarkLeafDirtyAsync` call performs a synchronous best-effort flush, restoring the pre-coalescing behaviour of one `WriteStateAsync` per first-call-per-leaf-per-window. Tighten the window if shard-root crash survival is more valuable than coalescing the hot-path write; widen it if storage-side write amplification dominates over crash-recovery cost.
+
 ## Policy-Driven Triggers
 
 Reminder-driven compaction handles the steady state. Bursty workloads can build a tombstone backlog **between** reminder ticks - either because the delete:write ratio spikes or because a leaf accumulates so many tombstones that scan latency degrades before the next reminder fires. Three optional policy controls let the leaf request an out-of-cycle pass without waiting for the next reminder.
