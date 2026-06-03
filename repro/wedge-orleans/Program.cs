@@ -32,10 +32,21 @@
 //                              the blocker grain's parked Task). Tests
 //                              whether the singleton-helper hop is what
 //                              prevents the deadline from firing.
+//                  chained   - callee internal chained back-pressure: the
+//                              blocker grain models WalShardGrain.AppendBatch
+//                              Async line 585 - it maintains its own bounded
+//                              _inFlight chain and parks each over-cap call
+//                              at `await headTask` against a sibling slot
+//                              whose task never completes. Tests whether
+//                              the wedge requires the callee's parked-Task
+//                              graph rather than a single delay.
 //   --wall-clock-cap   Per-arm wall-clock cap in seconds. Default 30.
-//   --load-count       Concurrent dispatches in the `load` / `singleton`
-//                      scenarios. Default 32 (rough match to the real
-//                      cohort's parked-frame counts; cheap to scale up).
+//   --load-count       Concurrent dispatches in the `load` / `singleton` /
+//                      `chained` scenarios. Default 32 (rough match to
+//                      the real cohort's parked-frame counts; cheap to
+//                      scale up).
+//   --chained-capacity In-flight cap on the chained blocker grain. Default 8
+//                      (matches Lattice's WalMaxPendingBatches default).
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -63,6 +74,55 @@ public sealed class BlockingGrain : Grain, IBlockingGrain
     }
 }
 
+/// <summary>
+/// Models <c>WalShardGrain.AppendBatchAsync</c>'s line 585 back-pressure
+/// waiter: maintains a bounded in-flight chain of never-completing tasks,
+/// and parks each over-cap call at <c>await headTask</c> against the head
+/// slot's task. With <paramref name="capacity"/>=8 (Lattice's default
+/// <c>WalMaxPendingBatches</c>) and N&gt;8 concurrent callers, the first
+/// 8 calls populate the chain, and every subsequent caller parks at
+/// <c>await headTask</c> exactly as the real wedge does.
+/// </summary>
+public interface IChainedBlockingGrain : IGrainWithIntegerKey
+{
+    Task<int> AppendAsync(int capacity, CancellationToken cancellationToken);
+}
+
+public sealed class ChainedBlockingGrain : Grain, IChainedBlockingGrain
+{
+    // Bounded chain of never-completing tasks. Mirrors WalShardGrain's
+    // _inFlight LinkedList<InFlightFlush>. Single-threaded turn invariant
+    // means we do not need extra locking - one turn at a time mutates it.
+    private readonly LinkedList<Task> _inFlight = new();
+
+    public async Task<int> AppendAsync(int capacity, CancellationToken _)
+    {
+        if (_inFlight.Count >= capacity)
+        {
+            // Park at the head's task, exactly as WalShardGrain.AppendBatch
+            // Async line 585 does. The head's task never completes (every
+            // slot is a Task.Delay(Infinite)), so this await never returns.
+            var headTask = _inFlight.First!.Value;
+            // ConfigureAwait(true) deliberately: keep the resume target on
+            // the grain context - default WalShardGrain shape.
+            await headTask.ConfigureAwait(true);
+            return -1; // unreachable
+        }
+
+        // Below cap: install a new never-completing slot. Then, exactly
+        // like WalShardGrain.AppendBatchAsync line 662 (await acks[i].Task),
+        // also await the JUST-INSTALLED slot so this caller parks too -
+        // otherwise the first `capacity` callers would return successfully
+        // without exercising the wedge-shaped wait. Every caller must park
+        // on a never-completing Task for the scenario to be a clean test
+        // of "WaitAsync against a parked grain-RPC return Task".
+        var slot = Task.Delay(Timeout.Infinite, CancellationToken.None);
+        _inFlight.AddLast(slot);
+        await slot.ConfigureAwait(true);
+        return -2; // unreachable
+    }
+}
+
 public interface IWrapperGrain : IGrainWithIntegerKey
 {
     // Runs the WaitAsync(TimeSpan) test from INSIDE a grain context against
@@ -80,6 +140,13 @@ public interface IWrapperGrain : IGrainWithIntegerKey
     // singleton-hop is the missing condition that suppresses cancellation
     // on the real wedge path.
     Task<long> TryDispatchViaSingletonAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap);
+
+    // Calls into a chained-blocker grain (models WalShardGrain's _inFlight
+    // chain at line 585) with a WaitAsync(TimeSpan) bound on the outer
+    // grain RPC. The chained blocker's own internal await is an intra-
+    // activation back-pressure wait against a head slot's Task, not a
+    // simple Task.Delay - which is the real-wedge shape.
+    Task<long> TryDispatchAgainstChainedAsync(long blockerKey, int capacity, TimeSpan timeout, TimeSpan wallClockCap);
 }
 
 public sealed class WrapperGrain(IGrainFactory factory, IBlockingDispatcher dispatcher) : Grain, IWrapperGrain
@@ -156,6 +223,28 @@ public sealed class WrapperGrain(IGrainFactory factory, IBlockingDispatcher disp
             return sw.ElapsedMilliseconds; // GOOD - singleton's WaitAsync fired and propagated through the wrapper grain context
         }
     }
+
+    public async Task<long> TryDispatchAgainstChainedAsync(long blockerKey, int capacity, TimeSpan timeout, TimeSpan wallClockCap)
+    {
+        var blocker = factory.GetGrain<IChainedBlockingGrain>(blockerKey);
+        var sw = Stopwatch.StartNew();
+        var capTask = Task.Delay(wallClockCap);
+        var grainCall = blocker.AppendAsync(capacity, CancellationToken.None);
+        try
+        {
+            var winner = await Task.WhenAny(grainCall.WaitAsync(timeout), capTask).ConfigureAwait(true);
+            if (winner == capTask)
+            {
+                return -1L;
+            }
+            await winner.ConfigureAwait(true);
+            return -2L;
+        }
+        catch (TimeoutException)
+        {
+            return sw.ElapsedMilliseconds; // GOOD - WaitAsync fired against the chained-blocker grain
+        }
+    }
 }
 
 /// <summary>
@@ -195,7 +284,8 @@ internal sealed record ReproConfig(
     IReadOnlyList<string> Scenarios,
     TimeSpan TimeoutBudget,
     TimeSpan WallClockCap,
-    int LoadCount);
+    int LoadCount,
+    int ChainedCapacity);
 
 internal static class Program
 {
@@ -208,6 +298,7 @@ internal static class Program
         Console.WriteLine($"[repro] WaitAsync timeout budget: {config.TimeoutBudget.TotalSeconds:0.##}s");
         Console.WriteLine($"[repro] wall-clock cap per arm  : {config.WallClockCap.TotalSeconds:0.##}s");
         Console.WriteLine($"[repro] load-count              : {config.LoadCount}");
+        Console.WriteLine($"[repro] chained-capacity        : {config.ChainedCapacity}");
         Console.WriteLine();
 
         using var host = Host.CreateDefaultBuilder()
@@ -234,6 +325,7 @@ internal static class Program
                 "baseline"  => await RunBaselineAsync(factory, config),
                 "load"      => await RunLoadAsync(factory, config),
                 "singleton" => await RunSingletonAsync(factory, config),
+                "chained"   => await RunChainedAsync(factory, config),
                 _ => HandleUnknown(scenario),
             };
             Console.WriteLine();
@@ -453,9 +545,72 @@ internal static class Program
         return sentinel == 0;
     }
 
+    /// <summary>
+    /// Callee internal chained-back-pressure scenario. Fans
+    /// <see cref="ReproConfig.LoadCount"/> concurrent wrapper-grain dispatches
+    /// against a SINGLE chained-blocker grain (one activation, shared by all
+    /// dispatches). The blocker maintains a bounded <c>_inFlight</c> chain
+    /// of never-completing tasks (capacity = <c>ChainedCapacity</c>) and
+    /// parks each over-cap call at <c>await headTask</c> - exactly the
+    /// shape of <c>WalShardGrain.AppendBatchAsync</c> line 585. With
+    /// <c>LoadCount</c>=32 and <c>ChainedCapacity</c>=8 the first 8 calls
+    /// populate the chain and the remaining 24 park at the head, mirroring
+    /// the real cohort's <c>inFlight=8</c> pinned signature with 24+ callers
+    /// parked behind.
+    /// </summary>
+    private static async Task<bool> RunChainedAsync(IGrainFactory factory, ReproConfig config)
+    {
+        Console.WriteLine($"===== SCENARIO chained (count={config.LoadCount}, capacity={config.ChainedCapacity}) =====");
+        Console.WriteLine($"[repro] dispatching {config.LoadCount} concurrent wrapper-grain calls against ONE chained-blocker activation (cap={config.ChainedCapacity}) ...");
+
+        var startedAt = Stopwatch.StartNew();
+        var tasks = new Task<long>[config.LoadCount];
+        const long sharedBlockerKey = 3000L;
+        for (var i = 0; i < config.LoadCount; i++)
+        {
+            // Wrapper-grain keys 3000+i (offset from baseline/load/singleton).
+            // All dispatches target the SAME sharedBlockerKey so they all
+            // land on the same chained-blocker activation - this is what
+            // produces the inFlight chain shape.
+            var wrapper = factory.GetGrain<IWrapperGrain>(3000 + i);
+            tasks[i] = wrapper.TryDispatchAgainstChainedAsync(sharedBlockerKey, config.ChainedCapacity, config.TimeoutBudget, config.WallClockCap);
+        }
+        var results = await Task.WhenAll(tasks);
+        startedAt.Stop();
+
+        var fired = 0;
+        var didNotFire = 0;
+        var sentinel = 0;
+        long minMs = long.MaxValue;
+        long maxMs = long.MinValue;
+        long sumMs = 0;
+        foreach (var ms in results)
+        {
+            if (ms == -1L) { didNotFire++; }
+            else if (ms < 0) { sentinel++; }
+            else
+            {
+                fired++;
+                if (ms < minMs) { minMs = ms; }
+                if (ms > maxMs) { maxMs = ms; }
+                sumMs += ms;
+            }
+        }
+        var meanMs = fired == 0 ? 0 : sumMs / fired;
+        Console.WriteLine($"[repro] chained result: fired={fired}/{config.LoadCount} did-not-fire={didNotFire} sentinel={sentinel} fire-time min/mean/max={minMs}/{meanMs}/{maxMs}ms (wall {startedAt.ElapsedMilliseconds}ms)");
+
+        if (didNotFire > 0)
+        {
+            Console.WriteLine($"[repro] SCENARIO chained - {didNotFire} dispatch(es) DID NOT FIRE within wall-clock cap ({config.WallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
+            return false;
+        }
+        Console.WriteLine($"[repro] SCENARIO chained - all {fired} dispatches fired their deadlines. OK.");
+        return sentinel == 0;
+    }
+
     private static bool HandleUnknown(string scenario)
     {
-        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load, singleton.");
+        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load, singleton, chained.");
         return false;
     }
 
@@ -508,6 +663,7 @@ internal static class Program
         var timeoutBudget = TimeSpan.FromSeconds(2);
         var wallClockCap = TimeSpan.FromSeconds(30);
         var loadCount = 32;
+        var chainedCapacity = 8;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -529,11 +685,15 @@ internal static class Program
                     if (i + 1 >= args.Length) { throw new ArgumentException("--load-count requires an integer."); }
                     loadCount = int.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture);
                     break;
+                case "--chained-capacity":
+                    if (i + 1 >= args.Length) { throw new ArgumentException("--chained-capacity requires an integer."); }
+                    chainedCapacity = int.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture);
+                    break;
                 default:
                     throw new ArgumentException($"unknown argument: '{args[i]}'");
             }
         }
 
-        return new ReproConfig(scenarios, timeoutBudget, wallClockCap, loadCount);
+        return new ReproConfig(scenarios, timeoutBudget, wallClockCap, loadCount, chainedCapacity);
     }
 }
