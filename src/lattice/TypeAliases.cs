@@ -131,6 +131,10 @@ internal static class TypeAliases
     // bytes summed across a shard's leaf chain in a single walk).
     internal const string ShardStorageUsage = "ol.ssu";
 
+    // Per-leaf byte footprint published by leaves to the shard root and
+    // folded into ShardRootState.LeafStateBytesTotal / SnapshotBytesTotal.
+    internal const string LeafByteFootprint = "ol.lbf";
+
     // Storage-usage accounting (byte-accurate retained footprint)
     internal const string TreeStorageUsageReport = "ol.tsu";
     internal const string ClusterStorageUsageReport = "ol.csu";

@@ -34,7 +34,7 @@ internal sealed class LatticeStorageUsageGrain(
             return c;
         }
 
-        var report = await BuildReportAsync(cancellationToken);
+        var report = await BuildReportAsync(forceRefresh, cancellationToken);
         _cached = report;
         PublishToMetrics(report, options);
         return report;
@@ -59,7 +59,7 @@ internal sealed class LatticeStorageUsageGrain(
         }
     }
 
-    private async Task<TreeStorageUsageReport> BuildReportAsync(CancellationToken cancellationToken)
+    private async Task<TreeStorageUsageReport> BuildReportAsync(bool forceRefresh, CancellationToken cancellationToken)
     {
         // Resolve routing (physical tree ID + shard map) via the public
         // entry point so registry-alias resolution is handled uniformly.
@@ -75,7 +75,7 @@ internal sealed class LatticeStorageUsageGrain(
         {
             var shardIndex = physicalShardIndices[i];
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
-            shardTasks[i] = GetShardUsageAsync(shard, shardIndex, cancellationToken);
+            shardTasks[i] = GetShardUsageAsync(shard, shardIndex, forceRefresh, cancellationToken);
         }
 
         // WAL fan-out: retained bytes per partition. The WAL grain key is
@@ -131,11 +131,13 @@ internal sealed class LatticeStorageUsageGrain(
         };
     }
 
-    private async Task<ShardStorageUsage> GetShardUsageAsync(IShardRootGrain shard, int shardIndex, CancellationToken cancellationToken)
+    private async Task<ShardStorageUsage> GetShardUsageAsync(IShardRootGrain shard, int shardIndex, bool forceRefresh, CancellationToken cancellationToken)
     {
         try
         {
-            return await shard.GetStorageUsageAsync(cancellationToken);
+            return forceRefresh
+                ? await shard.RefreshLeafByteFootprintsAsync(cancellationToken)
+                : await shard.GetStorageUsageAsync(cancellationToken);
         }
         catch (Exception ex)
         {

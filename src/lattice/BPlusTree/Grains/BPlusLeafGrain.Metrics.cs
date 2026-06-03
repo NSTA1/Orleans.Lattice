@@ -117,6 +117,77 @@ internal sealed partial class BPlusLeafGrain
             LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty));
         }
+
+        // Best-effort byte-footprint publish to the owning shard root so the
+        // shard-level storage-usage rollup stays current without ever
+        // walking the leaf chain on the read path. The shard root marks
+        // PublishLeafByteFootprintAsync AlwaysInterleave and updates
+        // activation-scoped fields only (no WriteStateAsync), so the
+        // await here cannot block the leaf's saga progress on a foreground
+        // shard-root etag CAS. Awaiting (rather than fire-and-forget)
+        // means a subsequent GetStorageUsageAsync against the shard root
+        // observes this leaf's contribution deterministically.
+        await TryPublishByteFootprintAsync();
+    }
+
+    private long _lastPublishedStateBytes = long.MinValue;
+    private long _lastPublishedSnapshotBytes = long.MinValue;
+
+    /// <summary>
+    /// Awaitable best-effort byte-footprint publish to the owning shard
+    /// root. Skipped when the leaf has no resolved <c>TreeId</c> / shard
+    /// index yet (very early in activation, before the parent has wired
+    /// the leaf in), when the grain-id key is not a Guid (unit-test
+    /// activations only - production leaf keys are always Guids), and
+    /// when the values are identical to the most recent successful
+    /// publish. Errors are swallowed so a transient shard-root failure
+    /// does not fail the user-visible mutation; the next publish (or the
+    /// operator-driven <c>RefreshLeafByteFootprintsAsync</c>) re-anchors
+    /// the totals.
+    /// </summary>
+    private async Task TryPublishByteFootprintAsync()
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is null || state.State.ShardIndex is not int shardIndex)
+        {
+            return;
+        }
+
+        var stateBytes = Cache.StateBytes;
+        var snapshotBytes = _lastCapturedSnapshotBytes;
+        if (stateBytes == _lastPublishedStateBytes && snapshotBytes == _lastPublishedSnapshotBytes)
+        {
+            return;
+        }
+        _lastPublishedStateBytes = stateBytes;
+        _lastPublishedSnapshotBytes = snapshotBytes;
+
+        Guid leafKey;
+        try
+        {
+            leafKey = context.GrainId.GetGuidKey();
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        var footprint = new State.LeafByteFootprint
+        {
+            StateBytes = stateBytes,
+            SnapshotBytes = snapshotBytes,
+        };
+        try
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{treeId}/{shardIndex}");
+            await shard.PublishLeafByteFootprintAsync(leafKey, footprint);
+        }
+        catch
+        {
+            // Best-effort: a transient publish failure must not fail the
+            // user-visible mutation. The next persist re-publishes; the
+            // operator-driven RefreshStorageUsageAsync re-anchors.
+        }
     }
 
     /// <summary>Builds the single-tree tag used by every leaf-level instrument.</summary>
