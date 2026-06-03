@@ -61,6 +61,16 @@ public class MojibakeHygieneTests
         (new string(new[] { '\u251C', '\u00F6', '\u251C', '\u00C5' }), "arrow (U+2192) via CP437"),
         (new string(new[] { '\u00D4', '\u00A3', '\u00F4' }), "check-mark (U+2713) via CP437"),
         (new string(new[] { '\u00D4', '\u00A3', '\u00C9' }), "cross-mark (U+2717) via CP437"),
+
+        // CP850-as-UTF-8 mojibake. CP850 is the Western European OEM
+        // code page that ships as the default on en-US Windows
+        // command prompts; it differs from CP437 in the upper half
+        // and produces a DIFFERENT trigram for the same source
+        // glyph. The first leak this gate failed to catch
+        // (docs/lattice/features.md:149 and docs/lattice.replication/
+        // features.md:110) was a CP850-decoded arrow, which the
+        // CP437-only needle above missed entirely.
+        (new string(new[] { '\u00D4', '\u00E5', '\u00C6' }), "arrow (U+2192) via CP850"),
     };
 
     // Directory segments under the repo root that are never in scope:

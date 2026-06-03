@@ -146,7 +146,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-002](https://github.com/NSTA1/Orleans.Lattice/issues/419) - Compaction policy controls
 - [G-011](https://github.com/NSTA1/Orleans.Lattice/issues/428) - Caller-supplied idempotency key for `SetManyAtomicAsync`
 - [G-012](https://github.com/NSTA1/Orleans.Lattice/issues/429) - `CoordinatorGrain<TSelf>` base class + `IsIdleAsync` rename
-- [G-014](https://github.com/NSTA1/Orleans.Lattice/issues/431) - WAL-as-sole-commit-point promotion (substantially shipped via F-047 ÔåÆ F-052)
+- [G-014](https://github.com/NSTA1/Orleans.Lattice/issues/431) - WAL-as-sole-commit-point promotion (substantially shipped via F-047 -> F-052)
 - [G-016](https://github.com/NSTA1/Orleans.Lattice/issues/433) - Operator dashboards package (`Orleans.Lattice.Dashboards`)
 - [G-019](https://github.com/NSTA1/Orleans.Lattice/issues/546) - Bimodal phase-1/activation wedge on the Azure-Tables WAL hot path (investigative)
 - [G-020](https://github.com/NSTA1/Orleans.Lattice/issues/551) - Non-atomic `GetManyAsync` snapshot across mid-saga reshard (migration Swap-phase ordering)

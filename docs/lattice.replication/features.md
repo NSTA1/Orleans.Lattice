@@ -107,7 +107,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-085](https://github.com/NSTA1/Orleans.Lattice/issues/493) - Causal+ observability
 - [R-086](https://github.com/NSTA1/Orleans.Lattice/issues/494) - Transport metadata pass-through contract test
 - [R-087](https://github.com/NSTA1/Orleans.Lattice/issues/495) - Per-origin FIFO invariant + out-of-order detection
-- [R-088](https://github.com/NSTA1/Orleans.Lattice/issues/496) - Bootstrap ÔåÆ incremental causal handoff verification
+- [R-088](https://github.com/NSTA1/Orleans.Lattice/issues/496) - Bootstrap -> incremental causal handoff verification
 - [R-089](https://github.com/NSTA1/Orleans.Lattice/issues/497) - Atomic multi-key VC capture point
 - [R-090](https://github.com/NSTA1/Orleans.Lattice/issues/498) - `MutationCategory` classification + maintenance skip
 - [R-091](https://github.com/NSTA1/Orleans.Lattice/issues/499) - Shadow-forward VC preservation
