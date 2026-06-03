@@ -162,6 +162,8 @@ afb00b1  docs: record vertical-scaling null result; revert silo to 2 vCPU/4 GiB
 24b8f74  docs: add FX-023 (reshard equal-count no-op) to core features index
 650d65f  ci: harden azure-throughput ladder against leaked BENCH_TREE_ID; bump silo to 4 vCPU/8 GiB (silo later reverted to 2/4)
 fbb04bd  docs: add FX-024 (ConfigureAwait hygiene on WalCommitLogWriter) to core features index
+f74ec86  docs: add G-024 (per-shard FlushAsync / reshard diagnostics pack) to core features index
+b603c58  feat: per-shard FlushAsync lifecycle / StartFlush / reshard diagnostics (G-024)
 ```
 
 Repro + bisect (this folder):
@@ -178,4 +180,101 @@ c468b4c  repro(wedge): add 'messaging' scenario; production messaging options do
 Plus issues filed: #570 (FX-023 reshard equal-count), #571 (docs: stale SNAT
 narrative in Silo/Program.cs), #572 (G-023 wedge diagnostic pack -
 implemented by `bfdc384` above), #573 (FX-024 ConfigureAwait hygiene on
-WalCommitLogWriter).
+WalCommitLogWriter), #574 (G-024 per-shard lifecycle / reshard diagnostics -
+implemented by `b603c58` above).
+
+---
+
+## 10. G-024-driven investigation plan
+
+The G-024 diagnostic pack (`b603c58`) provides three new attribution
+surfaces that together can name the wedge mechanism in a single ACI cohort:
+
+1. **D1 - `[wal-slot]` log lines per snapshot** (from the extended
+   `StallWatchdog`). Each line names a wedged slot's `(tree, shard)`,
+   offset range, current `WalFlushStage`, and stuck-at-stage duration.
+2. **D2 - `wal.shard.start_flush.calls` counter + `pending_segments`
+   histogram per `(tree, shard)`** (from `WalShardGrain.StartFlush`).
+   The counter's rate-during-wedge distinguishes "slot leak" from
+   "flush kick-off blocked"; the histogram says whether callers are
+   still arriving.
+3. **D3 - `shard_root.reshard.{initiated,rejected,completed,in_flight}`
+   counters per tree** (from `TreeReshardGrain.ReshardAsync`). Directly
+   correlates Lattice-side reshard activity with wedge onset.
+
+### 10.1 Steps
+
+| # | Step | Cost | Decisive |
+|---|---|---|---|
+| **S1** | Verify the G-024 pack ships and is observable: run one fresh `--scenario baseline` from the upstream repro (sanity that the in-tree build still passes the focused tests after `b603c58`). | seconds | yes for build sanity |
+| **S2** | Run one ACI cohort at the saturation rung (`-Rungs '4000:5' -DurationSec 45 -LocalBuild`) on `fix/wedge` HEAD (commit `b603c58`). Three things in scope to verify on the FINAL silo log: (a) banner carries the existing `walAppendDispatchTimeout=default(30s)` token (so we know the silo binary contains the G-023 pack; G-024 is a strict superset of G-023 in this branch so the same token is sufficient deployment verification), (b) the new `[wal-slot]` lines appear in every `[stall-watchdog]` block, (c) the wedge reproduces (it should; G-024 is observation-only). | ~5-10 min wall | yes for instrumentation reach |
+| **S3** | Parse the `[wal-slot]` lines from the cohort log: group by `(tree, shard, stage)`, compute the histogram of `stuck` durations per stage. The dominant stage names the binding constraint. | seconds (log parse) | yes for D1 attribution |
+| **S4** | Diff `wal.shard.start_flush.calls` counter across the wedge window (~t=10s onwards). Either it keeps incrementing (slot-leak class) or it flatlines (kick-off-blocked class) - that single signal categorises the wedge mechanism. | seconds | yes for D2 attribution |
+| **S5** | Diff `shard_root.reshard.initiated`/`rejected`/`completed` counters across the wedge window. Either reshard activity rate is non-zero through the wedge (Lattice-side reshard correlates causally) or it is zero (reshard activity falsified as the wedge cause). | seconds | yes for D3 attribution |
+| **S6** | Cross-table the three attribution results into the decision table in section 11. The combination resolves the wedge mechanism to one of ~6 well-defined source regions. | minutes (analysis) | yes |
+| **S7** | If a single mechanism is named: file the named code locus as the next `feature-dev` fix issue (e.g. "G-025: bound the X await in WalShardGrain.FlushAsync that observation X named"). If multiple equally-plausible mechanisms remain: extend the repro at `repro/wedge-orleans/` to model the specific named pattern and bisect further (reverse-direction bisect from the Lattice side). | varies | depends on S6 |
+
+### 10.2 Bench harness extension required for S2-S5
+
+The G-024 counters are emitted via `Meter.CreateCounter` /
+`Meter.CreateHistogram` on `LatticeMetrics.Meter`. The azure-throughput
+silo currently exports the existing meter to an OTel sink configured via
+env vars (`benchmark/azure-throughput/Silo/Program.cs`). For S4 and S5
+the counter values must reach the operator at cohort-read time. Two paths:
+
+- **(a) Use the existing OTel sink**: configure the sink to scrape every
+  counter on `LatticeMetrics.Meter` including the four G-024 counters.
+  If the sink is already wildcard-subscribed this is zero work; if it
+  uses an explicit allow-list the new metric names need adding. Confirm
+  during S1.
+- **(b) Add periodic `Console.WriteLine` of counter snapshots in
+  `Program.cs`**: a 2-second tick that writes
+  `[metric] start_flush.calls=N pending_segments_max=N reshard.initiated=N ...`
+  to stdout - reusing the existing per-second reporter shape. Lower
+  fidelity but no operator-side OTel config required, and the same
+  `.run/silo-*.log` exfiltration channel as `[stall-watchdog]` and
+  `[wal-slot]`. **Probably the right call** - matches the existing
+  bench-harness style and keeps the diagnostic self-contained per cohort.
+
+This is bench-side harness work, in scope for the optimisation agent. If
+the existing OTel sink is already wildcard, path (a) is free; otherwise
+path (b) is the right cost-vs-effort trade.
+
+## 11. Decision table for the cohort result
+
+The four observable signals from a single saturation-rung cohort
+post-`b603c58`:
+
+| Signal | Possible values |
+|---|---|
+| **L** - dominant `[wal-slot] stage` | `Created`, `Yielded`, `ProviderCallIssued`, `ProviderCallReturned`, `AcksApplied`, `FailureHandled` |
+| **C** - `start_flush.calls` rate during wedge | `>0` (rising) or `0` (flat) |
+| **P** - `pending_segments` distribution during wedge | growing (callers still arriving) or flat-at-zero |
+| **R** - `reshard.{initiated,rejected,completed}` activity during wedge | non-zero or zero |
+
+The cross-table that names the wedge mechanism:
+
+| L (dominant stage) | C (start_flush rate) | Named mechanism | Next fix region |
+|---|---|---|---|
+| `Created` | `0` (flat) | Slot stamped `Created` in `StartFlush` but `FlushAsync` body never reached - the task is in `_inFlight` but its `await Task.Yield()` continuation never schedules. | `WalShardGrain.FlushAsync` body before the post-yield check; the in-tree `WalFlushPreflightTimeout` deadline is the right shape but is itself dependent on the same continuation running (see section 6 for the original analysis). Likely needs an out-of-grain watchdog deadline rather than a CTS-based one. |
+| `Yielded` | `0` (flat) | Slot passed the preflight check but is stuck in the synchronous setup region between `Yielded` and `ProviderCallIssued` (parallel-array materialisation, provider-call CTS construction). Very narrow - should be microseconds. A dominant `Yielded` means a synchronous `Stopwatch.GetTimestamp` or array allocation is taking many seconds; very unlikely. | Open new investigation if this fires - it would be a real surprise. |
+| `ProviderCallIssued` | `0` (flat) | Slot is parked inside the provider call's `await providerCall.WaitAsync(deadline.Token)`. **This is the wedge `WalFlushTimeout` was designed to bound, and it ALSO failed to fire** (separately observable via the existing `wal.append_provider_duration` histogram having a tail above 15s while `flush.fail` is zero). The wedge is in the provider call itself or in `Task.WaitAsync(token)` not honouring the CTS - mirrors the writer-side dispatch-deadline non-firing already documented in section 4. | `AzureTableWalStorageProvider.AppendEncodedBatchAsync` internal behaviour, OR investigate why `WaitAsync(token)` doesn't fire on the provider's `Task` shape. |
+| `ProviderCallReturned` | `0` (flat) | Slot returned from the provider but is stuck before `AcksApplied` (the success-path ack-set loop) or before the outer `finally` (slot removal). Narrow region - the only operations between are inside the ack-set loop, which is purely synchronous (`TrySetResult`). Very unlikely. | Open new investigation if this fires. |
+| `ProviderCallReturned` or `AcksApplied` | `>0` (rising) | Slot is stamped past the provider call AND new flushes are being kicked off; this means the outer `finally` is removing slots normally but the `_inFlight` chain is filling faster than it drains. **A throughput-imbalance / phase-2 conveyor wedge**, NOT a deadlock. | `WalCommitLogWriter.AppendForPartitionAsync` fan-out concurrency; admit-vs-commit imbalance; consider whether `WalMaxPendingBatches` cap interaction with phase-2 commit latency is the constraint. |
+| `Created` | `>0` (rising) | New flushes ARE being kicked off but slots stuck at `Created` never advance. **Slot-leak in the `finally`**: the slot is removed from `_inFlight` but somehow the head of the chain stays at a stale slot pointer. | `WalShardGrain.FlushAsync` outer `finally`, or `_inFlight.Remove(node)` semantics under concurrent enumeration. |
+| `FailureHandled` | varies | Slot's failure path completed but the slot is still in `_inFlight`. **Failure-handler bug**: `HandleFlushFailureAsync` completed but the slot was not removed. | `WalShardGrain.HandleFlushFailureAsync` and the matching `finally` block. |
+| any | any | `R` non-zero through the wedge window AND `start_flush.calls` correlates with reshard activity | Reshard activity is causally implicated (not just the `reshard ... REJECTED` log storm). | `TreeReshardGrain` swap-phase interaction with `WalShardGrain` activation lifecycle. |
+
+The decision tree is intentionally exhaustive across the 6 stages. The
+expected outcome is `ProviderCallIssued + flat C + zero R` (the
+provider-await is the wedge, reshard correlation only) - if that holds,
+the next investigation locus is concrete and small. Any other outcome
+materially redirects the investigation.
+
+### 11.1 Carry-forward for the next cycle
+
+The bisect plan in section 10 + the decision table in section 11 carry
+the investigation forward. The standing carry-forward rule in section 8
+remains in force: no throughput A/B at the saturation rung until the
+wedge mechanism is named via this attribution. The G-024 pack is the
+mechanism that lifts that rule.
