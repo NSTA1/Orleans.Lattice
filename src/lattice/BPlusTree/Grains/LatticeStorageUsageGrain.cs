@@ -21,14 +21,14 @@ internal sealed class LatticeStorageUsageGrain(
     private TreeStorageUsageReport? _cached;
 
     /// <inheritdoc />
-    public async Task<TreeStorageUsageReport> GetReportAsync(CancellationToken cancellationToken)
+    public async Task<TreeStorageUsageReport> GetReportAsync(bool forceRefresh, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var options = await optionsResolver.ResolveAsync(TreeId);
         var ttl = options.StorageUsageCacheTtl;
         var now = DateTimeOffset.UtcNow;
 
-        if (_cached is { } c && ttl > TimeSpan.Zero && (now - c.SampledAt) < ttl)
+        if (!forceRefresh && _cached is { } c && ttl > TimeSpan.Zero && (now - c.SampledAt) < ttl)
         {
             PublishToMetrics(c, options);
             return c;

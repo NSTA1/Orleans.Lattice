@@ -19,6 +19,10 @@ internal interface ILatticeStorageUsage : IGrainWithStringKey
     /// retained WAL bytes). A WAL provider that does not support byte
     /// accounting sets <see cref="TreeStorageUsageReport.Partial"/>.
     /// </summary>
+    /// <param name="forceRefresh">When <see langword="true"/>, the cached report is
+    /// discarded and the fan-out is re-run unconditionally. Operator-driven deep
+    /// refresh (<see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>) sets this so
+    /// the returned figures reflect the current tree state, not a TTL-aged sample.</param>
     /// <param name="cancellationToken">Cancels the storage-usage fan-out.</param>
-    Task<TreeStorageUsageReport> GetReportAsync(CancellationToken cancellationToken);
+    Task<TreeStorageUsageReport> GetReportAsync(bool forceRefresh, CancellationToken cancellationToken);
 }

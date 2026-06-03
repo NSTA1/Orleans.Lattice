@@ -45,6 +45,7 @@ public sealed class LatticeStorageUsagePollerTests
         await Task.Delay(100);
         await poller.StopAsync(CancellationToken.None);
 
+        await admin.DidNotReceive().PollWalUsageAsync(Arg.Any<CancellationToken>());
         await admin.DidNotReceive().GetTotalStorageUsageAsync(Arg.Any<CancellationToken>());
     }
 
@@ -52,8 +53,7 @@ public sealed class LatticeStorageUsagePollerTests
     public async Task ExecuteAsync_enabled_polls_the_admin_grain()
     {
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
-            .Returns(default(ClusterStorageUsageReport));
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -65,15 +65,22 @@ public sealed class LatticeStorageUsagePollerTests
         await Task.Delay(200);
         await poller.StopAsync(CancellationToken.None);
 
-        await admin.ReceivedWithAnyArgs().GetTotalStorageUsageAsync(default);
+        await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
+        // The poller must never invoke the deep fan-out path that
+        // activates every leaf and snapshot grain. Asserting on
+        // GetTotalStorageUsageAsync directly is the headline regression
+        // gate; if the poller is ever re-pointed at the deep path this
+        // test fails before any cold-tree leaf-activation regression can
+        // escape into CI.
+        await admin.DidNotReceive().GetTotalStorageUsageAsync(Arg.Any<CancellationToken>());
+        await admin.DidNotReceive().RefreshStorageUsageAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task ExecuteAsync_enabled_sets_sink_staleness_horizon()
     {
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
-            .Returns(default(ClusterStorageUsageReport));
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -93,8 +100,7 @@ public sealed class LatticeStorageUsagePollerTests
     public async Task ExecuteAsync_short_interval_floors_horizon_at_the_default()
     {
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
-            .Returns(default(ClusterStorageUsageReport));
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -115,8 +121,8 @@ public sealed class LatticeStorageUsagePollerTests
     public async Task ExecuteAsync_admin_failure_does_not_crash_the_poller()
     {
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
-            .Returns<ClusterStorageUsageReport>(_ => throw new InvalidOperationException("registry not ready"));
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("registry not ready"));
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -127,6 +133,6 @@ public sealed class LatticeStorageUsagePollerTests
         // The poller swallows the fault and keeps ticking; stopping is clean.
         Assert.That(async () => await poller.StopAsync(CancellationToken.None), Throws.Nothing);
 
-        await admin.ReceivedWithAnyArgs().GetTotalStorageUsageAsync(default);
+        await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
     }
 }

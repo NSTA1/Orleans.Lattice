@@ -119,15 +119,71 @@ public sealed class LatticeStorageUsageMetrics
     /// <summary>
     /// Publishes the latest storage-usage report for a tree so the byte
     /// gauges reflect it on the next scrape. Called by the per-tree aggregator
-    /// after it assembles (or serves from cache) a report, and by the
-    /// background poller on its cadence. Stamps the publish time so a series
-    /// the poller stops refreshing (because the aggregator migrated to another
-    /// silo) expires from this silo's sink after <see cref="StalenessHorizon"/>.
+    /// after it assembles (or serves from cache) a report. Stamps the publish
+    /// time so a series the poller stops refreshing (because the aggregator
+    /// migrated to another silo) expires from this silo's sink after
+    /// <see cref="StalenessHorizon"/>. This is the deep-refresh path; the
+    /// cluster-wide background poller no longer drives it (see
+    /// <see cref="PublishWal"/> for the cheap WAL-only refresh path).
     /// </summary>
     public void Publish(TreeStorageUsageReport report)
     {
         ArgumentNullException.ThrowIfNull(report.TreeId);
         _reports[report.TreeId] = (report, _time.GetUtcNow());
+    }
+
+    /// <summary>
+    /// Refreshes only the WAL-bytes series and the WAL-bytes
+    /// publish-timestamp for a tree, without touching the snapshot,
+    /// leaf-state, or total surfaces. Called by the cluster-wide
+    /// background poller and the per-tree WAL-only aggregator so the
+    /// byte-pressure path and the <c>storage.wal_bytes</c> gauge stay
+    /// timely without paying the cost of a deep leaf/snapshot fan-out.
+    /// Snapshot / leaf-state / total bytes continue to reflect the last
+    /// deep publish (if any) until an explicit
+    /// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/> or
+    /// <see cref="ILattice.GetStorageUsageAsync"/> caller drives a fresh
+    /// deep report through <see cref="Publish"/>.
+    /// </summary>
+    public void PublishWal(TreeWalUsageReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report.TreeId);
+        if (report.Partial)
+        {
+            // A partial WAL surface is the "unsupported by provider"
+            // sentinel; do not republish a wrong byte count and do not
+            // refresh the timestamp (so the last deep value (if any)
+            // ages out naturally rather than being pinned by polling).
+            return;
+        }
+        var now = _time.GetUtcNow();
+        _reports.AddOrUpdate(
+            report.TreeId,
+            _ => (new TreeStorageUsageReport
+            {
+                TreeId = report.TreeId,
+                WalRetainedBytes = report.WalRetainedBytes,
+                SnapshotBytes = 0,
+                LeafStateBytes = 0,
+                TotalBytes = report.WalRetainedBytes,
+                Partial = false,
+                SampledAt = report.SampledAt,
+            }, now),
+            (_, existing) =>
+            {
+                var prev = existing.Report;
+                var merged = new TreeStorageUsageReport
+                {
+                    TreeId = prev.TreeId,
+                    WalRetainedBytes = report.WalRetainedBytes,
+                    SnapshotBytes = prev.SnapshotBytes,
+                    LeafStateBytes = prev.LeafStateBytes,
+                    TotalBytes = report.WalRetainedBytes + prev.SnapshotBytes + prev.LeafStateBytes,
+                    Partial = prev.Partial,
+                    SampledAt = report.SampledAt,
+                };
+                return (merged, now);
+            });
     }
 
     /// <summary>

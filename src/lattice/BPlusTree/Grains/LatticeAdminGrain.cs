@@ -17,7 +17,49 @@ internal sealed class LatticeAdminGrain(
     IGrainContext IGrainBase.GrainContext => context;
 
     /// <inheritdoc />
-    public async Task<ClusterStorageUsageReport> GetTotalStorageUsageAsync(CancellationToken cancellationToken = default)
+    public Task<ClusterStorageUsageReport> GetTotalStorageUsageAsync(CancellationToken cancellationToken = default)
+        => BuildRollupAsync(forceRefresh: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ClusterStorageUsageReport> RefreshStorageUsageAsync(CancellationToken cancellationToken = default)
+        => BuildRollupAsync(forceRefresh: true, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task PollWalUsageAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var treeIds = await registry.GetAllTreeIdsAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (treeIds.Count == 0) return;
+
+        var tasks = new Task[treeIds.Count];
+        for (var i = 0; i < treeIds.Count; i++)
+        {
+            tasks[i] = PollWalUsageForTreeAsync(treeIds[i], cancellationToken);
+        }
+        await Task.WhenAll(tasks);
+    }
+
+    private async Task PollWalUsageForTreeAsync(string treeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var wal = grainFactory.GetGrain<ILatticeWalUsage>(treeId);
+            await wal.GetWalUsageAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // A failing tree must not abort the cluster-wide WAL poll;
+            // the next tick retries. The metrics sink's staleness horizon
+            // covers a few missed polls before a series expires.
+            logger.LogDebug(ex, "WAL-usage poll failed for tree {TreeId}", treeId);
+        }
+    }
+
+    private async Task<ClusterStorageUsageReport> BuildRollupAsync(bool forceRefresh, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -28,7 +70,7 @@ internal sealed class LatticeAdminGrain(
         var tasks = new Task<TreeStorageUsageReport>[treeIds.Count];
         for (var i = 0; i < treeIds.Count; i++)
         {
-            tasks[i] = GetTreeUsageAsync(treeIds[i], cancellationToken);
+            tasks[i] = GetTreeUsageAsync(treeIds[i], forceRefresh, cancellationToken);
         }
 
         var reports = await Task.WhenAll(tasks);
@@ -64,12 +106,12 @@ internal sealed class LatticeAdminGrain(
         };
     }
 
-    private async Task<TreeStorageUsageReport> GetTreeUsageAsync(string treeId, CancellationToken cancellationToken)
+    private async Task<TreeStorageUsageReport> GetTreeUsageAsync(string treeId, bool forceRefresh, CancellationToken cancellationToken)
     {
         try
         {
-            var lattice = grainFactory.GetGrain<ILattice>(treeId);
-            return await lattice.GetStorageUsageAsync(cancellationToken);
+            var usage = grainFactory.GetGrain<ILatticeStorageUsage>(treeId);
+            return await usage.GetReportAsync(forceRefresh, cancellationToken);
         }
         catch (Exception ex)
         {

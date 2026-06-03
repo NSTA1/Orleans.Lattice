@@ -134,6 +134,7 @@ internal static class TypeAliases
     // Storage-usage accounting (byte-accurate retained footprint)
     internal const string TreeStorageUsageReport = "ol.tsu";
     internal const string ClusterStorageUsageReport = "ol.csu";
+    internal const string TreeWalUsageReport = "ol.twu";
 
     // Event stream
     internal const string LatticeTreeEvent = "ol.lte";
@@ -184,6 +185,7 @@ internal static class TypeAliases
     internal const string ITreeReshardGrain = "ol.gtx";
     internal const string ILatticeStats = "ol.gls";
     internal const string ILatticeStorageUsage = "ol.gsu";
+    internal const string ILatticeWalUsage = "ol.gwu";
     internal const string ILatticeAdmin = "ol.gad";
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
