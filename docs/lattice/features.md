@@ -139,6 +139,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-017](https://github.com/NSTA1/Orleans.Lattice/issues/434) - Snapshot blob size cap and oversized-row policy (investigative)
 - [G-018](https://github.com/NSTA1/Orleans.Lattice/issues/435) - Periodic recheck classifier-input cache (investigative)
 - [G-022](https://github.com/NSTA1/Orleans.Lattice/issues/567) - Bound internal-node digest publish held under the split gate to prevent a recursive publish-chain wedge
+- [G-023](https://github.com/NSTA1/Orleans.Lattice/issues/572) - Bound and attribute the residual phase-1/activation WAL wedge (post-#568 diagnostic pack)
 
 ### Shipped
 
@@ -150,5 +151,4 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-019](https://github.com/NSTA1/Orleans.Lattice/issues/546) - Bimodal phase-1/activation wedge on the Azure-Tables WAL hot path (investigative)
 - [G-020](https://github.com/NSTA1/Orleans.Lattice/issues/551) - Non-atomic `GetManyAsync` snapshot across mid-saga reshard (migration Swap-phase ordering)
 - [G-021](https://github.com/NSTA1/Orleans.Lattice/issues/552) - Reshard swap-phase write-path wedge: bounded outbound shard-forward deadline
-- [G-022](https://github.com/NSTA1/Orleans.Lattice/issues/567) - Bound BPlusInternalGrain digest upward publish to prevent recursive publish-chain wedge
 
