@@ -73,33 +73,44 @@ internal sealed class WalCommitLogWriter(
             // write pipeline; without a writer-side bound a wedged shard
             // activation holds every caller's dispatch parked until the
             // Orleans response timeout (default 3 minutes) expires.
-            // Bounding the dispatch converts that blind hang into a
-            // structured TimeoutException with per-shard counter
-            // attribution (WalAppendDispatchTimeouts), so the request
-            // pipeline releases its slot immediately and the wedged
-            // shard is identified in O(WalAppendDispatchTimeout) time.
+            //
+            // The bound is enforced via a deadline-CTS linked to the
+            // caller's token, and that linked token is passed INTO the
+            // grain RPC (so Orleans' own request-cancellation pipeline
+            // observes the deadline) AND observed on the caller's wait
+            // (so the wait abandons regardless of whether the callee
+            // honours the token). A prior implementation used
+            // Task.WaitAsync(TimeSpan) instead, but a 2026-06-03 cohort
+            // observed that pattern fail to fire after 116 seconds of
+            // parked dispatches against a 30-second deadline (timer
+            // thread alive, threadpool idle, vanilla Task<T> source);
+            // the linked-CTS shape uses the same threadpool timer queue
+            // but exposes cancellation as an OperationCanceledException
+            // on a registered callback path that does not depend on
+            // WaitAsync(TimeSpan)'s internal timer-task plumbing.
             var dispatchTimeout = perTree.WalAppendDispatchTimeout;
-            var grainCall = grain.AppendAsync(stamped, cancellationToken);
             if (dispatchTimeout == Timeout.InfiniteTimeSpan)
             {
-                return await grainCall.ConfigureAwait(false);
+                return await grain.AppendAsync(stamped, cancellationToken).ConfigureAwait(false);
             }
+            using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadlineCts.CancelAfter(dispatchTimeout);
+            var grainCall = grain.AppendAsync(stamped, deadlineCts.Token);
             try
             {
-                return await grainCall.WaitAsync(dispatchTimeout, cancellationToken).ConfigureAwait(false);
+                return await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false);
             }
-            catch (TimeoutException)
+            catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                // Empirical diagnostic (paired with the metric below): on prior
-                // cohort runs the WalAppendDispatchTimeouts counter read zero even
-                // though every shipped deadline on the path had elapsed many times
-                // over against the parked dispatches. The Console.WriteLine here
-                // distinguishes "catch never entered" (line absent from silo log)
-                // from "counter silently dropped" (line present, counter still 0).
-                // Loud prefix matches the existing [silo] / [stall-watchdog] log
-                // conventions on the azure-throughput silo so a single grep over
-                // the silo log surfaces every trip.
-                System.Console.WriteLine($"[wal-dispatch-timeout] tree={stamped.TreeId} shard={partition} entries=1 timeout={dispatchTimeout}");
+                // Empirical diagnostic (paired with the metric below):
+                // distinguishes "catch never entered" (line absent from
+                // silo log) from "counter silently dropped" (line present,
+                // counter still 0). New prefix `-cts` so a single grep
+                // separates the Option-B linked-CTS path from the earlier
+                // WaitAsync(TimeSpan) path. Loud prefix matches the
+                // existing [silo] / [stall-watchdog] log conventions on
+                // the azure-throughput silo.
+                System.Console.WriteLine($"[wal-dispatch-timeout-cts] tree={stamped.TreeId} shard={partition} entries=1 timeout={dispatchTimeout}");
                 LatticeMetrics.WalAppendDispatchTimeouts.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId),
@@ -212,27 +223,30 @@ internal sealed class WalCommitLogWriter(
         try
         {
             // Writer-side dispatch deadline (batched path); see
-            // AppendAsync above for the rationale. Held on the per-tree
-            // perTree.WalAppendDispatchTimeout so per-tree overrides
-            // apply uniformly to the single-entry and batched dispatches.
+            // AppendAsync above for the rationale, including why the
+            // linked-CTS shape replaces the prior WaitAsync(TimeSpan).
+            // Held on the per-tree perTree.WalAppendDispatchTimeout so
+            // per-tree overrides apply uniformly to the single-entry
+            // and batched dispatches.
             var dispatchTimeout = perTree.WalAppendDispatchTimeout;
-            var grainCall = grain.AppendBatchAsync(entries, cancellationToken);
             IReadOnlyList<long> offsets;
             if (dispatchTimeout == Timeout.InfiniteTimeSpan)
             {
-                offsets = await grainCall.ConfigureAwait(false);
+                offsets = await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false);
             }
             else
             {
+                using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                deadlineCts.CancelAfter(dispatchTimeout);
+                var grainCall = grain.AppendBatchAsync(entries, deadlineCts.Token);
                 try
                 {
-                    offsets = await grainCall.WaitAsync(dispatchTimeout, cancellationToken).ConfigureAwait(false);
+                    offsets = await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false);
                 }
-                catch (TimeoutException)
+                catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
-                    // Empirical diagnostic: see the single-entry AppendAsync
-                    // catch above for the rationale. Same conventions.
-                    System.Console.WriteLine($"[wal-dispatch-timeout] tree={treeId} shard={partition} entries={entries.Count} timeout={dispatchTimeout}");
+                    // Empirical diagnostic: see the single-entry catch above.
+                    System.Console.WriteLine($"[wal-dispatch-timeout-cts] tree={treeId} shard={partition} entries={entries.Count} timeout={dispatchTimeout}");
                     LatticeMetrics.WalAppendDispatchTimeouts.Add(
                         1,
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
