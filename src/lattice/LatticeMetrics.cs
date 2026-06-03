@@ -51,6 +51,17 @@ public static class LatticeMetrics
     /// <summary>Tag key for the physical shard index.</summary>
     public const string TagShard = "shard";
 
+    /// <summary>
+    /// Tag key for the WAL writer partition index. Distinct from
+    /// <see cref="TagShard"/>: the writer partition is the producer-side
+    /// routing key (one entry-batch per partition per call into
+    /// <c>WalCommitLogWriter.AppendForPartitionAsync</c>) and lines up
+    /// 1:1 with the destination shard's index, but is reported on the
+    /// writer-layer instruments so a future fan-out shape that decouples
+    /// the two does not silently overload <see cref="TagShard"/>.
+    /// </summary>
+    public const string TagPartition = "partition";
+
     /// <summary>Tag key for the operation kind (e.g. <c>keys</c> or <c>entries</c> on scan histograms).</summary>
     public const string TagOperation = "operation";
 
@@ -1358,6 +1369,52 @@ public static class LatticeMetrics
     public static readonly Histogram<long> ShardRootReshardInFlight =
         Meter.CreateHistogram<long>("orleans.lattice.shard_root.reshard.in_flight", unit: "{reshard}",
             description: "Per-tree reshard in-flight (0/1) observation, recorded at ReshardAsync entry.");
+
+    /// <summary>
+    /// Count of <c>WalCommitLogWriter</c> append dispatches that started
+    /// (one increment per pending-append at the <c>Enqueued</c> stamp).
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Wedge-investigation intent: the saturation-rung wedge has a
+    /// dominant mode (cohort 2026-06-03, 5/7 wedged cohorts) where every
+    /// shard's in-flight chain is empty (<c>head.IsNull=True</c>) yet
+    /// 348+ callers are parked at <c>WalShardGrain.AppendBatchAsync</c>
+    /// and 375+ at <c>WalCommitLogWriter.AppendForPartitionAsync</c>.
+    /// The wedge mechanism for that mode is upstream of in-flight
+    /// insertion, inside this writer's per-partition dispatch plumbing.
+    /// This counter is the writer-layer kick-off signal: a healthy rate
+    /// rules out "writer never gets called"; a collapse to zero during a
+    /// wedge tail localises the stall to the writer's own routing /
+    /// option-resolver path; a sustained rate combined with stale
+    /// <see cref="WalAppendPendingDispatches"/> p99 readings localises it
+    /// to the awaited shard-grain RPC.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalAppendDispatched =
+        Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.dispatched", unit: "{dispatch}",
+            description: "Count of WalCommitLogWriter append dispatches that reached the Enqueued lifecycle stamp.");
+
+    /// <summary>
+    /// Histogram of per-partition pending-append depth observed at every
+    /// <c>WalCommitLogWriter</c> append entry, sampled <i>before</i> the
+    /// new pending stamp is added to the partition's tracker. Tagged
+    /// with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Wedge-investigation intent: the writer's per-partition pending
+    /// tracker holds one <c>PendingAppend</c> stamp per in-flight
+    /// <c>AppendForPartitionAsync</c> caller. A growing distribution
+    /// during the wedge confirms the writer is the choke (callers
+    /// enqueuing into a tracker that cannot drain); a stuck-at-zero
+    /// distribution combined with sustained
+    /// <see cref="WalAppendDispatched"/> rules out a writer-layer
+    /// dispatch lifecycle stall and points the next bisect downstream of
+    /// the <c>SentToShard</c> stage. Mirrors the
+    /// <see cref="WalShardPendingSegments"/> shape one layer up.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalAppendPendingDispatches =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.writer.partition.pending_appends", unit: "{dispatch}",
+            description: "Per-WAL-writer-partition pending-append-dispatch count sampled at every append entry.");
 
     /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf

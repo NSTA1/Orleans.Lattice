@@ -192,6 +192,18 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.shard_root.reshard.rejected",
         "orleans.lattice.shard_root.reshard.completed",
         "orleans.lattice.shard_root.reshard.in_flight",
+        // Mode-B wedge diagnostic pack: writer-layer
+        // (WalCommitLogWriter) append-dispatch counter + per-partition
+        // pending-append-dispatch depth histogram. The dispatch counter
+        // localises a writer-layer kick-off stall (collapse to zero with
+        // shard-layer start_flush also at zero ranges the wedge upstream
+        // of the writer); the pending-dispatch histogram surfaces
+        // back-pressure absorbed inside the writer's per-partition
+        // tracker (growing p99 with sustained dispatched-rate means
+        // callers are enqueuing into a tracker that the awaited shard
+        // RPC is not draining).
+        "orleans.lattice.wal.writer.append.dispatched",
+        "orleans.lattice.wal.writer.partition.pending_appends",
     };
 
     /// <summary>

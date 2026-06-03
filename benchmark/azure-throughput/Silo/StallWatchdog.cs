@@ -166,6 +166,7 @@ internal sealed class StallWatchdog
 
             EmitSuspendedAsyncStateMachines(runtime, Line);
             EmitWalShardSlotLifecycle(runtime, Line);
+            EmitWalAppendLifecycle(runtime, Line);
             EmitThreadStacks(runtime, Line);
         }
         catch (Exception ex)
@@ -460,6 +461,134 @@ internal sealed class StallWatchdog
         }
 
         line($"---- {slotCount} in-flight slot(s) across {grainCount} WalShardGrain activation(s) ----");
+    }
+
+    /// <summary>
+    /// Enumerates every live <c>WalCommitLogWriter+PartitionTracker</c>
+    /// on the heap, follows its in-flight <c>LinkedList</c> of
+    /// <c>PendingAppend</c> stamps, and emits one <c>[wal-append]</c>
+    /// line per pending stamp naming the partition, dispatch entry
+    /// count, current lifecycle stage, and stuck-at-stage duration.
+    /// Mirrors the <see cref="EmitWalShardSlotLifecycle"/> walker one
+    /// layer up so the writer-layer wedge mode (Mode B per the
+    /// 2026-06-03 cohort) becomes attributable without re-deploying a
+    /// new diagnostic. An unrecognised stage byte is printed as
+    /// <c>?N</c> so a future enum addition surfaces cleanly without a
+    /// watchdog rebuild.
+    /// </summary>
+    private static void EmitWalAppendLifecycle(ClrRuntime runtime, Action<string> line)
+    {
+        line("==== WalCommitLogWriter pending-append dispatch lifecycle ====");
+        var heap = runtime.Heap;
+        if (!heap.CanWalkHeap)
+        {
+            line("heap not walkable in snapshot; skipping WAL append lifecycle scan.");
+            return;
+        }
+
+        var nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        var tickFreq = System.Diagnostics.Stopwatch.Frequency;
+        var trackerCount = 0;
+        var pendingCount = 0;
+
+        foreach (var obj in heap.EnumerateObjects())
+        {
+            // Detect PartitionTracker by field signature (TreeId +
+            // Partition + _inFlight) rather than by nested-type-name
+            // literal; the 2026-06-03 cohort proved literal matches
+            // silently break across ClrMD versions / nested-name
+            // formats.
+            if (obj.Type is null) { continue; }
+            var treeIdField = obj.Type.Fields.FirstOrDefault(f => f.Name == "TreeId");
+            var partitionField = obj.Type.Fields.FirstOrDefault(f => f.Name == "Partition");
+            var inFlightField = obj.Type.Fields.FirstOrDefault(f => f.Name == "_inFlight");
+            if (treeIdField is null || partitionField is null || inFlightField is null)
+            {
+                continue;
+            }
+            // Distinguish PartitionTracker from any other type that
+            // happens to share these three field names: require the
+            // partition to be int and the in-flight field to be
+            // reference-typed (the LinkedList<PendingAppend>).
+            if (partitionField.ElementType != ClrElementType.Int32 || inFlightField.IsValueType)
+            {
+                continue;
+            }
+
+            trackerCount++;
+            var treeIdObj = treeIdField.ReadObject(obj.Address, interior: false);
+            var treeId = treeIdObj.IsNull ? "<null>" : treeIdObj.AsString() ?? "<empty>";
+            var partition = partitionField.Read<int>(obj.Address, interior: false);
+
+            var inFlightObj = inFlightField.ReadObject(obj.Address, interior: false);
+            if (inFlightObj.IsNull || inFlightObj.Type is null)
+            {
+                line($"[wal-append-tracker] tree={treeId} partition={partition} inFlight=null");
+                continue;
+            }
+            var headField = inFlightObj.Type.Fields.FirstOrDefault(f => f.Name == "head");
+            var countField = inFlightObj.Type.Fields.FirstOrDefault(f => f.Name == "count");
+            var observedCount = countField is not null ? countField.Read<int>(inFlightObj.Address, interior: false) : -1;
+            var headObj = headField is not null ? headField.ReadObject(inFlightObj.Address, interior: false) : default;
+            var headIsNull = headField is null || headObj.IsNull;
+
+            // Unconditional per-tracker summary, BEFORE the head==null
+            // early-return: the 2026-06-03 cohort showed how easily a
+            // gated emit silently swallows the cohort's only signal.
+            line($"[wal-append-tracker] tree={treeId} partition={partition} inFlight.count={observedCount} head.IsNull={headIsNull}");
+
+            if (headIsNull)
+            {
+                continue;
+            }
+
+            var safetyCap = Math.Max(observedCount, 1) + 8;
+            var node = headObj;
+            for (var i = 0; i < safetyCap; i++)
+            {
+                if (node.IsNull || node.Type is null) { break; }
+                var itemField = node.Type.Fields.FirstOrDefault(f => f.Name == "item");
+                if (itemField is null) { break; }
+                var pendObj = itemField.ReadObject(node.Address, interior: false);
+                if (!pendObj.IsNull && pendObj.Type is not null)
+                {
+                    var stageField = pendObj.Type.Fields.FirstOrDefault(f => f.Name == "Stage");
+                    var stageStartedField = pendObj.Type.Fields.FirstOrDefault(f => f.Name == "StageStartedTicks");
+                    var entryCountField = pendObj.Type.Fields.FirstOrDefault(f => f.Name == "EntryCount");
+                    var batchBytesField = pendObj.Type.Fields.FirstOrDefault(f => f.Name == "BatchBytes");
+                    if (stageField is not null && stageStartedField is not null)
+                    {
+                        var stageByte = stageField.Read<byte>(pendObj.Address, interior: false);
+                        var stageStarted = stageStartedField.Read<long>(pendObj.Address, interior: false);
+                        var entryCount = entryCountField is not null ? entryCountField.Read<int>(pendObj.Address, interior: false) : -1;
+                        var batchBytes = batchBytesField is not null ? batchBytesField.Read<int>(pendObj.Address, interior: false) : -1;
+                        var stageName = stageByte switch
+                        {
+                            0 => "Enqueued",
+                            1 => "DequeuedForBatch",
+                            2 => "SentToShard",
+                            3 => "Acked",
+                            4 => "Failed",
+                            _ => $"?{stageByte}",
+                        };
+                        var stuckMs = stageStarted > 0 ? (long)((nowTicks - stageStarted) * 1000.0 / tickFreq) : -1L;
+                        line($"[wal-append] tree={treeId} partition={partition} entries={entryCount} bytes={batchBytes} stage={stageName} stuck={stuckMs}ms");
+                        pendingCount++;
+                    }
+                    else if (i == 0)
+                    {
+                        line($"[wal-append-debug] tree={treeId} partition={partition} first item type='{pendObj.Type.Name}' hasStageField={stageField is not null} hasStageStartedField={stageStartedField is not null}");
+                    }
+                }
+                var nextField = node.Type.Fields.FirstOrDefault(f => f.Name == "next");
+                if (nextField is null) { break; }
+                var nextObj = nextField.ReadObject(node.Address, interior: false);
+                if (nextObj.IsNull || nextObj.Address == headObj.Address) { break; }
+                node = nextObj;
+            }
+        }
+
+        line($"---- {pendingCount} pending-append stamp(s) across {trackerCount} PartitionTracker instance(s) ----");
     }
 
     /// <summary>
