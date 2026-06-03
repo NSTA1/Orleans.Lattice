@@ -87,7 +87,14 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
     # Build only on the first rung (unless -SkipBuild for the whole ladder).
     $skipBuildForRung = $SkipBuild -or ($i -gt 0)
 
-    & $deployScript -VehicleCount $vehicles -TickHz $hz -DurationSec $DurationSec -SkipBuild:$skipBuildForRung -LocalBuild:$LocalBuild
+    # Stamp a UNIQUE tree id per rung and pass it explicitly. The deploy script's
+    # precedence is -TreeId param > $env:BENCH_TREE_ID > UTC-stamped default, so passing
+    # it here makes the ladder immune to a leaked BENCH_TREE_ID in the operator's shell.
+    # Reusing a tree id across rungs both biases the first ~10s with manifest replay AND
+    # can crash the silo if the prior run already pinned the shard count (see #570).
+    $rungTreeId = "ladder-$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss'))-v${vehicles}-h${hz}"
+
+    & $deployScript -VehicleCount $vehicles -TickHz $hz -DurationSec $DurationSec -TreeId $rungTreeId -SkipBuild:$skipBuildForRung -LocalBuild:$LocalBuild
     if ($LASTEXITCODE -ne 0) { throw "Deploy failed for rung $rung." }
 
     # Wait for the producer container to terminate (restartPolicy=Never makes that a

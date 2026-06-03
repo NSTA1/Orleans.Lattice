@@ -387,8 +387,8 @@ properties:
         image: $siloImage
         resources:
           requests:
-            cpu: 2.0
-            memoryInGB: 4.0
+            cpu: 4.0
+            memoryInGB: 8.0
         ports:
           - port: 7000
             protocol: TCP
