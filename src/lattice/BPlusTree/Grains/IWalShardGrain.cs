@@ -154,8 +154,19 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// sums this across a tree's WAL shards to report the tree's retained
     /// WAL footprint. Forwards directly to
     /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so a storage-usage
+    /// poll never queues behind an in-flight <c>AppendBatchAsync</c> /
+    /// <c>TrimAsync</c> turn. The call is a read-only manifest scan on
+    /// the underlying provider; it touches no shared in-grain state and
+    /// safely interleaves with concurrent appends and trims (the
+    /// returned figure is an at-a-moment snapshot, bounded over-report
+    /// by one batch's worth of slack across a concurrent trim, exactly
+    /// the contract callers already expect).
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
     Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken);
 
     /// <summary>

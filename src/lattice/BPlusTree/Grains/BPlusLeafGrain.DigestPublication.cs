@@ -183,21 +183,32 @@ internal sealed partial class BPlusLeafGrain
             // the user-visible mutation), idempotent (LatchProjection...
             // is a no-op once already true), and gated by an activation
             // guard so we pay at most one registry hop per activation.
-            if (!_latchAttempted)
-            {
-                _latchAttempted = true;
-                return TryStampDigestLatchAsync();
-            }
-            return Task.CompletedTask;
+            //
+            // Disabled-digest mutations still need to publish the byte
+            // footprint so the shard root's running totals stay current
+            // even when projection-hash maintenance is off.
+            var latchTask = _latchAttempted ? Task.CompletedTask : TryStampDigestLatchAsync();
+            if (!_latchAttempted) _latchAttempted = true;
+            return AwaitBoth(latchTask, TryPublishByteFootprintAsync());
         }
-        if (!_digestDirty) return Task.CompletedTask;
+        if (!_digestDirty)
+        {
+            // No digest delta this turn, but a structural / topology
+            // mutation may still have changed the byte footprint (e.g.
+            // a tombstone-compaction reap that shrinks the cache
+            // without altering the projection hash). Publish the byte
+            // footprint anyway; the helper coalesces no-op publishes.
+            return TryPublishByteFootprintAsync();
+        }
         if (state.State.ParentId is not { } parentId)
         {
             // Clear the dirty flag even without a parent so we do not
             // accumulate dirt across mutations on a flat-tree leaf. A
-            // future re-parent re-publishes via SetParentAsync.
+            // future re-parent re-publishes via SetParentAsync. Still
+            // publish the byte footprint so the shard root's running
+            // totals reflect this leaf even in the flat-tree case.
             _digestDirty = false;
-            return Task.CompletedTask;
+            return TryPublishByteFootprintAsync();
         }
 
         // c2-xxviii: coalescing path. When the window is positive and
@@ -431,5 +442,19 @@ internal sealed partial class BPlusLeafGrain
         };
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
         await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);
+
+        // Piggyback the per-leaf byte-footprint publish on the digest
+        // commit boundary. Skipped when the values are unchanged since
+        // the last publish (see TryPublishByteFootprintAsync). Failures
+        // are swallowed: the shard root's running totals are best-effort
+        // and re-anchored by the operator-driven
+        // ILatticeAdmin.RefreshStorageUsageAsync seam.
+        await TryPublishByteFootprintAsync();
+    }
+
+    private static async Task AwaitBoth(Task a, Task b)
+    {
+        await a;
+        await b;
     }
 }

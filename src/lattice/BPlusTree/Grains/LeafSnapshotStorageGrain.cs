@@ -60,16 +60,25 @@ internal sealed class LeafSnapshotStorageGrain(
             return Task.FromResult(0L);
         }
 
+        // O(1) field read for blobs persisted with the precomputed byte
+        // total. Legacy blobs (persisted before the SnapshotBytes slot
+        // existed) decode the slot as 0; recompute once from Rows and
+        // cache the answer on the in-memory state (no WriteStateAsync) so
+        // a subsequent reactivation reading the legacy blob picks the
+        // same value back up on first read and the next foreground
+        // capture-overwrite stamps the slot durably.
+        if (state.State.SnapshotBytes > 0 || state.State.Rows.Count == 0)
+        {
+            return Task.FromResult(state.State.SnapshotBytes);
+        }
+
         long bytes = 0;
         foreach (var row in state.State.Rows)
         {
-            // Mirror the leaf-state byte accounting (key UTF-8 length plus
-            // stored value length) so the snapshot surface and the leaf
-            // surface report on the same logical-payload basis.
             bytes += System.Text.Encoding.UTF8.GetByteCount(row.Key)
-                + (row.Value.Value?.Length ?? 0);
+                + (row.Value.IsTombstone ? 0 : (row.Value.Value?.Length ?? 0));
         }
-
+        state.State.SnapshotBytes = bytes;
         return Task.FromResult(bytes);
     }
 

@@ -407,18 +407,53 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep);
 
     /// <summary>
+    /// <summary>
     /// Returns this shard's byte-accurate storage-usage rollup - the summed
     /// serialized leaf-state byte footprint and the summed persisted-snapshot
     /// byte footprint across every leaf in the shard's chain - used by the
     /// byte-accurate storage-usage aggregator
-    /// (<see cref="ILattice.GetStorageUsageAsync"/>). Walks the leaf chain
-    /// once and sums each leaf's <see cref="LeafStats.StateBytes"/> together
-    /// with each leaf's persisted-snapshot footprint (both computed without
-    /// extra storage I/O beyond the already-activated state rows). An empty
-    /// shard returns a zeroed rollup.
+    /// (<see cref="ILattice.GetStorageUsageAsync"/>). Served in O(1) from
+    /// the shard root's incrementally-maintained
+    /// <c>ShardRootState.LeafStateBytesTotal</c> and
+    /// <c>SnapshotBytesTotal</c>: leaves push their per-leaf
+    /// <see cref="State.LeafByteFootprint"/> via
+    /// <see cref="PublishLeafByteFootprintAsync"/> on every commit boundary,
+    /// and the shard root keeps the running totals current without ever
+    /// walking the leaf chain on the read path. An empty shard returns a
+    /// zeroed rollup. The deep walk that fans out across every leaf is now
+    /// reserved for the operator-driven re-anchor seam
+    /// (<see cref="RefreshLeafByteFootprintsAsync"/>) so a routine
+    /// dashboard scrape never pins an idle leaf into memory.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the read before it touches state.</param>
+    Task<ShardStorageUsage> GetStorageUsageAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records the byte-accurate footprint <paramref name="footprint"/> for
+    /// the leaf identified by <paramref name="leafKey"/>. Called by the leaf
+    /// grain on every commit boundary so the shard root's running totals
+    /// stay current without a periodic fan-out. Passing
+    /// <see cref="State.LeafByteFootprint.Removed"/> drops the leaf's
+    /// contribution (used after split-donation or merge-removal). Idempotent
+    /// on identical re-publishes (the totals are unchanged when the new
+    /// footprint matches the previously recorded one).
+    /// </summary>
+    /// <param name="leafKey">The leaf's Guid grain key.</param>
+    /// <param name="footprint">The leaf's freshly-sampled footprint, or <see cref="State.LeafByteFootprint.Removed"/>.</param>
+    [AlwaysInterleave]
+    Task PublishLeafByteFootprintAsync(Guid leafKey, State.LeafByteFootprint footprint);
+
+    /// <summary>
+    /// Operator-driven deep re-anchor of the shard's incrementally-tracked
+    /// leaf byte totals. Walks the leaf chain, queries each leaf's current
+    /// state-bytes and snapshot-bytes, and overwrites
+    /// <c>ShardRootState.LeafByteFootprints</c> plus the running totals to
+    /// match. Reserved for <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>;
+    /// the polling path never invokes it. Returns the freshly assembled
+    /// shard rollup so the caller can return the deep figure directly.
     /// </summary>
     /// <param name="cancellationToken">Cancels the leaf-chain walk between leaves.</param>
-    Task<ShardStorageUsage> GetStorageUsageAsync(CancellationToken cancellationToken);
+    Task<ShardStorageUsage> RefreshLeafByteFootprintsAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>

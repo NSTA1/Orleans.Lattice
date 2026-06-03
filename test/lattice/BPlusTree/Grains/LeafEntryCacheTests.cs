@@ -278,4 +278,86 @@ public sealed class LeafEntryCacheTests
         Assert.That(cache.TryGetTyped<FakeTypedState>("k1", out _), Is.False);
         Assert.That(cache.TryGetTyped<FakeTypedState>("k2", out _), Is.False);
     }
+
+    [Test]
+    public void StateBytes_starts_at_zero_on_a_fresh_cache()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(cache.StateBytes, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void StateBytes_increases_by_utf8_key_plus_value_on_store()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("abc", Row(new byte[] { 1, 2, 3, 4 }));
+        // utf8("abc") = 3, value.Length = 4 => 7
+        Assert.That(cache.StateBytes, Is.EqualTo(7L));
+    }
+
+    [Test]
+    public void StateBytes_replaces_existing_contribution_on_overwrite()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("abc", Row(new byte[] { 1, 2, 3, 4 }));
+        cache.StoreRow("abc", Row(new byte[] { 1, 2 }, ticks: 2));
+        // utf8("abc") = 3, new value.Length = 2 => 5 (NOT 7 + 5)
+        Assert.That(cache.StateBytes, Is.EqualTo(5L));
+    }
+
+    [Test]
+    public void StateBytes_subtracts_contribution_on_remove()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("abc", Row(new byte[] { 1, 2, 3 }));
+        cache.StoreRow("xy", Row(new byte[] { 9 }));
+        var before = cache.StateBytes;
+
+        cache.Remove("abc");
+
+        Assert.That(cache.StateBytes, Is.EqualTo(before - 6L)); // utf8("abc") + 3
+    }
+
+    [Test]
+    public void StateBytes_zero_after_clear()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row(new byte[] { 1, 2 }));
+        cache.StoreRow("b", Row(new byte[] { 3, 4 }));
+
+        cache.Clear();
+
+        Assert.That(cache.StateBytes, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void StateBytes_counts_only_key_for_a_tombstone()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("abc", Row(Array.Empty<byte>(), tombstone: true));
+        // Tombstone contributes only key bytes (no payload).
+        Assert.That(cache.StateBytes, Is.EqualTo(3L));
+    }
+
+    [Test]
+    public void StateBytes_uses_utf8_byte_count_for_multibyte_keys()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        // "key" with combining diacritic: 3 ASCII bytes + 2-byte UTF-8 mark.
+        const string multibyteKey = "café";
+        cache.StoreRow(multibyteKey, Row(new byte[] { 1 }));
+        var expected = System.Text.Encoding.UTF8.GetByteCount(multibyteKey) + 1;
+        Assert.That(cache.StateBytes, Is.EqualTo((long)expected));
+    }
+
+    [Test]
+    public void OverwriteStateBytesForBackfill_resets_running_total()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row(new byte[] { 1, 2 }));
+
+        cache.OverwriteStateBytesForBackfill(99L);
+
+        Assert.That(cache.StateBytes, Is.EqualTo(99L));
+    }
 }

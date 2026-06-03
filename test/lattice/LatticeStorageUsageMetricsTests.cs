@@ -164,6 +164,89 @@ public sealed class LatticeStorageUsageMetricsTests
     }
 
     [Test]
+    public void PublishWal_surfaces_only_the_wal_bytes_gauge_without_clobbering_deep_values()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        // Seed a deep publish so snapshot / leaf-state / total surfaces
+        // have a value.
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25));
+
+        // A subsequent WAL-only publish refreshes only the WAL bytes;
+        // snapshot and leaf-state must be preserved from the deep publish,
+        // and total bytes must be recomputed against the new WAL value.
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 150,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(150));
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(40),
+                "WAL-only publish must not clobber the snapshot surface");
+            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(25),
+                "WAL-only publish must not clobber the leaf-state surface");
+            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(215),
+                "total must be recomputed against the fresh WAL value");
+        });
+    }
+
+    [Test]
+    public void PublishWal_without_prior_deep_publish_seeds_wal_bytes_only()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 500,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(500));
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(0));
+            Assert.That(Read(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(0));
+            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(500));
+        });
+    }
+
+    [Test]
+    public void PublishWal_partial_does_not_overwrite_existing_value()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25));
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 0,
+            Partial = true,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(100),
+            "a partial WAL publish must not clobber the last-known good value with zero");
+    }
+
+    [Test]
+    public void PublishWal_null_tree_id_throws()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var report = new TreeWalUsageReport { TreeId = null! };
+        Assert.That(() => sut.PublishWal(report), Throws.TypeOf<ArgumentNullException>());
+    }
+
+    [Test]
     public void Policy_gauge_drops_series_after_staleness_horizon_elapses()
     {
         var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);

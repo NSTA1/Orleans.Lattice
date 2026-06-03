@@ -20,6 +20,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class LeafEntryCache
 {
     private readonly SortedDictionary<string, LwwValue<byte[]>> _rows;
+    private long _stateBytes;
 
     // Lazily allocated; null until the first StoreTyped call. Keyed by the
     // canonical row key. Storage is object-boxed because the cache hosts
@@ -48,6 +49,42 @@ internal sealed class LeafEntryCache
 
     /// <summary>The number of rows currently held by the cache.</summary>
     internal int Count => _rows.Count;
+
+    /// <summary>
+    /// Running sum of the per-entry logical-payload byte footprint across every
+    /// row currently held by the cache: <c>SUM(utf8(key) + value.Length)</c>
+    /// for entries with a non-null value, or just <c>utf8(key)</c> for
+    /// tombstones. Maintained incrementally on every <see cref="StoreRow"/> /
+    /// <see cref="Remove"/> / <see cref="Clear"/> call so callers (the
+    /// byte-accurate storage-usage aggregator's leaf surface) can read it in
+    /// O(1) instead of streaming the cache to recompute it on every read.
+    /// Excludes per-entry CRDT metadata and Orleans persistence framing,
+    /// matching the contract of <see cref="LeafStats.StateBytes"/>.
+    /// </summary>
+    internal long StateBytes => _stateBytes;
+
+    /// <summary>
+    /// One-shot backfill seam for activations whose persisted
+    /// <see cref="LeafNodeState.LeafStateBytes"/> slot was written before
+    /// incremental accounting was added. The activation path calls this
+    /// once after the cache has been populated (snapshot rehydrate + WAL
+    /// tail replay), at which point the running counter matches a fresh
+    /// walk by construction. Idempotent.
+    /// </summary>
+    internal void OverwriteStateBytesForBackfill(long value) => _stateBytes = value;
+
+    /// <summary>
+    /// Computes the per-entry logical-payload contribution to
+    /// <see cref="StateBytes"/>: UTF-8 key length plus stored value length
+    /// (or zero for a tombstone). Public-static so callers outside the
+    /// cache (e.g. snapshot-bytes precompute, deep-refresh paths) use the
+    /// identical formula.
+    /// </summary>
+    internal static long EntryBytes(string key, byte[]? value)
+        => System.Text.Encoding.UTF8.GetByteCount(key) + (value?.Length ?? 0);
+
+    private static long RowBytes(string key, in LwwValue<byte[]> row)
+        => EntryBytes(key, row.IsTombstone ? null : row.Value);
 
     /// <summary>
     /// Attempts to retrieve the canonical byte row for <paramref name="key"/>.
@@ -79,6 +116,11 @@ internal sealed class LeafEntryCache
     internal void StoreRow(string key, in LwwValue<byte[]> row)
     {
         ArgumentNullException.ThrowIfNull(key);
+        if (_rows.TryGetValue(key, out var existing))
+        {
+            _stateBytes -= RowBytes(key, existing);
+        }
+        _stateBytes += RowBytes(key, row);
         _rows[key] = row;
         _typedShadows?.Remove(key);
     }
@@ -94,6 +136,10 @@ internal sealed class LeafEntryCache
     {
         ArgumentNullException.ThrowIfNull(key);
         _typedShadows?.Remove(key);
+        if (_rows.TryGetValue(key, out var existing))
+        {
+            _stateBytes -= RowBytes(key, existing);
+        }
         return _rows.Remove(key);
     }
 
@@ -102,6 +148,7 @@ internal sealed class LeafEntryCache
     {
         _rows.Clear();
         _typedShadows?.Clear();
+        _stateBytes = 0;
     }
 
     /// <summary>

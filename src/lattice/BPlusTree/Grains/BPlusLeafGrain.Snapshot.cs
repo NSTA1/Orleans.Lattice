@@ -73,6 +73,18 @@ internal sealed partial class BPlusLeafGrain
     /// across the activation lifetime.
     /// </summary>
     private long _lastCapturedCheckpointOffset = long.MinValue;
+
+    /// <summary>
+    /// Byte-accurate footprint of the most recently persisted snapshot
+    /// for this leaf, or <c>0</c> when no snapshot has been captured this
+    /// activation. Mirrors the value written into
+    /// <see cref="LeafSnapshotBlob.SnapshotBytes"/> at capture time and
+    /// is consumed by the per-persist byte-footprint publish path in
+    /// <c>BPlusLeafGrain.Metrics.PersistAsync</c> so the shard root's
+    /// running snapshot-bytes total stays current without a snapshot
+    /// storage read on the persist hot path.
+    /// </summary>
+    private long _lastCapturedSnapshotBytes;
     /// <inheritdoc />
     public async Task CaptureSnapshotAsync()
     {
@@ -126,12 +138,18 @@ internal sealed partial class BPlusLeafGrain
                 SnapshotOffset = checkpoint,
                 Rows = rows,
                 CapturedAtTicks = DateTime.UtcNow.Ticks,
+                // Snapshot row footprint matches the leaf-state byte formula
+                // by construction (the snapshot is a copy of the cache), so
+                // use the cache's incrementally-maintained running total
+                // rather than re-walking every row at capture time.
+                SnapshotBytes = Cache.StateBytes,
             };
 
             var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
                 context.GrainId.GetGuidKey());
             await snapshotGrain.SaveAsync(blob, CancellationToken.None);
             _lastCapturedCheckpointOffset = checkpoint;
+            _lastCapturedSnapshotBytes = blob.SnapshotBytes;
         }
         finally
         {
@@ -358,6 +376,11 @@ internal sealed partial class BPlusLeafGrain
         // BPlusLeafGrain.ProjectionAdmin.cs - keeps the rehydrated
         // activation indistinguishable from a fresh activation.
         DisposeProjectionHasher();
+
+        // Carry the snapshot's persisted byte total forward so the next
+        // per-persist byte-footprint publish reflects the rehydrated
+        // snapshot footprint without re-reading the snapshot grain.
+        _lastCapturedSnapshotBytes = blob.SnapshotBytes;
 
         return true;
     }

@@ -201,6 +201,12 @@ $leafStorageTable = if ($env:BENCH_LEAF_STORAGE_TABLE) { $env:BENCH_LEAF_STORAGE
                     else { 'OrleansLatticeGrainState' }
 $leafStorageNumGrains = if ($env:BENCH_LEAF_STORAGE_NUM_GRAINS) { $env:BENCH_LEAF_STORAGE_NUM_GRAINS }
                         else { '0' }
+# Set BENCH_DISABLE_STORAGE_USAGE_POLLER=1 to revert to the pre-cold-tree-fix silo
+# behaviour (StorageUsagePollInterval=Zero, poller disabled). Empty / 0 / unset
+# leaves the poller at the library default 15 s cadence. Used for like-for-like
+# A/B against historic baselines.
+$disableStorageUsagePoller = if ($env:BENCH_DISABLE_STORAGE_USAGE_POLLER) { $env:BENCH_DISABLE_STORAGE_USAGE_POLLER }
+                             else { '0' }
 # Throughput-capture (throughput-capture-plan.md step 6): selects which
 # ILattice op the silo dispatches per producer batch. Default `set-many`
 # preserves the legacy bench shape (one ILattice.SetManyAsync per batch).
@@ -441,6 +447,8 @@ properties:
             value: '$atomicBatchSize'
           - name: BENCH_VEHICLE_COUNT
             value: '$vehicleCount'
+          - name: BENCH_DISABLE_STORAGE_USAGE_POLLER
+            value: '$disableStorageUsagePoller'
           - name: AZURE_CLIENT_ID
             value: $((az identity show --name $ctx.Identity --resource-group $ctx.ResourceGroup --query clientId --output tsv))
     - name: producer

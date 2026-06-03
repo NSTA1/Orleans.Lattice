@@ -1593,7 +1593,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var usage = grainFactory.GetGrain<ILatticeStorageUsage>(TreeId);
-        return usage.GetReportAsync(cancellationToken);
+        return usage.GetReportAsync(forceRefresh: false, cancellationToken);
     }
 
     /// <summary>

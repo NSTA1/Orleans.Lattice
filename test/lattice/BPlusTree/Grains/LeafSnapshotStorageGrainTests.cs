@@ -202,6 +202,23 @@ public sealed class LeafSnapshotStorageGrainTests
     }
 
     [Test]
+    public async Task GetSnapshotByteSizeAsync_serves_precomputed_value_when_blob_carries_one()
+    {
+        var (grain, _) = CreateGrain();
+        var blob = NewBlob(7, ("a", [1, 2]), ("bb", [9]));
+        // Simulate a producer that has precomputed the snapshot footprint
+        // at capture time (which is what BPlusLeafGrain.CaptureSnapshotAsync
+        // now does via Cache.StateBytes).
+        blob.SnapshotBytes = 999;
+        await grain.SaveAsync(blob, CancellationToken.None);
+
+        var bytes = await grain.GetSnapshotByteSizeAsync(CancellationToken.None);
+
+        Assert.That(bytes, Is.EqualTo(999),
+            "the precomputed SnapshotBytes slot must be served directly so a deep read is constant-time");
+    }
+
+    [Test]
     public async Task GetSnapshotByteSizeAsync_returns_zero_after_clear()
     {
         var (grain, _) = CreateGrain();

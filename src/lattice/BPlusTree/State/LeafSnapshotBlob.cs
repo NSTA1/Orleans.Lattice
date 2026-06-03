@@ -49,4 +49,17 @@ internal sealed class LeafSnapshotBlob
     /// against the leaf's persisted checkpoint, not this stamp.
     /// </summary>
     [Id(2)] public long CapturedAtTicks { get; set; }
+
+    /// <summary>
+    /// Precomputed byte-accurate footprint of <see cref="Rows"/> using the
+    /// same UTF-8-key + stored-value-length formula the leaf surface uses
+    /// for <see cref="LeafStats.StateBytes"/>. Populated once at capture
+    /// time by <see cref="Grains.ILeafSnapshotStorageGrain.SaveAsync"/> so
+    /// <see cref="Grains.ILeafSnapshotStorageGrain.GetSnapshotByteSizeAsync"/>
+    /// is a constant-time field read. Wire-compatible: legacy persisted
+    /// blobs without this field decode to <c>0</c>, and the storage grain
+    /// lazily back-fills the slot on the first byte-size read so the figure
+    /// converges to the correct value without forcing a re-capture.
+    /// </summary>
+    [Id(3)] public long SnapshotBytes { get; set; }
 }

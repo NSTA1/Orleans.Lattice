@@ -9,6 +9,17 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class ShardRootGrain
 {
+    // Activation-scoped per-leaf byte-footprint cache. Not persisted: a
+    // reactivation starts empty and the totals converge as leaves
+    // re-publish on their next commit. The operator-driven
+    // RefreshLeafByteFootprintsAsync re-anchors them exactly when an
+    // authoritative figure is needed. Keeping these off the persistent
+    // state row avoids a noisy WriteStateAsync on every leaf commit
+    // racing the foreground saga writes through the same etag CAS.
+    private readonly Dictionary<Guid, LeafByteFootprint> _leafByteFootprints = new();
+    private long _leafStateBytesTotal;
+    private long _snapshotBytesTotal;
+
     /// <inheritdoc />
     public async Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep)
     {
@@ -109,14 +120,79 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task<ShardStorageUsage> GetStorageUsageAsync(CancellationToken cancellationToken)
+    public Task<ShardStorageUsage> GetStorageUsageAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        // O(1) read off the activation-scoped running totals. Leaves
+        // publish their per-leaf footprint via
+        // PublishLeafByteFootprintAsync on every commit boundary, so the
+        // sum here matches a fresh deep walk by construction once every
+        // leaf has published at least once since activation. A
+        // freshly-reactivated shard root reports zero until the first
+        // leaf publish lands; the operator-driven re-anchor below
+        // returns the exact figure when authoritative numbers are needed.
+        return Task.FromResult(new ShardStorageUsage
+        {
+            LeafStateBytes = _leafStateBytesTotal,
+            SnapshotBytes = _snapshotBytesTotal,
+        });
+    }
+
+    /// <inheritdoc />
+    public Task PublishLeafByteFootprintAsync(Guid leafKey, LeafByteFootprint footprint)
+    {
+        // Activation-scoped: no WriteStateAsync, so we cannot race the
+        // foreground saga writes through the shard root's etag CAS.
+        if (footprint.StateBytes < 0 && footprint.SnapshotBytes < 0)
+        {
+            if (_leafByteFootprints.Remove(leafKey, out var prev))
+            {
+                _leafStateBytesTotal -= prev.StateBytes;
+                _snapshotBytesTotal -= prev.SnapshotBytes;
+            }
+            return Task.CompletedTask;
+        }
+
+        if (_leafByteFootprints.TryGetValue(leafKey, out var existing))
+        {
+            if (existing.StateBytes == footprint.StateBytes
+                && existing.SnapshotBytes == footprint.SnapshotBytes)
+            {
+                return Task.CompletedTask;
+            }
+            _leafStateBytesTotal += footprint.StateBytes - existing.StateBytes;
+            _snapshotBytesTotal += footprint.SnapshotBytes - existing.SnapshotBytes;
+        }
+        else
+        {
+            _leafStateBytesTotal += footprint.StateBytes;
+            _snapshotBytesTotal += footprint.SnapshotBytes;
+        }
+        _leafByteFootprints[leafKey] = footprint;
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public async Task<ShardStorageUsage> RefreshLeafByteFootprintsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var rollup = await DeepWalkLeafFootprintsAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Re-anchor the cached totals to the freshly-walked values so any
+        // drift accumulated since the last activation self-heals.
+        _leafStateBytesTotal = rollup.LeafStateBytes;
+        _snapshotBytesTotal = rollup.SnapshotBytes;
+        return rollup;
+    }
+
+    private async Task<ShardStorageUsage> DeepWalkLeafFootprintsAsync(CancellationToken cancellationToken)
+    {
         var rootNodeId = state.State.RootNodeId;
         if (rootNodeId is null)
         {
-            // No root yet - empty shard contributes nothing.
             return default;
         }
 
@@ -125,9 +201,6 @@ internal sealed partial class ShardRootGrain
             return await AccumulateLeafUsageAsync(rootNodeId.Value.GetGuidKey(), cancellationToken);
         }
 
-        // Descend the leftmost path to the first leaf, then walk the leaf
-        // chain via sibling pointers - same traversal shape as
-        // GetDiagnosticsAsync's deep mode so the aggregation is consistent.
         var currentId = rootNodeId.Value;
         var childrenAreLeaves = false;
         while (!childrenAreLeaves)

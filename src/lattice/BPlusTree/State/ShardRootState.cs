@@ -137,6 +137,38 @@ internal sealed class ShardRootState
 }
 
 /// <summary>
+/// Per-leaf byte-accurate storage footprint snapshot published by a leaf
+/// grain to its owning shard root. The pair feeds the shard root's
+/// activation-scoped running <c>LeafStateBytesTotal</c> /
+/// <c>SnapshotBytesTotal</c> so the byte-accurate storage-usage aggregator
+/// can read the shard total in O(1) rather than walking the leaf chain on
+/// every dashboard scrape. Activation-scoped (not persisted): a shard root
+/// that reactivates starts with zero totals and converges as leaves
+/// re-publish on their next commit; the operator-driven
+/// <see cref="Grains.IShardRootGrain.RefreshLeafByteFootprintsAsync"/>
+/// re-anchors the totals exactly when an authoritative figure is needed.
+/// </summary>
+[GenerateSerializer]
+[Alias(TypeAliases.LeafByteFootprint)]
+[Immutable]
+internal readonly record struct LeafByteFootprint
+{
+    /// <summary>
+    /// Sentinel published by a leaf that has been removed from the shard
+    /// (split-donated or merged-away). The shard root drops the leaf's
+    /// entry from its activation-scoped footprint map and subtracts the
+    /// leaf's last-known totals from the running sums.
+    /// </summary>
+    public static readonly LeafByteFootprint Removed = new() { StateBytes = -1, SnapshotBytes = -1 };
+
+    /// <summary>Per-leaf state-byte footprint (UTF-8 key + value bytes per row).</summary>
+    [Id(0)] public long StateBytes { get; init; }
+
+    /// <summary>Per-leaf snapshot-byte footprint; <c>0</c> when the leaf has no captured snapshot.</summary>
+    [Id(1)] public long SnapshotBytes { get; init; }
+}
+
+/// <summary>
 /// Intent record for a bulk-append graft that has been committed to state but
 /// not yet fully wired into the tree. Contains all the information needed to
 /// resume the graft after a crash.
