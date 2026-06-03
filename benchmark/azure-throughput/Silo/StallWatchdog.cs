@@ -381,10 +381,28 @@ internal sealed class StallWatchdog
             var node = headObj;
             for (var i = 0; i < safetyCap; i++)
             {
-                if (node.IsNull || node.Type is null) { break; }
+                if (node.IsNull || node.Type is null)
+                {
+                    if (i == 0) { line($"[wal-slot-debug] tree={treeId} shard={shardIndex} headNode IsNull={node.IsNull} hasType={node.Type is not null}"); }
+                    break;
+                }
                 var itemField = node.Type.Fields.FirstOrDefault(f => f.Name == "item");
-                if (itemField is null) { break; }
+                if (itemField is null)
+                {
+                    if (i == 0) { line($"[wal-slot-debug] tree={treeId} shard={shardIndex} headNode.Type='{node.Type.Name}' missing 'item' field. fields=[{string.Join(",", node.Type.Fields.Select(f => f.Name))}]"); }
+                    break;
+                }
                 var slotObj = itemField.ReadObject(node.Address, interior: false);
+                if (i == 0)
+                {
+                    // Always emit a head-item probe regardless of detection
+                    // outcome, so the cohort 5 mystery (328 grain-rows with
+                    // count=1/head!=null but 0 [wal-slot] and 0
+                    // [wal-slot-debug]) cannot recur: either we see the type
+                    // name, or we see IsNull=True (struct field needing
+                    // ReadValueType), or we see the field-name listing.
+                    line($"[wal-slot-probe] tree={treeId} shard={shardIndex} item.IsNull={slotObj.IsNull} item.Type='{(slotObj.Type?.Name ?? "<null>")}' itemFieldKind={itemField.Type?.Name ?? "<null>"} itemFieldIsValueType={itemField.IsValueType}");
+                }
                 // Detect InFlightFlush by the field signature (Stage:byte +
                 // StageStartedTicks:long) rather than by the nested-type name
                 // literal - ClrMD's nested-type Name format varies across
