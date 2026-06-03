@@ -68,7 +68,39 @@ internal sealed class WalCommitLogWriter(
         var dispatchStartTicks = Stopwatch.GetTimestamp();
         try
         {
-            return await grain.AppendAsync(stamped, cancellationToken).ConfigureAwait(false);
+            // Writer-side dispatch deadline. The outbound
+            // IWalShardGrain RPC is the outermost observable seam on the
+            // write pipeline; without a writer-side bound a wedged shard
+            // activation holds every caller's dispatch parked until the
+            // Orleans response timeout (default 3 minutes) expires.
+            // Bounding the dispatch converts that blind hang into a
+            // structured TimeoutException with per-shard counter
+            // attribution (WalAppendDispatchTimeouts), so the request
+            // pipeline releases its slot immediately and the wedged
+            // shard is identified in O(WalAppendDispatchTimeout) time.
+            var dispatchTimeout = perTree.WalAppendDispatchTimeout;
+            var grainCall = grain.AppendAsync(stamped, cancellationToken);
+            if (dispatchTimeout == Timeout.InfiniteTimeSpan)
+            {
+                return await grainCall.ConfigureAwait(false);
+            }
+            try
+            {
+                return await grainCall.WaitAsync(dispatchTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                LatticeMetrics.WalAppendDispatchTimeouts.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                throw new TimeoutException(
+                    $"WAL append dispatch to shard {partition} of tree '{stamped.TreeId}' "
+                    + $"exceeded the {dispatchTimeout} dispatch deadline "
+                    + $"({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the target "
+                    + $"WalShardGrain activation did not return within the deadline, "
+                    + $"indicating a wedged shard.");
+            }
         }
         finally
         {
@@ -169,7 +201,37 @@ internal sealed class WalCommitLogWriter(
         var dispatchStartTicks = Stopwatch.GetTimestamp();
         try
         {
-            var offsets = await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false);
+            // Writer-side dispatch deadline (batched path); see
+            // AppendAsync above for the rationale. Held on the per-tree
+            // perTree.WalAppendDispatchTimeout so per-tree overrides
+            // apply uniformly to the single-entry and batched dispatches.
+            var dispatchTimeout = perTree.WalAppendDispatchTimeout;
+            var grainCall = grain.AppendBatchAsync(entries, cancellationToken);
+            IReadOnlyList<long> offsets;
+            if (dispatchTimeout == Timeout.InfiniteTimeSpan)
+            {
+                offsets = await grainCall.ConfigureAwait(false);
+            }
+            else
+            {
+                try
+                {
+                    offsets = await grainCall.WaitAsync(dispatchTimeout, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    LatticeMetrics.WalAppendDispatchTimeouts.Add(
+                        1,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                    throw new TimeoutException(
+                        $"WAL append-batch dispatch to shard {partition} of tree '{treeId}' "
+                        + $"({entries.Count} entries) exceeded the {dispatchTimeout} dispatch deadline "
+                        + $"({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the target "
+                        + $"WalShardGrain activation did not return within the deadline, "
+                        + $"indicating a wedged shard.");
+                }
+            }
             return new KeyValuePair<string, IReadOnlyList<long>>(grainKey, offsets);
         }
         finally

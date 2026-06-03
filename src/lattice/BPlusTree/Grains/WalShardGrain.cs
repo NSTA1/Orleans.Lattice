@@ -285,6 +285,28 @@ internal sealed class WalShardGrain(
     /// </summary>
     public async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
+        // Deactivation-time diagnostic: record _inFlight.Count at
+        // deactivation time, ONCE per deactivation, BEFORE we attempt
+        // to drain. A non-zero observation means the activation is
+        // being torn down with in-flight flushes still pending - the
+        // slot population that defines the residual phase-1/activation
+        // wedge fingerprint ("mid-call deactivation orphans").
+        // Combined with a successor activation's
+        // WalFlushPreflightTimeouts, a non-zero deactivate observation
+        // immediately followed by a preflight timeout on the same
+        // (tree, shard) is the smoking gun for the
+        // mid-deactivation-orphan hypothesis.
+        long inFlightAtDeactivate;
+        lock (_stateGate)
+        {
+            inFlightAtDeactivate = _inFlight.Count;
+        }
+        LatticeMetrics.WalShardDeactivateInFlight.Record(inFlightAtDeactivate, _treeTag, _shardTag);
+        if (inFlightAtDeactivate > 0)
+        {
+            Trace($"deactivate.inflight count={inFlightAtDeactivate} reason={reason}");
+        }
+
         await DrainInFlightAsync().ConfigureAwait(true);
 
         bool hasPending;
@@ -909,6 +931,29 @@ internal sealed class WalShardGrain(
 
     private async Task FlushAsync(LinkedListNode<InFlightFlush> node)
     {
+        // Preflight deadline. The post-yield body and the
+        // synchronous setup that precedes the provider-call deadline
+        // (lines below: parallel-array materialisation, stopwatch start,
+        // provider-call CTS construction) are normally microseconds, but
+        // a paused activation scheduler can leave the Task.Yield()
+        // continuation un-scheduled indefinitely, pinning this slot in
+        // _inFlight with NO deadline armed yet (the existing
+        // WalFlushTimeout only covers the provider call, which has not
+        // been issued). Constructing the preflight CTS BEFORE the yield
+        // arms its timer before the scheduler-pause window opens, so a
+        // paused continuation is caught even if it never runs.
+        //
+        // The CTS is checked immediately after the yield resumes; if it
+        // fired during the pause the flush surfaces as TimeoutException
+        // routed through HandleFlushFailureAsync, the slot drains, and
+        // WalFlushPreflightTimeouts attributes the trip to (tree, shard).
+        // The CTS is disposed in the outer finally below regardless of
+        // path, so the timer is always released.
+        var preflightTimeout = Options.WalFlushPreflightTimeout;
+        using var preflightDeadline = preflightTimeout == Timeout.InfiniteTimeSpan
+            ? null
+            : new CancellationTokenSource(preflightTimeout);
+
         // Yield once before any provider call so this task is observably
         // incomplete by the time StartFlush stores the Task on the slot
         // (a synchronously-completing provider would otherwise run the
@@ -919,12 +964,39 @@ internal sealed class WalShardGrain(
         // call settles").
         await Task.Yield();
 
+        // If the preflight CTS fired while the yield's continuation was
+        // un-scheduled, surface a TimeoutException through the normal
+        // failure handler so the slot drains and the chain recovers
+        // rather than wedging at inFlight=WalMaxPendingBatches with no
+        // fault and no activation recycle. The throw falls through to
+        // the outer catch/finally (HandleFlushFailureAsync + slot
+        // removal + list recycling), preserving the existing failure
+        // accounting and pool hygiene.
+        TimeoutException? preflightFailure = null;
+        if (preflightDeadline is not null && preflightDeadline.IsCancellationRequested)
+        {
+            LatticeMetrics.WalFlushPreflightTimeouts.Add(1, _treeTag, _shardTag);
+            preflightFailure = new TimeoutException(
+                $"WAL flush preflight for shard {_shardIndex} of tree '{_treeId}' "
+                + $"offsets [{node.Value.StartOffset},{node.Value.EndOffsetExclusive}) "
+                + $"exceeded the {preflightTimeout} preflight deadline "
+                + $"({nameof(LatticeOptions.WalFlushPreflightTimeout)}); the grain "
+                + $"scheduler did not resume the post-yield continuation in time, "
+                + $"indicating a paused activation (startup reshard / membership change, "
+                + $"non-cooperative scheduler work item, or mid-flush deactivation).");
+            Trace($"flush.preflight.timeout [{node.Value.StartOffset},{node.Value.EndOffsetExclusive}) timeout={preflightTimeout}");
+        }
+
         var slot = node.Value;
         var segments = slot.Segments;
         var offsets = slot.Offsets;
         Trace($"flush.enter [{slot.StartOffset},{slot.EndOffsetExclusive})");
         try
         {
+            if (preflightFailure is not null)
+            {
+                throw preflightFailure;
+            }
             // Hand the encoded segments straight to the provider's
             // zero-copy overload. Providers that natively store binary
             // payloads (Azure Table Storage) skip the second encode
@@ -1378,6 +1450,13 @@ internal sealed class WalShardGrain(
         _treeId = treeId;
         _shardIndex = shardIndex;
         _provider = provider;
+        // Mirror OnActivateAsync's metric-tag initialisation so the
+        // test seam observes the same (tree, shard) tag attribution
+        // on every metric record (including the deactivation hook
+        // and the preflight-timeout counter) that the production
+        // activation contract provides.
+        _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeId);
+        _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
         // Mirror OnActivateAsync's ordering: reconcile any
         // half-committed multi-phase backend state before reading the
         // tail so the test seam exercises the same activation contract

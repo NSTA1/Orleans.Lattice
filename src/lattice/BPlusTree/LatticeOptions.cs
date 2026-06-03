@@ -1163,6 +1163,80 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultDigestPublishTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Maximum time the per-tree WAL writer
+    /// (<c>WalCommitLogWriter</c>) will wait on a single outbound
+    /// cross-grain <c>IWalShardGrain.AppendBatchAsync</c> /
+    /// <c>AppendAsync</c> dispatch before abandoning the await and
+    /// surfacing a <see cref="TimeoutException"/> to the caller. The
+    /// dispatch is the request-path RPC from the producer-facing
+    /// writer into the per-shard WAL grain; it is the outermost
+    /// observable seam on the write pipeline and was historically
+    /// unbounded on the writer side, so a wedged shard activation would
+    /// hold every caller's dispatch parked until the Orleans response
+    /// deadline (default 3 minutes) expired - a 180-second blind hang
+    /// with no per-shard attribution. Bounding the dispatch converts
+    /// that blind hang into a structured fault with per-shard counter
+    /// attribution (<see cref="Orleans.Lattice.LatticeMetrics.WalAppendDispatchTimeouts"/>),
+    /// so a wedged shard surfaces immediately and the request pipeline
+    /// releases its slot rather than back-filling behind the wedge.
+    /// This option does <b>not</b> fix the wedge mechanism itself - the
+    /// grain-side flush / activation deadlines already bound their own
+    /// regions - it bounds the symptom on the writer side and makes
+    /// every wedge attributable to a specific
+    /// <c>(tree, shard)</c> in O(timeout) instead of O(response
+    /// timeout) time. Defaults to
+    /// <see cref="DefaultWalAppendDispatchTimeout"/> (30 seconds) -
+    /// above the legitimate envelope of a fully-saturated dispatch
+    /// (one healthy flush + headroom), yet well below the Orleans
+    /// response timeout so a true park is caught and surfaced
+    /// promptly. Set to <see cref="Timeout.InfiniteTimeSpan"/> to
+    /// disable the ceiling and restore the historical unbounded-await
+    /// behaviour; the registered options validator rejects any other
+    /// non-positive value at first-resolve time.
+    /// </summary>
+    public TimeSpan WalAppendDispatchTimeout { get; set; } = DefaultWalAppendDispatchTimeout;
+
+    /// <summary>Default value for <see cref="WalAppendDispatchTimeout"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultWalAppendDispatchTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Maximum time the per-shard WAL grain's <c>FlushAsync</c> may
+    /// spend in its preflight region (the synchronous setup and
+    /// initial scheduler yield that precede the bounded provider
+    /// call) before the flush is abandoned and the slot drains. The
+    /// preflight region is normally microseconds - it copies the
+    /// already-encoded segments into the parallel arrays the provider
+    /// expects and hands them over - but if the activation's grain
+    /// scheduler never resumes the post-yield continuation (e.g. a
+    /// startup reshard / membership change parked the activation, a
+    /// non-cooperative work item is hogging the scheduler, or the
+    /// activation is being torn down mid-flush), the slot sits in
+    /// <c>_inFlight</c> with no deadline armed - the existing
+    /// <see cref="WalFlushTimeout"/> only covers the provider call,
+    /// which has not yet been issued - and the chain saturates at
+    /// <see cref="WalMaxPendingBatches"/> with no fault and no
+    /// activation recycle. With the ceiling the parked preflight
+    /// faults cleanly as a <see cref="TimeoutException"/> routed
+    /// through the normal failure handler, the slot drains, and the
+    /// <see cref="Orleans.Lattice.LatticeMetrics.WalFlushPreflightTimeouts"/>
+    /// counter attributes the trip to the affected
+    /// <c>(tree, shard)</c>. Defaults to
+    /// <see cref="DefaultWalFlushPreflightTimeout"/> (5 seconds) -
+    /// orders of magnitude above the legitimate microsecond envelope,
+    /// yet small enough that a genuinely stalled scheduler is caught
+    /// before the writer-side dispatch deadline
+    /// (<see cref="WalAppendDispatchTimeout"/>) trips. Set to
+    /// <see cref="Timeout.InfiniteTimeSpan"/> to disable the ceiling
+    /// and restore the historical unbounded-await behaviour; the
+    /// registered options validator rejects any other non-positive
+    /// value at first-resolve time.
+    /// </summary>
+    public TimeSpan WalFlushPreflightTimeout { get; set; } = DefaultWalFlushPreflightTimeout;
+
+    /// <summary>Default value for <see cref="WalFlushPreflightTimeout"/> (5 seconds).</summary>
+    public static readonly TimeSpan DefaultWalFlushPreflightTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's

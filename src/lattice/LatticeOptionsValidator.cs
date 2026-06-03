@@ -88,6 +88,20 @@ if (options.DigestPublishTimeout <= TimeSpan.Zero
         $"{nameof(LatticeOptions.DigestPublishTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the internal-node digest publish deadline that prevents a parked upward publish from pinning the split gate).");
 }
+if (options.WalAppendDispatchTimeout <= TimeSpan.Zero
+    && options.WalAppendDispatchTimeout != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalAppendDispatchTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the writer-side cross-grain dispatch deadline that prevents a wedged WAL shard from holding every caller's dispatch parked until the Orleans response timeout).");
+}
+if (options.WalFlushPreflightTimeout <= TimeSpan.Zero
+    && options.WalFlushPreflightTimeout != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalFlushPreflightTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the per-shard flush preflight deadline that prevents a parked scheduler yield from pinning an in-flight slot with no deadline armed).");
+}
 return ValidateOptionsResult.Success;
     }
 }

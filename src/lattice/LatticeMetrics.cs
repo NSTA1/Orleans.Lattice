@@ -1185,6 +1185,71 @@ public static class LatticeMetrics
             description: "Count of internal-node upward digest publishes abandoned after exceeding DigestPublishTimeout.");
 
     /// <summary>
+    /// Count of outbound <c>IWalShardGrain</c> dispatches
+    /// (<c>WalCommitLogWriter.AppendForPartitionAsync</c> /
+    /// <c>AppendAsync</c>) that were abandoned because they exceeded
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalAppendDispatchTimeout"/>.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// The dispatch is the writer-side cross-grain RPC into the per-shard
+    /// WAL grain; it was historically unbounded on the writer side, so a
+    /// wedged shard activation would hold every caller's dispatch parked
+    /// until the Orleans response deadline (default 3 minutes) expired.
+    /// A non-zero value attributes the wedge to a specific
+    /// <c>(tree, shard)</c> pair in O(<see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalAppendDispatchTimeout"/>)
+    /// time rather than O(response timeout) time, and the parked dispatch
+    /// is faulted as a <see cref="TimeoutException"/> so the request
+    /// pipeline releases its slot rather than back-filling behind the
+    /// wedge. Sustained non-zero counts on a specific
+    /// <c>(tree, shard)</c> identify the wedged shard for follow-up
+    /// investigation.
+    /// </summary>
+    public static readonly Counter<long> WalAppendDispatchTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_dispatch.timeouts", unit: "{timeout}",
+            description: "Count of writer-side WAL shard dispatches abandoned after exceeding WalAppendDispatchTimeout.");
+
+    /// <summary>
+    /// Count of per-shard WAL <c>FlushAsync</c> preflight regions (the
+    /// synchronous setup and initial scheduler yield that precede the
+    /// bounded provider call) that were abandoned because they exceeded
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushPreflightTimeout"/>.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// The preflight region is normally microseconds; a non-zero count
+    /// indicates the activation's grain scheduler did not resume the
+    /// flush's post-yield continuation within the deadline, leaving the
+    /// in-flight slot pinned with no provider-call deadline armed (the
+    /// existing <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushTimeout"/>
+    /// only covers the provider call itself, which has not yet been
+    /// issued). The faulted preflight surfaces as a
+    /// <see cref="TimeoutException"/> routed through the normal failure
+    /// handler, the slot drains, and this counter attributes the trip to
+    /// the affected <c>(tree, shard)</c>. Sustained non-zero counts
+    /// indicate the activation's scheduler is being held by a startup
+    /// reshard / membership change, a non-cooperative work item, or a
+    /// mid-flush activation tear-down.
+    /// </summary>
+    public static readonly Counter<long> WalFlushPreflightTimeouts =
+        Meter.CreateCounter<long>("orleans.lattice.wal.flush.preflight.timeouts", unit: "{timeout}",
+            description: "Count of WAL shard FlushAsync preflight regions abandoned after exceeding WalFlushPreflightTimeout.");
+
+    /// <summary>
+    /// Histogram of <c>_inFlight.Count</c> observed when a per-shard
+    /// <c>WalShardGrain</c> activation is being deactivated. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>. Recorded exactly
+    /// once per <c>OnDeactivateAsync</c> call. A zero observation is the
+    /// healthy steady-state shape (the grain drained cleanly); a non-zero
+    /// observation means the activation was torn down with in-flight
+    /// flushes still pending - the slot population that defines the
+    /// post-#568 residual phase-1/activation wedge fingerprint. Combined
+    /// with <see cref="WalFlushPreflightTimeouts"/>, a deactivation with
+    /// non-zero in-flight count immediately followed by a preflight
+    /// timeout on a successor activation is the smoking gun for the
+    /// "mid-call deactivation orphan" hypothesis.
+    /// </summary>
+    public static readonly Histogram<long> WalShardDeactivateInFlight =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.shard.deactivate.in_flight", unit: "{slot}",
+            description: "Per-WAL-shard in-flight slot count observed at OnDeactivateAsync time.");
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via
