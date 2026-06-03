@@ -638,3 +638,180 @@ Both falsification criteria met:
 3. The wedge-plan can be considered resolved at the rung the
    campaign opened against. The remaining work is performance
    tuning, not reliability investigation.
+
+---
+
+## 19. G-026 cohort at the original 25k rung 2026-06-03 (wedge reproduces; corrected analysis)
+
+The previous section's verdict ("wedge investigation resolved at
+the rung the campaign targeted") was scoped to the 4000-vehicle
+rung. A single-cohort run at the campaign's original 25,000
+vehicle / 5 Hz rung (offered rate ~125,000 e/s) on the same
+`006ba11` candidate binary reveals the wedge IS still present
+at the original rung. The first-pass log analysis of that run
+was wrong in multiple ways; this section records the corrected
+reading and the new hypothesis it points at.
+
+### Cohort
+
+Single run, rung `25000:5`, `DurationSec=45`, `-SkipBuild`,
+silo log `silo-20260603-153020Z.log`. Bench report:
+
+```
+target          :  125,000/s
+steady-state avg:      269/s   (over 42s "productive" window)
+total written   :    24,661
+```
+
+### What actually happened (deduplicated timeline)
+
+The bench log scraper appears to write each `[silo] t=N.Ns ...`
+sample line multiple times (3000+ raw rows for ~130 unique
+timestamps). After deduplication on the timestamp, the ENTIRE
+run consists of five distinct write events and one long silence:
+
+| t       | delta entries | cumulative | notes                                  |
+|---------|---------------|------------|----------------------------------------|
+| 5.1s    | +85           | 85         | initialisation tail                    |
+| 8.1s    | +12,288       | 12,373     | first real flush (3 x 4096 batches)    |
+| 12.1s   | +4,096        | 16,469     | one batch                              |
+| 51.1s   | +4,096        | 20,565     | after a **39-second silence**          |
+| 52.1s   | +4,096        | 24,661     | one more batch                         |
+| 53s..end | 0            | 24,661     | **73+ seconds of total silence to end of run** |
+
+`inFlight=8` is reported pinned for every silo sample from
+t=2s onwards. Throughput is NOT steady at any rate; it is two
+small flush windows separated by a 39s drought and followed by
+a permanent silence with 8 slots held but nothing draining.
+
+### What the [wal-append] watchdog samples show
+
+The StallWatchdog fired 35 times across the run. Every snapshot
+shows the same dominant signal:
+
+- `[wal-append]` rows: 1,715 total, **100% at the `SentToShard`
+  stage** with `stuck` time clustered at **p50=8.99s, p99=9.08s,
+  max=9.08s** (vs 5.7s at the 4k rung baseline).
+- `[wal-append-tracker]` depth: **max=8, exactly the cap, 0 rows
+  over cap** across 315 tracker observations. The writer-side
+  cap is doing exactly what it was designed to do.
+- Shard-side `[wal-slot-grain]`: 175 rows `count=1, headNull=False`
+  + 70 rows `count=2` + 70 rows `count=0, headNull=True`. The
+  shard's in-flight chain holds 1-2 slots most snapshots.
+
+### What the phaseA admission_wait metric shows
+
+A single phaseA row stamps the first ~10s window cleanly:
+
+```
+[phaseA] t=10.3s instrument=wal.writer.append.admission_wait
+  tree=ladder-...-v25000-h5  count=1298  sum=2,229,917 ms
+  min=0  p50=1722 ms  p90=2924 ms  p99=3195 ms  max=3230 ms
+```
+
+1,298 dispatches in the opening 10 seconds with a median
+admission wait of 1.72s and p99 of 3.2s. The admission cap is
+firing as designed - callers ARE queuing on the semaphore for
+multi-second periods. No subsequent phaseA window emits a
+nonzero admission_wait row, because after the first ~12s the
+silo stops admitting new dispatches in volume (the bursts at
+t=51-52s are recovery flushes, not continued ingestion).
+
+`[wal-admission-timeout]` counter: **0** for the whole run. The
+admission wait p99 of 3.2s is well under the
+`WalAppendDispatchTimeout=30s` deadline, so the typed-timeout
+signal G-026 was designed to surface does not fire.
+
+### Reshard activity correlates with wedge onset
+
+- Reshards initiated: **53**, completed: 53, Lattice-side
+  rejections: 0.
+- Orleans-side `OrleansMessageRejectionException: Forwarding
+  failed` rejections during reshard: extensive (every reshard
+  attempt has multiple rejected forwards with exponential
+  backoff: 100ms, 200ms, 400ms, ...).
+
+The reshard storm coincides with the wedge onset. Reshards run
+to swap shard counts (32 in this rung); Orleans's routing
+rejects the forward of split-coordinator messages while the
+target shard activation is mid-transition, the rejected
+forwards bounce back to the silo's outbox, and the WAL
+shard's append pipeline is blocked behind whatever turn-queue
+state the rejected forward left behind.
+
+### Why the first-pass analysis was wrong
+
+The first reading of this cohort (the assistant's own message
+that prompted this corrected section) claimed:
+
+- "System holds steady at the shard's drain rate forever" -
+  FALSE. The system stops writing entirely after t=52s and
+  runs silent for 70+ seconds before the bench wall-clock
+  terminates.
+- "Predictable graceful degradation" - FALSE. After the first
+  12 seconds the system is effectively wedged, with one tiny
+  ~2-second recovery window at t=51-52s.
+- "The 'wedge' is now just back-pressure" - FALSE at 25k. The
+  cap kept the writer queue bounded (good), but the underlying
+  shard wedge is still real.
+
+The error came from reading the bench summary line
+("steady-state avg 269/s") as if it described a stable rate;
+it is actually the mean of (5 nonzero samples + 67 zero
+samples) over the "productive" window, which gives a
+mathematically valid but operationally meaningless figure.
+
+### Corrected verdict at the 25k rung
+
+| Claim                                                | Truth                                                                                                  |
+|------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| G-026 cap pins writer-side depth at WalMaxPendingBatches | True (max=8, 0 rows over).                                                                          |
+| G-026 prevents queue-overflow / failure-cascade regime  | True (no `wal-dispatch-timeout-cts` lines, no `wal.append_dispatch.timeouts`).                       |
+| G-026 surfaces saturation as typed admission timeout    | **Not at this rung.** Admission wait p99 is 3.2s; deadline is 30s; counter never fires.              |
+| System degrades gracefully at offered-rate-vs-drain-rate | **False.** The system wedges hard after the first 12s of ingestion.                                  |
+| 4k rung verdict ("wedge resolved")                   | Still valid - 3/3 candidate cohorts healthy with no watchdog firings.                                  |
+| 25k rung verdict                                     | **The wedge persists at the original campaign rung even with G-026 in place.**                       |
+
+### New hypothesis: reshard activity is the residual wedge driver at the original rung
+
+`SentToShard` stuck-time clusters at exactly ~9s (p50 to max
+spans 8986 - 9075 ms, a 90ms window). That is not a tail
+distribution of shard RTT under load; it is a single,
+discrete deadline firing. Combined with the reshard storm
+(53 reshards completed in a 45-second offered-load window =
+more than 1 per second) and the OrleansMessageRejectionException
+forward-failure log, the residual wedge looks like a
+**reshard-induced turn-queue stall**, not a back-pressure
+overload. G-021 (already shipped) bounded the outbound shard
+forwards with `ShardForwardTimeout`; that change addressed
+parked forwards but did NOT address forwards REJECTED by
+Orleans' router with an immediate exception. The rejected
+forwards leave the split coordinator in a state where its
+post-rejection retry path interacts with the WAL shard's
+in-flight chain in a way that pins inFlight at the shard cap
+without ever draining.
+
+## 20. Next cycle entry point
+
+Section 17's "next cycle entry points" (admission-timeout
+validation at a higher rung; Family A latency reduction) need
+to be reordered. The 25k rung shows that BEFORE Family A
+work would even be measurable, the reshard-rejection wedge
+must be addressed. File a new issue scoped narrowly to:
+
+> **G-027:** investigate the residual at-saturation wedge at
+> the 25k rung where 53 Orleans-rejected reshard forwards
+> coincide with permanent stall of an inFlight=cap shard
+> in-flight chain. The `SentToShard` stuck-time clusters at
+> a single discrete value (~9s) across 35 watchdog
+> snapshots, indicating one deadline / interlock fires once
+> and pins the chain afterwards. Determine whether the
+> rejected reshard forward leaves a WAL shard slot held by
+> the split coordinator's retry path, and bound that hold
+> with the same shape as G-021's `ShardForwardTimeout` if so.
+
+Family A and the admission-deadline split (mentioned in
+section 17) remain valid next-cycle hypotheses but should run
+AFTER G-027 is decided, so the at-saturation cohort is in a
+state where a per-flush-latency change can be cleanly
+attributed.
