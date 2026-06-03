@@ -40,6 +40,18 @@
 //                              whose task never completes. Tests whether
 //                              the wedge requires the callee's parked-Task
 //                              graph rather than a single delay.
+//                  churn     - activation-churn storm: a flaky grain whose
+//                              OnActivateAsync deactivates itself with a
+//                              short delay, so dispatches into it experience
+//                              Orleans 'Forwarding failed' / re-routing
+//                              traffic concurrent with the parked Wait
+//                              callers. Models the real cohort's 228-540
+//                              reshard-REJECTED storm per wedged run. Each
+//                              dispatch also issues WaitAsync(TimeSpan) on
+//                              a separate blocker grain that hangs forever
+//                              (the question this tests: does churn on
+//                              UNRELATED activations starve the timeout
+//                              callback of WORKING ones?).
 //   --wall-clock-cap   Per-arm wall-clock cap in seconds. Default 30.
 //   --load-count       Concurrent dispatches in the `load` / `singleton` /
 //                      `chained` scenarios. Default 32 (rough match to
@@ -75,13 +87,33 @@ public sealed class BlockingGrain : Grain, IBlockingGrain
 }
 
 /// <summary>
-/// Models <c>WalShardGrain.AppendBatchAsync</c>'s line 585 back-pressure
-/// waiter: maintains a bounded in-flight chain of never-completing tasks,
-/// and parks each over-cap call at <c>await headTask</c> against the head
-/// slot's task. With <paramref name="capacity"/>=8 (Lattice's default
-/// <c>WalMaxPendingBatches</c>) and N&gt;8 concurrent callers, the first
-/// 8 calls populate the chain, and every subsequent caller parks at
-/// <c>await headTask</c> exactly as the real wedge does.
+/// Models the real cohort's <c>reshard ... REJECTED (Forwarding failed)</c>
+/// storm (228-540 occurrences per wedged run). Every activation aggressively
+/// requests its own deactivation, so an Orleans message in flight against it
+/// has a high chance of being routed against a now-deactivating activation
+/// (which forces re-routing to a new activation, the source of the "Forwarding
+/// failed" log lines on the production silo). With many concurrent callers
+/// the churn rate sustains.
+/// </summary>
+public interface IFlakyDeactivatingGrain : IGrainWithIntegerKey
+{
+    Task<int> PingAndSelfDeactivateAsync();
+}
+
+public sealed class FlakyDeactivatingGrain : Grain, IFlakyDeactivatingGrain
+{
+    public Task<int> PingAndSelfDeactivateAsync()
+    {
+        // Self-deactivate immediately after each call so the next dispatch
+        // either hits the in-flight deactivation (Orleans routes to a fresh
+        // activation, surfacing as "Forwarding failed" / RoutingException)
+        // or hits a not-yet-activated grain (cold-activation overhead per
+        // call). Either way, the grain-activation churn rate matches the
+        // real cohort's reshard storm shape.
+        DeactivateOnIdle();
+        return Task.FromResult(0);
+    }
+}
 /// </summary>
 public interface IChainedBlockingGrain : IGrainWithIntegerKey
 {
@@ -326,6 +358,7 @@ internal static class Program
                 "load"      => await RunLoadAsync(factory, config),
                 "singleton" => await RunSingletonAsync(factory, config),
                 "chained"   => await RunChainedAsync(factory, config),
+                "churn"     => await RunChurnAsync(factory, config),
                 _ => HandleUnknown(scenario),
             };
             Console.WriteLine();
@@ -608,9 +641,105 @@ internal static class Program
         return sentinel == 0;
     }
 
+    /// <summary>
+    /// Activation-churn scenario. Spawns a background loop that hammers
+    /// many <see cref="IFlakyDeactivatingGrain"/> activations (each
+    /// self-deactivates per call, so Orleans is forced to spin up fresh
+    /// activations continuously), while concurrently issuing
+    /// <see cref="ReproConfig.LoadCount"/> dispatches that each
+    /// <c>WaitAsync(TimeSpan)</c> against a permanently-blocked grain.
+    /// Tests whether sustained activation-rejection / re-routing traffic
+    /// concurrent with the parked WaitAsync callers is what suppresses
+    /// the deadline firing - the real cohort had 228-540 reshard-REJECTED
+    /// per wedged run alongside the inFlight=8 pinned signature.
+    /// </summary>
+    private static async Task<bool> RunChurnAsync(IGrainFactory factory, ReproConfig config)
+    {
+        Console.WriteLine($"===== SCENARIO churn (count={config.LoadCount}, churn-duration={config.WallClockCap.TotalSeconds:0.##}s) =====");
+
+        // Launch a sustained background churn loop on N flaky activations.
+        // Each iteration: call PingAndSelfDeactivateAsync on a rotating key,
+        // forcing Orleans to deactivate-then-reactivate (or route to a fresh
+        // activation). Continue until the parked-callers test finishes.
+        using var churnCts = new CancellationTokenSource();
+        var churnTask = Task.Run(async () =>
+        {
+            var churnCount = 0;
+            var failures = 0;
+            try
+            {
+                while (!churnCts.IsCancellationRequested)
+                {
+                    // Fan 32 flaky activations in parallel each iteration,
+                    // matching the real-cohort scale of 228-540 storm events.
+                    var fanout = new Task[32];
+                    for (var i = 0; i < fanout.Length; i++)
+                    {
+                        var key = (long)((churnCount + i) % 64);
+                        fanout[i] = SafeCallAsync(factory.GetGrain<IFlakyDeactivatingGrain>(4000 + key));
+                    }
+                    await Task.WhenAll(fanout).ConfigureAwait(false);
+                    churnCount += fanout.Length;
+                }
+            }
+            catch (OperationCanceledException) { /* expected */ }
+            Console.WriteLine($"[repro] churn loop completed: {churnCount} ping iterations, {failures} surfaced failures.");
+
+            async Task SafeCallAsync(IFlakyDeactivatingGrain g)
+            {
+                try { await g.PingAndSelfDeactivateAsync().ConfigureAwait(false); }
+                catch { Interlocked.Increment(ref failures); }
+            }
+        });
+
+        Console.WriteLine($"[repro] churn loop running; concurrently dispatching {config.LoadCount} WaitAsync callers against permanently-blocked grains ...");
+        var startedAt = Stopwatch.StartNew();
+        var tasks = new Task<long>[config.LoadCount];
+        for (var i = 0; i < config.LoadCount; i++)
+        {
+            // Wrapper-grain keys 5000+i, blocker keys 5000+i.
+            var wrapper = factory.GetGrain<IWrapperGrain>(5000 + i);
+            var blockerKey = (long)(5000 + i);
+            tasks[i] = wrapper.TryDispatchWithWaitAsyncTimeoutAsync(blockerKey, config.TimeoutBudget, config.WallClockCap);
+        }
+        var results = await Task.WhenAll(tasks);
+        startedAt.Stop();
+        churnCts.Cancel();
+        try { await churnTask; } catch { /* swallow */ }
+
+        var fired = 0;
+        var didNotFire = 0;
+        var sentinel = 0;
+        long minMs = long.MaxValue;
+        long maxMs = long.MinValue;
+        long sumMs = 0;
+        foreach (var ms in results)
+        {
+            if (ms == -1L) { didNotFire++; }
+            else if (ms < 0) { sentinel++; }
+            else
+            {
+                fired++;
+                if (ms < minMs) { minMs = ms; }
+                if (ms > maxMs) { maxMs = ms; }
+                sumMs += ms;
+            }
+        }
+        var meanMs = fired == 0 ? 0 : sumMs / fired;
+        Console.WriteLine($"[repro] churn result: fired={fired}/{config.LoadCount} did-not-fire={didNotFire} sentinel={sentinel} fire-time min/mean/max={minMs}/{meanMs}/{maxMs}ms (wall {startedAt.ElapsedMilliseconds}ms)");
+
+        if (didNotFire > 0)
+        {
+            Console.WriteLine($"[repro] SCENARIO churn - {didNotFire} dispatch(es) DID NOT FIRE within wall-clock cap ({config.WallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
+            return false;
+        }
+        Console.WriteLine($"[repro] SCENARIO churn - all {fired} dispatches fired their deadlines. OK.");
+        return sentinel == 0;
+    }
+
     private static bool HandleUnknown(string scenario)
     {
-        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load, singleton, chained.");
+        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load, singleton, chained, churn.");
         return false;
     }
 
