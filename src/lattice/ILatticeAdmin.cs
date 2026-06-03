@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using Orleans.Concurrency;
+
 /// <summary>
 /// Cluster-wide administrative surface for a Lattice deployment. A single
 /// activation per cluster, resolved via
@@ -28,8 +30,16 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// one tree's report was partial (for example a WAL provider without byte
     /// accounting); the cluster total is then a lower bound.
     /// </para>
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: the call is a
+    /// read-only cluster-wide fan-out with no per-call shared state on the
+    /// admin grain, so a slow tree's deep walk must not block sibling
+    /// administrative calls (a concurrent <see cref="PollWalUsageAsync"/>
+    /// driven by the per-silo poller, for example).
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the cluster-wide fan-out before it begins.</param>
+    [AlwaysInterleave]
     Task<ClusterStorageUsageReport> GetTotalStorageUsageAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -48,8 +58,16 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// deep leaf-walk fan-out and should not be invoked on a polling
     /// cadence.
     /// </para>
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// as <see cref="GetTotalStorageUsageAsync"/>: a slow tree under one
+    /// poll tick must not stall the next tick, and an operator-driven
+    /// <see cref="RefreshStorageUsageAsync"/> must not be parked behind
+    /// a poll fan-out already in flight.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the WAL fan-out.</param>
+    [AlwaysInterleave]
     Task PollWalUsageAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -62,11 +80,17 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// example after a manual storage migration, or to validate a
     /// long-running deployment's reported figures); the background
     /// storage-usage poller never invokes it.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: read-only
+    /// cluster-wide fan-out with no per-call shared state on the admin
+    /// grain (re-anchor writes happen on the per-shard root, not here).
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the deep cluster-wide fan-out.</param>
     /// <returns>
     /// The freshly assembled byte-accurate cluster-wide report. Identical
     /// in shape to <see cref="GetTotalStorageUsageAsync"/>'s return value.
     /// </returns>
+    [AlwaysInterleave]
     Task<ClusterStorageUsageReport> RefreshStorageUsageAsync(CancellationToken cancellationToken = default);
 }

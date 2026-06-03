@@ -159,8 +159,6 @@ internal sealed partial class BPlusLeafGrain
         {
             return;
         }
-        _lastPublishedStateBytes = stateBytes;
-        _lastPublishedSnapshotBytes = snapshotBytes;
 
         Guid leafKey;
         try
@@ -181,6 +179,11 @@ internal sealed partial class BPlusLeafGrain
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{treeId}/{shardIndex}");
             await shard.PublishLeafByteFootprintAsync(leafKey, footprint);
+            // Only advance the "last published" watermark on a successful
+            // hop; a transient failure must not silence future republishes
+            // that would otherwise carry the same byte totals.
+            _lastPublishedStateBytes = stateBytes;
+            _lastPublishedSnapshotBytes = snapshotBytes;
         }
         catch
         {
