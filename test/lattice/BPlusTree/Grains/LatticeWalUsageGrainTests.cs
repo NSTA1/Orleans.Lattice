@@ -27,13 +27,12 @@ public sealed class LatticeWalUsageGrainTests
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("ol.gwu", TreeId));
 
-        // Stub the ILattice routing call: a single physical shard, single
-        // WAL partition, no alias resolution.
-        var lattice = Substitute.For<ILattice>();
-        var shardMap = ShardMap.CreateDefault(virtualShardCount: 64, physicalShardCount: 1);
-        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<RoutingInfo>(new RoutingInfo(TreeId, shardMap)));
-        factory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        // The aggregator now resolves the physical tree id directly through
+        // the registry instead of going via ILattice.GetRoutingAsync, so
+        // the user-facing grain (which sits in the producer's hot path)
+        // is never activated by polling. TestOptionsResolver.ForFactory
+        // already wires the registry to return an entry with
+        // PhysicalTreeId=null, which the SUT correctly resolves to TreeId.
 
         var resolver = TestOptionsResolver.ForFactory(factory, options);
         metrics = new LatticeStorageUsageMetrics();
@@ -65,14 +64,16 @@ public sealed class LatticeWalUsageGrainTests
         });
 
         // Headline cold-tree regression: the aggregator must not activate any
-        // shard root, leaf, internal node, or snapshot storage grain. If a
-        // future change re-introduces a leaf-walk in the polling path,
-        // these assertions fail before the cold-tree regression can escape
+        // shard root, leaf, internal node, snapshot storage grain, or the
+        // public ILattice surface (the producer's hot path). If a future
+        // change re-introduces a leaf-walk in the polling path, these
+        // assertions fail before the cold-tree regression can escape
         // into CI.
         factory.DidNotReceiveWithAnyArgs().GetGrain<IShardRootGrain>(default!);
         factory.DidNotReceiveWithAnyArgs().GetGrain<IBPlusLeafGrain>(default(Guid));
         factory.DidNotReceiveWithAnyArgs().GetGrain<IBPlusInternalGrain>(default(Guid));
         factory.DidNotReceiveWithAnyArgs().GetGrain<ILeafSnapshotStorageGrain>(default(Guid));
+        factory.DidNotReceiveWithAnyArgs().GetGrain<ILattice>(default!);
     }
 
     [Test]
@@ -142,6 +143,60 @@ public sealed class LatticeWalUsageGrainTests
 
         Assert.That(ReadOverThresholdGauge(TreeId), Is.Null,
             "no advisory ceiling configured = no over-threshold measurement");
+    }
+
+    [Test]
+    public async Task GetWalUsageAsync_serves_cached_report_within_ttl_without_refanning_out()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var wal = Substitute.For<IWalShardGrain>();
+        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(1234L);
+        factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
+
+        // Large TTL so a sequential second call is well inside the window.
+        var grain = CreateGrain(factory, out _, options: new LatticeOptions { StorageUsageCacheTtl = TimeSpan.FromMinutes(5) });
+
+        var first = await grain.GetWalUsageAsync(CancellationToken.None);
+        var second = await grain.GetWalUsageAsync(CancellationToken.None);
+
+        Assert.That(first.SampledAt, Is.EqualTo(second.SampledAt),
+            "the second call within the cache TTL must serve the same sampled report");
+        // The WAL provider must have been queried exactly once across both
+        // calls; the second call is served from the per-activation cache
+        // and must not pile a duplicate Azure Table query onto the same
+        // connection pool the foreground writes share.
+        await wal.Received(1).GetRetainedByteSizeAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetWalUsageAsync_coalesces_concurrent_callers_behind_one_in_flight_fan_out()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var wal = Substitute.For<IWalShardGrain>();
+        var gate = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
+
+        var grain = CreateGrain(factory, out _);
+
+        // Two concurrent callers arrive while the fan-out is in flight.
+        var callerA = grain.GetWalUsageAsync(CancellationToken.None);
+        var callerB = grain.GetWalUsageAsync(CancellationToken.None);
+
+        // Release the gate so both callers complete from the SAME
+        // underlying fan-out.
+        gate.SetResult(999L);
+        var resultA = await callerA;
+        var resultB = await callerB;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resultA.WalRetainedBytes, Is.EqualTo(999L));
+            Assert.That(resultB.WalRetainedBytes, Is.EqualTo(999L));
+            Assert.That(resultA.SampledAt, Is.EqualTo(resultB.SampledAt),
+                "both callers must observe the same sampled report from a single in-flight fan-out");
+        });
+        await wal.Received(1).GetRetainedByteSizeAsync(Arg.Any<CancellationToken>());
     }
 
     private static long? ReadWalGauge(string treeId)

@@ -437,24 +437,29 @@ builder.UseOrleans(silo =>
         o.DigestCoalescingWindowMs = digestCoalescingMs;
     });
 
-    // Disable the per-silo storage-usage poller for the throughput run.
-    // The poller is a GLOBAL knob read from the default (unnamed) options,
-    // so the per-tree ConfigureLattice above does not reach it - it must be
-    // turned off via the global ConfigureLattice overload. On its 15s
-    // cadence the poller drives ILatticeAdmin.GetTotalStorageUsageAsync,
-    // which fans out across every registered tree and walks each shard's
-    // entire leaf chain (ShardRootGrain.GetStorageUsageAsync ->
-    // AccumulateLeafUsageAsync -> leaf.GetStatsAsync). Under the 25k-vehicle
-    // saturation rung that forces mass cold-leaf activations + WAL replays
-    // that monopolise the single-threaded ShardRootGrain turn and saturate
-    // the Azure Table connection pool, starving live ingest of a turn -
-    // the foreground SetManyAsync fan-out parks and writtenTotal freezes.
-    // Setting the interval to zero disables the poller entirely so the
-    // metering scan never competes with the ingest hot path.
-    silo.ConfigureLattice(o =>
+    // Storage-usage poller cadence is left at the library default (15s).
+    // The previous override pinned it to TimeSpan.Zero to dodge the
+    // leaf-walk-on-every-tick path that activated every shard's whole
+    // leaf chain on each poll, monopolising the ShardRootGrain turn under
+    // load. That path was rewritten: the poller now drives the leaf-free
+    // ILatticeAdmin.PollWalUsageAsync (touches only WAL partition grains)
+    // and the deep leaf/snapshot bytes are served in O(1) per shard from
+    // an incrementally-maintained running total. The poll path no longer
+    // competes with foreground ingest, so the override is not needed.
+    //
+    // BENCH_DISABLE_STORAGE_USAGE_POLLER (default empty) is a per-cohort
+    // escape hatch: setting it to "1"/"true" reverts to the pre-cold-tree-fix
+    // behaviour so a like-for-like A/B against the historic baseline can
+    // be run without recompiling the silo image.
+    var disablePoller = (Environment.GetEnvironmentVariable("BENCH_DISABLE_STORAGE_USAGE_POLLER") ?? string.Empty).Trim();
+    if (disablePoller == "1" || string.Equals(disablePoller, "true", StringComparison.OrdinalIgnoreCase))
     {
-        o.StorageUsagePollInterval = TimeSpan.Zero;
-    });
+        silo.ConfigureLattice(o =>
+        {
+            o.StorageUsagePollInterval = TimeSpan.Zero;
+        });
+        Console.WriteLine("[silo] BENCH_DISABLE_STORAGE_USAGE_POLLER=1 -> StorageUsagePollInterval=Zero (poller disabled)");
+    }
 
     silo.AddAzureTableWalStorage(o =>
     {

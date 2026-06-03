@@ -21,54 +21,109 @@ internal sealed class LatticeWalUsageGrain(
 {
     private string TreeId => context.GrainId.Key.ToString()!;
 
+    // Per-activation cached report + single-flight in-flight task. Both are
+    // gated by the tree's StorageUsageCacheTtl (default 10s). Concurrent
+    // callers within the TTL window see the cached report; concurrent
+    // callers that miss the cache share the same in-flight fan-out so the
+    // WAL provider's connection pool never carries duplicate
+    // GetRetainedByteSizeAsync queries against the same partition during
+    // a single poll window. Critical for the Azure Table WAL path where
+    // each per-partition query is a manifest scan against the same table
+    // the foreground appends hit; uncoalesced poll storms otherwise pile
+    // up on the same connection pool and starve foreground ingest.
+    private TreeWalUsageReport? _cached;
+    private Task<TreeWalUsageReport>? _inFlight;
+
     /// <inheritdoc />
     public async Task<TreeWalUsageReport> GetWalUsageAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Resolve routing via the public entry point so registry-alias
-        // resolution is handled uniformly. GetRoutingAsync is a single
-        // ILattice activation; it does not fan out to shards or leaves.
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        var routing = await lattice.GetRoutingAsync(cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var now = DateTimeOffset.UtcNow;
 
-        var walPartitions = await optionsResolver.GetWalPartitionsAsync(routing.PhysicalTreeId);
-        var walTasks = new Task<long>[walPartitions];
-        for (var partition = 0; partition < walPartitions; partition++)
+        // Cache hit: serve the most recent report and re-publish it to
+        // the metrics sink so a sibling silo's poller can keep the gauge
+        // alive without doing redundant Azure Table work.
+        if (_cached is { } cached
+            && resolved.StorageUsageCacheTtl > TimeSpan.Zero
+            && (now - cached.SampledAt) < resolved.StorageUsageCacheTtl)
         {
-            var wal = grainFactory.GetGrain<IWalShardGrain>($"{routing.PhysicalTreeId}/{partition}");
-            walTasks[partition] = GetRetainedBytesAsync(wal, partition, cancellationToken);
+            PublishToMetrics(cached, resolved);
+            return cached;
         }
 
-        var walRetained = await Task.WhenAll(walTasks);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        long walRetainedBytes = 0;
-        var partial = false;
-        foreach (var bytes in walRetained)
+        // Single-flight: a concurrent caller arriving while a fan-out is
+        // already in progress shares the in-flight task rather than
+        // launching a parallel one.
+        if (_inFlight is { } pending)
         {
-            if (bytes < 0)
-            {
-                partial = true;
-            }
-            else
-            {
-                walRetainedBytes += bytes;
-            }
+            return await pending;
         }
 
-        var options = await optionsResolver.ResolveAsync(TreeId);
-        var report = new TreeWalUsageReport
-        {
-            TreeId = TreeId,
-            WalRetainedBytes = walRetainedBytes,
-            Partial = partial,
-            SampledAt = DateTimeOffset.UtcNow,
-        };
+        _inFlight = BuildReportAsync(cancellationToken);
+        return await _inFlight;
+    }
 
-        PublishToMetrics(report, options);
-        return report;
+    private async Task<TreeWalUsageReport> BuildReportAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Resolve the physical tree id directly via the registry rather
+            // than through ILattice.GetRoutingAsync. The public ILattice
+            // grain sits in the producer's hot path (every SetAsync /
+            // SetManyAsync routes through it), so polling it on the
+            // storage-usage cadence forces a sync point on a non-reentrant
+            // activation that is otherwise saturated with foreground
+            // mutations. The registry is the source of truth for alias
+            // resolution and is not in the per-write path.
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var entry = await registry.GetEntryAsync(TreeId);
+            var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var walPartitions = await optionsResolver.GetWalPartitionsAsync(physicalTreeId);
+            var walTasks = new Task<long>[walPartitions];
+            for (var partition = 0; partition < walPartitions; partition++)
+            {
+                var wal = grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+                walTasks[partition] = GetRetainedBytesAsync(wal, partition, cancellationToken);
+            }
+
+            var walRetained = await Task.WhenAll(walTasks);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            long walRetainedBytes = 0;
+            var partial = false;
+            foreach (var bytes in walRetained)
+            {
+                if (bytes < 0)
+                {
+                    partial = true;
+                }
+                else
+                {
+                    walRetainedBytes += bytes;
+                }
+            }
+
+            var options = await optionsResolver.ResolveAsync(TreeId);
+            var report = new TreeWalUsageReport
+            {
+                TreeId = TreeId,
+                WalRetainedBytes = walRetainedBytes,
+                Partial = partial,
+                SampledAt = DateTimeOffset.UtcNow,
+            };
+
+            _cached = report;
+            PublishToMetrics(report, options);
+            return report;
+        }
+        finally
+        {
+            _inFlight = null;
+        }
     }
 
     /// <summary>
