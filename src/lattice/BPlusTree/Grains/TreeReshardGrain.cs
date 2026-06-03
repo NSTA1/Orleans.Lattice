@@ -109,7 +109,17 @@ internal sealed class TreeReshardGrain(
             }
         }
 
-        if (newShardCount <= currentCount)
+        // Idempotent re-pin: a caller asking for the count the tree is
+        // already at is a safe no-op. The shard map already matches the
+        // request, so there is nothing to migrate; treating this as an
+        // error has crashed hosts whose start-up unconditionally pins the
+        // tree's configured shard count on every run.
+        if (newShardCount == currentCount)
+        {
+            return;
+        }
+
+        if (newShardCount < currentCount)
         {
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "shrink_unsupported"));
 #if LATTICE_DIAG
