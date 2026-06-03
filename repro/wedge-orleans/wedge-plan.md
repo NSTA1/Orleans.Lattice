@@ -278,3 +278,121 @@ the investigation forward. The standing carry-forward rule in section 8
 remains in force: no throughput A/B at the saturation rung until the
 wedge mechanism is named via this attribution. The G-024 pack is the
 mechanism that lifts that rule.
+
+---
+
+## 12. Cohort attempt of 2026-06-03 ~12:00 UTC - bimodal at the saturation rung
+
+The S2 cohort prescribed in section 10 was attempted; the second of three planned runs was **terminated by an in-tool cancellation** and per the operator's standing instruction (treat cancellation as terminal) the third was not started.
+
+### Run 1 (silo-20260603-115719Z.log)
+
+`HEAD = 5ec4459` (b603c58 G-024 pack + 5ec4459 phaseA allowlist). Command:
+
+```
+./benchmark/azure-throughput/scripts/40-ladder.ps1 -Rungs '4000:5' -DurationSec 45 -LocalBuild
+```
+
+**Outcome: HEALTHY.** First non-wedged 4k cohort in the investigation.
+
+- `FINAL written=723,964 failed=0 elapsed=112.6s Entries written per second (avg)=6,430`.
+- Peak rate 20,476 e/s (hit the 20 k/s offered target).
+- 51 "wedge samples" all clustered at t=3.1s startup (snapshot artefact); silo drained to `inFlight=0` by t=70s.
+- Producer terminated cleanly (`[producer] DONE total=728,000 elapsed=45.1s`); no `Broken pipe`.
+- G-024 instrumentation behaved as designed: `wal.shard.start_flush.calls` rose steadily per shard (57 -> 233 -> 641 -> 713 -> 498 -> 243), `wal.shard.pending_segments` peak `min=1 p50=12 p90=100 max=100`, reshards 51 initiated / 51 completed / 0 rejected, `reshard.in_flight` always 0.
+- `[stall-watchdog]` and `[wal-slot]` never fired (correct - the watchdog only triggers under a stall).
+
+### Run 2 (orphan; ACI silo retrieved via `az container logs`)
+
+`HEAD` unchanged. Command was the same with `-SkipBuild`. The deploy script was cancelled mid-bounded-wait; the silo + producer kept running in ACI until `az container stop`. The recoverable tail (`az container logs` returns ~62 lines of buffer; no FINAL, no `[stall-watchdog]`):
+
+```
+[silo] t=  62.6s written=     48,269 Entries written per second=         0 inFlight=  8
+...
+[silo] t=  78.6s written=     48,269 Entries written per second=         0 inFlight=  8
+```
+
+**Outcome: WEDGED.** The wedge fingerprint (`inFlight=8` pinned, `rate=0`) is present and sustained for at least 17 s before manual stop.
+
+### Run 3
+
+Not executed (per the standing cancellation = terminal rule).
+
+### Verdict
+
+1/2 healthy at the saturation rung post-G-024. The "wedge always reproduces deterministically" claim from section 6 is **falsified by this cohort attempt**: the wedge is **bimodal again**, not deterministic. Prior cohorts had run 4/4 wedged, then 1/1 wedged (cohort 5/5 wedged total) - this cycle adds 1 healthy + 1 wedged, bringing the post-hardened-ladder tally to 6/7 wedged, 1/7 healthy. The bimodality apparently never went away; the "deterministic" claim was a small-sample artefact of three consecutive wedged runs in a row.
+
+### Implications for the investigation
+
+1. **G-024 is NOT a wedge fix.** The instrumentation is observation-only; the one healthy cohort is consistent with the pre-existing ~14% healthy rate (1/7) of saturation-rung cohorts. The change is not statistically distinguishable from no change at this sample size.
+2. **The G-024 attribution path remains viable but requires a wedged cohort.** The healthy cohort produced no `[wal-slot]` lines because the watchdog never triggered (correct), so the section 11 decision table still has not been exercised against the wedge.
+3. **The investigation now needs cohort discipline** beyond what this cycle has time for: at the empirically observed ~85 % wedge rate, attributing the wedge requires running enough cohorts that at least one wedges AND completes its watchdog window. A single 4k rung that wedges to FINAL + watchdog fires is the minimum useful diagnostic sample.
+
+### Carry-forward for the next cycle
+
+- The G-024 pack ships and is verified observable (`[phaseA]` rows confirmed for all 7 instruments; `[wal-slot]` plumbing verified in source but unexercised in the cohort because the wedge did not reproduce on the cohort that ran to FINAL).
+- The next investigation cycle should run the S2 cohort with **n>=3 to ensure at least one wedged run reaches FINAL**, with the wall-clock cap raised to let the StallWatchdog fire on the wedged sample (default trigger is throughput-stall-based; a wedged run should fire it within ~90 s of the stall starting).
+- Section 11 decision table is unchanged and stands ready for the next attribution attempt.
+- The original "wedge is now deterministic" claim in section 6 should be read as "wedge is bimodal with a low healthy rate, not strictly deterministic, but the wedged-run signal is reproducible" - the bimodality re-emerging here doesn't change the section 7 decisive conclusion (wedge is Lattice-specific).
+
+---
+
+## 13. Cohort attempt 2026-06-03 (G-024 ship + StallWatchdog rework, branch `fix/wedge`)
+
+This section supersedes section 12. The "Run 3 not executed" claim there was correct at the time of writing but is now stale: n=7 cohorts were ultimately executed under the cancellation = retry standing rule. Full audit trail in `benchmark/.run/azure-throughput/POSTMORTEM-2026-06-03-g024-stallwatchdog-rework-and-bimodality.md`.
+
+### Cohort tally (rung `4000:5`, `DurationSec=45`, `-LocalBuild` per run)
+
+| # | Log | Outcome | Steady avg | Written | Mode | Notes |
+|---|---|---|---|---|---|---|
+| 1 | 115719Z | HEALTHY | 6,430/s | 723,964 | n/a | watchdog never fired (correct) |
+| 2 | 123606Z | WEDGED | 221/s | 31,057 | B (inferred from dumpasync; pre-watchdog-fix) | 0 `[wal-slot-grain]` rows (placement bug) |
+| 3 | 124016Z | WEDGED | ~0/s | 0 | B (inferred) | 0 rows (placement bug) |
+| 4 | 130520Z | WEDGED | 1,283/s | 45,158 | B | 0 rows (post `aeb1b0d` but pre `1624183`) |
+| 5 | 132021Z | WEDGED | 1,035/s | 72,670 | **A** | 328 rows `count=1, headNull=False`; one persistent slot per shard |
+| 6 | 132807Z | WEDGED | 399/s | 17,012 | B | 441 rows `count=0, headNull=True` |
+| 7 | 133637Z | WEDGED | 620/s | 44,254 | B | 306 rows `count=0, headNull=True` |
+
+**Final tally: 1 healthy / 1 Mode A / 5 Mode B.** Mode B is ~71 % of wedged cohorts and is the dominant target for the next cycle.
+
+### Watchdog rework (the durable artefact of this cycle)
+
+The shipped `[wal-slot-grain]` row is the **Mode A vs Mode B classifier** that surfaced the bimodality. Three sequential bugs in the watchdog hid this until commit `1624183`:
+
+1. `b603c58` - literal nested-type-name match for `InFlightFlush` detection. Fixed by field-signature detection in `aeb1b0d`.
+2. `aeb1b0d` - `[wal-slot-grain]` emit placed AFTER the `head.IsNull` early return. Fixed in `1624183` by moving the emit before the return.
+3. `45e147b` - `[wal-slot-probe]` emit gated by the same early return path. Untested in Mode A (no Mode A cohort reproduced after the probe shipped); observation-only and safe.
+
+Each bug silently failed closed: zero `[wal-slot]` rows on every wedged cohort, no exception trace, no other tell. **Pattern for future watchdog work:** any diagnostic emit intended to be unconditional must precede ALL state-conditional early returns.
+
+## 14. Mode-aware decision table (supersedes section 11)
+
+Section 11's single-axis decision table was written before bimodality was known. It assumed every wedged cohort would have one dominant `[wal-slot]` stage L. That assumption is invalidated by Mode B, where `_inFlight` is empty and there is no L to read.
+
+The next cycle should walk this table:
+
+| `[wal-slot-grain]` dominant tuple | Top async-stall frame | Mode | Implicated layer | Diagnostic pack |
+|---|---|---|---|---|
+| `count>=1, headNull=False` | `WalShardGrain.AppendBatchAsync await#0` | A | `WalShardGrain.FlushAsync` lifecycle | shard-layer pack (this cycle's `b603c58`) - read dominant stage from `[wal-slot]` and walk it against the per-stage rows in section 11 |
+| `count=0, headNull=True` | `WalCommitLogWriter.AppendForPartitionAsync await#0` | B | `WalCommitLogWriter` per-partition append plumbing | NOT INSTRUMENTED in this cycle - file the next-cycle pack (issue #575) and reproduce |
+| `count=0, headNull=True` | something other than `WalCommitLogWriter` | C (unknown) | new bisect target | dumpasync top frame names the next instrumentation site |
+
+### Mode A sub-table (unchanged, retained for reference)
+
+The original section 11 stage rows still apply when `[wal-slot]` actually produces a stage observation. Walk that exactly as documented in section 11.
+
+### Mode B sub-table (placeholder until the next cycle ships)
+
+To be filled in once issue #575 instruments `WalCommitLogWriter.AppendForPartitionAsync` with `Enqueued / DequeuedForBatch / SentToShard / Acked / Failed` lifecycle stamps and the next cohort produces `[wal-append]` rows. The expected mapping (to be empirically confirmed):
+
+| Dominant `[wal-append]` stage | Likely mechanism |
+|---|---|
+| `Enqueued` (entries pile up before any dequeue) | batcher loop never wakes - check batcher task aliveness, `flushMs` timer health |
+| `DequeuedForBatch` (entries dequeued but never forwarded) | dispatch-to-shard call wedges - probable shard-grain reentrancy or scheduler starvation |
+| `SentToShard` (forwarded but no ack) | wedge collapses back into Mode A territory - re-read the shard-layer pack |
+| `Failed` | error-path stall - check failure handler instrumentation |
+
+## 15. Next cycle entry point
+
+- Issue #575 (G-025): `WalCommitLogWriter.AppendForPartitionAsync` instrumentation pack. Shape mirrors the shard-layer pack: lifecycle enum + per-pending stamp + queue-depth histogram + dispatch counter + `[wal-append]` watchdog walker.
+- After G-025 ships, run an n=3 cohort at the same rung. Expect `[wal-append]` rows on at least one Mode B wedged run; walk the dominant stage through section 14's Mode B sub-table.
