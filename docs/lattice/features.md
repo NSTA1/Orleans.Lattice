@@ -140,6 +140,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-017](https://github.com/NSTA1/Orleans.Lattice/issues/434) - Snapshot blob size cap and oversized-row policy (investigative)
 - [G-018](https://github.com/NSTA1/Orleans.Lattice/issues/435) - Periodic recheck classifier-input cache (investigative)
 - [G-022](https://github.com/NSTA1/Orleans.Lattice/issues/567) - Bound internal-node digest publish held under the split gate to prevent a recursive publish-chain wedge
+- [G-024](https://github.com/NSTA1/Orleans.Lattice/issues/574) - Per-shard FlushAsync lifecycle / StartFlush / reshard diagnostics to attribute the residual phase-1/activation WAL wedge
 
 ### Shipped
 
