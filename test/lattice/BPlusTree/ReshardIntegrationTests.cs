@@ -136,7 +136,7 @@ public class ReshardIntegrationTests
     }
 
     [Test]
-    public void ReshardAsync_throws_when_target_not_greater_than_current()
+    public void ReshardAsync_throws_when_target_below_current()
     {
         var treeId = $"reshard-invalid-{Guid.NewGuid():N}";
         RegisterTreeAsync(treeId).GetAwaiter().GetResult();
@@ -146,9 +146,31 @@ public class ReshardIntegrationTests
         // bypassed and the grow-only validation below is actually exercised.
         tree.SetAsync("seed", [1]).GetAwaiter().GetResult();
 
-        // Cluster is configured with 4 shards; any request for ≤4 must throw.
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => tree.ReshardAsync(4));
+        // Cluster is configured with 4 shards; a genuine shrink (<4) must throw.
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => tree.ReshardAsync(2));
+    }
+
+    [Test]
+    public async Task ReshardAsync_is_noop_when_target_equals_current()
+    {
+        // Idempotent re-pin: asking for the count the tree is already at must
+        // succeed without mutating the shard map. Hosts whose start-up
+        // unconditionally pins the configured shard count rely on this so a
+        // restart against an already-correctly-sharded tree does not crash.
+        var treeId = $"reshard-eq-{Guid.NewGuid():N}";
+        await RegisterTreeAsync(treeId);
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        await tree.SetAsync("seed", [1]);
+
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var mapBefore = await registry.GetShardMapAsync(treeId);
+        var versionBefore = mapBefore?.Version;
+
+        Assert.DoesNotThrowAsync(() => tree.ReshardAsync(4));
+
+        var mapAfter = await registry.GetShardMapAsync(treeId);
+        Assert.That(mapAfter?.Version, Is.EqualTo(versionBefore),
+            "Equal-count reshard must not bump the shard-map version.");
     }
 
     [Test]
