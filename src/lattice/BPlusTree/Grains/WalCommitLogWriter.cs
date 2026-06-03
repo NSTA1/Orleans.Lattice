@@ -90,6 +90,16 @@ internal sealed class WalCommitLogWriter(
             }
             catch (TimeoutException)
             {
+                // Empirical diagnostic (paired with the metric below): on prior
+                // cohort runs the WalAppendDispatchTimeouts counter read zero even
+                // though every shipped deadline on the path had elapsed many times
+                // over against the parked dispatches. The Console.WriteLine here
+                // distinguishes "catch never entered" (line absent from silo log)
+                // from "counter silently dropped" (line present, counter still 0).
+                // Loud prefix matches the existing [silo] / [stall-watchdog] log
+                // conventions on the azure-throughput silo so a single grep over
+                // the silo log surfaces every trip.
+                System.Console.WriteLine($"[wal-dispatch-timeout] tree={stamped.TreeId} shard={partition} entries=1 timeout={dispatchTimeout}");
                 LatticeMetrics.WalAppendDispatchTimeouts.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId),
@@ -220,6 +230,9 @@ internal sealed class WalCommitLogWriter(
                 }
                 catch (TimeoutException)
                 {
+                    // Empirical diagnostic: see the single-entry AppendAsync
+                    // catch above for the rationale. Same conventions.
+                    System.Console.WriteLine($"[wal-dispatch-timeout] tree={treeId} shard={partition} entries={entries.Count} timeout={dispatchTimeout}");
                     LatticeMetrics.WalAppendDispatchTimeouts.Add(
                         1,
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
