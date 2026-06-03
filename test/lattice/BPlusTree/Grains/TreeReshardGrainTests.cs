@@ -87,10 +87,21 @@ public partial class TreeReshardGrainTests
     }
 
     [Test]
-    public void ReshardAsync_throws_when_target_equals_current_shard_count()
+    public async Task ReshardAsync_is_noop_when_target_equals_current_shard_count()
     {
-        var (grain, _, _, _) = CreateGrain(physicalShardCount: 2);
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => grain.ReshardAsync(2));
+        // Idempotent re-pin: asking for the count the tree is already at
+        // must succeed without mutating state or starting a coordinator.
+        // Otherwise a host whose start-up unconditionally pins the tree's
+        // configured shard count crashes on every restart.
+        var (grain, state, _, _) = CreateGrain(physicalShardCount: 2);
+        var writesBefore = state.WriteCount;
+
+        await grain.ReshardAsync(2);
+
+        Assert.That(state.WriteCount, Is.EqualTo(writesBefore),
+            "Equal-count reshard must not mutate persisted state.");
+        Assert.That(state.State.InProgress, Is.False);
+        Assert.That(state.State.Phase, Is.EqualTo(ReshardPhase.None));
     }
 
     [Test]
