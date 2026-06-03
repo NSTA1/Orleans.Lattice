@@ -179,24 +179,29 @@ var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", 8);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", 8);
-// Connection-REUSE transport (fix/wedge). The 25k wedge root cause is a
-// single Azure Tables request that hangs forever (StallWatchdog showed all
-// snapshots parked at TableClient.AddEntityAsync @ await#0) and pins a
-// WalMaxPendingBatches slot, cascading into a pipeline-wide deadlock at
-// inFlight=WalMaxPendingBatches. On ACI the SNAT gateway silently resets
-// idle outbound sockets; an *infinite* PooledConnectionLifetime never
-// recycles the dead socket, so a request dispatched onto it never returns.
-// When enabled, this transport REUSES connections (to avoid the SNAT
-// establishment stall) but with a FINITE pooled-connection lifetime and
-// idle timeout so ACI-killed sockets are torn down rather than reused into
-// a hang. Paired with a bounded RetryNetworkTimeout (below) so any request
-// that does hang fails per-attempt and the retry policy recovers the slot
-// instead of deadlocking the pipeline.
+// Connection-REUSE transport (ACI socket hygiene). NOTE: the original
+// SNAT-socket-hang narrative for the 25k wedge was falsified by three
+// post-mortems (wal-wedge-root-cause-2025-11-25-revised,
+// wal-wedge-watchdog-tcpdump-2025-11-25, and wal-wedge-watchdog-confirmation),
+// which attributed the wedge to an unbounded cross-grain await held under
+// _ensureRootGate in ShardRootGrain.EnsureRootSlowAsync rather than to a
+// hung Azure Tables socket. That await was bounded by PR #568 via
+// LatticeOptions.ActivationReadyTimeout (15 s default), which closed the
+// activation back-pressure deadlock tracked as the 25k wedge.
+// This knob and the per-attempt timeout below are kept as correct ACI
+// socket hygiene (reuse pooled connections with a FINITE pooled-connection
+// lifetime + idle timeout so ACI-killed sockets are torn down rather than
+// reused into a hang, paired with a bounded per-attempt timeout) - they
+// are not the wedge fix. A residual wedge with the same inFlight=8 pinned
+// signature still surfaces at the 4k-vehicle saturation rung after PR #568
+// (see benchmark/azure-throughput/vertical-scale.md); attribution of that
+// residual is independent of this knob.
 var walConnectionReuse = ReadBool("BENCH_WAL_CONNECTION_REUSE", false);
 // Per-attempt network timeout for the WAL Azure Tables client. Default 0
-// leaves the SDK default (100s, effectively unbounded for the wedge). A
-// finite value bounds every individual HTTP attempt so a hung request
-// fails and releases its pending-batch slot. The wedge fix sets this > 0.
+// leaves the SDK default (100s, effectively unbounded). A finite value
+// bounds every individual HTTP attempt so a hung request fails and
+// releases its pending-batch slot - kept as ACI socket hygiene, not as
+// the wedge fix (see the connection-reuse note above).
 var walNetworkTimeoutSec = ReadIntAllowZero("BENCH_WAL_NETWORK_TIMEOUT_SEC", 0);
 // Finite per-commit deadline (seconds) for the per-shard PhaseTwoWorker's
 // manifest commit, mapped to AzureTableWalStorageOptions.PhaseTwoCommitTimeout.
