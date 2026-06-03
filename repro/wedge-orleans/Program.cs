@@ -23,10 +23,19 @@
 //                              grain shape (closest match to the real wedge
 //                              caller pattern). Tests whether having many
 //                              simultaneously-parked turns is sufficient.
+//                  singleton - adds the DI-singleton helper hop: wrapper
+//                              grain calls a singleton dispatcher (modelled
+//                              on Lattice's WalCommitLogWriter shape: shared
+//                              instance across all grains, .ConfigureAwait(false)
+//                              on its internal await, WaitAsync(TimeSpan)
+//                              deadline applied INSIDE the singleton against
+//                              the blocker grain's parked Task). Tests
+//                              whether the singleton-helper hop is what
+//                              prevents the deadline from firing.
 //   --wall-clock-cap   Per-arm wall-clock cap in seconds. Default 30.
-//   --load-count       Concurrent dispatches in the `load` scenario.
-//                      Default 32 (rough match to the real cohort's parked-
-//                      frame counts; cheap to scale up).
+//   --load-count       Concurrent dispatches in the `load` / `singleton`
+//                      scenarios. Default 32 (rough match to the real
+//                      cohort's parked-frame counts; cheap to scale up).
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -63,9 +72,17 @@ public interface IWrapperGrain : IGrainWithIntegerKey
 
     // Runs the linked-CTS Option-B pattern from INSIDE a grain context.
     Task<long> TryDispatchWithLinkedCtsAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap);
+
+    // Routes through a DI-singleton helper that itself awaits the blocker
+    // grain's parked Task with a WaitAsync(TimeSpan) bound. Mirrors the
+    // Lattice grain -> WalCommitLogWriter -> WalShardGrain shape, including
+    // the singleton's internal .ConfigureAwait(false). Tests whether the
+    // singleton-hop is the missing condition that suppresses cancellation
+    // on the real wedge path.
+    Task<long> TryDispatchViaSingletonAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap);
 }
 
-public sealed class WrapperGrain(IGrainFactory factory) : Grain, IWrapperGrain
+public sealed class WrapperGrain(IGrainFactory factory, IBlockingDispatcher dispatcher) : Grain, IWrapperGrain
 {
     public async Task<long> TryDispatchWithWaitAsyncTimeoutAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap)
     {
@@ -114,6 +131,64 @@ public sealed class WrapperGrain(IGrainFactory factory) : Grain, IWrapperGrain
             return sw.ElapsedMilliseconds; // GOOD - linked CTS fired
         }
     }
+
+    public async Task<long> TryDispatchViaSingletonAsync(long blockerKey, TimeSpan timeout, TimeSpan wallClockCap)
+    {
+        var sw = Stopwatch.StartNew();
+        var capTask = Task.Delay(wallClockCap);
+        // ConfigureAwait(true): default, captures the wrapper grain's
+        // context as the resume target for the singleton's returned Task.
+        // Matches BPlusLeafGrain.cs:1027 which awaits walWriter.AppendManyAsync(...)
+        // with default ConfigureAwait.
+        var singletonCall = dispatcher.DispatchAsync(blockerKey, timeout);
+        var winner = await Task.WhenAny(singletonCall, capTask).ConfigureAwait(true);
+        if (winner == capTask)
+        {
+            return -1L;
+        }
+        try
+        {
+            await winner.ConfigureAwait(true); // surface exception
+            return -2L;
+        }
+        catch (TimeoutException)
+        {
+            return sw.ElapsedMilliseconds; // GOOD - singleton's WaitAsync fired and propagated through the wrapper grain context
+        }
+    }
+}
+
+/// <summary>
+/// DI-singleton helper. Models the Lattice grain -&gt;
+/// <c>WalCommitLogWriter</c> -&gt; <c>WalShardGrain</c> shape: shared
+/// across all grains, takes <see cref="IGrainFactory"/> by DI, uses
+/// <c>.ConfigureAwait(false)</c> on its internal await, and applies a
+/// <c>WaitAsync(TimeSpan)</c> bound on the inner grain RPC. If the
+/// singleton's bound fails to propagate a <see cref="TimeoutException"/>
+/// to the caller, this scenario reproduces the real-wedge failure mode.
+/// </summary>
+public interface IBlockingDispatcher
+{
+    Task DispatchAsync(long blockerKey, TimeSpan timeout);
+}
+
+public sealed class BlockingDispatcher(IGrainFactory factory) : IBlockingDispatcher
+{
+    public async Task DispatchAsync(long blockerKey, TimeSpan timeout)
+    {
+        var blocker = factory.GetGrain<IBlockingGrain>(blockerKey);
+        // .ConfigureAwait(false) mirrors WalCommitLogWriter's pattern -
+        // the singleton's catch / rethrow runs on the threadpool free of
+        // any caller-captured grain context.
+        try
+        {
+            await blocker.BlockForeverAsync(CancellationToken.None).WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new TimeoutException($"singleton dispatch to blocker {blockerKey} exceeded {timeout}");
+        }
+    }
 }
 
 internal sealed record ReproConfig(
@@ -141,6 +216,7 @@ internal static class Program
             {
                 silo.UseLocalhostClustering();
                 silo.AddMemoryGrainStorageAsDefault();
+                silo.Services.AddSingleton<IBlockingDispatcher, BlockingDispatcher>();
             })
             .Build();
 
@@ -155,8 +231,9 @@ internal static class Program
         {
             pass &= scenario switch
             {
-                "baseline" => await RunBaselineAsync(factory, config),
-                "load"     => await RunLoadAsync(factory, config),
+                "baseline"  => await RunBaselineAsync(factory, config),
+                "load"      => await RunLoadAsync(factory, config),
+                "singleton" => await RunSingletonAsync(factory, config),
                 _ => HandleUnknown(scenario),
             };
             Console.WriteLine();
@@ -312,9 +389,73 @@ internal static class Program
         return sentinel == 0;
     }
 
+    /// <summary>
+    /// Singleton-hop scenario. Fans <see cref="ReproConfig.LoadCount"/>
+    /// concurrent wrapper-grain dispatches that each route through a shared
+    /// DI singleton helper (<see cref="IBlockingDispatcher"/>) before
+    /// reaching the blocker grain. Mirrors the real Lattice path of grain
+    /// -&gt; <c>WalCommitLogWriter</c> -&gt; <c>WalShardGrain</c>: shared
+    /// singleton with <c>.ConfigureAwait(false)</c> internally and a
+    /// <c>WaitAsync(TimeSpan)</c> deadline applied inside the singleton.
+    /// Passes only if EVERY dispatch's singleton-applied deadline
+    /// propagates a <see cref="TimeoutException"/> back to the wrapper
+    /// grain (which awaits with default ConfigureAwait, capturing its own
+    /// grain context as the resume target - the exact shape that fails in
+    /// the real WAL wedge).
+    /// </summary>
+    private static async Task<bool> RunSingletonAsync(IGrainFactory factory, ReproConfig config)
+    {
+        Console.WriteLine($"===== SCENARIO singleton (count={config.LoadCount}) =====");
+        Console.WriteLine($"[repro] dispatching {config.LoadCount} concurrent wrapper-grain calls through a shared singleton helper against {config.LoadCount} distinct blocker keys ...");
+
+        var startedAt = Stopwatch.StartNew();
+        var tasks = new Task<long>[config.LoadCount];
+        for (var i = 0; i < config.LoadCount; i++)
+        {
+            // Wrapper-grain keys 2000+i, blocker keys 2000+i (offset away
+            // from baseline=0/1 and load=1000+i so a combined
+            // `--scenario baseline,load,singleton` run does not reuse
+            // parked activations across scenarios).
+            var wrapper = factory.GetGrain<IWrapperGrain>(2000 + i);
+            var blockerKey = (long)(2000 + i);
+            tasks[i] = wrapper.TryDispatchViaSingletonAsync(blockerKey, config.TimeoutBudget, config.WallClockCap);
+        }
+        var results = await Task.WhenAll(tasks);
+        startedAt.Stop();
+
+        var fired = 0;
+        var didNotFire = 0;
+        var sentinel = 0;
+        long minMs = long.MaxValue;
+        long maxMs = long.MinValue;
+        long sumMs = 0;
+        foreach (var ms in results)
+        {
+            if (ms == -1L) { didNotFire++; }
+            else if (ms < 0) { sentinel++; }
+            else
+            {
+                fired++;
+                if (ms < minMs) { minMs = ms; }
+                if (ms > maxMs) { maxMs = ms; }
+                sumMs += ms;
+            }
+        }
+        var meanMs = fired == 0 ? 0 : sumMs / fired;
+        Console.WriteLine($"[repro] singleton result: fired={fired}/{config.LoadCount} did-not-fire={didNotFire} sentinel={sentinel} fire-time min/mean/max={minMs}/{meanMs}/{maxMs}ms (wall {startedAt.ElapsedMilliseconds}ms)");
+
+        if (didNotFire > 0)
+        {
+            Console.WriteLine($"[repro] SCENARIO singleton - {didNotFire} dispatch(es) DID NOT FIRE within wall-clock cap ({config.WallClockCap.TotalSeconds:0.##}s). REPRO of the wedge.");
+            return false;
+        }
+        Console.WriteLine($"[repro] SCENARIO singleton - all {fired} dispatches fired their deadlines. OK.");
+        return sentinel == 0;
+    }
+
     private static bool HandleUnknown(string scenario)
     {
-        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load.");
+        Console.Error.WriteLine($"[repro] unknown scenario: '{scenario}'. Valid: baseline, load, singleton.");
         return false;
     }
 
