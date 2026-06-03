@@ -345,6 +345,11 @@ internal sealed class StallWatchdog
             var inFlightObj = inFlightField.ReadObject(obj.Address, interior: false);
             if (inFlightObj.IsNull || inFlightObj.Type is null)
             {
+                // Emit a per-grain line even when _inFlight itself is null so
+                // the cohort can distinguish "grain holds no LinkedList" from
+                // "LinkedList exists but is empty" from "LinkedList exists and
+                // is populated but slot detection missed".
+                line($"[wal-slot-grain] tree={treeId} shard={shardIndex} inFlight=null");
                 continue;
             }
 
@@ -353,30 +358,25 @@ internal sealed class StallWatchdog
             // observed Count so a torn read can't infinite-loop).
             var headField = inFlightObj.Type.Fields.FirstOrDefault(f => f.Name == "head");
             var countField = inFlightObj.Type.Fields.FirstOrDefault(f => f.Name == "count");
-            if (headField is null)
-            {
-                continue;
-            }
-            var headObj = headField.ReadObject(inFlightObj.Address, interior: false);
-            if (headObj.IsNull)
-            {
-                continue;
-            }
-            var observedCount = countField is not null ? countField.Read<int>(inFlightObj.Address, interior: false) : 0;
-            var safetyCap = Math.Max(observedCount, 1) + 8; // small headroom against torn read
+            var observedCount = countField is not null ? countField.Read<int>(inFlightObj.Address, interior: false) : -1;
+            var headObj = headField is not null ? headField.ReadObject(inFlightObj.Address, interior: false) : default;
+            var headIsNull = headField is null || headObj.IsNull;
 
-            // Per-grain diagnostic line: emits even when we walk 0 slots so a
-            // future cohort can distinguish "head was null" from "head was
-            // populated but slot detection missed". The 2026-06-03 cohort
-            // showed "0 in-flight slot(s) across 9 WalShardGrain activations"
-            // even though 335 callers were parked at WalShardGrain.AppendBatchAsync
-            // await#0 (line 585 await headTask reads _inFlight.First!.Value.Task,
-            // proving _inFlight was populated) - so the prior literal type-name
-            // check was the bug. The walker below now detects InFlightFlush by
-            // its (Stage, StageStartedTicks) field signature rather than by a
-            // hardcoded fully-qualified nested-type-name string, which has
-            // varied across ClrMD versions and .NET nested-generic name formats.
-            line($"[wal-slot-grain] tree={treeId} shard={shardIndex} inFlight.count={observedCount} head.IsNull={headObj.IsNull}");
+            // Unconditional per-grain summary: emits BEFORE any early-return
+            // on head==null so the 2026-06-03 mystery ("0 slots across 9
+            // activations" with no per-grain rows) cannot recur. Distinguishes
+            // (a) head==null + count==0 (legitimately empty: no in-flight
+            // flush at snapshot time - callers parked upstream of FlushAsync)
+            // from (b) head==null + count>0 (torn read / structural skew) from
+            // (c) head!=null + slot-detection-misses-by-field-shape (in which
+            // case the [wal-slot-debug] line below names the actual type).
+            line($"[wal-slot-grain] tree={treeId} shard={shardIndex} inFlight.count={observedCount} head.IsNull={headIsNull}");
+
+            if (headIsNull)
+            {
+                continue;
+            }
+            var safetyCap = Math.Max(observedCount, 1) + 8; // small headroom against torn read
 
             var node = headObj;
             for (var i = 0; i < safetyCap; i++)
