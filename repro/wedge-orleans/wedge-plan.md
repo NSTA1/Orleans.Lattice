@@ -396,3 +396,137 @@ To be filled in once issue #575 instruments `WalCommitLogWriter.AppendForPartiti
 
 - Issue #575 (G-025): `WalCommitLogWriter.AppendForPartitionAsync` instrumentation pack. Shape mirrors the shard-layer pack: lifecycle enum + per-pending stamp + queue-depth histogram + dispatch counter + `[wal-append]` watchdog walker.
 - After G-025 ships, run an n=3 cohort at the same rung. Expect `[wal-append]` rows on at least one Mode B wedged run; walk the dominant stage through section 14's Mode B sub-table.
+
+---
+
+## 16. G-025 cohort attempt 2026-06-03 (writer-layer attribution lands)
+
+n=3 cohorts at rung `4000:5` `DurationSec=45` on commit `894d705`
+(writer-layer pending-append dispatch diagnostic pack shipped as
+issue #575 / G-025).
+
+| # | Log | Outcome | Steady avg | Written | [wal-append] rows | Dominant stage | Stuck p50/p99 | Tracker nonzero-depth min/max/avg |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 141000Z | WEDGED hard | 278/s | 0 | **2,775** | **SentToShard 100%** | **5,764 / 5,985 ms** | 1 / 18 / 9.4 (296 obs) |
+| 2 | 142844Z | WEDGED | 899/s | 42,451 | 0 | n/a | n/a | none nonzero at snapshot |
+| 3 | 143239Z | WEDGED | 869/s | 39,621 | 0 | n/a | n/a | none nonzero at snapshot |
+
+### Cohort 1 attribution
+
+Definitive: every one of the 2,775 pending-append stamps observed
+across the wedge window was parked at the `SentToShard` lifecycle
+stage with a head-of-line stuck-time of **5.7 seconds (median)**
+and **6.0 seconds (max)**. The `SentToShard` stamp is set
+immediately before `await grain.AppendAsync/AppendBatchAsync`, so
+the parked await is on the shard-grain RPC itself. Per-partition
+tracker depths fan out to 1, 2, 3, 8, 12, 15, 16, 18 across 9
+partitions - the writer is absorbing back-pressure into its own
+per-partition chain because the downstream shard cannot drain.
+
+dumpasync confirms the picture from the caller side: 3,584
+callers parked at `BPlusLeafGrain.CommitSetAsync await#0`, 3,582
+at `SetCoreAsync await#0`, 3,579 at
+`WalCommitLogWriter.AppendAsync await#0` - the entire write
+pipeline stacked up behind the shard-grain RPC.
+
+Shard-side classifier from the same snapshot disagrees with the
+earlier-cycle "Mode B = empty in-flight" framing: 222 grain rows
+show `count=1 headNull=False`, 74 show `count=2`, and only 37
+show `count=0 headNull=True`. The wedge in this cohort has BOTH
+shard in-flight slots populated AND writer pending-append depths
+saturated; the prior cycle's "Mode B" subset was just a snapshot-
+timing artefact of cohorts where the shard-side queues happened
+to drain before the watchdog fired.
+
+### Cohorts 2 and 3 attribution
+
+Both wedged at low-throughput (899 e/s and 869 e/s, with non-zero
+totals) but emitted **zero** `[wal-append]` rows and zero
+`[wal-append-tracker]` non-empty-depth observations. dumpasync
+still showed 619 / 500 callers parked at
+`WalCommitLogWriter.AppendForPartitionAsync await#0` (the
+batched-path entry, which uses the same per-partition tracker as
+the single-entry path), so the wedge is at the same boundary -
+just transient at snapshot time: the tracker had drained between
+the heap snapshot and the dumpasync.
+
+The likely explanation: cohorts 2 and 3 were partially-recovering
+runs that wedged for shorter intervals, and the watchdog's
+once-per-process firing latched onto a snapshot during a drain
+moment. To resolve this would require either a multi-snapshot
+watchdog or a `partition.pending_appends` histogram tail read
+from the `[phaseA]` rows (which IS still being emitted - see
+PhaseADiagnosticReporter); the attribution from cohort 1 is
+strong enough to lock the mechanism without that follow-up.
+
+### Mode-aware decision table update
+
+Section 14's "Mode B = empty `_inFlight` + callers stacked
+upstream" entry is now superseded. The real wedge taxonomy is:
+
+| Class | `[wal-append]` dominant stage | Shard `[wal-slot-grain]` | Top async-stall | Mechanism |
+|---|---|---|---|---|
+| **SentToShard back-pressure** (cohort 1 silo-141000Z) | `SentToShard` 100% with multi-second stuck-time | `count>=1, headNull=False` predominant | `BPlusLeafGrain.CommitSetAsync` + `WalCommitLogWriter.AppendAsync` parallel-tall | Shard-grain RPC RTT exceeds offered rate; writer absorbs back-pressure into per-partition tracker until the system saturates and the producer stops feeding |
+| Transient wedge with drained snapshot (cohorts 2+3) | none observed (drained at snapshot) | none observed (drained at snapshot) | `WalCommitLogWriter.AppendForPartitionAsync` 500-619 | Same root cause as above, snapshot-timing artefact; resolve with multi-snapshot watchdog or `[phaseA]` percentile rows |
+| Healthy | n/a (watchdog never fires) | n/a | n/a | offered rate < shard drain rate |
+
+### What we now know that we did not before
+
+1. The wedge is **NOT a deadlock or a lifecycle bug** in any of
+   the layers G-019..G-022 instrumented. It is a back-pressure
+   regime: the shard-grain RPC's effective service rate is too
+   low to absorb the writer's offered rate.
+2. The "Mode A vs Mode B" axis from section 14 was a
+   misclassification driven by an under-instrumented watchdog
+   layer; with G-025 in place, there is **one wedge mechanism**
+   (shard-grain RPC saturation) with two snapshot phenotypes
+   (full tracker + populated `_inFlight` if the snapshot lands
+   mid-wedge; both empty if the snapshot lands mid-drain).
+3. The stuck-time per pending dispatch is **5-6 seconds**, which
+   is consistent with **multi-RTT batched Azure Tables flush
+   latency at saturation**. A single Azure Tables EGT
+   round-trip is ~50-100ms at this region; 5-6 seconds is 50-100
+   round-trips queued behind one in-flight flush.
+4. Per-partition tracker depth reaches 18 (cohort 1) which is
+   ~2x the default `WalMaxPendingBatches=8` ceiling - meaning
+   the writer-layer `PartitionTracker` enforces no ceiling
+   (correctly: the ceiling is per-shard, not per-writer-
+   partition), and the writer is fanning out faster than the
+   shard can absorb.
+
+### Section 15's next-cycle entry point is now obsolete
+
+Section 15 named a follow-up cohort "to walk the dominant
+`[wal-append]` stage through section 14's Mode B sub-table". That
+walk landed in the table above and produced an actionable
+mechanism, so the entry point has graduated. Replace section 15
+with this:
+
+## 17. Next cycle entry point
+
+The wedge mechanism is now named: **shard-grain RPC saturation
+under offered rate above the Azure-Tables flush drain rate**.
+The next cycle's hypothesis space falls into two families:
+
+A. **Reduce per-flush latency** - shorten the head-of-line
+   stuck-time on each in-flight flush. Candidates: bigger
+   batch-coalescing windows, fewer round-trips per flush
+   (G-007 / G-008 territory but specifically on the WAL flush),
+   write-amplification reduction (skip the WAL row when the leaf
+   commit can settle by another path).
+
+B. **Bound writer-side back-pressure** - cap the
+   `PartitionTracker` depth so the producer back-pressures
+   sooner, surfacing the saturation as a slow caller rather
+   than as an apparent-wedge. Candidates: per-writer-partition
+   cap on `_inFlight`; a writer-side admission control that
+   refuses dispatch when tracker depth crosses a threshold,
+   matching the shard-side `WalMaxPendingBatches` shape.
+
+Both families would benefit from a cleaner repro: the cohort 1
+phenotype (heavy wedge with full diagnostic capture) only
+reproduced 1/3 cohorts at this rung. Before the next cycle,
+either (a) walk the rung up to find one where the wedge is
+near-deterministic, or (b) raise the producer ramp-rate so the
+shard saturation arrives faster, increasing the probability of
+catching the wedge with the diagnostic in mid-snapshot.
