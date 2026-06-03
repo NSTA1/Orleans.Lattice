@@ -287,7 +287,18 @@ var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
     0 => "off",
     var s => $"{s}s",
 };
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
+// Deployment-verification tokens: the residual phase-1/activation WAL
+// wedge diagnostic pack added two new bounded-deadline options on
+// LatticeOptions whose default values are emitted verbatim in the banner.
+// Their PRESENCE in the banner is the cheapest proof that the deployed
+// silo binary contains the diagnostic-pack code path - the symbols
+// referenced here do not exist on earlier binaries, so a stale image
+// would fail to compile / start. The values themselves are the library
+// defaults; the bench harness does not currently override them, but if
+// it later does the override path must update these tokens too.
+var walAppendDispatchTimeoutBanner = $"default({LatticeOptions.DefaultWalAppendDispatchTimeout.TotalSeconds:0.##}s)";
+var walFlushPreflightTimeoutBanner = $"default({LatticeOptions.DefaultWalFlushPreflightTimeout.TotalSeconds:0.##}s)";
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 
 var builder = Host.CreateApplicationBuilder(args);
