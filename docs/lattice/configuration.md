@@ -55,22 +55,27 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 
 | Option | Type | Default | Safe to change after data exists? |
 |---|---|---|---|
+| [`ActivationReadyTimeout`](#activationreadytimeout) | `TimeSpan` | 15 seconds | Yes (on next seed) |
 | [`AtomicWriteRetention`](#atomicwriteretention) | `TimeSpan` | 48 hours | Yes |
 | [`AutoSplitEnabled`](#autosplitenabled) | `bool` | `true` | Yes |
 | [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
 | [`CacheTtl`](#cachettl) | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
 | [`CompactionLeafBatchSize`](#compactionleafbatchsize) | `int` | 64 | Yes |
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
+| [`CompactionTriggerCooldown`](tombstone-compaction.md) | `TimeSpan` | 5 minutes | Yes |
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
 | [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 5 (measured sweet spot) | Yes |
 | [`DigestPublishTimeout`](#digestpublishtimeout) | `TimeSpan` | 15 seconds | Yes (on next publish) |
+| [`DirtyLeafFlushIntervalMs`](tombstone-compaction.md#dirtyleafflushintervalms) | `int` | 50 (ms) | Yes |
 | [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
 | [`HotShardOpsPerSecondThreshold`](#hotshardopspersecondthreshold) | `int` | 200 | Yes |
 | [`HotShardSampleInterval`](#hotshardsampleinterval) | `TimeSpan` | 30 seconds | Yes |
 | [`HotShardSplitCooldown`](#hotshardsplitcooldown) | `TimeSpan` | 2 minutes | Yes |
 | [`KeysPageSize`](#keyspagesize) | `int` | 512 | Yes |
 | [`LeafProjectionRetention`](#leafprojectionretention) | `TimeSpan` | 7 days | Yes |
+| [`LeafSnapshotMargin`](projection-rebuild.md) | `double` | 0.30 | Yes |
+| [`LeafSnapshotReClassifyEveryNCheckpoints`](projection-rebuild.md) | `int` | 64 | Yes |
 | [`MaintainProjectionDigest`](#maintainprojectiondigest) | `bool` | `true` | Yes |
 | [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 5000 | Yes |
 | [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 5 seconds | Yes |
@@ -78,13 +83,19 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
+| [`MaxLeafEntriesBeforeForcedCompaction`](tombstone-compaction.md) | `int` | 0 (disabled) | Yes |
 | [`MaxLeafReplayEntries`](#maxleafreplayentries) | `int` | 10 000 | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
 | [`MaxScanRetries`](#maxscanretries) | `int` | 3 | Yes |
+| [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
+| [`MinTombstoneRatioForCompaction`](tombstone-compaction.md) | `double` | 0.0 (disabled) | Yes |
 | [`PrefetchEntriesScan`](#prefetchentriesscan) | `bool` | `false` | Yes |
 | [`PrefetchKeysScan`](#prefetchkeysscan) | `bool` | `false` | Yes |
 | [`ProjectionRebuildPolicy`](#projectionrebuildpolicy) | enum | `SnapshotThenWal` | Yes |
 | [`PublishEvents`](#publishevents) | `bool` | `false` | Yes |
+| [`RetryPolicy`](retry-policy.md) | `ILatticeRetryPolicy?` | `null` (no retry) | Yes |
+| [`ShardForwardTimeout`](#shardforwardtimeout) | `TimeSpan` | 15 seconds | Yes (on next forward) |
+| [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |
 | [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
 | [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |
 | [`StorageUsageCacheTtl`](#storageusagecachettl) | `TimeSpan` | 10 seconds | Yes |
@@ -102,6 +113,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
+| [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
 ### Structural sizing (registry-pinned)
 
