@@ -815,3 +815,57 @@ section 17) remain valid next-cycle hypotheses but should run
 AFTER G-027 is decided, so the at-saturation cohort is in a
 state where a per-flush-latency change can be cleanly
 attributed.
+
+---
+
+## 21. G-027 hypothesis invalidated 2026-06-03 (the 25k 'wedge' was a measurement artefact)
+
+Section 19's hypothesis (rejected reshard forwards leave a WAL-shard interlock held by the split coordinator's retry path) was filed against a single 25k cohort whose silo log appeared to show 53 reshard attempts, 35 stall-watchdog firings, and 1,715 SentToShard parked stamps at a discrete 9-second stuck time. Deep re-analysis on main (post-G-026 merge) shows every one of those counts was bench-log-scraper duplication.
+
+### Deduplicated reality of cohort silo-20260603-153020Z
+
+| Inflated claim | Deduplicated reality |
+|---|---|
+| 53 reshard attempts | **5 reshard attempts**, all during silo startup, completing by t=1.5s with backoffs 100/200/400/800 ms (attempts 1-4 rejected; attempt 5 succeeded). Bench-harness startup-only code in azure-throughput/Silo/Program.cs lines ~700-780, NOT runtime resharding under load. |
+| 35 watchdog firings | **1 watchdog firing**, at writtenTotal=16,469 - i.e. immediately after the t=12.1s flush event. |
+| 1,715 SentToShard parked stamps at discrete 9s | The dedup brought this down to ~28 distinct stamp observations; the 9s 'stuck-time' equals the producer-side 'innerAvgMs=9233ms' (TCP send-call duration under back-pressure) - **the end-to-end RTT at this offered load, not a Lattice deadline firing**. |
+| inFlight=8 pinned for the entire run | wal.append.in_flight p50 actually drops 7 -> 0 between t=10s and t=40s as the chain drains; climbs back to 7 at t=60s when a final producer burst arrives. The '[silo] t=Ns Entries written per second=0' lines that prompted the wedge claim are a sampling artefact: the silo reporter only counts COMPLETED SetManyAsync batches per 1s window, and with FlushConcurrency=8 batches each taking 4-7s at the Azure-Tables saturation latency, most 1s windows contain zero completions even while thousands of leaf commits per phaseA window are landing. |
+
+### What actually happened at 25k
+
+- Producer fires 125k entries in 1s (5x the silo's sustained Azure Tables drain rate at this load).
+- Silo's TCP read buffer fills; producer back-pressures at 9.2s per send call (producer log: `t=10.5s sent=150,000 ... innerAvgMs=9233ms`).
+- Silo processes leaf commits at ~250 entries/s sustained (leaf.commit.duration phase=apply count=3,712 per 10s phaseA window).
+- Producer essentially stops sending between t=20s and t=60s (tcp.read.line_bytes count drops to 0 over t=30-50s).
+- G-026's writer cap pins at 8 with 0 over-cap observations and 0 admission_timeouts (working as designed).
+
+### Decision: closed G-027 (#578) as 'not planned'
+
+There is no interlock to fix. The 25k throughput floor (~250 e/s sustained) is the Azure Tables per-flush rate at this load and is a Family A (per-flush latency reduction) hypothesis for a future cycle, not a reliability bug.
+
+Closing comment on the issue: https://github.com/NSTA1/Orleans.Lattice/issues/578#issuecomment-4614403962
+
+### Compounding analytical errors
+
+This cycle is the third in the campaign where a 'discrete deadline firing once' wedge interpretation was reached and later refuted. The lesson is twofold:
+
+1. **Always dedupe bench-scraper output before drawing event-count conclusions.** Multiple `[silo]` / `[stall-watchdog]` log writers (the bench harness scrapes stdin per channel) duplicate each line; the raw count can be 10x the unique count. Pipe through `Sort-Object -Unique` on the line before tallying.
+2. **Cross-reference [phaseA] counter rates against [silo] reporter rates before declaring 'rate=0'.** The silo reporter is a 1s-resolution sampling of completed batches; the [phaseA] counters are 10s-window aggregations of underlying activity. Disagreement between them is the signal that the silo reporter is under-sampling, NOT that the system has wedged.
+
+### Implications for sections 17-20
+
+- Section 17's 'reshard storm correlates with wedge onset' is **falsified** for cohort silo-20260603-153020Z; the reshard activity was 5 startup retries and was complete before any load arrived.
+- Section 18's verdict ('G-026 lands - heavy wedge eliminated at 4k rung') **stands** - the 4k cohort verdict is independent and the 4k phenotype was a real wedge with G-026 a real fix.
+- Section 19's 'corrected analysis of the 25k cohort' is **doubly corrected** by this section: the initial silo-log-only reading was wrong (called it healthy graceful-degradation when it was bursty), the second reading was wrong (called it a deadline interlock wedge), and the third reading (this section, after the [phaseA] cross-reference) shows the system is in honest TCP back-pressure at the offered-rate-vs-drain-rate saturation point with no wedge at all.
+- Section 20's 'G-027 as the next cycle entry point' is **superseded**. The next genuine cycle is Family A (per-flush latency reduction at the 25k rung), framed as a perf optimisation against a known ~250 e/s sustained saturation rate, not as wedge investigation.
+
+## 22. Campaign-end status
+
+The wedge investigation campaign that opened with G-019 (#546) and closed with G-026 (#577) is **resolved** at the rungs it targeted:
+
+- **4k rung**: heavy-wedge phenotype eliminated 3/3 cohorts on commit `006ba11` (G-026). Median throughput 869 -> 5,775 e/s. No regression risk vs main.
+- **25k rung**: no wedge present after dedup + [phaseA] cross-reference. System operates in honest TCP back-pressure at the Azure-Tables saturation drain rate (~250 e/s sustained). G-027 hypothesis invalidated; issue #578 closed not-planned.
+
+Reliability shipped via PR #579 (merged to main as `1dff59c`). The diagnostic packs G-023 / G-024 / G-025 plus the StallWatchdog + `[wal-append]` / `[wal-slot]` lifecycle stamps remain in the codebase for any future wedge investigation, and are now backed by stable field-signature contracts via the WedgeDiagnostics test suites in test/lattice/BPlusTree/Grains/.
+
+Future work is performance (Family A) or operator-experience (the admission-deadline-split idea from section 17 follow-up), not reliability.

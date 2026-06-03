@@ -32,13 +32,16 @@ public class EmDashHygieneTests
 
     // File extensions that hold binary payloads where a U+2014 byte sequence
     // is meaningless and would only produce noise. Everything else is treated
-    // as text and scanned.
+    // as text and scanned. `.log` files are local-only run artefacts
+    // (gitignored; see MojibakeHygieneTests for rationale) and are never
+    // tracked, so a leak there cannot reach a PR.
     private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".pdf",
         ".dll", ".exe", ".pdb", ".so", ".dylib",
         ".zip", ".tar", ".gz", ".7z", ".nupkg", ".snk",
         ".dmp", ".bin",
+        ".log",
     };
 
     /// <summary>

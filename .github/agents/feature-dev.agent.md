@@ -123,7 +123,13 @@ The agent **must invoke each command below verbatim** and **paste the tail of it
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-6. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureTableEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
+6. **Mojibake hygiene.** Byte-level mojibake sequences - UTF-8 bytes decoded as Windows-1252 / CP437 / latin1 and re-encoded as UTF-8 - must not appear in any tracked text file. They sneak in when PR-body text or doc prose is pasted from a terminal or word processor whose code page disagreed with the underlying UTF-8 bytes (this campaign caught arrow and check-mark leaks in features.md and on a PR-success log line). `MojibakeHygieneTests.No_mojibake_sequences_in_tracked_files` enforces it via a curated trigram set covering smart quotes, smart apostrophes, ellipses, en / em dashes, arrows, and check-marks. `MojibakeHygieneTests.Every_needle_is_actually_detectable_in_an_in_memory_string` is the smoke-detector-battery-test for the gate itself:
+
+   ```powershell
+   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MojibakeHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
+   ```
+
+7. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureTableEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
