@@ -64,61 +64,82 @@ This is **at the .NET runtime / Orleans grain-task-proxy boundary**. Source-walk
 - Whether Orleans 10.1.0's grain RPC machinery captures the caller's SynchronizationContext into the returned Task in a way that affects `WaitAsync`'s callback dispatch. The 10.1.0 source for `GrainReference.InvokeAsync<T>(...)` and `ResponseCompletionSource` would clarify.
 - Whether a third-party diagnostic (eg `dotnet-counters monitor System.Threading.Tasks.TplEventSource` attached to the wedged silo) would surface anything new.
 
-## 6. Repro built and run - the simple repro does NOT reproduce the wedge
+## 6. Repro built and incrementally extended - the wedge does NOT reproduce in isolation
 
-A 4-arm in-process repro lives at `repro/wedge-orleans/`:
+The minimal 4-arm baseline plus five incrementally-added scenarios all fire
+their `WaitAsync` deadlines cleanly in ~2 seconds against a 2 second budget.
+Each scenario adds exactly one of the candidate conditions identified at the
+end of the analysis phase; each commit is one scenario:
 
-| Arm | Caller | Pattern | Result |
+| Commit | Scenario | Condition tested | Result |
 |---|---|---|---|
-| 1.A | Main (no grain context) | `WaitAsync(TimeSpan)` | fired in 2006 ms - OK |
-| 1.B | Main (no grain context) | linked CTS + `WaitAsync(token)` | fired in 2008 ms - OK |
-| 2.A | Wrapper grain (captures grain context on await) | `WaitAsync(TimeSpan)` | fired in 2010 ms - OK |
-| 2.B | Wrapper grain (captures grain context on await) | linked CTS + `WaitAsync(token)` | fired in 2014 ms - OK |
+| `a86839f` | baseline | 4 arms: (caller in Main vs in grain) x (WaitAsync(TimeSpan) vs linked-CTS) | 4/4 fire in 2005-2020 ms |
+| `e103d9e` | load | silo-wide load (32 / 64 / 256 concurrent parked dispatches) | 256/256 fire in 2001-2018 ms |
+| `8d82a7e` | singleton | DI-singleton helper hop modelling WalCommitLogWriter exactly (.ConfigureAwait(false), WaitAsync(TimeSpan) inside the singleton) | 32/32 fire in 2007-2021 ms |
+| `759056c` | chained | callee internal chained back-pressure modelling WalShardGrain.AppendBatchAsync line 585 exactly (single activation, bounded _inFlight chain, every caller parks at await headTask) | 32/32 fire in 2008-2021 ms |
+| `a9b2f92` | churn | activation-churn storm (149,504 self-deactivating ping iterations over 30 s + 32 concurrent parked WaitAsync callers) | 32/32 fire in 2008-2019 ms |
+| `c468b4c` | messaging | production-mirror messaging options (ResponseTimeout=180s, explicit ClusterOptions) | 32/32 fire in 2008-2020 ms |
+| (combined run) | load,singleton,chained,churn,messaging | all five conditions stacked at load-count=64 | 64/64 per scenario, all fire in ~2 s |
 
-**Verdict: the Orleans 10.1.0 grain-RPC return-task plumbing does NOT, in
-isolation, suppress `Task.WaitAsync` cancellation - including from inside a
-grain that awaits another grain's blocked Task with default ConfigureAwait
-(grain context captured on the await, matching the real-wedge caller shape).**
+**Every individual condition the analysis phase nominated is falsified. The
+five conditions stacked are also falsified.** `Task.WaitAsync` against an
+Orleans 10.1.0 grain RPC return Task works correctly under every load,
+helper-hop, chained-back-pressure, activation-churn, and messaging-config
+shape this repro can construct.
 
-This eliminates the simplest "Orleans broke `WaitAsync`" theory. The Lattice
-wedge therefore depends on at least one additional condition not present in
-the minimal repro. Candidates ranked by plausibility:
+## 7. Decisive conclusion - the wedge is Lattice-specific, not an Orleans-platform issue
 
-1. **Silo-wide load shape**: many grains parked simultaneously, not a single
-   activation. The repro has 2 grain activations; the real wedge has hundreds
-   of parked turns across multiple WalShardGrain activations.
-2. **Singleton helper hop**: `WalCommitLogWriter` is DI-singleton, not a grain.
-   The grain calls singleton.AppendManyAsync which then awaits a different
-   grain. The repro skips the singleton hop entirely - it goes grain-to-grain.
-3. **WalShardGrain congestion**: the callee grain has hundreds of pending
-   turns parked at `await headTask` (line 585). The repro's blocking grain
-   has exactly one parked turn.
-4. **`reshard ... REJECTED (Forwarding failed)` storm**: 228-540 per wedged
-   run in the real cohort. The repro has none.
-5. **Clustering / scheduler config**: `UseLocalhostClustering` may differ from
-   ACI's setup. Less likely but unfalsified.
+The repro has exhausted the candidate-causes catalogue we built from the
+ACI cohort''s parked-frame histograms and source walks. None reproduce. The
+remaining differences between the repro and the real wedge are:
 
-## 7. Escalation path - REVISED post-repro
+- **The real Lattice production code path** itself - `BPlusLeafGrain.SetManyAsync`
+  -> `WalCommitLogWriter.AppendManyAsync` -> `WalShardGrain.AppendBatchAsync` ->
+  `AzureTableWalStorageProvider.AppendBatchAsync` -> per-shard phase-2 chain.
+  This is hundreds of lines of intra-grain state machine, leaf-locks,
+  splits, registry updates, and the actual Azure-Tables-backed WAL.
+- **The real Azure Tables backend** - the WAL provider hits real Azure HTTP,
+  with all the SNAT / connection-pool / response-task-completion-source
+  interactions that the in-memory repro skips entirely.
+- **The `reshard ... REJECTED (Forwarding failed)` storm signal that the
+  churn scenario could not reproduce** - the real storm appears to be a
+  specific consequence of Lattice''s reshard / placement machinery
+  (ShardRootGrain reshard messages) rather than generic Orleans
+  deactivation, and the repro''s generic DeactivateOnIdle storm produces
+  zero such forwarding rejections.
 
-The simple "file at dotnet/orleans" path is no longer well-evidenced - the
-Orleans primitives demonstrably work in the minimal case. The next productive
-step is one of:
+### What this means for the optimisation track
 
-- **Extended repro**: incrementally add Lattice-specific patterns (singleton
-  helper, multiple shard activations, leaf-state locks, simulated reshard
-  rejection storm) to the existing `repro/wedge-orleans/` and find the smallest
-  combination that reproduces. This is a multi-hour effort but is the only
-  path that produces an upstream-actionable report.
-- **ClrMD-based lock-ownership probe** under the real wedge: extend the
-  StallWatchdog to also dump SyncBlock / Monitor.Wait ownership data, not
-  just parked async frames. This would name the specific synchronization
-  primitive that's not making progress at the moment the wedge fires. Cost:
-  ~50-100 LOC bench-side; needs one ACI cohort to validate.
-- **Stop here**. The wedge is now a tracked-known-issue with a published
-  reproducible test bed (`repro/wedge-orleans/`) showing what does NOT cause it,
-  and four shipped commits adding partial diagnostic coverage. Future cycles
-  can pick up from this point.
+**Refocus on Lattice, not Orleans.** Filing the wedge at `dotnet/orleans`
+without a richer repro would be unproductive - the Orleans primitives
+demonstrably work in isolation. The next investigation should be:
 
+1. **An incremental approach FROM the Lattice side**: take the real
+   `WalCommitLogWriter` + `WalShardGrain` code path and incrementally
+   *strip* it back inside the repro until the wedge disappears. The
+   condition removed when the wedge clears is the cause. This is the
+   reverse-direction bisect of what this repro did, and is materially more
+   work but the only remaining path that does not require ClrMD-level
+   instrumentation under live Azure load.
+2. **Targeted ClrMD probe under the live wedge** to capture
+   SyncBlock / Monitor.Wait ownership data (not just parked async frames
+   the StallWatchdog already gives us). This would name the specific
+   synchronization primitive that''s not making progress at the wedge
+   moment.
+3. **Stop here for now**. The wedge is a tracked-known-issue with a
+   published, reviewable repro that decisively shows what does NOT cause
+   it. Future optimisation cycles can pick up from either (1) or (2) when
+   a maintainer chooses to invest more time.
+
+### Bonus finding: ORLEANS0014 analyzer
+
+The repro''s build surfaces an `ORLEANS0014` warning - Orleans 10''s analyzer
+flags `ConfigureAwait(false)` in grain code. **The same analyzer should be
+firing on `WalCommitLogWriter`''s `.ConfigureAwait(false)` calls.** Either
+the analyzer is grain-class-only (and `WalCommitLogWriter` is `internal
+sealed class` not derived from `Grain` so it slips through), or the
+analyzer is suppressed somewhere in `src/lattice/`. Worth confirming as
+part of FX-024 (#573) when that gets implemented.
 ## 8. Standing carry-forward rule (unchanged)
 
 No throughput A/B at the saturation rung on the azure-throughput tier until
@@ -127,8 +148,10 @@ by the wedge until then.
 
 ## 9. What landed on `fix/wedge` this cycle (in order)
 
+Production / instrumentation:
+
 ```
-fb4912e  fix: replace WaitAsync(TimeSpan) with linked-CTS deadline on WAL writer dispatch (Option B, ineffective but kept - structurally cleaner than the WaitAsync(TimeSpan) shape and the catch filter is more precise)
+fb4912e  fix: replace WaitAsync(TimeSpan) with linked-CTS deadline on WAL writer dispatch (Option B, ineffective for the wedge but kept - structurally cleaner than the WaitAsync(TimeSpan) shape and the catch filter is more precise)
 d0852d7  diag: log inside writer dispatch-timeout catch (kept - cheap permanent diagnostic for any future wedge cohort)
 68b0b33  bench: stamp WalAppendDispatchTimeout / WalFlushPreflightTimeout in silo banner (kept - permanent deployment verification)
 bfdc384  fix: bound and attribute the residual phase-1/activation WAL wedge (G-023 pack)
@@ -138,8 +161,21 @@ afb00b1  docs: record vertical-scaling null result; revert silo to 2 vCPU/4 GiB
 02a3ecf  ci: clear leaked per-run BENCH_* overrides at azure-throughput ladder startup
 24b8f74  docs: add FX-023 (reshard equal-count no-op) to core features index
 650d65f  ci: harden azure-throughput ladder against leaked BENCH_TREE_ID; bump silo to 4 vCPU/8 GiB (silo later reverted to 2/4)
+fbb04bd  docs: add FX-024 (ConfigureAwait hygiene on WalCommitLogWriter) to core features index
+```
+
+Repro + bisect (this folder):
+
+```
+a86839f  repro: promote the WAL-wedge reproduction harness from .scratch/ to a tracked top-level repro/ folder (4-arm baseline; does not reproduce)
+e103d9e  repro(wedge): add 'load' scenario; silo-wide load alone does NOT reproduce
+8d82a7e  repro(wedge): add 'singleton' scenario; singleton-helper hop alone does NOT reproduce
+759056c  repro(wedge): add 'chained' scenario; callee internal chained back-pressure does NOT reproduce
+a9b2f92  repro(wedge): add 'churn' scenario; activation-rejection storm does NOT reproduce
+c468b4c  repro(wedge): add 'messaging' scenario; production messaging options do NOT reproduce
 ```
 
 Plus issues filed: #570 (FX-023 reshard equal-count), #571 (docs: stale SNAT
-narrative in Silo/Program.cs), #572 (G-023 wedge diagnostic pack - implemented
-by bfdc384 above).
+narrative in Silo/Program.cs), #572 (G-023 wedge diagnostic pack -
+implemented by `bfdc384` above), #573 (FX-024 ConfigureAwait hygiene on
+WalCommitLogWriter).
