@@ -72,7 +72,12 @@ internal sealed class WalCommitLogWriter(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var (stamped, partition, walPartitions, perTree) = await RouteAsync(entry).ConfigureAwait(false);
+        // Grain-context-resuming awaits below: this singleton helper is
+        // invoked from a grain turn (BPlusLeafGrain, AtomicWriteGrain, ...).
+        // Internal awaits must NOT silently drop the grain context - only
+        // the deliberate wedge-attribution outbound shard-RPC awaits do
+        // (each annotated inline with why ConfigureAwait(false) is required).
+        var (stamped, partition, walPartitions, perTree) = await RouteAsync(entry);
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{stamped.TreeId}/{partition}");
 
         // Mode-B wedge attribution: record a per-partition pending stamp
@@ -96,7 +101,7 @@ internal sealed class WalCommitLogWriter(
         double admissionWaitMs;
         try
         {
-            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken).ConfigureAwait(false);
+            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken);
         }
         catch (TimeoutException)
         {
@@ -147,6 +152,11 @@ internal sealed class WalCommitLogWriter(
                 pending.AdvanceTo(WalAppendStage.SentToShard);
                 try
                 {
+                    // Wedge-attribution exception: route the catch off the
+                    // (possibly wedged) caller grain context onto the
+                    // threadpool, so the writer-side diagnostic counter and
+                    // log line fire even when the grain scheduler is parked.
+                    // See WalAppendStage / StallWatchdog for the lifecycle.
                     var offsetInf = await grain.AppendAsync(stamped, cancellationToken).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                     return offsetInf;
@@ -163,6 +173,10 @@ internal sealed class WalCommitLogWriter(
             var grainCall = grain.AppendAsync(stamped, deadlineCts.Token);
             try
             {
+                // Wedge-attribution exception: same rationale as the
+                // infinite-timeout branch above - the catch must land on the
+                // threadpool so the dispatch-timeout diagnostic is emitted
+                // even when the caller's grain context is wedged.
                 var offset = await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false);
                 pending.AdvanceTo(WalAppendStage.Acked);
                 return offset;
@@ -221,7 +235,7 @@ internal sealed class WalCommitLogWriter(
         // dominant SetMany([single]) case.
         if (count == 1)
         {
-            var offset = await AppendAsync(entries[0], cancellationToken).ConfigureAwait(false);
+            var offset = await AppendAsync(entries[0], cancellationToken);
             return new[] { offset };
         }
 
@@ -238,7 +252,7 @@ internal sealed class WalCommitLogWriter(
         var partitionMeta = new Dictionary<string, (string TreeId, int Partition, int WalPartitions, LatticeOptions PerTree)>(StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
-            var (stamped, partition, walPartitions, perTree) = await RouteAsync(entries[i]).ConfigureAwait(false);
+            var (stamped, partition, walPartitions, perTree) = await RouteAsync(entries[i]);
             var grainKey = $"{stamped.TreeId}/{partition}";
             if (!partitionEntries.TryGetValue(grainKey, out var list))
             {
@@ -264,7 +278,7 @@ internal sealed class WalCommitLogWriter(
             var meta = partitionMeta[grainKey];
             tasks[t++] = AppendForPartitionAsync(grainKey, grain, list, meta.TreeId, meta.Partition, meta.WalPartitions, meta.PerTree, cancellationToken);
         }
-        var partitionResults = await Task.WhenAll(tasks).ConfigureAwait(false);
+        var partitionResults = await Task.WhenAll(tasks);
 
         // Stitch the per-partition offsets back into the caller's
         // input order.
@@ -308,7 +322,7 @@ internal sealed class WalCommitLogWriter(
         double admissionWaitMs;
         try
         {
-            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken).ConfigureAwait(false);
+            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken);
         }
         catch (TimeoutException)
         {
@@ -337,6 +351,10 @@ internal sealed class WalCommitLogWriter(
                 pending.AdvanceTo(WalAppendStage.SentToShard);
                 try
                 {
+                    // Wedge-attribution exception (batched path); see
+                    // AppendAsync's single-entry branch above for the full
+                    // rationale: catch must land off the grain context so the
+                    // dispatch-timeout diagnostic still fires under a wedge.
                     offsets = await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                 }
@@ -354,6 +372,8 @@ internal sealed class WalCommitLogWriter(
                 var grainCall = grain.AppendBatchAsync(entries, deadlineCts.Token);
                 try
                 {
+                    // Wedge-attribution exception (batched path); see the
+                    // single-entry WaitAsync site above for the rationale.
                     offsets = await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                 }
@@ -440,7 +460,7 @@ internal sealed class WalCommitLogWriter(
         // (WalMaxPendingBatches and friends used by the dispatch
         // histogram below) are still read from the live IOptionsMonitor
         // here - they are dynamic-tunable by design.
-        var partitions = await optionsResolver.GetWalPartitionsAsync(entry.TreeId).ConfigureAwait(false);
+        var partitions = await optionsResolver.GetWalPartitionsAsync(entry.TreeId);
         var perTree = options.Get(entry.TreeId);
 
         var resolvedMode = modeResolver.Resolve(entry.TreeId) ?? LatticeMergeMode.LwwRegister;
@@ -667,12 +687,12 @@ internal sealed class WalCommitLogWriter(
                 bool acquired;
                 if (timeout == Timeout.InfiniteTimeSpan)
                 {
-                    await _admission.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await _admission.WaitAsync(cancellationToken);
                     acquired = true;
                 }
                 else
                 {
-                    acquired = await _admission.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+                    acquired = await _admission.WaitAsync(timeout, cancellationToken);
                 }
                 if (!acquired)
                 {
