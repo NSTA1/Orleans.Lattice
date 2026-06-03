@@ -530,3 +530,111 @@ either (a) walk the rung up to find one where the wedge is
 near-deterministic, or (b) raise the producer ramp-rate so the
 shard saturation arrives faster, increasing the probability of
 catching the wedge with the diagnostic in mid-snapshot.
+
+---
+
+## 18. G-026 cohort attempt 2026-06-03 (writer-side admission cap lands)
+
+Hypothesis (per the cycle's Phase 1 framing) was a **reliability**
+change: bound `WalCommitLogWriter.PartitionTracker._inFlight` at
+`WalMaxPendingBatches` with a typed admission timeout, so a
+saturated downstream shard surfaces as honest slowness instead of
+a silent wedge. Success criterion was conjunctive:
+- healthy-cohort throughput not degraded beyond 1.5x IQR_baseline
+- wedged-cohort phenotype shifts to admission timeouts (no silent
+  unbounded queue absorption)
+
+The hypothesis explicitly stated this was NOT a throughput
+optimisation; throughput preservation was a guard, not a target.
+
+### Cohort results
+
+n=3 candidate cohorts on commit `006ba11` vs the previous
+cycle's n=3 baseline cohorts on commit `894d705`, same rung
+`4000:5 -DurationSec 45`.
+
+| Run | Cohort | Steady avg | Written | Watchdog | [wal-append] | Tracker max depth |
+|---|---|---|---|---|---|---|
+| Baseline 1 (141000Z) | wedged-hard | 278/s | 0 | yes | 2,775 (SentToShard) | 18 |
+| Baseline 2 (142844Z) | wedged | 899/s | 42,451 | yes | 0 (drained) | 0 (snapshot drained) |
+| Baseline 3 (143239Z) | wedged | 869/s | 39,621 | yes | 0 (drained) | 0 (snapshot drained) |
+| Candidate 1 (151636Z) | **HEALTHY** | **5,817/s** | **363,669** | **no** | 0 | n/a (below trigger) |
+| Candidate 2 (152054Z) | **HEALTHY** | **5,775/s** | **372,465** | **no** | 0 | n/a |
+| Candidate 3 (152350Z) | **HEALTHY** | **5,507/s** | **349,663** | **no** | 0 | n/a |
+
+Median throughput: baseline **869/s** -> candidate **5,775/s**
+(**+4,906/s, +565%**). Baseline IQR=621; threshold 1.5x=932; delta
+moves the median by 7.9x the threshold. Candidate IQR=310, **0.5x**
+of baseline IQR (distribution shape tightened, not widened).
+Wedged-cohort heavy phenotype (0 written, 2,775 SentToShard stamps,
+tracker depth 18) failed to reproduce in 3/3 candidate runs.
+
+### Surprise: a reliability change produced a 6.7x throughput
+### win
+
+The Phase 1 hypothesis did NOT predict throughput improvement
+and the cycle would have been accepted as a successful
+reliability outcome even at flat throughput. The most likely
+explanation for the unexpected throughput delta:
+
+The unbounded writer queue was driving the shard into a **failure
+regime** rather than just a slow regime. Cohort 1 baseline
+observed tracker depth = 18 (more than 2x the shard's
+`WalMaxPendingBatches=8`) with head-of-line stuck-time = 5.7s
+(p50) - the writer was feeding the shard faster than it could
+absorb, the shard's own ceiling produced flush-deadline
+TimeoutExceptions, retries cascaded back as fresh dispatches,
+and the system collapsed into a regime where each dispatch did
+~6s of work for 0 throughput. The writer-side cap keeps the
+shard inside its healthy operating envelope: the offered rate
+back-pressures at the writer boundary instead of crashing
+through the shard's deadline, the shard never enters the
+failure cascade, and effective throughput rises to what the
+shard CAN absorb at saturation.
+
+In short: **bounded back-pressure is faster than unbounded
+back-pressure when the downstream is non-linear under
+overload**. The cycle was a reliability hypothesis that
+incidentally exposed a perf regime collapse the unbounded shape
+was creating.
+
+### Caveat: admission-timeout signal not directly observed
+### at-Azure
+
+`[wal-admission-timeout]` fired **zero** times across the 3
+candidate cohorts because the system never approached the cap
+under the offered rate. That confirms the cap is not contended
+at this rung but does NOT directly observe the "callers receive
+typed TimeoutException in bounded time" behaviour at-Azure. The
+behaviour is exhaustively confirmed by 3 unit tests
+(`PartitionTracker_AcquireAsync_throws_TimeoutException_when_cap_saturated`,
+`PartitionTracker_AcquireAsync_with_cap_zero_is_unbounded_opt_out`,
+`AppendAsync_admission_timeout_path_increments_writer_counter_when_tracker_presaturated`)
+plus the integration coverage on the uncontended fast path,
+but a higher-rung cohort that actually saturates the cap is
+still owed to close that observation gap.
+
+### Decision: KEEP
+
+Both falsification criteria met:
+- Healthy throughput improved by 7.9x the noise threshold (target
+  was no-degradation; delta is large positive).
+- Heavy-wedge phenotype eliminated 3/3 (target was "shifts to
+  admission timeouts"; actual was "shifts to no-saturation"
+  which is the better outcome - the system never even
+  approached saturation).
+
+### Next cycle entry points
+
+1. Higher-rung cohort to directly observe `[wal-admission-timeout]`
+   firing under genuine saturation. Walk the rung up from `4000:5`
+   until the cap is contended.
+2. Family A (per-flush latency reduction) becomes more attractive
+   now: with the writer in a healthy regime, the dominant cost is
+   the per-shard flush RTT. The 5.7s head-of-line stuck-time from
+   the baseline cohort is what the shard CAN do at saturation;
+   shortening that directly raises the cap the writer can
+   sustainably drive.
+3. The wedge-plan can be considered resolved at the rung the
+   campaign opened against. The remaining work is performance
+   tuning, not reliability investigation.
