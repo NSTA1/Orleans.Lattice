@@ -430,7 +430,9 @@ This seed runs while the shard holds its non-reentrant activation gate. During a
 
 Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
 
-This option can be changed freely at any time. The new value takes effect on the next forward.
+When the deadline fires, the seed throws `ShardActivationTimeoutException` (publicly visible, derived from `TimeoutException`). The exception is retriable by construction - every cross-grain step in the seed is idempotent on retry - and the public `ILattice.ReshardAsync` operator transparently absorbs up to two consecutive occurrences before propagating to the caller, so external code generally does not need to special-case the cold-start race. Callers that want to detect or instrument the absorbed retries explicitly can catch the typed exception (it carries `TreeId`, `ShardIndex`, and `TimeoutSeconds` slots for per-occurrence attribution). The wider audit of other public operators that should adopt the same internal-retry envelope is tracked separately.
+
+This option can be changed freely at any time. The new value takes effect on the next seed.
 
 ### `DigestPublishTimeout`
 

@@ -1113,13 +1113,18 @@ internal sealed partial class ShardRootGrain(
         {
             LatticeMetrics.ActivationReadyTimeouts.Add(
                 1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
-            throw new TimeoutException(
+            throw new ShardActivationTimeoutException(
                 $"Activation-readiness seed for shard {MyShardIndex} of tree '{TreeId}' "
                 + $"exceeded the {timeout} seed deadline "
                 + $"({nameof(LatticeOptions.ActivationReadyTimeout)}); a registry or "
                 + "root-leaf RPC is likely parked because the target activation is not "
                 + "yet visible during a startup reshard or membership change. The seed is "
-                + "abandoned and the operation will be retried against refreshed routing.", oce);
+                + "abandoned and the operation will be retried against refreshed routing.", oce)
+            {
+                TreeId = TreeId ?? string.Empty,
+                ShardIndex = MyShardIndex,
+                TimeoutSeconds = timeout.TotalSeconds,
+            };
         }
     }
 
