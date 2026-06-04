@@ -38,7 +38,9 @@ internal sealed partial class LatticeGrain
         }
 
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-        await shard.RebuildShardProjectionAsync(cancellationToken);
+        await ShardActivationRetry.RunAsync(
+            () => shard.RebuildShardProjectionAsync(cancellationToken),
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -67,7 +69,9 @@ internal sealed partial class LatticeGrain
         // coordinator grain still rejects the request when compaction
         // is disabled or a pass is already in flight.
         var compactor = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
-        return await compactor.RequestCompactionAsync(shardIndex, TombstoneCompactionGrain.TriggerOperator);
+        return await ShardActivationRetry.RunAsync(
+            () => compactor.RequestCompactionAsync(shardIndex, TombstoneCompactionGrain.TriggerOperator),
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -87,13 +91,17 @@ internal sealed partial class LatticeGrain
         // Fan out across every physical shard concurrently; the
         // returned scalar is the max-reduced per-shard lag because
         // back-pressure is dominated by the slowest shard, not the
-        // mean.
+        // mean. Each shard's call is wrapped in its own
+        // ShardActivationRetry envelope so a single shard's seed-timeout
+        // only retries that shard, not every sibling.
         var tasks = new Task<long>[physicalShards.Count];
         for (var i = 0; i < physicalShards.Count; i++)
         {
             var shardIndex = physicalShards[i];
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-            tasks[i] = shard.GetShardMaterialiserLagAsync(cancellationToken);
+            tasks[i] = ShardActivationRetry.RunAsync(
+                () => shard.GetShardMaterialiserLagAsync(cancellationToken),
+                cancellationToken);
         }
 
         var perShardLags = await Task.WhenAll(tasks);

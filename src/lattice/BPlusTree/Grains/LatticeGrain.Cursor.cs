@@ -132,12 +132,16 @@ internal sealed partial class LatticeGrain
         // (length equals the tree's pinned WalPartitions) so the
         // snapshot leaf can drive its per-partition replay with
         // saga-atomicity preserved across the multi-partition
-        // boundary.
+        // boundary. Per-shard ShardActivationRetry wrap: a single
+        // shard's cold-start seed-timeout retries only that shard,
+        // not the whole fan-out.
         var headTasks = new Task<long[]>[physicalShards.Count];
         for (var i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            headTasks[i] = shard.SnapshotWalHeadAsync(cancellationToken);
+            headTasks[i] = ShardActivationRetry.RunAsync(
+                () => shard.SnapshotWalHeadAsync(cancellationToken),
+                cancellationToken);
         }
         await Task.WhenAll(headTasks);
         cancellationToken.ThrowIfCancellationRequested();

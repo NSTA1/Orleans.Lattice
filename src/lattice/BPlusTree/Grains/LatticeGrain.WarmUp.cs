@@ -76,7 +76,9 @@ internal sealed partial class LatticeGrain
                 // activated before producers ever connect - the only
                 // grain reachable before traffic that the first writes
                 // must touch on the traversal path.
-                await shard.WarmUpAsync();
+                await ShardActivationRetry.RunAsync(
+                    () => shard.WarmUpAsync(),
+                    CancellationToken.None);
             }
             finally
             {

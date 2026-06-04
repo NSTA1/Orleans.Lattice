@@ -97,4 +97,34 @@ internal static class ShardActivationRetry
         // operators see the same shape they would have seen pre-envelope.
         throw last!;
     }
+
+    /// <summary>
+    /// Generic overload of <see cref="RunAsync(Func{Task}, CancellationToken)"/>
+    /// for operations that produce a value. Same retry semantics; preserved as
+    /// a distinct overload rather than wrapping the void path in a sentinel
+    /// closure so the value path takes no extra closure allocation.
+    /// </summary>
+    internal static async Task<T> RunAsync<T>(Func<Task<T>> operation, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+
+        ShardActivationTimeoutException? last = null;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            try
+            {
+                return await operation().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            }
+            catch (ShardActivationTimeoutException ex)
+            {
+                last = ex;
+                if (attempt == MaxAttempts) break;
+                var backoff = BackoffBetweenAttempts[attempt - 1];
+                await Task.Delay(backoff, cancellationToken)
+                    .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            }
+        }
+
+        throw last!;
+    }
 }
