@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Storage.AzureTable</PackageId>
-    <Version>6.1.0</Version>
+    <Version>6.2.0</Version>
     <Description>Azure Table Storage IWalStorageProvider for Orleans.Lattice. Provides a durable per-shard write-ahead log backend usable by both single-cluster (core) and replicated deployments.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
@@ -25,7 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
-    <PackageReference Include="Azure.Data.Tables" Version="12.10.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
   </ItemGroup>
 
 </Project>
