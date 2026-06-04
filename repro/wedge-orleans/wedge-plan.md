@@ -869,3 +869,62 @@ The wedge investigation campaign that opened with G-019 (#546) and closed with G
 Reliability shipped via PR #579 (merged to main as `1dff59c`). The diagnostic packs G-023 / G-024 / G-025 plus the StallWatchdog + `[wal-append]` / `[wal-slot]` lifecycle stamps remain in the codebase for any future wedge investigation, and are now backed by stable field-signature contracts via the WedgeDiagnostics test suites in test/lattice/BPlusTree/Grains/.
 
 Future work is performance (Family A) or operator-experience (the admission-deadline-split idea from section 17 follow-up), not reliability.
+
+---
+
+## 23. Re-verification on a deterministic VM 2026-06-04 (wedge-plan2.md Phase 1)
+
+A new investigation cycle (`wedge-plan2.md`) was opened against the post-G-026 main tip after a fresh "wedge reliably at >=4k vehicles" report. The cycle moved the iteration host off ACI onto a single `Standard_F8as_v6` VM in westus3 (8 vCPU AMD Zen4, 32 GiB, accelerated networking confirmed end-to-end). Same managed-identity Tables account, same code path, deterministic single-tenant host. See `repro/wedge-orleans/wedge-plan2.md` Phase 0 for the rationale (ACI's `az container logs` 60s truncation, bench-scraper stdout duplication, vCPU ceiling, and missing `dotnet-dump`/`dotnet-counters` attach surface drove ~3 spurious investigation cycles in this campaign alone).
+
+### 23.1 Findings
+
+Cohorts at 4k:5 and 25k:5 reproduced cleanly on the new host. Summary:
+
+| Cohort | Written | Failed | Active avg | Silo CPU peak | Diagnostics | Verdict |
+|---|---|---|---|---|---|---|
+| 4k:5 / 30s | 547,006 | 0 | 13,884 e/s | 220% (2.2 cores) | clean | HEALTHY |
+| 25k:5 / 30s (default 30s grain timeout) | 36,992 | 45,056 | 587 e/s | 270% | clean (no watchdog) | "wedge"-shaped but **not a wedge** |
+| 25k:5 / 30s (BENCH_RESPONSE_TIMEOUT_SEC=180) | 147,566 | 0 | 2,243 e/s | 490% (5 of 8 cores) | clean | HEALTHY |
+
+The "wedge at 25k" reproduced **only as the bench harness's outer Orleans grain RPC `ResponseTimeout` (default 30s) firing on calls that were honestly queueing at the G-026 writer admission cap**. With a realistic 180s timeout the same rung produced zero failures and a 3.8x throughput improvement. The G-026 cap was firing as designed (`wal.writer.append.admission_wait p99 ~2.1s` in the first 10s window); the bench harness's caller-side deadline was just shorter than the realistic worst-case admission wait at that rung.
+
+### 23.2 Self-attribution improvements
+
+Two changes shipped to make this failure mode unmissable to the next investigator:
+
+1. **Named log line on `TimeoutException`** in `TcpIngestService.FlushAsync`. The bare Orleans `Response did not arrive on time in 00:00:30` stack is now wrapped:
+   > `[silo] grain-rpc-deadline: SetManyAsync of N did not return within ResponseTimeout (BENCH_RESPONSE_TIMEOUT_SEC=30s). Offered rate exceeds sustained Tables drain rate at this rung; raise BENCH_RESPONSE_TIMEOUT_SEC, drop tickHz/vehicles, or tune WAL fan-out (BENCH_WAL_PARTITIONS / BENCH_WAL_MAX_PENDING_BATCHES).`
+2. **Cohort-runner verdict** (`benchmark/vm/run-cohort.ps1`) parses the FINAL line and reports `failed=N` explicitly when non-zero, so a "HEALTHY (but 55% failed)" cohort can't pass for HEALTHY.
+
+### 23.3 Saturation knobs catalogue (what to turn when offered exceeds drain)
+
+Reference for future cycles. Knobs are listed in the order an investigator typically reaches for them. Each knob comes with the failure mode it addresses; misdiagnosing the failure mode and turning the wrong knob is what made this campaign go on as long as it did.
+
+| Knob | Default | What it bounds | When to turn |
+|---|---|---|---|
+| `BENCH_TICK_HZ` / `BENCH_VEHICLE_COUNT` | 5 / 4000 | Offered rate (= vehicles x tickHz) | First lever; if offered rate >> sustained drain rate, no other knob makes the system healthy. |
+| `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Silo+Client `Orleans.Messaging.ResponseTimeout` | Raise when `[silo] grain-rpc-deadline` appears - this is the bench harness's outer call hitting its own deadline. Saturation is not a wedge. |
+| `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync` call | Larger = fewer round-trips, more coalescing in WAL phase 2; smaller = lower head-of-line stuck-time at the WAL admission cap. |
+| `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight `SetManyAsync` calls from `TcpIngestService` | Match to `BENCH_WAL_PARTITIONS` so every flush has a distinct WAL partition to land on. |
+| `BENCH_WAL_PARTITIONS` | 8 | WAL grain count per tree | Increase to widen the writer-side fan-out; pairs with `BENCH_FLUSH_CONCURRENCY`. |
+| `BENCH_WAL_MAX_PENDING_BATCHES` | 8 (bench), 1 (library default) | Per-WalShardGrain pipeline depth | Already G-026; raising lets each partition's flushes overlap against Tables. |
+| `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS` | 5 | Phase-2 commit-batching window | Raise to coalesce more commits into one Tables transaction (helps throughput at the cost of latency). |
+| `BENCH_PIPELINE_PHASE2` | 1 (on) | Overlap phase 2 of batch N with phase 0+1 of batch N+1 | Leave on for throughput; switch off only as a diagnostic A/B. |
+| `WalAppendDispatchTimeout` (lattice option) | 30s | Writer dispatch deadline (G-023) | Library-level cap; not a bench knob but firing of `wal.append_dispatch.timeouts` signals the writer thinks the shard is unresponsive. |
+| `WalFlushPreflightTimeout` (lattice option) | 5s | Shard-side preflight deadline (G-023) | Same. |
+| `ShardForwardTimeout` (lattice option) | 2s | Outbound shard-forward deadline (G-021) | Bounds parked forwards (not Orleans-rejected forwards). |
+
+Failure-mode -> knob mapping:
+
+- **`[silo] grain-rpc-deadline` log line** -> raise `BENCH_RESPONSE_TIMEOUT_SEC` OR drop the offered rate. Not a Lattice bug.
+- **`failed=N` non-zero in FINAL** -> same as above (those are the timed-out batches).
+- **`stall-watchdog` lines + `[wal-slot]` rows + `inFlight` pinned** -> genuine WAL wedge; the G-024 `[wal-slot]` lifecycle stage names the locus (see section 11).
+- **`[wal-append]` rows with `SentToShard` dominant** -> G-025 territory; shard-grain RPC saturated; raise WAL fan-out.
+- **Healthy verdict but throughput plateau** -> Family A (per-flush latency reduction); the silo CAN sustain the offered rate, the Tables RTT is the floor.
+
+### 23.4 Carry-forward
+
+- Wedge-plan.md is **closed** as a reliability investigation. Re-opening requires evidence that a `stall-watchdog` line fires AND `[wal-slot]` / `[wal-append]` lifecycle stages show a non-trivial dominant stage AND the `[silo] grain-rpc-deadline` line does NOT appear. Until that combination shows up, "wedge at high rungs" is the bench harness's grain RPC deadline, not a Lattice bug.
+- Next cycle is **performance, not reliability**. Family A (per-flush latency) at the 25k rung now has a clean 2,243 e/s sustained baseline on the F8 VM to push against.
+- The deterministic-VM bench harness (`benchmark/vm/`) is the canonical iteration loop. ACI is demoted to optional cross-environment smoke testing post-fix.
+
