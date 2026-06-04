@@ -59,7 +59,7 @@
          to the run's results.json. Disabled by default - opt in via
          BENCH_MICROBENCH_PROFILE=alloc|cpu|both. -->
     <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.661903" />
-    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.2" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.3" />
   </ItemGroup>
 
   <ItemGroup>
