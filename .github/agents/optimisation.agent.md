@@ -148,7 +148,7 @@ Pick the cheapest tier that still exercises the suspected hot path. Tiers are ch
 |---|---|---|---|---|
 | **In-process microbench** (BDN `InProcessEmitToolchain`, single silo, no docker) | Grain-call latency, allocation-per-entry, codec round-trip, serialiser cost, hash distribution | ~7-9 min wall (full suite at `quick`); ~5-10 sec wall (scoped subset at `dry`) | ~25-30 min (`quick`); ~30 sec (`dry`) | `microbench` |
 | **Docker-compose end-to-end** (one or more silos, real network, dashboard-grade metrics) | Ship/apply, cross-silo gRPC, multi-cluster replication, fleet-level latency tails | 1-2 minutes wall + ~30s warmup | 5-10 minutes | `bidirectional-replication` |
-| **Real-Azure WAL throughput** (single silo + producer in ACI, real Azure Tables storage) | WAL hot-path optimisations whose effect depends on real Azure Tables RTT, partition-server behaviour, or throttling that Azurite does not model | ~2 minutes wall (bounded by `BENCH_TOTAL_DURATION_SEC=120`) + initial `az acr build` ~3-5 min on first run | ~6-10 minutes (n=3, `-SkipBuild` on rungs 2-3) | `azure-throughput` |
+| **Real-Azure WAL throughput** (single silo + co-located producer on a Linux VM, real Azure Tables storage) | WAL hot-path optimisations whose effect depends on real Azure Tables RTT, partition-server behaviour, or throttling that Azurite does not model | ~1-2 minutes wall per cohort (producer runs `BENCH_DURATION_SEC`, default 30-45s; silo stop + FINAL drain adds ~5-15s) + initial `dotnet publish` ~30-60s on first run after a fresh VM | ~5-10 minutes (n=3, no rebuild between rungs) | `azure-throughput` |
 
 State which **tier shape** you are using and why in the chat reply. Name the specific scenario you ran. **If the hypothesis is about ship/apply or anything cross-cluster, the in-process microbench tier is wrong** - state the rejection explicitly so it is clear you considered it. Conversely, if the hypothesis is about a code path that an in-process tier can exercise honestly, do not pay for a docker-compose cohort just because that scenario is the most familiar one. **If the hypothesis is about a WAL hot-path optimisation whose effect is bounded by real Azure Tables RTT (phase-0/1/2 round-trip count, transaction shape, partition contention), the docker-compose tier is wrong** - Azurite collapses network RTT, runs a single partition server, and does not model Azure throttling, so a docker-compose A/B can both miss a real regression and manufacture a phantom win. State the tier-2 rejection explicitly and use the real-Azure tier instead.
 
@@ -242,7 +242,9 @@ Rarely needed during normal optimisation cycles; the aggregated
 
 #### Real-Azure WAL throughput tier
 
-The `benchmark/azure-throughput/` harness is the only tier in the suite that runs against **real Azure Storage** rather than Azurite or in-process state. It is a two-container Azure Container Instances deployment (producer + single-silo lattice host) that drives sustained synthetic vehicle telemetry through `ILattice.SetManyAsync` and reports `Entries written per second` to stdout.
+The `benchmark/azure-throughput/` harness is the only tier in the suite that runs against **real Azure Storage** rather than Azurite or in-process state. It deploys a single Linux VM in Azure (deterministic CPU, accelerated networking, managed-identity auth to Azure Tables) running two systemd units: `lattice-silo.service` (the lattice host) and `lattice-producer.service` (the synthetic fleet emitter). Both run on the same VM and the producer connects to the silo over loopback (`127.0.0.1:7000`).
+
+The full topology, ops procedures, and saturation-knobs catalogue are in `benchmark/azure-throughput/README.md`. The historical why-not-ACI rationale is in `benchmark/azure-throughput/throughput.md` section 0.
 
 **Use this tier when the hypothesis is about the Azure Tables WAL hot path** and the effect depends on something Azurite does not model:
 
@@ -252,63 +254,74 @@ The `benchmark/azure-throughput/` harness is the only tier in the suite that run
 - Throttling regimes (429 responses with `x-ms-server-request-id`-keyed back-off).
 - Managed-identity or auth-path overhead on the first write after activation.
 
-Do not use this tier for anything else - the cohort cost dominates (~2 min per run plus ~3-5 min for the first `az acr build`), and any non-WAL-path hypothesis is exercised more honestly by the in-process microbench or docker-compose tiers.
+Do not use this tier for anything else - any non-WAL-path hypothesis is exercised more honestly by the in-process microbench or docker-compose tiers.
 
 **One-time setup** (per workstation, before the first cycle that uses this tier):
 
 ```powershell
-$env:BENCH_PREFIX = 'lat' + (Get-Random -Maximum 9999)
-./benchmark/azure-throughput/scripts/00-login.ps1
-./benchmark/azure-throughput/scripts/10-provision.ps1
+# Copy parameters template and edit SubscriptionId (Location defaults to westus3).
+Copy-Item benchmark/azure-throughput/scripts/parameters.ps1 ``
+          benchmark/azure-throughput/scripts/parameters.local.ps1
+az login
+./benchmark/azure-throughput/scripts/deploy.ps1
 ```
 
-`10-provision.ps1` is idempotent and creates a resource group, an ACR, a storage account, a user-assigned managed identity, and the role assignment that lets the silo write to the WAL table. It writes `scripts/.context.json` with the resource ids; that file is gitignored and contains the operator's subscription id, so never commit it.
+`deploy.ps1` is idempotent: it provisions the resource group, the VM (default `Standard_D2as_v5`), an NSG that allows SSH only from your current public IP, a storage account, and a managed-identity role assignment that lets the silo write to the WAL tables. It also generates an SSH key under `~/.ssh/` if missing, registers a `~/.ssh/config` host alias for the VM, waits for cloud-init to finish, then chains to `update.ps1` to publish the silo + producer and start the silo. `parameters.local.ps1` is gitignored and contains your subscription id; never commit it.
 
-**Per-run invocation (baseline and candidate cohorts both)**:
+**Per-cohort invocation (baseline and candidate cohorts both)**:
 
 ```powershell
-# Baseline arm.
-$env:BENCH_TREE_ID = 'azure-throughput-baseline'
-$env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'false'   # whatever the hypothesis is A/B-ing
-./benchmark/azure-throughput/scripts/20-build-and-deploy.ps1
-# -> blocks up to BENCH_TOTAL_DURATION_SEC (default 120) for the run to complete,
-#    az container stops the group on the deadline, then writes:
-#       benchmark/azure-throughput/.run/silo-{utc}.log
-#       benchmark/azure-throughput/.run/producer-{utc}.log
-#    and prints the [silo] FINAL line to stdout.
+# Push latest source + rebuild + restart silo. Run once per code change.
+./benchmark/azure-throughput/scripts/update.ps1
 
-# Candidate arm. The script will rebuild the silo image with the new bits.
-$env:BENCH_TREE_ID = 'azure-throughput-candidate'
-$env:BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'true'
-./benchmark/azure-throughput/scripts/20-build-and-deploy.ps1
+# Baseline arm.
+./benchmark/azure-throughput/scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45 ``
+    -ExtraSiloEnv @{ BENCH_TREE_ID = 'azure-throughput-baseline'; BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'false' }
+
+# Candidate arm.
+./benchmark/azure-throughput/scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45 ``
+    -ExtraSiloEnv @{ BENCH_TREE_ID = 'azure-throughput-candidate'; BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'true' }
 ```
 
-**Keep every variable identical between arms except the option under test.** That includes `BENCH_VEHICLE_COUNT`, `BENCH_TICK_HZ`, `BENCH_DURATION_SEC`, `BENCH_TOTAL_DURATION_SEC`, `BENCH_BATCH_SIZE`, `BENCH_FLUSH_MS`, `BENCH_FLUSH_CONCURRENCY`, `BENCH_WAL_PARTITIONS`, `BENCH_WAL_MAX_PENDING_BATCHES`, and `BENCH_PIPELINE_PHASE2`. `BENCH_TREE_ID` is the one exception: `20-build-and-deploy.ps1` defaults it to a per-run UTC-stamped id (`azure-throughput-{utc}`) so every run gets a fresh manifest-key namespace and the first ~10s of throughput samples are not biased by manifest replay of a previous run. Setting `BENCH_TREE_ID` explicitly per arm (as in the example above) is useful for tagging the cohort sample in the silo log, but is not required for correctness - the default rotation is what guarantees a fresh tree. **Never** pin `BENCH_TREE_ID` to the same value across arms or across runs of the same arm: that re-introduces stale manifest history into the cohort and the per-run variance becomes a function of "which run inherited the largest replay" rather than of the option under test.
+Each `run-cohort.ps1` call stops any leftover silo/producer, restarts the silo with the cohort's env drop-in, runs the producer for `DurationSec`, stops the silo to trigger drain + FINAL, then extracts both unit journals and a per-second CPU/RSS sampler CSV into `benchmark/.run/azure-throughput/`. It prints a self-contained summary block (host, throughput, CPU, RSS, diagnostics, HEALTHY/WEDGE verdict) to stdout.
 
-**Reading the result.** The cohort sample is the `[silo] FINAL` line emitted by the silo on graceful shutdown:
+**Keep every variable identical between arms except the option under test.** That includes `Vehicles`, `TickHz`, `DurationSec`, and any `BENCH_*` env vars not directly named by the hypothesis. `BENCH_TREE_ID` is the one exception: `run-cohort.ps1` defaults it to a per-cohort UTC-stamped id (`cohort-<cohort-name>`) so every cohort gets a fresh manifest-key namespace and the first ~10s of throughput samples are not biased by manifest replay of a previous cohort. Setting `BENCH_TREE_ID` explicitly per arm (as in the example above) is useful for tagging the cohort sample in the silo log, but is not required for correctness - the default rotation is what guarantees a fresh tree. **Never** pin `BENCH_TREE_ID` to the same value across arms or across runs of the same arm: that re-introduces stale manifest history into the cohort and the per-run variance becomes a function of "which run inherited the largest replay" rather than of the option under test.
+
+**Reading the result.** `run-cohort.ps1` prints a structured summary block at the end of every cohort:
 
 ```text
-[silo] FINAL written=12,360,000 failed=0 elapsed=120.0s Entries written per second (avg)=103,000
+=== Cohort complete ===
+Host         : 8 vCPU / 32092 MiB / 6.17.0-1017-azure
+Cohort       : v4000-h5-30s-<utc>
+Producer     : inactive
+Silo FINAL   : [silo] FINAL written=547,006 failed=0 elapsed=43.9s active=35.7s Entries written per second (avg)=12,434 (active avg)=15,297
+Throughput   : 547,006 entries in 35.7s active = 15,297/s
+Silo CPU     : avg 163.3% / peak 220% (of one vCPU)
+System CPU   : avg 20.4% / peak 24.1%
+Silo RSS peak: 0.6 GiB (of 31.3 GiB)
+Diagnostics  : stall-watchdog=0  wal-slot=0  wal-append=0
+Verdict      : HEALTHY
 ```
 
-The deploy script writes the full silo stdout to `benchmark/azure-throughput/.run/silo-{utc}.log` and prints the FINAL line to stdout. An agent consumes it directly from the local file - no further `az` calls are required after the deploy script returns:
+The `Throughput` line is the **active-window** average - entries divided by (last-flush-drain - first-accepted-batch). Excludes the silo's pre-connect idle window and the post-FINAL drain, so it's the honest sustained-ingest number. Use this as the cohort sample. The raw silo journal (with `[phaseA]` instruments and per-second `[silo] t=...` rate samples) is at `benchmark/.run/azure-throughput/silo-<cohort>.log`; the per-second VM-level CPU/RSS samples are at `sampler-<cohort>.csv`.
+
+**`failed=N` non-zero in the FINAL line is a degraded cohort, not a HEALTHY result**, even though the runner may still print `Verdict : HEALTHY`. The most common cause at higher rungs is the silo's grain-RPC `ResponseTimeout` (default 30s) firing on calls honestly queueing at the writer admission cap - the silo log will show `[silo] grain-rpc-deadline: ...` lines pointing at `BENCH_RESPONSE_TIMEOUT_SEC`. Pass `-ExtraSiloEnv @{ BENCH_RESPONSE_TIMEOUT_SEC = '180' }` to lift the deadline, drop the offered rate, or widen WAL fan-out. See `benchmark/azure-throughput/wedge-plan.md` section 23.3 for the full saturation-knobs catalogue and failure-mode -> knob mapping.
+
+**n=3 cohort discipline.** Run each arm three times back-to-back (six runs total). A cohort of three at the 4k:5 / 45s rung is ~3-4 minutes wall-clock per arm after the initial `update.ps1`. Record the active throughput average and the per-run variance in the Phase 3 / Phase 5 cohort tables exactly like the other tiers. If variance is wide (CoV > 10%), increase `DurationSec` before re-running.
+
+**No history-stack push.** This tier does not write to the local VictoriaMetrics history stack - the result lives in `benchmark/.run/azure-throughput/silo-*.log` (plus the per-cohort `sampler-*.csv`) only. That is intentional: a one-off real-Azure cohort is not directly comparable to docker-compose or microbench rows in the persona-trend dashboards. If you need cross-cycle continuity for this tier, copy the cohort summary block and selected `[phaseA]` rows into the Phase 7 post-mortem.
+
+**Cost / teardown discipline.** The VM is auto-shutdown via a DevTestLab schedule at 19:00 UTC daily (configurable in `parameters.local.ps1`). For tighter cost control, deallocate explicitly between sessions:
 
 ```powershell
-$rate = (Get-Content .\benchmark\azure-throughput\.run\silo-<utc>.log |
-         Select-String '^\[silo\] FINAL' | Select-Object -Last 1).Line
+./benchmark/azure-throughput/scripts/vm.ps1 stop      # deallocate; no compute charges
+./benchmark/azure-throughput/scripts/vm.ps1 start     # ~30s to come back up
+./benchmark/azure-throughput/scripts/vm.ps1 status    # check state + SSH details
 ```
 
-The same file contains per-second samples (`[silo] t=  12.0s ... Entries written per second=...`) so steady-state min/avg/max can be computed without going back to Azure. Skip the first ~10 seconds of samples (silo activation + first phase-2 commit) when computing steady-state stats; `40-ladder.ps1` already uses a `t >= 10` filter and is the reference implementation.
+A stopped (deallocated) VM bills only for the OS disk + public IP + storage account (combined ~$14/month idle on the default `D2as_v5` + Standard SSD). Full teardown is `az group delete --name rg-lat --yes --no-wait` (or whatever `ResourceGroup` is set to in `parameters.local.ps1`).
 
-**Force-stop fallback.** When the wall-clock deadline fires before the silo emits FINAL, the script falls back to printing the last 10 silo log lines and warns. Treat that as a degraded sample, not a result: re-run with a higher `BENCH_TOTAL_DURATION_SEC` (and `BENCH_DURATION_SEC` accordingly) before averaging it into the cohort.
-
-**n=3 cohort discipline.** Run each arm three times back-to-back (six runs total). The deploy script's bounded-wait + auto-stop means a cohort of three is ~6 minutes wall-clock per arm after the first `az acr build`. Record the FINAL average and the per-run variance in the Phase 3 / Phase 5 cohort tables exactly like the other tiers. If variance is wide (CoV > 10 %), increase `BENCH_DURATION_SEC` (and `BENCH_TOTAL_DURATION_SEC` correspondingly) before re-running.
-
-**No history-stack push.** This tier does not write to the local VictoriaMetrics history stack - the result lives in `.run/silo-*.log` only. That is intentional: a one-off real-Azure cohort is not directly comparable to docker-compose or microbench rows in the persona-trend dashboards. If you need cross-cycle continuity for this tier, copy the FINAL line and per-second samples into the Phase 7 post-mortem.
-
-**Teardown discipline.** `20-build-and-deploy.ps1` always issues `az container stop` at the end of a run, so the ACI compute is not left charging. Resource-group teardown is separate - run `./benchmark/azure-throughput/scripts/90-teardown.ps1` at the end of the cycle (or leave the RG in place if the next cycle will also use this tier). The compute meter only runs while a container is in the `Running` state; an idle (stopped) container group bills only for the storage account, which is negligible.
-
-**Ladder sweep variant.** When the hypothesis is about scaling behaviour rather than a single-rung A/B (for example, "does the candidate's win regime hold as offered rate climbs?"), use `scripts/40-ladder.ps1` instead of two single-shot calls. It re-deploys the container group for each `(vehicles, tickHz)` rung, waits for the producer to terminate, parses the silo log for the per-rung FINAL line, and writes `.run/.ladder-results.csv`. The ladder is a sweep, not a cohort, so it does not replace the n=3 cohort discipline on the chosen rung.
+**Ladder sweep variant.** When the hypothesis is about scaling behaviour rather than a single-rung A/B (for example, "does the candidate's win regime hold as offered rate climbs?"), use `scripts/ladder.ps1` instead of multiple single-shot `run-cohort.ps1` calls. It loops over a rung list, calls `run-cohort.ps1` for each, parses the cohort summary, and writes a CSV at `scripts/.ladder-results.csv` with one row per rung. It pins `BENCH_RESPONSE_TIMEOUT_SEC=180` by default so a saturated rung surfaces as honest back-pressure rather than the silo's own grain-RPC deadline firing. The ladder is a sweep, not a cohort, so it does not replace the n=3 cohort discipline on the chosen rung.
 
 #### Authoring a new scenario
 
@@ -434,7 +447,7 @@ The following have all happened in this codebase before. Each one wasted hours.
 
 - **Removing the last `await` from a hot grain method.** Converting a grain method like `public async Task<T> GetAsync(...)` into a sync wrapper that returns `Task.FromResult(...)` on the dominant path looks like a clean win on paper - one MoveNext gone per call - but it also removes the only yield point Orleans' grain scheduler had between successive inbound calls on that activation. The empirical signature is *IQR widening across multiple metrics simultaneously* (cycle 41 measured 2.6x p99 IQR, 7x p95 IQR, 6x reads/s IQR) rather than a clean median regression. Only elide synchronous fast paths when the surrounding caller still awaits an inter-grain call on the dominant path (cycle 39 / PR #240 - the `ShardRootGrain.PrepareForOperationAsync` ship - is the model: the helper sync-completed, but the caller's downstream `await cache.GetAsync(...)` still produced the inter-grain yield). See Phase 1 clause 6 (yield-boundary preservation) and Phase 6 IQR-ratio check for the prospective and retrospective guards on this anti-pattern.
 
-- **Launching benchmark runs (or any other long-running command) as background processes from the agent.** Empirically, the `run_command_in_terminal` tool's `background=true` mode does not reliably attach to or stream output from interactive PowerShell scripts in this workspace: every observed attempt has produced a pwsh process with near-zero CPU, no child `docker`/`dotnet`/`az` processes, no tee/redirect file, and no output retrievable via `get_background_terminal_output` (returns literal `nothing`). The most plausible cause is that the script reaches an interactive `az`/docker prompt or a `Read-Host`-equivalent that has no stdin attached in detached mode, and the script silently parks. The agent then wastes 5+ minutes polling a stuck background id while believing a 30-minute cohort is in flight. **Mandatory rule:** every benchmark invocation (`./benchmark.ps1 ...`, `./benchmark/azure-throughput/scripts/20-build-and-deploy.ps1 ...`, `dotnet test`, `docker build`, `az ...` deploys, anything that takes more than ~30 s) MUST be run with `background=false` in the foreground, one run at a time. If the tool blocks the agent's turn for the duration of a long cohort, that is the correct behaviour - hand control back to the user **before** the cohort with a short summary of the exact command(s) you intend to run and what each will write to `.run/`, and let the user run them at the shell so you can read the artefacts afterwards. Do not try to "split the cohort across background tasks", "parallelise the deploys", or "tee the output and poll" - all three have failed in this workspace. The only sanctioned use of `background=true` is for genuinely fire-and-forget local processes that do not need orchestration (e.g. starting a local VictoriaMetrics container that another foreground command will then query); benchmark cohorts are not that.
+- **Launching benchmark runs (or any other long-running command) as background processes from the agent.** Empirically, the `run_command_in_terminal` tool's `background=true` mode does not reliably attach to or stream output from interactive PowerShell scripts in this workspace: every observed attempt has produced a pwsh process with near-zero CPU, no child `docker`/`dotnet`/`az` processes, no tee/redirect file, and no output retrievable via `get_background_terminal_output` (returns literal `nothing`). The most plausible cause is that the script reaches an interactive `az`/docker prompt or a `Read-Host`-equivalent that has no stdin attached in detached mode, and the script silently parks. The agent then wastes 5+ minutes polling a stuck background id while believing a 30-minute cohort is in flight. **Mandatory rule:** every benchmark invocation (`./benchmark.ps1 ...`, `./benchmark/azure-throughput/scripts/run-cohort.ps1 ...`, `./benchmark/azure-throughput/scripts/ladder.ps1 ...`, `./benchmark/azure-throughput/scripts/deploy.ps1`, `./benchmark/azure-throughput/scripts/update.ps1`, `dotnet test`, `docker build`, `az ...` deploys, anything that takes more than ~30 s) MUST be run with `background=false` in the foreground, one run at a time. If the tool blocks the agent's turn for the duration of a long cohort, that is the correct behaviour - hand control back to the user **before** the cohort with a short summary of the exact command(s) you intend to run and what each will write to `.run/`, and let the user run them at the shell so you can read the artefacts afterwards. Do not try to "split the cohort across background tasks", "parallelise the deploys", or "tee the output and poll" - all three have failed in this workspace. The only sanctioned use of `background=true` is for genuinely fire-and-forget local processes that do not need orchestration (e.g. starting a local VictoriaMetrics container that another foreground command will then query); benchmark cohorts are not that.
 
 ## What this agent does NOT do
 
