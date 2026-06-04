@@ -30,10 +30,19 @@ jobs:
       # outside samples/ (plus docs) changed.
       #
       # Outputs:
-      #   code       - at least one non-doc file changed (any *.md / docs/** only => false).
-      #   nonSample  - at least one non-doc, non-sample file changed.
+      #   code       - at least one non-doc, non-benchmark file changed
+      #                (any *.md / docs/** / benchmark/** only => false).
+      #   nonSample  - at least one non-doc, non-benchmark, non-sample file changed.
       #
       # Derived: samples-only == (code == 'true' && nonSample == 'false').
+      #
+      # benchmark/** is excluded because its projects (Silo/, Producer/,
+      # infra/, scripts/) are not referenced from Orleans.Lattice.slnx and
+      # are deployed/run by hand against a long-lived Azure VM
+      # (see benchmark/azure-throughput/README.md). A benchmark-only PR has
+      # no compileable surface for the library test matrix to cover, so
+      # gating on it would just burn CI minutes running every package's
+      # deterministic suite via the conservative no-match-found fallback.
       #
       # NOTE: patterns must use '**/*.md' for recursive markdown matching.
       # picomatch (the matcher dorny/paths-filter uses) only treats '**' as a
@@ -49,9 +58,11 @@ jobs:
             code:
               - '!**/*.md'
               - '!docs/**'
+              - '!benchmark/**'
             nonSample:
               - '!**/*.md'
               - '!docs/**'
+              - '!benchmark/**'
               - '!samples/**'
 
       # Auto-discover packages by convention: each subdirectory of `src/`
