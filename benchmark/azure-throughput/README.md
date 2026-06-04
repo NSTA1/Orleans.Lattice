@@ -14,18 +14,15 @@ harness when a throughput claim needs to be backed by real-Azure numbers.
 
 ## Topology
 
-```
-+---------------------------+   loopback TCP   +-----------------------------+
-| lattice-producer (systemd)| ---------------> | lattice-silo (systemd)      |
-| (synthetic fleet emitter) |   127.0.0.1:7000 |  ILattice.SetManyAsync ->   |
-|                           |                  |  AzureTableWalStorage       |
-+---------------------------+                  +--------------+--------------+
-															  |
-															  v
-											  +-----------------------------+
-											  | Azure Storage Account       |
-											  | (Tables, managed identity)  |
-											  +-----------------------------+
+```mermaid
+flowchart LR
+	subgraph VM["Linux VM (single host)"]
+		direction LR
+		P[lattice-producer.service<br/>synthetic fleet emitter]
+		S[lattice-silo.service<br/>ILattice.SetManyAsync]
+		P -- loopback TCP<br/>127.0.0.1:7000 --> S
+	end
+	S -- AzureTableWalStorage<br/>managed identity --> AZ[(Azure Storage Account<br/>Tables)]
 ```
 
 Both processes run as systemd units on the same Linux VM and share a loopback hop
