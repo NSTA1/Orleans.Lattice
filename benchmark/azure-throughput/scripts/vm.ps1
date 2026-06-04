@@ -32,8 +32,8 @@ Set-StrictMode -Version Latest
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ParametersFile) {
-	$local = Join-Path $here 'vm.parameters.local.ps1'
-	$default = Join-Path $here 'vm.parameters.ps1'
+	$local = Join-Path $here 'parameters.local.ps1'
+	$default = Join-Path $here 'parameters.ps1'
 	$ParametersFile = if (Test-Path $local) { $local } else { $default }
 }
 $p = & $ParametersFile

@@ -1,6 +1,7 @@
-// Single Linux VM for Orleans.Lattice wedge investigation (Phase 0 of wedge-plan2.md).
+// Single Linux VM for the Orleans.Lattice azure-throughput benchmark.
 //
-// Design constraints (from wedge-plan2.md Phase 0):
+// Design constraints (originally from wedge-plan2.md Phase 0, now the
+// general-purpose benchmark host):
 //   - Deterministic single-tenant host (no ACI noise).
 //   - Accelerated networking ON (smallest SKU that supports it).
 //   - SSH-only, locked to a single source IP, public-key auth only.

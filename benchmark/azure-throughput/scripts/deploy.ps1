@@ -8,7 +8,8 @@
 	Creates the resource group if missing, deploys main.bicep, prints the SSH command.
 
 .PARAMETER ParametersFile
-	Optional explicit path to a parameters .ps1 file.
+	Optional explicit path to a parameters .ps1 file. Defaults to
+	parameters.local.ps1 (preferred) or parameters.ps1 in this folder.
 
 .PARAMETER NamePrefix
 	Optional override for NamePrefix from the parameters file. Used for the
@@ -35,10 +36,12 @@ Set-StrictMode -Version Latest
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not $ParametersFile) {
-	$local = Join-Path $here 'vm.parameters.local.ps1'
-	$default = Join-Path $here 'vm.parameters.ps1'
+	$local = Join-Path $here 'parameters.local.ps1'
+	$default = Join-Path $here 'parameters.ps1'
 	$ParametersFile = if (Test-Path $local) { $local } else { $default }
 }
+# Infra (Bicep + cloud-init + units) lives alongside us under ../infra/.
+$infraDir = Join-Path (Split-Path -Parent $here) 'infra'
 Write-Host "Loading parameters from $ParametersFile" -ForegroundColor Cyan
 $p = & $ParametersFile
 
@@ -91,8 +94,8 @@ az account set --subscription $p.SubscriptionId | Out-Null
 Write-Host "Ensuring resource group $($p.ResourceGroup) in $($p.Location)" -ForegroundColor Cyan
 az group create --name $p.ResourceGroup --location $p.Location --output none
 
-$bicep = Join-Path $here 'main.bicep'
-$cloudInit = Join-Path $here 'cloud-init.yaml'
+$bicep = Join-Path $infraDir 'main.bicep'
+$cloudInit = Join-Path $infraDir 'cloud-init.yaml'
 $customDataB64 = ''
 if (Test-Path $cloudInit) {
 	$bytes = [System.IO.File]::ReadAllBytes($cloudInit)
@@ -175,6 +178,18 @@ if (Test-Path $sshCfg) {
 }
 
 Write-Host 'Waiting for SSH to come up + cloud-init to finish...' -ForegroundColor Cyan
+# Purge any stale known_hosts entries for this FQDN/alias. A re-deploy after a
+# teardown re-uses the public DNS name but gets a NEW host key, so a leftover
+# entry from a prior VM will cause every probe below to silently reject with
+# 'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!' and the wait loop will
+# spin until the 8-minute deadline.
+$kh = Join-Path $HOME '.ssh/known_hosts'
+if (Test-Path $kh) {
+	foreach ($name in @($hostAlias, $fqdn)) {
+		& ssh-keygen -R $name -f $kh 2>$null | Out-Null
+	}
+}
+
 $deadline = (Get-Date).AddMinutes(8)
 $sshReady = $false
 while ((Get-Date) -lt $deadline) {
@@ -194,7 +209,7 @@ Write-Host ($ciState -join "`n")
 $dotnetVer = (& ssh -o StrictHostKeyChecking=accept-new $hostAlias '/usr/bin/dotnet --version 2>/dev/null || true').Trim()
 if (-not $dotnetVer) {
 	Write-Host 'cloud-init did not install .NET; running bootstrap.sh fallback...' -ForegroundColor Yellow
-	$bs = Join-Path $here 'bootstrap.sh'
+	$bs = Join-Path $infraDir 'bootstrap.sh'
 	$tmp = New-TemporaryFile
 	try {
 		[System.IO.File]::WriteAllText($tmp.FullName, ((Get-Content -Raw $bs) -replace "`r`n","`n"))
@@ -207,7 +222,7 @@ Write-Host "  dotnet $dotnetVer" -ForegroundColor Green
 
 Write-Host ''
 Write-Host '=== Infra deploy complete; running update-vm to publish silo + producer ===' -ForegroundColor Cyan
-$updateScript = Join-Path $here 'update-vm.ps1'
+$updateScript = Join-Path $here 'update.ps1'
 $updateArgs = @{}
 if ($NamePrefix)    { $updateArgs.NamePrefix    = $p.NamePrefix }
 if ($ParametersFile) { $updateArgs.ParametersFile = $ParametersFile }
@@ -217,5 +232,5 @@ if ($LASTEXITCODE -ne 0) { throw "update-vm.ps1 failed (exit $LASTEXITCODE)." }
 Write-Host ''
 Write-Host '=== End-to-end deploy complete ===' -ForegroundColor Green
 $prefixArg = if ($NamePrefix) { " -NamePrefix $($p.NamePrefix)" } else { '' }
-Write-Host "Run a cohort:  ./benchmark/vm/run-cohort.ps1$prefixArg -Vehicles 4000 -TickHz 5 -DurationSec 30" -ForegroundColor Yellow
-Write-Host "Tail logs:     ./benchmark/vm/vm.ps1 logs$prefixArg" -ForegroundColor Yellow
+Write-Host "Run a cohort:  ./benchmark/azure-throughput/scripts/run-cohort.ps1$prefixArg -Vehicles 4000 -TickHz 5 -DurationSec 30" -ForegroundColor Yellow
+Write-Host "Tail logs:     ./benchmark/azure-throughput/scripts/vm.ps1 logs$prefixArg" -ForegroundColor Yellow

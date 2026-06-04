@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot bootstrap for the wedge VM. Idempotent. Used by update-vm.ps1
+# One-shot bootstrap for the benchmark VM. Idempotent. Used by scripts/update.ps1
 # as a fallback when cloud-init fails (cloud-init's default runner is dash,
 # which historically tripped on `set -o pipefail`; the YAML form has been
 # patched but this script is the manual recovery path / single source of

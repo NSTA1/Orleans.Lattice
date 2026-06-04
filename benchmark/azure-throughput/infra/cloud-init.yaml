@@ -1,5 +1,5 @@
 #cloud-config
-# One-shot post-provision bootstrap for the lattice-wedge VM.
+# One-shot post-provision bootstrap for the azure-throughput benchmark VM.
 # Installs the .NET 10 SDK, dotnet diagnostic global tools, rsync, and lays
 # down the /opt/lattice tree owned by the admin user. The silo systemd unit
 # is dropped in by bootstrap-vm.ps1 (it needs the storage table endpoint

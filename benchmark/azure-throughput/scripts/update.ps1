@@ -51,11 +51,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Resolve-Path (Join-Path $here '../..')
+$repoRoot = Resolve-Path (Join-Path $here '../../..')
+$infraDir = Join-Path (Split-Path -Parent $here) 'infra'
 
 if (-not $ParametersFile) {
-	$local = Join-Path $here 'vm.parameters.local.ps1'
-	$default = Join-Path $here 'vm.parameters.ps1'
+	$local = Join-Path $here 'parameters.local.ps1'
+	$default = Join-Path $here 'parameters.ps1'
 	$ParametersFile = if (Test-Path $local) { $local } else { $default }
 }
 $p = & $ParametersFile
@@ -128,7 +129,7 @@ Write-Host "  cloud-init: $ciState"
 $dotnetVersion = (& ssh @sshOpts $sshTarget 'timeout 10 /usr/bin/dotnet --version 2>/dev/null || true').Trim()
 if (-not $dotnetVersion) {
 	Write-Host 'dotnet SDK not present. Running bootstrap.sh...' -ForegroundColor Yellow
-	$bs = Join-Path $here 'bootstrap.sh'
+	$bs = Join-Path $infraDir 'bootstrap.sh'
 	$tmp = New-TemporaryFile
 	try {
 		[System.IO.File]::WriteAllText($tmp.FullName, ((Get-Content -Raw $bs) -replace "`r`n","`n"))
@@ -145,7 +146,7 @@ Write-Host "  dotnet $dotnetVersion"
 if (-not $SkipUnitSync) {
 	Write-Host 'Rendering + installing systemd units...' -ForegroundColor Cyan
 	function Install-Unit([string]$name) {
-		$tpl = Get-Content -Raw (Join-Path $here $name)
+		$tpl = Get-Content -Raw (Join-Path $infraDir $name)
 		$rendered = $tpl `
 			-replace '__ADMIN_USER__', $adminUser `
 			-replace '__TABLE_ENDPOINT__', $tableEndpoint `
@@ -217,8 +218,8 @@ if (-not $NoRestart) {
 	$active = & ssh @sshOpts $sshTarget 'systemctl is-active lattice-silo'
 	Write-Host "  lattice-silo is-active: $active" -ForegroundColor Green
 	Write-Host ''
-	Write-Host 'Run a cohort with:  ./benchmark/vm/run-cohort.ps1' -ForegroundColor Yellow
-	Write-Host 'Tail silo logs:     ./benchmark/vm/vm.ps1 logs' -ForegroundColor Yellow
+	Write-Host 'Run a cohort with:  ./benchmark/azure-throughput/scripts/run-cohort.ps1' -ForegroundColor Yellow
+	Write-Host 'Tail silo logs:     ./benchmark/azure-throughput/scripts/vm.ps1 logs' -ForegroundColor Yellow
 }
 
 Write-Host 'Done.' -ForegroundColor Green

@@ -69,7 +69,8 @@ now actively distorting the investigation more than it is helping.
    needed; not necessary for the reliability question this plan
    targets.
 3. **Local repro against Azurite + a real Tables endpoint for the
-   final confirmation.** The current `repro/wedge-orleans/` harness
+   final confirmation.** The current console-app wedge repro (deleted in the
+      same cleanup that moved these docs here)
    already demonstrated (sections 6-7) that the platform primitives
    work in isolation, so the local repro is most valuable as a
    wiring-validation step for each new bound (does the deadline

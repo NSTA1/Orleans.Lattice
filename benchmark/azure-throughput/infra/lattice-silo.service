@@ -1,15 +1,15 @@
-# systemd unit for the Orleans.Lattice azure-throughput silo on the wedge VM.
-# Placeholders are substituted by update-vm.ps1 at deploy time:
+# systemd unit for the Orleans.Lattice azure-throughput silo.
+# Placeholders are substituted by scripts/update.ps1 at deploy time:
 #   __ADMIN_USER__         : VM admin user (owner of /opt/lattice)
 #   __TABLE_ENDPOINT__     : https://<account>.table.core.windows.net/
 #   __BLOB_ENDPOINT__      : https://<account>.blob.core.windows.net/
 #   __STORAGE_ACCOUNT__    : storage account name
 #
-# Restart=no: we want a wedge / crash to remain visible to journalctl and
+# Restart=no: we want a wedge or crash to remain visible to journalctl and
 # dotnet-dump rather than be silently respawned.
 
 [Unit]
-Description=Orleans.Lattice azure-throughput silo (wedge VM)
+Description=Orleans.Lattice azure-throughput silo
 After=network-online.target
 Wants=network-online.target
 

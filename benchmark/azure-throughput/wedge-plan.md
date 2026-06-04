@@ -874,7 +874,7 @@ Future work is performance (Family A) or operator-experience (the admission-dead
 
 ## 23. Re-verification on a deterministic VM 2026-06-04 (wedge-plan2.md Phase 1)
 
-A new investigation cycle (`wedge-plan2.md`) was opened against the post-G-026 main tip after a fresh "wedge reliably at >=4k vehicles" report. The cycle moved the iteration host off ACI onto a single `Standard_F8as_v6` VM in westus3 (8 vCPU AMD Zen4, 32 GiB, accelerated networking confirmed end-to-end). Same managed-identity Tables account, same code path, deterministic single-tenant host. See `repro/wedge-orleans/wedge-plan2.md` Phase 0 for the rationale (ACI's `az container logs` 60s truncation, bench-scraper stdout duplication, vCPU ceiling, and missing `dotnet-dump`/`dotnet-counters` attach surface drove ~3 spurious investigation cycles in this campaign alone).
+A new investigation cycle (`throughput.md` in this folder) was opened against the post-G-026 main tip after a fresh "wedge reliably at >=4k vehicles" report. The cycle moved the iteration host off ACI onto a single `Standard_F8as_v6` VM in westus3 (8 vCPU AMD Zen4, 32 GiB, accelerated networking confirmed end-to-end). Same managed-identity Tables account, same code path, deterministic single-tenant host. See `throughput.md` Phase 0 for the rationale (ACI's `az container logs` 60s truncation, bench-scraper stdout duplication, vCPU ceiling, and missing `dotnet-dump`/`dotnet-counters` attach surface drove ~3 spurious investigation cycles in this campaign alone).
 
 ### 23.1 Findings
 

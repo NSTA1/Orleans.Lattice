@@ -1,5 +1,5 @@
-# Default parameters for the lattice-wedge VM deployment.
-# Copy to vm.parameters.local.ps1 and edit. The .local.ps1 form is gitignored.
+# Default parameters for the azure-throughput benchmark VM.
+# Copy to parameters.local.ps1 and edit. The .local.ps1 form is gitignored.
 
 @{
 	SubscriptionId          = ''                       # az account show --query id -o tsv
