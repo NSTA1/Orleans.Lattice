@@ -334,7 +334,7 @@ builder.Logging.AddFilter("Orleans.Runtime.Placement.PlacementService", LogLevel
 
 builder.Services.AddHostedService<TcpIngestService>();
 builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.PhaseADiagnosticReporter>();
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec));
 
 builder.UseOrleans(silo =>
 {
@@ -639,7 +639,7 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
 // TcpIngestService class methods. Top-level local functions cannot
 // be referenced from non-top-level types per CS8801.
 
-internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount, int WalMaxPendingBatches);
+internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount, int WalMaxPendingBatches, int ResponseTimeoutSec);
 
 /// <summary>
 /// Selects which <c>ILattice</c> operation the benchmark silo dispatches
@@ -1089,6 +1089,14 @@ internal sealed class TcpIngestService(
         // commit-log seam actually run in parallel against
         // independent shards / partitions.
         var startedAt = Stopwatch.GetTimestamp();
+        // Timestamp of the first SetManyAsync dispatch - set inside the
+        // dispatch loop the first time a batch is actually accepted from
+        // the channel. The FINAL line uses this (when present) to compute
+        // an "active" average that excludes the idle window before any
+        // producer connected; `startedAt` is retained so the elapsed
+        // field continues to mean "wall-clock since the worker started"
+        // for any external parser that already depended on it.
+        long firstAcceptedAt = 0;
         long writtenTotal = 0;
         long writtenSinceReport = 0;
         long failedTotal = 0;
@@ -1120,6 +1128,7 @@ internal sealed class TcpIngestService(
             Interlocked.Increment(ref inFlight);
             if (Interlocked.Exchange(ref firstDispatchLogged, 1) == 0)
             {
+                Interlocked.Exchange(ref firstAcceptedAt, Stopwatch.GetTimestamp());
                 // One-shot: prove what the very first SetManyAsync call
                 // actually got. Configured batch size is the cap; the
                 // first batch may be smaller if a flush deadline hit
@@ -1282,10 +1291,22 @@ internal sealed class TcpIngestService(
         try { await stallWatchdogTask; } catch { /* shutdown */ }
         reporterCts.Dispose();
 
-        var totalElapsed = (Stopwatch.GetTimestamp() - startedAt) / (double)Stopwatch.Frequency;
+        var endedAt = Stopwatch.GetTimestamp();
+        var totalElapsed = (endedAt - startedAt) / (double)Stopwatch.Frequency;
         var writtenFinal = Interlocked.Read(ref writtenTotal);
         var failedFinal = Interlocked.Read(ref failedTotal);
-        Console.WriteLine($"[silo] FINAL written={writtenFinal:N0} failed={failedFinal:N0} elapsed={totalElapsed:0.0}s Entries written per second (avg)={writtenFinal / Math.Max(0.001, totalElapsed):N0}");
+        // "Active" window: from first accepted batch to last drained flush.
+        // Excludes the idle pre-connect window and is the most accurate
+        // measure of sustained ingest throughput. Falls back to total
+        // when nothing was accepted (silo started but no producer ever
+        // connected).
+        var firstAccept = Interlocked.Read(ref firstAcceptedAt);
+        var activeElapsed = firstAccept != 0
+            ? (endedAt - firstAccept) / (double)Stopwatch.Frequency
+            : totalElapsed;
+        var avgTotal = writtenFinal / Math.Max(0.001, totalElapsed);
+        var avgActive = writtenFinal / Math.Max(0.001, activeElapsed);
+        Console.WriteLine($"[silo] FINAL written={writtenFinal:N0} failed={failedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s Entries written per second (avg)={avgTotal:N0} (active avg)={avgActive:N0}");
     }
 
     // Sentinel returned by FlushAsync when a SetManyAsync was rejected
@@ -1377,7 +1398,29 @@ internal sealed class TcpIngestService(
             catch (Exception ex)
             {
                 BenchMetrics.LatticeOpRetryAttempts.Record(attempt - 1, treeTag, modeTag);
-                logger.LogWarning(ex, "[silo] flush of {Count} failed (mode={Mode})", batch.Count, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
+                // Surface the most common saturation-vs-bug class explicitly. A bare
+                // TimeoutException out of Orleans means the SILO's own grain RPC deadline
+                // (Silo+Client `ResponseTimeout`) fired before SetManyAsync returned. This
+                // is NOT a wedge - it's the bench harness's outer call hitting its 30s
+                // (default) ceiling because the configured offered rate exceeds the
+                // sustainable Tables drain rate at this rung. The G-026 writer admission
+                // cap is doing exactly what it's designed to do (queueing); the deadline
+                // just happens to be shorter than the realistic worst-case admission
+                // wait. Knobs: raise BENCH_RESPONSE_TIMEOUT_SEC, reduce BENCH_TICK_HZ or
+                // BENCH_VEHICLE_COUNT, raise BENCH_WAL_PARTITIONS / WalMaxPendingBatches.
+                if (ex is TimeoutException)
+                {
+                    logger.LogWarning(
+                        "[silo] grain-rpc-deadline: SetManyAsync of {Count} did not return within ResponseTimeout " +
+                        "(BENCH_RESPONSE_TIMEOUT_SEC={ResponseTimeoutSec}s). Offered rate exceeds sustained Tables " +
+                        "drain rate at this rung; raise BENCH_RESPONSE_TIMEOUT_SEC, drop tickHz/vehicles, or tune WAL " +
+                        "fan-out (BENCH_WAL_PARTITIONS / BENCH_WAL_MAX_PENDING_BATCHES). mode={Mode}",
+                        batch.Count, settings.ResponseTimeoutSec, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
+                }
+                else
+                {
+                    logger.LogWarning(ex, "[silo] flush of {Count} failed (mode={Mode})", batch.Count, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
+                }
                 return 0;
             }
         }

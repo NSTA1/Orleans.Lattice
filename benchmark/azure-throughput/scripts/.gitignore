@@ -1,30 +1,8 @@
-# Per-deployment context written by 10-provision.ps1; contains the
-# operator's Azure subscription ID and other resource IDs.
-.context.json
-# Regenerated ACI deployment file written by 20-build-and-deploy.ps1;
-# contains live ACR credentials, never commit.
-.aci-deploy.yaml
-# Local-only state written by 40-ladder.ps1 / 21-reconfigure.ps1.
-.fleet-size.config
-# Per-rung sweep results written by 40-ladder.ps1. Local-only,
-# possibly contains throughput numbers from cost-sensitive runs.
+# Operator-specific overrides: subscription ID, SSH key path, source IP, etc.
+parameters.local.ps1
+# Per-rung sweep results written by ladder.ps1. Local-only.
 .ladder-results.csv
 .ladder-phaseA.csv
-# Per-operator BENCH_PREFIX persisted by 10-provision.ps1. Random per machine,
-# used to keep storage-account / ACR names globally unique. Never commit.
-.prefix
-# Ephemeral per-probe driver scripts, manifests, and run logs written by
-# the operator while iterating on a scaling.md probe series (e.g.
-# `.run-U9g-driver.ps1`, `.run-U9hA-manifest.csv`). The shape that
-# actually shipped is documented in scaling.md; the local drivers are
-# not reusable tooling. The conventional `40-ladder.ps1` and friends
-# remain tracked.
-.run-*
-# Per-probe sweep directories written by 40-ladder.ps1 when copying a
-# rung's CSVs and logs aside for a single scaling.md probe (e.g.
-# `.u9h-d-sweep/`, `.u9j-rung-sweep/`). The directory contents - CSVs,
-# logs, and any other captured evidence - are intentionally local-only.
-# `*.log` is already covered by the top-level rule, but the CSVs inside
-# (renamed to `.results.csv` / `.phaseA.csv` per directory) are not,
-# so we ignore the whole directory shape here.
+# Per-probe sweep directories written by ladder.ps1 when copying a
+# rung's CSVs and logs aside for a single scaling.md probe.
 .*-sweep/

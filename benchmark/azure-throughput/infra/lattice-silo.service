@@ -1,0 +1,41 @@
+# systemd unit for the Orleans.Lattice azure-throughput silo.
+# Placeholders are substituted by scripts/update.ps1 at deploy time:
+#   __ADMIN_USER__         : VM admin user (owner of /opt/lattice)
+#   __TABLE_ENDPOINT__     : https://<account>.table.core.windows.net/
+#   __BLOB_ENDPOINT__      : https://<account>.blob.core.windows.net/
+#   __STORAGE_ACCOUNT__    : storage account name
+#
+# Restart=no: we want a wedge or crash to remain visible to journalctl and
+# dotnet-dump rather than be silently respawned.
+
+[Unit]
+Description=Orleans.Lattice azure-throughput silo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__ADMIN_USER__
+WorkingDirectory=/opt/lattice/publish
+ExecStart=/usr/bin/dotnet /opt/lattice/publish/VehicleFleetSimulator.AzureThroughput.Silo.dll
+Restart=no
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# Auth + endpoints. The VM's system-assigned MI is granted Table/Blob/Queue
+# Data Contributor on this account, so DefaultAzureCredential will pick the
+# managed identity token via IMDS automatically.
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_NOLOGO=1
+Environment=BENCH_STORAGE_URI=__TABLE_ENDPOINT__
+Environment=AZURE_STORAGE_ACCOUNT=__STORAGE_ACCOUNT__
+# Hint DefaultAzureCredential to skip interactive/Visual Studio chains.
+Environment=AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential
+
+# stdout/stderr -> journald, tagged so vm.ps1 logs / journalctl -t works.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lattice-silo
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,67 @@
+#cloud-config
+# One-shot post-provision bootstrap for the azure-throughput benchmark VM.
+# Installs the .NET 10 SDK, dotnet diagnostic global tools, rsync, and lays
+# down the /opt/lattice tree owned by the admin user. The silo systemd unit
+# is dropped in by bootstrap-vm.ps1 (it needs the storage table endpoint
+# which is a deploy-time output, not known here).
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - rsync
+  - curl
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - jq
+  - htop
+  - sysstat
+
+write_files:
+  - path: /etc/profile.d/lattice.sh
+    permissions: '0644'
+    content: |
+      export DOTNET_ROOT=/usr/share/dotnet
+      export PATH=$PATH:/usr/share/dotnet:$HOME/.dotnet/tools
+      export DOTNET_CLI_TELEMETRY_OPTOUT=1
+      export DOTNET_NOLOGO=1
+
+runcmd:
+  # Microsoft package feed for .NET 10. Each command runs under bash explicitly
+  # (cloud-init's default runner is dash, which doesn't grok 'set -o pipefail').
+  - - bash
+    - -c
+    - |
+      set -euo pipefail
+      UBUNTU_VERSION=$(lsb_release -rs)
+      curl -fsSL -o /tmp/packages-microsoft-prod.deb \
+        https://packages.microsoft.com/config/ubuntu/${UBUNTU_VERSION}/packages-microsoft-prod.deb
+      dpkg -i /tmp/packages-microsoft-prod.deb
+      rm -f /tmp/packages-microsoft-prod.deb
+      apt-get update
+      apt-get install -y dotnet-sdk-10.0
+
+  # Diagnostic tools as global tools, installed into the admin user's profile.
+  - - bash
+    - -c
+    - |
+      set -euo pipefail
+      ADMIN_USER=$(getent passwd 1000 | cut -d: -f1)
+      sudo -u "$ADMIN_USER" -H bash -lc '
+        export DOTNET_CLI_TELEMETRY_OPTOUT=1
+        export DOTNET_NOLOGO=1
+        dotnet tool install --global dotnet-dump
+        dotnet tool install --global dotnet-counters
+        dotnet tool install --global dotnet-trace
+        dotnet tool install --global dotnet-gcdump
+      '
+
+  # /opt/lattice tree owned by admin so rsync from the dev box does not need sudo.
+  - - bash
+    - -c
+    - |
+      set -euo pipefail
+      ADMIN_USER=$(getent passwd 1000 | cut -d: -f1)
+      mkdir -p /opt/lattice/src /opt/lattice/publish /opt/lattice/logs
+      chown -R "$ADMIN_USER":"$ADMIN_USER" /opt/lattice

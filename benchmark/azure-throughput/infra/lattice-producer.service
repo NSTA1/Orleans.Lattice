@@ -1,0 +1,43 @@
+# systemd unit for the azure-throughput producer.
+# Runs alongside lattice-silo.service on the same host (127.0.0.1:7000).
+#
+# Placeholders substituted by scripts/update.ps1:
+#   __ADMIN_USER__ : VM admin user (owner of /opt/lattice)
+#
+# Cohort knobs (BENCH_VEHICLE_COUNT, BENCH_TICK_HZ, BENCH_DURATION_SEC) are
+# overridden per run via `systemctl edit --runtime lattice-producer` (or via
+# scripts/run-cohort.ps1 which writes a drop-in before starting). Defaults
+# here match the 4k:5 baseline rung from repro/wedge-orleans/throughput.md
+# section 25.
+#
+# Restart=no: we want the producer to exit cleanly when its duration is up;
+# the cohort wrapper reads the exit + the silo journal afterwards.
+
+[Unit]
+Description=Orleans.Lattice azure-throughput producer
+After=lattice-silo.service network-online.target
+Requires=lattice-silo.service
+
+[Service]
+Type=simple
+User=__ADMIN_USER__
+WorkingDirectory=/opt/lattice/publish-producer
+ExecStart=/usr/bin/dotnet /opt/lattice/publish-producer/VehicleFleetSimulator.AzureThroughput.Producer.dll
+Restart=no
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_NOLOGO=1
+Environment=BENCH_SILO_HOST=127.0.0.1
+Environment=BENCH_SILO_PORT=7000
+Environment=BENCH_VEHICLE_COUNT=4000
+Environment=BENCH_TICK_HZ=5
+Environment=BENCH_DURATION_SEC=45
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lattice-producer
+
+[Install]
+WantedBy=multi-user.target
