@@ -97,6 +97,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
+- [FX-027](https://github.com/NSTA1/Orleans.Lattice/issues/587) - extend `ShardActivationRetry` envelope to other public `ILattice` operators that drive the shard-root seed (sub-audit of FX-026)
+
 ### Shipped
 
 - [FX-001](https://github.com/NSTA1/Orleans.Lattice/issues/401) - Leaf split publish ordering
@@ -122,6 +124,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-023](https://github.com/NSTA1/Orleans.Lattice/issues/570) - Reshard to equal shard count throws instead of idempotent no-op (crashes host)
 - [FX-024](https://github.com/NSTA1/Orleans.Lattice/issues/573) - Scrub ConfigureAwait(false) from WalCommitLogWriter except the deliberate G-023 catch-to-threadpool sites
 - [FX-025](https://github.com/NSTA1/Orleans.Lattice/issues/576) - Storage-usage poller activates every leaf and snapshot grain, defeating cold-tree assumptions
+- [FX-026](https://github.com/NSTA1/Orleans.Lattice/issues/586) - `ReshardAsync` surfaces retriable `ActivationReadyTimeout` to callers, breaking startup-reshard contract under cold-start
 
 ## Gaps & potential additions
 

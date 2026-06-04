@@ -115,8 +115,31 @@ public class ShardRootGrainActivationReadyDeadlineTests
             registerBehavior: () => neverCompletes.Task);
 
         Assert.That(async () => await h.Grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>()),
-            Throws.InstanceOf<TimeoutException>()
+            Throws.InstanceOf<ShardActivationTimeoutException>()
                   .With.Message.Contains(nameof(LatticeOptions.ActivationReadyTimeout)));
+    }
+
+    [Test]
+    public void FirstTouch_typed_exception_carries_attribution_slots()
+    {
+        // The typed exception's slots are part of the public wire contract -
+        // operator tooling (and the retry envelope's logging in future) reads
+        // them rather than message-text-grepping. Pin them so a future change
+        // that drops the slot population at the throw site is caught.
+        var neverCompletes = new TaskCompletionSource();
+        var h = CreateHarness(
+            TimeSpan.FromMilliseconds(150),
+            registerBehavior: () => neverCompletes.Task);
+
+        var ex = Assert.ThrowsAsync<ShardActivationTimeoutException>(
+            async () => await h.Grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.TreeId, Is.EqualTo(TreeId));
+            Assert.That(ex.ShardIndex, Is.EqualTo(0));
+            Assert.That(ex.TimeoutSeconds, Is.EqualTo(0.15).Within(0.001));
+        });
     }
 
     [Test]
@@ -143,7 +166,7 @@ public class ShardRootGrainActivationReadyDeadlineTests
 
         // First touch parks then times out.
         Assert.That(async () => await h.Grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>()),
-            Throws.InstanceOf<TimeoutException>());
+            Throws.InstanceOf<ShardActivationTimeoutException>());
 
         // Let the abandoned first registration drain harmlessly.
         gate.SetResult();
