@@ -88,6 +88,9 @@ internal sealed partial class LatticeGrain
         IComparer<string> comparer = reverse ? ReverseOrdinal : StringComparer.Ordinal;
         var entriesComparer = reverse ? EntriesReverseComparer : EntriesForwardComparer;
 
+        // Per-shard ShardActivationRetry wrap on the initial MoveNextAsync:
+        // a single shard's cold-start seed-timeout retries only that shard,
+        // not the whole scan init.
         var movedReported = isSystemTree ? null : new HashSet<int>();
         var cursors = new List<IEntriesCursor>(physicalShards.Count);
         var initTasks = new Task[physicalShards.Count];
@@ -97,7 +100,8 @@ internal sealed partial class LatticeGrain
                 GetShardGrainByIndex(physicalTreeId, physicalShards[i]),
                 startInclusive, endExclusive, pageSize, reverse, usePrefetch, movedReported);
             cursors.Add(sc);
-            initTasks[i] = sc.MoveNextAsync();
+            initTasks[i] = ShardActivationRetry.RunAsync(
+                () => sc.MoveNextAsync());
         }
         await Task.WhenAll(initTasks);
 

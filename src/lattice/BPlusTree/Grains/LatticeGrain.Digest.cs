@@ -56,6 +56,8 @@ internal sealed partial class LatticeGrain
         }
 
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-        return await shard.GetShardProjectionDigestAsync(cancellationToken);
+        return await ShardActivationRetry.RunAsync(
+            () => shard.GetShardProjectionDigestAsync(cancellationToken),
+            cancellationToken);
     }
 }

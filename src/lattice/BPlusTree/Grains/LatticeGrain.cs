@@ -358,7 +358,11 @@ internal sealed partial class LatticeGrain(
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG reader-shard-fanout-enter] shard={shardIdx} attempt={attempt} keys=[{string.Join(',', keys)}]");
 #endif
-            var values = await shard.GetManyAsync(keys);
+            // Per-shard ShardActivationRetry wrap: a single shard's cold-start
+            // seed-timeout retries only that shard, not the whole fan-out.
+            // Healthy sibling tasks continue uninterrupted.
+            var values = await ShardActivationRetry.RunAsync(
+                () => shard.GetManyAsync(keys));
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG reader-shard-fanout-exit] shard={shardIdx} attempt={attempt} returnedCount={values.Count} rounds=[{string.Join(',', values.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
 #endif
@@ -482,6 +486,14 @@ internal sealed partial class LatticeGrain(
 #endif
                         if (DateTime.UtcNow >= deadline) throw;
                         if (!TryInvalidateStaleAlias()) throw;
+                    }
+                    catch (ShardActivationTimeoutException)
+                    {
+                        // Seed-timeout is retriable by construction; absorb
+                        // into the existing wall-clock budget with a per-
+                        // attempt backoff (mirrors RetryOnStaleRoutingAsync).
+                        if (DateTime.UtcNow >= deadline) throw;
+                        await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                     }
                     catch (InvalidOperationException)
                     {
@@ -794,7 +806,10 @@ internal sealed partial class LatticeGrain(
             IShardRootGrain shard,
             List<KeyValuePair<string, byte[]>> entries)
         {
-            await shard.SetManyAsync(entries);
+            // Per-shard ShardActivationRetry wrap: a single shard's cold-start
+            // seed-timeout retries only that shard, not the whole fan-out.
+            await ShardActivationRetry.RunAsync(
+                () => shard.SetManyAsync(entries));
         }
     }
 
@@ -819,7 +834,9 @@ internal sealed partial class LatticeGrain(
         DiagSink.Write($"[DIAG setmanyatomic-enter] tree={TreeId} op={operationId} entriesCount={entries.Count}");
         try
         {
-            await saga.ExecuteAsync(TreeId, entries);
+            await ShardActivationRetry.RunAsync(
+                () => saga.ExecuteAsync(TreeId, entries),
+                cancellationToken);
             DiagSink.Write($"[DIAG setmanyatomic-exit] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0}");
         }
         catch (Exception ex)
@@ -828,7 +845,9 @@ internal sealed partial class LatticeGrain(
             throw;
         }
 #else
-        await saga.ExecuteAsync(TreeId, entries);
+        await ShardActivationRetry.RunAsync(
+            () => saga.ExecuteAsync(TreeId, entries),
+            cancellationToken);
 #endif
     }
 
@@ -856,7 +875,9 @@ internal sealed partial class LatticeGrain(
         DiagSink.Write($"[DIAG setmanyatomic-enter] tree={TreeId} op={operationId} entriesCount={entries.Count} idempotent=true");
         try
         {
-            await saga.ExecuteAsync(TreeId, entries);
+            await ShardActivationRetry.RunAsync(
+                () => saga.ExecuteAsync(TreeId, entries),
+                cancellationToken);
             DiagSink.Write($"[DIAG setmanyatomic-exit] tree={TreeId} op={operationId} entriesCount={entries.Count} elapsedMs={swSetMany.Elapsed.TotalMilliseconds:F0}");
         }
         catch (Exception ex)
@@ -865,7 +886,9 @@ internal sealed partial class LatticeGrain(
             throw;
         }
 #else
-        await saga.ExecuteAsync(TreeId, entries);
+        await ShardActivationRetry.RunAsync(
+            () => saga.ExecuteAsync(TreeId, entries),
+            cancellationToken);
 #endif
     }
 
@@ -960,11 +983,14 @@ internal sealed partial class LatticeGrain(
         using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
 
         // Fan out to all physical shards in parallel - any may contain keys in the range.
+        // Per-shard ShardActivationRetry wrap: a single shard's cold-start
+        // seed-timeout retries only that shard, not the whole fan-out.
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            tasks[i] = shard.DeleteRangeAsync(startInclusive, endExclusive);
+            tasks[i] = ShardActivationRetry.RunAsync(
+                () => shard.DeleteRangeAsync(startInclusive, endExclusive));
         }
 
         await Task.WhenAll(tasks);
@@ -1106,7 +1132,11 @@ internal sealed partial class LatticeGrain(
                         pass1Tasks[i] = Task.FromResult(0);
                         continue;
                     }
-                    pass1Tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
+                    // Per-shard ShardActivationRetry wrap: a single shard's
+                    // cold-start seed-timeout retries only that shard, not
+                    // the whole fan-out.
+                    pass1Tasks[i] = ShardActivationRetry.RunAsync(
+                        () => shard.CountForSlotsAsync(owned, virtualShardCount));
                 }
                 await Task.WhenAll(pass1Tasks);
             }
@@ -1137,11 +1167,14 @@ internal sealed partial class LatticeGrain(
 
     private async Task<int> SimpleSumCountAsync(string physicalTreeId, IReadOnlyList<int> physicalShards)
     {
+        // Per-shard ShardActivationRetry wrap: a single shard's cold-start
+        // seed-timeout retries only that shard, not the whole fan-out.
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            tasks[i] = shard.CountAsync();
+            tasks[i] = ShardActivationRetry.RunAsync(
+                () => shard.CountAsync());
         }
         await Task.WhenAll(tasks);
         var total = 0;
@@ -1304,7 +1337,10 @@ internal sealed partial class LatticeGrain(
                     for (int i = 0; i < physicalShards.Count; i++)
                     {
                         var sh = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-                        fastTasks[i] = sh.CountAsync();
+                        // Per-shard ShardActivationRetry wrap: see
+                        // SimpleSumCountAsync for the rationale.
+                        fastTasks[i] = ShardActivationRetry.RunAsync(
+                            () => sh.CountAsync());
                     }
                     await Task.WhenAll(fastTasks);
                 }
@@ -1329,7 +1365,10 @@ internal sealed partial class LatticeGrain(
                         tasks[i] = Task.FromResult(0);
                         continue;
                     }
-                    tasks[i] = shard.CountForSlotsAsync(owned, virtualShardCount);
+                    // Per-shard ShardActivationRetry wrap: see the pass-1
+                    // fan-out above for the rationale.
+                    tasks[i] = ShardActivationRetry.RunAsync(
+                        () => shard.CountForSlotsAsync(owned, virtualShardCount));
                 }
                 await Task.WhenAll(tasks);
             }
@@ -1597,6 +1636,19 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
+    /// Linear backoff applied inside <see cref="RetryOnStaleRoutingAsync{T}"/>
+    /// (and its void overload) between consecutive
+    /// <see cref="ShardActivationTimeoutException"/> retries. The seed
+    /// timeout itself is the dominant per-attempt cost (~15 s default);
+    /// the backoff exists so the next attempt does not slam into the same
+    /// not-yet-visible activation immediately. Aligned with the per-attempt
+    /// shape used by the standalone <see cref="ShardActivationRetry"/>
+    /// helper consumed by operators (e.g. <see cref="ReshardAsync"/>) that
+    /// do not route through the stale-routing envelope.
+    /// </summary>
+    private static readonly TimeSpan ShardActivationRetryBackoff = TimeSpan.FromSeconds(1);
+
+    /// <summary>
     /// Returns <c>true</c> if the cached alias was stale and has been invalidated,
     /// allowing a retry with a fresh resolution. Returns <c>false</c> if no alias
     /// was cached (meaning the tree is genuinely deleted, not a stale alias).
@@ -1672,6 +1724,18 @@ internal sealed partial class LatticeGrain(
                 if (DateTime.UtcNow >= deadline) throw;
                 if (!TryInvalidateStaleAlias()) throw;
             }
+            catch (ShardActivationTimeoutException)
+            {
+                // Seed-timeout is by design retriable - every cross-grain
+                // step in the shard-root activation seed is idempotent on
+                // retry. Absorb it into the existing wall-clock budget so
+                // operators do not observe the typed surface during normal
+                // cold-start races. A backoff between attempts keeps the
+                // retry from slamming into the same not-yet-visible
+                // activation immediately.
+                if (DateTime.UtcNow >= deadline) throw;
+                await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+            }
             catch (InvalidOperationException)
             {
                 if (invalidOpRetried) throw;
@@ -1710,6 +1774,14 @@ internal sealed partial class LatticeGrain(
             {
                 if (DateTime.UtcNow >= deadline) throw;
                 if (!TryInvalidateStaleAlias()) throw;
+            }
+            catch (ShardActivationTimeoutException)
+            {
+                // See the generic overload for the rationale: seed-timeout
+                // is retriable by construction; absorb within the wall-clock
+                // budget with a per-attempt backoff.
+                if (DateTime.UtcNow >= deadline) throw;
+                await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
             }
             catch (InvalidOperationException)
             {

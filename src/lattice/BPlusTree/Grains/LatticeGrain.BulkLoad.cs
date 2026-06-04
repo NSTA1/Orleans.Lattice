@@ -35,14 +35,28 @@ internal sealed partial class LatticeGrain
         // a shard that the current batch's keys do not partition into.
         // Per the contract on `ILattice.BulkLoadAsync`, "Throws
         // InvalidOperationException if any shard already contains data".
-        var tasks = new List<Task>();
+        //
+        // Per-shard buckets are sorted up-front. Each shard's RPC is
+        // wrapped in its own ShardActivationRetry envelope so a single
+        // shard's seed-timeout only retries that shard, not every
+        // sibling. The shard-side `operationId` deduplication keeps the
+        // per-shard retry idempotent.
+        foreach (var (_, bucket) in shardBuckets)
+        {
+            if (bucket.Count > 0)
+                bucket.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
+        }
+
+        var tasks = new List<Task>(shardBuckets.Count);
         foreach (var (shardIdx, bucket) in shardBuckets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (bucket.Count > 0)
-                bucket.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
-            tasks.Add(shard.BulkLoadAsync($"{operationId}-{shardIdx}", bucket));
+            var capturedShardIdx = shardIdx;
+            var capturedBucket = bucket;
+            tasks.Add(ShardActivationRetry.RunAsync(
+                () => shard.BulkLoadAsync($"{operationId}-{capturedShardIdx}", capturedBucket),
+                cancellationToken));
         }
 
         await Task.WhenAll(tasks);
@@ -53,7 +67,9 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
-        await deletion.DeleteTreeAsync();
+        await ShardActivationRetry.RunAsync(
+            () => deletion.DeleteTreeAsync(),
+            cancellationToken);
     }
 
     public async Task RecoverTreeAsync(CancellationToken cancellationToken = default)
@@ -61,7 +77,9 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
-        await deletion.RecoverAsync();
+        await ShardActivationRetry.RunAsync(
+            () => deletion.RecoverAsync(),
+            cancellationToken);
     }
 
     public async Task PurgeTreeAsync(CancellationToken cancellationToken = default)
@@ -69,7 +87,9 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
-        await deletion.PurgeNowAsync();
+        await ShardActivationRetry.RunAsync(
+            () => deletion.PurgeNowAsync(),
+            cancellationToken);
     }
 
     public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren, CancellationToken cancellationToken = default)
@@ -77,7 +97,9 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
-        await resize.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren);
+        await ShardActivationRetry.RunAsync(
+            () => resize.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren),
+            cancellationToken);
     }
 
     public async Task UndoResizeAsync(CancellationToken cancellationToken = default)
@@ -85,7 +107,9 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
-        await resize.UndoResizeAsync();
+        await ShardActivationRetry.RunAsync(
+            () => resize.UndoResizeAsync(),
+            cancellationToken);
     }
 
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
@@ -94,7 +118,9 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
-        await snapshot.SnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren);
+        await ShardActivationRetry.RunAsync(
+            () => snapshot.SnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren),
+            cancellationToken);
     }
 
     public async Task<bool> TreeExistsAsync(CancellationToken cancellationToken = default)
@@ -132,7 +158,9 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
-        await merge.MergeAsync(sourceTreeId);
+        await ShardActivationRetry.RunAsync(
+            () => merge.MergeAsync(sourceTreeId),
+            cancellationToken);
     }
 
     public async Task<bool> IsMergeCompleteAsync(CancellationToken cancellationToken = default)
