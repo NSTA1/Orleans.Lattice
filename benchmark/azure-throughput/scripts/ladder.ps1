@@ -125,7 +125,7 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
 	"${vehicles},${tickHz},${DurationSec},${written},${failed},${active},${throughput},${elapsed},${siloCpuPeak},${siloCpuAvg},${sysCpuPeak},${rssGiB},${verdict},${tsUtc}" `
 		| Add-Content -Path $ResultsCsv -Encoding utf8
 
-	Write-Host "[ladder] rung $vehicles:$tickHz -> throughput=$throughput e/s, failed=$failed, verdict=$verdict" -ForegroundColor Yellow
+	Write-Host "[ladder] rung ${vehicles}:${tickHz} -> throughput=$throughput e/s, failed=$failed, verdict=$verdict" -ForegroundColor Yellow
 
 	if ($DegradeThresholdPct -gt 0 -and $throughput -gt 0) {
 		if ($throughput -gt $bestThroughput) {
