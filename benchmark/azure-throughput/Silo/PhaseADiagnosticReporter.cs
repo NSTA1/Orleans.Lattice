@@ -2,9 +2,10 @@
 //
 // Subscribes to the shared "orleans.lattice" meter and emits per-instrument
 // p50/p90/p99/count lines to stdout once every BENCH_PHASEA_REPORT_SEC
-// seconds (default 10). The ACI log carrying these lines is the single
-// sink the ladder script (40-ladder.ps1) scrapes for attribution, so
-// the format is intentionally fixed and easy to grep:
+// seconds (default 10). The systemd-journald-captured silo log carrying
+// these lines is the single sink the cohort runner and the ladder script
+// scrape for attribution, so the format is intentionally fixed and easy
+// to grep:
 //
 //   [phaseA] t=20.0s instrument=wal.append.turn_wait      tree=t shard=0 phase=- status=- count=42318 p50=1.41ms p90=3.20ms p99=8.74ms
 //   [phaseA] t=20.0s instrument=provider.commit.duration  tree=t shard=0 phase=phase1 status=- count=4231 p50=12.8ms p90=18.4ms p99=41.2ms
@@ -416,7 +417,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
 
         var elapsed = Stopwatch.GetElapsedTime(_startedAtTicks).TotalSeconds;
         // Sort by instrument name then tag tuple so successive report
-        // ticks emit lines in a stable order - greppable in the ACI log
+        // ticks emit lines in a stable order - greppable in the silo log
         // and predictable for the ladder-script CSV parse step.
         Array.Sort(snapshot, static (a, b) =>
         {

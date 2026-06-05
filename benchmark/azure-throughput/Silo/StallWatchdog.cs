@@ -18,11 +18,13 @@ namespace VehicleFleetSimulator.AzureThroughput.Silo;
 /// the wedge trips.
 /// </para>
 /// <para>
-/// ACI gives the run exactly one exfiltration channel that survives the
-/// container-group teardown: the silo's stdout, which the deploy script
-/// streams to <c>.run/silo-*.log</c>. A core dump would need a file mount
-/// the bench does not have, so the watchdog instead performs the analysis
-/// <i>in process</i>: it snapshots its own runtime with ClrMD and walks
+/// The single-VM topology gives the run exactly one exfiltration channel
+/// that survives a wedged silo's eventual systemd-driven teardown: the
+/// silo's stdout, which systemd-journald captures and the cohort runner
+/// pulls back to <c>benchmark/.run/azure-throughput/silo-*.log</c>. A core
+/// dump would need a separate retrieval path the cohort runner does not
+/// drive, so the watchdog instead performs the analysis <i>in process</i>:
+/// it snapshots its own runtime with ClrMD and walks
 /// the managed heap for suspended async state machines (the in-process
 /// equivalent of <c>dumpasync</c>) plus every managed thread stack (the
 /// equivalent of <c>dotnet-stack</c>), then prints the result to stdout.

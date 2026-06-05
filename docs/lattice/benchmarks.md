@@ -306,6 +306,58 @@ post-mortem inspection in [PerfView](https://github.com/microsoft/perfview) or
 When the variable is unset, the raw blob is written to a temp file and deleted
 on session stop.
 
+## The `azure-throughput` harness (real Azure Tables)
+
+`azure-throughput` is the out-of-band tier for measuring sustained
+write-throughput against a **real Azure Storage account** rather than
+Azurite or the in-memory WAL. The local docker-compose scenarios are
+reproducible and cheap, but Azurite collapses network RTT and does not
+model Azure Tables partition-server behaviour or throttling - so any
+throughput claim that needs to back a public number, or any WAL hot-
+path optimisation that needs realistic Azure-side latency, runs here.
+
+The harness deploys a single Linux VM (Standard_D4as_v5 by default,
+with accelerated networking) into Azure. The producer and silo run
+as co-located systemd units; the silo authenticates to a real Azure
+Tables WAL via the VM's system-assigned managed identity. A cohort
+runner script applies env-var drop-ins, restarts the silo, runs the
+producer for the configured duration, then collects the silo and
+producer journals plus a per-second VM-level CPU/RSS sampler CSV
+under `benchmark/.run/azure-throughput/`.
+
+Entry points:
+
+```powershell
+# One-time provision (Bicep + cloud-init + first publish).
+./benchmark/azure-throughput/scripts/deploy.ps1
+
+# Inner-loop sync + publish + silo restart on the existing VM.
+./benchmark/azure-throughput/scripts/update.ps1
+
+# Single cohort at the default 4,000 vehicles / 5 Hz / 45 s rung.
+./benchmark/azure-throughput/scripts/run-cohort.ps1
+
+# Rung sweep across multiple offered-load points.
+./benchmark/azure-throughput/scripts/ladder.ps1 -Rungs '4000:5','6000:5','8000:5'
+
+# Deallocate the VM when finished (no compute charges; storage + PIP idle).
+./benchmark/azure-throughput/scripts/vm.ps1 stop
+```
+
+The harness is **not** driven through `./benchmark.ps1` and does not
+push to the local history VictoriaMetrics stack - the result is the
+`[silo] FINAL written=... failed=... elapsed=...` line in the silo
+journal plus the headline summary block `run-cohort.ps1` prints to
+stdout. Cohort sampling methodology, the full `BENCH_*` saturation-
+knobs catalogue, the A/B procedure for WAL optimisations, the VM-SKU
+sizing rule, and the cost / auto-shutdown story all live in
+[`benchmark/azure-throughput/README.md`](../../benchmark/azure-throughput/README.md)
+so they are not duplicated here. The empirical WAL-side findings that
+inform the current shipping defaults (and the storage-account-
+throughput envelope above which raising `WalMaxPendingBatches`
+stops helping) live in
+[WAL Tuning](wal-tuning.md).
+
 ## Where to go next
 
 - [`benchmark/README.md`](../../benchmark/README.md) - topology, calibration,
@@ -314,5 +366,10 @@ on session stop.
   authoritative scenario plan with every knob enumerated.
 - [`benchmark/history/README.md`](../../benchmark/history/README.md) - long-lived
   trend-dashboard stack, label schema, ad-hoc PromQL query path.
+- [`benchmark/azure-throughput/README.md`](../../benchmark/azure-throughput/README.md) -
+  real-Azure-Tables single-VM harness: topology, knobs, A/B procedure,
+  auto-shutdown safety net.
+- [`docs/lattice/wal-tuning.md`](wal-tuning.md) - how `WalMaxPendingBatches`
+  and `WalPartitions` interact with a durable backend's throughput envelope.
 - [`docs/lattice/metrics.md`](metrics.md) - what every `orleans.lattice.*`
   meter measures and what regression each tile catches.

@@ -13,7 +13,7 @@
 //   BENCH_DURATION_SEC    run duration in seconds; 0 = run forever (default 300)
 //
 // The producer reports its own outbound rate to stdout once per second so a wedged producer
-// is distinguishable from a wedged silo when reading ACI logs.
+// is distinguishable from a wedged silo when reading the systemd-journald-captured logs.
 
 using System.Buffers;
 using System.Diagnostics;

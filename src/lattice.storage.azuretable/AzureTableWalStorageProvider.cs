@@ -78,8 +78,8 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// across distinct partitions. Concurrent calls into the same shard
 /// land in distinct batch partitions during phase 1 (no contention)
 /// and serialise through the per-shard phase-2 worker for phase 2.
-/// With the v6.0.1 default <c>WalMaxPendingBatches = 8</c>, up to
-/// eight <see cref="AppendBatchAsync"/> calls can be in-flight per
+/// With the post-v6.2 default <c>WalMaxPendingBatches = 16</c>, up to
+/// sixteen <see cref="AppendBatchAsync"/> calls can be in-flight per
 /// shard; the worker's phase-2 coalescing window collapses
 /// overlapping commits into one Azure-Tables transaction. A phase-1
 /// failure on an earlier offset while a later offset has already

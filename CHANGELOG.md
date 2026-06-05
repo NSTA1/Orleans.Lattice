@@ -12,6 +12,30 @@ Items merged into `main` after the v6.2.0 cut accumulate here under the `### Add
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Changed - configuration defaults
+
+- **`LatticeOptions.WalMaxPendingBatches` default raised from 8 to 16.** Measured on Standard_D4as_v5 + Azure Tables Standard at 4,000 keys/s offered load, the new default delivers a +57% increase in steady-state silo throughput at the 4k:5 rung (mean of n=3 cohorts: 21,275 entries/s, range ~104 e/s, ~0.5% CoV) with no reliability regression (`failed=0`, no stall-watchdog firings, no admission timeouts). The change is a pure default flip; no public-API break and no behavioural change on hosts that already pin the value explicitly. Set to `1` to restore the historical single-in-flight-per-partition shape. At the canonical `WalPartitions = 8` the combined fan-out is `8 * 16 = 128` concurrent flushes against the provider, which sits at the edge of a single Azure Tables Standard storage account's sustained throughput budget; if you need more headroom, increase `WalPartitions` (fan-out across accounts) before lifting the per-partition cap further.
+
+### Added - documentation
+
+- **New `docs/lattice/wal-tuning.md`** covering how `WalMaxPendingBatches` and `WalPartitions` interact with a durable backend's throughput envelope, the SKU-sizing rules of thumb for Azure Tables Standard, and the storage-account-throughput ceiling (~2,500 ops/sec/account on Standard SKU) above which raising the cap further surfaces as 429 throttling rather than additional throughput. Includes the three instruments (`wal.writer.append.admission_wait`, `wal.append.provider.duration`, `wal.writer.partition.pending_appends`) that tell you which regime you are in.
+
+### Changed - documentation
+
+- **`docs/lattice/performance-single-silo.md`** Layer 2 `SetManyAsync` row updated to reflect the new shipping default (13,574 -> 21,275 entries/s; per-call p99 2.85 s -> ~1.4 s), with per-cell provenance disclosed for the cells that pre-date the WAL re-tune. The "How it was run" paragraph and the opening disclaimer no longer claim ACI or a single uniform operating point.
+- **`docs/lattice/wal.md`**, **`docs/lattice/wal-storage-providers.md`**, **`docs/lattice/configuration.md`**: `WalMaxPendingBatches` default updated everywhere; cross-links to the new `wal-tuning.md` added.
+- **`docs/lattice/benchmarks.md`** now documents the `azure-throughput` real-Azure-Tables tier alongside the docker-compose scenarios and the in-process `microbench`, with entry-point gestures and a link out to the harness's deep-detail README (no content duplication).
+- **`benchmark/README.md`** `azure-throughput` section refreshed from the stale ACI narrative to the current single-VM + systemd + managed-identity reality.
+- **`benchmark/azure-throughput/`** source and README scrubbed of stale ACI references: comments now describe the systemd / journald topology, with socket-hygiene knob attribution generalised to "cloud NAT" so the comments stay accurate while preserving the wedge investigation's historical attribution.
+
+### Changed - benchmark harness
+
+- **`benchmark/azure-throughput/Silo/Program.cs`** env-var defaults for `BENCH_WAL_PARTITIONS` and `BENCH_WAL_MAX_PENDING_BATCHES` now reference `LatticeOptions.DefaultWalPartitions` / `LatticeOptions.DefaultWalMaxPendingBatches` directly, so the harness automatically tracks future library re-tunes instead of drifting from the shipping default.
+
+### Fixed - benchmark harness
+
+- **`benchmark/azure-throughput/scripts/run-cohort.ps1`** runner is no longer hang-vulnerable on the post-FINAL artefact fetch path: every `scp` and `journalctl` pull is routed through a bounded job-wrapped wall-clock budget (`_ScpExec` / `_SshExec`), the silo log is fetched first (it carries the cohort sample), and producer-log / sampler-CSV failures are now soft-warned rather than aborting the cohort.
+
 ---
 
 ## [6.2.0] - 2026-06-04
