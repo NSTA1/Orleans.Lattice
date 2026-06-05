@@ -54,23 +54,23 @@ the prose around the marker block is hand-editable.
 
 <!-- perf-table:layer1:start
   schema=v1
-  host=AMD Ryzen 7 PRO 7840U (16 logical / 8 physical)
-  dotnet=10.0.8
   bdnFidelity=quick
   bdnToolchain=InProcessEmitToolchain
-  cohortN=1
-  rowsMeasured=2026-05-30
-  methodology=Per-call p50 / allocations / single-thread ceiling reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Initial cells are the pre-VM-harness laptop run; subsequent regenerations via benchmark/performance-report.ps1 will write VM-grounded values and bump host/dotnet/cohortN/rowsMeasured accordingly.
+  cohortN=3
+  dotnet=10.0.108
+  host=Standard_D4as_v5
+  rowsMeasured=2026-06-05
+  methodology=Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
-| Operation              | Per-call p50 | Allocations | Single-thread ceiling |
-|------------------------|-------------:|------------:|----------------------:|
-| `GetAsync` (point read)              | **283 ns**       | 456 B       | **~3.54 M op/s** |
-| `SetAsync` (point write)             | **2.19 us**       | 616 B       | **~458 k op/s**  |
-| `GetManyAsync` (16 keys/call)        | **6.59 us**       | 6,144 B     | **~152 k calls/s** (~2.4 M keys/s) |
-| `SetManyAsync` (1,000 entries/call)  | **557 us**     | 250 KB      | **~1.79 k calls/s** (~1.79 M entries/s) |
-| `SetManyAtomicAsync` (16 keys/saga)  | **132 us**     | 64 KB       | **~7.57 k sagas/s** (~121 k keys/s) |
+| Operation                                | Per-call p50 | Allocations | Single-thread ceiling |
+|------------------------------------------|-------------:|------------:|----------------------:|
+| `GetAsync` (point read) | **1.32 us** | 456 B | **~760.5 k op/s** |
+| `SetAsync` (point write) | **9.43 us** | 840 B | **~106.1 k op/s** |
+| `GetManyAsync` (16 keys/call) | **8.8 us** | 7 KB | **~113.7 k calls/s** |
+| `SetManyAsync` (1,000 entries/call) | **1.05 ms** | 350 KB | **956 calls/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **270.42 us** | 67 KB | **~3.7 k sagas/s** |
 
 <!-- perf-table:layer1:end -->
 
