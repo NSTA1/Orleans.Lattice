@@ -568,7 +568,10 @@ function Invoke-Layer1Cohorts {
 			metrics = $payload.metrics
 		})
 	}
-	return ,$cohorts.ToArray()
+	# Return as a flat array. `,$x.ToArray()` wraps in a 1-element outer array
+	# which the caller's foreach then iterates as a single (array-typed) cohort.
+	# `@($x.ToArray())` always yields a flat array; empty input stays empty.
+	return @($cohorts.ToArray())
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -656,7 +659,7 @@ function Invoke-Layer2Cohorts {
 				verdict       = $parsed.Verdict
 			})
 		}
-		$result[$mode] = ,$cohortList.ToArray()
+		$result[$mode] = @($cohortList.ToArray())
 	}
 	return $result
 }
@@ -746,7 +749,10 @@ function Read-SiloLogStats {
 function Aggregate-Layer1Cells {
 	[CmdletBinding()] param([Parameter(Mandatory)] $Cohorts)
 	# Cohorts are an array of hashtables with .metrics dictionary
-	# (microbench_<slug>_p50_ns, _alloc_b, etc).
+	# (microbench_<slug>_p50_ns, _alloc_b, etc). Normalise to a flat array
+	# defensively - upstream may wrap a single cohort as a scalar or as a
+	# 1-element array; @($x) handles both shapes plus the empty case.
+	$Cohorts = @($Cohorts)
 	if ($Cohorts.Count -eq 0) { return @{} }
 	$rows = @{}
 	foreach ($row in $Layer1Rows) {
