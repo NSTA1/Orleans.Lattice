@@ -84,6 +84,25 @@
 	Run cohorts and write state.json but do NOT touch the markdown.
 	Useful for inspecting the raw cohort before publishing.
 
+.PARAMETER Fidelity
+	BDN fidelity for Layer 1 cohorts. One of:
+	  dry   (default) - Job.Dry: 1 warmup + 1 measurement iter per [Benchmark]
+						method. ~3 sec/method, ~75 sec/cohort across the doc's
+						5 workloads. Per-cohort variance is wider than 'quick';
+						the n=3 cohort discipline (median across N) provides the
+						statistical guard. Right floor for a published-doc
+						refresh whose precision is already 'approximate ceiling'.
+	  quick           - Job.ShortRun: 1 launch + 3 warmup + 3 measurement iters.
+						~30-40 sec/method when no glob expansion fires; on this
+						bench the GlobFilter expands the 5 doc rows into ~25
+						distinct methods (variant suffixes + parameterisations),
+						so a 'quick' cohort takes ~10 min instead of ~3 min.
+						Choose this when you want tighter per-cohort confidence
+						intervals and are willing to pay the wall.
+	  full            - Job.Default + forking toolchain. Gold-standard rigour;
+						~30+ min per cohort. Reserved for the final re-verify
+						pass when a 'dry' or 'quick' delta is borderline.
+
 .PARAMETER NamePrefix
 	Force a specific name prefix (cleaned to <=9 chars). Default is an
 	auto-generated 'pr' + 7 random hex chars (= 9 cleaned chars). Use this
@@ -123,6 +142,9 @@ param(
 	[switch] $KeepVm,
 	[string] $ReuseVm,
 	[switch] $SkipDocUpdate,
+
+	[ValidateSet('dry','quick','full')]
+	[string] $Fidelity = 'dry',
 
 	# Convenience switches: equivalent to -Layer 1 / -Layer 2. Either form works;
 	# mutually exclusive with -Layer except for the default (all). These are here
@@ -380,7 +402,8 @@ function New-EmptyState {
 		[Parameter(Mandatory)][hashtable] $Rung,
 		[int] $ResponseTimeoutSec = 180,
 		[int] $WalPartitions = 8,
-		[int] $WalMaxPendingBatches = 16
+		[int] $WalMaxPendingBatches = 16,
+		[string] $BdnFidelity = 'dry'
 	)
 	return @{
 		schema             = 'v1'
@@ -393,6 +416,7 @@ function New-EmptyState {
 		responseTimeoutSec = $ResponseTimeoutSec
 		walPartitions      = $WalPartitions
 		walMaxPendingBatches = $WalMaxPendingBatches
+		bdnFidelity        = $BdnFidelity
 		startedUtc         = (Get-Date).ToUniversalTime().ToString('o')
 		endedUtc           = $null
 		layer1 = @{
@@ -464,7 +488,9 @@ function Invoke-Layer1Cohorts {
 		[Parameter(Mandatory)][string] $Prefix,
 		[Parameter(Mandatory)][string[]] $WorkloadIds,
 		[Parameter(Mandatory)][int] $N,
-		[Parameter(Mandatory)][string] $ParametersFilePath
+		[Parameter(Mandatory)][string] $ParametersFilePath,
+		[ValidateSet('dry','quick','full')]
+		[string] $Fidelity = 'dry'
 	)
 	$rows = @($Layer1Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
 	if ($rows.Count -eq 0) {
@@ -518,7 +544,7 @@ function Invoke-Layer1Cohorts {
 		# accepts --results <path> and --filter <comma-globs>; we pin
 		# BENCH_REGRESSION_GATE_ENABLED=false because this script's job is to
 		# CREATE the new baseline, not gate against an old one.
-		$remoteCmd = "cd /opt/lattice/src && BENCH_REGRESSION_GATE_ENABLED=false BENCH_MICROBENCH_FIDELITY=quick BENCH_MICROBENCH_WORKLOADS='$filterPatterns' BENCH_SCENARIO=performance-report-layer1 BENCH_RUN_ID=$runId /usr/bin/dotnet run --project benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release --no-build -- --results $remoteResults"
+		$remoteCmd = "cd /opt/lattice/src && BENCH_REGRESSION_GATE_ENABLED=false BENCH_MICROBENCH_FIDELITY=$Fidelity BENCH_MICROBENCH_WORKLOADS='$filterPatterns' BENCH_SCENARIO=performance-report-layer1 BENCH_RUN_ID=$runId /usr/bin/dotnet run --project benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release --no-build -- --results $remoteResults"
 		& ssh @sshOpts $sshTarget $remoteCmd
 		if ($LASTEXITCODE -ne 0) {
 			Write-Warning "[layer1] cohort $i/${N}: ssh microbench run exited $LASTEXITCODE; skipping pull"
@@ -886,7 +912,7 @@ function New-MetaHeaderForLayer1 {
 		$meta['schema']        = 'v1'
 		$meta['host']          = $State.vmSize
 		$meta['dotnet']        = ($State.dotnetVersion ?? '10.0.x')
-		$meta['bdnFidelity']   = 'quick'
+		$meta['bdnFidelity']   = ($State.bdnFidelity ?? 'dry')
 		$meta['bdnToolchain']  = 'InProcessEmitToolchain'
 		$meta['cohortN']       = $cohortN
 		$meta['rowsMeasured']  = $rowsDate
@@ -1153,9 +1179,12 @@ function Main {
 	$state = if (Test-Path $stateFile) {
 		Read-StateFile -Path $stateFile
 	} else {
-		New-EmptyState -Prefix $prefix -VmSize $VmSize -Region $region -Rung $rungHt
+		New-EmptyState -Prefix $prefix -VmSize $VmSize -Region $region -Rung $rungHt -BdnFidelity $Fidelity
 	}
 	$state.startedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	# Stamp the resolved CLI fidelity onto state so the meta-header records
+	# what was actually used; tolerates state.json files predating this slot.
+	$state['bdnFidelity'] = $Fidelity
 
 	$provisioned = $false
 	try {
@@ -1171,7 +1200,7 @@ function Main {
 		if ($Layer -in 'all','1') {
 			$l1Ids = Resolve-WorkloadIds -LayerRows $Layer1Rows -WorkloadsSpec $Workloads
 			Write-Host "[main] Layer 1 workloads: $($l1Ids -join ',')" -ForegroundColor Cyan
-			$l1Cohorts = Invoke-Layer1Cohorts -Prefix $prefix -WorkloadIds $l1Ids -N $N -ParametersFilePath $paramFile
+			$l1Cohorts = Invoke-Layer1Cohorts -Prefix $prefix -WorkloadIds $l1Ids -N $N -ParametersFilePath $paramFile -Fidelity $Fidelity
 			# Merge cohorts (rather than replace) so partial re-runs don't lose
 			# earlier rows' data; the aggregator will use the latest cohorts.
 			$state.layer1.cohorts = @($state.layer1.cohorts) + @($l1Cohorts)
