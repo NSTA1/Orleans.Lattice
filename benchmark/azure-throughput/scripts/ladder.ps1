@@ -115,7 +115,7 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
 	# retained as a secondary field for back-compat and for the
 	# `DegradeThresholdPct` early-stop heuristic when no steady-state samples
 	# are usable.
-	$written  = if ($out -match 'written=([\d,]+)')                        { [int](($matches[1]) -replace ',','') } else { 0 }
+	$written  = if ($out -match '(?:ops|written)=([\d,]+)')                { [int](($matches[1]) -replace ',','') } else { 0 }
 	$failed   = if ($out -match 'failed=([\d,]+)')                         { [int](($matches[1]) -replace ',','') } else { 0 }
 	$active   = if ($out -match 'active=([\d.]+)s')                        { [double]$matches[1] }                 else { 0 }
 	$elapsed  = if ($out -match 'elapsed=([\d.]+)s')                       { [double]$matches[1] }                 else { 0 }

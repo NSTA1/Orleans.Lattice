@@ -64,6 +64,7 @@ mechanical and the prose around the marker is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
   dotnet=10.0.108
+  gitSha=93c1152
   host=Standard_D4as_v5
   rowsMeasured=2026-06-05
   methodology=Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.
@@ -80,7 +81,7 @@ mechanical and the prose around the marker is hand-editable.
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-06-05 on Standard_D4as_v5 (.NET 10.0.108) at git sha 7d0454f, n=3 cohorts (BDN quick).
+> Measured 2026-06-05 on Standard_D4as_v5 (.NET 10.0.108) at git sha 93c1152, n=3 cohorts (BDN quick).
 
 **Reading the numbers.** The single-thread ceiling is the derived
 `1 / p50`. It represents the algorithmic cost of the operation on one
@@ -123,31 +124,47 @@ realistic latency the storage provider contributes.
 
 <!-- perf-table:layer2:start
   schema=v1
+  batchSize=4096
+  cohortN=3
+  dotnet=10.0.108
+  gitSha=93c1152
   host=Standard_D4as_v5
   region=westus3
-  dotnet=10.0.8
-  walPartitions=8
-  walMaxPendingBatches=16
-  rung=4000vehicles/5Hz/45s
   responseTimeoutSec=180
-  cohortN=3
   rowsMeasured=2026-06-05
-  methodology=Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the matching duration histogram's p50/p99 from the last full [phaseA] reporter window. Initial cells are a mix of cycle-30 (SetManyAsync, refreshed) and the pre-VM ACI campaign (other rows); subsequent regenerations via benchmark/performance-report.ps1 will write VM-grounded values for every row.
-  provenanceNote=SetManyAsync row refreshed via cycle 30 (PR #594); other rows pending re-measurement on VM via benchmark/performance-report.ps1
+  rung=4000 vehicles / 5 Hz / 45s
+  walMaxPendingBatches=16
+  walPartitions=8
+  methodology=Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, lattice.op.duration_ms for get-many which sends one batched call). The get-point cell is derived from lattice.op.duration_ms divided by BENCH_BATCH_SIZE (=batchSize meta key) to produce a per-key cost amortised across the silo TCP-ingest fan-out, since the lattice grain does not currently histogram per-call GetAsync at the caller-visible boundary.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
-| Operation              | Sustained throughput            | Per-call p50 | Per-call p99 |
-|------------------------|--------------------------------:|-------------:|-------------:|
-| `GetAsync` (point read)              | **45,750 keys/s**           | ~0.11 ms     | ~0.18 ms     |
-| `SetAsync` (point write)             | **202 keys/s sustained**, **16,381 keys/s burst max** | ~58 ms     | ~300 ms     |
-| `GetManyAsync` (4,096 keys/call)     | **178,927 keys/s** (~44 calls/s) | 14.1 ms    | 68.6 ms     |
-| `SetManyAsync` (4,096 entries/call)  | **21,275 entries/s** (~5.2 calls/s) (*) | not recaptured (*) | **~1.4 s** (*) |
-| `SetManyAtomicAsync` (64 keys/saga)  | **465 keys/s** (~7.3 sagas/s), **1,793 keys/s burst max** | ~800 ms     | ~1,030 ms   |
+| Operation                                | Sustained throughput | Per-call p50  | Per-call p99  |
+|------------------------------------------|---------------------:|--------------:|--------------:|
+| `GetAsync` (point read) | **~19.6 k keys/s** | ~20 us | ~20 us |
+| `SetAsync` (point write) | **~3.9 k keys/s** | ~13.31 ms | ~104.13 ms |
+| `GetManyAsync` (4,096 keys/call) | **~19.7 k keys/s** | ~3.47 ms | ~7.66 ms |
+| `SetManyAsync` (4,096 entries/call) | **~21.2 k keys/s** | ~234.31 ms | ~408.88 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | **~5.5 k keys/s** | ~78.92 ms | ~683.73 ms |
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-06-05 on Standard_D4as_v5 in westus3 (.NET 10.0.x) at git sha pre-VM-harness, n=3 cohorts at 4000vehicles/5Hz/45s.
+> Measured 2026-06-05 on Standard_D4as_v5 in westus3 (.NET 10.0.108) at git sha 93c1152, n=3 cohorts at 4000 vehicles / 5 Hz / 45s.
+
+**Per-call instrument coverage.** Write-mode per-call cells (`SetAsync`,
+`SetManyAsync`, `SetManyAtomicAsync`) are sourced from the matching
+caller-visible histogram on `LatticeGrain` (`set.duration`,
+`set_many.duration`, `saga.broadcast.duration`). For `GetManyAsync` the
+silo issues one batched `lattice.GetManyAsync(keys)` call per ingest
+batch, so the silo's per-batch ingest envelope (`lattice.op.duration_ms`)
+is itself the per-call cost. For `GetAsync` the silo fans out one
+batch into N parallel per-key `lattice.GetAsync(key)` calls; the
+published per-call cell is therefore the silo ingest envelope **divided
+by `BENCH_BATCH_SIZE`** (recorded as the `batchSize` meta key above),
+producing the per-key cost amortised across the fan-out. The lattice
+grain does not currently histogram per-call read latency at the
+caller-visible boundary; when it does, the `GetAsync` cell will tighten
+to the true per-call cost without the fan-out amortisation.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across

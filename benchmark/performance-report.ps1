@@ -137,6 +137,13 @@ param(
 
 	[string] $Rung = '4000:5:45',
 
+	# BENCH_BATCH_SIZE pinned into the Layer 2 silo env. Default 4096 matches
+	# the silo's BENCH_BATCH_SIZE default; pinning it here makes the divisor
+	# used to compute per-key read-side cells (see Read-SiloLogStats) auditable
+	# on state.json. Override at your own risk: every Layer 2 cell becomes a
+	# function of this number.
+	[int] $BatchSize = 4096,
+
 	[switch] $DryRun,
 	[switch] $Diff,
 	[switch] $KeepVm,
@@ -276,7 +283,11 @@ $Layer2Rows = @(
 		Label = '`SetManyAsync` (4,096 entries/call)';
 		WorkloadId = 'set-many';
 		WorkloadMode = 'set-many';
-		ThroughputUnit = 'entries/s';
+		# Unit is keys/s (not entries/s) for column-wise comparability with
+		# the other rows; one SetManyAsync entry = one (key,value) pair = one
+		# key-write, so the values are semantically identical. The (4,096
+		# entries/call) part of the Label keeps the API-level wording visible.
+		ThroughputUnit = 'keys/s';
 	},
 	@{
 		Label = '`SetManyAtomicAsync` (64 keys/saga)';
@@ -302,6 +313,29 @@ function New-RunPrefix {
 	# take 7 chars from 8-char hex (one digit of headroom in case of cryptic
 	# all-zero / vanity-collision concerns).
 	return 'pr' + $hex.Substring(0, 7)
+}
+
+function Get-MainSha {
+	<#
+	.SYNOPSIS
+		Returns the short sha of the upstream main commit this branch is built
+		on top of. That is the comparable anchor for any reader of the
+		published doc - the per-branch HEAD sha changes on every commit, but
+		the main sha records the silo binary's lineage and pairs naturally
+		with PR / changelog history.
+	#>
+	# Prefer the merge-base with origin/main (works even when the branch is
+	# rebased onto an arbitrary main commit). Fall back to local main, then to
+	# HEAD if neither ref exists.
+	$candidates = @('origin/main', 'main', 'HEAD')
+	foreach ($ref in $candidates) {
+		$mb = (& git merge-base HEAD $ref 2>$null)
+		if ($mb) {
+			$short = (& git rev-parse --short $mb.Trim() 2>$null)
+			if ($short) { return $short.Trim() }
+		}
+	}
+	return $null
 }
 
 function Test-PreflightOrThrow {
@@ -403,6 +437,7 @@ function New-EmptyState {
 		[int] $ResponseTimeoutSec = 180,
 		[int] $WalPartitions = 8,
 		[int] $WalMaxPendingBatches = 16,
+		[int] $BatchSize = 4096,
 		[string] $BdnFidelity = 'dry'
 	)
 	return @{
@@ -412,10 +447,12 @@ function New-EmptyState {
 		region             = $Region
 		dotnetVersion      = $null
 		gitSha             = (& git rev-parse --short HEAD 2>$null).Trim()
+		mainSha            = (Get-MainSha)
 		rung               = $Rung
 		responseTimeoutSec = $ResponseTimeoutSec
 		walPartitions      = $WalPartitions
 		walMaxPendingBatches = $WalMaxPendingBatches
+		batchSize          = $BatchSize
 		bdnFidelity        = $BdnFidelity
 		startedUtc         = (Get-Date).ToUniversalTime().ToString('o')
 		endedUtc           = $null
@@ -587,7 +624,8 @@ function Invoke-Layer2Cohorts {
 		[Parameter(Mandatory)][string] $ParametersFilePath,
 		[int] $ResponseTimeoutSec = 180,
 		[int] $WalPartitions = 8,
-		[int] $WalMaxPendingBatches = 16
+		[int] $WalMaxPendingBatches = 16,
+		[int] $BatchSize = 4096
 	)
 	$rows = @($Layer2Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
 	if ($rows.Count -eq 0) {
@@ -617,6 +655,7 @@ function Invoke-Layer2Cohorts {
 				BENCH_WORKLOAD_MODE           = $mode
 				BENCH_WAL_PARTITIONS          = "$WalPartitions"
 				BENCH_WAL_MAX_PENDING_BATCHES = "$WalMaxPendingBatches"
+				BENCH_BATCH_SIZE              = "$BatchSize"
 			}
 			Write-Host "[layer2] cohort $i/$N mode=$mode ..." -ForegroundColor DarkGray
 			# Capture the set of pre-existing log files so we can identify the
@@ -647,7 +686,7 @@ function Invoke-Layer2Cohorts {
 			Copy-Item $newest $siloDest -Force
 
 			# Parse the steady-state mean and per-call p50/p99 from the silo log.
-			$parsed = Read-SiloLogStats -SiloLogPath $siloDest -WorkloadMode $mode
+			$parsed = Read-SiloLogStats -SiloLogPath $siloDest -WorkloadMode $mode -BatchSize $BatchSize
 			$cohortList.Add(@{
 				cohortName    = $cohortName
 				siloLog       = $siloDest
@@ -667,22 +706,28 @@ function Invoke-Layer2Cohorts {
 function Read-SiloLogStats {
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][string] $SiloLogPath,
-		[Parameter(Mandatory)][string] $WorkloadMode
+		[Parameter(Mandatory)][string] $WorkloadMode,
+		[int] $BatchSize = 4096
 	)
 	# Reuses the same methodology run-cohort.ps1 emits: steady-state mean of
 	# `[silo] t=` per-second rate samples over t in [15s, last-non-zero-rate].
 	$samples = @()
 	$failedSamples = 0
 	foreach ($m in (Select-String -Path $SiloLogPath -Pattern '^\[silo\] t=')) {
-		if ($m.Line -match 't=\s*([\d.]+)s\s+written=\s*([\d,]+)\s+Entries written per second=\s*([\d,]+)\s+inFlight=\s*(\d+)') {
-			$samples += [pscustomobject]@{
-				t        = [double]$Matches[1]
-				rate     = [long](($Matches[3]) -replace ',','')
-				inFlight = [int]$Matches[4]
-			}
-			if ($m.Line -match 'failed=\s*([\d,]+)' -and [long](($Matches[1]) -replace ',','') -gt 0) {
-				$failedSamples++
-			}
+		# Match both the new and legacy per-second formats so logs captured before
+		# the silo rename ("Entries written per second" -> "ops/sec", "written="
+		# -> "ops=") can still be parsed without re-provisioning. Drop the legacy
+		# arm after the next round of cohorts retires those logs.
+		if (-not ($m.Line -match 't=\s*([\d.]+)s\s+(?:ops|written)=\s*([\d,]+)\s+(?:ops/sec|Entries written per second)=\s*([\d,]+)\s+inFlight=\s*(\d+)')) {
+			continue
+		}
+		$samples += [pscustomobject]@{
+			t        = [double]$Matches[1]
+			rate     = [long](($Matches[3]) -replace ',','')
+			inFlight = [int]$Matches[4]
+		}
+		if ($m.Line -match 'failed=\s*([\d,]+)' -and [long](($Matches[1]) -replace ',','') -gt 0) {
+			$failedSamples++
 		}
 	}
 	$steady = $samples | Where-Object { $_.t -ge 15 -and $_.rate -gt 0 }
@@ -693,31 +738,63 @@ function Read-SiloLogStats {
 		$inFlightMax = ($steady | Measure-Object -Property inFlight -Maximum).Maximum
 	}
 
-	# Per-call p50/p99. We look in the last full [phaseA] reporter window for
-	# the matching duration histogram. The workload-mode -> instrument mapping:
-	#   set-many / set-many-atomic -> set_many.duration   (envelope)
-	#   set-point                  -> set.duration
-	#   get-point                  -> get.duration
-	#   get-many                   -> get_many.duration
-	$instrumentName = switch ($WorkloadMode) {
-		'set-many'        { 'set_many.duration' }
-		'set-many-atomic' { 'set_many.duration' }
-		'set-point'       { 'set.duration' }
-		'get-point'       { 'get.duration' }
-		'get-many'        { 'get_many.duration' }
-		default           { 'set_many.duration' }
+	# Per-call p50/p99. Pick the most representative instrument per workload
+	# mode; fall back to lattice.op.duration_ms (the silo's ingest envelope,
+	# present for every workload). Read modes have NO per-call lattice-grain
+	# instrument today (see the metrics doc) - they use the fallback only,
+	# which represents the silo's ingest-dispatch wall rather than the
+	# isolated ILattice.GetAsync call. The doc prose calls this out so
+	# operators know the read-side cells are per-batch, not per-call.
+	#
+	# Each [phaseA] line shape:
+	#   [phaseA] t=10.3s instrument=NAME tree=T shard=S phase=P status=... count=N sum=... p50=... p90=... p99=... max=...
+	# We anchor on 'instrument=NAME tree=' (with trailing 'tree=' as a hard
+	# anchor) so substring matches like 'set.duration' vs 'set.stage.duration'
+	# stay disjoint.
+	$preferred = switch ($WorkloadMode) {
+		'set-many'        { @('set_many.duration') }
+		'set-many-atomic' { @('saga.broadcast.duration', 'set_many.duration') }
+		'set-point'       { @('set.duration') }
+		'get-point'       { @() }   # no lattice-grain read histogram exists
+		'get-many'        { @() }   # ditto
+		default           { @() }
 	}
+	$candidates = @($preferred) + @('lattice.op.duration_ms')
 
-	# [phaseA] lines look like:
-	#   [phaseA] <instrument>{tag=val,...} p50=N.NN p95=N.NN p99=N.NN ...
-	# Find the last block of [phaseA] lines containing $instrumentName and pull
-	# its p50 / p99.
-	$phaseAMatches = @(Select-String -Path $SiloLogPath -Pattern ('^\[phaseA\].*' + [regex]::Escape($instrumentName)))
-	$p50 = $null; $p99 = $null
-	if ($phaseAMatches.Count -gt 0) {
-		$last = $phaseAMatches[-1].Line
+	$p50 = $null; $p99 = $null; $instrumentUsed = $null
+	foreach ($cand in $candidates) {
+		# Anchor: 'instrument=<name> tree=' guarantees exact-name match.
+		$pat = '^\[phaseA\][^\n]*instrument=' + [regex]::Escape($cand) + ' tree='
+		$phaseAMatches = @(Select-String -Path $SiloLogPath -Pattern $pat)
+		# Filter to the productive window (skip the first ~10s warm-up and the
+		# trailing drain windows where count is low). The reporter emits at
+		# ~10-second cadence; t>=15s catches the second window onward.
+		$productive = @($phaseAMatches | Where-Object {
+			$_.Line -match '\[phaseA\] t=\s*([\d.]+)s' -and ([double]$Matches[1] -ge 15)
+		})
+		if ($productive.Count -eq 0) { continue }
+		# Use the last full productive window (matches the pre-fix behaviour
+		# for now; revisit to do count-weighted aggregation across windows).
+		$last = $productive[-1].Line
 		if ($last -match 'p50=([\d.]+)') { $p50 = [double]$Matches[1] }
 		if ($last -match 'p99=([\d.]+)') { $p99 = [double]$Matches[1] }
+		if ($null -ne $p50 -or $null -ne $p99) {
+			$instrumentUsed = $cand
+			break
+		}
+	}
+
+	# For the get-point workload mode the silo's lattice.op.duration_ms
+	# instrument times one ingest BATCH (BENCH_BATCH_SIZE keys dispatched via
+	# FanOutAsync as N parallel GetAsync calls). To produce a per-key cell
+	# (comparable in magnitude to GetManyAsync's per-call which IS a single
+	# batched call), divide p50/p99 by the batch size. get-many is NOT
+	# divided: one lattice.op = one GetManyAsync call = one batch already.
+	# Write modes use a per-call instrument so no divisor applies.
+	$isPointReadFallback = ($instrumentUsed -eq 'lattice.op.duration_ms') -and ($WorkloadMode -eq 'get-point')
+	if ($isPointReadFallback -and $BatchSize -gt 1) {
+		if ($null -ne $p50) { $p50 = [math]::Round($p50 / $BatchSize, 6) }
+		if ($null -ne $p99) { $p99 = [math]::Round($p99 / $BatchSize, 6) }
 	}
 
 	# Verdict + FINAL failed.
@@ -727,18 +804,19 @@ function Read-SiloLogStats {
 	if ($verdictLine) {
 		if ($verdictLine.Line -match 'Verdict\s*:\s*([A-Z]+)') { $verdict = $Matches[1] }
 	}
-	$finalLine = (Select-String -Path $SiloLogPath -Pattern 'FINAL written=' | Select-Object -First 1)
+	$finalLine = (Select-String -Path $SiloLogPath -Pattern 'FINAL (ops|written)=' | Select-Object -First 1)
 	if ($finalLine -and $finalLine.Line -match 'failed=([\d,]+)') {
 		$finalFailed = [long]($Matches[1] -replace ',','')
 	}
 
 	return @{
-		SteadyMean    = $steadyMean
-		PerCallP50Ms  = $p50
-		PerCallP99Ms  = $p99
-		InFlightMax   = $inFlightMax
-		Failed        = ($finalFailed + $failedSamples)
-		Verdict       = $verdict
+		SteadyMean      = $steadyMean
+		PerCallP50Ms    = $p50
+		PerCallP99Ms    = $p99
+		InstrumentUsed  = $instrumentUsed
+		InFlightMax     = $inFlightMax
+		Failed          = ($finalFailed + $failedSamples)
+		Verdict         = $verdict
 	}
 }
 
@@ -847,9 +925,33 @@ function Format-Layer2Row {
 	)
 	$unit = $Cell.throughputUnit
 	$thr = Format-Throughput $Cell.sustainedThroughput $unit
-	$p50 = if ($null -eq $Cell.perCallP50Ms) { 'not captured' } else { ('~{0} ms' -f $Cell.perCallP50Ms) }
-	$p99 = if ($null -eq $Cell.perCallP99Ms) { 'not captured' } else { ('~{0} ms' -f $Cell.perCallP99Ms) }
+	$p50 = Format-Layer2Latency $Cell.perCallP50Ms
+	$p99 = Format-Layer2Latency $Cell.perCallP99Ms
 	return ('| {0} | **{1}** | {2} | {3} |' -f $Label, $thr, $p50, $p99)
+}
+
+function Format-Layer2Latency {
+	<#
+	.SYNOPSIS
+		Render a millisecond cell with a sensible unit prefix. Values >= 1 ms
+		render as "~X.XX ms"; smaller values render in microseconds so the
+		read-mode per-key cells (derived as ingest-envelope / BatchSize,
+		typically sub-microsecond to single-digit microseconds) read honestly
+		rather than as "~0 ms".
+	#>
+	[CmdletBinding()] param($Ms)
+	if ($null -eq $Ms) { return 'not captured' }
+	$v = [double]$Ms
+	if ($v -ge 1.0) {
+		return ('~{0} ms' -f [math]::Round($v, 2))
+	}
+	$us = $v * 1000.0
+	if ($us -ge 1.0) {
+		return ('~{0} us' -f [math]::Round($us, 2))
+	}
+	# Sub-microsecond: report in ns.
+	$ns = $us * 1000.0
+	return ('~{0} ns' -f [math]::Round($ns, 0))
 }
 
 function Format-Duration {
@@ -921,9 +1023,9 @@ function New-MetaHeaderForLayer1 {
 		$meta['bdnFidelity']   = ($State.bdnFidelity ?? 'dry')
 		$meta['bdnToolchain']  = 'InProcessEmitToolchain'
 		$meta['cohortN']       = $cohortN
-		$meta['rowsMeasured']  = $rowsDate
-		$meta['gitSha']        = $State.gitSha
-		$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
+			$meta['rowsMeasured']  = $rowsDate
+			$meta['gitSha']        = ($State.mainSha ?? $State.gitSha)
+			$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
 	}
 	return $meta
 }
@@ -944,7 +1046,7 @@ function New-MetaHeaderForLayer2 {
 	} elseif ($Existing.ContainsKey('rowsMeasured')) {
 		$Existing['rowsMeasured']
 	} else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
-	$rung = ('{0}vehicles/{1}Hz/{2}s' -f $State.rung.Vehicles, $State.rung.TickHz, $State.rung.DurationSec)
+	$rung = ('{0} vehicles / {1} Hz / {2}s' -f $State.rung.Vehicles, $State.rung.TickHz, $State.rung.DurationSec)
 
 	$meta = @{}
 	foreach ($k in $Existing.Keys) { $meta[$k] = $Existing[$k] }
@@ -956,12 +1058,13 @@ function New-MetaHeaderForLayer2 {
 		$meta['dotnet']             = ($State.dotnetVersion ?? '10.0.x')
 		$meta['walPartitions']      = $State.walPartitions
 		$meta['walMaxPendingBatches'] = $State.walMaxPendingBatches
+		$meta['batchSize']          = if ($State.ContainsKey('batchSize') -and $State['batchSize']) { $State['batchSize'] } else { 4096 }
 		$meta['rung']               = $rung
 		$meta['responseTimeoutSec'] = $State.responseTimeoutSec
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
-		$meta['gitSha']             = $State.gitSha
-		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the matching duration histogram p50/p99 from the last full [phaseA] reporter window.'
+		$meta['gitSha']             = ($State.mainSha ?? $State.gitSha)
+		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, lattice.op.duration_ms for get-many which sends one batched call). The get-point cell is derived from lattice.op.duration_ms divided by BENCH_BATCH_SIZE (=batchSize meta key) to produce a per-key cost amortised across the silo TCP-ingest fan-out, since the lattice grain does not currently histogram per-call GetAsync at the caller-visible boundary.'
 	}
 	return $meta
 }
@@ -1244,7 +1347,7 @@ function Main {
 	$state = if (Test-Path $stateFile) {
 		Read-StateFile -Path $stateFile
 	} else {
-		New-EmptyState -Prefix $prefix -VmSize $VmSize -Region $region -Rung $rungHt -BdnFidelity $Fidelity
+		New-EmptyState -Prefix $prefix -VmSize $VmSize -Region $region -Rung $rungHt -BatchSize $BatchSize -BdnFidelity $Fidelity
 	}
 	$state.startedUtc = (Get-Date).ToUniversalTime().ToString('o')
 	# Stamp the resolved CLI fidelity onto state so the meta-header records
@@ -1277,7 +1380,7 @@ function Main {
 		if ($Layer -in 'all','2') {
 			$l2Ids = Resolve-WorkloadIds -LayerRows $Layer2Rows -WorkloadsSpec $Workloads
 			Write-Host "[main] Layer 2 workloads: $($l2Ids -join ',')" -ForegroundColor Cyan
-			$l2CohortsByMode = Invoke-Layer2Cohorts -Prefix $prefix -WorkloadIds $l2Ids -Rung $rungHt -N $N -ParametersFilePath $paramFile -ResponseTimeoutSec $state.responseTimeoutSec -WalPartitions $state.walPartitions -WalMaxPendingBatches $state.walMaxPendingBatches
+			$l2CohortsByMode = Invoke-Layer2Cohorts -Prefix $prefix -WorkloadIds $l2Ids -Rung $rungHt -N $N -ParametersFilePath $paramFile -ResponseTimeoutSec $state.responseTimeoutSec -WalPartitions $state.walPartitions -WalMaxPendingBatches $state.walMaxPendingBatches -BatchSize $BatchSize
 			foreach ($mode in $l2CohortsByMode.Keys) { $state.layer2.cohorts[$mode] = $l2CohortsByMode[$mode] }
 			$l2Rows = Aggregate-Layer2Cells -CohortsByMode $l2CohortsByMode
 			foreach ($k in $l2Rows.Keys) { $state.layer2.rows[$k] = $l2Rows[$k] }
