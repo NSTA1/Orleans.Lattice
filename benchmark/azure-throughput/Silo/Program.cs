@@ -1213,19 +1213,30 @@ internal sealed class TcpIngestService(
         }, CancellationToken.None);
 
         // Stall watchdog: when the WAL write pipeline wedges (writtenTotal
-        // frozen while inFlight stays pinned at the WalMaxPendingBatches
-        // ceiling), self-snapshot with ClrMD and print the parked async
+        // frozen while inFlight stays non-zero, or while a sustained
+        // provider-failure stream accumulates without inFlight
+        // advancement), self-snapshot with ClrMD and print the parked async
         // state-machine chain + thread stacks to stdout - the in-process
         // equivalent of `dumpasync` / `dotnet-stack`, exfiltrated through
         // the systemd-journald-captured silo log. Three prior
         // `TimeoutException`-based fixes each fired zero times on the
         // wedge, so this captures the actually-parked await instead of
-        // bounding another guessed one. Shares the reporter's cancellation
+        // bounding another guessed one. The dual-arm shape (inFlight > 0
+        // OR sustained failures) is the dual-arm generalisation: Shape A
+        // (inFlight=N<cap parked on a saturating account) and Shape B
+        // (inFlight=0 because batches faulted, but FINAL never emits)
+        // both promote to a wedge now. Shares the reporter's cancellation
         // so it stops cleanly at end of run.
         var stallWatchdog = new StallWatchdog(
             writtenTotalSnapshot: () => Interlocked.Read(ref writtenTotal),
             inFlightSnapshot: () => Interlocked.Read(ref inFlight),
-            pinnedInFlightThreshold: settings.WalMaxPendingBatches,
+            failedTotalSnapshot: () => Interlocked.Read(ref failedTotal),
+            // One full WAL batch (default 100 entries) of failures per
+            // poll interval is the noise floor we use to promote a
+            // frozen written-total to a wedge. Below that, a single
+            // straggler batch failing late in the run can still be a
+            // healthy tail.
+            failedDeltaThreshold: 100L,
             stallWindow: TimeSpan.FromSeconds(20),
             pollInterval: TimeSpan.FromSeconds(1));
         var stallWatchdogTask = Task.Run(() => stallWatchdog.RunAsync(reporterCts.Token), CancellationToken.None);

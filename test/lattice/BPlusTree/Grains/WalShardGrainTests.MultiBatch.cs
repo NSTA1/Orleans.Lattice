@@ -169,11 +169,23 @@ public partial class WalShardGrainTests
     [Test]
     public async Task OnDeactivateAsync_drains_every_in_flight_slot()
     {
-        // With cap=3 and gate-held flushes, deactivate must wait for
-        // every in-flight provider call before returning. After the
-        // gate opens and OnDeactivateAsync returns, every append's
-        // TCS must be completed and the provider must hold every
-        // entry.
+        // Historically this test held three flushes gated, deactivated,
+        // then opened the gate to verify the drain waited for every
+        // in-flight slot before returning. With the drain-CTS link the
+        // drain now actively cancels every in-flight provider call at
+        // drain entry so a co-operative provider gives
+        // up promptly - and the gated provider's
+        // `_gate.Task.WaitAsync(cancellationToken)` observes the
+        // cancellation, surfacing every flush as
+        // <see cref="TimeoutException"/> rather than waiting for the
+        // gate to open. The "drained-before-returning" contract still
+        // holds (the deactivation does not return with appends still
+        // parked on their TCS), but the form of the drain is now
+        // "actively cancel and fault" rather than "passively await".
+        // The post-drain assertion is updated to reflect the new
+        // contract: every in-flight slot's TCS settles (with the
+        // typed fault), and OnDeactivateAsync returns promptly without
+        // the test having to open the gate first.
         var gated = new GatedWalStorageProvider(new InMemoryWalStorageProvider());
         var grain = await CreateGrainAsync(gated, new LatticeOptions
         {
@@ -185,21 +197,24 @@ public partial class WalShardGrainTests
         var t2 = grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
         var t3 = grain.AppendAsync(MakeEntry("c"), CancellationToken.None);
 
-        // Schedule deactivation before opening the gate; the
-        // deactivation must not return until every flush settles.
-        var deactivate = Task.Run(() => grain.OnDeactivateAsync(
+        // Deactivate; the drain signals the per-activation drain CTS
+        // which cancels the gated provider's await, every flush faults
+        // through the normal failure handler, and the chain settles.
+        await grain.OnDeactivateAsync(
             new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"),
-            CancellationToken.None));
+            CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
 
-        // Give the deactivation a moment to enter its drain loop, then
-        // release the gate.
-        await Task.Delay(50);
+        // Every append's TCS must be terminal (faulted with
+        // TimeoutException via the FlushAsync deadline catch). The
+        // contract: no caller observes a hung TCS after the drain.
+        Assert.That(async () => await t1, Throws.InstanceOf<TimeoutException>());
+        Assert.That(async () => await t2, Throws.InstanceOf<TimeoutException>());
+        Assert.That(async () => await t3, Throws.InstanceOf<TimeoutException>());
+
+        // Open the gate so the abandoned provider tasks complete
+        // cleanly (otherwise their parked _gate.Task.WaitAsync awaits
+        // would linger in GC's freachable queue beyond the test).
         gated.Open();
-
-        await deactivate;
-        var offsets = await Task.WhenAll(t1, t2, t3);
-
-        Assert.That(offsets, Is.EqualTo(new[] { 0L, 1L, 2L }));
     }
 
     [Test]

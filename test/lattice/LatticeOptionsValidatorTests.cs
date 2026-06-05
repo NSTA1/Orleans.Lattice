@@ -344,4 +344,52 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalFlushPreflightTimeout)));
     }
+
+    [Test]
+    public void WalDrainBudget_default_is_seventy_five_seconds()
+    {
+        Assert.That(new LatticeOptions().WalDrainBudget, Is.EqualTo(TimeSpan.FromSeconds(75)));
+        Assert.That(LatticeOptions.DefaultWalDrainBudget, Is.EqualTo(TimeSpan.FromSeconds(75)));
+    }
+
+    [Test]
+    public void WalDrainBudget_default_is_five_times_default_flush_timeout()
+    {
+        // The default is documented as 5 * WalFlushTimeout. Pin the
+        // relationship so a future change to WalFlushTimeout does not
+        // silently break the documented scaling.
+        Assert.That(LatticeOptions.DefaultWalDrainBudget,
+            Is.EqualTo(LatticeOptions.DefaultWalFlushTimeout * 5),
+            "WalDrainBudget default must remain 5 * WalFlushTimeout default per the documented scaling rule.");
+    }
+
+    [Test]
+    public void WalDrainBudget_positive_passes()
+    {
+        var result = Validate(o => o.WalDrainBudget = TimeSpan.FromSeconds(5));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalDrainBudget_infinite_passes()
+    {
+        var result = Validate(o => o.WalDrainBudget = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalDrainBudget_zero_fails()
+    {
+        var result = Validate(o => o.WalDrainBudget = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalDrainBudget)));
+    }
+
+    [Test]
+    public void WalDrainBudget_negative_fails()
+    {
+        var result = Validate(o => o.WalDrainBudget = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalDrainBudget)));
+    }
 }

@@ -102,6 +102,13 @@ if (options.WalFlushPreflightTimeout <= TimeSpan.Zero
         $"{nameof(LatticeOptions.WalFlushPreflightTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the per-shard flush preflight deadline that prevents a parked scheduler yield from pinning an in-flight slot with no deadline armed).");
 }
+if (options.WalDrainBudget <= TimeSpan.Zero
+    && options.WalDrainBudget != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalDrainBudget)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the per-shard deactivation drain budget that prevents a wedged provider call from holding host shutdown indefinitely).");
+}
 return ValidateOptionsResult.Success;
     }
 }

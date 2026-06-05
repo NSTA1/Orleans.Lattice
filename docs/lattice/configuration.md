@@ -579,6 +579,22 @@ The default of 5 seconds is orders of magnitude above the legitimate microsecond
 
 This option can be changed freely at any time. The new value takes effect on the next flush.
 
+### `WalDrainBudget`
+
+Hard ceiling on how long a per-shard WAL grain's `OnDeactivateAsync` drain may run before the remaining in-flight slots are force-faulted and the chain is released so the activation can finish tearing down (default: 75 seconds = `5 * WalFlushTimeout`). Bounds the host-level SIGTERM drain so the silo's shutdown accounting (the benchmark host's `FINAL` line, an `IHostApplicationLifetime.ApplicationStopping` cancellation source) always settles within bounded time of the SIGTERM, regardless of whether the underlying storage provider is healthy.
+
+Defends against the saturating-storage-account wedge: when the provider call's await is parked behind an SDK retry loop in pre-attempt back-off, the existing per-flush `WalFlushTimeout` may not fire promptly (the SDK observes cancellation only between attempts, not during back-off), so a chain with N in-flight slots can hold the deactivation indefinitely. With this budget the drain:
+
+1. Signals every in-flight flush's cancellation token at entry (the per-activation drain `CancellationTokenSource` is linked into each per-flush deadline at flush construction, so a single `Cancel()` cancels every in-flight provider call in one shot);
+2. Awaits the chain to settle naturally for up to `WalDrainBudget`;
+3. Force-faults any slot that has not unlinked when the budget expires, with a typed `TimeoutException` faulted onto every parked ack `TaskCompletionSource` so callers parked on `AppendAsync` / `AppendBatchAsync` are released rather than parking through the rest of host shutdown.
+
+The `orleans.lattice.wal.shard.drain.budget.expirations` counter and `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` histogram (both tagged `tree` and `shard`) attribute every budget-driven force-fault per partition. A zero counter on a healthy drain; any non-zero rate identifies a shard whose provider call could not be cancelled inside the budget.
+
+The default of 75 seconds is `5 * WalFlushTimeout` - sized so a healthy chain with cap = 16 in-flight flushes has time to drain naturally (each flush is itself bounded by `WalFlushTimeout`) while a wedged chain still surfaces within a bounded window of the SIGTERM. Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-drain behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. The new value takes effect on the next deactivation.
+
 ### `WalMaxPendingBatches`
 
 Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 16, the measured Azure Tables Standard sweet spot at 4,000 keys/s offered load on Standard_D4as_v5). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle. The previous default was 8; raising it to 16 produced a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression.

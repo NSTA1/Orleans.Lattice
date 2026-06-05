@@ -1256,6 +1256,54 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalFlushPreflightTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// Hard ceiling on how long a per-shard WAL grain's
+    /// <c>OnDeactivateAsync</c> drain may run before the remaining
+    /// in-flight slots are force-faulted and the chain is released so
+    /// the activation can finish tearing down. Bounds the host-level
+    /// SIGTERM drain so the silo's shutdown accounting (the
+    /// benchmark host's <c>FINAL</c> line, an
+    /// <see cref="System.Threading.IHostApplicationLifetime.ApplicationStopping"/>
+    /// cancellation source) always settles within bounded time of the
+    /// SIGTERM, regardless of whether the underlying storage provider
+    /// is healthy.
+    /// <para>
+    /// Defends against the saturating-storage-account wedge: when the
+    /// provider call's await is parked behind an SDK retry loop in
+    /// pre-attempt back-off, the existing per-flush
+    /// <see cref="WalFlushTimeout"/> may not fire promptly (the SDK
+    /// observes cancellation only between attempts, not during
+    /// back-off), so a chain with N in-flight slots can hold the
+    /// deactivation indefinitely. With this budget the drain cancels
+    /// every in-flight flush's cancellation token at entry, awaits the
+    /// chain to settle naturally for up to <see cref="WalDrainBudget"/>,
+    /// and then force-faults any slot that has not unlinked with a
+    /// <see cref="TimeoutException"/>. The faulted slot's ack TCSs are
+    /// completed via the normal failure-handler path so callers parked
+    /// on <c>AppendAsync</c> / <c>AppendBatchAsync</c> are released
+    /// rather than parking through the rest of the host shutdown.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalDrainBudget"/>
+    /// (75 seconds = <c>5 * <see cref="DefaultWalFlushTimeout"/></c>),
+    /// chosen so a healthy chain with cap=16 in-flight flushes has
+    /// time to drain naturally (each flush is itself bounded by
+    /// <see cref="WalFlushTimeout"/>) while a wedged chain still
+    /// surfaces within a bounded window of the SIGTERM. The
+    /// <see cref="Orleans.Lattice.LatticeMetrics.WalShardDrainBudgetExpirations"/>
+    /// counter attributes a budget-driven force-fault to the affected
+    /// <c>(tree, shard)</c>. Set to
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to
+    /// disable the ceiling and restore the historical unbounded-drain
+    /// behaviour; the registered options validator rejects any other
+    /// non-positive value at first-resolve time.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalDrainBudget { get; set; } = DefaultWalDrainBudget;
+
+    /// <summary>Default value for <see cref="WalDrainBudget"/> (75 seconds = 5 * <see cref="DefaultWalFlushTimeout"/>).</summary>
+    public static readonly TimeSpan DefaultWalDrainBudget = TimeSpan.FromSeconds(75);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's
