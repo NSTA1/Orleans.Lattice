@@ -494,6 +494,19 @@ function Invoke-Layer1Cohorts {
 	$mbDir = Join-Path $prefixDir 'microbench'
 	if (-not (Test-Path $mbDir)) { New-Item -ItemType Directory -Path $mbDir -Force | Out-Null }
 
+	# One-time build of the microbench project on the VM. update.ps1 only
+	# publishes Silo + Producer; the microbench project is built on demand here
+	# so the per-cohort `dotnet run --no-build` can find the assembly. We pay
+	# the ~30s build cost once and amortise across all N cohorts (and across
+	# all workloads within each cohort - BDN's filter just selects [Benchmark]
+	# methods from the already-built assembly).
+	Write-Host "[layer1] building Bench.Microbench on the VM (one-time, ~30s) ..." -ForegroundColor Cyan
+	$buildCmd = "cd /opt/lattice/src && /usr/bin/dotnet build benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release --nologo /clp:ErrorsOnly"
+	& ssh @sshOpts $sshTarget $buildCmd
+	if ($LASTEXITCODE -ne 0) {
+		throw "[layer1] microbench build on the VM failed (ssh exit $LASTEXITCODE). Cannot continue without the build output."
+	}
+
 	$cohorts = New-Object System.Collections.Generic.List[hashtable]
 	for ($i = 1; $i -le $N; $i++) {
 		$runId = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ssZ') + "-$i"
@@ -862,17 +875,23 @@ function New-MetaHeaderForLayer1 {
 	} else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
 
 	# Start from the existing meta (so unknown keys like provenanceNote ride
-	# through) and overlay the keys this script owns.
+	# through) and overlay the keys this script owns - but ONLY when we have
+	# fresh rows. When every cohort failed (RowsAgg empty), preserve the
+	# existing meta header verbatim so the doc doesn't claim to be VM-grounded
+	# when in fact the cells fell back to the previous values.
 	$meta = @{}
 	foreach ($k in $Existing.Keys) { $meta[$k] = $Existing[$k] }
-	$meta['schema']        = 'v1'
-	$meta['host']          = $State.vmSize
-	$meta['dotnet']        = ($State.dotnetVersion ?? '10.0.x')
-	$meta['bdnFidelity']   = 'quick'
-	$meta['bdnToolchain']  = 'InProcessEmitToolchain'
-	$meta['cohortN']       = $cohortN
-	$meta['rowsMeasured']  = $rowsDate
-	$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
+	if (-not $meta.ContainsKey('schema')) { $meta['schema'] = 'v1' }
+	if ($RowsAgg.Count -gt 0) {
+		$meta['schema']        = 'v1'
+		$meta['host']          = $State.vmSize
+		$meta['dotnet']        = ($State.dotnetVersion ?? '10.0.x')
+		$meta['bdnFidelity']   = 'quick'
+		$meta['bdnToolchain']  = 'InProcessEmitToolchain'
+		$meta['cohortN']       = $cohortN
+		$meta['rowsMeasured']  = $rowsDate
+		$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
+	}
 	return $meta
 }
 
@@ -896,17 +915,20 @@ function New-MetaHeaderForLayer2 {
 
 	$meta = @{}
 	foreach ($k in $Existing.Keys) { $meta[$k] = $Existing[$k] }
-	$meta['schema']             = 'v1'
-	$meta['host']               = $State.vmSize
-	$meta['region']             = $State.region
-	$meta['dotnet']             = ($State.dotnetVersion ?? '10.0.x')
-	$meta['walPartitions']      = $State.walPartitions
-	$meta['walMaxPendingBatches'] = $State.walMaxPendingBatches
-	$meta['rung']               = $rung
-	$meta['responseTimeoutSec'] = $State.responseTimeoutSec
-	$meta['cohortN']            = $cohortN
-	$meta['rowsMeasured']       = $rowsDate
-	$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the matching duration histogram p50/p99 from the last full [phaseA] reporter window.'
+	if (-not $meta.ContainsKey('schema')) { $meta['schema'] = 'v1' }
+	if ($RowsAgg.Count -gt 0) {
+		$meta['schema']             = 'v1'
+		$meta['host']               = $State.vmSize
+		$meta['region']             = $State.region
+		$meta['dotnet']             = ($State.dotnetVersion ?? '10.0.x')
+		$meta['walPartitions']      = $State.walPartitions
+		$meta['walMaxPendingBatches'] = $State.walMaxPendingBatches
+		$meta['rung']               = $rung
+		$meta['responseTimeoutSec'] = $State.responseTimeoutSec
+		$meta['cohortN']            = $cohortN
+		$meta['rowsMeasured']       = $rowsDate
+		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the matching duration histogram p50/p99 from the last full [phaseA] reporter window.'
+	}
 	return $meta
 }
 
@@ -1032,8 +1054,14 @@ function Update-DocMarkers {
 	$existingMetaL1 = Get-ExistingMetaHeader -Content $content -Layer 'layer1'
 	$existingMetaL2 = Get-ExistingMetaHeader -Content $content -Layer 'layer2'
 
-	# Build the replacement block(s).
-	if ($State.layer1.rows.Count -gt 0 -or $existingL1.Count -gt 0) {
+	# Rewrite a layer's block only when we have at least one fresh aggregated
+	# row. If every cohort failed for a layer (RowsAgg empty), leave the
+	# existing block byte-identical - rewriting it would re-sort meta keys and
+	# re-shape the table header, producing noisy "diff for no reason" output
+	# and (worse) painting a stale meta header (host=current-VM-SKU,
+	# cohortN=preserved) onto rows that fell back from the previous
+	# measurement.
+	if ($State.layer1.rows.Count -gt 0) {
 		$meta1 = New-MetaHeaderForLayer1 -State $State -RowsAgg $State.layer1.rows -Existing $existingMetaL1
 		$header1 = Render-MetaHeader -Layer 'layer1' -Meta $meta1
 		$table1 = Render-Layer1Table -RowsAgg $State.layer1.rows -ExistingRows $existingL1
@@ -1041,14 +1069,31 @@ function Update-DocMarkers {
 
 		$pattern1 = '(?s)<!-- perf-table:layer1:start.*?<!-- perf-table:layer1:end -->'
 		$content = [regex]::Replace($content, $pattern1, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $newBlock1 })
+	} elseif ($existingL1.Count -eq 0) {
+		# Edge case: marker block exists but contains no rows (e.g. operator
+		# committed an empty marker pair as a seed). Render placeholders so the
+		# next run has something to update.
+		$meta1 = New-MetaHeaderForLayer1 -State $State -RowsAgg @{} -Existing $existingMetaL1
+		$header1 = Render-MetaHeader -Layer 'layer1' -Meta $meta1
+		$table1 = Render-Layer1Table -RowsAgg @{} -ExistingRows @{}
+		$newBlock1 = $header1 + $nl + $nl + $table1 + $nl + $nl + '<!-- perf-table:layer1:end -->'
+		$pattern1 = '(?s)<!-- perf-table:layer1:start.*?<!-- perf-table:layer1:end -->'
+		$content = [regex]::Replace($content, $pattern1, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $newBlock1 })
 	}
 
-	if ($State.layer2.rows.Count -gt 0 -or $existingL2.Count -gt 0) {
+	if ($State.layer2.rows.Count -gt 0) {
 		$meta2 = New-MetaHeaderForLayer2 -State $State -RowsAgg $State.layer2.rows -Existing $existingMetaL2
 		$header2 = Render-MetaHeader -Layer 'layer2' -Meta $meta2
 		$table2 = Render-Layer2Table -RowsAgg $State.layer2.rows -ExistingRows $existingL2
 		$newBlock2 = $header2 + $nl + $nl + $table2 + $nl + $nl + '<!-- perf-table:layer2:end -->'
 
+		$pattern2 = '(?s)<!-- perf-table:layer2:start.*?<!-- perf-table:layer2:end -->'
+		$content = [regex]::Replace($content, $pattern2, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $newBlock2 })
+	} elseif ($existingL2.Count -eq 0) {
+		$meta2 = New-MetaHeaderForLayer2 -State $State -RowsAgg @{} -Existing $existingMetaL2
+		$header2 = Render-MetaHeader -Layer 'layer2' -Meta $meta2
+		$table2 = Render-Layer2Table -RowsAgg @{} -ExistingRows @{}
+		$newBlock2 = $header2 + $nl + $nl + $table2 + $nl + $nl + '<!-- perf-table:layer2:end -->'
 		$pattern2 = '(?s)<!-- perf-table:layer2:start.*?<!-- perf-table:layer2:end -->'
 		$content = [regex]::Replace($content, $pattern2, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $newBlock2 })
 	}
