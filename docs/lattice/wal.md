@@ -374,6 +374,33 @@ and then triggers (and awaits) a final flush of any remaining pending
 entries, so a graceful deactivation never leaves a caller observing a
 hung TCS regardless of the configured `WalMaxPendingBatches`.
 
+The drain is bounded by `WalDrainBudget` (default 75 seconds = `5 *
+WalFlushTimeout`). At drain entry the per-activation drain
+`CancellationTokenSource` is signalled - every in-flight flush has
+already linked its per-flush deadline into this source at construction
+time, so a co-operative provider's `AppendBatchAsync` cancellation
+token cancels in one shot and the flush surfaces a `TimeoutException`
+routed through the normal failure handler. The chain is then awaited
+to settle naturally for up to the budget; any slot that has not
+unlinked when the budget expires is force-faulted with a typed
+`TimeoutException` faulted onto every parked ack TCS so callers are
+released rather than parking through the rest of host shutdown. The
+`orleans.lattice.wal.shard.drain.budget.expirations` counter and
+`orleans.lattice.wal.shard.drain.budget.force_faulted_slots` histogram
+(both tagged `tree` and `shard`) attribute every budget-driven
+force-fault per partition.
+
+This bound defends against the saturating-storage-account wedge: when
+the provider call's await is parked behind an SDK retry loop in
+pre-attempt back-off, the per-flush `WalFlushTimeout` may not fire
+promptly (the SDK observes cancellation only between attempts, not
+during back-off), so without the drain budget a chain with N in-flight
+slots could hold the deactivation indefinitely. With the budget the
+chain settles within bounded time of the SIGTERM regardless of whether
+the underlying provider is healthy. Set `WalDrainBudget` to
+`InfiniteTimeSpan` to disable the ceiling and restore the historical
+unbounded-drain behaviour.
+
 ### Append-failure semantics
 
 A flush failure is fail-fast for every affected caller:

@@ -1261,6 +1261,48 @@ public static class LatticeMetrics
             description: "Per-WAL-shard in-flight slot count observed at OnDeactivateAsync time.");
 
     /// <summary>
+    /// Count of per-shard <c>WalShardGrain</c> deactivation drains that
+    /// exceeded <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalDrainBudget"/>
+    /// and had to force-fault one or more in-flight slots so the
+    /// activation could finish tearing down. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// <para>
+    /// Reliability intent: under a saturating-storage-account wedge,
+    /// the provider call's await can park behind an SDK retry loop in
+    /// pre-attempt back-off where the per-flush
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushTimeout"/>
+    /// deadline does not fire promptly (the SDK observes cancellation
+    /// only between attempts, not during back-off), so a chain with N
+    /// in-flight slots could otherwise hold the deactivation
+    /// indefinitely. With the drain budget the deactivation force-faults
+    /// any slot that has not unlinked within the deadline; this counter
+    /// names the wedged shard so operators can attribute the trip
+    /// without source-walking the silo log. Zero on a healthy
+    /// drain; any non-zero rate identifies a shard whose provider call
+    /// could not be cancelled inside the drain budget.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalShardDrainBudgetExpirations =
+        Meter.CreateCounter<long>("orleans.lattice.wal.shard.drain.budget.expirations", unit: "{expiration}",
+            description: "Count of WalShardGrain deactivation drains that exceeded WalDrainBudget and force-faulted in-flight slots.");
+
+    /// <summary>
+    /// Histogram of in-flight slots force-faulted by a per-shard
+    /// <c>WalShardGrain</c> deactivation drain after
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalDrainBudget"/>
+    /// expired. Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Recorded exactly once per drain that hit the budget; the value is
+    /// the number of slots that had not unlinked when the budget fired and
+    /// were force-faulted to release the activation. A zero observation
+    /// is not recorded - the histogram only fires on the
+    /// <see cref="WalShardDrainBudgetExpirations"/> path, so reading the
+    /// histogram's count and the counter's count gives the same number.
+    /// </summary>
+    public static readonly Histogram<long> WalShardDrainBudgetForceFaultedSlots =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.shard.drain.budget.force_faulted_slots", unit: "{slot}",
+            description: "Per-WAL-shard in-flight slot count force-faulted by a deactivation drain that exceeded WalDrainBudget.");
+
+    /// <summary>
     /// Count of <c>WalShardGrain.StartFlush</c> invocations per
     /// <c>(tree, shard)</c>. Incremented once at the top of every
     /// <c>StartFlush</c> call, including the follow-on flushes a

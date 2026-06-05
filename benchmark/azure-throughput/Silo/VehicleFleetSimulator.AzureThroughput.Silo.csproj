@@ -38,4 +38,15 @@
     <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.726401" />
   </ItemGroup>
 
+  <!--
+    Expose internal types (StallWatchdog, TcpIngestService, ...) to the
+    sibling test project so the test project can construct them
+    directly. The silo is an Exe, not a published library, so the
+    InternalsVisibleTo grant cannot accidentally leak into a downstream
+    consumer's surface.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="VehicleFleetSimulator.AzureThroughput.Silo.Tests" />
+  </ItemGroup>
+
 </Project>

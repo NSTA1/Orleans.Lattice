@@ -178,6 +178,31 @@ internal sealed class WalShardGrain(
     private Exception? _stickyFailure;
 
     /// <summary>
+    /// Per-grain cancellation source signalled at deactivation entry
+    /// by <see cref="OnDeactivateAsync"/> so every in-flight flush's
+    /// provider call observes drain cancellation immediately rather than
+    /// waiting for its own per-flush <see cref="LatticeOptions.WalFlushTimeout"/>
+    /// deadline to fire. Constructed in
+    /// <see cref="OnActivateAsync(CancellationToken)"/> /
+    /// <see cref="InitializeForTestingAsync"/> at activation time so the
+    /// source is available to link into every per-flush deadline CTS in
+    /// <see cref="FlushAsync"/> (a deactivation that races a flush's
+    /// deadline construction signals the already-linked token rather
+    /// than missing the link). A co-operative provider (any
+    /// implementation that observes its <see cref="CancellationToken"/>)
+    /// gives up promptly when the drain is signalled; an un-cooperative
+    /// provider's slot is force-faulted by the
+    /// <see cref="LatticeOptions.WalDrainBudget"/> ceiling after the
+    /// natural drain has had a chance to settle. Never explicitly
+    /// disposed - a force-faulted FlushAsync's body may still be alive
+    /// when deactivation returns, and
+    /// <see cref="CancellationTokenSource.Token"/> throws
+    /// <see cref="ObjectDisposedException"/> after disposal. The CTS is
+    /// a small heap object that the GC reclaims with the activation.
+    /// </summary>
+    private CancellationTokenSource? _drainCts;
+
+    /// <summary>
     /// Compiled-out diagnostic trace. Enabled by defining the
     /// <c>LATTICE_DIAG</c> preprocessor symbol on the build (e.g.
     /// <c>dotnet build /p:LatticeDiag=true</c>); emits a single line
@@ -275,6 +300,12 @@ internal sealed class WalShardGrain(
         await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = highest + 1;
+        // Construct the per-activation drain cancellation source up-front
+        // so every FlushAsync (including the very first one) can link
+        // its per-flush deadline to a stable token. A deactivation that
+        // races a flush's deadline construction signals this already-
+        // linked token rather than missing the link.
+        _drainCts = new CancellationTokenSource();
         _initialized = true;
     }
 
@@ -282,6 +313,20 @@ internal sealed class WalShardGrain(
     /// Drains every in-flight flush and any pending batch before
     /// returning, so a graceful deactivation never leaves callers
     /// observing a hung <see cref="TaskCompletionSource{TResult}"/>.
+    /// <para>
+    /// Bounded by <see cref="LatticeOptions.WalDrainBudget"/>: at
+    /// drain entry the per-grain <see cref="_drainCts"/> is signalled
+    /// so every in-flight provider call's linked deadline cancels
+    /// immediately (co-operative providers give up promptly), the
+    /// natural settle is awaited for up to the budget, and any slot
+    /// that has not unlinked within the budget is force-faulted so
+    /// the activation can finish tearing down. The
+    /// <see cref="Orleans.Lattice.LatticeMetrics.WalShardDrainBudgetExpirations"/>
+    /// counter and the
+    /// <see cref="Orleans.Lattice.LatticeMetrics.WalShardDrainBudgetForceFaultedSlots"/>
+    /// histogram attribute every budget-driven force-fault to the
+    /// affected <c>(tree, shard)</c>.
+    /// </para>
     /// </summary>
     public async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
@@ -307,7 +352,26 @@ internal sealed class WalShardGrain(
             Trace($"deactivate.inflight count={inFlightAtDeactivate} reason={reason}");
         }
 
-        await DrainInFlightAsync().ConfigureAwait(true);
+        // Signal drain cancellation before awaiting the chain so
+        // every in-flight flush's provider call observes the
+        // cancellation immediately rather than waiting for its own
+        // per-flush WalFlushTimeout deadline to fire. A co-operative
+        // provider (any IWalStorageProvider implementation that observes
+        // its CancellationToken) gives up promptly; an un-cooperative
+        // provider's slot is force-faulted by the WalDrainBudget
+        // ceiling below. The drain CTS is the per-activation source
+        // constructed at OnActivateAsync / InitializeForTestingAsync
+        // time so every FlushAsync has already linked its per-flush
+        // deadline against it - signalling here cancels every linked
+        // token in one shot regardless of when the flush started.
+        // Not disposed here: a force-faulted FlushAsync may still be
+        // alive (its body is unobserved but its deadline-construction
+        // continuation might read the token), and CancellationTokenSource.Token
+        // throws ObjectDisposedException after Dispose. The CTS is a
+        // small heap object the GC reclaims with the activation.
+        _drainCts?.Cancel();
+
+        await DrainInFlightAsync(Options.WalDrainBudget).ConfigureAwait(true);
 
         bool hasPending;
         lock (_stateGate)
@@ -317,7 +381,13 @@ internal sealed class WalShardGrain(
         if (hasPending)
         {
             StartFlush();
-            await DrainInFlightAsync().ConfigureAwait(true);
+            // A second bounded drain for the follow-on flush
+            // started above. The budget is fresh because the
+            // post-pending flush is a logically separate batch and
+            // the SIGTERM-bound contract is "FINAL emits within
+            // bounded time of the SIGTERM" - sharing the original
+            // budget would silently shorten the second drain.
+            await DrainInFlightAsync(Options.WalDrainBudget).ConfigureAwait(true);
         }
     }
 
@@ -325,9 +395,24 @@ internal sealed class WalShardGrain(
     /// Awaits every in-flight flush in chronological order, swallowing
     /// individual failures because they are already surfaced to their
     /// respective ack TCSs (and to <see cref="_stickyFailure"/>).
+    /// Bounded by <paramref name="budget"/>; on expiry, force-faults
+    /// every slot that has not yet unlinked so the activation can
+    /// finish tearing down within bounded time of the SIGTERM.
     /// </summary>
-    private async Task DrainInFlightAsync()
+    private async Task DrainInFlightAsync(TimeSpan budget)
     {
+        // Snapshot the current chain so the force-fault path below has
+        // a stable list to iterate over - new appends can race in only
+        // on a different grain turn and the deactivation contract gives
+        // them the same sticky-failure short-circuit a normal flush
+        // failure does. The natural-drain loop reads the head pointer
+        // per iteration so any slot that does settle naturally is still
+        // unlinked by its own FlushAsync.finally and not by this method.
+        var startTicks = Stopwatch.GetTimestamp();
+        var deadlineTicks = budget == Timeout.InfiniteTimeSpan
+            ? long.MaxValue
+            : startTicks + (long)(budget.TotalSeconds * Stopwatch.Frequency);
+
         while (true)
         {
             Task? head;
@@ -339,14 +424,138 @@ internal sealed class WalShardGrain(
             {
                 return;
             }
+
+            // Bound the per-head wait by the remaining budget. A budget
+            // of InfiniteTimeSpan reproduces the historical unbounded
+            // await; a finite budget gives the natural drain a chance
+            // to settle but falls through to the force-fault path
+            // below once the budget is exhausted.
+            if (deadlineTicks == long.MaxValue)
+            {
+                try { await head.ConfigureAwait(true); } catch { /* failures surfaced via TCSs */ }
+                continue;
+            }
+
+            var nowTicks = Stopwatch.GetTimestamp();
+            if (nowTicks >= deadlineTicks)
+            {
+                ForceFaultRemainingSlotsForDrainBudgetExpiry(budget);
+                return;
+            }
+            var remainingMs = (long)((deadlineTicks - nowTicks) * 1000.0 / Stopwatch.Frequency);
             try
             {
-                await head.ConfigureAwait(true);
+                await head.WaitAsync(TimeSpan.FromMilliseconds(remainingMs)).ConfigureAwait(true);
+            }
+            catch (TimeoutException)
+            {
+                // Drain budget expired before this slot's FlushAsync
+                // settled. Force-fault every remaining slot so callers
+                // parked on AppendAsync / AppendBatchAsync are released
+                // (rather than parking through the rest of host
+                // shutdown) and the activation can finish tearing down.
+                ForceFaultRemainingSlotsForDrainBudgetExpiry(budget);
+                return;
             }
             catch
             {
-                // Failures already surfaced to TCSs and _stickyFailure.
+                // Per-slot fault already surfaced via TCSs / _stickyFailure.
             }
+        }
+    }
+
+    /// <summary>
+    /// Force-faults every in-flight slot that has not yet unlinked,
+    /// invoked by <see cref="DrainInFlightAsync"/> when the
+    /// <see cref="LatticeOptions.WalDrainBudget"/> expires. Each slot's
+    /// ack TCSs receive a typed <see cref="TimeoutException"/> so
+    /// callers parked on <c>AppendAsync</c> / <c>AppendBatchAsync</c>
+    /// are released; the slot is removed from <c>_inFlight</c> so the
+    /// natural drain loop terminates. The underlying provider tasks
+    /// are abandoned (the task references are still held by the slot's
+    /// FlushAsync continuation but no caller awaits them after this
+    /// point); they are harmlessly collected when the activation is
+    /// finalised. The matching counter /
+    /// histogram attribute the trip per <c>(tree, shard)</c>.
+    /// </summary>
+    private void ForceFaultRemainingSlotsForDrainBudgetExpiry(TimeSpan budget)
+    {
+        // One shared exception instance for the drain-budget force-fault
+        // path: latches as _stickyFailure (so any append racing in on a
+        // future grain turn fails fast) AND faults every parked TCS so
+        // callers are released. Mirrors HandleFlushFailureAsync's
+        // single-exception pattern - separating "what the latch says"
+        // from "what callers see" would cost an extra allocation per
+        // drain expiration without any observable benefit; the
+        // exception message names both roles.
+        var ex = new TimeoutException(
+            $"WAL deactivation drain for shard {_shardIndex} of tree '{_treeId}' "
+            + $"exceeded the {budget} drain budget ({nameof(LatticeOptions.WalDrainBudget)}); "
+            + "the in-flight chain was force-faulted so callers are released and the "
+            + "activation can finish tearing down.");
+
+        List<InFlightFlush> abandoned;
+        List<TaskCompletionSource<long>> stalePending;
+        lock (_stateGate)
+        {
+            // Snapshot and clear the chain inside the gate so a
+            // concurrent FlushAsync.finally (running on a continuation
+            // that happens to race the budget expiry) cannot
+            // double-remove a node. We hold the in-flight list as the
+            // authoritative reference to the slot data; the slot's own
+            // task may still settle later but its ack TCSs are about to
+            // be faulted unconditionally and its node is no longer in
+            // _inFlight, so the FlushAsync.finally's _inFlight.Remove
+            // call becomes a no-op on the already-removed node.
+            abandoned = new List<InFlightFlush>(_inFlight.Count);
+            foreach (var slot in _inFlight)
+            {
+                abandoned.Add(slot);
+            }
+            _inFlight.Clear();
+
+            // The currently-accumulating pending batch's ack TCSs must
+            // also be faulted: their offsets were assigned above a
+            // window that is now logically orphaned, and no future
+            // append will satisfy them. Recycle the rented lists so
+            // the chain invariants are preserved if the activation is
+            // somehow recovered (the standard pre-activation
+            // initialise path does not re-enter the same activation,
+            // but a fresh seed-list is cheaper than leaving the field
+            // pointing at a half-consumed list).
+            stalePending = _pendingAcks;
+            for (var i = 0; i < _pendingSegments.Count; i++)
+            {
+                ReturnSegment(_pendingSegments[i]);
+            }
+            ReturnSegmentList(_pendingSegments);
+            ReturnOffsetList(_pendingOffsets);
+            _pendingSegments = RentSegmentList();
+            _pendingOffsets = RentOffsetList();
+            _pendingAcks = RentAckList();
+            _pendingBatchSizeBytes = 0;
+
+            // Latch a sticky failure so any append that races in on a
+            // future grain turn fails fast rather than claiming offsets
+            // we are about to fault.
+            _stickyFailure ??= ex;
+        }
+
+        LatticeMetrics.WalShardDrainBudgetExpirations.Add(1, _treeTag, _shardTag);
+        LatticeMetrics.WalShardDrainBudgetForceFaultedSlots.Record(abandoned.Count, _treeTag, _shardTag);
+        Trace($"drain.budget.expired budget={budget} forceFaultedSlots={abandoned.Count}");
+
+        foreach (var slot in abandoned)
+        {
+            var acks = slot.Acks;
+            for (var i = 0; i < acks.Count; i++)
+            {
+                acks[i].TrySetException(ex);
+            }
+        }
+        for (var i = 0; i < stalePending.Count; i++)
+        {
+            stalePending[i].TrySetException(ex);
         }
     }
 
@@ -1073,9 +1282,24 @@ internal sealed class WalShardGrain(
                 // between bounding the *call* and bounding the *wait*; only
                 // the latter is wedge-proof.
                 var flushTimeout = Options.WalFlushTimeout;
-                using var deadline = flushTimeout == Timeout.InfiniteTimeSpan
-                    ? null
-                    : new CancellationTokenSource(flushTimeout);
+                // Link the per-flush deadline to the per-activation
+                // drain cancellation source so a deactivation entering
+                // at any point cancels the in-flight provider call
+                // immediately rather than waiting for the natural
+                // per-flush WalFlushTimeout deadline to fire. The drain
+                // CTS is the same instance constructed at activation time
+                // and signalled at OnDeactivateAsync entry, so the link
+                // is captured here once and the deactivation cancels
+                // every linked token in one shot regardless of when the
+                // flush started.
+                var drainSnapshot = _drainCts;
+                using var deadline = (flushTimeout == Timeout.InfiniteTimeSpan, drainSnapshot) switch
+                {
+                    (true, null) => null,
+                    (true, not null) => CancellationTokenSource.CreateLinkedTokenSource(drainSnapshot.Token),
+                    (false, null) => new CancellationTokenSource(flushTimeout),
+                    (false, not null) => LinkWithFlushTimeout(drainSnapshot.Token, flushTimeout),
+                };
                 try
                 {
                     var providerCall = _provider.AppendEncodedBatchAsync(
@@ -1109,6 +1333,23 @@ internal sealed class WalShardGrain(
                 catch (OperationCanceledException oce)
                     when (deadline is not null && deadline.IsCancellationRequested)
                 {
+                    // Distinguish the two cancellation sources so the
+                    // surfaced TimeoutException attributes the trip to
+                    // the actually-firing deadline rather than blaming
+                    // WalFlushTimeout when the drain CTS was the
+                    // cause. drainSnapshot is captured up-front (same
+                    // value the deadline was linked to); a null
+                    // drainSnapshot means there's no linked drain and
+                    // only the flush-timer could have fired.
+                    if (drainSnapshot is not null && drainSnapshot.IsCancellationRequested)
+                    {
+                        throw new TimeoutException(
+                            $"WAL flush for shard {_shardIndex} of tree '{_treeId}' "
+                            + $"offsets [{slot.StartOffset},{slot.EndOffsetExclusive}) "
+                            + $"was cancelled by the per-activation deactivation drain "
+                            + $"({nameof(LatticeOptions.WalDrainBudget)}); the in-flight provider "
+                            + $"call observed cancellation at drain entry.", oce);
+                    }
                     throw new TimeoutException(
                         $"WAL flush for shard {_shardIndex} of tree '{_treeId}' "
                         + $"offsets [{slot.StartOffset},{slot.EndOffsetExclusive}) "
@@ -1530,6 +1771,27 @@ internal sealed class WalShardGrain(
         _ackListPool.Push(list);
     }
 
+    /// <summary>
+    /// Constructs a linked <see cref="CancellationTokenSource"/> that
+    /// cancels when either the drain token <paramref name="drainToken"/>
+    /// fires or the <paramref name="flushTimeout"/> deadline elapses.
+    /// Extracted into a named helper so the
+    /// <see cref="FlushAsync"/> deadline-construction switch stays a
+    /// pure expression and the (timer-armed, drain-linked) shape lands
+    /// in one place. <c>CancellationTokenSource.CancelAfter</c> arms
+    /// the timer after construction; the linked source is returned
+    /// already linked, then <c>CancelAfter</c> arms the flush deadline
+    /// on top so either cause cancels the same token.
+    /// </summary>
+    private static CancellationTokenSource LinkWithFlushTimeout(
+        CancellationToken drainToken,
+        TimeSpan flushTimeout)
+    {
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(drainToken);
+        linked.CancelAfter(flushTimeout);
+        return linked;
+    }
+
     private void EnsureInitialized()
     {
         if (!_initialized)
@@ -1580,6 +1842,11 @@ internal sealed class WalShardGrain(
         await provider.ReconcileAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = highest + 1;
+        // Mirror OnActivateAsync's drain-CTS construction so unit tests
+        // see the same activation contract production grains use; the
+        // drain-budget tests rely on the CTS being available so every
+        // FlushAsync can link its per-flush deadline.
+        _drainCts = new CancellationTokenSource();
         _initialized = true;
     }
 }

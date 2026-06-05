@@ -42,7 +42,8 @@ internal sealed class StallWatchdog
 {
     private readonly Func<long> _writtenTotalSnapshot;
     private readonly Func<long> _inFlightSnapshot;
-    private readonly int _pinnedInFlightThreshold;
+    private readonly Func<long> _failedTotalSnapshot;
+    private readonly long _failedDeltaThreshold;
     private readonly TimeSpan _stallWindow;
     private readonly TimeSpan _pollInterval;
     private int _fired;
@@ -53,35 +54,65 @@ internal sealed class StallWatchdog
     /// <param name="writtenTotalSnapshot">
     /// Reads the monotonically-increasing total entries written. The
     /// watchdog declares a stall when this value stops advancing while
-    /// in-flight work remains pinned.
+    /// in-flight work or sustained failures keep the silo from
+    /// settling cleanly.
     /// </param>
     /// <param name="inFlightSnapshot">
-    /// Reads the current in-flight dispatch count. A wedge pins this at
-    /// the configured ceiling; a clean idle leaves it at zero.
+    /// Reads the current in-flight dispatch count. The "wedge with
+    /// inFlight pinned" shape (the saturation-rung phenotype the
+    /// writer-side admission-cap fix the reliability cycle named) fires when this stays
+    /// non-zero while no progress is made; the "drained but no FINAL"
+    /// shape (provider returned faults, chain drained
+    /// to zero, but the silo never settled) is caught by the
+    /// <paramref name="failedTotalSnapshot"/> signal instead.
     /// </param>
-    /// <param name="pinnedInFlightThreshold">
-    /// The in-flight count at or above which a non-advancing
-    /// written-total is treated as a wedge rather than a drained idle.
-    /// Pass <c>WalMaxPendingBatches</c> (the value the wedge pins at).
+    /// <param name="failedTotalSnapshot">
+    /// Reads the monotonically-increasing total failed entries. A
+    /// per-sample delta of at least
+    /// <paramref name="failedDeltaThreshold"/> with no
+    /// <paramref name="writtenTotalSnapshot"/> advancement is the
+    /// "provider saturation, chain faulting but never recovering"
+    /// signal that the drained-but-faulting phenotype produces (the SDK
+    /// surfaced <c>TableTransactionFailedException</c> for every
+    /// in-flight batch but the silo never re-armed the offered rate).
+    /// Pass <c>() =&gt; 0</c> if the bench does not surface a failed
+    /// counter to disable the provider-saturation arm.
+    /// </param>
+    /// <param name="failedDeltaThreshold">
+    /// Minimum per-sample increase in failed entries (across one
+    /// <paramref name="pollInterval"/>) that promotes a frozen
+    /// written-total to a wedge. Set above the noise floor so a
+    /// single late-failing batch on a healthy run does not trip it.
+    /// Pass <c>0</c> with a constant <paramref name="failedTotalSnapshot"/>
+    /// to disable the provider-saturation arm.
     /// </param>
     /// <param name="stallWindow">
-    /// How long the written-total must stay frozen (with in-flight pinned)
-    /// before the watchdog fires. Long enough to exclude a transient
-    /// back-pressure dip, short enough to fire well inside the run.
+    /// How long the written-total must stay frozen (with in-flight
+    /// non-zero or sustained failures) before the watchdog fires. Long
+    /// enough to exclude a transient back-pressure dip, short enough
+    /// to fire well inside the run.
     /// </param>
     /// <param name="pollInterval">How often to sample.</param>
     public StallWatchdog(
         Func<long> writtenTotalSnapshot,
         Func<long> inFlightSnapshot,
-        int pinnedInFlightThreshold,
+        Func<long> failedTotalSnapshot,
+        long failedDeltaThreshold,
         TimeSpan stallWindow,
         TimeSpan pollInterval)
     {
         ArgumentNullException.ThrowIfNull(writtenTotalSnapshot);
         ArgumentNullException.ThrowIfNull(inFlightSnapshot);
+        ArgumentNullException.ThrowIfNull(failedTotalSnapshot);
+        if (failedDeltaThreshold < 0L)
+        {
+            throw new ArgumentOutOfRangeException(nameof(failedDeltaThreshold), failedDeltaThreshold,
+                "Failed-delta threshold must be non-negative; pass 0 to disable the provider-saturation arm.");
+        }
         _writtenTotalSnapshot = writtenTotalSnapshot;
         _inFlightSnapshot = inFlightSnapshot;
-        _pinnedInFlightThreshold = pinnedInFlightThreshold;
+        _failedTotalSnapshot = failedTotalSnapshot;
+        _failedDeltaThreshold = failedDeltaThreshold;
         _stallWindow = stallWindow;
         _pollInterval = pollInterval;
     }
@@ -95,6 +126,7 @@ internal sealed class StallWatchdog
     public async Task RunAsync(CancellationToken ct)
     {
         long lastWritten = _writtenTotalSnapshot();
+        long lastFailed = _failedTotalSnapshot();
         var lastProgressAt = DateTime.UtcNow;
         try
         {
@@ -104,6 +136,9 @@ internal sealed class StallWatchdog
 
                 var written = _writtenTotalSnapshot();
                 var inFlight = _inFlightSnapshot();
+                var failed = _failedTotalSnapshot();
+                var failedDelta = failed - lastFailed;
+                lastFailed = failed;
 
                 if (written != lastWritten)
                 {
@@ -113,11 +148,30 @@ internal sealed class StallWatchdog
                     continue;
                 }
 
-                // Written total is frozen. Only a wedge (not a drained
-                // idle) keeps in-flight work pinned while no progress is
-                // made, so gate on the in-flight ceiling to avoid firing
-                // on the clean post-drain tail at end of run.
-                if (inFlight < _pinnedInFlightThreshold)
+                // Written total is frozen. Two phenotypes promote this to
+                // a wedge rather than a drained idle:
+                //
+                //   (1) inFlight > 0: callers are still parked downstream
+                //       and the chain is not making progress. The historic
+                //       gate was inFlight >= cap (the previously-shipped
+                //       saturation phenotype), but the in-flight-N-below-cap
+                //       phenotype - inFlight=N<cap parked on a saturating
+                //       account - violated that gate. Firing on any
+                //       non-zero in-flight covers both cases and a
+                //       drained-idle still resets above on a zero sample.
+                //
+                //   (2) failed delta exceeds the threshold across one
+                //       poll interval: even with inFlight = 0, a sustained
+                //       provider-failure stream signals a wedge that
+                //       absorbs and faults batches without ever advancing
+                //       writtenTotal. This is the drained-but-faulting
+                //       the chain drained because every batch faulted,
+                //       but the silo never settled to FINAL. The threshold
+                //       guards against firing on a single straggler late
+                //       in the run.
+                var inFlightArmed = inFlight > 0;
+                var failureArmed = _failedDeltaThreshold > 0L && failedDelta >= _failedDeltaThreshold;
+                if (!inFlightArmed && !failureArmed)
                 {
                     lastProgressAt = DateTime.UtcNow;
                     continue;
@@ -130,7 +184,7 @@ internal sealed class StallWatchdog
 
                 if (Interlocked.Exchange(ref _fired, 1) == 0)
                 {
-                    EmitParkedStateReport(written, inFlight);
+                    EmitParkedStateReport(written, inFlight, failed, failedDelta, inFlightArmed, failureArmed);
                 }
             }
         }
@@ -141,19 +195,42 @@ internal sealed class StallWatchdog
     }
 
     /// <summary>
+    /// Test-only observable: <c>true</c> once the watchdog has detected
+    /// a wedge and called <see cref="EmitParkedStateReport"/>. Set to
+    /// <c>false</c> for the lifetime of a healthy run. The
+    /// <c>EmitParkedStateReport</c> emit path itself depends on
+    /// <c>ClrMD</c> + <c>createdump</c> availability and can fail
+    /// silently on dev workstations where those are not provisioned,
+    /// so behaviour tests assert this flag rather than scraping stdout.
+    /// </summary>
+    internal bool HasFiredForTesting => Volatile.Read(ref _fired) != 0;
+
+    /// <summary>
     /// Snapshots the current process with ClrMD and prints, to stdout,
     /// (1) every suspended async state machine on the managed heap grouped
     /// by type with its <c>&lt;&gt;1__state</c> resume point, and (2) every
     /// managed thread's call stack. All output is single-line-prefixed
     /// with <c>[stall-watchdog]</c> so it is trivially grep-able out of the
-    /// interleaved silo log.
+    /// interleaved silo log. The <paramref name="inFlightArmed"/> /
+    /// <paramref name="failureArmed"/> flags name which phenotype tripped
+    /// the watchdog (the in-flight arm is the in-flight phenotype; the
+    /// provider-saturation arm) so the operator can correlate the wedge
+    /// shape against the captured async / thread state without inferring
+    /// it from the inFlight count alone.
     /// </summary>
-    private static void EmitParkedStateReport(long written, long inFlight)
+    private static void EmitParkedStateReport(long written, long inFlight, long failed, long failedDelta, bool inFlightArmed, bool failureArmed)
     {
         var sb = new StringBuilder(64 * 1024);
         void Line(string text) => sb.Append("[stall-watchdog] ").Append(text).Append('\n');
 
-        Line($"WEDGE DETECTED writtenTotal={written:N0} inFlight={inFlight} pid={Environment.ProcessId} - capturing in-process async/thread state");
+        var armed = (inFlightArmed, failureArmed) switch
+        {
+            (true, true) => "inFlight+failures",
+            (true, false) => "inFlight",
+            (false, true) => "failures",
+            _ => "<none>",
+        };
+        Line($"WEDGE DETECTED writtenTotal={written:N0} inFlight={inFlight} failedTotal={failed:N0} failedDelta={failedDelta:N0} armedBy={armed} pid={Environment.ProcessId} - capturing in-process async/thread state");
 
         try
         {

@@ -625,18 +625,27 @@ public partial class WalShardGrainTests
     [Test]
     public async Task OnDeactivateAsync_drains_pending_batch_before_returning()
     {
-        // Append once and then deactivate immediately; without a drain,
-        // the in-flight TCS would never complete. The provider sees the
-        // batch by the time OnDeactivateAsync returns.
+        // Append, await the commit, then deactivate. The fully-completed
+        // in-flight task drains as a no-op (the slot has already
+        // unlinked) and OnDeactivateAsync returns promptly.
+        //
+        // Historically this test did NOT await the AppendAsync before
+        // calling OnDeactivateAsync, relying on a healthy in-memory
+        // provider finishing before any drain logic could interfere.
+        // With the drain-CTS link the drain now actively
+        // cancels every in-flight provider call at drain entry so a
+        // co-operative provider gives up promptly - which means the
+        // earlier "race the flush against the drain" shape would now
+        // surface as a faulted append (the in-memory provider observes
+        // its cancellation token at the top of AppendBatchAsync). The
+        // "drained-before-returning" contract still holds, but the test
+        // pre-completes the append so the drain has nothing to cancel.
         var provider = new InMemoryWalStorageProvider();
         var grain = await CreateGrainAsync(provider);
 
-        // Fire an append but do not await it - the grain has accepted
-        // the entry into its pending batch and started a flush.
-        var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        var seq = await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
 
         await grain.OnDeactivateAsync(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"), CancellationToken.None);
-        var seq = await append;
 
         var head = await provider.GetHighestOffsetAsync(TreeId, ShardIndex, CancellationToken.None);
         Assert.Multiple(() =>
