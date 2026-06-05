@@ -51,7 +51,6 @@ journald-backed log capture with no scraper indirection.
 | `infra/bootstrap.sh` | Manual / fallback bootstrap path; idempotent. |
 | `infra/lattice-silo.service` | systemd unit template for the silo (placeholders filled in by `update.ps1`). |
 | `infra/lattice-producer.service` | systemd unit template for the co-located producer. |
-| `infra/README.md` | Phase-0-flavour notes on the infra topology. |
 | `scripts/parameters.ps1` | Default parameters (subscription, region, prefix, VM size). |
 | `scripts/parameters.local.ps1` | **Gitignored** operator overrides. Created by `deploy.ps1` if missing. |
 | `scripts/deploy.ps1` | End-to-end provision: key gen, `~/.ssh/config`, Bicep deploy, cloud-init wait, bootstrap fallback, chained `update.ps1`. |
@@ -165,8 +164,8 @@ short version, in the order an investigator reaches for them:
 | `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Silo grain-RPC deadline. **Raise to 180 when saturating** or you'll see `[silo] grain-rpc-deadline` failures that look like wedges but aren't. The `ladder.ps1` script pins this to 180 by default for exactly this reason. |
 | `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync`. |
 | `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight flushes from `TcpIngestService`. |
-| `BENCH_WAL_PARTITIONS` | 8 | WAL grain count per tree. Pairs with `BENCH_FLUSH_CONCURRENCY`. |
-| `BENCH_WAL_MAX_PENDING_BATCHES` | 8 | Per-WalShardGrain pipeline depth. |
+| `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (currently 8) | WAL grain count per tree. Pairs with `BENCH_FLUSH_CONCURRENCY`. Inherited from the shipping default so the bench tracks the library; override explicitly to A/B against a non-default fan-out. |
+| `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (currently 16) | Per-WalShardGrain pipeline depth. Inherited from the shipping default so the bench tracks the library; see [WAL Tuning](../../docs/lattice/wal-tuning.md) for the storage-account-throughput envelope above which raising this further stops helping. |
 | `BENCH_TREE_ID` | rotates per cohort | Pin to re-use an existing WAL partition; otherwise every cohort starts on an empty manifest. |
 
 All of these can be passed via `-ExtraSiloEnv @{ BENCH_FOO = 'bar' }` to

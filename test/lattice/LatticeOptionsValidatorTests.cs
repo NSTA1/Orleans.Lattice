@@ -83,10 +83,10 @@ public class LatticeOptionsValidatorTests
     // without coordinating with the docs / changelog.
 
     [Test]
-    public void WalMaxPendingBatches_default_is_eight()
+    public void WalMaxPendingBatches_default_is_sixteen()
     {
-        Assert.That(new LatticeOptions().WalMaxPendingBatches, Is.EqualTo(8));
-        Assert.That(LatticeOptions.DefaultWalMaxPendingBatches, Is.EqualTo(8));
+        Assert.That(new LatticeOptions().WalMaxPendingBatches, Is.EqualTo(16));
+        Assert.That(LatticeOptions.DefaultWalMaxPendingBatches, Is.EqualTo(16));
     }
 
     [Test]

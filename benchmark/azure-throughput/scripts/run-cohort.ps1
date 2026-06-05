@@ -94,6 +94,36 @@ function Invoke-SshQuery([string]$cmd, [int]$TimeoutSec = 15) {
 	$r = _SshExec -Cmd $cmd -TimeoutSec $TimeoutSec
 	return $r.Output
 }
+
+# Hard PowerShell-side timeout wrapper for scp. Same rationale as _SshExec:
+# scp inherits ssh's TCP-stream behaviour and a half-open / stalled stream
+# (e.g. ssh session opened, destination file created, but no data ever
+# arrives) does NOT honour ConnectTimeout / ServerAliveInterval reliably in
+# practice. Without this wrapper an empty .tmp file gets created locally and
+# the scp process parks indefinitely, hanging the whole cohort loop. Job +
+# wall-clock cap lets us abort cleanly and surface a typed failure instead.
+function _ScpExec {
+	param(
+		[Parameter(Mandatory)] [string] $Source,
+		[Parameter(Mandatory)] [string] $Dest,
+		[int] $TimeoutSec = 60
+	)
+	$job = Start-Job -ArgumentList @($sshOpts, $Source, $Dest) -ScriptBlock {
+		param($opts, $src, $dst)
+		& scp @opts $src $dst 2>&1
+		$LASTEXITCODE
+	}
+	$wallCap = $TimeoutSec + 15
+	if (-not (Wait-Job -Job $job -Timeout $wallCap)) {
+		Stop-Job -Job $job -ErrorAction SilentlyContinue
+		Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+		throw "scp '$Source' -> '$Dest' hung past ${wallCap}s wall budget."
+	}
+	$out = @(Receive-Job -Job $job)
+	$exit = if ($out.Count -gt 0) { [int]$out[-1] } else { -1 }
+	Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+	return $exit
+}
 $cleanup = { }
 try {
 
@@ -203,8 +233,8 @@ done
 $tmpSampler = New-TemporaryFile
 try {
 	[System.IO.File]::WriteAllText($tmpSampler.FullName, ($samplerCmd -replace "`r`n","`n"))
-	& scp @sshOpts $tmpSampler.FullName "${sshTarget}:/tmp/cohort-sampler.sh" | Out-Null
-	if ($LASTEXITCODE -ne 0) { throw 'scp of sampler script failed.' }
+	$exit = _ScpExec -Source $tmpSampler.FullName -Dest "${sshTarget}:/tmp/cohort-sampler.sh" -TimeoutSec 30
+	if ($exit -ne 0) { throw "scp of sampler script failed (exit $exit)." }
 } finally { Remove-Item $tmpSampler.FullName -Force -ErrorAction SilentlyContinue }
 Invoke-Ssh 'rm -f /tmp/cohort-sampler.csv; chmod +x /tmp/cohort-sampler.sh; nohup bash /tmp/cohort-sampler.sh >/tmp/cohort-sampler.out 2>&1 &'
 
@@ -246,19 +276,49 @@ if (-not $sawFinal) { Write-Host '  no FINAL line seen within 60s; silo may be w
 # simplest reliable path is to capture journalctl's stdout into a local
 # file via ssh's own stream (which is read fully before ssh exits, so
 # no half-read pipe stalls).
+#
+# Every fetch is routed through a job-wrapped wall-clock budget. Empirically
+# the producer-log fetch path can stall after creating the local .tmp file
+# but before sending a single byte and would hang the whole cohort loop
+# indefinitely. The bounded Save-Remote / _ScpExec helpers convert that
+# stall into a typed failure without taking down the cohort, and the silo-
+# log fetch (which lands the data needed for the §27.1 steady-state mean)
+# runs first so a producer-log stall does not lose the cohort sample.
 Write-Host 'Extracting journals + sampler...' -ForegroundColor Cyan
 $samplerLog = Join-Path $logDir "sampler-$cohortName.csv"
 
-function Save-Remote([string]$remoteCmd, [string]$localPath) {
+function Save-Remote([string]$remoteCmd, [string]$localPath, [int]$TimeoutSec = 60) {
 	$tmp = "$localPath.tmp"
-	& ssh @sshOpts $sshTarget $remoteCmd *> $tmp
-	if ($LASTEXITCODE -ne 0) { throw "ssh '$remoteCmd' failed (exit $LASTEXITCODE)." }
+	# Clear any prior aborted-fetch tmp so a stale zero-byte file doesn't
+	# masquerade as a successful pull.
+	Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+	$r = _SshExec -Cmd $remoteCmd -TimeoutSec $TimeoutSec
+	if ($r.ExitCode -ne 0) {
+		Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+		throw "ssh '$remoteCmd' failed (exit $($r.ExitCode))."
+	}
+	[System.IO.File]::WriteAllText($tmp, $r.Output)
 	Move-Item -Force $tmp $localPath
 }
 
-Save-Remote "sudo -n journalctl -u lattice-silo --since $cursorStamp --no-pager --output=cat" $siloLog
-Save-Remote "sudo -n journalctl -u lattice-producer --since $cursorStamp --no-pager --output=cat" $prodLog
-& scp @sshOpts "${sshTarget}:/tmp/cohort-sampler.csv" $samplerLog 2>$null | Out-Null
+# Silo log first: the [silo] t= per-second samples and [phaseA] instruments
+# in this file are the cohort sample (per the §27.1 methodology in
+# benchmark/azure-throughput/throughput.md). If anything else stalls we still
+# want this file on disk.
+try { Save-Remote "sudo -n journalctl -u lattice-silo --since $cursorStamp --no-pager --output=cat" $siloLog -TimeoutSec 60 }
+catch { Write-Host "  silo journal fetch failed: $_" -ForegroundColor Yellow }
+
+# Producer log: useful for offered-rate sanity-checks but not required for
+# the cohort sample. A failure here must not abort the cohort.
+try { Save-Remote "sudo -n journalctl -u lattice-producer --since $cursorStamp --no-pager --output=cat" $prodLog -TimeoutSec 60 }
+catch { Write-Host "  producer journal fetch failed: $_" -ForegroundColor Yellow }
+
+# Sampler CSV: VM-level CPU/RSS samples used by the headline summary. Same
+# best-effort posture as the producer log.
+try {
+	$samplerExit = _ScpExec -Source "${sshTarget}:/tmp/cohort-sampler.csv" -Dest $samplerLog -TimeoutSec 60
+	if ($samplerExit -ne 0) { Write-Host "  sampler fetch returned exit $samplerExit" -ForegroundColor Yellow }
+} catch { Write-Host "  sampler fetch failed: $_" -ForegroundColor Yellow }
 
 Invoke-Ssh 'sudo systemctl stop lattice-producer 2>/dev/null || true'
 

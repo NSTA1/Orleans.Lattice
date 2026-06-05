@@ -26,9 +26,10 @@ provider's per-account budget.
 
 You should **measure your own workload**. The shapes here cover point reads,
 point writes, batched multi-key reads and writes, and atomic multi-key
-sagas at one specific operating point - a 10,000-entity / 5 Hz / 245-byte
-event stream against a single Azure Tables Standard account in West Europe.
-If your keys are larger, your fan-out is different, your hot-key
+sagas against a single Azure Tables Standard account; the per-cell
+provenance (offered fleet, host SKU, region, and whether the cell
+predates the post-v6.2 WAL re-tune) is summarised under each layer. If
+your keys are larger, your fan-out is different, your hot-key
 distribution is skewed, or your durability requirements differ, your
 numbers will differ too. The benchmark harness ships with the repository
 and is easy to repoint at your own offered load - see
@@ -69,14 +70,25 @@ the system delivers in production".
 ## Layer 2 - Sustained throughput on Azure (single silo, real storage)
 
 **How it was run.** Layer 2 measures the end-to-end sustained throughput of
-a single silo against a real Azure Tables Standard storage account in
-West Europe. A standalone producer streams vehicle telemetry events over
-TCP at a configured rate; the silo ingests, batches, and dispatches them
-through `ILattice` against a tuned operating point (32 shards, batched WAL,
-phase-2 commit pipelining). Both producer and silo run as Azure
-Container Instances; the bench harness records per-operation latency
-histograms throughout the run and reports the sustained throughput over
-the productive window after warm-up.
+a single silo against a real Azure Tables Standard storage account. A
+standalone producer streams vehicle telemetry events over TCP at a
+configured rate; the silo ingests, batches, and dispatches them through
+`ILattice` with phase-2 commit pipelining and the shipping defaults for
+`WalPartitions` and `WalMaxPendingBatches`. Producer and silo run as
+co-located `systemd` units on a single Linux VM; the bench harness records
+per-operation latency histograms throughout the run and reports the
+sustained throughput over the productive window after warm-up.
+
+The cells below are a mix of two cohort campaigns: the read-side cells
+(`GetAsync`, `GetManyAsync`) and the atomic-saga cell come from the
+original West Europe campaign on the older harness shape; the
+`SetManyAsync` cell was re-measured under the post-v6.2 WAL re-tune on
+Standard_D4as_v5 in westus3 with the new shipping default
+`WalMaxPendingBatches = 16` (see [WAL Tuning](wal-tuning.md) and
+`benchmark/azure-throughput/throughput.md` section 30 for the cohort).
+The `SetAsync` per-key cell predates the WAL re-tune; it is still the
+right floor to plan against when the workload cannot batch but may
+under-report on the new default.
 
 These are the numbers to quote as **"what one Orleans.Lattice silo does
 in production today"**. They reflect a fully durable write path
@@ -88,16 +100,31 @@ realistic latency the storage provider contributes.
 | `GetAsync` (point read)              | **45,750 keys/s**           | ~0.11 ms     | ~0.18 ms     |
 | `SetAsync` (point write)             | **202 keys/s sustained**, **16,381 keys/s burst max** | ~58 ms     | ~300 ms     |
 | `GetManyAsync` (4,096 keys/call)     | **178,927 keys/s** (~44 calls/s) | 14.1 ms    | 68.6 ms     |
-| `SetManyAsync` (4,096 entries/call)  | **13,574 entries/s** (~3.3 calls/s), **24,551 entries/s burst max** | 2.0 s     | 2.85 s     |
+| `SetManyAsync` (4,096 entries/call)  | **21,275 entries/s** (~5.2 calls/s) (*) | not recaptured (*) | **~1.4 s** (*) |
 | `SetManyAtomicAsync` (64 keys/saga)  | **465 keys/s** (~7.3 sagas/s), **1,793 keys/s burst max** | ~800 ms     | ~1,030 ms   |
+
+(*) Re-measured under the post-v6.2 WAL re-tune on Standard_D4as_v5 in
+westus3 with the new shipping default `WalMaxPendingBatches = 16` at the
+4,000-vehicle / 5 Hz rung. The throughput cell is the mean of n=3 cohorts
+(steady-state mean per cohort: 21,216 / 21,292 / 21,320 e/s; range 104
+e/s; ~0.5% CoV). The per-call p99 cell is derived from
+`leaf.commit.duration{step=wal}` p99 = 1,296-1,479 ms recorded in the
+same cohort; the per-call p50 was not captured at the per-call instrument
+level in this cohort. The pre-re-tune campaign recorded **13,574
+entries/s** sustained with **2.0 s p50 / 2.85 s p99** per call, against
+the previous default of `WalMaxPendingBatches = 8`. See [WAL Tuning](wal-tuning.md)
+for the storage-account-throughput envelope above which raising the cap
+further stops helping.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
-many entries per call, which is why `SetManyAsync` delivers **~67x** the
-sustained throughput of per-key `SetAsync` at the same offered load. If
-your workload can naturally batch writes (telemetry tick frames, event
-sourcing batches, periodic flush windows), use `SetManyAsync`. If it
-cannot, your write ceiling is the `SetAsync` row.
+many entries per call, which is why `SetManyAsync` delivers **~105x**
+the sustained throughput of per-key `SetAsync` at the same offered load
+(21,275 / 202; the per-key floor predates the WAL re-tune and may be
+loose against the current default). If your workload can naturally batch
+writes (telemetry tick frames, event sourcing batches, periodic flush
+windows), use `SetManyAsync`. If it cannot, your write ceiling is the
+`SetAsync` row.
 
 The `SetManyAtomicAsync` row reflects the cost of all-or-nothing semantics
 across multiple keys via the atomic-write saga - one saga durably commits
@@ -128,21 +155,23 @@ benefits from per-silo cache layers that the write path cannot use.
 - **Multi-silo.** A second silo with shard fan-out is the next campaign
   axis and is not yet measured. Numbers for a 2-, 4-, or N-silo cluster
   will appear in a follow-up document once that work lands.
-- **`WalPartitions = 8` is now the shipping default.** The Layer 2
-  write-path numbers above (`SetAsync`, `SetManyAsync`,
-  `SetManyAtomicAsync`) were measured with `LatticeOptions.WalPartitions
-  = 8`, which matches the shipping default. Both the foreground
-  commit-log writer and the activation-time WAL replay loop on
-  `BPlusLeafGrain` fan across every configured partition (two-pass
-  replay with a post-pass reconciliation that advances every
-  partition's checkpoint to the highest applied offset once deferred
-  terminal mutations are drained), so a cold leaf reactivation under
-  `WalPartitions > 1` rebuilds correctly. Reducing `WalPartitions` to
-  `1` will deliver materially lower sustained write throughput
-  because every commit serialises through one WAL partition's
-  per-Azure-Tables-partition flush envelope.
-  The multi-partition WAL replay work (tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice))
-  has shipped, so the Layer 2 cells above reflect what the
+- **WAL shipping defaults: `WalPartitions = 8`, `WalMaxPendingBatches = 16`.**
+  The post-v6.2 `SetManyAsync` Layer 2 cell was measured with both
+  defaults in force. Both the foreground commit-log writer and the
+  activation-time WAL replay loop on `BPlusLeafGrain` fan across every
+  configured partition (two-pass replay with a post-pass reconciliation
+  that advances every partition's checkpoint to the highest applied
+  offset once deferred terminal mutations are drained), so a cold leaf
+  reactivation under `WalPartitions > 1` rebuilds correctly. Reducing
+  `WalPartitions` to `1` will deliver materially lower sustained write
+  throughput because every commit serialises through one WAL partition's
+  per-Azure-Tables-partition flush envelope. Reducing
+  `WalMaxPendingBatches` to `1` restores the historical
+  single-in-flight-per-partition shape (strict ordering against the
+  provider; no pipeline depth); raising it above 16 in combination with
+  a matching producer-side dispatch knob can saturate a single Azure
+  Tables Standard storage account - see [WAL Tuning](wal-tuning.md) for
+  the envelope. The Layer 2 cells above reflect what the
   default-configured silo delivers.
 - **Your specific workload.** Key size, value size, fan-out shape,
   read/write mix, durability requirements, and storage-provider tier

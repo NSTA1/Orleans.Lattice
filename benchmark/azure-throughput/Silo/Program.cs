@@ -4,8 +4,8 @@
 // them, and writes each batch into a single lattice tree backed by the Azure Table WAL
 // storage provider (managed identity to the configured storage account).
 //
-// Reports "Entries written per second" to stdout once per second so the ACI log is the
-// canonical result surface.
+// Reports "Entries written per second" to stdout once per second so the systemd-journald
+// log is the canonical result surface.
 //
 // Environment variables:
 //   BENCH_STORAGE_URI       https://{account}.table.core.windows.net  (required for managed identity)
@@ -30,14 +30,23 @@
 //                           with batch N's phase 2. Drop to 1 for diagnostic A/B runs
 //                           that isolate leaf-mailbox queueing from per-leaf-turn
 //                           Azure Tables RTT cost.)
-//   BENCH_WAL_PARTITIONS    WAL partitions per tree (default 8 - matches flush concurrency so
-//                           parallel SetManyAsync flushes fan out across distinct WAL grains
-//                           and therefore distinct Azure Tables manifest partitions)
+//   BENCH_WAL_PARTITIONS    WAL partitions per tree (defaults to LatticeOptions
+//                           .DefaultWalPartitions so the bench harness tracks the
+//                           shipping default automatically). Matches flush concurrency
+//                           so parallel SetManyAsync flushes fan out across distinct
+//                           WAL grains and therefore distinct Azure Tables manifest
+//                           partitions.
 //   BENCH_WAL_MAX_PENDING_BATCHES
-//                           Per-WalShardGrain pipeline depth (default 8). Library default is
-//                           1 (single in-flight append per partition) for wire-compat; raising
-//                           it lets each partition's flushes overlap against Azure Tables
-//                           rather than strictly serialising.
+//                           Per-WalShardGrain pipeline depth (defaults to
+//                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
+//                           harness tracks the shipping default automatically). Drop
+//                           to 1 for the historical single-in-flight-per-partition
+//                           shape (strict ordering against the provider; no pipeline
+//                           depth). Raising in combination with a matching
+//                           BENCH_FLUSH_CONCURRENCY lift can saturate a single Azure
+//                           Tables Standard storage account (~2,500 ops/sec/account)
+//                           and surface as 429 throttling - see
+//                           docs/lattice/wal-tuning.md.
 //   BENCH_SHARD_COUNT       Override the tree's physical shard count at startup via
 //                           ILattice.ReshardAsync. 0 = keep the library default (64).
 //                           Notes: (a) ReshardAsync is grow-only against a populated
@@ -77,9 +86,9 @@
 //                           commit time.
 //   BENCH_TOTAL_DURATION_SEC
 //                           Server-side watchdog. After this many seconds the silo
-//                           triggers a graceful host shutdown so the ACI container
-//                           group transitions to Terminated even if the local deploy
-//                           shell that orchestrated the run has died. 0 disables the
+//                           triggers a graceful host shutdown so the systemd unit
+//                           transitions to inactive even if the local cohort runner
+//                           that orchestrated the run has died. 0 disables the
 //                           watchdog. Default 600 (10 minutes) - well above the
 //                           harness's nominal 120s run so a normal client-driven stop
 //                           still wins the race, while a runaway run cannot burn paid
@@ -150,15 +159,15 @@ using Orleans.Lattice.Storage.AzureTable;
 using VehicleFleetSimulator.Abstractions;
 using VehicleFleetSimulator.AzureThroughput.Silo;
 
-// Force autoflush on stdout/stderr. When the process is running inside
-// a Linux container (ACI, Docker) and stdout is redirected, .NET's
-// default `Console.Out` is a buffered StreamWriter that does NOT flush
-// on every WriteLine. The buffer is ~4 KiB, so periodic single-line
-// progress output (one line/sec from the throughput drainer) sits in
-// the buffer for tens of seconds before the container log driver sees
-// it - which looks exactly like a hung silo. Wrapping the existing
-// stream in a new StreamWriter with AutoFlush=true is the canonical
-// fix and is harmless on Windows/dev runs.
+// Force autoflush on stdout/stderr. When the process is running under
+// systemd (or any other process supervisor that redirects stdout to a
+// pipe/journal, including Docker), .NET's default `Console.Out` is a
+// buffered StreamWriter that does NOT flush on every WriteLine. The
+// buffer is ~4 KiB, so periodic single-line progress output (one
+// line/sec from the throughput drainer) sits in the buffer for tens of
+// seconds before the journal sees it - which looks exactly like a hung
+// silo. Wrapping the existing stream in a new StreamWriter with
+// AutoFlush=true is the canonical fix and is harmless on Windows/dev runs.
 Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
 Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
 
@@ -177,31 +186,35 @@ var tcpPort     = ReadInt("BENCH_TCP_PORT", 7000);
 var batchSize   = ReadInt("BENCH_BATCH_SIZE", 4096);
 var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
-var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", 8);
-var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", 8);
-// Connection-REUSE transport (ACI socket hygiene). NOTE: the original
-// SNAT-socket-hang narrative for the 25k wedge was falsified by three
-// post-mortems (wal-wedge-root-cause-2025-11-25-revised,
-// wal-wedge-watchdog-tcpdump-2025-11-25, and wal-wedge-watchdog-confirmation),
-// which attributed the wedge to an unbounded cross-grain await held under
-// _ensureRootGate in ShardRootGrain.EnsureRootSlowAsync rather than to a
-// hung Azure Tables socket. That await was bounded by PR #568 via
+var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
+var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
+// Connection-REUSE transport (cloud-NAT socket hygiene; originally
+// attributed to ACI but the same long-lived-connection failure mode applies
+// to any cloud-side SNAT including a VM behind an Azure load balancer or
+// outbound NAT gateway). NOTE: the original SNAT-socket-hang narrative for
+// the 25k wedge was falsified by three post-mortems
+// (wal-wedge-root-cause-2025-11-25-revised, wal-wedge-watchdog-tcpdump-2025-11-25,
+// and wal-wedge-watchdog-confirmation), which attributed the wedge to an
+// unbounded cross-grain await held under _ensureRootGate in
+// ShardRootGrain.EnsureRootSlowAsync rather than to a hung Azure Tables
+// socket. That await was bounded by PR #568 via
 // LatticeOptions.ActivationReadyTimeout (15 s default), which closed the
 // activation back-pressure deadlock tracked as the 25k wedge.
-// This knob and the per-attempt timeout below are kept as correct ACI
-// socket hygiene (reuse pooled connections with a FINITE pooled-connection
-// lifetime + idle timeout so ACI-killed sockets are torn down rather than
-// reused into a hang, paired with a bounded per-attempt timeout) - they
-// are not the wedge fix. A residual wedge with the same inFlight=8 pinned
-// signature still surfaces at the 4k-vehicle saturation rung after PR #568
-// (see benchmark/azure-throughput/vertical-scale.md); attribution of that
-// residual is independent of this knob.
+// This knob and the per-attempt timeout below are kept as correct
+// long-lived-connection hygiene (reuse pooled connections with a FINITE
+// pooled-connection lifetime + idle timeout so cloud-NAT-killed sockets are
+// torn down rather than reused into a hang, paired with a bounded
+// per-attempt timeout) - they are not the wedge fix. A residual wedge with
+// the same inFlight=8 pinned signature still surfaces at the 4k-vehicle
+// saturation rung after PR #568 (see benchmark/azure-throughput/throughput.md
+// section 18); attribution of that residual is independent of this knob.
 var walConnectionReuse = ReadBool("BENCH_WAL_CONNECTION_REUSE", false);
 // Per-attempt network timeout for the WAL Azure Tables client. Default 0
 // leaves the SDK default (100s, effectively unbounded). A finite value
 // bounds every individual HTTP attempt so a hung request fails and
-// releases its pending-batch slot - kept as ACI socket hygiene, not as
-// the wedge fix (see the connection-reuse note above).
+// releases its pending-batch slot - kept as long-lived-connection hygiene
+// against any cloud SNAT path, not as the wedge fix (see the
+// connection-reuse note above).
 var walNetworkTimeoutSec = ReadIntAllowZero("BENCH_WAL_NETWORK_TIMEOUT_SEC", 0);
 // Finite per-commit deadline (seconds) for the per-shard PhaseTwoWorker's
 // manifest commit, mapped to AzureTableWalStorageOptions.PhaseTwoCommitTimeout.
@@ -220,7 +233,7 @@ int? walPhaseTwoCommitTimeoutSec =
         ? parsedPhase2Timeout
         : null;
 // Finite pooled-connection lifetime (seconds) for the reuse transport so
-// ACI SNAT-killed sockets are recycled instead of reused into a hang.
+// cloud-NAT-killed sockets are recycled instead of reused into a hang.
 var walConnLifetimeSec = ReadInt("BENCH_WAL_CONN_LIFETIME_SEC", 90);
 var shardCountOverride = ReadIntAllowZero("BENCH_SHARD_COUNT", 0);
 var pipelinePhase2 = ReadBool("BENCH_PIPELINE_PHASE2", AzureTableWalStorageOptions.DefaultPipelinePhaseTwoCommits);
@@ -398,7 +411,7 @@ builder.UseOrleans(silo =>
         case "azure":
         default:
             // Reuse the same storage account and credential that the WAL
-            // provider uses below so a single ACI managed-identity grant
+            // provider uses below so a single VM managed-identity grant
             // covers both the WAL table and the grain-state table.
             void ConfigureAzure(Orleans.Configuration.AzureTableStorageOptions o)
             {
@@ -496,8 +509,8 @@ builder.UseOrleans(silo =>
         // duration.
         o.PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(phaseTwoCoalescingMs);
         // Wedge fix part 1: bound every individual HTTP attempt. Without a
-        // finite per-attempt timeout, a request dispatched onto an
-        // ACI-SNAT-killed socket hangs at TableClient.AddEntityAsync forever,
+        // finite per-attempt timeout, a request dispatched onto a
+        // cloud-NAT-killed socket hangs at TableClient.AddEntityAsync forever,
         // holds a WalMaxPendingBatches slot, and the back-pressure await in
         // WalShardGrain deadlocks the whole pipeline at inFlight=cap. A
         // finite RetryNetworkTimeout turns that hang into a per-attempt
@@ -528,12 +541,12 @@ builder.UseOrleans(silo =>
                 ? TimeSpan.FromSeconds(phase2TimeoutSec)
                 : null;
         }
-        // Connection-reuse transport (fix/wedge). When BENCH_WAL_CONNECTION_REUSE
+        // Connection-reuse transport. When BENCH_WAL_CONNECTION_REUSE
         // is set, replace the default Azure.Core transport with one that reuses
         // connections (dodging the SNAT establishment stall) but with a FINITE
-        // lifetime/idle timeout so ACI-killed sockets are recycled rather than
-        // reused into a hang. BuildServiceClient honours this callback only in
-        // connection-string / credential mode (the path this silo uses); the
+        // lifetime/idle timeout so cloud-NAT-killed sockets are recycled rather
+        // than reused into a hang. BuildServiceClient honours this callback only
+        // in connection-string / credential mode (the path this silo uses); the
         // provider re-attaches RetryAttemptTrackingPolicy afterwards so
         // provider.retry.attempts{status=...} still records.
         if (walConnectionReuse)
@@ -542,7 +555,7 @@ builder.UseOrleans(silo =>
             {
                 var handler = new SocketsHttpHandler
                 {
-                    // Wedge fix part 2: FINITE lifetime/idle so an ACI SNAT-
+                    // Wedge fix part 2: FINITE lifetime/idle so a cloud-NAT-
                     // killed socket is torn down and re-established on next use
                     // instead of being reused into a request that hangs forever.
                     PooledConnectionLifetime = TimeSpan.FromSeconds(walConnLifetimeSec),
@@ -565,10 +578,12 @@ var host = builder.Build();
 
 // Server-side watchdog: if BENCH_TOTAL_DURATION_SEC > 0, schedule a graceful
 // IHostApplicationLifetime.StopApplication() once that wall-clock window
-// elapses. This is the only stop signal that survives a local deploy-shell
-// crash; the ACI container group is configured with restartPolicy: Never,
-// so a clean host exit transitions the group to Terminated and stops
-// billing for the bench compute.
+// elapses. This is the only stop signal that survives a local cohort-runner
+// crash; the lattice-silo systemd unit is configured to not auto-restart
+// (cohort-driven lifecycle), so a clean host exit leaves the unit inactive
+// and the VM-level DevTestLab auto-shutdown schedule (see
+// benchmark/azure-throughput/README.md's Auto-shutdown safety net) puts the
+// VM into deallocated state on a fixed daily window to bound paid compute.
 if (totalDurationSec > 0)
 {
     var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
@@ -1202,11 +1217,11 @@ internal sealed class TcpIngestService(
         // ceiling), self-snapshot with ClrMD and print the parked async
         // state-machine chain + thread stacks to stdout - the in-process
         // equivalent of `dumpasync` / `dotnet-stack`, exfiltrated through
-        // the one channel ACI preserves across teardown (the streamed silo
-        // log). Three prior `TimeoutException`-based fixes each fired zero
-        // times on the wedge, so this captures the actually-parked await
-        // instead of bounding another guessed one. Shares the reporter's
-        // cancellation so it stops cleanly at end of run.
+        // the systemd-journald-captured silo log. Three prior
+        // `TimeoutException`-based fixes each fired zero times on the
+        // wedge, so this captures the actually-parked await instead of
+        // bounding another guessed one. Shares the reporter's cancellation
+        // so it stops cleanly at end of run.
         var stallWatchdog = new StallWatchdog(
             writtenTotalSnapshot: () => Interlocked.Read(ref writtenTotal),
             inFlightSnapshot: () => Interlocked.Read(ref inFlight),

@@ -112,6 +112,7 @@ For internals (the "how"):
 - [WAL](docs/lattice/wal.md) - write-ahead log as the sole foreground-commit durability boundary.
 - [WAL Causal+](docs/lattice/wal-causal-plus.md) - causal+ entry-schema extension, dependency satisfaction, snapshot semantics.
 - [WAL Storage Providers](docs/lattice/wal-storage-providers.md) - `IWalStorageProvider` durability seam, in-memory default, optional Azure Table backend.
+- [WAL Tuning](docs/lattice/wal-tuning.md) - how `WalMaxPendingBatches` and `WalPartitions` interact with a durable backend's throughput envelope; default sizing rules and the storage-account ceiling above which the cap stops helping.
 
 For feature tracking (the "what's planned / what shipped"):
 

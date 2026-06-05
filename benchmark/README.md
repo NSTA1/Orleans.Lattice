@@ -457,21 +457,22 @@ account rather than the in-repo Azurite emulator. The local `docker-compose` sce
 are reproducible and cheap to run, but Azurite collapses network RTT and does not model
 Azure Tables partition-server behaviour or throttling, so it is not a faithful proxy for
 throughput numbers that need to back a public performance claim. This harness fills that
-gap: it deploys two containers (producer + single-silo lattice host) into one Azure
-Container Instances container group, points the silo at a real Azure Tables WAL, and
-reports `Entries written per second` to stdout once per second.
+gap: a single Linux VM (Standard_D4as_v5 by default, accelerated networking) runs the
+producer and silo as co-located systemd units, the silo authenticates to a real Azure
+Tables account via system-assigned managed identity, and the cohort runner reports
+entries-written-per-second from the silo's journald-captured `[silo] FINAL` line.
 
 Use it when:
 
 - you need a before/after measurement for a WAL hot-path optimisation against real Azure
-  Tables latency (the silo wires `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` into
-  `AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath` so the same harness can
-  drive both arms of an A/B);
+  Tables latency (the silo accepts `BENCH_*` env overrides for every WAL-side knob so
+  the same harness can drive both arms of an A/B);
 - you want to validate a configuration choice (batch size, flush concurrency, WAL
   partitions, pipeline depth) under realistic Azure-side RTT rather than the local
   loopback hop that Azurite exposes.
 
 It is not driven through `./benchmark.ps1` and does not push to the local history
-VictoriaMetrics stack - the result is the `[silo] FINAL` line in the ACI container log.
-See [`azure-throughput/README.md`](./azure-throughput/README.md) for the full deployment
-walkthrough, configuration knobs, and the A/B-runbook for the WAL candidate-row elision.
+VictoriaMetrics stack - results land in `benchmark/.run/azure-throughput/` as a silo
+journal, producer journal, and per-second sampler CSV per cohort, with a summary block
+printed by `run-cohort.ps1`. See [`azure-throughput/README.md`](./azure-throughput/README.md)
+for the deployment walkthrough, the saturation-knobs catalogue, and the A/B procedure.

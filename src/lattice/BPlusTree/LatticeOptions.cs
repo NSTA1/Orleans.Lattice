@@ -912,20 +912,39 @@ public class LatticeOptions
     /// flush before being enqueued; this provides natural back-pressure
     /// under sustained burst load without changing the dense-offset
     /// invariant. Defaults to <see cref="DefaultWalMaxPendingBatches"/>
-    /// (8) - the measured Azure Tables Standard sweet spot at the
-    /// c2-iii operating point. Set to <c>1</c> for the historical
-    /// single-in-flight shape (strict ordering against the provider;
-    /// no pipeline depth). Raising the cap above what the storage
-    /// provider can usefully serve in parallel degrades latency without
-    /// improving throughput (more concurrent flushes compete for the
-    /// same provider budget and grow each flush's slow-tail wait). Must
-    /// be at least <c>1</c>; the registered options validator rejects
-    /// non-positive values at first-resolve time.
+    /// (16) - the measured Azure Tables Standard sweet spot at 4,000
+    /// keys/s offered load on a 4-vCPU host (Standard_D4as_v5 in
+    /// westus3, June 2026 measurement). The previous default was 8;
+    /// the lift to 16 recorded a +57% increase in steady-state silo
+    /// throughput at the 4k:5 rung with no reliability regression. Set
+    /// to <c>1</c> for the historical single-in-flight shape (strict
+    /// ordering against the provider; no pipeline depth).
+    /// <para>
+    /// <b>Storage-account ceiling.</b> Raising the cap above 16 in
+    /// combination with a matching producer-side dispatch knob can
+    /// saturate the Azure Tables storage account: the sustained
+    /// per-account throughput threshold (~2,500 transactions/sec on
+    /// Standard SKU) collapses under <c>WalPartitions * cap</c>
+    /// concurrent flushes, surfaces as <c>429</c> throttling with
+    /// <c>Retry-After</c> back-off, and lifts per-flush wall time from
+    /// ~50 ms to several seconds. The 16 default at the canonical
+    /// <c>WalPartitions = 8</c> caches 128 concurrent flushes against
+    /// a single storage account, which is at the edge of the per-
+    /// account budget. If you need more headroom, increase
+    /// <see cref="WalPartitions"/> (fan-out across accounts) before
+    /// lifting the per-partition cap further. Raising the cap above
+    /// what the storage provider can usefully serve in parallel
+    /// degrades latency without improving throughput.
+    /// </para>
+    /// <para>
+    /// Must be at least <c>1</c>; the registered options validator
+    /// rejects non-positive values at first-resolve time.
+    /// </para>
     /// </summary>
     public int WalMaxPendingBatches { get; set; } = DefaultWalMaxPendingBatches;
 
-    /// <summary>Default value for <see cref="WalMaxPendingBatches"/> (8, measured Azure Tables sweet spot).</summary>
-    public const int DefaultWalMaxPendingBatches = 8;
+    /// <summary>Default value for <see cref="WalMaxPendingBatches"/> (16, measured Azure Tables Standard sweet spot on Standard_D4as_v5).</summary>
+    public const int DefaultWalMaxPendingBatches = 16;
 
     /// <summary>
     /// Hard ceiling on how long a single per-shard WAL flush (the

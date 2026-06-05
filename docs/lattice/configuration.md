@@ -109,7 +109,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
 | [`WalFlushPreflightTimeout`](#walflushpreflighttimeout) | `TimeSpan` | 5 seconds | Yes |
 | [`WalFlushTimeout`](#walflushtimeout) | `TimeSpan` | 15 seconds | Yes |
-| [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 8 | Yes |
+| [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
@@ -581,11 +581,11 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalMaxPendingBatches`
 
-Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 8, the measured Azure Tables Standard sweet spot at the c2-iii operating point). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle.
+Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 16, the measured Azure Tables Standard sweet spot at 4,000 keys/s offered load on Standard_D4as_v5). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle. The previous default was 8; raising it to 16 produced a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression.
 
 Set to `1` to restore the historical single-in-flight shape (strict ordering against the provider; no pipeline depth). Most workloads on durable backing stores benefit from the default; the strict-ordering shape is useful only when targeting a provider whose ordering guarantees are weaker than per-request linearisability.
 
-The flush-cap-reached cutover backs off the calling task by awaiting the in-flight head, so the cap also acts as the natural back-pressure ceiling against caller fan-in. Raising the cap above what the storage provider can usefully serve in parallel degrades latency without improving throughput - more concurrent flushes compete for the same provider budget and grow each flush's slow-tail wait.
+The flush-cap-reached cutover backs off the calling task by awaiting the in-flight head, so the cap also acts as the natural back-pressure ceiling against caller fan-in. Raising the cap above what the storage provider can usefully serve in parallel degrades latency without improving throughput - more concurrent flushes compete for the same provider budget and grow each flush's slow-tail wait. At the canonical `WalPartitions = 8` the combined fan-out is `8 * 16 = 128` concurrent flushes against the provider, which is at the edge of a single Azure Tables Standard storage account's sustained throughput budget; see [WAL Tuning](wal-tuning.md) for the envelope above which the storage account becomes the binding constraint and the recovery path (`WalPartitions` fan-out across accounts, not a higher per-partition cap).
 
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
