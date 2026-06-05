@@ -22,6 +22,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
 - [F-082](https://github.com/NSTA1/Orleans.Lattice/issues/598) - End-to-end `performance-report.ps1`: provision VM -> measure Layers 1+2 -> deprovision -> update `docs/lattice/performance-single-silo.md`
+- [F-083](https://github.com/NSTA1/Orleans.Lattice/issues/600) - Caller-visible per-call read-path histograms on `LatticeGrain` (`get.duration` / `get_many.duration`) + Grafana panels + `performance-report.ps1` consumption
 
 ### Shipped
 
