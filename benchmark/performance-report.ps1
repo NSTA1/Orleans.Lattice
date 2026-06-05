@@ -428,9 +428,18 @@ function Invoke-Provision {
 	$deployScript = Join-Path $azScriptsDir 'deploy.ps1'
 	if (-not (Test-Path $deployScript)) { throw "Missing $deployScript" }
 	Write-Host "[provision] deploy.ps1 -NamePrefix $Prefix -VmSize $VmSize" -ForegroundColor Cyan
-	$argList = @('-NamePrefix', $Prefix, '-VmSize', $VmSize)
-	if ($ParametersFilePath) { $argList += @('-ParametersFile', $ParametersFilePath) }
-	& $deployScript @argList
+	# Use HASHTABLE splat (not array). Array splat against ScriptBlock /
+	# ExternalScript via & does NOT recognise '-Name value' pairs as named
+	# args - it passes them through as positional, which then trips
+	# 'A positional parameter cannot be found' against scripts whose param
+	# block uses [CmdletBinding()] with no Position=N attributes. Hashtable
+	# splat binds by name correctly.
+	$argMap = @{
+		NamePrefix = $Prefix
+		VmSize     = $VmSize
+	}
+	if ($ParametersFilePath) { $argMap['ParametersFile'] = $ParametersFilePath }
+	& $deployScript @argMap
 	if ($LASTEXITCODE -ne 0) { throw "deploy.ps1 failed (exit $LASTEXITCODE)" }
 }
 
