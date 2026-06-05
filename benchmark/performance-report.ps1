@@ -27,6 +27,17 @@
 	Which layer(s) to regenerate. One of: all (default), 1, 2.
 	-Layer all == both layers.
 
+	Convenience: the -Layer1 / -Layer2 switches are equivalent to -Layer 1 /
+	-Layer 2 (so '-Layer1' as a single token works). Setting both switches
+	together is equivalent to -Layer all. Mixing -Layer with a disagreeing
+	-LayerN switch is rejected.
+
+.PARAMETER Layer1
+	Convenience switch: equivalent to -Layer 1.
+
+.PARAMETER Layer2
+	Convenience switch: equivalent to -Layer 2.
+
 .PARAMETER Workloads
 	Comma-separated workload subset for the chosen layer. Defaults to all
 	workloads.
@@ -113,12 +124,39 @@ param(
 	[string] $ReuseVm,
 	[switch] $SkipDocUpdate,
 
+	# Convenience switches: equivalent to -Layer 1 / -Layer 2. Either form works;
+	# mutually exclusive with -Layer except for the default (all). These are here
+	# because operators reach for them naturally ('-Layer1') over '-Layer 1'.
+	[switch] $Layer1,
+	[switch] $Layer2,
+
 	[string] $NamePrefix,
 	[string] $ParametersFile
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Resolve the layer-switches into the single $Layer enum so the rest of the
+# script branches on one value. Switch precedence:
+#   - If neither -Layer1 nor -Layer2 is set, $Layer (default 'all') wins.
+#   - If exactly one is set, it overrides $Layer (so '-Layer 2 -Layer1' is a
+#     user mistake we report rather than silently picking one).
+#   - If both are set, that's 'all'.
+#   - Mixing -Layer with -Layer1 / -Layer2 to disagreeing values is rejected.
+$switchPicks = @()
+if ($Layer1) { $switchPicks += '1' }
+if ($Layer2) { $switchPicks += '2' }
+if ($switchPicks.Count -gt 0) {
+	$switchValue = if ($switchPicks.Count -eq 2) { 'all' } else { $switchPicks[0] }
+	# If the caller passed both -Layer and a -LayerN switch with conflicting
+	# values, surface a clear error instead of picking one silently.
+	$layerExplicit = $PSBoundParameters.ContainsKey('Layer')
+	if ($layerExplicit -and $Layer -ne $switchValue) {
+		throw "Conflicting layer selection: -Layer '$Layer' vs the switch(es) that resolve to '$switchValue'. Use ONE of -Layer <all|1|2> OR -Layer1 / -Layer2."
+	}
+	$Layer = $switchValue
+}
 
 # Resolve repo-relative paths once.
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
