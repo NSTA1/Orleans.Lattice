@@ -241,7 +241,7 @@ $Layer1Rows = @(
 		# fixture and pinning it to 16 to align bench with doc.
 	},
 	@{
-		Label = '`SetManyAsync` (1,000 entries/call)';
+		Label = '`SetManyAsync` (1,000 keys/call)';
 		WorkloadId = 'bulk-load';
 		BdnMethod = 'BulkLoad';
 		MetricSlug = 'bulk_load';
@@ -280,13 +280,13 @@ $Layer2Rows = @(
 		ThroughputUnit = 'keys/s';
 	},
 	@{
-		Label = '`SetManyAsync` (4,096 entries/call)';
+		Label = '`SetManyAsync` (4,096 keys/call)';
 		WorkloadId = 'set-many';
 		WorkloadMode = 'set-many';
-		# Unit is keys/s (not entries/s) for column-wise comparability with
-		# the other rows; one SetManyAsync entry = one (key,value) pair = one
-		# key-write, so the values are semantically identical. The (4,096
-		# entries/call) part of the Label keeps the API-level wording visible.
+		# Unit is keys/s (matches other rows) - one SetManyAsync entry = one
+		# (key,value) pair = one key-write. The (4,096 keys/call) label
+		# describes the per-call batch shape; the throughput cell is the
+		# resulting key-write rate.
 		ThroughputUnit = 'keys/s';
 	},
 	@{

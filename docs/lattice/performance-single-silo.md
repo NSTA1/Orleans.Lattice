@@ -76,7 +76,7 @@ mechanical and the prose around the marker is hand-editable.
 | `GetAsync` (point read) | **1.32 us** | 456 B | **~760.5 k op/s** |
 | `SetAsync` (point write) | **9.43 us** | 840 B | **~106.1 k op/s** |
 | `GetManyAsync` (16 keys/call) | **8.8 us** | 7 KB | **~113.7 k calls/s** |
-| `SetManyAsync` (1,000 entries/call) | **1.05 ms** | 350 KB | **956 calls/s** |
+| `SetManyAsync` (1,000 keys/call) | **1.05 ms** | 350 KB | **956 calls/s** |
 | `SetManyAtomicAsync` (16 keys/saga) | **270.42 us** | 67 KB | **~3.7 k sagas/s** |
 
 <!-- perf-table:layer1:end -->
@@ -144,7 +144,7 @@ realistic latency the storage provider contributes.
 | `GetAsync` (point read) | **~19.6 k keys/s** | ~20 us | ~20 us |
 | `SetAsync` (point write) | **~3.9 k keys/s** | ~13.31 ms | ~104.13 ms |
 | `GetManyAsync` (4,096 keys/call) | **~19.7 k keys/s** | ~3.47 ms | ~7.66 ms |
-| `SetManyAsync` (4,096 entries/call) | **~21.2 k keys/s** | ~234.31 ms | ~408.88 ms |
+| `SetManyAsync` (4,096 keys/call) | **~21.2 k keys/s** | ~234.31 ms | ~408.88 ms |
 | `SetManyAtomicAsync` (64 keys/saga) | **~5.5 k keys/s** | ~78.92 ms | ~683.73 ms |
 
 <!-- perf-table:layer2:end -->
