@@ -8,9 +8,15 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.2.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v6.2.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.2.1] - 2026-06-05
+
+Core-library patch release (`Orleans.Lattice` only). Raises the silo-wide `WalMaxPendingBatches` default from 8 to 16 - a measured +57% steady-state throughput uplift at the 4,000 keys/s rung on Standard_D4as_v5 + Azure Tables Standard with no reliability regression. Adds a new `docs/lattice/wal-tuning.md` covering the storage-account-throughput envelope above which raising the cap further stops helping, and refreshes the WAL-side configuration and performance docs around the new default. Companion package versions (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Dashboards`) remain at `6.2.0` - this release ships the core library only. Safe drop-in upgrade from v6.2.0; no public-API break, no wire-format change, no behavioural change on hosts that already pin `WalMaxPendingBatches` explicitly.
 
 ### Changed - configuration defaults
 
@@ -284,7 +290,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.0...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.1...HEAD
+[6.2.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.3...v6.2.0
 [6.1.3]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.2...v6.1.3
 [6.1.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.1...v6.1.2
