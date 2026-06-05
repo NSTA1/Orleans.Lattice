@@ -60,7 +60,7 @@ the prose around the marker block is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=1
   rowsMeasured=2026-05-30
-  methodology=Per-call p50 / allocations / single-thread ceiling reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Initial cells are the pre-F-082 laptop run; subsequent regenerations via benchmark/performance-report.ps1 will write VM-grounded values and bump host/dotnet/cohortN/rowsMeasured accordingly.
+  methodology=Per-call p50 / allocations / single-thread ceiling reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Initial cells are the pre-VM-harness laptop run; subsequent regenerations via benchmark/performance-report.ps1 will write VM-grounded values and bump host/dotnet/cohortN/rowsMeasured accordingly.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
