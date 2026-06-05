@@ -47,9 +47,22 @@ no Azure I/O on this path. These numbers are the upper bound on what the
 implementation could theoretically sustain on a single thread if every
 other layer were perfect.
 
-The figures below were measured on an AMD Ryzen 7 PRO 7840U laptop (16
-logical / 8 physical cores) running .NET 10.0.8 with the BenchmarkDotNet
-in-process toolchain.
+The marker block immediately below records the host SKU, .NET version, BDN
+fidelity, and cohort-N captured at the time the table was last refreshed.
+Subsequent refreshes are mechanical (`benchmark/performance-report.ps1`);
+the prose around the marker block is hand-editable.
+
+<!-- perf-table:layer1:start
+  schema=v1
+  host=AMD Ryzen 7 PRO 7840U (16 logical / 8 physical)
+  dotnet=10.0.8
+  bdnFidelity=quick
+  bdnToolchain=InProcessEmitToolchain
+  cohortN=1
+  rowsMeasured=2026-05-30
+  methodology=Per-call p50 / allocations / single-thread ceiling reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Initial cells are the pre-F-082 laptop run; subsequent regenerations via benchmark/performance-report.ps1 will write VM-grounded values and bump host/dotnet/cohortN/rowsMeasured accordingly.
+  DO-NOT-HAND-EDIT-BETWEEN-MARKERS
+-->
 
 | Operation              | Per-call p50 | Allocations | Single-thread ceiling |
 |------------------------|-------------:|------------:|----------------------:|
@@ -58,6 +71,8 @@ in-process toolchain.
 | `GetManyAsync` (16 keys/call)        | **6.59 us**       | 6,144 B     | **~152 k calls/s** (~2.4 M keys/s) |
 | `SetManyAsync` (1,000 entries/call)  | **557 us**     | 250 KB      | **~1.79 k calls/s** (~1.79 M entries/s) |
 | `SetManyAtomicAsync` (16 keys/saga)  | **132 us**     | 64 KB       | **~7.57 k sagas/s** (~121 k keys/s) |
+
+<!-- perf-table:layer1:end -->
 
 **Reading the numbers.** The single-thread ceiling is the derived
 `1 / p50`. It represents the algorithmic cost of the operation on one
@@ -95,6 +110,22 @@ in production today"**. They reflect a fully durable write path
 (WAL-before-Apply, real Azure round-trips, per-shard fan-out) and the
 realistic latency the storage provider contributes.
 
+<!-- perf-table:layer2:start
+  schema=v1
+  host=Standard_D4as_v5
+  region=westus3
+  dotnet=10.0.8
+  walPartitions=8
+  walMaxPendingBatches=16
+  rung=4000vehicles/5Hz/45s
+  responseTimeoutSec=180
+  cohortN=3
+  rowsMeasured=2026-06-05
+  methodology=Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the matching duration histogram's p50/p99 from the last full [phaseA] reporter window. Initial cells are a mix of cycle-30 (SetManyAsync, refreshed) and the pre-VM ACI campaign (other rows); subsequent regenerations via benchmark/performance-report.ps1 will write VM-grounded values for every row.
+  provenanceNote=SetManyAsync row refreshed via cycle 30 (PR #594); other rows pending re-measurement on VM via benchmark/performance-report.ps1
+  DO-NOT-HAND-EDIT-BETWEEN-MARKERS
+-->
+
 | Operation              | Sustained throughput            | Per-call p50 | Per-call p99 |
 |------------------------|--------------------------------:|-------------:|-------------:|
 | `GetAsync` (point read)              | **45,750 keys/s**           | ~0.11 ms     | ~0.18 ms     |
@@ -102,6 +133,8 @@ realistic latency the storage provider contributes.
 | `GetManyAsync` (4,096 keys/call)     | **178,927 keys/s** (~44 calls/s) | 14.1 ms    | 68.6 ms     |
 | `SetManyAsync` (4,096 entries/call)  | **21,275 entries/s** (~5.2 calls/s) (*) | not recaptured (*) | **~1.4 s** (*) |
 | `SetManyAtomicAsync` (64 keys/saga)  | **465 keys/s** (~7.3 sagas/s), **1,793 keys/s burst max** | ~800 ms     | ~1,030 ms   |
+
+<!-- perf-table:layer2:end -->
 
 (*) Re-measured under the post-v6.2 WAL re-tune on Standard_D4as_v5 in
 westus3 with the new shipping default `WalMaxPendingBatches = 16` at the
