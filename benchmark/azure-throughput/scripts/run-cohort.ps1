@@ -265,7 +265,7 @@ Write-Host 'Waiting for silo FINAL (flush drain)...' -ForegroundColor Cyan
 $finalDeadline = (Get-Date).AddSeconds(60)
 $sawFinal = $false
 while ((Get-Date) -lt $finalDeadline) {
-	$hit = Invoke-SshQuery "sudo -n journalctl -u lattice-silo --since '$cursorStamp' --no-pager --output=cat | grep -F 'FINAL written=' | head -1"
+	$hit = Invoke-SshQuery "sudo -n journalctl -u lattice-silo --since '$cursorStamp' --no-pager --output=cat | grep -E 'FINAL (ops|written)=' | head -1"
 	if ($hit) { $sawFinal = $true; Write-Host "  $hit" -ForegroundColor Green; break }
 	Start-Sleep -Seconds 2
 }
@@ -324,7 +324,7 @@ Invoke-Ssh 'sudo systemctl stop lattice-producer 2>/dev/null || true'
 
 # Parse summaries.
 $prodSummary = Select-String -Path $prodLog -Pattern '\[producer\] DONE' -SimpleMatch | Select-Object -First 1
-$siloFinal   = Select-String -Path $siloLog -Pattern 'FINAL written=' -SimpleMatch | Select-Object -First 1
+$siloFinal   = Select-String -Path $siloLog -Pattern 'FINAL (ops|written)=' | Select-Object -First 1
 $watchdog    = @(Select-String -Path $siloLog -Pattern '\[stall-watchdog\]' -SimpleMatch).Count
 $walSlot     = @(Select-String -Path $siloLog -Pattern '\[wal-slot\]' -SimpleMatch).Count
 $walAppend   = @(Select-String -Path $siloLog -Pattern '\[wal-append\]' -SimpleMatch).Count
@@ -341,7 +341,10 @@ $siloTail    = @(Select-String -Path $siloLog -Pattern '^\[silo\] t=') | Select-
 $siloPerSec = @()
 $failedSamples = 0
 foreach ($m in (Select-String -Path $siloLog -Pattern '^\[silo\] t=')) {
-	if ($m.Line -match 't=\s*([\d.]+)s\s+written=\s*([\d,]+)\s+Entries written per second=\s*([\d,]+)\s+inFlight=\s*(\d+)') {
+	# Accept both the new (ops=, ops/sec=) and legacy (written=, Entries
+	# written per second=) per-second formats so cohort logs captured before
+	# the silo log-token rename can still be parsed without re-provisioning.
+	if ($m.Line -match 't=\s*([\d.]+)s\s+(?:ops|written)=\s*([\d,]+)\s+(?:ops/sec|Entries written per second)=\s*([\d,]+)\s+inFlight=\s*(\d+)') {
 		$sample = [pscustomobject]@{
 			t        = [double]$matches[1]
 			written  = [long](($matches[2]) -replace ',','')
@@ -391,7 +394,7 @@ $writtenFinal = 0; $elapsedFinal = 0.0; $activeFinal = 0.0
 $failedFinal  = 0; $avgTotalFinal = 0.0; $avgActiveFinal = 0.0
 if ($siloFinal) {
 	$line = $siloFinal.Line
-	if ($line -match 'written=([\d,]+)')                         { $writtenFinal  = [long]($matches[1] -replace ',','') }
+	if ($line -match '(?:ops|written)=([\d,]+)')                { $writtenFinal  = [long]($matches[1] -replace ',','') }
 	if ($line -match 'failed=([\d,]+)')                          { $failedFinal   = [long]($matches[1] -replace ',','') }
 	if ($line -match 'elapsed=([\d.]+)s')                        { $elapsedFinal  = [double]$matches[1] }
 	if ($line -match 'active=([\d.]+)s')                         { $activeFinal   = [double]$matches[1] }

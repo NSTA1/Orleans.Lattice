@@ -29,6 +29,12 @@ benchmark/
 ├── benchmark.ps1                    # Single-parameter runner (scenario slug). Captures
 │                                    # results.json + opportunistically pushes to history.
 ├── benchmark-all.ps1                # Sweep runner: invokes benchmark.ps1 for every scenario.
+├── performance-report.ps1           # End-to-end perf-report orchestrator: provisions an
+│                                    # Azure VM via azure-throughput/scripts/, runs Layer 1
+│                                    # (BDN microbench) + Layer 2 (silo + producer cohorts),
+│                                    # aggregates results, rewrites the marker blocks in
+│                                    # docs/lattice/performance-single-silo.md, and tears
+│                                    # the VM down. See the dedicated section below.
 ├── start-history.ps1                # Bring up / tear down the long-lived history stack only.
 ├── benchmark-scenarios.md           # Authoritative scenario plan (14 scenarios).
 ├── docker-compose.yml               # Base topology (single cluster).
@@ -56,11 +62,14 @@ benchmark/
 │   ├── Generate-Dashboards.ps1      # Regenerates the eight persona-trend dashboards.
 │   ├── README.md                    # Data model, label schema, ad-hoc query path.
 │   └── grafana/                     # Provisioning + generated BenchmarkHistory.*.json.
-├── azure-throughput/                # Out-of-band benchmark targeting real Azure Storage
-│                                    # (ACI two-container deployment, not docker-compose).
-│                                    # Used for WAL throughput numbers that need to be
-│                                    # backed by a real Azure Tables account. See its own
-│                                    # README.md for usage.
+├── azure-throughput/                # Out-of-band benchmark targeting real Azure Storage:
+│                                    # a single Linux VM (Standard_D4as_v5 + accelerated
+│                                    # networking) runs the producer and silo as co-located
+│                                    # systemd units, with the silo authenticating to a real
+│                                    # Azure Tables account via system-assigned managed
+│                                    # identity. Used for WAL throughput numbers that need
+│                                    # to be backed by a real Azure Tables account. See its
+│                                    # own README.md for usage.
 └── .run/                            # Per-run output: <scenario>/<run_id>/results.json
                                      # plus comparison.{md,csv} when `-Compare` is used.
 ```
@@ -446,8 +455,13 @@ and the simulator pipeline; the Orleans-native end-to-end cost is captured by
 ./benchmark.ps1 microbench
 ```
 
-The runner builds and invokes `benchmark/host/Bench.Microbench/`, which exercises four
-workload
+The runner builds and invokes `benchmark/host/Bench.Microbench/`, which exposes ~25
+`[Benchmark]` methods across the primitive operations (`PointRead`, `PointWrite`,
+`PointGetMany`, `BulkLoad`, `SetManyAtomic`, etc.) plus their parameterised /
+deeper-tree / atomic-tree variants. Scope a run via the `-Workloads` CLI override
+(comma-separated BDN globs, e.g. `-Workloads '*.PointWrite,*.PointRead'`) and pick
+the fidelity via `-Fidelity` (`dry` / `quick` / `full`); see the script's
+comment-help for the cost / rigour trade-off table.
 
 
 ## `azure-throughput` - real-Azure WAL throughput harness
@@ -460,7 +474,7 @@ throughput numbers that need to back a public performance claim. This harness fi
 gap: a single Linux VM (Standard_D4as_v5 by default, accelerated networking) runs the
 producer and silo as co-located systemd units, the silo authenticates to a real Azure
 Tables account via system-assigned managed identity, and the cohort runner reports
-entries-written-per-second from the silo's journald-captured `[silo] FINAL` line.
+the steady-state ops/sec from the silo's journald-captured per-second samples.
 
 Use it when:
 
@@ -476,3 +490,47 @@ VictoriaMetrics stack - results land in `benchmark/.run/azure-throughput/` as a 
 journal, producer journal, and per-second sampler CSV per cohort, with a summary block
 printed by `run-cohort.ps1`. See [`azure-throughput/README.md`](./azure-throughput/README.md)
 for the deployment walkthrough, the saturation-knobs catalogue, and the A/B procedure.
+
+## `performance-report.ps1` - regenerate the published single-silo perf doc
+
+`performance-report.ps1` is the end-to-end orchestrator behind
+[`docs/lattice/performance-single-silo.md`](../docs/lattice/performance-single-silo.md).
+A single invocation:
+
+1. Provisions a fresh Azure VM (default `Standard_D4as_v5` in the operator's
+   configured region) using the `azure-throughput/scripts/deploy.ps1` plumbing,
+   under a per-run prefix that does not collide with any long-lived environment.
+2. Runs **Layer 1** - `Bench.Microbench` cohorts on the VM (in-process BDN; no
+   Orleans dispatch, no I/O) - to produce the per-call algorithmic ceilings.
+3. Runs **Layer 2** - silo + producer cohorts via `azure-throughput/scripts/run-cohort.ps1`,
+   one per public `ILattice` workload mode (`get-point`, `set-point`, `get-many`,
+   `set-many`, `set-many-atomic`) - to produce the sustained-throughput numbers
+   under real Azure Tables latency.
+4. Aggregates each cohort (median across N runs, default `N=3`) and rewrites the
+   `perf-table:layer1` / `perf-table:layer2` marker blocks in
+   `docs/lattice/performance-single-silo.md`, plus the `> Measured ...` provenance
+   note that immediately follows each table.
+5. Tears the VM down (`az group delete --no-wait`) unless `-KeepVm` was passed.
+
+The script is the **only** way the published single-silo doc should be refreshed:
+the marker blocks are mechanically managed, and a CI hygiene test
+(`PerformanceReportMarkerHygieneTests`) fails the build if the marker contract
+drifts. Prose around the markers stays hand-editable.
+
+```powershell
+./benchmark/performance-report.ps1                                  # full sweep (~80-95 min, ~$0.50)
+./benchmark/performance-report.ps1 -Layer1                          # Layer 1 only (~15-20 min)
+./benchmark/performance-report.ps1 -Layer2                          # Layer 2 only (~50-60 min)
+./benchmark/performance-report.ps1 -Layer 2 -Workloads 'set-many'   # one row
+./benchmark/performance-report.ps1 -DryRun                          # re-render doc from latest state.json
+./benchmark/performance-report.ps1 -DryRun -Diff                    # show planned doc, do not write
+./benchmark/performance-report.ps1 -KeepVm -ReuseVm prdeadbee       # debug session against an existing VM
+```
+
+Like `azure-throughput`, this script is **not** driven through `./benchmark.ps1`
+and does **not** push to the local history VictoriaMetrics stack: results land
+under `benchmark/.run/performance-report/<prefix>/` as a per-prefix `state.json`
+sidecar plus the underlying microbench `results.json` files and silo journals.
+See the script's `Get-Help -Full` output for the complete parameter reference
+(including `-Fidelity`, `-N`, `-VmSize`, `-Rung`, `-BatchSize`, `-SkipDocUpdate`).
+

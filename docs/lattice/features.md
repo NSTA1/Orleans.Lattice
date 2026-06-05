@@ -21,6 +21,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
 - [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
+- [F-083](https://github.com/NSTA1/Orleans.Lattice/issues/600) - Caller-visible per-call read-path histograms on `LatticeGrain` (`get.duration` / `get_many.duration`) + Grafana panels + `performance-report.ps1` consumption
 
 ### Shipped
 
@@ -92,6 +93,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-079](https://github.com/NSTA1/Orleans.Lattice/issues/399) - Multi-silo restart chaos test
 - [F-080](https://github.com/NSTA1/Orleans.Lattice/issues/400) - Drop the per-append registry RPC from the WAL hot path (F-077 throughput regression)
 - [F-081](https://github.com/NSTA1/Orleans.Lattice/issues/535) - Byte-accurate storage-usage visibility + advisory byte-pressure WAL retention policy
+- [F-082](https://github.com/NSTA1/Orleans.Lattice/issues/598) - End-to-end `performance-report.ps1`: provision VM -> measure Layers 1+2 -> deprovision -> update `docs/lattice/performance-single-silo.md`
 
 ## Follow-up fixes
 

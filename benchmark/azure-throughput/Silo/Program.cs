@@ -4,7 +4,7 @@
 // them, and writes each batch into a single lattice tree backed by the Azure Table WAL
 // storage provider (managed identity to the configured storage account).
 //
-// Reports "Entries written per second" to stdout once per second so the systemd-journald
+// Reports "ops/sec" to stdout once per second so the systemd-journald
 // log is the canonical result surface.
 //
 // Environment variables:
@@ -1205,7 +1205,7 @@ internal sealed class TcpIngestService(
                     var rate = written / Math.Max(0.001, sinceLocal / (double)Stopwatch.Frequency);
                     var elapsed = (now - startedAt) / (double)Stopwatch.Frequency;
                     var failedTag = failed > 0 ? $" failed={failed,8:N0}" : string.Empty;
-                    Console.WriteLine($"[silo] t={elapsed,7:0.0}s written={totalNow,12:N0} Entries written per second={rate,10:N0} inFlight={inFlightNow,3}{failedTag}");
+                    Console.WriteLine($"[silo] t={elapsed,7:0.0}s ops={totalNow,12:N0} ops/sec={rate,10:N0} inFlight={inFlightNow,3}{failedTag}");
                     lastReport = now;
                 }
             }
@@ -1319,7 +1319,7 @@ internal sealed class TcpIngestService(
 
         var endedAt = Stopwatch.GetTimestamp();
         var totalElapsed = (endedAt - startedAt) / (double)Stopwatch.Frequency;
-        var writtenFinal = Interlocked.Read(ref writtenTotal);
+        var opsFinal = Interlocked.Read(ref writtenTotal);
         var failedFinal = Interlocked.Read(ref failedTotal);
         // "Active" window: from first accepted batch to last drained flush.
         // Excludes the idle pre-connect window and is the most accurate
@@ -1330,9 +1330,9 @@ internal sealed class TcpIngestService(
         var activeElapsed = firstAccept != 0
             ? (endedAt - firstAccept) / (double)Stopwatch.Frequency
             : totalElapsed;
-        var avgTotal = writtenFinal / Math.Max(0.001, totalElapsed);
-        var avgActive = writtenFinal / Math.Max(0.001, activeElapsed);
-        Console.WriteLine($"[silo] FINAL written={writtenFinal:N0} failed={failedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s Entries written per second (avg)={avgTotal:N0} (active avg)={avgActive:N0}");
+        var avgTotal = opsFinal / Math.Max(0.001, totalElapsed);
+        var avgActive = opsFinal / Math.Max(0.001, activeElapsed);
+        Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0}");
     }
 
     // Sentinel returned by FlushAsync when a SetManyAsync was rejected

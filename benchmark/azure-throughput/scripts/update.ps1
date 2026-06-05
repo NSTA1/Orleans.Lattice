@@ -1,10 +1,10 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-	Sync source, build, and (re)start the silo on the wedge VM.
+	Sync source, build, and (re)start the silo on the lattice-bench VM.
 
 .DESCRIPTION
-	Inner-loop deploy script (Phase 0.2 of wedge-plan2.md). On each run:
+	Inner-loop deploy script. On each run:
 	  1. Reads VM coords + storage outputs from the last Bicep deployment.
 	  2. Renders lattice-silo.service from the template (substitutes storage
 		 endpoints + admin user) and SCPs it into place. Idempotent.
