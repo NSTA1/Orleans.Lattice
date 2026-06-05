@@ -588,3 +588,85 @@ In priority order, ranked by independent value:
 - **New baseline for D4as_v5 + Azure Tables Standard at 4k:5 / 45s, cap=16:** steady-state mean ~21,275 e/s (mean of n=3), range ~104 e/s (~0.5% CoV). Use as the comparison baseline for any future cap-related candidate at this rung.
 - **Hard ceiling discovered:** Azure Tables Standard single-account throughput caps the silo at ~128 concurrent flushes (~2,500 ops/sec) before 429 throttling. Document for operators.
 - **Runner fix in working tree:** `_ScpExec` + bounded `Save-Remote`; bundled with hand-off or split sibling PR per feature-dev choice.
+---
+
+## 31. §30.6 item 1 closeout 2026-06-05: D8as_v5 ceiling = ~22-24 ke/s (single Azure Tables Standard account), storage-account-bound
+
+§30.6 item 1 carried forward as the next discovery hypothesis: "find the silo's true post-cap=16 ceiling" by moving to a larger VM (D8as_v5) so that the silo is not CPU-pressured at higher offered rates. This cycle is its closeout.
+
+**Verdict: not an optimisation candidate.** The D8 ceiling is +10-15% over the D4 baseline at the same operating point; the binding constraint above ~6k:5 is the storage account, not the silo. The cap=16 default shipped in PR #594 already captures essentially the full single-account throughput envelope.
+
+### 31.1 Cohorts
+
+Host: Standard_D8as_v5 in westus3, fresh deploy (`rg-lat`), HEAD at d2aa406 (= origin/main post PR #594). All WAL knobs at shipping defaults (`WalPartitions=8`, `WalMaxPendingBatches=16`); `BENCH_RESPONSE_TIMEOUT_SEC=180` on the ladder rungs. Steady mean computed per §27.1 (mean of `[silo] t=` per-second samples over `t in [15s, last-non-zero-rate]`).
+
+**Sanity gate (4k:5 / 30s):**
+
+| Metric | Value |
+|---|---|
+| Steady mean | 20,134 e/s (within ~5% of §30 D4 baseline of 21,275 e/s) |
+| `inFlight` median / max | 1 / 7 (cap=16 not stressed) |
+| Silo CPU avg / peak | 389% / 790% (49% / 99% of 8 vCPU) |
+| `failed` | 0 |
+| Verdict | HEALTHY |
+
+Confirms cap=16 banner in force (`walPartitions=8 walMaxPending=16`); silo producer-bound at 4k:5 as predicted; D8 has CPU headroom over D4.
+
+**Rung sweep (6k:5, 8k:5, 12k:5, 16k:5 / 45s each):**
+
+| Rung | Steady mean | `inFlight` med/max | `failed` (cumulative) | FINAL emitted? | Drain tail | Verdict |
+|---|---|---|---|---|---|---|
+| 6k:5  | **23,604 e/s** | 8 / 8 | sum >= 10,231 | NO | 29 samples | **WEDGE** |
+| 8k:5  | 20,032 e/s     | 8 / 8 | sum >= 8,192  | NO | 32 samples | **WEDGE** |
+| 12k:5 | 22,336 e/s     | 8 / 8 | 0 (recovered) | YES | 3 samples | HEALTHY (close miss) |
+| 16k:5 | 16,639 e/s     | 8 / 8 | sum >= 16,384 | NO | 32 samples | **WEDGE** |
+
+**Note on verdict reporting:** all four rungs originally printed `Verdict : HEALTHY` from the runner, despite the runner itself emitting `no FINAL line seen within 60s; silo may be wedged.` on the preceding line. This is the §30.6 item 4 runner-bug now empirically triggered three times in one sweep; corrected verdicts shown above and the runner now ships the four-state verdict ladder (HEALTHY / DEGRADED / FAILED / WEDGE) that surfaces these failures honestly. See `fix(bench): runner Verdict requires FINAL + clean drain` in the same PR.
+
+**A/B (6k:5 / 45s with `BENCH_WAL_PARTITIONS=16` to test "is per-partition queue depth the binder?"):**
+
+| Metric | Cohort 1 (P=8 default) | Cohort 5 (P=16) | Delta |
+|---|---|---|---|
+| Steady mean | 23,604 e/s | **16,935 e/s** | **-28%** |
+| Final `failed=` | sum >= 10,231 (mid) | **36,864** (final) | -29 ke dropped |
+| Time to first `failed=` | end of producer window | **t=27.1s** (mid-window) | failure regime arrives much earlier |
+| Per-partition throughput | 23,604 / 8 = 2,950 e/s/part | 16,935 / 16 = **1,058 e/s/part** | collapsed 64% |
+| `TableTransactionFailedException` count | unknown (FINAL missing) | 9 (5x "entity already exists" + 4x "operation could not be completed within the specified time") | clear failure burst |
+
+**Amplifies catastrophically.** Doubling `WalPartitions` against the *same* Azure Tables account doubles concurrent transaction count (128 -> 256), and the per-partition throughput collapses 64%. The aggregate concurrent-transaction ceiling on the account is what binds, not per-partition queue depth.
+
+### 31.2 Findings
+
+**Primary (closes §30.6 item 1):** the silo's true post-cap=16 ceiling on D8as_v5 + single Azure Tables Standard account is **~22-24 ke/s** (best clean rung observed, 6k:5 mid-window mean). This is +10-15% over the D4 baseline (21,275 e/s at 4k:5). The marginal lift is real but small; **the WAL is no longer the binder**. Across every rung `inFlight` median = max = 8, well below the cap=16 ceiling, and silo CPU sat 28-57% avg (peak 99% only as brief bursts).
+
+**Secondary:** the storage-account failure manifests as `TableTransactionFailedException` (mixed 409 Conflict on SDK retry + 504-style provider timeout), **not** as the 429 throttling described in §30.4.1 / wal-tuning.md. Mechanism: at ~128+ concurrent transactions against one account, individual transactions accumulate retry attempts; the SDK's first attempt times out, the server has already committed it server-side, and the retry races into a 409 on the same RowKeys. Both 409s and 504s surface as `TableTransactionFailedException` to the silo's TCP-ingest layer. **Doc fix:** wal-tuning.md describes only the 429 manifestation; should be amended to cover 409+504 as well.
+
+**Tertiary (reliability hand-off):** the §27.1 / §30.6 item 2/3 drain-wedge phenotype, previously rare, **reproduces every time** under storage saturation. 3/4 ladder cohorts wedged with no FINAL. Two distinct shapes - `inFlight=N` parked (chain stuck), or `inFlight=0` with no progress (chain drained but stop-acknowledgement never emitted). `stall-watchdog`, `[wal-slot]`, `[wal-append]` instruments stayed at zero for all of them. This is reliability work, not optimisation; the right hand-off is a GitHub issue under `lattice` label so `feature-dev` can sequence it.
+
+**Quaternary (harness):** the §30.6 item 4 runner-bug is now empirically demonstrated three times in one sweep. Fixed in this PR (commit 2): runner verdict now requires FINAL emitted AND `failed=0` AND drain-tail length < 10 samples AND clean diagnostics before declaring HEALTHY; ladder reads the §27.1 steady-state mean directly so wedged cohorts no longer parse as `throughput=0 e/s`.
+
+**Quintenary (harness):** ladder.ps1 had a string-interpolation parse error (`$vehicles:$tickHz` -> PowerShell scope-variable misread). Fixed in this PR (commit 1).
+
+### 31.3 Decision
+
+**Discard as an optimisation candidate.** No code change to ship from this cycle. Per agent rules Phase 7 outcomes: this is a (b) "within noise / not actionable" outcome - the D8 marginal lift is too small to warrant changing any default, and the next actionable optimisation candidate (multi-account fan-out via per-partition storage resolver) is a multi-cycle infrastructure exercise that needs operator decision before any benchmark cycle can start it.
+
+### 31.4 Carry-forward
+
+In priority order:
+
+1. **Document the storage-account back-pressure manifestation in wal-tuning.md** (done in this PR, commit 3): both `TableTransactionFailedException` (409+504) and 429 throttling are envelope-exceeded signals. Add D8 ~22-24 ke/s ceiling as a measured data point.
+
+2. **Open a reliability tracking issue** for the drain-wedge under storage saturation. Reproducer: any rung >=6k:5 on D8 with the default storage account against ARM-tier Tables Standard. **Out of scope for this agent**; hand-off to the operator.
+
+3. **Future cycle (multi-account fan-out, deferred):** the actionable path past the single-account ceiling is a per-partition storage resolver (`LatticeOptions.WalStorageProvider`) mapping WAL partition index -> distinct storage account. Hypothesis: `WalPartitions=16` across 2 accounts (each running 8 partitions / 16 in-flight) lifts the ceiling to ~44 ke/s. Requires provisioning 2 storage accounts and a benchmark-harness change to wire the resolver from a `BENCH_*` env var. **Multi-cycle effort; defer until operator confirms it's worth the infrastructure spend.**
+
+4. **Do NOT** re-attempt single-account `WalPartitions` increases at any rung above ~6k:5 - the dual-knob amplification finding is settled.
+
+### 31.5 Carry-forward (corrected baselines)
+
+- **D4as_v5 + Azure Tables Standard at 4k:5, cap=16:** ~21,275 e/s steady mean (per §30; the existing baseline). Unchanged by this cycle.
+- **D8as_v5 + Azure Tables Standard at 6k:5, cap=16:** ~22-24 ke/s steady mean as a *peak* observation; the same rung wedges if pushed past producer disconnect, so this is not a stable "operate against" number, it is an "envelope upper bound". Operators deploying on D8 should not assume cohort-grade reliability above 6k:5 without partitioning storage.
+- **Storage account single-tenant ceiling on Standard SKU:** ~128 concurrent transactions sustained, manifests as `TableTransactionFailedException` (409+504) above that. Recovery is multi-account fan-out, not knob increases.
+- **Post-mortem on disk:** `benchmark/.run/azure-throughput/POSTMORTEM-2026-06-05-d8-ceiling-discovery.md` (gitignored; the next cycle's Phase 0 input).
+

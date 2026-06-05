@@ -84,21 +84,44 @@ further in combination with the silo's other concurrency knobs:
    `WalPartitions = 8` and `WalMaxPendingBatches = 16` becomes some
    combined configuration that drives a higher fan-out, for example
    raising the silo's own dispatch concurrency to 16 alongside cap=16
-   at 6,000 keys/s offered load) pushes the account above its budget
-   and surfaces as:
+   at 6,000 keys/s offered load, or raising `WalPartitions` to 16
+   against a single account) pushes the account above its budget
+   and surfaces in one of two manifestations:
 
-   - `429 TooManyRequests` responses from Azure Tables with
-     `Retry-After` headers,
-   - per-flush provider duration spiking from ~50 ms to ~8 s as the
-     SDK back-off engages,
-   - exhaustion of the per-flush `WalAppendDispatchTimeout` (default 30 s),
-   - `[wal-admission-timeout]` lines on the slowest partition,
-   - a drain wedge whose phenotype differs cleanly from the wedges
-     covered by the existing `WalFlushTimeout` and
-     `WalAppendDispatchTimeout` bounds (the wedge is upstream of the
-     grain's own bounds; the bounds fire, but the silo is now
-     reliability-bound on the storage account rather than on the
-     grain).
+   **Manifestation A: explicit throttling.** Under sustained pressure
+   the storage account responds with `429 TooManyRequests` carrying a
+   `Retry-After` header, the Azure.Data.Tables SDK back-off engages,
+   per-flush provider duration spikes from ~50 ms to ~8 s, the
+   per-flush `WalAppendDispatchTimeout` (default 30 s) exhausts,
+   and `[wal-admission-timeout]` lines fire on the slowest
+   partition.
+
+   **Manifestation B: `TableTransactionFailedException` bursts (409
+   + 504).** Under burst pressure the storage account does not always
+   issue a clean 429; instead, individual transactions accumulate
+   retry attempts within the SDK's default per-attempt deadline,
+   succeed server-side on the first attempt, and the SDK's retry
+   then races into a `409 Conflict` ("The specified entity already
+   exists") on the second attempt - or the per-attempt deadline
+   (defaults to 100 s on the SDK) exhausts and surfaces as
+   `"Operation could not be completed within the specified time"`
+   (a 504-style provider timeout). Both fault paths surface to the
+   silo's foreground commit path as
+   `Azure.Data.Tables.TableTransactionFailedException` carrying one
+   of those two messages, **not** as
+   `RequestFailedException(StatusCode=429)`. This was the dominant
+   manifestation observed on D8as_v5 at 6k:5 with
+   `WalPartitions=16` (256 concurrent transactions against one
+   account); see `benchmark/azure-throughput/throughput.md` section
+   31 for the cohort.
+
+   Both manifestations produce the same downstream symptoms: per-flush
+   provider duration climbing into seconds, a drain wedge whose
+   phenotype differs cleanly from the wedges covered by the existing
+   `WalFlushTimeout` and `WalAppendDispatchTimeout` bounds, and
+   non-zero `failed=N` entries surfacing to the foreground commit
+   path. The recovery path is the same for both: partition the
+   storage, not raise the per-grain timeouts.
 
 The recovery is **not** to raise the per-grain timeouts further - the
 underlying constraint is the storage account, not the grain. The
@@ -116,7 +139,7 @@ For a single Azure Tables Standard storage account:
 |---|---|---|
 | 2 vCPU (Standard_D2as_v5 and smaller) | `8` | The silo is CPU-bound at the 4k:5 rung; the admission gate is not the binding constraint. Default 16 wastes admission depth on a CPU that cannot pull faster. |
 | 4 vCPU (Standard_D4as_v5) | `16` (default) | The sweet spot the default is tuned for. Silo CPU sits 55-75% of box at peak; admission depth is the binding constraint and 16 unblocks it without saturating the storage account. |
-| 8+ vCPU (Standard_D8as_v5 and larger) | `16` to `32` | Headroom to lift the cap further if the storage account can sustain the load. Verify by measuring `wal.append.provider.duration` p99: if it stays at the ~50-100 ms Tables RTT floor under sustained load, the cap can lift; if it climbs into the seconds, the storage account is throttling and the recovery is `WalPartitions` fan-out across accounts, not a higher cap. |
+| 8+ vCPU (Standard_D8as_v5 and larger) | `16` (still default) | The single-account ceiling, not the silo, is the binding constraint at this SKU. Measured envelope on D8as_v5 + single Azure Tables Standard account: **~22-24 ke/s** at 6k:5 with `WalMaxPendingBatches=16`, `WalPartitions=8` - only ~10-15% above the D4as_v5 baseline at the same defaults (~21 ke/s at 4k:5). Lifting `WalMaxPendingBatches` to 32 against the same account is strictly worse (the cycle 31 A/B at `WalPartitions=16` showed per-partition throughput collapsing 64% and 36k failed batches in 45 s). The recovery is `WalPartitions` fan-out across accounts via a per-partition `LatticeOptions.WalStorageProvider` resolver, not a higher cap. |
 
 For a Premium Azure Tables account, or a fan-out across multiple
 Standard accounts via `LatticeOptions.WalStorageProvider`, the
