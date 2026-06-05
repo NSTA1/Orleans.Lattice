@@ -43,11 +43,12 @@ and is easy to re-run against your own subscription - see
 `ILattice` method when scheduling and durable storage are out of the
 picture: a `BenchmarkDotNet` harness instantiates the grain layer in-process
 against an in-memory storage provider, runs each operation under BDN's
-in-process toolchain, and reports per-call p50, allocations, and a derived
-single-thread ceiling (= `1 / p50`). There is no Orleans RPC, no network,
-no Azure I/O on this path. These numbers are the upper bound on what the
-implementation could theoretically sustain on a single thread if every
-other layer were perfect.
+in-process toolchain on a single thread, and reports per-call p50,
+allocations, and a derived per-thread call rate (= `1 / p50 * batchSize`,
+in keys/s). There is no Orleans RPC, no network, no Azure I/O on this
+path. These numbers are the algorithmic upper bound for one thread; a
+real silo runs many threads concurrently and pays additional costs (see
+Layer 2 below and the "Reading the numbers" paragraph after the table).
 
 The cohort is driven by `benchmark/performance-report.ps1 -Layer1` on the
 same Azure VM that hosts the Layer 2 silo, so both layers share an identical
@@ -67,12 +68,12 @@ mechanical and the prose around the marker is hand-editable.
   gitSha=93c1152
   host=Standard_D4as_v5
   rowsMeasured=2026-06-05
-  methodology=Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.
+  methodology=Per-call p50 and allocations reported directly by BenchmarkDotNet. Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median of N cohorts.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
-| Operation                                | Per-call p50 | Allocations | Single-thread ceiling |
-|------------------------------------------|-------------:|------------:|----------------------:|
+| Operation                                | Per-call p50 | Allocations | Per-thread call rate (1 / p50) |
+|------------------------------------------|-------------:|------------:|-------------------------------:|
 | `GetAsync` (point read) | **1.32 us** | 456 B | **~760.5 k keys/s** |
 | `SetAsync` (point write) | **9.43 us** | 840 B | **~106.1 k keys/s** |
 | `GetManyAsync` (16 keys/call) | **8.8 us** | 7 KB | **~1.82 M keys/s** |
@@ -83,12 +84,17 @@ mechanical and the prose around the marker is hand-editable.
 
 > Measured 2026-06-05 on Standard_D4as_v5 (.NET 10.0.108) at git sha 93c1152, n=3 cohorts (BDN quick).
 
-**Reading the numbers.** The single-thread ceiling is the derived
-`1 / p50`. It represents the algorithmic cost of the operation on one
-thread running it back-to-back with no other work; it is **not** a
-multi-thread scaling claim. A real silo runs many of these calls in
-parallel and each call pays a different mix of scheduling, RPC, and
-storage cost - so Layer 2 below is the right column to consult for "what
+**Reading the numbers.** The per-thread call rate is the derived
+`1 / p50` scaled by the per-call batch size (1 for `GetAsync` / `SetAsync`,
+the `(N keys/call)` value otherwise), reported in keys/s so batched and
+per-key calls are directly comparable. It represents the algorithmic cost
+of the operation on **one thread** running it back-to-back with no other
+work; on a multi-core silo the aggregate rate scales with active cores
+minus scheduling, RPC, and contention overhead. It is **not** a
+multi-thread scaling claim, and the headline silo throughput in Layer 2
+is materially lower than `cores * per-thread-rate` because production
+paths pay grain-RPC, WAL, and storage costs that the in-process bench
+bypasses - so Layer 2 below is the right column to consult for "what
 the system delivers in production".
 
 ## Layer 2 - Sustained throughput on Azure (single silo, real storage)

@@ -1059,7 +1059,7 @@ function New-MetaHeaderForLayer1 {
 		$meta['cohortN']       = $cohortN
 		$meta['rowsMeasured']  = $rowsDate
 		$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
+		$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median of N cohorts.'
 	}
 	return $meta
 }
@@ -1129,8 +1129,8 @@ function Render-Layer1Table {
 	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg, [Parameter(Mandatory)][hashtable] $ExistingRows)
 	$nl = "`r`n"
 	$sb = [System.Text.StringBuilder]::new()
-	[void]$sb.Append('| Operation                                | Per-call p50 | Allocations | Single-thread ceiling |').Append($nl)
-	[void]$sb.Append('|------------------------------------------|-------------:|------------:|----------------------:|').Append($nl)
+	[void]$sb.Append('| Operation                                | Per-call p50 | Allocations | Per-thread call rate (1 / p50) |').Append($nl)
+	[void]$sb.Append('|------------------------------------------|-------------:|------------:|-------------------------------:|').Append($nl)
 	foreach ($row in $Layer1Rows) {
 		if ($RowsAgg.ContainsKey($row.Label)) {
 			[void]$sb.Append((Format-Layer1Row -Label $row.Label -Cell $RowsAgg[$row.Label] -CeilingUnit $row.CeilingUnit)).Append($nl)
