@@ -8,11 +8,17 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.2.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v6.2.2 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
-### Added
+---
+
+## [6.2.2] - 2026-06-05
+
+Core-library patch release (`Orleans.Lattice` only). Bounds the WAL deactivation drain so host shutdown always settles within bounded time of the SIGTERM under saturating storage-account back-pressure - the wedge phenotype that reproduces every time at rung >= 6k:5 on `Standard_D8as_v5` + Azure Tables Standard, where pre-G-028 the in-flight chain stayed parked through the rest of host shutdown. Companion package versions (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Dashboards`) remain at `6.2.0` - this release ships the core library only. Safe drop-in upgrade from v6.2.1; no public-API break, no wire-format change, no behavioural change on hosts that today shut down cleanly within the 75-second default budget.
+
+### Fixed
 
 - **Bounded WAL deactivation drain so host shutdown always settles within bounded time of the SIGTERM, even under saturating storage-account back-pressure (G-028).** A new `LatticeOptions.WalDrainBudget` (default 75 seconds = `5 * WalFlushTimeout`) caps how long a per-shard `WalShardGrain.OnDeactivateAsync` may wait for its in-flight chain to drain. At drain entry the per-activation drain `CancellationTokenSource` is signalled - every in-flight flush has already linked its per-flush deadline into this source - so a co-operative provider's `AppendBatchAsync` cancellation token cancels in one shot and the flush surfaces a `TimeoutException`. Any slot that has not unlinked when the budget expires is force-faulted with a typed `TimeoutException` faulted onto every parked ack `TaskCompletionSource`, so callers parked on `AppendAsync` / `AppendBatchAsync` are released rather than parking through the rest of host shutdown. Two new instruments name the affected partition: `orleans.lattice.wal.shard.drain.budget.expirations` (the counter that increments per budget-driven force-fault) and `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` (the histogram of slot counts force-faulted per drain). Set to `InfiniteTimeSpan` to opt back into the historical unbounded-drain shape; the options validator rejects any other non-positive value. The benchmark host's `StallWatchdog` now generalises its wedge detection to the same family of phenotypes: it fires on any non-zero in-flight count with no `writtenTotal` advancement (was: pinned at `WalMaxPendingBatches`) and on a sustained per-sample failure delta with no in-flight advancement, so both the "in-flight parked" and "drained-to-zero-via-faults" wedge shapes surface a ClrMD parked-state report inside the run instead of going silent.
 
@@ -294,7 +300,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.1...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.2...HEAD
+[6.2.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.1...v6.2.2
 [6.2.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.3...v6.2.0
 [6.1.3]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.2...v6.1.3
