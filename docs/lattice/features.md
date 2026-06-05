@@ -22,6 +22,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
 - [F-083](https://github.com/NSTA1/Orleans.Lattice/issues/600) - Caller-visible per-call read-path histograms on `LatticeGrain` (`get.duration` / `get_many.duration`) + Grafana panels + `performance-report.ps1` consumption
+- [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-partition WAL storage resolver (`LatticeOptions.WalStorageProvider`) for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
 
 ### Shipped
 
