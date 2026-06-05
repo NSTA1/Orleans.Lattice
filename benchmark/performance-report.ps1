@@ -1384,9 +1384,17 @@ function Main {
 		New-EmptyState -Prefix $prefix -VmSize $VmSize -Region $region -Rung $rungHt -BatchSize $BatchSize -BdnFidelity $Fidelity
 	}
 	$state.startedUtc = (Get-Date).ToUniversalTime().ToString('o')
-	# Stamp the resolved CLI fidelity onto state so the meta-header records
-	# what was actually used; tolerates state.json files predating this slot.
-	$state['bdnFidelity'] = $Fidelity
+	# Stamp the resolved CLI -Fidelity / -BatchSize onto state ONLY for layers
+	# that are actually running this invocation. bdnFidelity is a Layer 1
+	# concept (BDN); batchSize is a Layer 2 concept (BENCH_BATCH_SIZE). A
+	# -Layer 2 run that overwrites bdnFidelity (or a -Layer 1 run that
+	# overwrites batchSize) would cause the OTHER layer's meta-header to
+	# re-render with a stale value sourced from this run's CLI defaults
+	# rather than from the layer's actual measurement. Gating preserves
+	# the cross-layer invariant: each meta-key reflects the most recent run
+	# that actually measured the layer it belongs to.
+	if ($Layer -in 'all','1') { $state['bdnFidelity'] = $Fidelity }
+	if ($Layer -in 'all','2') { $state['batchSize']   = $BatchSize }
 
 	$provisioned = $false
 	try {
