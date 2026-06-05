@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-	Deploy the lattice-wedge VM (Bicep). Idempotent.
+	Deploy the lattice-bench VM (Bicep). Idempotent.
 
 .DESCRIPTION
 	Reads parameters from vm.parameters.local.ps1 (preferred) or vm.parameters.ps1.
@@ -21,7 +21,7 @@
 .EXAMPLE
 	./deploy-vm.ps1
 .EXAMPLE
-	./deploy-vm.ps1 -NamePrefix lattice-wedge-spike
+	./deploy-vm.ps1 -NamePrefix lattice-bench-spike
 #>
 [CmdletBinding()]
 param(
@@ -102,7 +102,7 @@ if (Test-Path $cloudInit) {
 	$customDataB64 = [Convert]::ToBase64String($bytes)
 	Write-Host "Using cloud-init from $cloudInit ($([math]::Round($bytes.Length/1KB,1)) KiB)" -ForegroundColor Cyan
 }
-$deployName = "lattice-wedge-$(Get-Date -Format 'yyyyMMddHHmmss')"
+$deployName = "lattice-bench-$(Get-Date -Format 'yyyyMMddHHmmss')"
 
 Write-Host "Deploying $deployName ..." -ForegroundColor Cyan
 $result = az deployment group create `

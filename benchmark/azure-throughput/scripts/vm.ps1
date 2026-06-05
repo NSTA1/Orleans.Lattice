@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-	Start / stop / status / ssh / refresh-ip helper for the lattice-wedge VM.
+	Start / stop / status / ssh / refresh-ip helper for the lattice-bench VM.
 
 .PARAMETER Action
 	start    - deallocate -> running
