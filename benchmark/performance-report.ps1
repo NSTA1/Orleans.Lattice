@@ -217,7 +217,7 @@ $Layer1Rows = @(
 		BdnMethod = 'PointRead';
 		MetricSlug = 'point_read';
 		ExpectedBatchSize = 1;
-		CeilingUnit = 'op/s';
+		CeilingUnit = 'keys/s';
 	},
 	@{
 		Label = '`SetAsync` (point write)';
@@ -225,7 +225,7 @@ $Layer1Rows = @(
 		BdnMethod = 'PointWrite';
 		MetricSlug = 'point_write';
 		ExpectedBatchSize = 1;
-		CeilingUnit = 'op/s';
+		CeilingUnit = 'keys/s';
 	},
 	@{
 		Label = '`GetManyAsync` (16 keys/call)';
@@ -233,12 +233,15 @@ $Layer1Rows = @(
 		BdnMethod = 'PointGetMany';
 		MetricSlug = 'point_get_many';
 		ExpectedBatchSize = 16;
-		CeilingUnit = 'calls/s';
+		CeilingUnit = 'keys/s';
 		# Note: the current bench builds a 4-key batch (LatticeMicroBenchmarks.cs
 		# line ~430). When this script first runs against the real bench, the
 		# row label '(16 keys/call)' will not match. The aggregator emits a
 		# warning; consider adding a BENCH_MICROBENCH_GETMANY_BATCH env to the
-		# fixture and pinning it to 16 to align bench with doc.
+		# fixture and pinning it to 16 to align bench with doc. The per-key
+		# ceiling cell scales by ExpectedBatchSize, so a mismatch silently
+		# inflates the displayed throughput - rebuild the bench to match
+		# before publishing.
 	},
 	@{
 		Label = '`SetManyAsync` (1,000 keys/call)';
@@ -246,7 +249,7 @@ $Layer1Rows = @(
 		BdnMethod = 'BulkLoad';
 		MetricSlug = 'bulk_load';
 		ExpectedBatchSize = 1000;
-		CeilingUnit = 'calls/s';
+		CeilingUnit = 'keys/s';
 	},
 	@{
 		Label = '`SetManyAtomicAsync` (16 keys/saga)';
@@ -254,7 +257,7 @@ $Layer1Rows = @(
 		BdnMethod = 'SetManyAtomic';
 		MetricSlug = 'set_many_atomic';
 		ExpectedBatchSize = 16;
-		CeilingUnit = 'sagas/s';
+		CeilingUnit = 'keys/s';
 	}
 )
 
@@ -336,6 +339,32 @@ function Get-MainSha {
 		}
 	}
 	return $null
+}
+
+function Get-StateOr {
+	<#
+	.SYNOPSIS
+		Strict-mode-safe lookup of a state hashtable key with a default value.
+	.DESCRIPTION
+		Under `Set-StrictMode -Version Latest`, '$ht.missingKey' throws for
+		any container shape (Hashtable, OrderedDictionary,
+		OrderedHashtable from ConvertFrom-Json -AsHashtable). The traditional
+		'$ht.key ?? default' pattern fails on the lookup before the ??
+		operator can kick in. This helper does the ContainsKey guard once.
+		Returns the value when present and non-null; the default otherwise.
+		Used in meta-header overlays so state.json files that pre-date a key
+		(legacy from earlier script versions) round-trip cleanly.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)] $State,
+		[Parameter(Mandatory)][string] $Key,
+		$Default = $null
+	)
+	if ($null -ne $State -and $State.ContainsKey($Key)) {
+		$v = $State[$Key]
+		if ($null -ne $v) { return $v }
+	}
+	return $Default
 }
 
 function Test-PreflightOrThrow {
@@ -853,7 +882,12 @@ function Aggregate-Layer1Cells {
 		}
 		$p50Median = (Get-Median $p50s)
 		$allocMedian = if ($allocs.Count -gt 0) { (Get-Median $allocs) } else { $null }
-		$ceiling = if ($p50Median -gt 0) { [int](1e9 / $p50Median) } else { $null }
+		# Per-key throughput ceiling: (1 / p50_seconds) * batchSize.
+		# Batched calls return per-key keys/s rather than per-call calls/s
+		# so the column is comparable across rows; the (N keys/call) label
+		# part keeps the per-call batch shape visible to the reader.
+		$batchSize = if ($row.ContainsKey('ExpectedBatchSize')) { [int]$row.ExpectedBatchSize } else { 1 }
+		$ceiling = if ($p50Median -gt 0) { [int]((1e9 / $p50Median) * $batchSize) } else { $null }
 		$rows[$row.Label] = @{
 			perCallP50Ns        = [int][math]::Round($p50Median, 0)
 			allocB              = if ($allocMedian) { [int][math]::Round($allocMedian, 0) } else { $null }
@@ -1019,13 +1053,13 @@ function New-MetaHeaderForLayer1 {
 	if ($RowsAgg.Count -gt 0) {
 		$meta['schema']        = 'v1'
 		$meta['host']          = $State.vmSize
-		$meta['dotnet']        = ($State.dotnetVersion ?? '10.0.x')
-		$meta['bdnFidelity']   = ($State.bdnFidelity ?? 'dry')
+		$meta['dotnet']        = (Get-StateOr $State 'dotnetVersion' '10.0.x')
+		$meta['bdnFidelity']   = (Get-StateOr $State 'bdnFidelity' 'dry')
 		$meta['bdnToolchain']  = 'InProcessEmitToolchain'
 		$meta['cohortN']       = $cohortN
-			$meta['rowsMeasured']  = $rowsDate
-			$meta['gitSha']        = ($State.mainSha ?? $State.gitSha)
-			$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
+		$meta['rowsMeasured']  = $rowsDate
+		$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
+		$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
 	}
 	return $meta
 }
@@ -1055,15 +1089,15 @@ function New-MetaHeaderForLayer2 {
 		$meta['schema']             = 'v1'
 		$meta['host']               = $State.vmSize
 		$meta['region']             = $State.region
-		$meta['dotnet']             = ($State.dotnetVersion ?? '10.0.x')
+		$meta['dotnet']             = (Get-StateOr $State 'dotnetVersion' '10.0.x')
 		$meta['walPartitions']      = $State.walPartitions
 		$meta['walMaxPendingBatches'] = $State.walMaxPendingBatches
-		$meta['batchSize']          = if ($State.ContainsKey('batchSize') -and $State['batchSize']) { $State['batchSize'] } else { 4096 }
+		$meta['batchSize']          = (Get-StateOr $State 'batchSize' 4096)
 		$meta['rung']               = $rung
 		$meta['responseTimeoutSec'] = $State.responseTimeoutSec
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
-		$meta['gitSha']             = ($State.mainSha ?? $State.gitSha)
+		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
 		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, lattice.op.duration_ms for get-many which sends one batched call). The get-point cell is derived from lattice.op.duration_ms divided by BENCH_BATCH_SIZE (=batchSize meta key) to produce a per-key cost amortised across the silo TCP-ingest fan-out, since the lattice grain does not currently histogram per-call GetAsync at the caller-visible boundary.'
 	}
 	return $meta

@@ -73,11 +73,11 @@ mechanical and the prose around the marker is hand-editable.
 
 | Operation                                | Per-call p50 | Allocations | Single-thread ceiling |
 |------------------------------------------|-------------:|------------:|----------------------:|
-| `GetAsync` (point read) | **1.32 us** | 456 B | **~760.5 k op/s** |
-| `SetAsync` (point write) | **9.43 us** | 840 B | **~106.1 k op/s** |
-| `GetManyAsync` (16 keys/call) | **8.8 us** | 7 KB | **~113.7 k calls/s** |
-| `SetManyAsync` (1,000 keys/call) | **1.05 ms** | 350 KB | **956 calls/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **270.42 us** | 67 KB | **~3.7 k sagas/s** |
+| `GetAsync` (point read) | **1.32 us** | 456 B | **~760.5 k keys/s** |
+| `SetAsync` (point write) | **9.43 us** | 840 B | **~106.1 k keys/s** |
+| `GetManyAsync` (16 keys/call) | **8.8 us** | 7 KB | **~1.82 M keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **1.05 ms** | 350 KB | **~956 k keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **270.42 us** | 67 KB | **~59.2 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 
