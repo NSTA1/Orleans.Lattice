@@ -330,6 +330,61 @@ $walSlot     = @(Select-String -Path $siloLog -Pattern '\[wal-slot\]' -SimpleMat
 $walAppend   = @(Select-String -Path $siloLog -Pattern '\[wal-append\]' -SimpleMatch).Count
 $siloTail    = @(Select-String -Path $siloLog -Pattern '^\[silo\] t=') | Select-Object -Last 1
 
+# Section 27.1: the runner-printed FINAL `active avg` is corrupted by
+# drain-tail behaviour when the silo wedges (denominator inflated by 28+ s
+# of dead time during the post-producer drain stall). The honest cohort
+# sample is the mean of `[silo] t=` per-second rate samples over
+# `t in [15s, last-non-zero-rate]`: the `t >= 15s` filter trims the warmup
+# ramp, the `rate > 0` filter trims the post-producer drain. We compute
+# both numbers here and emit the steady-state mean as the primary metric;
+# the FINAL `active avg` is shown only as a secondary diagnostic.
+$siloPerSec = @()
+$failedSamples = 0
+foreach ($m in (Select-String -Path $siloLog -Pattern '^\[silo\] t=')) {
+	if ($m.Line -match 't=\s*([\d.]+)s\s+written=\s*([\d,]+)\s+Entries written per second=\s*([\d,]+)\s+inFlight=\s*(\d+)') {
+		$sample = [pscustomobject]@{
+			t        = [double]$matches[1]
+			written  = [long](($matches[2]) -replace ',','')
+			rate     = [long](($matches[3]) -replace ',','')
+			inFlight = [int]$matches[4]
+		}
+		$siloPerSec += $sample
+		if ($m.Line -match 'failed=\s*([\d,]+)' -and [long](($matches[1]) -replace ',','') -gt 0) {
+			$failedSamples++
+		}
+	}
+}
+$steady = $siloPerSec | Where-Object { $_.t -ge 15 -and $_.rate -gt 0 }
+$steadyMean = 0
+$steadyCount = @($steady).Count
+if ($steadyCount -gt 0) {
+	$steadyMean = [int](($steady | Measure-Object -Property rate -Sum).Sum / $steadyCount)
+}
+$inFlightMax = 0
+$inFlightMedian = 0
+if ($steadyCount -gt 0) {
+	$inFlightMax = ($steady | Measure-Object -Property inFlight -Maximum).Maximum
+	$sortedIf = @($steady | Sort-Object inFlight)
+	$inFlightMedian = $sortedIf[[int]($sortedIf.Count / 2)].inFlight
+}
+
+# Post-producer drain-tail length: number of trailing rate=0 samples. A
+# long zero-rate tail with `inFlight>0` (or with `inFlight=0` but no
+# progress) is the drain-wedge phenotype - the silo did not surface its
+# stuck batches to the SIGTERM-driven drain inside the configured
+# `WalFlushTimeout`/`WalAppendDispatchTimeout` budget. Independent of the
+# `stall-watchdog` instrument, which has historically not fired on this
+# wedge family.
+$drainTailSamples = 0
+for ($i = @($siloPerSec).Count - 1; $i -ge 0; $i--) {
+	if ($siloPerSec[$i].rate -eq 0) { $drainTailSamples++ } else { break }
+}
+
+# Any Exception line at all - including silo-side TableTransactionFailedException
+# bursts and uncaught grain RPC faults - is a degradation signal even when
+# the silo recovered in time to emit FINAL.
+$exceptionCount = @(Select-String -Path $siloLog -Pattern 'Exception' -SimpleMatch).Count
+
 # Pull written / elapsed / active out of the FINAL line. Tolerates the
 # older single-avg FINAL line (active== reported as N/A in that case).
 $writtenFinal = 0; $elapsedFinal = 0.0; $activeFinal = 0.0
@@ -361,6 +416,49 @@ $maxSysCpu    = _AggMax 'sys_cpu_pct'
 $memTotalKib  = if (@($samples).Count -gt 0) { [int](($samples | Select-Object -Last 1).sys_mem_total_kib) } else { 0 }
 $memTotalGiB  = [math]::Round($memTotalKib / 1024 / 1024, 1)
 
+# Verdict computation. Pre-section-31 the runner declared HEALTHY based
+# solely on (watchdog=0 AND walSlot=0 AND walAppend=0). Empirically that
+# misses three independent failure modes that all leave those counters at
+# zero (cohort 2026-06-05 d8-ceiling-discovery): missing FINAL, non-zero
+# `failed=N` from per-second samples or FINAL, and a long post-producer
+# zero-rate drain tail. Verdict now considers each independently and
+# returns the most-severe state.
+#
+# State precedence (worst-first):
+#   WEDGE     - drain-tail >= drainWedgeThreshold OR no FINAL emitted at all
+#   FAILED    - any per-second `failed=N>0` sample OR FINAL failed>0
+#   DEGRADED  - watchdog/wal-slot/wal-append OR exception lines OR
+#               brief drain-tail OR FINAL missing the activeAvg field
+#   HEALTHY   - none of the above; FINAL emitted, no failures, clean drain
+$drainWedgeThreshold = 10  # samples (~10 s of trailing rate=0 post-producer)
+$verdictReasons = @()
+$verdictState   = 'HEALTHY'
+function _DowngradeVerdict([string]$target) {
+	$order = @{ 'HEALTHY'=0; 'DEGRADED'=1; 'FAILED'=2; 'WEDGE'=3 }
+	if ($order[$target] -gt $order[$script:verdictState]) { $script:verdictState = $target }
+}
+if (-not $sawFinal -or -not $siloFinal) {
+	_DowngradeVerdict 'WEDGE'
+	$verdictReasons += 'no FINAL emitted'
+}
+if ($drainTailSamples -ge $drainWedgeThreshold) {
+	_DowngradeVerdict 'WEDGE'
+	$verdictReasons += "$drainTailSamples-sample drain tail"
+}
+if ($failedFinal -gt 0 -or $failedSamples -gt 0) {
+	_DowngradeVerdict 'FAILED'
+	if ($failedFinal -gt 0) { $verdictReasons += "FINAL failed=$failedFinal" }
+	elseif ($failedSamples -gt 0) { $verdictReasons += "$failedSamples per-second sample(s) carried failed>0" }
+}
+if ($watchdog -gt 0 -or $walSlot -gt 0 -or $walAppend -gt 0) {
+	_DowngradeVerdict 'DEGRADED'
+	$verdictReasons += "watchdog=$watchdog wal-slot=$walSlot wal-append=$walAppend"
+}
+if ($exceptionCount -gt 0) {
+	_DowngradeVerdict 'DEGRADED'
+	$verdictReasons += "$exceptionCount exception line(s)"
+}
+
 Write-Host ''
 Write-Host '=== Cohort complete ===' -ForegroundColor Green
 Write-Host ("Host         : {0}" -f $vmInfo)
@@ -369,18 +467,40 @@ Write-Host ("Producer     : {0}" -f $finalState)
 if ($prodSummary) { Write-Host ("  {0}" -f $prodSummary.Line) }
 if ($siloFinal)   { Write-Host ("Silo FINAL   : {0}" -f $siloFinal.Line.Trim()) }
 elseif ($siloTail) { Write-Host ("Silo last    : {0}" -f $siloTail.Line.Trim()) }
-if ($writtenFinal -gt 0) {
-	Write-Host ("Throughput   : {0:N0} entries in {1:0.0}s active = {2:N0}/s{3}" -f `
-		$writtenFinal, $activeFinal, $avgActiveFinal, $(if ($failedFinal -gt 0) { " (failed=$failedFinal)" } else { '' }))
+
+# Steady-state mean (section 27.1) is the primary throughput metric. Always
+# print if we have at least one usable sample; this is what cohort A/B
+# comparisons should use. FINAL `(active avg)` is shown as a secondary
+# diagnostic when it differs materially (and is suppressed for WEDGE
+# verdicts where it is provably wrong).
+if ($steadyCount -gt 0) {
+	$inFlightLabel = if ($steadyCount -gt 0) { " inFlight med/max={0}/{1}" -f $inFlightMedian, $inFlightMax } else { '' }
+	Write-Host ("Steady mean  : {0:N0} e/s (n={1} samples, t>=15s, rate>0){2}" -f $steadyMean, $steadyCount, $inFlightLabel)
 } else {
-	Write-Host 'Throughput   : -- no final output: unknown --' -ForegroundColor Yellow
+	Write-Host 'Steady mean  : -- no nonzero per-second samples --' -ForegroundColor Yellow
 }
+if ($writtenFinal -gt 0) {
+	$activeAvgIsTrustworthy = ($verdictState -ne 'WEDGE')
+	$activeAvgSuffix = if ($activeAvgIsTrustworthy) { '' } else { ' (drain-inflated; ignore)' }
+	Write-Host ("FINAL active : {0:N0} entries in {1:0.0}s active = {2:N0}/s{3}{4}" -f `
+		$writtenFinal, $activeFinal, $avgActiveFinal, $(if ($failedFinal -gt 0) { " (failed=$failedFinal)" } else { '' }), $activeAvgSuffix)
+} else {
+	Write-Host 'FINAL active : -- no FINAL emitted --' -ForegroundColor Yellow
+}
+Write-Host ("Drain tail   : {0} trailing rate=0 sample(s) post-producer" -f $drainTailSamples)
 Write-Host ("Silo CPU     : avg {0}% / peak {1}% (of one vCPU)" -f $avgSiloCpu, $maxSiloCpu)
 Write-Host ("System CPU   : avg {0}% / peak {1}%" -f $avgSysCpu, $maxSysCpu)
 Write-Host ("Silo RSS peak: {0} GiB (of {1} GiB)" -f $peakRssGiB, $memTotalGiB)
-Write-Host ("Diagnostics  : stall-watchdog={0}  wal-slot={1}  wal-append={2}" -f $watchdog, $walSlot, $walAppend)
-$wedgeVerdict = if ($watchdog -eq 0 -and $walSlot -eq 0 -and $walAppend -eq 0) { 'HEALTHY' } else { 'WEDGE SIGNAL' }
-Write-Host ("Verdict      : {0}" -f $wedgeVerdict) -ForegroundColor $(if ($wedgeVerdict -eq 'HEALTHY') {'Green'} else {'Red'})
+Write-Host ("Diagnostics  : stall-watchdog={0}  wal-slot={1}  wal-append={2}  exceptions={3}  failed-samples={4}" -f $watchdog, $walSlot, $walAppend, $exceptionCount, $failedSamples)
+$verdictColor = switch ($verdictState) {
+	'HEALTHY'  { 'Green' }
+	'DEGRADED' { 'Yellow' }
+	'FAILED'   { 'Red' }
+	'WEDGE'    { 'Red' }
+	default    { 'Yellow' }
+}
+$verdictDetail = if ($verdictReasons.Count -gt 0) { ' (' + ($verdictReasons -join '; ') + ')' } else { '' }
+Write-Host ("Verdict      : {0}{1}" -f $verdictState, $verdictDetail) -ForegroundColor $verdictColor
 Write-Host "Logs         : $siloLog"
 Write-Host "             : $prodLog"
 Write-Host "             : $samplerLog"

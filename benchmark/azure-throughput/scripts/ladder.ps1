@@ -80,7 +80,7 @@ Write-Host "[ladder] rungs=$($Rungs.Count) duration=${DurationSec}s cooldown=${C
 Write-Host "[ladder] results -> $ResultsCsv" -ForegroundColor DarkGray
 
 # Fresh CSV header per sweep so the file is self-describing.
-"vehicles,tickHz,durationSec,written,failed,activeSec,activeAvg,totalElapsedSec,siloCpuPeakPct,siloCpuAvgPct,sysCpuPeakPct,siloRssGiB,verdict,timestampUtc" `
+"vehicles,tickHz,durationSec,written,failed,activeSec,steadyMean,activeAvg,drainTailSamples,totalElapsedSec,siloCpuPeakPct,siloCpuAvgPct,sysCpuPeakPct,siloRssGiB,verdict,timestampUtc" `
 	| Out-File -FilePath $ResultsCsv -Encoding utf8
 
 $bestThroughput = 0
@@ -109,23 +109,38 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
 	$out = & $cohortScript @cohortArgs 2>&1 | Tee-Object -Variable cohortOut | Out-String
 
 	# Pull the same summary fields run-cohort.ps1 already prints, so we don't
-	# duplicate parsing logic in two places.
+	# duplicate parsing logic in two places. Per the section 27.1 methodology
+	# the primary throughput metric is `Steady mean :` (mid-window mean of
+	# `[silo] t=` per-second samples, t>=15s, rate>0). FINAL `(active avg)` is
+	# retained as a secondary field for back-compat and for the
+	# `DegradeThresholdPct` early-stop heuristic when no steady-state samples
+	# are usable.
 	$written  = if ($out -match 'written=([\d,]+)')                        { [int](($matches[1]) -replace ',','') } else { 0 }
 	$failed   = if ($out -match 'failed=([\d,]+)')                         { [int](($matches[1]) -replace ',','') } else { 0 }
 	$active   = if ($out -match 'active=([\d.]+)s')                        { [double]$matches[1] }                 else { 0 }
 	$elapsed  = if ($out -match 'elapsed=([\d.]+)s')                       { [double]$matches[1] }                 else { 0 }
-	$throughput = if ($out -match '\(active avg\)=([\d,]+)')               { [int](($matches[1]) -replace ',','') } else { 0 }
+	$steadyMean = if ($out -match 'Steady mean\s+:\s+([\d,]+)\s+e/s')      { [int](($matches[1]) -replace ',','') } else { 0 }
+	$activeAvg  = if ($out -match '\(active avg\)=([\d,]+)')               { [int](($matches[1]) -replace ',','') } else { 0 }
+	$drainTail  = if ($out -match 'Drain tail\s+:\s+(\d+) trailing')       { [int]$matches[1] }                     else { 0 }
 	$siloCpuPeak = if ($out -match 'Silo CPU\s+:\s+avg [\d.]+% / peak ([\d.]+)%') { [double]$matches[1] } else { 0 }
 	$siloCpuAvg  = if ($out -match 'Silo CPU\s+:\s+avg ([\d.]+)%')         { [double]$matches[1] }                 else { 0 }
 	$sysCpuPeak  = if ($out -match 'System CPU\s+:\s+avg [\d.]+% / peak ([\d.]+)%') { [double]$matches[1] } else { 0 }
 	$rssGiB      = if ($out -match 'Silo RSS peak:\s+([\d.]+) GiB')        { [double]$matches[1] }                 else { 0 }
-	$verdict     = if ($out -match 'Verdict\s+:\s+(\S+)')                  { $matches[1] }                          else { 'UNKNOWN' }
+	$verdict     = if ($out -match 'Verdict\s+:\s+(\w+)')                  { $matches[1] }                          else { 'UNKNOWN' }
 	$tsUtc       = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 
-	"${vehicles},${tickHz},${DurationSec},${written},${failed},${active},${throughput},${elapsed},${siloCpuPeak},${siloCpuAvg},${sysCpuPeak},${rssGiB},${verdict},${tsUtc}" `
+	# `throughput` is the per-rung "best honest sustained number" used for the
+	# DegradeThresholdPct early-stop guard. Prefer steady-state mean; fall
+	# back to FINAL active-avg only when no per-second samples reached the
+	# mid-window. (A FINAL active-avg from a wedged cohort is drain-inflated
+	# and would mask the cliff; the runner now suppresses it for WEDGE
+	# verdicts so the fall-back path stays honest.)
+	$throughput = if ($steadyMean -gt 0) { $steadyMean } else { $activeAvg }
+
+	"${vehicles},${tickHz},${DurationSec},${written},${failed},${active},${steadyMean},${activeAvg},${drainTail},${elapsed},${siloCpuPeak},${siloCpuAvg},${sysCpuPeak},${rssGiB},${verdict},${tsUtc}" `
 		| Add-Content -Path $ResultsCsv -Encoding utf8
 
-	Write-Host "[ladder] rung $vehicles:$tickHz -> throughput=$throughput e/s, failed=$failed, verdict=$verdict" -ForegroundColor Yellow
+	Write-Host "[ladder] rung ${vehicles}:${tickHz} -> steady=$steadyMean e/s, failed=$failed, drainTail=${drainTail}s, verdict=$verdict" -ForegroundColor Yellow
 
 	if ($DegradeThresholdPct -gt 0 -and $throughput -gt 0) {
 		if ($throughput -gt $bestThroughput) {
