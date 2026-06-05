@@ -922,6 +922,7 @@ function New-MetaHeaderForLayer1 {
 		$meta['bdnToolchain']  = 'InProcessEmitToolchain'
 		$meta['cohortN']       = $cohortN
 		$meta['rowsMeasured']  = $rowsDate
+		$meta['gitSha']        = $State.gitSha
 		$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Single-thread ceiling = round(1 / p50). Cells are the median of N cohorts.'
 	}
 	return $meta
@@ -959,6 +960,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['responseTimeoutSec'] = $State.responseTimeoutSec
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
+		$meta['gitSha']             = $State.gitSha
 		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the matching duration histogram p50/p99 from the last full [phaseA] reporter window.'
 	}
 	return $meta
@@ -1071,6 +1073,61 @@ function Get-ExistingMetaHeader {
 	return $dict
 }
 
+# ────────────────────────────────────────────────────────────────────────────
+# Provenance note rendering (the "> Measured ..." blockquote that follows
+# each :end marker). Owned by the script the same way the marker block is,
+# but lives OUTSIDE the marker pair so the line is visible to readers
+# scanning the doc without expanding any HTML comments.
+# ────────────────────────────────────────────────────────────────────────────
+
+function Render-ProvenanceNote {
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string] $Layer,
+		[Parameter(Mandatory)][hashtable] $Meta
+	)
+	$date    = if ($Meta.ContainsKey('rowsMeasured'))  { $Meta['rowsMeasured'] }  else { 'unknown' }
+	$hostSku = if ($Meta.ContainsKey('host'))          { $Meta['host'] }          else { 'unknown' }
+	$dot     = if ($Meta.ContainsKey('dotnet'))        { $Meta['dotnet'] }        else { 'unknown' }
+	$sha     = if ($Meta.ContainsKey('gitSha') -and $Meta['gitSha']) { $Meta['gitSha'] } else { 'unknown' }
+	$cohN    = if ($Meta.ContainsKey('cohortN'))       { $Meta['cohortN'] }       else { 'unknown' }
+	switch ($Layer) {
+		'layer1' {
+			$fid = if ($Meta.ContainsKey('bdnFidelity')) { $Meta['bdnFidelity'] } else { 'unknown' }
+			return "> Measured ${date} on ${hostSku} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts (BDN ${fid})."
+		}
+		'layer2' {
+			$region = if ($Meta.ContainsKey('region')) { $Meta['region'] }  else { 'unknown' }
+			$rung   = if ($Meta.ContainsKey('rung'))   { $Meta['rung'] }    else { 'unknown' }
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts at ${rung}."
+		}
+		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
+	}
+}
+
+function Set-ProvenanceNote {
+	<#
+	.SYNOPSIS
+		Inserts or rewrites the "> Measured ..." blockquote that immediately
+		follows the named layer's :end marker. Match by anchored prefix so a
+		hand-written blockquote elsewhere (e.g. an unrelated quote in the
+		surrounding prose) is never touched.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string] $Content,
+		[Parameter(Mandatory)][string] $Layer,
+		[Parameter(Mandatory)][string] $Note
+	)
+	# Match the :end marker, then any whitespace (including a single blank
+	# line), then optionally an existing '> Measured ...' line. Substitute
+	# with marker + blank + our note + blank.
+	$endTag = "<!-- perf-table:${Layer}:end -->"
+	$pattern = '(?m)' + [regex]::Escape($endTag) + "\r?\n(\r?\n)?(?:> Measured [^\r\n]*\r?\n(\r?\n)?)?"
+	$replacement = $endTag + "`r`n`r`n" + $Note + "`r`n`r`n"
+	# Replace at most once - if for some reason two :end markers share a
+	# layer name (which the hygiene test forbids), at least we don't fan out.
+	return [regex]::Replace($Content, $pattern, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $replacement }, 1)
+}
+
 function Update-DocMarkers {
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][string] $DocPath,
@@ -1101,6 +1158,7 @@ function Update-DocMarkers {
 
 		$pattern1 = '(?s)<!-- perf-table:layer1:start.*?<!-- perf-table:layer1:end -->'
 		$content = [regex]::Replace($content, $pattern1, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $newBlock1 })
+		$content = Set-ProvenanceNote -Content $content -Layer 'layer1' -Note (Render-ProvenanceNote -Layer 'layer1' -Meta $meta1)
 	} elseif ($existingL1.Count -eq 0) {
 		# Edge case: marker block exists but contains no rows (e.g. operator
 		# committed an empty marker pair as a seed). Render placeholders so the
@@ -1121,6 +1179,7 @@ function Update-DocMarkers {
 
 		$pattern2 = '(?s)<!-- perf-table:layer2:start.*?<!-- perf-table:layer2:end -->'
 		$content = [regex]::Replace($content, $pattern2, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $newBlock2 })
+		$content = Set-ProvenanceNote -Content $content -Layer 'layer2' -Note (Render-ProvenanceNote -Layer 'layer2' -Meta $meta2)
 	} elseif ($existingL2.Count -eq 0) {
 		$meta2 = New-MetaHeaderForLayer2 -State $State -RowsAgg @{} -Existing $existingMetaL2
 		$header2 = Render-MetaHeader -Layer 'layer2' -Meta $meta2

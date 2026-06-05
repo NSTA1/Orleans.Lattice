@@ -80,6 +80,8 @@ mechanical and the prose around the marker is hand-editable.
 
 <!-- perf-table:layer1:end -->
 
+> Measured 2026-06-05 on Standard_D4as_v5 (.NET 10.0.108) at git sha 7d0454f, n=3 cohorts (BDN quick).
+
 **Reading the numbers.** The single-thread ceiling is the derived
 `1 / p50`. It represents the algorithmic cost of the operation on one
 thread running it back-to-back with no other work; it is **not** a
@@ -144,6 +146,8 @@ realistic latency the storage provider contributes.
 | `SetManyAtomicAsync` (64 keys/saga)  | **465 keys/s** (~7.3 sagas/s), **1,793 keys/s burst max** | ~800 ms     | ~1,030 ms   |
 
 <!-- perf-table:layer2:end -->
+
+> Measured 2026-06-05 on Standard_D4as_v5 in westus3 (.NET 10.0.x) at git sha pre-VM-harness, n=3 cohorts at 4000vehicles/5Hz/45s.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
