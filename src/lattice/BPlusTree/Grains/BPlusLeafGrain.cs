@@ -886,6 +886,43 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <summary>
+    /// Per-call threshold above which <see cref="CommitSetManyAsync"/>
+    /// rents the <see cref="WalRecord"/> buffer from
+    /// <see cref="ArrayPool{T}.Shared"/>. Below this threshold the
+    /// method allocates a fresh <c>WalRecord[count]</c> directly: the
+    /// pool's small-bucket Clear-on-return cost (proportional to the
+    /// bucket size, not to the caller's requested <c>count</c>) and
+    /// the pool's reuse-keeps-arrays-live working-set effect together
+    /// dominate the saving on small batches. Empirically, on the
+    /// 2026-06-06 cohort that motivated this threshold:
+    /// <list type="bullet">
+    /// <item>An unconditional-pool first attempt regressed
+    /// <c>BulkLoad_DeeperTree</c> (<c>MaxLeafKeys=4</c>, per-call
+    /// <c>count=32</c>) +16% on <c>mean_ns</c> and widened its
+    /// deterministic <c>alloc_b</c> IQR 13.85x.</item>
+    /// <item>A threshold of 32 also regressed <c>BulkLoad_DeeperTree</c>
+    /// (+4.5% <c>alloc_b</c>, IQR ratio 12.30x) because
+    /// <c>count == 32</c> still selected the pool path and
+    /// <c>Rent(32)</c> produced bimodal per-run allocation depending
+    /// on which pool bucket the rent landed on.</item>
+    /// <item>A threshold of 128 (this value) routes every workload
+    /// with per-call <c>count &lt;= 64</c> through the direct path,
+    /// preserving baseline behaviour on every small-leaf bench while
+    /// pooling for the large-batch foreground commit shape -
+    /// <c>SetMany_4Shards</c> (per-shard <c>count ~ 250</c>) and
+    /// <c>BulkLoad</c> (single-shard <c>count = 1000</c>) - both of
+    /// which took the full -36% to -38% <c>alloc_b</c> win.</item>
+    /// </list>
+    /// The pool-vs-allocation choice is hidden from the rest of the
+    /// method by the <c>rentedFromPool</c> bool that the finally
+    /// block branches on. clearArray=true is required on the pool
+    /// path so the rented array does not pin <see cref="string"/> /
+    /// <see cref="byte"/>[] / <see cref="VersionVector"/> references
+    /// in the pool slot between rents.
+    /// </summary>
+    private const int CommitSetManyPoolThreshold = 128;
+
+    /// <summary>
     /// Foreground bulk-write commit path. Collapses the per-key WAL
     /// round-trip into a single <see cref="ICommitLogWriter.AppendManyAsync"/>
     /// call so a N-key batch routed to the same WAL partition pays one
@@ -899,35 +936,6 @@ internal sealed partial class BPlusLeafGrain(
     /// the same <see cref="SplitResult"/> shape the per-key loop would
     /// have produced for its final overflowing entry.
     /// </summary>
-    /// <summary>
-    /// Per-call threshold above which <see cref="CommitSetManyAsync"/>
-    /// rents the <see cref="WalRecord"/> buffer from
-    /// <see cref="ArrayPool{T}.Shared"/>. Below this threshold the
-    /// method allocates a fresh <c>WalRecord[count]</c> directly: the
-    /// pool's smallest bucket on net10.0 is 16 elements, so a
-    /// <see cref="ArrayPool{T}.Shared.Rent(int)"/> for <c>count &lt;= 16</c>
-    /// returns a 16-slot array, and the <see cref="Array.Clear"/>-on-return
-    /// discipline (required so the pool slot does not pin
-    /// <see cref="string"/> / <see cref="byte"/>[] / <see cref="VersionVector"/>
-    /// references between rents) clears the whole 16-slot extent
-    /// regardless of how many slots the caller wrote. Empirically, on
-    /// the 2026-06-06 cohort that motivated this threshold,
-    /// <c>BulkLoad_DeeperTree</c> (<c>MaxLeafKeys=4</c>, per-call <c>count</c>
-    /// between 1 and 4 across up to 8 leaf splits per op) regressed
-    /// +16% on <c>mean_ns</c> and widened
-    /// <c>alloc_b</c> IQR 13.85x under unconditional pooling; the
-    /// <c>SetMany_4Shards</c> primary target (per-shard <c>count</c> ~250)
-    /// took the full -36.2% <c>alloc_b</c> win. A threshold of 32
-    /// (the second pool bucket, ~4 KiB of rented backing memory at
-    /// <c>~130 B/slot</c>) keeps the unconditional-allocation shape for
-    /// every small-leaf workload that hits this path while still
-    /// pooling for the large-batch foreground commit path. The
-    /// pool-vs-allocation choice is hidden from the rest of the
-    /// method by the <c>rentedFromPool</c> bool that the finally
-    /// block branches on.
-    /// </summary>
-    private const int CommitSetManyPoolThreshold = 32;
-
     private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         using var _commitScope = EnterCommitScope();
