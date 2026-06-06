@@ -61,10 +61,10 @@ public class PerformanceReportMarkerHygieneTests
 
     // The expected layer-keyed table-header column count (one |-separated
     // cell per logical column, ignoring the empty leading / trailing pipes).
-    // Layer 1: Operation | Per-call p50 | Allocations | Single-thread ceiling.
-    // Layer 2: Operation | Sustained throughput | Per-call p50 | Per-call p99.
-    private const int Layer1ExpectedColumns = 4;
-    private const int Layer2ExpectedColumns = 4;
+    // Layer 1: Operation | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate.
+    // Layer 2: Operation | Sustained throughput | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99.
+    private const int Layer1ExpectedColumns = 7;
+    private const int Layer2ExpectedColumns = 6;
 
     private static readonly Regex StartMarkerRegex = new(
         @"<!--\s*perf-table:(?<layer>[a-z0-9_-]+):start\s*\r?\n(?<body>.*?)\r?\n-->\r?\n",

@@ -11,7 +11,13 @@ public enum LatticeDashboardKind
     /// Per-tree throughput, leaf-write percentiles, cache hit-rate,
     /// tombstone churn, splits committed, atomic-write outcomes,
     /// coordinator completions, tree-lifecycle, event publish / drop,
-    /// and runtime configuration changes. Sources the
+    /// runtime configuration changes, and top-of-stack
+    /// <c>GetAsync</c> / <c>GetManyAsync</c> / <c>ExistsAsync</c> /
+    /// <c>GetWithVersionAsync</c> per-call latency envelopes with
+    /// per-stage decomposition (<c>get.duration</c>,
+    /// <c>get.stage.duration</c>, <c>get_many.duration</c>,
+    /// <c>get_many.stage.duration</c>, <c>exists.duration</c>,
+    /// <c>get_with_version.duration</c>). Sources the
     /// <c>orleans.lattice</c> meter only and does not require the
     /// replication package.
     /// </summary>

@@ -670,3 +670,107 @@ In priority order:
 - **Storage account single-tenant ceiling on Standard SKU:** ~128 concurrent transactions sustained, manifests as `TableTransactionFailedException` (409+504) above that. Recovery is multi-account fan-out, not knob increases.
 - **Post-mortem on disk:** `benchmark/.run/azure-throughput/POSTMORTEM-2026-06-05-d8-ceiling-discovery.md` (gitignored; the next cycle's Phase 0 input).
 
+---
+
+## 32. Observation 2026-06-06 (single-account ceiling reproduces on D4 at 4k:5 with WEDGE phenotype)
+
+A `./benchmark/performance-report.ps1` end-to-end run on 2026-06-06 (HEAD = `f9afdfb`, fresh D4as_v5 deploy, shipping defaults `WalPartitions=8`, `WalMaxPendingBatches=16`, `BENCH_RESPONSE_TIMEOUT_SEC=180`, `BENCH_BATCH_SIZE=4096`, n=3 cohorts at `Vehicles=4000 / TickHz=5 / DurationSec=45`) recorded 3/3 set-many cohorts wedging at drain with the §31.2 `TableTransactionFailedException` (mixed HTTP 409 entity-conflict + SDK timeout) phenotype, despite the §30 baseline at the same rung having produced 3/3 HEALTHY cohorts with `failed=0`.
+
+This section captures the new observation; **the mechanism is already exhaustively documented in §31.2 / §31.5**. The new information is the rung drop: the storage-account-bound regime that §31 characterised at `>=6k:5 on D8as_v5` now reproduces at `4k:5 on D4as_v5`. This is a discovery, not an actionable optimisation cycle - §32 is appended for the next cycle's Phase 0 input.
+
+### 32.1 Cohort
+
+| Cohort | Steady mean | First `failed>0` sample | Cumulative `failed=` (FINAL or last watchdog) | `stall-watchdog` lines | `[wal-dispatch-timeout-cts]` events | `TableTransactionFailedException` count (409 / SDK-timeout) | FINAL emitted? | Verdict (runner) |
+|---|---|---|---|---|---|---|---|---|
+| `v4000-h5-45s-20260606115935Z` | 15,186 e/s | t=31.1s (mid-window, 12,288/s) | 36,864 (FINAL) | 0 | 31 (spread across shards 1, 2, 7) | 9 (6 / 3) | YES | WEDGE |
+| `v4000-h5-45s-20260606120149Z` | 22,414 e/s | t=49.1s (drain edge, 44,322/s) | 142,626 (watchdog, no FINAL) | 389 | 4 (shard 5) | 36 (36 / 0) | **NO** (SIGKILL at t=88s) | WEDGE |
+| `v4000-h5-45s-20260606120503Z` | 22,926 e/s | t=38.1s (mid-window, 3,983/s) | 40,113 (FINAL) | 393 | 58 (spread across 7 of 8 shards) | 28 (27 / 1) | YES | WEDGE |
+
+Compare directly with §30.1 candidate (same rung, same configuration, just 24h earlier):
+
+| Cohort | Steady mean | `failed=` | Verdict |
+|---|---|---|---|
+| §30 candidate run 1 | 21,216 e/s | 0 | HEALTHY |
+| §30 candidate run 2 | 21,292 e/s | 0 | HEALTHY |
+| §30 candidate run 3 | 21,320 e/s | 0 | HEALTHY |
+
+The §30 cohort had a *very tight* distribution (range 104 e/s, CoV ~0.2%) clustered at ~21,275 e/s. Today's cohorts spread 15,186 - 22,926 e/s and cohorts 2 and 3 individually *exceed* §31.5's published single-account ceiling of `~22-24 ke/s`. That is the empirical fingerprint of the silo crossing the storage-account ceiling - §30's 21,275 was just under, today's runs occasionally land just over.
+
+### 32.2 Diagnostic comparison vs §30 baseline
+
+Per-window mid-cohort `wal.writer.append.admission_wait` p99 (the §28-derived single most diagnostic instrument for the storage-account-bound regime):
+
+| Window | §30 candidate cap=16 baseline | Today cohort 1 | Today cohort 2 | Today cohort 3 |
+|---|---|---|---|---|
+| mid-cohort (t~30s) | 1,196 - 1,389 ms | **2,877 ms** | **3,506 ms** | 1,494 ms |
+| late-cohort (t~60-80s) | (not tabulated; clean drain) | 1,507 ms | **6,830 ms** | 719 ms |
+
+`wal.writer.partition.pending_appends` p99 was already saturated at **15** (cap=16 minus the active flush) in §30; today's runs show the same saturation but the per-attempt wait has 2-5x. The cap is the same, the queue depth is the same, the per-attempt drain time has degraded.
+
+`provider.commit.duration` phase1 p99 stayed in the **22-91 ms** band (mid + late, all cohorts), unchanged from §30. The Azure round-trip itself is healthy when it lands - the failure mode is internal SDK retry against a server-side-already-committed transaction, which never surfaces as a longer `provider.commit.duration`. `provider.retry.attempts` stayed at **0** in every cohort's late window, confirming the SDK's internal retry is invisible to the custom retry counter (it lives inside one observed Azure transaction, not as a sibling attempt).
+
+### 32.3 Phenotype mapping
+
+Today's three cohorts reproduce three of the four known wedge phenotypes the catalogue tracks:
+
+| Cohort | Phenotype | Catalogue reference |
+|---|---|---|
+| 1 | Mid-window failure burst followed by recovery and clean FINAL with non-zero `failed=`; no watchdog | new variant - first time this exact shape recorded, see §32.4 |
+| 2 | Drain-phase wedge with `inFlight=1`, **389 stall-watchdog firings** dumping 1,556 suspended `WalCommitLogWriter.AppendForPartitionAsync`, no FINAL, SIGKILL | §27.1 footnote and §30.6 item 2 (silent in §27.1, now watchdog-visible after G-028 PR #599 promoted the watchdog) |
+| 3 | Drain-phase wedge with `inFlight=8`, **393 stall-watchdog firings**, FINAL eventually emits with 40,113 failures | §31.2 tertiary finding (drain wedge under storage saturation) |
+
+The new variant in cohort 1 is the "**mid-window failure burst with recovery**" shape: failures fire at t=29-31s (a full ~15s before producer disconnect), the silo recovers, throughput drops to ~12-15 ke/s for the rest of the producer window, and the FINAL emits cleanly with cumulative failed=36,864. This is the storage-account ceiling firing *during* the producer window, not at drain. The runner verdict still reports WEDGE because of the failed count, but the silo did not actually wedge - it back-pressured cleanly and recovered.
+
+### 32.4 What is new vs §31
+
+**New observation: the storage-account-bound regime reproduces one rung lower than §31 catalogued.** §31 published the ceiling as `D8as_v5 at 6k:5+`; today's run shows the same phenotype at `D4as_v5 at 4k:5`. Possible causes (not isolated by this single run):
+
+- **Stochastic Azure-side variance.** The §30 D4 cohort hit 21,275 e/s mean with 104 e/s range - the silo was already operating at 95-98% of the §31.5 published ceiling, with no measured headroom. A small day-to-day shift in the storage account's effective ceiling (other-tenant noise, Azure-side maintenance window, regional load) is enough to push two of three cohorts over.
+- **Account-specific ceiling drift.** The §30 / §31 cohorts ran against a different storage account (different `NamePrefix`-derived account name on each deploy). Today's storage account may have a slightly lower effective ceiling than §30's.
+- **No detectable code-side cause in this branch.** The branch under test (`feature/f083-read-path-histograms`) only modifies the read path on `LatticeGrain` (`GetAsync` / `GetManyAsync` / `ExistsAsync` / `GetWithVersionAsync`). The set-many hot path was not touched; per-call closure allocations were re-verified zero. The 6 new histograms added to the `PhaseADiagnosticReporter` allowlist produce 0 records on a `set-many` workload (read instruments fire only on read calls); their startup cost is per-activation, not per-message.
+
+**The new mid-window failure variant (§32.3 cohort 1) is worth recording in its own right.** Previously the catalogue had only drain-phase wedges (§27.1, §30.4.1, §31's tertiary) and the §30.4.1 dual-knob throttling-during-producer-window shape. Cohort 1 is the first recorded case of "single-knob storage-account ceiling firing mid-window then recovering" - the silo back-pressures honestly and continues. This is a healthier failure mode than the drain-wedge variants and suggests at least one of the recent reliability improvements (G-028's bounded WAL deactivation drain in PR #599, perhaps) is reducing the chance that mid-window pressure escalates to a drain wedge.
+
+### 32.5 Doc-pipeline impact (F-082 / F-083 cohort cells)
+
+The `performance-report.ps1` doc-update path (F-082) ingests the **per-second steady-state mean** (per §27.1) and the **last `[phaseA]` window's p50 / p75 / p90 / p99** (per F-083) into `state.json` and renders the Layer 2 table. Both signals are computed from `ops_total` (= successful ops only - the failed batches' WAL writes that hit 409 do not count toward `ops_total`).
+
+Practical consequence: when a cohort wedges at drain with the §32 phenotype, the published Layer 2 cell reads as a **plausible-looking** throughput number (today's cohort 3 = 22,926 e/s, just above the §31 ceiling, no obvious "this is wrong" signal in the doc itself). The per-call p50 also looks reasonable because the histograms only record successful calls. The wedge is only visible in:
+
+- The `stall-watchdog` firings in the silo log (not surfaced to `state.json`).
+- The runner's `Verdict : WEDGE` line (printed but not used by the aggregator).
+- The `failed=N` token on FINAL lines (parsed by the runner, surfaced in the per-cohort `failed` field but not aggregated into the doc).
+
+This means **a doc-update pass can land cells from a wedge cohort and silently misrepresent the production envelope**. Operator-facing recommendation:
+
+1. After any `performance-report.ps1` run that updates the doc, **manually inspect** the `[layer2]` console output for `Verdict : WEDGE` / `DEGRADED` / `FAILED` lines. The runner reports these clearly; the aggregator does not.
+2. Re-run the affected workload mode (`-Layer 2 -Workloads set-many`) until all 3 cohorts are HEALTHY before quoting the doc cells.
+3. The §32-style discrepancy between "plausible cell" and "WEDGE verdict" is the canonical signal that the storage account is at its ceiling. Either drop the offered load one rung (3k:5) or move to multi-account fan-out (F-084 planned work) before publishing the cell.
+
+### 32.6 Reliability surface re-confirmation
+
+The §30.6 item 2/3 / §31.2 tertiary finding stands: the drain-wedge family under storage saturation is real, reproducible at `>=4k:5 on D4` (one rung lower than previously catalogued), and not handled by the existing `WalAppendDispatchTimeout` / `WalFlushTimeout` / G-028 deactivation-drain bounds. The new evidence today:
+
+- **The stall-watchdog DOES fire on this phenotype** (G-028 PR #599 promoted the watchdog and it now catches both drain-wedge variants - cohorts 2 and 3 above). §27.1's claim that the watchdog was silent on this fingerprint is now obsolete.
+- **The async dump confirms the wedge mechanism**: 1,556 suspended `WalCommitLogWriter.AppendForPartitionAsync` + 739/738 `PartitionTracker.AcquireAsync` + 372 `WalShardGrain.FlushAsync` + 367 `AzureTableWalStorageProvider.SubmitPhaseOneAsync` + 328 `HttpConnection.SendAsync` -> `Azure.Core.Pipeline.RetryPolicy.ProcessAsync`. The chain is parked all the way through the Azure SDK retry policy, not at the silo's own admission gate. The silo's `WalAppendDispatchTimeout=30s` does fire (`[wal-dispatch-timeout-cts]` events), but releases only the dispatch caller; the SDK retry continues in the background and the next admission queue refill re-enters the same wait.
+- **The drain wedge survives SIGTERM**: cohort 2 logged `Lifecycle stop operations canceled at stage 'ApplicationServices'` and `lattice-silo.service: State 'stop-sigterm' timed out. Killing.` Even the bounded G-028 deactivation drain (default 2 minutes) is not enough to clear the parked chain when 367 Azure SDK transactions are mid-retry.
+
+The structural fix remains F-084 (per-partition WAL storage resolver, multi-account fan-out). The reliability hardening hand-off is unchanged from §31.2: the drain-wedge family needs a feature-dev pass that either:
+
+- Cancels in-flight SDK transactions on `SIGTERM` / drain timeout (currently the SDK's `HttpClient` ignores the silo's drain `CancellationToken` once it has handed off to the underlying `Socket.SendAsync`), or
+- Surfaces the storage-account-ceiling signal earlier (e.g. tracking 409 rate as a back-pressure input that lowers the admission cap dynamically), or
+- Both.
+
+### 32.7 Carry-forward
+
+In priority order:
+
+1. **No code change to ship from this observation.** The mechanism is already documented in §31.2 / §31.5; F-084 remains the planned structural fix. The new info (rung threshold drop, mid-window-failure variant, watchdog now visible) is recorded here for the next cycle's Phase 0.
+
+2. **Operator-facing recommendation for `performance-report.ps1` users:** the doc-update pass can publish wedge-cohort cells without warning. See §32.5 for the inspection checklist. A follow-up harness improvement (out of scope for the F-083 PR) would be teaching `Aggregate-Layer2Cells` to skip cohorts whose runner verdict is not HEALTHY, or at minimum emit a stderr warning when it aggregates a wedge cohort into a doc cell.
+
+3. **The `wal-tuning.md` amendment from §31.4 item 1 should also cover the rung drop.** The current text describes the ceiling as a D8 + 6k:5 phenomenon; reality is closer to "the ceiling is workload-density-bound, not VM-size-bound, and reproduces wherever the steady-state mean climbs into the ~22-24 ke/s band". A short clarification ("on the standard tier the ceiling is the storage account, not the silo, and can manifest at any rung whose steady-state mean approaches ~22 ke/s") would close the gap for operators.
+
+4. **The drain-wedge reliability hand-off is unchanged from §31.2.** Repeat for emphasis: this is a real, reproducible reliability gap; F-084 papers over it by reducing single-account pressure but does not eliminate it. The right long-term fix is upstream SDK-cancellation cooperation on drain - separate from the storage-fan-out work.
+
+5. **`Aggregate-Layer2Cells` doc-pipeline blindness** (item 2 above) is the cheapest near-term win and is independent of F-084 or any reliability work.

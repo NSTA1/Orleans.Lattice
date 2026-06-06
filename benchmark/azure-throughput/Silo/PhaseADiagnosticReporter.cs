@@ -1,16 +1,16 @@
 // Phase A diagnostic reporter for the Azure throughput harness.
 //
 // Subscribes to the shared "orleans.lattice" meter and emits per-instrument
-// p50/p90/p99/count lines to stdout once every BENCH_PHASEA_REPORT_SEC
+// p50/p75/p90/p99/count lines to stdout once every BENCH_PHASEA_REPORT_SEC
 // seconds (default 10). The systemd-journald-captured silo log carrying
 // these lines is the single sink the cohort runner and the ladder script
 // scrape for attribution, so the format is intentionally fixed and easy
 // to grep:
 //
-//   [phaseA] t=20.0s instrument=wal.append.turn_wait      tree=t shard=0 phase=- status=- count=42318 p50=1.41ms p90=3.20ms p99=8.74ms
-//   [phaseA] t=20.0s instrument=provider.commit.duration  tree=t shard=0 phase=phase1 status=- count=4231 p50=12.8ms p90=18.4ms p99=41.2ms
+//   [phaseA] t=20.0s instrument=wal.append.turn_wait      tree=t shard=0 phase=- status=- count=42318 p50=1.41ms p75=2.10ms p90=3.20ms p99=8.74ms
+//   [phaseA] t=20.0s instrument=provider.commit.duration  tree=t shard=0 phase=phase1 status=- count=4231 p50=12.8ms p75=15.4ms p90=18.4ms p99=41.2ms
 //   [phaseA] t=20.0s instrument=provider.retry.exhausted  tree=t shard=0 phase=phase1 status=429 count=12
-//   [phaseA] t=20.0s instrument=saga.perkey.duration      tree=t shard=- phase=- status=- count=8421 p50=2.50ms p90=11.0ms p99=34.2ms
+//   [phaseA] t=20.0s instrument=saga.perkey.duration      tree=t shard=- phase=- status=- count=8421 p50=2.50ms p75=4.80ms p90=11.0ms p99=34.2ms
 //
 // Design constraints:
 //   - Zero per-Record allocation on the publisher hot path: tag values
@@ -19,7 +19,7 @@
 //     (instrument, treeTag, shardTag, phaseTag, statusTag) tuple.
 //   - Bounded per-tuple state: a reservoir is a fixed-capacity
 //     double[]. Each report tick the reservoir is sorted in place
-//     and the (count, p50, p90, p99) tuple is emitted. Reservoirs
+//     and the (count, p50, p75, p90, p99) tuple is emitted. Reservoirs
 //     reset after every report tick so the next window's quantiles
 //     reflect that window only.
 //   - Bounded tuple count: the instrument allowlist + the small
@@ -135,6 +135,21 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // splits the envelope into its four constituent spans.
         "orleans.lattice.set.duration",
         "orleans.lattice.set.stage.duration",
+        // Caller-visible read-path envelopes + per-sub-stage attribution.
+        // get.duration / get_many.duration are the public ILattice read
+        // entry points' wall-clock cost; the .stage.duration histograms
+        // split each into its constituent spans (route|shard for the
+        // point path; route|bucket|fanout|merge for the batched path).
+        // exists.duration / get_with_version.duration are the lower-
+        // traffic envelopes published for symmetry. performance-report.ps1
+        // reads get.duration for the get-point workload mode and
+        // get_many.duration for get-many.
+        "orleans.lattice.get.duration",
+        "orleans.lattice.get.stage.duration",
+        "orleans.lattice.get_many.duration",
+        "orleans.lattice.get_many.stage.duration",
+        "orleans.lattice.exists.duration",
+        "orleans.lattice.get_with_version.duration",
         // U9p step 6: cross-grain dispatch view from `WalCommitLogWriter`
         // around `await walGrain.AppendAsync(...)`. The leaf's
         // `leaf.commit.duration phase=wal` measures the inside of
@@ -457,6 +472,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
                 sb.Append(" sum=").Append(agg.Sum.ToString("F2", CultureInfo.InvariantCulture));
                 sb.Append(" min=").Append(agg.Min.ToString("F2", CultureInfo.InvariantCulture));
                 sb.Append(" p50=").Append(agg.P50.ToString("F2", CultureInfo.InvariantCulture));
+                sb.Append(" p75=").Append(agg.P75.ToString("F2", CultureInfo.InvariantCulture));
                 sb.Append(" p90=").Append(agg.P90.ToString("F2", CultureInfo.InvariantCulture));
                 sb.Append(" p99=").Append(agg.P99.ToString("F2", CultureInfo.InvariantCulture));
                 sb.Append(" max=").Append(agg.Max.ToString("F2", CultureInfo.InvariantCulture));
@@ -508,6 +524,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         public double Min { get; private set; } = double.PositiveInfinity;
         public double Max { get; private set; } = double.NegativeInfinity;
         public double P50 { get; private set; }
+        public double P75 { get; private set; }
         public double P90 { get; private set; }
         public double P99 { get; private set; }
 
@@ -557,7 +574,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         }
 
         /// <summary>
-        /// Computes p50 / p90 / p99 for the current window, then resets
+        /// Computes p50 / p75 / p90 / p99 for the current window, then resets
         /// every accumulator so the next window starts clean. Returns
         /// a defensive snapshot so the caller can sort / render
         /// outside the reporter's lock.
@@ -578,6 +595,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
                 // Sort in place over the live portion of the reservoir.
                 Array.Sort(_reservoir, 0, live);
                 snap.P50 = Quantile(_reservoir, live, 0.50);
+                snap.P75 = Quantile(_reservoir, live, 0.75);
                 snap.P90 = Quantile(_reservoir, live, 0.90);
                 snap.P99 = Quantile(_reservoir, live, 0.99);
             }

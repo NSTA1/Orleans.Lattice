@@ -76,6 +76,8 @@ internal sealed class HarnessJsonExporter : IExporter
             {
                 metrics[$"microbench_{slug}_mean_ns"] = null;
                 metrics[$"microbench_{slug}_p50_ns"] = null;
+                metrics[$"microbench_{slug}_p75_ns"] = null;
+                metrics[$"microbench_{slug}_p90_ns"] = null;
                 metrics[$"microbench_{slug}_p95_ns"] = null;
                 metrics[$"microbench_{slug}_p99_ns"] = null;
                 metrics[$"microbench_{slug}_per_second"] = null;
@@ -86,11 +88,15 @@ internal sealed class HarnessJsonExporter : IExporter
             Array.Sort(samples);
             var mean = Mean(samples);
             var p50 = Percentile(samples, 50);
+            var p75 = Percentile(samples, 75);
+            var p90 = Percentile(samples, 90);
             var p95 = Percentile(samples, 95);
             var p99 = Percentile(samples, 99);
 
             metrics[$"microbench_{slug}_mean_ns"] = Round(mean, 1);
             metrics[$"microbench_{slug}_p50_ns"] = Round(p50, 1);
+            metrics[$"microbench_{slug}_p75_ns"] = Round(p75, 1);
+            metrics[$"microbench_{slug}_p90_ns"] = Round(p90, 1);
             metrics[$"microbench_{slug}_p95_ns"] = Round(p95, 1);
             metrics[$"microbench_{slug}_p99_ns"] = Round(p99, 1);
             metrics[$"microbench_{slug}_per_second"] = mean > 0 ? Round(1_000_000_000d / mean, 0) : (object?)null;

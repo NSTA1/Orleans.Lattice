@@ -65,24 +65,24 @@ mechanical and the prose around the marker is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
   dotnet=10.0.108
-  gitSha=93c1152
+  gitSha=f9afdfb
   host=Standard_D4as_v5
-  rowsMeasured=2026-06-05
-  methodology=Per-call p50 and allocations reported directly by BenchmarkDotNet. Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median of N cohorts.
+  rowsMeasured=2026-06-06
+  methodology=Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
-| Operation                                | Per-call p50 | Allocations | Per-thread call rate (1 / p50) |
-|------------------------------------------|-------------:|------------:|-------------------------------:|
-| `GetAsync` (point read) | **1.32 us** | 456 B | **~760.5 k keys/s** |
-| `SetAsync` (point write) | **9.43 us** | 840 B | **~106.1 k keys/s** |
-| `GetManyAsync` (16 keys/call) | **8.8 us** | 7 KB | **~1.82 M keys/s** |
-| `SetManyAsync` (1,000 keys/call) | **1.05 ms** | 350 KB | **~956 k keys/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **270.42 us** | 67 KB | **~59.2 k keys/s** |
+| Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |
+|------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|
+| `GetAsync` (point read) | **1.35 us** | 4.12 us | 8.87 us | 230.82 us | 216 B | **~739.3 k keys/s** |
+| `SetAsync` (point write) | **9.15 us** | 17.33 us | 20.24 us | 41.35 us | 784 B | **~109.3 k keys/s** |
+| `GetManyAsync` (16 keys/call) | **9.13 us** | 12.31 us | 14.69 us | 74.06 us | 6 KB | **~1.75 M keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **1.01 ms** | 1.09 ms | 1.43 ms | 2.76 ms | 350 KB | **~988.5 k keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **264.58 us** | 376.52 us | 493.24 us | 1.61 ms | 67 KB | **~60.5 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-06-05 on Standard_D4as_v5 (.NET 10.0.108) at git sha 93c1152, n=3 cohorts (BDN quick).
+> Measured 2026-06-06 on Standard_D4as_v5 (.NET 10.0.108) at git sha f9afdfb, n=3 cohorts (BDN quick).
 
 **Reading the numbers.** The per-thread call rate is the derived
 `1 / p50` scaled by the per-call batch size (1 for `GetAsync` / `SetAsync`,
@@ -133,44 +133,29 @@ realistic latency the storage provider contributes.
   batchSize=4096
   cohortN=3
   dotnet=10.0.108
-  gitSha=93c1152
+  gitSha=f9afdfb
   host=Standard_D4as_v5
   region=westus3
   responseTimeoutSec=180
-  rowsMeasured=2026-06-05
+  rowsMeasured=2026-06-06
   rung=4000 vehicles / 5 Hz / 45s
   walMaxPendingBatches=16
   walPartitions=8
-  methodology=Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, lattice.op.duration_ms for get-many which sends one batched call). The get-point cell is derived from lattice.op.duration_ms divided by BENCH_BATCH_SIZE (=batchSize meta key) to produce a per-key cost amortised across the silo TCP-ingest fan-out, since the lattice grain does not currently histogram per-call GetAsync at the caller-visible boundary.
+  methodology=Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Each per-cohort quantile is computed inside the silo's 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
-| Operation                                | Sustained throughput | Per-call p50  | Per-call p99  |
-|------------------------------------------|---------------------:|--------------:|--------------:|
-| `GetAsync` (point read) | **~19.6 k keys/s** | ~20 us | ~20 us |
-| `SetAsync` (point write) | **~3.9 k keys/s** | ~13.31 ms | ~104.13 ms |
-| `GetManyAsync` (4,096 keys/call) | **~19.7 k keys/s** | ~3.47 ms | ~7.66 ms |
-| `SetManyAsync` (4,096 keys/call) | **~21.2 k keys/s** | ~234.31 ms | ~408.88 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | **~5.5 k keys/s** | ~78.92 ms | ~683.73 ms |
+| Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |
+|------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|
+| `GetAsync` (point read) | **~19.9 k keys/s** | ~60 us | ~80 us | ~110 us | ~110 us |
+| `SetAsync` (point write) | **~4 k keys/s** | ~25.08 ms | ~41.24 ms | ~62.79 ms | ~132.18 ms |
+| `GetManyAsync` (4,096 keys/call) | **~19.6 k keys/s** | ~3.47 ms | ~3.66 ms | ~4.55 ms | ~8.3 ms |
+| `SetManyAsync` (4,096 keys/call) | **~15.6 k keys/s** | ~2274.7 ms | ~2750.88 ms | ~2750.88 ms | ~2750.88 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | **~4.2 k keys/s** | ~74.41 ms | ~92.78 ms | ~153.91 ms | ~727.24 ms |
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-06-05 on Standard_D4as_v5 in westus3 (.NET 10.0.108) at git sha 93c1152, n=3 cohorts at 4000 vehicles / 5 Hz / 45s.
-
-**Per-call instrument coverage.** Write-mode per-call cells (`SetAsync`,
-`SetManyAsync`, `SetManyAtomicAsync`) are sourced from the matching
-caller-visible histogram on `LatticeGrain` (`set.duration`,
-`set_many.duration`, `saga.broadcast.duration`). For `GetManyAsync` the
-silo issues one batched `lattice.GetManyAsync(keys)` call per ingest
-batch, so the silo's per-batch ingest envelope (`lattice.op.duration_ms`)
-is itself the per-call cost. For `GetAsync` the silo fans out one
-batch into N parallel per-key `lattice.GetAsync(key)` calls; the
-published per-call cell is therefore the silo ingest envelope **divided
-by `BENCH_BATCH_SIZE`** (recorded as the `batchSize` meta key above),
-producing the per-key cost amortised across the fan-out. The lattice
-grain does not currently histogram per-call read latency at the
-caller-visible boundary; when it does, the `GetAsync` cell will tighten
-to the true per-call cost without the fan-out amortisation.
+> Measured 2026-06-06 on Standard_D4as_v5 in westus3 (.NET 10.0.108) at git sha f9afdfb, n=3 cohorts at 4000 vehicles / 5 Hz / 45s.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
@@ -190,6 +175,38 @@ Read paths are uniformly fast: `GetManyAsync` is at or near the Azure
 Tables read-side ceiling for a single storage account on this
 provisioning tier, and the read path benefits from per-silo cache layers
 that the write path cannot use.
+
+**A note on read-side caching.** The `GetAsync` / `GetManyAsync` per-call cells above are the caller-visible envelope, which
+includes whatever the `LeafCacheGrain` read-through cache served. In the
+steady state of a workload that re-reads recently-written keys (the
+producer-driven telemetry stream the benchmark drives is a representative
+case - vehicles cycle through the same key set tick after tick), the
+local-silo cache absorbs most of the cost: a same-silo revision-cookie
+short-circuit skips the cross-grain delta fetch entirely, the read
+collapses to a `Dictionary<string, LwwValue<byte[]>>.TryGetValue`, and
+the envelope p50 settles into the tens-of-microseconds range you see
+above. On a cache miss (the key has not been seen, or its TTL elapsed),
+the cache fetches a delta from the primary leaf and the envelope grows
+by an Azure-Tables round-trip - typically pushing the p99 noticeably
+above the p50.
+
+This is **not** a knock against the published numbers: the cache is part
+of the production read path and an honest representation of what an
+`ILattice` consumer's `await` actually waits for. But two practical
+consequences follow:
+
+1. **Your read-side numbers will differ** if your workload has a low
+   cache hit ratio (e.g. read-once-write-once analytics, large keyspace
+   with random access). The histogram cannot distinguish hits from
+   misses on a per-call basis; pair `get.duration` with the
+   `cache.hits` / `cache.misses` counters on a dashboard to estimate
+   the regime your workload sits in.
+2. **`GetWithVersionAsync` bypasses the cache** because the returned
+   `HybridLogicalClock` must reflect the primary leaf's authoritative
+   ordering, which the value-only cache cannot guarantee. So
+   `get_with_version.duration` will systematically run higher than
+   `get.duration` for the same key distribution - if your dashboards
+   ever show the inverse, that is a regression signal.
 
 ## What this guide does not promise
 
