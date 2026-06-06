@@ -37,6 +37,33 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// test exists to verify.
 /// </para>
 /// <para>
+/// <b>WAL durability across silo restart.</b> Per-key leaf entries
+/// are <i>not</i> persisted in the leaf grain row - they live only in
+/// the per-activation <c>LeafEntryCache</c> plus the WAL, and the
+/// activation-time materialiser rebuilds the cache from the WAL on
+/// every reactivation. The default <c>IWalStorageProvider</c>
+/// installed by <c>AddLattice</c> is a per-silo singleton
+/// (<c>InMemoryWalStorageProvider</c>) and dies with the silo, so a
+/// SecondarySilo restart would silently wipe every WAL partition
+/// whose <c>WalShardGrain</c> happened to be activated on the
+/// secondary - and because <c>WalShardGrain</c> uses Orleans default
+/// placement (<c>RandomPlacement</c>), at <c>WalPartitions = 8</c>
+/// roughly half of the universe would be hosted on the secondary on
+/// any given run. The leaves would reactivate against an empty WAL
+/// and silently surface as "key missing" on every read, fingerprinted
+/// at CI as a flaky "envelope / presence violation" volume that
+/// scales with the secondary's WAL ownership fraction. The fixture
+/// closes that hole the same way it closes the grain-storage hole:
+/// a process-scope <see cref="InMemoryWalStorageProvider"/>
+/// (<see cref="WalProvider"/>) shared across every silo in the
+/// cluster, wired via <c>siloBuilder.AddWalStorage</c> so the WAL
+/// state survives the restart. The matching deterministic regression
+/// is <see cref="MultiSiloRestartWalDurabilityRegressionTests"/>,
+/// which exercises the same surface without the writer convoy so a
+/// future regression on this seam surfaces as a deterministic
+/// failure rather than a load-dependent flake.
+/// </para>
+/// <para>
 /// <b>Acceptance.</b> Post-window CountAsync must match the seeded
 /// universe; no envelope violation on any final read; restart driver
 /// must have run at least one restart.
@@ -54,6 +81,16 @@ public class MultiSiloRestartChaosTests
     private const int ReaderCount = 2;
     private static readonly TimeSpan ChaosDuration = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan RestartInterval = TimeSpan.FromMilliseconds(2500);
+
+    /// <summary>
+    /// Fixture-scope shared <see cref="InMemoryWalStorageProvider"/>.
+    /// Wired into every silo via <see cref="SiloConfigurator"/> so the
+    /// WAL state survives <see cref="TestCluster.RestartSiloAsync(SiloHandle)"/>
+    /// even though each silo's own DI container is torn down. See the
+    /// class docstring's <i>WAL durability across silo restart</i>
+    /// note for the failure mode this seam exists to close.
+    /// </summary>
+    private static readonly InMemoryWalStorageProvider WalProvider = new();
 
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
@@ -261,6 +298,21 @@ public class MultiSiloRestartChaosTests
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
+            // Register the fixture-scope shared WAL provider BEFORE
+            // AddLattice so AddLattice's TryAddSingleton is a no-op and
+            // our shared instance becomes the resolved one across every
+            // silo in the cluster. Without this, the default per-silo
+            // InMemoryWalStorageProvider dies with the secondary silo
+            // on restart, every WalShardGrain that had been activated
+            // there reactivates on the primary against an empty WAL,
+            // and the leaves materialise with zero entries - silently
+            // erasing roughly half of every universe on every restart
+            // (the half whose WAL partition landed on the secondary
+            // under WalShardGrain's default RandomPlacement). See the
+            // class docstring's "WAL durability across silo restart"
+            // note for the full failure mode.
+            siloBuilder.AddWalStorage(_ => WalProvider);
+
             // Use a process-scope in-memory grain storage provider so
             // every silo in the cluster shares one backing dictionary.
             // The default per-silo Orleans memory-storage provider dies
