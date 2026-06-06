@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
@@ -898,11 +899,60 @@ internal sealed partial class BPlusLeafGrain(
     /// the same <see cref="SplitResult"/> shape the per-key loop would
     /// have produced for its final overflowing entry.
     /// </summary>
+    /// <summary>
+    /// Per-call threshold above which <see cref="CommitSetManyAsync"/>
+    /// rents the <see cref="WalRecord"/> buffer from
+    /// <see cref="ArrayPool{T}.Shared"/>. Below this threshold the
+    /// method allocates a fresh <c>WalRecord[count]</c> directly: the
+    /// pool's smallest bucket on net10.0 is 16 elements, so a
+    /// <see cref="ArrayPool{T}.Shared.Rent(int)"/> for <c>count &lt;= 16</c>
+    /// returns a 16-slot array, and the <see cref="Array.Clear"/>-on-return
+    /// discipline (required so the pool slot does not pin
+    /// <see cref="string"/> / <see cref="byte"/>[] / <see cref="VersionVector"/>
+    /// references between rents) clears the whole 16-slot extent
+    /// regardless of how many slots the caller wrote. Empirically, on
+    /// the 2026-06-06 cohort that motivated this threshold,
+    /// <c>BulkLoad_DeeperTree</c> (<c>MaxLeafKeys=4</c>, per-call <c>count</c>
+    /// between 1 and 4 across up to 8 leaf splits per op) regressed
+    /// +16% on <c>mean_ns</c> and widened
+    /// <c>alloc_b</c> IQR 13.85x under unconditional pooling; the
+    /// <c>SetMany_4Shards</c> primary target (per-shard <c>count</c> ~250)
+    /// took the full -36.2% <c>alloc_b</c> win. A threshold of 32
+    /// (the second pool bucket, ~4 KiB of rented backing memory at
+    /// <c>~130 B/slot</c>) keeps the unconditional-allocation shape for
+    /// every small-leaf workload that hits this path while still
+    /// pooling for the large-batch foreground commit path. The
+    /// pool-vs-allocation choice is hidden from the rest of the
+    /// method by the <c>rentedFromPool</c> bool that the finally
+    /// block branches on.
+    /// </summary>
+    private const int CommitSetManyPoolThreshold = 32;
+
     private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         using var _commitScope = EnterCommitScope();
         var count = entries.Count;
-        var walEntries = new List<WalRecord>(count);
+        // walEntries is a transient, single-use buffer: built once
+        // below, passed once to ICommitLogWriter.AppendManyAsync via an
+        // ArraySegment slice. On large batches the buffer is rented
+        // from the shared pool and returned with clearArray=true so the
+        // rented array does not pin string / byte[] / VersionVector
+        // references in the pool slot. On small batches the pool
+        // overhead (smallest bucket = 16 slots, Array.Clear cost is
+        // proportional to bucket size not to `count`) dominates the
+        // saving, so we allocate a fresh WalRecord[count] directly -
+        // see CommitSetManyPoolThreshold for the empirical motivation.
+        // The pool path saves a per-call WalRecord[count] heap
+        // allocation (~130 B/slot * count) on the dominant foreground
+        // bulk-write shape - 49.5% of the SetMany_4Shards -Profile
+        // alloc top-N before this change, sourced from this method's
+        // List<WalRecord>..ctor(int32) frame.
+        var rentedFromPool = count >= CommitSetManyPoolThreshold;
+        var walEntries = rentedFromPool
+            ? ArrayPool<WalRecord>.Shared.Rent(count)
+            : new WalRecord[count];
+        try
+        {
         var stamps = new HybridLogicalClock[count];
         var values = new LwwValue<byte[]>[count];
 
@@ -974,7 +1024,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 atomicBatchIndexForEntry = 0;
             }
-            walEntries.Add(new WalRecord
+            walEntries[i] = new WalRecord
             {
                 TreeId = treeId,
                 Op = MutationKind.Set,
@@ -992,7 +1042,7 @@ internal sealed partial class BPlusLeafGrain(
                 AtomicBatchIndex = atomicBatchIndexForEntry,
                 IsPrepared = isPrepared,
                 ShardIndex = shardIndex,
-            });
+            };
         }
 
         // Publish the highest assigned stamp once - the version vector
@@ -1024,7 +1074,15 @@ internal sealed partial class BPlusLeafGrain(
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
-            await writer.AppendManyAsync(walEntries);
+            // ArraySegment<T> implements IReadOnlyList<T>, so the
+            // segment slice bounds AppendManyAsync's view to the first
+            // `count` slots of the buffer (which may be oversized on
+            // the pool path, exactly `count` on the direct-allocation
+            // path). The boxing on the IReadOnlyList<WalRecord>
+            // parameter is a single ~24 B allocation per call, dwarfed
+            // by the per-call WalRecord[count] array allocation the
+            // pool path replaces.
+            await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -1136,6 +1194,19 @@ internal sealed partial class BPlusLeafGrain(
         RecordCommitStep("digest", digestStartTicks);
 
         return splitResult;
+        }
+        finally
+        {
+            // Return only the buffers we rented; direct-allocation
+            // small-batch buffers are normal heap arrays and will be
+            // collected by the GC. clearArray: true on the pool path
+            // so the rented array does not pin string / byte[] /
+            // VersionVector references in the pool slot between rents.
+            if (rentedFromPool)
+            {
+                ArrayPool<WalRecord>.Shared.Return(walEntries, clearArray: true);
+            }
+        }
     }
 
     public async Task<bool> DeleteAsync(string key)
