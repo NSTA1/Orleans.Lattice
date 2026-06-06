@@ -1590,6 +1590,104 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.set.stage.duration", unit: "ms",
             description: "Wall-clock ms inside one sub-stage (gate|route|shard|publish) of LatticeGrain.SetAsync.");
 
+    // --- Foreground read envelopes (LatticeGrain) ----------------------------
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one call to
+    /// <c>LatticeGrain.GetAsync</c>, the user-facing point-read
+    /// <see cref="ILattice.GetAsync"/> entry point. Tagged with
+    /// <see cref="TagTree"/>. End-to-end caller-visible latency of one
+    /// single-key read (includes routing resolution, the shard RPC, and
+    /// any stale-routing retries). Pair with <see cref="GetStageDuration"/>
+    /// to attribute the per-call envelope to one of its sub-spans.
+    /// <para>
+    /// Mirrors <see cref="SetDuration"/> for the point-read path. Closes
+    /// the read-side gap in the foreground-call attribution model: the
+    /// existing <c>shard.reads</c> counter only counts reads, not their
+    /// latency, and <c>leaf.scan.duration</c> covers range scans only.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> GetDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.get.duration", unit: "ms",
+            description: "Wall-clock ms inside one LatticeGrain.GetAsync call (caller-visible envelope).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one sub-stage of
+    /// <c>LatticeGrain.GetAsync</c>. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagStage"/> (<c>route</c> | <c>shard</c>).
+    /// <para>
+    /// One observation per stage per inner attempt: under a stale-routing
+    /// storm a single <c>GetAsync</c> call records multiple <c>route</c> /
+    /// <c>shard</c> data points so the histograms attribute the retry
+    /// cost. Mirrors the per-attempt accumulation pattern of
+    /// <see cref="SetStageDuration"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> GetStageDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.get.stage.duration", unit: "ms",
+            description: "Wall-clock ms inside one sub-stage (route|shard) of LatticeGrain.GetAsync.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one call to
+    /// <c>LatticeGrain.GetManyAsync</c>, the user-facing batched-read
+    /// <see cref="ILattice.GetManyAsync"/> entry point. Tagged with
+    /// <see cref="TagTree"/>. End-to-end caller-visible latency of one
+    /// batched-read call (includes routing, per-key bucketing, per-shard
+    /// parallel fan-out, the registry-snapshot double-check, and any
+    /// stale-routing retries). Pair with
+    /// <see cref="GetManyStageDuration"/> to attribute the envelope to
+    /// one of its sub-spans.
+    /// </summary>
+    public static readonly Histogram<double> GetManyDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.get_many.duration", unit: "ms",
+            description: "Wall-clock ms inside one LatticeGrain.GetManyAsync call (caller-visible envelope).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one sub-stage of
+    /// <c>LatticeGrain.GetManyAsync</c>. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagStage"/> (<c>route</c> | <c>bucket</c> |
+    /// <c>fanout</c> | <c>merge</c>).
+    /// <para>
+    /// Mirrors <see cref="SetManyStageDuration"/> for the batched-read
+    /// path. The <c>route</c> stage covers the <c>GetRoutingAsync</c>
+    /// fetch; <c>bucket</c> the per-key shard bucketing loop;
+    /// <c>fanout</c> the cross-shard <c>Task.WhenAll</c> dispatch;
+    /// <c>merge</c> the post-fan-out result merge plus the
+    /// snapshot-stability and topology-stability checks. One observation
+    /// per stage per inner attempt: under a snapshot retry or
+    /// stale-routing storm a single call records multiple data points
+    /// per stage so the histogram attributes the retry cost honestly.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> GetManyStageDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.get_many.stage.duration", unit: "ms",
+            description: "Wall-clock ms inside one sub-stage (route|bucket|fanout|merge) of LatticeGrain.GetManyAsync.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one call to
+    /// <c>LatticeGrain.ExistsAsync</c>, the user-facing key-existence
+    /// <see cref="ILattice.ExistsAsync"/> entry point. Tagged with
+    /// <see cref="TagTree"/>. Lower-traffic than <see cref="GetDuration"/>
+    /// in typical workloads but exposed for symmetry with the other
+    /// read-side envelopes so a dashboard tile can confirm activity.
+    /// </summary>
+    public static readonly Histogram<double> ExistsDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.exists.duration", unit: "ms",
+            description: "Wall-clock ms inside one LatticeGrain.ExistsAsync call (caller-visible envelope).");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one call to
+    /// <c>LatticeGrain.GetWithVersionAsync</c>, the user-facing versioned-read
+    /// <see cref="ILattice.GetWithVersionAsync"/> entry point. Tagged with
+    /// <see cref="TagTree"/>. Lower-traffic than <see cref="GetDuration"/>
+    /// in typical workloads but exposed for symmetry with the other
+    /// read-side envelopes so an operator can verify version-probe
+    /// activity.
+    /// </summary>
+    public static readonly Histogram<double> GetWithVersionDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.get_with_version.duration", unit: "ms",
+            description: "Wall-clock ms inside one LatticeGrain.GetWithVersionAsync call (caller-visible envelope).");
+
     // --- Retroactive shard-split sweep instruments ----------------
 
     /// <summary>
@@ -1764,18 +1862,21 @@ public static class LatticeMetrics
     /// <summary><see cref="TagStage"/> = <c>gate</c> (LatticeGrain.SetManyAsync pre-flight: compaction reminder + monitor + events-gate probe).</summary>
     public static readonly KeyValuePair<string, object?> StageGateTag = new(TagStage, "gate");
 
-    /// <summary><see cref="TagStage"/> = <c>route</c> (LatticeGrain.SetManyAsync routing fetch via GetRoutingAsync).</summary>
+    /// <summary><see cref="TagStage"/> = <c>route</c> (LatticeGrain.SetManyAsync / GetManyAsync routing fetch via GetRoutingAsync; LatticeGrain.GetAsync per-attempt shard resolution).</summary>
     public static readonly KeyValuePair<string, object?> StageRouteTag = new(TagStage, "route");
 
-    /// <summary><see cref="TagStage"/> = <c>bucket</c> (LatticeGrain.SetManyAsync per-key shard bucketing loop).</summary>
+    /// <summary><see cref="TagStage"/> = <c>bucket</c> (LatticeGrain.SetManyAsync / GetManyAsync per-key shard bucketing loop).</summary>
     public static readonly KeyValuePair<string, object?> StageBucketTag = new(TagStage, "bucket");
 
     /// <summary><see cref="TagStage"/> = <c>events</c> (LatticeGrain.SetManyAsync trailing per-entry PublishEventAsync foreach).</summary>
     public static readonly KeyValuePair<string, object?> StageEventsTag = new(TagStage, "events");
 
-    /// <summary><see cref="TagStage"/> = <c>shard</c> (LatticeGrain.SetAsync inner shard.SetAsync RPC including stale-routing retries).</summary>
+    /// <summary><see cref="TagStage"/> = <c>shard</c> (LatticeGrain.SetAsync / GetAsync inner shard RPC including stale-routing retries).</summary>
     public static readonly KeyValuePair<string, object?> StageShardTag = new(TagStage, "shard");
 
     /// <summary><see cref="TagStage"/> = <c>publish</c> (LatticeGrain.SetAsync trailing PublishEventAsync hop).</summary>
     public static readonly KeyValuePair<string, object?> StagePublishTag = new(TagStage, "publish");
+
+    /// <summary><see cref="TagStage"/> = <c>merge</c> (LatticeGrain.GetManyAsync post-fan-out result merge plus snapshot- and topology-stability checks).</summary>
+    public static readonly KeyValuePair<string, object?> StageMergeTag = new(TagStage, "merge");
 }

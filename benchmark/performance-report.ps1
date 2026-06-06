@@ -138,10 +138,13 @@ param(
 	[string] $Rung = '4000:5:45',
 
 	# BENCH_BATCH_SIZE pinned into the Layer 2 silo env. Default 4096 matches
-	# the silo's BENCH_BATCH_SIZE default; pinning it here makes the divisor
-	# used to compute per-key read-side cells (see Read-SiloLogStats) auditable
-	# on state.json. Override at your own risk: every Layer 2 cell becomes a
-	# function of this number.
+	# the silo's BENCH_BATCH_SIZE default; pinning it here keeps the meta
+	# header auditable on state.json so the throughput cell can be interpreted
+	# in context (the per-call read cells no longer depend on this value -
+	# they are sourced directly from the get.duration / get_many.duration
+	# caller-visible histograms on the lattice grain - but the throughput
+	# cell's per-batch shape still does). Override at your own risk:
+	# throughput results become a function of this number.
 	[int] $BatchSize = 4096,
 
 	[switch] $DryRun,
@@ -151,7 +154,7 @@ param(
 	[switch] $SkipDocUpdate,
 
 	[ValidateSet('dry','quick','full')]
-	[string] $Fidelity = 'dry',
+	[string] $Fidelity = 'quick',
 
 	# Convenience switches: equivalent to -Layer 1 / -Layer 2. Either form works;
 	# mutually exclusive with -Layer except for the default (all). These are here
@@ -545,6 +548,53 @@ function Invoke-Teardown {
 	}
 }
 
+function Get-VmDotnetVersion {
+	<#
+	.SYNOPSIS
+		Probe `/usr/bin/dotnet --version` over ssh on the just-provisioned VM
+		and return the resulting "X.Y.Z" string. Returns $null on any failure
+		(network blip, ssh handshake, missing dotnet) so the caller can fall
+		back to the legacy '10.0.x' placeholder rather than abort the run.
+	.DESCRIPTION
+		Both the Layer 1 and Layer 2 meta-headers stamp `dotnet=` into the
+		per-table marker block. Before this helper existed both were rendered
+		as the hard-coded placeholder '10.0.x' because $state.dotnetVersion
+		was initialised to $null in New-EmptyState and never populated; the
+		actual version (e.g. 10.0.108) was only known to update.ps1 as a
+		local variable. Probing the VM directly is the most reliable source:
+		it captures the SDK version the silo + microbench actually use, not
+		whatever ambient SDK the operator's host happens to have installed.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string] $Prefix,
+		[Parameter(Mandatory)][string] $ParametersFilePath
+	)
+	$p = & $ParametersFilePath
+	if ($Prefix) { $p.NamePrefix = $Prefix; $p.ResourceGroup = "rg-$Prefix" }
+	$pipName = "$($p.NamePrefix)-pip"
+	$fqdn = (& az network public-ip show -g $p.ResourceGroup -n $pipName --query dnsSettings.fqdn -o tsv 2>$null).Trim()
+	if (-not $fqdn) { return $null }
+	$sshTarget = "$($p.AdminUsername)@$fqdn"
+	$sshOpts = @(
+		'-o','StrictHostKeyChecking=accept-new',
+		'-o','ServerAliveInterval=15',
+		'-o','ServerAliveCountMax=3',
+		'-o','ConnectTimeout=10'
+	)
+	# Bracket with `timeout 10` so a wedged ssh handshake cannot hang the
+	# whole run. `|| true` keeps the remote shell exiting 0 on any failure;
+	# the empty stdout then trips the trim-empty guard below and we fall
+	# back gracefully.
+	$ver = (& ssh @sshOpts $sshTarget 'timeout 10 /usr/bin/dotnet --version 2>/dev/null || true').Trim()
+	if (-not $ver) { return $null }
+	# Defensive sanity check: dotnet --version is a SemVer-shaped X.Y.Z
+	# string. Reject anything that doesn't match so a malformed remote
+	# response (the wrong binary on $PATH, a banner line, etc.) doesn't
+	# leak into the meta-header.
+	if ($ver -notmatch '^\d+\.\d+\.\d+([\-+].*)?$') { return $null }
+	return $ver
+}
+
 # ────────────────────────────────────────────────────────────────────────────
 # Layer 1 cohorts (BDN microbench on the VM)
 # ────────────────────────────────────────────────────────────────────────────
@@ -594,7 +644,17 @@ function Invoke-Layer1Cohorts {
 	# methods from the already-built assembly).
 	Write-Host "[layer1] building Bench.Microbench on the VM (one-time, ~30s) ..." -ForegroundColor Cyan
 	$buildCmd = "cd /opt/lattice/src && /usr/bin/dotnet build benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release --nologo /clp:ErrorsOnly"
-	& ssh @sshOpts $sshTarget $buildCmd
+	# `| Out-Host` routes the remote build / ssh / scp stdout directly to the
+	# console instead of letting it accumulate on this function's success
+	# stream. PowerShell folds every uncaptured native-command stdout line
+	# into the function's return value, so without the Out-Host pipe the
+	# returned cohort array would be polluted with BDN progress text and
+	# the caller's `foreach ($c in $Cohorts) { $c.metrics ... }` would
+	# fail with 'The property metrics cannot be found on this object'
+	# the first time it hit a stringified BDN log line. `$LASTEXITCODE` is
+	# preserved through the pipe (it is set by the native command, not by
+	# the pipeline).
+	& ssh @sshOpts $sshTarget $buildCmd | Out-Host
 	if ($LASTEXITCODE -ne 0) {
 		throw "[layer1] microbench build on the VM failed (ssh exit $LASTEXITCODE). Cannot continue without the build output."
 	}
@@ -611,13 +671,16 @@ function Invoke-Layer1Cohorts {
 		# BENCH_REGRESSION_GATE_ENABLED=false because this script's job is to
 		# CREATE the new baseline, not gate against an old one.
 		$remoteCmd = "cd /opt/lattice/src && BENCH_REGRESSION_GATE_ENABLED=false BENCH_MICROBENCH_FIDELITY=$Fidelity BENCH_MICROBENCH_WORKLOADS='$filterPatterns' BENCH_SCENARIO=performance-report-layer1 BENCH_RUN_ID=$runId /usr/bin/dotnet run --project benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release --no-build -- --results $remoteResults"
-		& ssh @sshOpts $sshTarget $remoteCmd
+		# See the Out-Host rationale on the build call above; the per-cohort
+		# `dotnet run` produces hundreds of BDN progress + result lines and
+		# is the dominant source of pollution if uncaptured.
+		& ssh @sshOpts $sshTarget $remoteCmd | Out-Host
 		if ($LASTEXITCODE -ne 0) {
 			Write-Warning "[layer1] cohort $i/${N}: ssh microbench run exited $LASTEXITCODE; skipping pull"
 			continue
 		}
 		# Pull results.json back.
-		& scp @sshOpts "${sshTarget}:$remoteResults" $localResults
+		& scp @sshOpts "${sshTarget}:$remoteResults" $localResults | Out-Host
 		if ($LASTEXITCODE -ne 0) {
 			Write-Warning "[layer1] cohort $i/${N}: scp pull failed; results may be missing"
 			continue
@@ -637,7 +700,16 @@ function Invoke-Layer1Cohorts {
 	# Return as a flat array. `,$x.ToArray()` wraps in a 1-element outer array
 	# which the caller's foreach then iterates as a single (array-typed) cohort.
 	# `@($x.ToArray())` always yields a flat array; empty input stays empty.
-	return @($cohorts.ToArray())
+	#
+	# `Where-Object { $_ -is [hashtable] }` type-narrows the explicit return
+	# expression. It does NOT catch stray Write-Outputs leaked earlier in
+	# the function body - PowerShell merges every uncaptured success-stream
+	# write into the function's pipeline output, so the filter only operates
+	# on what the `return` statement itself emits. The source-of-truth
+	# protection is the `| Out-Host` pipes on every `& <native>` invocation
+	# above; the filter just keeps the explicit return strictly hashtable-
+	# typed so a future caller iterating $cohorts can rely on the shape.
+	return @($cohorts.ToArray() | Where-Object { $_ -is [hashtable] })
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -690,13 +762,23 @@ function Invoke-Layer2Cohorts {
 			# Capture the set of pre-existing log files so we can identify the
 			# new one this run produced.
 			$before = @(Get-ChildItem $cohortSourceDir -Filter "silo-*.log" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+			# `| Out-Host` routes the run-cohort.ps1 progress lines (silo +
+			# producer ssh streams, az status pokes, etc.) to the console
+			# instead of letting them accumulate on this function's success
+			# stream. Without it the returned $result hashtable is polluted
+			# with stringified progress lines that downstream consumers
+			# treating $result as an enumerable would trip over; even the
+			# narrow `foreach ($mode in $l2CohortsByMode.Keys)` consumer is
+			# safer with the source-of-truth fix here than relying on key
+			# enumeration to skip the noise. Mirrors the Out-Host pattern in
+			# Invoke-Layer1Cohorts.
 			& $runCohort `
 				-Vehicles    $Rung.Vehicles `
 				-TickHz      $Rung.TickHz `
 				-DurationSec $Rung.DurationSec `
 				-NamePrefix  $Prefix `
 				-ParametersFile $ParametersFilePath `
-				-ExtraSiloEnv $extraEnv
+				-ExtraSiloEnv $extraEnv | Out-Host
 			if ($LASTEXITCODE -ne 0) {
 				Write-Warning "[layer2] cohort $i/$N (mode=$mode): run-cohort.ps1 exited $LASTEXITCODE; skipping"
 				continue
@@ -714,13 +796,15 @@ function Invoke-Layer2Cohorts {
 			$siloDest = Join-Path $l2Dir "silo-$cohortName.log"
 			Copy-Item $newest $siloDest -Force
 
-			# Parse the steady-state mean and per-call p50/p99 from the silo log.
+			# Parse the steady-state mean and per-call p50/p75/p90/p99 from the silo log.
 			$parsed = Read-SiloLogStats -SiloLogPath $siloDest -WorkloadMode $mode -BatchSize $BatchSize
 			$cohortList.Add(@{
 				cohortName    = $cohortName
 				siloLog       = $siloDest
 				steadyMean    = $parsed.SteadyMean
 				perCallP50Ms  = $parsed.PerCallP50Ms
+				perCallP75Ms  = $parsed.PerCallP75Ms
+				perCallP90Ms  = $parsed.PerCallP90Ms
 				perCallP99Ms  = $parsed.PerCallP99Ms
 				inFlightMax   = $parsed.InFlightMax
 				failed        = $parsed.Failed
@@ -767,16 +851,16 @@ function Read-SiloLogStats {
 		$inFlightMax = ($steady | Measure-Object -Property inFlight -Maximum).Maximum
 	}
 
-	# Per-call p50/p99. Pick the most representative instrument per workload
-	# mode; fall back to lattice.op.duration_ms (the silo's ingest envelope,
-	# present for every workload). Read modes have NO per-call lattice-grain
-	# instrument today (see the metrics doc) - they use the fallback only,
-	# which represents the silo's ingest-dispatch wall rather than the
-	# isolated ILattice.GetAsync call. The doc prose calls this out so
-	# operators know the read-side cells are per-batch, not per-call.
+	# Per-call p50/p75/p90/p99. Pick the most representative instrument per
+	# workload mode; fall back to lattice.op.duration_ms (the silo's ingest
+	# envelope, present for every workload). Read modes now have their own
+	# per-call lattice-grain instruments (get.duration / get_many.duration),
+	# shipped alongside the existing write-side envelopes, so all five
+	# workload modes use a real per-call duration histogram and the per-
+	# batch-size divisor below has been retired.
 	#
 	# Each [phaseA] line shape:
-	#   [phaseA] t=10.3s instrument=NAME tree=T shard=S phase=P status=... count=N sum=... p50=... p90=... p99=... max=...
+	#   [phaseA] t=10.3s instrument=NAME tree=T shard=S phase=P status=... count=N sum=... min=... p50=... p75=... p90=... p99=... max=...
 	# We anchor on 'instrument=NAME tree=' (with trailing 'tree=' as a hard
 	# anchor) so substring matches like 'set.duration' vs 'set.stage.duration'
 	# stay disjoint.
@@ -784,13 +868,13 @@ function Read-SiloLogStats {
 		'set-many'        { @('set_many.duration') }
 		'set-many-atomic' { @('saga.broadcast.duration', 'set_many.duration') }
 		'set-point'       { @('set.duration') }
-		'get-point'       { @() }   # no lattice-grain read histogram exists
-		'get-many'        { @() }   # ditto
+		'get-point'       { @('get.duration') }
+		'get-many'        { @('get_many.duration') }
 		default           { @() }
 	}
 	$candidates = @($preferred) + @('lattice.op.duration_ms')
 
-	$p50 = $null; $p99 = $null; $instrumentUsed = $null
+	$p50 = $null; $p75 = $null; $p90 = $null; $p99 = $null; $instrumentUsed = $null
 	foreach ($cand in $candidates) {
 		# Anchor: 'instrument=<name> tree=' guarantees exact-name match.
 		$pat = '^\[phaseA\][^\n]*instrument=' + [regex]::Escape($cand) + ' tree='
@@ -804,8 +888,13 @@ function Read-SiloLogStats {
 		if ($productive.Count -eq 0) { continue }
 		# Use the last full productive window (matches the pre-fix behaviour
 		# for now; revisit to do count-weighted aggregation across windows).
+		# Parse each token independently: silo logs from before the p75
+		# reporter extension will only carry p50/p90/p99, in which case p75
+		# stays null and the rendered cell falls through to 'not captured'.
 		$last = $productive[-1].Line
 		if ($last -match 'p50=([\d.]+)') { $p50 = [double]$Matches[1] }
+		if ($last -match 'p75=([\d.]+)') { $p75 = [double]$Matches[1] }
+		if ($last -match 'p90=([\d.]+)') { $p90 = [double]$Matches[1] }
 		if ($last -match 'p99=([\d.]+)') { $p99 = [double]$Matches[1] }
 		if ($null -ne $p50 -or $null -ne $p99) {
 			$instrumentUsed = $cand
@@ -813,18 +902,12 @@ function Read-SiloLogStats {
 		}
 	}
 
-	# For the get-point workload mode the silo's lattice.op.duration_ms
-	# instrument times one ingest BATCH (BENCH_BATCH_SIZE keys dispatched via
-	# FanOutAsync as N parallel GetAsync calls). To produce a per-key cell
-	# (comparable in magnitude to GetManyAsync's per-call which IS a single
-	# batched call), divide p50/p99 by the batch size. get-many is NOT
-	# divided: one lattice.op = one GetManyAsync call = one batch already.
-	# Write modes use a per-call instrument so no divisor applies.
-	$isPointReadFallback = ($instrumentUsed -eq 'lattice.op.duration_ms') -and ($WorkloadMode -eq 'get-point')
-	if ($isPointReadFallback -and $BatchSize -gt 1) {
-		if ($null -ne $p50) { $p50 = [math]::Round($p50 / $BatchSize, 6) }
-		if ($null -ne $p99) { $p99 = [math]::Round($p99 / $BatchSize, 6) }
-	}
+	# Historic note: an earlier shape divided the get-point p50/p99 by
+	# BENCH_BATCH_SIZE because the only available instrument was the silo's
+	# per-batch ingest envelope (lattice.op.duration_ms). Now that the
+	# lattice grain exposes a real per-call get.duration histogram, the
+	# divisor is no longer needed and has been removed; all five workload
+	# modes report the matching duration histogram's p50/p99 directly.
 
 	# Verdict + FINAL failed.
 	$verdict = ''
@@ -841,6 +924,8 @@ function Read-SiloLogStats {
 	return @{
 		SteadyMean      = $steadyMean
 		PerCallP50Ms    = $p50
+		PerCallP75Ms    = $p75
+		PerCallP90Ms    = $p90
 		PerCallP99Ms    = $p99
 		InstrumentUsed  = $instrumentUsed
 		InFlightMax     = $inFlightMax
@@ -864,23 +949,32 @@ function Aggregate-Layer1Cells {
 	$rows = @{}
 	foreach ($row in $Layer1Rows) {
 		$slug = $row.MetricSlug
-		$p50Key = "microbench_${slug}_p50_ns"
+		$p50Key   = "microbench_${slug}_p50_ns"
+		$p75Key   = "microbench_${slug}_p75_ns"
+		$p90Key   = "microbench_${slug}_p90_ns"
+		$p99Key   = "microbench_${slug}_p99_ns"
 		$allocKey = "microbench_${slug}_alloc_b"
-		$p50s = @()
-		$allocs = @()
+		$p50s = @(); $p75s = @(); $p90s = @(); $p99s = @(); $allocs = @()
 		foreach ($c in $Cohorts) {
-			if ($c.metrics.ContainsKey($p50Key) -and $null -ne $c.metrics[$p50Key]) {
-				$p50s += [double]$c.metrics[$p50Key]
-			}
-			if ($c.metrics.ContainsKey($allocKey) -and $null -ne $c.metrics[$allocKey]) {
-				$allocs += [double]$c.metrics[$allocKey]
-			}
+			if ($c.metrics.ContainsKey($p50Key)   -and $null -ne $c.metrics[$p50Key])   { $p50s   += [double]$c.metrics[$p50Key] }
+			if ($c.metrics.ContainsKey($p75Key)   -and $null -ne $c.metrics[$p75Key])   { $p75s   += [double]$c.metrics[$p75Key] }
+			if ($c.metrics.ContainsKey($p90Key)   -and $null -ne $c.metrics[$p90Key])   { $p90s   += [double]$c.metrics[$p90Key] }
+			if ($c.metrics.ContainsKey($p99Key)   -and $null -ne $c.metrics[$p99Key])   { $p99s   += [double]$c.metrics[$p99Key] }
+			if ($c.metrics.ContainsKey($allocKey) -and $null -ne $c.metrics[$allocKey]) { $allocs += [double]$c.metrics[$allocKey] }
 		}
 		if ($p50s.Count -eq 0) {
 			Write-Warning "[aggregate-l1] no p50 samples for row '$($row.Label)' (slug=$slug); cohort N=$($Cohorts.Count)"
 			continue
 		}
 		$p50Median = (Get-Median $p50s)
+		$p75Median = if ($p75s.Count -gt 0) { (Get-Median $p75s) } else { $null }
+		$p90Median = if ($p90s.Count -gt 0) { (Get-Median $p90s) } else { $null }
+		$p99Median = if ($p99s.Count -gt 0) { (Get-Median $p99s) } else { $null }
+		# Explicit null check, NOT truthy: a real measurement of '0 bytes allocated'
+		# (e.g. an in-process GetAsync that the JIT promotes to an allocation-free
+		# steady-state) is falsy under `if ($allocMedian)` and was previously
+		# coerced to $null, rendering as 'n/a' in the doc table even though zero
+		# is the correct answer.
 		$allocMedian = if ($allocs.Count -gt 0) { (Get-Median $allocs) } else { $null }
 		# Per-key throughput ceiling: (1 / p50_seconds) * batchSize.
 		# Batched calls return per-key keys/s rather than per-call calls/s
@@ -890,7 +984,10 @@ function Aggregate-Layer1Cells {
 		$ceiling = if ($p50Median -gt 0) { [int]((1e9 / $p50Median) * $batchSize) } else { $null }
 		$rows[$row.Label] = @{
 			perCallP50Ns        = [int][math]::Round($p50Median, 0)
-			allocB              = if ($allocMedian) { [int][math]::Round($allocMedian, 0) } else { $null }
+			perCallP75Ns        = if ($null -ne $p75Median) { [int][math]::Round($p75Median, 0) } else { $null }
+			perCallP90Ns        = if ($null -ne $p90Median) { [int][math]::Round($p90Median, 0) } else { $null }
+			perCallP99Ns        = if ($null -ne $p99Median) { [int][math]::Round($p99Median, 0) } else { $null }
+			allocB              = if ($null -ne $allocMedian) { [int][math]::Round($allocMedian, 0) } else { $null }
 			singleThreadCeiling = $ceiling
 			cohortN             = $p50s.Count
 		}
@@ -911,6 +1008,8 @@ function Aggregate-Layer2Cells {
 		}
 		$means = @($cohorts | ForEach-Object { $_.steadyMean } | Where-Object { $_ -gt 0 })
 		$p50s  = @($cohorts | ForEach-Object { $_.perCallP50Ms } | Where-Object { $null -ne $_ })
+		$p75s  = @($cohorts | ForEach-Object { $_.perCallP75Ms } | Where-Object { $null -ne $_ })
+		$p90s  = @($cohorts | ForEach-Object { $_.perCallP90Ms } | Where-Object { $null -ne $_ })
 		$p99s  = @($cohorts | ForEach-Object { $_.perCallP99Ms } | Where-Object { $null -ne $_ })
 		if ($means.Count -eq 0) {
 			Write-Warning "[aggregate-l2] mode=${mode}: no positive steady-state means in $($cohorts.Count) cohorts"
@@ -920,6 +1019,8 @@ function Aggregate-Layer2Cells {
 			sustainedThroughput = [int][math]::Round((Get-Median $means), 0)
 			throughputUnit      = $row.ThroughputUnit
 			perCallP50Ms        = if ($p50s.Count -gt 0) { [math]::Round((Get-Median $p50s), 2) } else { $null }
+			perCallP75Ms        = if ($p75s.Count -gt 0) { [math]::Round((Get-Median $p75s), 2) } else { $null }
+			perCallP90Ms        = if ($p90s.Count -gt 0) { [math]::Round((Get-Median $p90s), 2) } else { $null }
 			perCallP99Ms        = if ($p99s.Count -gt 0) { [math]::Round((Get-Median $p99s), 2) } else { $null }
 			cohortN             = $cohorts.Count
 		}
@@ -946,10 +1047,17 @@ function Format-Layer1Row {
 		[Parameter(Mandatory)][hashtable] $Cell,
 		[string] $CeilingUnit = 'op/s'
 	)
-	$p50 = Format-Duration $Cell.perCallP50Ns
-	$alloc = Format-Bytes $Cell.allocB
-	$ceiling = Format-Throughput $Cell.singleThreadCeiling $CeilingUnit
-	return ('| {0} | **{1}** | {2} | **{3}** |' -f $Label, $p50, $alloc, $ceiling)
+	# Use Get-StateOr for the post-p75 percentile fields so legacy state.json
+	# files (written before the four-percentile columns were introduced) that
+	# only carry perCallP50Ns / allocB / singleThreadCeiling still render
+	# instead of throwing under Set-StrictMode -Version Latest.
+	$p50 = Format-Duration (Get-StateOr $Cell 'perCallP50Ns')
+	$p75 = Format-Duration (Get-StateOr $Cell 'perCallP75Ns')
+	$p90 = Format-Duration (Get-StateOr $Cell 'perCallP90Ns')
+	$p99 = Format-Duration (Get-StateOr $Cell 'perCallP99Ns')
+	$alloc = Format-Bytes (Get-StateOr $Cell 'allocB')
+	$ceiling = Format-Throughput (Get-StateOr $Cell 'singleThreadCeiling') $CeilingUnit
+	return ('| {0} | **{1}** | {2} | {3} | {4} | {5} | **{6}** |' -f $Label, $p50, $p75, $p90, $p99, $alloc, $ceiling)
 }
 
 function Format-Layer2Row {
@@ -957,11 +1065,17 @@ function Format-Layer2Row {
 		[Parameter(Mandatory)][string] $Label,
 		[Parameter(Mandatory)][hashtable] $Cell
 	)
-	$unit = $Cell.throughputUnit
-	$thr = Format-Throughput $Cell.sustainedThroughput $unit
-	$p50 = Format-Layer2Latency $Cell.perCallP50Ms
-	$p99 = Format-Layer2Latency $Cell.perCallP99Ms
-	return ('| {0} | **{1}** | {2} | {3} |' -f $Label, $thr, $p50, $p99)
+	# Same strict-mode-safe accessor pattern as Format-Layer1Row: state.json
+	# files written before the p75/p90 columns landed only carry the p50/p99
+	# fields; Get-StateOr returns $null on the missing keys and the Format-
+	# Layer2Latency helper degrades to 'not captured'.
+	$unit = Get-StateOr $Cell 'throughputUnit' 'op/s'
+	$thr = Format-Throughput (Get-StateOr $Cell 'sustainedThroughput') $unit
+	$p50 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP50Ms')
+	$p75 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP75Ms')
+	$p90 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP90Ms')
+	$p99 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP99Ms')
+	return ('| {0} | **{1}** | {2} | {3} | {4} | {5} |' -f $Label, $thr, $p50, $p75, $p90, $p99)
 }
 
 function Format-Layer2Latency {
@@ -989,13 +1103,19 @@ function Format-Layer2Latency {
 }
 
 function Format-Duration {
-	[CmdletBinding()] param([Parameter(Mandatory)][int] $Ns)
-	if ($Ns -lt 1000) { return "$Ns ns" }
-	if ($Ns -lt 1000000) {
-		$us = [math]::Round($Ns / 1000.0, 2)
+	[CmdletBinding()] param($Ns)
+	# `$Ns` may be $null when the upstream BDN cohort did not emit this
+	# percentile (e.g. older state.json files written before the p75/p90
+	# columns were added). Mirror Format-Bytes' graceful 'n/a' rendering
+	# instead of throwing a parameter-binding error.
+	if ($null -eq $Ns) { return 'n/a' }
+	$asInt = [int]$Ns
+	if ($asInt -lt 1000) { return "$asInt ns" }
+	if ($asInt -lt 1000000) {
+		$us = [math]::Round($asInt / 1000.0, 2)
 		return "$us us"
 	}
-	$ms = [math]::Round($Ns / 1000000.0, 2)
+	$ms = [math]::Round($asInt / 1000000.0, 2)
 	return "$ms ms"
 }
 
@@ -1059,7 +1179,7 @@ function New-MetaHeaderForLayer1 {
 		$meta['cohortN']       = $cohortN
 		$meta['rowsMeasured']  = $rowsDate
 		$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']   = 'Per-call p50 and allocations reported directly by BenchmarkDotNet. Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median of N cohorts.'
+		$meta['methodology']   = 'Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.'
 	}
 	return $meta
 }
@@ -1098,7 +1218,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
 		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, lattice.op.duration_ms for get-many which sends one batched call). The get-point cell is derived from lattice.op.duration_ms divided by BENCH_BATCH_SIZE (=batchSize meta key) to produce a per-key cost amortised across the silo TCP-ingest fan-out, since the lattice grain does not currently histogram per-call GetAsync at the caller-visible boundary.'
+		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
 	}
 	return $meta
 }
@@ -1129,8 +1249,8 @@ function Render-Layer1Table {
 	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg, [Parameter(Mandatory)][hashtable] $ExistingRows)
 	$nl = "`r`n"
 	$sb = [System.Text.StringBuilder]::new()
-	[void]$sb.Append('| Operation                                | Per-call p50 | Allocations | Per-thread call rate (1 / p50) |').Append($nl)
-	[void]$sb.Append('|------------------------------------------|-------------:|------------:|-------------------------------:|').Append($nl)
+	[void]$sb.Append('| Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |').Append($nl)
+	[void]$sb.Append('|------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|').Append($nl)
 	foreach ($row in $Layer1Rows) {
 		if ($RowsAgg.ContainsKey($row.Label)) {
 			[void]$sb.Append((Format-Layer1Row -Label $row.Label -Cell $RowsAgg[$row.Label] -CeilingUnit $row.CeilingUnit)).Append($nl)
@@ -1138,7 +1258,7 @@ function Render-Layer1Table {
 			# Preserve prior cell content if this layer / row wasn't re-run.
 			[void]$sb.Append($ExistingRows[$row.Label]).Append($nl)
 		} else {
-			[void]$sb.Append('| ' + $row.Label.PadRight(40) + ' | _pending_    | _pending_   | _pending_             |').Append($nl)
+			[void]$sb.Append('| ' + $row.Label.PadRight(40) + ' | _pending_    | _pending_    | _pending_    | _pending_    | _pending_   | _pending_             |').Append($nl)
 		}
 	}
 	return $sb.ToString().TrimEnd("`r","`n")
@@ -1148,15 +1268,15 @@ function Render-Layer2Table {
 	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg, [Parameter(Mandatory)][hashtable] $ExistingRows)
 	$nl = "`r`n"
 	$sb = [System.Text.StringBuilder]::new()
-	[void]$sb.Append('| Operation                                | Sustained throughput | Per-call p50  | Per-call p99  |').Append($nl)
-	[void]$sb.Append('|------------------------------------------|---------------------:|--------------:|--------------:|').Append($nl)
+	[void]$sb.Append('| Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |').Append($nl)
+	[void]$sb.Append('|------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|').Append($nl)
 	foreach ($row in $Layer2Rows) {
 		if ($RowsAgg.ContainsKey($row.Label)) {
 			[void]$sb.Append((Format-Layer2Row -Label $row.Label -Cell $RowsAgg[$row.Label])).Append($nl)
 		} elseif ($ExistingRows -and $ExistingRows.ContainsKey($row.Label)) {
 			[void]$sb.Append($ExistingRows[$row.Label]).Append($nl)
 		} else {
-			[void]$sb.Append('| ' + $row.Label.PadRight(40) + ' | _pending_            | _pending_     | _pending_     |').Append($nl)
+			[void]$sb.Append('| ' + $row.Label.PadRight(40) + ' | _pending_            | _pending_     | _pending_     | _pending_     | _pending_     |').Append($nl)
 		}
 	}
 	return $sb.ToString().TrimEnd("`r","`n")
@@ -1404,6 +1524,18 @@ function Main {
 			$provisioned = $true
 		} else {
 			Write-Host "[main] -ReuseVm ${ReuseVm}: skipping provisioning" -ForegroundColor Yellow
+		}
+
+		# Probe the VM's actual `dotnet --version` and persist it on $state.
+		# Stamps the meta-header's `dotnet=` cell with the real SDK the silo
+		# + microbench run under, replacing the legacy '10.0.x' placeholder.
+		# Failures are non-fatal (the placeholder is the documented fallback).
+		$probed = Get-VmDotnetVersion -Prefix $prefix -ParametersFilePath $paramFile
+		if ($probed) {
+			$state['dotnetVersion'] = $probed
+			Write-Host "[main] vm dotnet: $probed" -ForegroundColor DarkGray
+		} else {
+			Write-Warning "[main] could not probe /usr/bin/dotnet --version on the VM; meta-header will retain the previous value (or the '10.0.x' placeholder)."
 		}
 
 		# Layer 1.

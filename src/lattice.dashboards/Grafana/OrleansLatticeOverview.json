@@ -934,6 +934,73 @@
           "legendFormat": "{{tree}} reclaimed bytes/s"
         }
       ]
+    },
+    {
+      "id": 27,
+      "title": "GetAsync / GetManyAsync envelope p50 (ms)",
+      "description": "Top-of-stack public-API read-call duration: get.duration is single-key GetAsync, get_many.duration is batched GetManyAsync. Pair with the cache hit-ratio panel above (cache.hits / cache.misses) to interpret in context - on a hot keyspace the LeafCacheGrain serves most reads in the tens-of-microseconds range; on a cache-miss-heavy workload the envelope grows by one cross-grain RPC into the primary leaf.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 82 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "G", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_get_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 GetAsync" },
+        { "refId": "M", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_get_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 GetManyAsync" }
+      ]
+    },
+    {
+      "id": 28,
+      "title": "GetAsync / GetManyAsync envelope p95 / p99 (ms)",
+      "description": "p95 and p99 of the public-API read-call envelopes. The gap between p50 and p99 is the tail introduced by stale-routing retries, registry-snapshot retries, topology-version drift mid-fan-out, or LeafCacheGrain TTL-driven delta refreshes.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 82 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "G95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_get_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 GetAsync" },
+        { "refId": "G99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_get_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99 GetAsync" },
+        { "refId": "M95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_get_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 GetManyAsync" },
+        { "refId": "M99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_get_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99 GetManyAsync" }
+      ]
+    },
+    {
+      "id": 29,
+      "title": "GetAsync stage breakdown p95 (ms)",
+      "description": "Per-stage sub-attribution inside LatticeGrain.GetAsync. get.stage.duration is tagged stage = route (per-attempt GetShardGrainAsync resolution) and stage = shard (per-attempt shard.GetAsync RPC including the cache-or-leaf read). Under a stale-routing storm both stages record multiple observations per envelope so the histograms attribute the retry cost.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 89 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(orleans_lattice_get_stage_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{stage}}" }
+      ]
+    },
+    {
+      "id": 30,
+      "title": "GetManyAsync stage breakdown p95 (ms)",
+      "description": "Per-stage sub-attribution inside LatticeGrain.GetManyAsync. get_many.stage.duration is tagged stage in {route, bucket, fanout, merge}, isolating routing fetch, per-key shard bucketing, the cross-shard parallel fan-out (registry snapshot + Task.WhenAll), and the trailing topology / snap2 stability checks plus dictionary materialise.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 89 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(orleans_lattice_get_many_stage_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{stage}}" }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "ExistsAsync / GetWithVersionAsync envelope p95 (ms)",
+      "description": "Lower-traffic read surfaces: exists.duration (key-existence probe) and get_with_version.duration (versioned point read). GetWithVersionAsync bypasses the LeafCacheGrain by design - the returned HybridLogicalClock must reflect the primary leaf's authoritative ordering - so this envelope runs systematically higher than the cached GetAsync envelope above on the same key distribution. If that ordering inverts on a dashboard, treat it as a regression signal.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 96 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "E", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_exists_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 ExistsAsync" },
+        { "refId": "V", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_get_with_version_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 GetWithVersionAsync" }
+      ]
     }
   ]
 }

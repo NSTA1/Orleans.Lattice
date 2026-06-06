@@ -44,6 +44,58 @@ internal sealed partial class LatticeGrain(
 {
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
+
+    /// <summary>
+    /// Per-activation cached <c>(tag=tree, value=TreeId)</c> KeyValuePair
+    /// used as the leading tag on every <c>set.duration</c> /
+    /// <c>set.stage.duration</c> / <c>set_many.duration</c> /
+    /// <c>set_many.stage.duration</c> / <c>get.duration</c> /
+    /// <c>get.stage.duration</c> / <c>get_many.duration</c> /
+    /// <c>get_many.stage.duration</c> / <c>exists.duration</c> /
+    /// <c>get_with_version.duration</c> Record call.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The pair is invariant for the activation's lifetime
+    /// (<c>LatticeMetrics.TagTree</c> is a compile-time constant and
+    /// <see cref="TreeId"/> is derived once from the activation's
+    /// immutable grain context), so each public-API entry point can
+    /// read it as a field instead of re-constructing the KVP on every
+    /// call. The KVP itself is a 16-byte value type that already
+    /// stack-allocates; the cache primarily removes the per-call
+    /// <see cref="TreeId"/> property dispatch + struct construction
+    /// from every Record callsite, which adds up to 7+ constructions
+    /// per single-key Set/Get call.
+    /// </para>
+    /// <para>
+    /// Initialised behind a <c>bool</c> flag rather than a
+    /// <see cref="Nullable{T}"/> wrapper because the BCL's
+    /// <see cref="Histogram{T}.Record(T, KeyValuePair{string, object?})"/>
+    /// overload set takes the tag by value - wrapping it in a
+    /// <see cref="Nullable{T}"/> would force a <c>HasValue</c> check +
+    /// a struct copy on every read. The flag-based init is the same
+    /// pattern the activation uses for other lazy-cached value-typed
+    /// state (see <see cref="_treeIdCache"/> for the reference-typed
+    /// equivalent). Safe to lazy-init without a lock under Orleans'
+    /// non-reentrant grain scheduling: this activation only ever runs
+    /// one turn at a time.
+    /// </para>
+    /// </remarks>
+    private KeyValuePair<string, object?> _stageTagTreeCache;
+    private bool _stageTagTreeCached;
+    private KeyValuePair<string, object?> StageTagTree
+    {
+        get
+        {
+            if (!_stageTagTreeCached)
+            {
+                _stageTagTreeCache = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+                _stageTagTreeCached = true;
+            }
+            return _stageTagTreeCache;
+        }
+    }
+
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
     private bool _compactionEnsured;
     private bool _monitorEnsured;
@@ -132,13 +184,88 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return await RetryOnStaleRoutingAsync(
-            async () =>
+
+        // Caller-visible per-call envelope + per-attempt sub-stage attribution.
+        // GetDuration tracks the end-to-end wall-clock cost of one
+        // ILattice.GetAsync; GetStageDuration tagged stage=(route|shard)
+        // splits the envelope into routing-resolution vs the inner shard
+        // RPC so a stale-routing storm shows up as multiple route+shard
+        // observations per envelope rather than one inflated envelope cell.
+        //
+        // The retry loop is inlined (rather than delegated to
+        // RetryOnStaleRoutingAsync) so the per-stage measurements live on
+        // the method's own async state machine instead of a per-call
+        // closure capturing `this`, `key`, and `stageTagTree`. Mirrors the
+        // hot-path inlining choice in SetAsyncCore - the cost is a
+        // duplicated retry-loop shape, the benefit is one fewer
+        // allocation per call on the busiest public read entry point.
+        var stageTagTree = StageTagTree;
+        var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var invalidOpRetried = false;
+            while (true)
             {
-                var shard = await GetShardGrainAsync(key);
-                return await shard.GetAsync(key);
-            },
-            cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    IShardRootGrain shard;
+                    var routeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                    try
+                    {
+                        shard = await GetShardGrainAsync(key);
+                    }
+                    finally
+                    {
+                        LatticeMetrics.GetStageDuration.Record(
+                            System.Diagnostics.Stopwatch.GetElapsedTime(routeStartTicks).TotalMilliseconds,
+                            stageTagTree, LatticeMetrics.StageRouteTag);
+                    }
+                    var shardStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                    try
+                    {
+                        return await shard.GetAsync(key);
+                    }
+                    finally
+                    {
+                        LatticeMetrics.GetStageDuration.Record(
+                            System.Diagnostics.Stopwatch.GetElapsedTime(shardStartTicks).TotalMilliseconds,
+                            stageTagTree, LatticeMetrics.StageShardTag);
+                    }
+                }
+                catch (StaleShardRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    InvalidateShardMap();
+                }
+                catch (StaleTreeRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                }
+                catch (ShardActivationTimeoutException)
+                {
+                    // Seed-timeout is retriable by construction; absorb
+                    // into the wall-clock budget with a per-attempt
+                    // backoff (mirrors RetryOnStaleRoutingAsync).
+                    if (DateTime.UtcNow >= deadline) throw;
+                    await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+                }
+                catch (InvalidOperationException)
+                {
+                    if (invalidOpRetried) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                    invalidOpRetried = true;
+                }
+            }
+        }
+        finally
+        {
+            LatticeMetrics.GetDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
+                stageTagTree);
+        }
     }
 
     public async Task<VersionedValue> GetWithVersionAsync(string key, CancellationToken cancellationToken = default)
@@ -146,13 +273,31 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return await RetryOnStaleRoutingAsync(
-            async () =>
-            {
-                var shard = await GetShardGrainAsync(key);
-                return await shard.GetWithVersionAsync(key);
-            },
-            cancellationToken);
+
+        // Caller-visible per-call envelope. GetWithVersionDuration is the
+        // single-observation envelope histogram; no per-stage decomposition
+        // is published here today because the path is structurally identical
+        // to GetAsync (one routing + one shard RPC) and the stage split on
+        // GetAsync covers the same diagnostic surface. Operators triaging a
+        // versioned-read latency tail can pivot on get.stage.duration.
+        var stageTagTree = StageTagTree;
+        var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            return await RetryOnStaleRoutingAsync(
+                async () =>
+                {
+                    var shard = await GetShardGrainAsync(key);
+                    return await shard.GetWithVersionAsync(key);
+                },
+                cancellationToken);
+        }
+        finally
+        {
+            LatticeMetrics.GetWithVersionDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
+                stageTagTree);
+        }
     }
 
     public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
@@ -171,13 +316,30 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return await RetryOnStaleRoutingAsync(
-            async () =>
-            {
-                var shard = await GetShardGrainAsync(key);
-                return await shard.ExistsAsync(key);
-            },
-            cancellationToken);
+
+        // Caller-visible per-call envelope. ExistsDuration is the
+        // single-observation envelope histogram; no per-stage decomposition
+        // is published here today (structurally identical to GetAsync at
+        // the LatticeGrain layer; operators triaging an existence-probe
+        // latency tail can pivot on get.stage.duration).
+        var stageTagTree = StageTagTree;
+        var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            return await RetryOnStaleRoutingAsync(
+                async () =>
+                {
+                    var shard = await GetShardGrainAsync(key);
+                    return await shard.ExistsAsync(key);
+                },
+                cancellationToken);
+        }
+        finally
+        {
+            LatticeMetrics.ExistsDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
+                stageTagTree);
+        }
     }
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
@@ -186,49 +348,80 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(keys);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Deadline-bounded stale-routing retry loop, symmetric with
-        // SetAsyncCore. Under a cascading mid-saga reshard the previous
-        // single-shot catch-and-retry shape exhausted on the second
-        // stale-routing throw and the exception propagated out of a
-        // continuous read - which a strict-atomic-visibility caller
-        // counts as a violation. The wall-clock budget mirrors
-        // SetAsyncCore's so reads and writes absorb the same topology
-        // storm in lockstep. Asymmetric InvalidOperationException
-        // handling preserves tree-deletion semantics (single retry
-        // only, so a deleted tree surfaces in <2s rather than after
-        // 60s).
-        var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
-        var invalidOpRetried = false;
-        while (true)
+        // Caller-visible per-call envelope. GetManyDuration tracks the
+        // wall-clock cost of one ILattice.GetManyAsync (including the
+        // outer stale-routing retry loop below and the inner
+        // snapshot-retry loop in GetManyAsyncCore). GetManyStageDuration
+        // tagged stage=(route|bucket|fanout|merge) is recorded per inner
+        // attempt inside GetManyAsyncCore so the dominant sub-cost is
+        // attributable without a profile. Mirrors the per-attempt
+        // accumulation pattern on SetManyAsync.
+        var stageTagTree = StageTagTree;
+        var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
+            // Deadline-bounded stale-routing retry loop, symmetric with
+            // SetAsyncCore. Under a cascading mid-saga reshard the previous
+            // single-shot catch-and-retry shape exhausted on the second
+            // stale-routing throw and the exception propagated out of a
+            // continuous read - which a strict-atomic-visibility caller
+            // counts as a violation. The wall-clock budget mirrors
+            // SetAsyncCore's so reads and writes absorb the same topology
+            // storm in lockstep. Asymmetric InvalidOperationException
+            // handling preserves tree-deletion semantics (single retry
+            // only, so a deleted tree surfaces in <2s rather than after
+            // 60s).
+            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var invalidOpRetried = false;
+            while (true)
             {
-                return await GetManyAsyncCore(keys);
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    return await GetManyAsyncCore(keys, stageTagTree);
+                }
+                catch (StaleShardRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    InvalidateShardMap();
+                }
+                catch (StaleTreeRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                }
+                catch (InvalidOperationException)
+                {
+                    if (invalidOpRetried) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                    invalidOpRetried = true;
+                }
             }
-            catch (StaleShardRoutingException)
-            {
-                if (DateTime.UtcNow >= deadline) throw;
-                InvalidateShardMap();
-            }
-            catch (StaleTreeRoutingException)
-            {
-                if (DateTime.UtcNow >= deadline) throw;
-                if (!TryInvalidateStaleAlias()) throw;
-            }
-            catch (InvalidOperationException)
-            {
-                if (invalidOpRetried) throw;
-                if (!TryInvalidateStaleAlias()) throw;
-                invalidOpRetried = true;
-            }
+        }
+        finally
+        {
+            LatticeMetrics.GetManyDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
+                stageTagTree);
         }
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-    private async ValueTask<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys)
+    private async ValueTask<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys, KeyValuePair<string, object?> stageTagTree)
     {
-        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        string physicalTreeId;
+        ShardMap shardMap;
+        var initialRouteStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            (physicalTreeId, shardMap) = await GetRoutingAsync();
+        }
+        finally
+        {
+            LatticeMetrics.GetManyStageDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(initialRouteStartTicks).TotalMilliseconds,
+                stageTagTree, LatticeMetrics.StageRouteTag);
+        }
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
         // Double-checked snapshot retry: pre-fetch a TxRegistry snapshot
@@ -278,69 +471,128 @@ internal sealed partial class LatticeGrain(
             if (attempt > 0)
             {
                 InvalidateShardMap();
-                (physicalTreeId, shardMap) = await GetRoutingAsync();
+                var retryRouteStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
+                {
+                    (physicalTreeId, shardMap) = await GetRoutingAsync();
+                }
+                finally
+                {
+                    LatticeMetrics.GetManyStageDuration.Record(
+                        System.Diagnostics.Stopwatch.GetElapsedTime(retryRouteStartTicks).TotalMilliseconds,
+                        stageTagTree, LatticeMetrics.StageRouteTag);
+                }
             }
 
             var versionAtStart = shardMap.Version;
 
             // Group keys by shard under the map snapshot captured for
             // this attempt.
-            var shardBuckets = new Dictionary<int, List<string>>();
-            foreach (var key in keys)
+            var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            Dictionary<int, List<string>> shardBuckets;
+            try
             {
-                var idx = shardMap.Resolve(key);
-                if (!shardBuckets.TryGetValue(idx, out var bucket))
+                shardBuckets = new Dictionary<int, List<string>>();
+                foreach (var key in keys)
                 {
-                    bucket = [];
-                    shardBuckets[idx] = bucket;
+                    var idx = shardMap.Resolve(key);
+                    if (!shardBuckets.TryGetValue(idx, out var bucket))
+                    {
+                        bucket = [];
+                        shardBuckets[idx] = bucket;
+                    }
+                    bucket.Add(key);
                 }
-                bucket.Add(key);
+            }
+            finally
+            {
+                LatticeMetrics.GetManyStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(bucketStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageBucketTag);
             }
 
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} bucketCount={shardBuckets.Count} buckets=[{string.Join(';', shardBuckets.Select(kv => $"s{kv.Key}:[{string.Join(',', kv.Value)}]"))}]");
 #endif
 
-            var snap1Pair = await FetchRegistrySnapshotAsync();
-            var snap1 = snap1Pair.Snap;
-            var concurrent = new ConcurrentDictionary<string, byte[]>();
-            using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+            // Fan-out stage: registry-snapshot probe + per-shard parallel
+            // fetch. The snapshot probe is part of the fan-out (it sets up
+            // the ambient visibility view every per-shard task reads under)
+            // so attributing it to a separate "snapshot" stage would
+            // fragment the fan-out's wall-clock without buying
+            // diagnostic value at the per-call granularity.
+            ConcurrentDictionary<string, byte[]> concurrent;
+            RegistrySnapshotPair snap1Pair;
+            var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
             {
-                var tasks = new List<Task>(shardBuckets.Count);
-                foreach (var (shardIdx, bucket) in shardBuckets)
+                snap1Pair = await FetchRegistrySnapshotAsync();
+                var snap1 = snap1Pair.Snap;
+                concurrent = new ConcurrentDictionary<string, byte[]>();
+                using (LatticeRegistrySnapshotContext.BeginScope(snap1))
                 {
-                    var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-                    tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
+                    var tasks = new List<Task>(shardBuckets.Count);
+                    foreach (var (shardIdx, bucket) in shardBuckets)
+                    {
+                        var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+                        tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
+                    }
+                    await Task.WhenAll(tasks);
                 }
-                await Task.WhenAll(tasks);
+            }
+            finally
+            {
+                LatticeMetrics.GetManyStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageFanOutTag);
             }
 
-            // Unconditional topology-stability check: if the shard-map
-            // version moved while the fan-out was in flight, the per-shard
-            // reads may have spanned an inconsistent snapshot (some keys
-            // routed to a shadow-forwarded source owner, others to the new
-            // owner). Discard and retry against the fresh map.
-            var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
-            if (shardMapNow.Version != versionAtStart)
+            // Merge stage: topology-stability check + snap2 stability
+            // check + final ConcurrentDictionary -> Dictionary
+            // materialise on the happy path. Recorded once per attempt
+            // even when a topology-version drift or snap2 mismatch
+            // forces a continue, so operators see the wasted-attempt
+            // cost.
+            var mergeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool returning = false;
+            Dictionary<string, byte[]>? result = null;
+            try
             {
+                // Unconditional topology-stability check: if the shard-map
+                // version moved while the fan-out was in flight, the per-shard
+                // reads may have spanned an inconsistent snapshot (some keys
+                // routed to a shadow-forwarded source owner, others to the new
+                // owner). Discard and retry against the fresh map.
+                var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
+                if (shardMapNow.Version != versionAtStart)
+                {
 #if LATTICE_DIAG
-                DiagSink.Write($"[DIAG reader-topology-retry] tree={physicalTreeId} attempt={attempt} versionAtStart={versionAtStart} versionNow={shardMapNow.Version}");
+                    DiagSink.Write($"[DIAG reader-topology-retry] tree={physicalTreeId} attempt={attempt} versionAtStart={versionAtStart} versionNow={shardMapNow.Version}");
 #endif
-                continue;
-            }
+                    continue;
+                }
 
-            if (await IsSnap2StableAsync(snap1, snap1Pair.Revision))
-            {
+                if (await IsSnap2StableAsync(snap1Pair.Snap, snap1Pair.Revision))
+                {
 #if LATTICE_DIAG
-                DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={concurrent.Count} rounds=[{string.Join(',', concurrent.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
+                    DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={concurrent.Count} rounds=[{string.Join(',', concurrent.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
 #endif
-                return new Dictionary<string, byte[]>(concurrent);
+                    result = new Dictionary<string, byte[]>(concurrent);
+                    returning = true;
+                }
+                // else: a saga's InFlight->Committed transition raced our
+                // fan-out; retry with the fresh snapshot in scope.
+#if LATTICE_DIAG
+                if (!returning) DiagSink.Write($"[DIAG reader-snapshot-retry] tree={physicalTreeId} attempt={attempt} returnedSoFar={concurrent.Count}");
+#endif
             }
-            // else: a saga's InFlight->Committed transition raced our
-            // fan-out; retry with the fresh snapshot in scope.
-#if LATTICE_DIAG
-            DiagSink.Write($"[DIAG reader-snapshot-retry] tree={physicalTreeId} attempt={attempt} returnedSoFar={concurrent.Count}");
-#endif
+            finally
+            {
+                LatticeMetrics.GetManyStageDuration.Record(
+                    System.Diagnostics.Stopwatch.GetElapsedTime(mergeStartTicks).TotalMilliseconds,
+                    stageTagTree, LatticeMetrics.StageMergeTag);
+            }
+            if (returning) return result!;
         }
 
         throw new InvalidOperationException(
@@ -401,7 +653,7 @@ internal sealed partial class LatticeGrain(
         // single-key write is attributed alongside the existing
         // leaf-side / WAL-side instruments. Mirrors c2-xxiv on the
         // set-many path.
-        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var stageTagTree = StageTagTree;
         var setStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
@@ -682,7 +934,7 @@ internal sealed partial class LatticeGrain(
         // ShardRootSetManyShadowForward / ShardRootSetManyLeafRpc)
         // continue to attribute the per-shard half; this fills the
         // missing LatticeGrain-side half of the envelope.
-        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var stageTagTree = StageTagTree;
         var setManyStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
