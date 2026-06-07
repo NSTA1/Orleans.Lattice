@@ -335,8 +335,12 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
         }
         Assert.That(targetTracker, Is.Not.Null, "test setup: tracker must exist after the first dispatch");
         var acquire = trackerType.GetMethod("AcquireAsync")!;
-        // Hold the slot without ever releasing it.
-        var hold = (Task<double>)acquire.Invoke(targetTracker, new object[] { 1, TimeSpan.FromSeconds(10), CancellationToken.None })!;
+        // Hold the slot without ever releasing it. Passing
+        // CancellationToken.None for both the caller-supplied CT and
+        // the writer-supplied drain token isolates this test to the
+        // admission path; the drain seam is exercised by
+        // WalCommitLogWriterDrainTests.
+        var hold = (Task<double>)acquire.Invoke(targetTracker, new object[] { 1, TimeSpan.FromSeconds(10), CancellationToken.None, CancellationToken.None })!;
         await hold.WaitAsync(TimeSpan.FromSeconds(2));
 
         // The next writer.AppendAsync must hit admission timeout
@@ -375,15 +379,18 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
         var release = trackerType.GetMethod("ReleaseAdmission")!;
 
         // cap=1 admission: first acquire succeeds immediately
-        // (uncontended fast path returns 0 ms wait).
-        var firstTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None })!;
+        // (uncontended fast path returns 0 ms wait). Passing
+        // CancellationToken.None for both the caller-supplied CT and
+        // the writer-supplied drain token isolates this test to the
+        // admission path.
+        var firstTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
         var firstWait = await firstTask.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.That(firstWait, Is.GreaterThanOrEqualTo(0d),
             "writer-layer admission: uncontended first acquire must return non-negative wait time");
 
         // Second acquire on the saturated semaphore: must throw
         // TimeoutException after the 50 ms deadline.
-        var secondTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None })!;
+        var secondTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
         var ex = Assert.ThrowsAsync<TimeoutException>(async () => await secondTask.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.That(ex!.Message, Does.Contain("admission deadline"),
             "writer-layer admission: TimeoutException must name the admission deadline so the failure mode is unambiguous in caller logs");
@@ -392,7 +399,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
 
         // Release the held slot; a subsequent acquire must succeed.
         release.Invoke(tracker, Array.Empty<object>());
-        var thirdTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None })!;
+        var thirdTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
         var thirdWait = await thirdTask.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.That(thirdWait, Is.GreaterThanOrEqualTo(0d),
             "writer-layer admission: post-release acquire must succeed");
@@ -414,7 +421,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
         // acquire onwards would deadlock until the deadline.
         for (var i = 0; i < 50; i++)
         {
-            var task = (Task<double>)acquire.Invoke(tracker, new object[] { 0, TimeSpan.FromMilliseconds(50), CancellationToken.None })!;
+            var task = (Task<double>)acquire.Invoke(tracker, new object[] { 0, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
             var wait = await task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.That(wait, Is.EqualTo(0d),
                 $"writer-layer admission: opt-out (cap=0) acquire #{i} must complete immediately returning 0 ms");

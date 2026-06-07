@@ -1505,6 +1505,43 @@ public static class LatticeMetrics
             description: "Wall-clock ms a WalCommitLogWriter dispatch waited for a per-partition admission slot.");
 
     /// <summary>
+    /// Count of writer-side parked admission callers released by a
+    /// silo-drain signal on host shutdown. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagPartition"/>. One sample per parked caller
+    /// faulted out of <c>PartitionTracker.AcquireAsync</c> when the
+    /// owning <see cref="Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter"/>
+    /// drains on host shutdown; zero on a healthy shutdown that has
+    /// no parked callers.
+    /// <para>
+    /// Reliability intent: distinct from
+    /// <see cref="WalAppendAdmissionTimeouts"/> (which counts
+    /// per-call dispatch-deadline expiries during steady-state
+    /// operation) and from <see cref="WalShardDrainBudgetExpirations"/>
+    /// (which counts shard-grain deactivation drains that had to
+    /// force-fault). This counter names writer-side parked callers
+    /// released by the silo's drain on shutdown - the surface that
+    /// closes the writer-admission-semaphore-wedged-at-SIGTERM
+    /// phenotype documented in
+    /// <c>benchmark/azure-throughput/throughput.md</c> section 32.6.
+    /// A non-zero rate on shutdown is normal when the silo was under
+    /// storage saturation at drain entry; a non-zero rate during
+    /// steady-state operation indicates the drain hook fired
+    /// spuriously and is a regression signal.
+    /// </para>
+    /// <para>
+    /// Per-silo: each silo process emits its own samples for the
+    /// trackers its <see cref="Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter"/>
+    /// owns. A dashboard <c>sum by (tree, partition)</c> across the
+    /// cluster gives the cumulative drain-released-caller count;
+    /// a <c>sum by (silo)</c> isolates which silos saw saturated
+    /// shutdowns.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalAppendDrainReleases =
+        Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.drain.releases", unit: "{release}",
+            description: "Count of writer-side parked admission callers released by a silo-drain signal on host shutdown.");
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via

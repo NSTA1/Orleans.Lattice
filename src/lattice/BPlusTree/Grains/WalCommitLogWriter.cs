@@ -61,12 +61,104 @@ internal sealed class WalCommitLogWriter(
     //
     // Static so the watchdog has a fixed root to find; the field is
     // never read in production code paths (the per-instance Append paths
-    // own the only references).
+    // own the only references). Trackers are stateless wrt drain: drain
+    // state lives on the per-instance _drainCts below, not on the
+    // shared tracker, so disposing one writer never poisons a tracker
+    // that a sibling (or a successor in an in-process test fixture)
+    // would resolve from the same map.
     internal static readonly ConcurrentDictionary<(string TreeId, int Partition), PartitionTracker> _trackers
         = new();
 
-    private static PartitionTracker GetTracker(string treeId, int partition) =>
-        _trackers.GetOrAdd((treeId, partition), static key => new PartitionTracker(key.TreeId, key.Partition));
+    // Per-instance drain CTS. Each WalCommitLogWriter owns its own
+    // token; DrainAsync cancels it; AcquireAsync observes it alongside
+    // the caller's CT. Because the token lives on the writer instance
+    // (not on the process-wide PartitionTracker), a writer's drain
+    // cannot reach traffic dispatched through a peer writer instance
+    // - that's the multi-silo correctness property the original
+    // tracker-state design quietly broke for in-process test fixtures
+    // that share the static _trackers map across successive silo
+    // builds.
+    //
+    // Constructed eagerly so the token is non-default from the first
+    // dispatch. Never disposed - the writer is a DI singleton with
+    // process lifetime; the CTS is a small heap object the GC reclaims
+    // at process exit.
+    private readonly CancellationTokenSource _drainCts = new();
+
+    // Writer-level drain flag. Flipped at DrainAsync entry so
+    // GetTracker calls during shutdown fast-fail with
+    // InvalidOperationException instead of registering fresh dispatches
+    // that would race against the drain.
+    private volatile bool _isDraining;
+
+    private PartitionTracker GetTracker(string treeId, int partition)
+    {
+        // Pre-drain gate at the writer level: refuse to route a
+        // dispatch through a writer instance that has already begun
+        // draining. Reads the writer-local flag, not any tracker state,
+        // so successor writers in the same process see a clean gate.
+        if (_isDraining)
+        {
+            throw new InvalidOperationException(
+                $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the owning WalCommitLogWriter is shutting down ({nameof(LatticeOptions.WalDrainBudget)}).");
+        }
+        return _trackers.GetOrAdd((treeId, partition), static key => new PartitionTracker(key.TreeId, key.Partition));
+    }
+
+    /// <summary>
+    /// Writer-side drain entry: releases every parked admission caller
+    /// this writer dispatched through, then returns. Idempotent; the
+    /// second call is a no-op.
+    /// <para>
+    /// Multi-silo correctness: cancels only this writer's per-instance
+    /// drain token. Peer silos in the cluster have their own
+    /// <see cref="WalCommitLogWriter"/> singleton with its own drain
+    /// token, so a drain here does not touch any admission gate on a
+    /// peer silo. In-process test fixtures that build successive
+    /// silos through the same static <see cref="_trackers"/> map see
+    /// the same isolation - drain state lives on the writer instance,
+    /// not on the shared tracker, so a drained writer cannot poison a
+    /// tracker that a successor writer instance resolves from the
+    /// shared map. The downstream
+    /// <see cref="IWalShardGrain"/> activations are also untouched -
+    /// they continue serving traffic from any peer silo whose writer
+    /// has not yet drained.
+    /// </para>
+    /// <para>
+    /// Caller contract: typically invoked by the silo lifecycle's
+    /// stop stage via the registered
+    /// <c>WalCommitLogWriterDrainer</c> <see cref="Microsoft.Extensions.Hosting.IHostedService"/>;
+    /// hosts that want deterministic shutdown can call directly. After
+    /// this method returns, every parked
+    /// <see cref="PartitionTracker.AcquireAsync"/> caller dispatched
+    /// through this writer has surfaced a typed
+    /// <see cref="TimeoutException"/> naming
+    /// <see cref="LatticeOptions.WalDrainBudget"/> and the writer
+    /// refuses new dispatches with <see cref="InvalidOperationException"/>.
+    /// In-flight dispatches that successfully acquired a slot before
+    /// the drain are not interrupted - they complete or fail through
+    /// the existing dispatch-deadline path.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Host-level shutdown token; observed only for the synchronous transition (the drain itself does not block).</param>
+    public Task DrainAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _isDraining = true;
+        // Cancel asynchronously: CancelAsync (.NET 8+) queues every
+        // registered callback's continuation to the threadpool rather
+        // than running them synchronously on the canceller's thread.
+        // That keeps DrainAsync from observing a synchronous re-entry
+        // of AcquireAsync's catch handler, which would tangle the call
+        // stack between the drain caller and the parked callers being
+        // released. The fire-and-forget shape is safe because every
+        // parked caller's continuation is independent (their faulting
+        // writes to per-Task state) and DrainAsync has no completion
+        // contract beyond "the flag is set and the CTS will cancel".
+        try { _ = _drainCts.CancelAsync(); }
+        catch (ObjectDisposedException) { /* defensive: nobody disposes _drainCts but cheap to guard */ }
+        return Task.CompletedTask;
+    }
     /// <inheritdoc />
     public async Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
@@ -101,12 +193,29 @@ internal sealed class WalCommitLogWriter(
         double admissionWaitMs;
         try
         {
-            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken);
+            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken, _drainCts.Token);
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
-            System.Console.WriteLine($"[wal-admission-timeout] tree={stamped.TreeId} partition={partition} entries=1 cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
-            LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTagWriter, partitionTagWriter);
+            // Distinguish the two TimeoutException sources AcquireAsync
+            // can raise: a genuine WalAppendDispatchTimeout deadline
+            // trip (the silo is healthy but offered load exceeded the
+            // drain rate) versus a drain release (the silo is shutting
+            // down and the parked caller was released by the writer-side
+            // drain). The drain-release path is its own metric
+            // (WalAppendDrainReleases, emitted inside
+            // PartitionTracker.AcquireAsync) and must NOT count toward
+            // the admission-timeout counter, because operators
+            // dashboarding the admission counter want to see
+            // "saturated steady-state" not "clean shutdown".
+            // The discriminator is the exception message: only the
+            // drain-release path names WalDrainBudget.
+            var isDrainRelease = ex.Message.Contains(nameof(LatticeOptions.WalDrainBudget), StringComparison.Ordinal);
+            if (!isDrainRelease)
+            {
+                System.Console.WriteLine($"[wal-admission-timeout] tree={stamped.TreeId} partition={partition} entries=1 cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
+                LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTagWriter, partitionTagWriter);
+            }
             throw;
         }
         LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTagWriter, partitionTagWriter);
@@ -294,7 +403,7 @@ internal sealed class WalCommitLogWriter(
         return offsets;
     }
 
-    private static async Task<KeyValuePair<string, IReadOnlyList<long>>> AppendForPartitionAsync(
+    private async Task<KeyValuePair<string, IReadOnlyList<long>>> AppendForPartitionAsync(
         string grainKey,
         IWalShardGrain grain,
         IReadOnlyList<WalRecord> entries,
@@ -322,12 +431,20 @@ internal sealed class WalCommitLogWriter(
         double admissionWaitMs;
         try
         {
-            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken);
+            admissionWaitMs = await tracker.AcquireAsync(perTree.WalMaxPendingBatches, perTree.WalAppendDispatchTimeout, cancellationToken, _drainCts.Token);
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
-            System.Console.WriteLine($"[wal-admission-timeout] tree={treeId} partition={partition} entries={entries.Count} cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
-            LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTag, partitionTag);
+            // Same drain-vs-deadline disambiguation as the single-entry
+            // overload above: the drain-release path has its own metric
+            // (WalAppendDrainReleases) and must not be counted toward
+            // WalAppendAdmissionTimeouts.
+            var isDrainRelease = ex.Message.Contains(nameof(LatticeOptions.WalDrainBudget), StringComparison.Ordinal);
+            if (!isDrainRelease)
+            {
+                System.Console.WriteLine($"[wal-admission-timeout] tree={treeId} partition={partition} entries={entries.Count} cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
+                LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTag, partitionTag);
+            }
             throw;
         }
         LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTag, partitionTag);
@@ -652,14 +769,30 @@ internal sealed class WalCommitLogWriter(
         /// <paramref name="timeout"/> expiry; the catch site is responsible
         /// for recording <see cref="LatticeMetrics.WalAppendAdmissionTimeouts"/>
         /// with the appropriate tags before re-throwing.
+        /// <para>
+        /// Throws <see cref="TimeoutException"/> naming
+        /// <see cref="LatticeOptions.WalDrainBudget"/> when the owning
+        /// <see cref="WalCommitLogWriter"/>'s drain token cancels while
+        /// the caller is parked on the admission semaphore - parked
+        /// callers release within bounded time of drain entry with an
+        /// attributable exception. The drain token lives on the writer
+        /// instance, not on this tracker, so a writer's drain cannot
+        /// poison a tracker that a sibling (or successor) writer would
+        /// resolve from the same shared map.
+        /// </para>
         /// </summary>
-        public async Task<double> AcquireAsync(int maxPending, TimeSpan timeout, CancellationToken cancellationToken)
+        /// <param name="maxPending">Per-partition admission cap; opt-out / unbounded shape when &lt;= 0.</param>
+        /// <param name="timeout">Per-call admission deadline; <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> waits indefinitely.</param>
+        /// <param name="cancellationToken">Caller-supplied cancellation token (typically <see cref="CancellationToken.None"/> from the foreground commit path).</param>
+        /// <param name="drainToken">Writer-supplied drain token; cancelling it surfaces a typed <see cref="TimeoutException"/> naming <see cref="LatticeOptions.WalDrainBudget"/> to every parked caller without mutating any tracker state.</param>
+        public async Task<double> AcquireAsync(int maxPending, TimeSpan timeout, CancellationToken cancellationToken, CancellationToken drainToken)
         {
-            // Lazy first-use initialisation under the link-gate so the
-            // cap is set at most once even under concurrent first
-            // dispatches. WalMaxPendingBatches <= 0 is treated as the
-            // opt-out / unbounded shape; the semaphore stays null and
-            // every dispatch admits immediately.
+            // Lazy first-use initialisation of the semaphore under the
+            // tracker gate so the cap is set at most once even under
+            // concurrent first dispatches. WalMaxPendingBatches <= 0 is
+            // treated as the opt-out / unbounded shape; the semaphore
+            // stays null and every dispatch admits immediately. Drain
+            // state is NOT on the tracker - see the writer's _drainCts.
             if (_admission is null && maxPending > 0)
             {
                 lock (_gate)
@@ -680,30 +813,83 @@ internal sealed class WalCommitLogWriter(
             // completes synchronously and the elapsed measurement is
             // sub-microsecond. Only the contended path pays the await
             // suspension cost.
+            //
+            // The drain-token must be observed alongside the caller's
+            // CT, but only allocate a linked CTS when the caller's token
+            // is genuinely cancellable. The dominant hot-path caller is
+            // the leaf grain's foreground commit path, which typically
+            // passes CancellationToken.None - linking unconditionally
+            // would cost one CTS allocation per dispatch on every
+            // append. When the caller's token cannot be cancelled, pass
+            // drainToken directly; when both tokens are live, build the
+            // link and dispose it in the finally.
             var startTicks = Stopwatch.GetTimestamp();
-            var deadlineCts = (CancellationTokenSource?)null;
+            CancellationTokenSource? linkedCts = null;
+            CancellationToken waitToken;
+            if (cancellationToken.CanBeCanceled)
+            {
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, drainToken);
+                waitToken = linkedCts.Token;
+            }
+            else
+            {
+                waitToken = drainToken;
+            }
             try
             {
                 bool acquired;
                 if (timeout == Timeout.InfiniteTimeSpan)
                 {
-                    await _admission.WaitAsync(cancellationToken);
+                    await _admission.WaitAsync(waitToken);
                     acquired = true;
                 }
                 else
                 {
-                    acquired = await _admission.WaitAsync(timeout, cancellationToken);
+                    acquired = await _admission.WaitAsync(timeout, waitToken);
                 }
                 if (!acquired)
                 {
                     throw new TimeoutException(
                         $"WAL append admission to writer partition {Partition} of tree '{TreeId}' exceeded the {timeout} admission deadline ({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the partition's pending-append tracker was saturated at cap={_admissionCap} ({nameof(LatticeOptions.WalMaxPendingBatches)}) and no slot freed within the deadline, indicating a wedged downstream shard.");
                 }
+                // Acquired a slot, but a drain that arrived between
+                // the WaitAsync returning and us re-checking should
+                // still fault the caller rather than letting it dispatch.
+                // Release the slot we just took so the writer's drain
+                // accounting does not see it as an undrained in-flight.
+                if (drainToken.IsCancellationRequested)
+                {
+                    _admission.Release();
+                    LatticeMetrics.WalAppendDrainReleases.Add(
+                        1,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition));
+                    throw new TimeoutException(
+                        $"WAL append admission to writer partition {Partition} of tree '{TreeId}' was released by the owning WalCommitLogWriter's drain ({nameof(LatticeOptions.WalDrainBudget)}) before the dispatch could proceed; the silo is shutting down.");
+                }
                 return Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
+            }
+            catch (OperationCanceledException) when (drainToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                // The drain signal fired while we were parked on the
+                // semaphore. Convert to a typed TimeoutException so the
+                // caller's catch site can attribute the trip to the
+                // silo-drain path without source-walking, and record a
+                // metric sample for dashboard observability.
+                LatticeMetrics.WalAppendDrainReleases.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition));
+                throw new TimeoutException(
+                    $"WAL append admission to writer partition {Partition} of tree '{TreeId}' was released by the owning WalCommitLogWriter's drain ({nameof(LatticeOptions.WalDrainBudget)}) while parked on the admission semaphore; the silo is shutting down.");
             }
             finally
             {
-                deadlineCts?.Dispose();
+                // Dispose the linked CTS only when we actually allocated
+                // one (the cancellable-caller-token branch above). The
+                // uncancellable-caller branch passes drainToken directly
+                // and has no per-call allocation to release.
+                linkedCts?.Dispose();
             }
         }
 

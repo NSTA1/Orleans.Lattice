@@ -85,6 +85,15 @@ public static class LatticeServiceCollectionExtensions
         builder.AddWalStorage();
         builder.Services.TryAddSingleton<ICommitLogWriter, WalCommitLogWriter>();
         builder.Services.TryAddSingleton<ICommitLogReader, WalCommitLogReader>();
+        // Per-silo writer drain: wire WalCommitLogWriter.DrainAsync into
+        // the host's StopAsync stage so every parked admission caller is
+        // released within bounded time of SIGTERM. Each silo process gets
+        // its own hosted-service instance bound to its own writer singleton;
+        // peer silos in the cluster drain independently with no cross-silo
+        // coordination. The hosted service safely no-ops on hosts where
+        // ICommitLogWriter is replaced with a non-WalCommitLogWriter
+        // implementation (test doubles, future alternates).
+        builder.Services.AddSingleton<IHostedService, BPlusTree.Grains.WalCommitLogWriterDrainer>();
         // WAL byte-budget encoder: the canonical Orleans-binary
         // implementation produces the exact serialised bytes for each
         // captured WalRecord, so WalShardGrain pays one encode per

@@ -954,17 +954,38 @@ function Aggregate-Layer1Cells {
 		$p90Key   = "microbench_${slug}_p90_ns"
 		$p99Key   = "microbench_${slug}_p99_ns"
 		$allocKey = "microbench_${slug}_alloc_b"
+		# Rows whose per-call batch size is > 1 are async-heavy
+		# (SetManyAsync, GetManyAsync, SetManyAtomicAsync). BDN's MemoryDiagnoser
+		# reads GC.GetAllocatedBytesForCurrentThread(), which is thread-local;
+		# on those workloads the await continuation can land on a worker thread
+		# and the workload-thread reading collapses to 0 for that cohort even
+		# though the operation clearly allocates. Point rows (ExpectedBatchSize=1
+		# or unset) can legitimately report 0 - e.g. a JIT-promoted
+		# allocation-free GetAsync steady state - and must not be filtered.
+		$batchSize = if ($row.ContainsKey('ExpectedBatchSize')) { [int]$row.ExpectedBatchSize } else { 1 }
+		$dropZeroAllocCohorts = $batchSize -gt 1
 		$p50s = @(); $p75s = @(); $p90s = @(); $p99s = @(); $allocs = @()
+		$allocZeroDropped = 0
 		foreach ($c in $Cohorts) {
 			if ($c.metrics.ContainsKey($p50Key)   -and $null -ne $c.metrics[$p50Key])   { $p50s   += [double]$c.metrics[$p50Key] }
 			if ($c.metrics.ContainsKey($p75Key)   -and $null -ne $c.metrics[$p75Key])   { $p75s   += [double]$c.metrics[$p75Key] }
 			if ($c.metrics.ContainsKey($p90Key)   -and $null -ne $c.metrics[$p90Key])   { $p90s   += [double]$c.metrics[$p90Key] }
 			if ($c.metrics.ContainsKey($p99Key)   -and $null -ne $c.metrics[$p99Key])   { $p99s   += [double]$c.metrics[$p99Key] }
-			if ($c.metrics.ContainsKey($allocKey) -and $null -ne $c.metrics[$allocKey]) { $allocs += [double]$c.metrics[$allocKey] }
+			if ($c.metrics.ContainsKey($allocKey) -and $null -ne $c.metrics[$allocKey]) {
+				$allocValue = [double]$c.metrics[$allocKey]
+				if ($dropZeroAllocCohorts -and $allocValue -eq 0.0) {
+					$allocZeroDropped++
+					continue
+				}
+				$allocs += $allocValue
+			}
 		}
 		if ($p50s.Count -eq 0) {
 			Write-Warning "[aggregate-l1] no p50 samples for row '$($row.Label)' (slug=$slug); cohort N=$($Cohorts.Count)"
 			continue
+		}
+		if ($allocZeroDropped -gt 0) {
+			Write-Warning "[aggregate-l1] row '$($row.Label)' (slug=$slug, batchSize=$batchSize): dropped $allocZeroDropped of $($Cohorts.Count) per-cohort alloc_b=0 samples as BDN MemoryDiagnoser async-thread-loss artefacts. $($allocs.Count) usable allocation cohort(s) remain."
 		}
 		$p50Median = (Get-Median $p50s)
 		$p75Median = if ($p75s.Count -gt 0) { (Get-Median $p75s) } else { $null }
@@ -974,13 +995,15 @@ function Aggregate-Layer1Cells {
 		# (e.g. an in-process GetAsync that the JIT promotes to an allocation-free
 		# steady-state) is falsy under `if ($allocMedian)` and was previously
 		# coerced to $null, rendering as 'n/a' in the doc table even though zero
-		# is the correct answer.
+		# is the correct answer. The batched-row zero-drop above prevents BDN's
+		# thread-local-counter async undercount from clobbering this with a
+		# bogus 0 - if every cohort for a batched row dropped, $allocs is empty
+		# and the cell renders as 'n/a' (correctly: we have no usable sample).
 		$allocMedian = if ($allocs.Count -gt 0) { (Get-Median $allocs) } else { $null }
 		# Per-key throughput ceiling: (1 / p50_seconds) * batchSize.
 		# Batched calls return per-key keys/s rather than per-call calls/s
 		# so the column is comparable across rows; the (N keys/call) label
 		# part keeps the per-call batch shape visible to the reader.
-		$batchSize = if ($row.ContainsKey('ExpectedBatchSize')) { [int]$row.ExpectedBatchSize } else { 1 }
 		$ceiling = if ($p50Median -gt 0) { [int]((1e9 / $p50Median) * $batchSize) } else { $null }
 		$rows[$row.Label] = @{
 			perCallP50Ns        = [int][math]::Round($p50Median, 0)
@@ -1475,6 +1498,19 @@ function Main {
 		}
 		Write-Host "[dry-run] state file: $stateFile" -ForegroundColor Cyan
 		$state = Read-StateFile -Path $stateFile
+		# Re-aggregate from the raw per-cohort metrics whenever the state file
+		# carries them. The pre-baked $state.layer1.rows / $state.layer2.rows
+		# are kept as a fallback for state files written before the cohorts
+		# arrays were populated, but when both are present the cohorts win -
+		# re-aggregating is the whole point of a dry-run replay (fix an
+		# aggregator bug locally, replay against the on-disk run logs, see
+		# the corrected doc without paying for a fresh Azure VM).
+		if ($state.ContainsKey('layer1') -and $state.layer1.ContainsKey('cohorts') -and @($state.layer1.cohorts).Count -gt 0) {
+			$state.layer1.rows = Aggregate-Layer1Cells -Cohorts $state.layer1.cohorts
+		}
+		if ($state.ContainsKey('layer2') -and $state.layer2.ContainsKey('cohorts') -and $state.layer2.cohorts -is [hashtable] -and $state.layer2.cohorts.Count -gt 0) {
+			$state.layer2.rows = Aggregate-Layer2Cells -CohortsByMode $state.layer2.cohorts
+		}
 		Update-DocMarkers -DocPath $docPath -State $state -WhatIf:$Diff
 		if (-not $Diff -and -not $SkipDocUpdate) {
 			Write-Host "[dry-run] doc rewritten from state.json" -ForegroundColor Green
