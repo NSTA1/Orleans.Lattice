@@ -131,6 +131,49 @@ seam in `LatticeOptions.WalStorageProvider` is purpose-built for
 exactly this), or to a Premium account with a higher per-account
 throughput target.
 
+## Bounded shutdown when the writer is wedged
+
+The above section describes the **steady-state** wedge: the silo is
+running and the storage account is saturating. A second wedge surface
+exists at **silo shutdown**: when the host receives `SIGTERM` while
+the writer's per-(tree, partition) admission semaphore has parked
+callers (callers awaiting a `WalAppendDispatchTimeout`-bounded
+admission slot whose downstream dispatches are themselves parked in
+the SDK retry loop), the silo cannot finish its bounded deactivation
+drain without releasing those parked callers.
+
+The library handles this automatically: `WalCommitLogWriter` exposes
+a per-silo drain entry that the host's `StopAsync` lifecycle stage
+invokes via a registered `IHostedService`. The drain signals every
+parked `AcquireAsync` caller on the owning silo's writer; each
+parked caller surfaces a typed `TimeoutException` whose message
+names `WalDrainBudget` so operators can grep-attribute the trip,
+and a counter sample lands on
+`orleans.lattice.wal.writer.append.drain.releases` tagged with
+`(tree, partition)` so dashboards can graph "how many parked callers
+were released on this silo's shutdown". Post-drain
+`AppendAsync` / `AppendManyAsync` calls on the draining silo
+fail fast with `InvalidOperationException` or a
+`TimeoutException` naming `WalDrainBudget` rather than blocking
+on a drained admission gate.
+
+The drain is **per-silo, local-only**. Each silo process in a
+multi-silo cluster has its own `WalCommitLogWriter` singleton with
+its own owned-tracker set; a drain on silo A does not touch silo B's
+admission semaphore and does not interrupt any in-flight
+`IWalShardGrain` activation that silo B is dispatching to. Rolling
+restarts settle cleanly because each silo drains its own writer
+independently when its turn arrives.
+
+The recovery for the **steady-state** wedge is still to partition the
+storage (above); the drain seam closes the **shutdown** half of the
+same problem so a saturated silo terminates inside its bounded
+deactivation drain instead of needing `SIGKILL`. The two halves
+are complementary - the structural fix (multi-account fan-out)
+reduces the rate at which the steady-state wedge fires; the drain
+seam ensures that when it does fire, shutdown still settles
+inside the host's grace window.
+
 ## Sizing rules of thumb
 
 For a single Azure Tables Standard storage account:

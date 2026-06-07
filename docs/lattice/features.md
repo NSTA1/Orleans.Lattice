@@ -22,6 +22,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
 - [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-partition WAL storage resolver (`LatticeOptions.WalStorageProvider`) for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
+- [F-085](https://github.com/NSTA1/Orleans.Lattice/issues/609) - Transport-agnostic WAL saturation back-pressure surface on the core library so callers throttle offered load before silent queueing on the writer-side admission gate
+- [F-086](https://github.com/NSTA1/Orleans.Lattice/issues/610) - Adopt the F-085 saturation back-pressure surface in the Azure-throughput bench silo so the open-loop producer throttles via the kernel TCP window when the storage account saturates
 
 ### Shipped
 
@@ -127,6 +129,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-025](https://github.com/NSTA1/Orleans.Lattice/issues/576) - Storage-usage poller activates every leaf and snapshot grain, defeating cold-tree assumptions
 - [FX-026](https://github.com/NSTA1/Orleans.Lattice/issues/586) - `ReshardAsync` surfaces retriable `ActivationReadyTimeout` to callers, breaking startup-reshard contract under cold-start
 - [FX-027](https://github.com/NSTA1/Orleans.Lattice/issues/587) - extend `ShardActivationRetry` envelope to other public `ILattice` operators that drive the shard-root seed (sub-audit of FX-026)
+- [FX-028](https://github.com/NSTA1/Orleans.Lattice/issues/608) - WAL drain wedge under Azure-Tables-account saturation survives bounded deactivation drain and requires SIGKILL (cancellation-cooperative provider hand-off)
 
 ## Gaps & potential additions
 

@@ -3,10 +3,15 @@
 This document is an **approximate guide** to the performance you can expect
 from Orleans.Lattice on a **single silo** under steady-state load. The
 numbers come from two complementary benchmark surfaces - the algorithmic
-ceiling of each `ILattice` method in isolation (Layer 1) and the sustained
-throughput a real silo delivers against real Azure Tables under a realistic
-offered load (Layer 2) - and both are regenerated together against a
-freshly-provisioned Azure VM by `benchmark/performance-report.ps1`.
+ceiling of each `ILattice` method in isolation (Layer 1) and the
+end-to-end behaviour a real silo delivers against a real Azure Tables
+account under a realistic offered load (Layer 2) - and both are
+regenerated together against a freshly-provisioned Azure VM by
+`benchmark/performance-report.ps1`. Layer 2 write cells reflect a fully
+durable WAL-before-Apply path with real Azure round-trips; Layer 2 read
+cells are the caller-visible envelope that includes the per-silo
+`LeafCacheGrain` read-through cache (see the read-side caching note
+below).
 
 The figures are **steady-state averages** taken from the productive window
 of each run, with drain tails excluded. Cold starts, JIT warm-up, grain
@@ -65,24 +70,24 @@ mechanical and the prose around the marker is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
   dotnet=10.0.108
-  gitSha=f9afdfb
+  gitSha=dc8ef37
   host=Standard_D4as_v5
-  rowsMeasured=2026-06-06
+  rowsMeasured=2026-06-07
   methodology=Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |
 |------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|
-| `GetAsync` (point read) | **1.35 us** | 4.12 us | 8.87 us | 230.82 us | 216 B | **~739.3 k keys/s** |
-| `SetAsync` (point write) | **9.15 us** | 17.33 us | 20.24 us | 41.35 us | 784 B | **~109.3 k keys/s** |
-| `GetManyAsync` (16 keys/call) | **9.13 us** | 12.31 us | 14.69 us | 74.06 us | 6 KB | **~1.75 M keys/s** |
-| `SetManyAsync` (1,000 keys/call) | **1.01 ms** | 1.09 ms | 1.43 ms | 2.76 ms | 350 KB | **~988.5 k keys/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **264.58 us** | 376.52 us | 493.24 us | 1.61 ms | 67 KB | **~60.5 k keys/s** |
+| `GetAsync` (point read) | **1.34 us** | 4.18 us | 8.53 us | 133.53 us | 216 B | **~745.2 k keys/s** |
+| `SetAsync` (point write) | **9.77 us** | 18.28 us | 21.23 us | 42.57 us | 784 B | **~102.4 k keys/s** |
+| `GetManyAsync` (16 keys/call) | **10.45 us** | 13.41 us | 15.26 us | 74.61 us | 6 KB | **~1.53 M keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **971.54 us** | 980.35 us | 1.51 ms | 2.97 ms | 217 KB | **~1.03 M keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **275.92 us** | 338.03 us | 492.59 us | 1.58 ms | 67 KB | **~58 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-06-06 on Standard_D4as_v5 (.NET 10.0.108) at git sha f9afdfb, n=3 cohorts (BDN quick).
+> Measured 2026-06-07 on Standard_D4as_v5 (.NET 10.0.108) at git sha 916ea62, n=3 cohorts (BDN quick).
 
 **Reading the numbers.** The per-thread call rate is the derived
 `1 / p50` scaled by the per-call batch size (1 for `GetAsync` / `SetAsync`,
@@ -159,22 +164,77 @@ realistic latency the storage provider contributes.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
-many entries per call, which is why `SetManyAsync` delivers orders of
-magnitude higher sustained throughput than per-key `SetAsync` at the same
-offered load. If your workload can naturally batch writes (telemetry tick
-frames, event sourcing batches, periodic flush windows), use
-`SetManyAsync`. If it cannot, your write ceiling is the `SetAsync` row.
+many entries per call, which is why `SetManyAsync` delivers materially
+higher sustained key-write throughput than per-key `SetAsync` at the
+same offered load (the published cells show roughly a 4x gap, with the
+rest of the per-key win absorbed by `SetManyAsync`'s long per-call
+latency tail - each call submits its keys as a sequence of 100-entity
+Azure-Tables transactions against one batch partition). If your workload
+can naturally batch writes (telemetry tick frames, event sourcing
+batches, periodic flush windows), use `SetManyAsync`. If it cannot, your
+write ceiling is the `SetAsync` row. **The aggregate write rows on this
+VM SKU sit within striking distance of the measured single-account
+ceiling for Azure Tables Standard, not Azure's documented per-account
+transaction target** (`benchmark/azure-throughput/throughput.md` section
+31 pinned the empirical ceiling at **~22-24 ke/s aggregate key-write
+throughput** against one storage account, with `TableTransactionFailedException`
+(409 Conflict + SDK timeout) bursts as the saturation signal). The
+fastest write cell here (`SetManyAsync` at ~15.6 ke/s) is under that
+wall, but a workload that combines `SetManyAsync` with other set-side
+traffic on the same account can climb into the saturation regime - see
+[WAL Tuning](wal-tuning.md) for the back-pressure manifestations and
+the partition-the-storage recovery path. The binding constraint inside
+the silo (independent of the account ceiling) is per-shard WAL-flush
+concurrency, and for `SetManyAsync` specifically, per-call transaction
+submission against a single Azure batch partition.
 
-The `SetManyAtomicAsync` row reflects the cost of all-or-nothing semantics
-across multiple keys via the atomic-write saga: one saga durably commits
-the configured key batch with cross-shard isolation. Atomic writes trade
-throughput for transactional guarantees; reach for them when you need
-them and use `SetManyAsync` when you don't.
+**A note on entities vs transactions vs keys.** Three different
+"per-second" numbers appear in the perf discussion and are easy to
+conflate:
 
-Read paths are uniformly fast: `GetManyAsync` is at or near the Azure
-Tables read-side ceiling for a single storage account on this
-provisioning tier, and the read path benefits from per-silo cache layers
-that the write path cannot use.
+- **Keys/s** - what every cell in the throughput column reports. One
+  key = one `(string, byte[])` entry from the caller's point of view,
+  regardless of how it gets persisted.
+- **Entities/s** - the same concept on the Azure side. One Azure Tables
+  entity = one row. The library generally produces one entity per key-
+  write, so for the workloads above keys/s == entities/s.
+- **Transactions/s** - the unit Azure Tables Standard's per-account
+  ceiling is denominated in. One `EntityGroupTransaction` carries up to
+  100 entities against one partition key, so a single `SetMany(4096)`
+  call decomposes into ~41 transactions. Azure's documented per-account
+  aspirational target is 20,000 transactions/sec; the empirical
+  per-account ceiling we measure on Standard tier is roughly an order
+  of magnitude lower (~2,500 transactions/sec; throughput.md section 31
+  / wal-tuning.md), because the binder is per-account concurrent
+  in-flight transactions, not the aspirational TPS budget.
+
+The quick mental conversion: `ke/s of keys ~ transactions/s x 100`
+for `SetManyAsync`-shaped traffic, but for `SetAsync`-shaped traffic
+(one key per transaction) the two are equal.
+
+The `SetManyAtomicAsync` row reflects the cost of all-or-nothing
+semantics across multiple keys via the atomic-write saga: one saga
+durably commits the configured key batch with cross-shard isolation.
+The published cell lands at roughly the same key-write rate as per-key
+`SetAsync` and is the slowest of the write rows in per-saga latency,
+because the saga pays multiple WAL round-trips (candidate, decision,
+per-leaf apply) per commit. Use it when you need cross-key atomicity
+and fall back to `SetManyAsync` when you don't.
+
+Read paths are uniformly fast, but they are **fast because the
+production read path is cache-served**, not because they exhaust Azure
+Tables' read budget. The `GetAsync` p50 of ~60 us per call and the
+`GetManyAsync` per-key cost of ~850 ns (3.47 ms / 4,096 keys) are each
+roughly two orders of magnitude faster than a single Azure Tables
+round-trip - the difference is the per-silo `LeafCacheGrain`. The
+single-account read budget itself (the same ~2,500 transactions/sec
+empirical ceiling that gates the write path - the Azure-published
+per-account TPS target is higher but the binder for both shapes is
+per-account concurrent in-flight transactions; see
+`benchmark/azure-throughput/throughput.md` section 31) sits in front
+of the cache, not behind it. On a workload with a low cache hit ratio
+the read envelope grows toward the round-trip cost and the read budget
+starts to matter.
 
 **A note on read-side caching.** The `GetAsync` / `GetManyAsync` per-call cells above are the caller-visible envelope, which
 includes whatever the `LeafCacheGrain` read-through cache served. In the

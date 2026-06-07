@@ -401,6 +401,41 @@ the underlying provider is healthy. Set `WalDrainBudget` to
 `InfiniteTimeSpan` to disable the ceiling and restore the historical
 unbounded-drain behaviour.
 
+### Writer-side drain at host shutdown
+
+The shard-grain deactivation drain above bounds the **shard-side**
+shutdown surface: it releases callers parked inside
+`WalShardGrain.FlushAsync` waiting on a provider call. A symmetric
+**writer-side** drain surface exists for callers parked one layer up,
+inside `WalCommitLogWriter.PartitionTracker.AcquireAsync` waiting
+on the per-(tree, partition) admission semaphore.
+
+The library handles this automatically: `WalCommitLogWriter` exposes
+a per-silo drain entry that the host's `StopAsync` lifecycle stage
+invokes via a registered `IHostedService`. The drain signals every
+parked `AcquireAsync` caller on the owning silo's writer; each
+parked caller surfaces a typed `TimeoutException` whose message
+names `WalDrainBudget` so operators can grep-attribute the trip,
+and a counter sample lands on
+`orleans.lattice.wal.writer.append.drain.releases` tagged with
+`(tree, partition)`. Post-drain `AppendAsync` /
+`AppendManyAsync` calls on the draining silo fail fast with
+`InvalidOperationException` or a `TimeoutException` naming
+`WalDrainBudget` rather than blocking on a drained admission gate.
+
+The drain is **per-silo, local-only**. Each silo process in a
+multi-silo cluster has its own `WalCommitLogWriter` singleton with
+its own owned-tracker set; a drain on silo A does not touch silo B's
+admission semaphore and does not interrupt any in-flight
+`IWalShardGrain` activation that silo B is dispatching to. Rolling
+restarts settle cleanly because each silo drains its own writer
+independently when its turn arrives. The writer-side drain
+complements the shard-side `WalDrainBudget` force-fault path:
+together they bound the silo shutdown end-to-end so a saturated
+silo terminates inside its bounded deactivation drain instead of
+needing `SIGKILL` (the wedge phenotype documented in
+`benchmark/azure-throughput/throughput.md` section 32.6).
+
 ### Append-failure semantics
 
 A flush failure is fail-fast for every affected caller:
