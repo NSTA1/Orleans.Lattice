@@ -613,6 +613,16 @@ Minimum number of `orleans.lattice.wal.append_dispatch.timeouts` trips observed 
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
+### `WalSaturationRecoveryWindow`
+
+Window after the most-recently observed `WalSaturationState.Saturated` transition during which the classifier holds a tree at or above `Throttled` even if the current sampler tick's per-partition depth observation would otherwise classify it as `Healthy` (default: 1 second). Defends against bursty per-partition WAL drain where one partition fills to cap, drains entirely in the next tick, and the next partition fills - the per-tick `max(depth_ratio)` across partitions oscillates between `~1.0` and `~0.0` within a single sampler period and the classifier would otherwise flap `Healthy <-> Saturated` at the sampler cadence with `Throttled` never observed as a stable state. With the window in effect, callers see `Throttled` persist as the natural lead-up and fall-back regime around saturation episodes; the canonical TCP / queue ingest reader pattern can take the advisory `Throttled` action (yield-per-line, lower-priority dispatch) for measurable durations rather than seeing only the binary pause-or-go pattern.
+
+The window does NOT affect the `Healthy -> Saturated` transition latency - `Saturated` still fires immediately on the current tick's at-cap condition, so the public saturation-signal surface's bound (transition latency under one `WalSaturationSampleInterval`) is preserved. It does NOT affect the recovery path either: once the window elapses AND the current tick observes no saturation pressure, the tree drops to `Healthy` and any pending `IWalSaturationSignal.WaitForHealthyAsync` completes; the window only delays the recovery by the configured value.
+
+Set to `TimeSpan.Zero` to disable the upgrade entirely and restore the per-tick classifier behaviour the sampler shipped with. Set to `Timeout.InfiniteTimeSpan` to hold `Throttled` forever after the first `Saturated` observation - useful for tests that want a sticky `Throttled` floor without arming a wall-clock dependency, or for defensive deployments that prefer the saturation regime to be sticky. The validator rejects any other negative value.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick (or the next tick that would otherwise upgrade a tree, if the tree was Saturated more than `WalSaturationRecoveryWindow` ago).
+
 ### `WalMaxPendingBatches`
 
 Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 16, the measured Azure Tables Standard sweet spot at 4,000 keys/s offered load on Standard_D4as_v5). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle. The previous default was 8; raising it to 16 produced a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression.

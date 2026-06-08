@@ -482,4 +482,49 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationDispatchTimeoutThreshold)));
     }
+
+    [Test]
+    public void WalSaturationRecoveryWindow_default_is_one_second()
+    {
+        Assert.That(new LatticeOptions().WalSaturationRecoveryWindow, Is.EqualTo(TimeSpan.FromSeconds(1)));
+        Assert.That(LatticeOptions.DefaultWalSaturationRecoveryWindow, Is.EqualTo(TimeSpan.FromSeconds(1)));
+    }
+
+    [Test]
+    public void WalSaturationRecoveryWindow_positive_passes()
+    {
+        var result = Validate(o => o.WalSaturationRecoveryWindow = TimeSpan.FromMilliseconds(500));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationRecoveryWindow_zero_passes()
+    {
+        // Zero is the documented "disable the upgrade entirely" sentinel
+        // that restores the per-tick classifier behaviour the sampler
+        // shipped with before the recovery-window upgrade. Validator
+        // must accept it (unlike most TimeSpan options where zero is
+        // rejected as a no-op).
+        var result = Validate(o => o.WalSaturationRecoveryWindow = TimeSpan.Zero);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationRecoveryWindow_infinite_passes()
+    {
+        // Infinite holds the Throttled floor forever after the first
+        // Saturated observation - the documented sentinel.
+        var result = Validate(o => o.WalSaturationRecoveryWindow = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationRecoveryWindow_negative_fails()
+    {
+        // -1s is not the InfiniteTimeSpan sentinel (which is -1ms);
+        // it is a genuine negative TimeSpan and must be rejected.
+        var result = Validate(o => o.WalSaturationRecoveryWindow = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationRecoveryWindow)));
+    }
 }

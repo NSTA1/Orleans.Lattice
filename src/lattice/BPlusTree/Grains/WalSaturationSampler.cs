@@ -50,6 +50,19 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         = new();
     private bool _priorInitialised;
 
+    // Per-tree wall-clock of the most recent tick at which the
+    // classifier observed Saturated. The classifier consults this
+    // on every tick to upgrade a transient Healthy classification to
+    // Throttled while the recovery window is still open, so the
+    // advisory regime persists across bursty per-partition WAL drain
+    // cycles instead of flapping at the sampler cadence. Single-
+    // threaded (sampler thread only); no concurrency primitives
+    // needed. Grows monotonically with the set of trees ever observed,
+    // matching the bounded cardinality of the underlying
+    // WalSaturationSignal._states dictionary.
+    private readonly Dictionary<string, DateTimeOffset> _lastSaturatedTickUtc
+        = new(StringComparer.Ordinal);
+
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
 
@@ -245,11 +258,60 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         var opts = _options.Get(string.Empty);
         var dispatchThreshold = opts.WalSaturationDispatchTimeoutThreshold;
         var throttledRatio = opts.WalSaturationThrottledRatio;
+        var recoveryWindow = opts.WalSaturationRecoveryWindow;
         var observedAt = _time.GetUtcNow();
 
         foreach (var acc in perTree.Values)
         {
             var newState = Classify(acc, throttledRatio, dispatchThreshold);
+
+            // Apply the recovery-window upgrade. When the current-
+            // tick classification is Healthy but the tree was observed
+            // Saturated within the configured recovery window, hold it
+            // at Throttled instead. This defends against the bursty
+            // per-partition WAL drain pattern where one partition fills
+            // to cap and drains entirely within a sampler period, so
+            // the per-tick max(depth_ratio) across partitions
+            // oscillates ~1.0 <-> ~0.0 and the classifier would
+            // otherwise flap Healthy <-> Saturated at the sampler
+            // cadence with Throttled never observed as a stable
+            // state.
+            //
+            // Bookkeeping rules:
+            // - Saturated observation: refresh the per-tree timestamp
+            //   so the recovery window restarts on every Saturated
+            //   tick. This handles the regime where Saturated fires
+            //   repeatedly across a long episode.
+            // - Throttled observation: do NOT refresh the timestamp.
+            //   Throttled is the pure depth-ratio signal; using it to
+            //   extend the recovery window would conflate "we've been
+            //   above the throttled threshold" with "we've recently
+            //   been at cap", losing the distinction the regime
+            //   classifies.
+            // - Healthy classification + window not yet elapsed:
+            //   upgrade to Throttled. The upgrade is silent (no extra
+            //   bookkeeping) since it happens deterministically from
+            //   the timestamp on every tick.
+            // - InfiniteTimeSpan recovery window: once Saturated has
+            //   been observed, every subsequent Healthy tick upgrades
+            //   to Throttled forever (useful for tests, defensive).
+            // - Zero recovery window: the upgrade never fires; the
+            //   classifier behaves as the pre-recovery-window shape
+            //   did (per-tick classification drives the regime
+            //   directly).
+            if (newState == WalSaturationState.Saturated)
+            {
+                _lastSaturatedTickUtc[acc.TreeId] = observedAt;
+            }
+            else if (newState == WalSaturationState.Healthy
+                && recoveryWindow != TimeSpan.Zero
+                && _lastSaturatedTickUtc.TryGetValue(acc.TreeId, out var lastSat)
+                && (recoveryWindow == Timeout.InfiniteTimeSpan
+                    || (observedAt - lastSat) < recoveryWindow))
+            {
+                newState = WalSaturationState.Throttled;
+            }
+
             var previousState = _signal.UpdateState(acc.TreeId, newState);
             if (previousState == newState) continue;
 

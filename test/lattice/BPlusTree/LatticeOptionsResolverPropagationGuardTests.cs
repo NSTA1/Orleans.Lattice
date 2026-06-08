@@ -115,6 +115,7 @@ public class LatticeOptionsResolverPropagationGuardTests
             "WalSaturationSampleInterval",
             "WalSaturationThrottledRatio",
             "WalSaturationDispatchTimeoutThreshold",
+            "WalSaturationRecoveryWindow",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

@@ -127,6 +127,13 @@ if (options.WalSaturationDispatchTimeoutThreshold < 1)
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalSaturationDispatchTimeoutThreshold)} must be greater than or equal to 1.");
 }
+if (options.WalSaturationRecoveryWindow < TimeSpan.Zero
+    && options.WalSaturationRecoveryWindow != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationRecoveryWindow)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the recovery window holds a tree at Throttled after the most-recent Saturated observation; zero disables the window entirely, infinite holds Throttled forever after the first Saturated observation).");
+}
 return ValidateOptionsResult.Success;
     }
 }

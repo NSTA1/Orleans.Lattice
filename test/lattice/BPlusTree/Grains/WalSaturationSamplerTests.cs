@@ -79,8 +79,21 @@ public class WalSaturationSamplerTests
             observers ?? Array.Empty<IWalSaturationObserver>(),
             NullLogger<WalSaturationObserverDispatcher>.Instance);
 
+        // Always zero the saturation-classifier recovery window in
+        // the shared test factory so tests written before the
+        // recovery-window upgrade (which assert direct
+        // Saturated -> Healthy transitions on the next tick after a
+        // synthetic drain) continue to exercise the deterministic
+        // per-tick classifier behaviour the sampler shipped with.
+        // Recovery-window tests that exercise the upgrade explicitly
+        // construct their sampler via a separate helper that does
+        // not zero the window (see
+        // CreateRecoveryWindowSampler below).
+        var effective = options ?? new LatticeOptions();
+        effective.WalSaturationRecoveryWindow = TimeSpan.Zero;
+
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        monitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
+        monitor.Get(Arg.Any<string>()).Returns(effective);
 
         return new WalSaturationSampler(
             signal,
@@ -597,5 +610,297 @@ public class WalSaturationSamplerTests
     {
         var sampler = CreateSampler(options: null, observers: null, out _, out _);
         sampler.Dispose();
+    }
+
+    // ---- Recovery-window classifier upgrades --------------------
+
+    /// <summary>
+    /// Sampler factory for recovery-window tests that need
+    /// deterministic wall-clock control AND a non-zero recovery
+    /// window. Uses the internal <see cref="WalSaturationSampler"/>
+    /// constructor that accepts a <see cref="TimeProvider"/> so the
+    /// recovery-window elapsed-time check is driven by a controllable
+    /// clock rather than the system clock. The shared
+    /// <see cref="CreateSampler"/> helper deliberately zeroes the
+    /// recovery window to preserve the deterministic per-tick
+    /// classifier behaviour the sampler shipped with; the
+    /// recovery-window tests bypass it.
+    /// </summary>
+    private (WalSaturationSampler Sampler, WalSaturationSignal Signal, MutableTimeProvider Clock) CreateRecoveryWindowSampler(TimeSpan recoveryWindow)
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        var dispatcher = new WalSaturationObserverDispatcher(
+            Array.Empty<IWalSaturationObserver>(),
+            NullLogger<WalSaturationObserverDispatcher>.Instance);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions
+        {
+            WalSaturationRecoveryWindow = recoveryWindow,
+        });
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        var sampler = new WalSaturationSampler(
+            signal,
+            dispatcher,
+            monitor,
+            NullLogger<WalSaturationSampler>.Instance,
+            clock);
+        return (sampler, signal, clock);
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_upgrades_Healthy_to_Throttled_within_window()
+    {
+        // Reproduces the bursty-drain phenotype: the per-partition WAL
+        // drain is bursty, so one tick observes a partition at-cap
+        // (Saturated) and the very next tick observes every partition
+        // with depth=0 (would-be Healthy in the pre-recovery-window
+        // classifier). With a non-zero recovery window, the Healthy
+        // tick must upgrade to Throttled so the advisory regime
+        // persists.
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(TimeSpan.FromSeconds(1));
+
+        // Tick 1: partition 0 at cap => Saturated.
+        SeedPartition(_treeId, partition: 0, depth: 16, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated),
+            "first tick observing at-cap depth must classify Saturated");
+
+        // Drain the partition to mimic the burst end.
+        var tracker = WalCommitLogWriter._trackers[(_treeId, 0)];
+        while (tracker._inFlight.Count > 0)
+        {
+            tracker.Unlink(tracker._inFlight.First!.Value);
+        }
+
+        // Tick 2: depth=0, but only 200 ms have elapsed since the
+        // Saturated tick - well inside the 1-second recovery window.
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "Healthy classification inside the recovery window must be upgraded to Throttled");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_falls_back_to_Healthy_after_window_expires()
+    {
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(TimeSpan.FromMilliseconds(500));
+
+        SeedPartition(_treeId, partition: 0, depth: 16, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+
+        var tracker = WalCommitLogWriter._trackers[(_treeId, 0)];
+        while (tracker._inFlight.Count > 0)
+        {
+            tracker.Unlink(tracker._inFlight.First!.Value);
+        }
+
+        // Tick 2: still inside the 500 ms window.
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled));
+
+        // Tick 3: total 600 ms elapsed, window expired => fall back to Healthy.
+        clock.Advance(TimeSpan.FromMilliseconds(400));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "Healthy classification past the recovery window must NOT be upgraded - the tree has genuinely recovered");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_zero_disables_the_upgrade()
+    {
+        // Zero recovery window is the documented sentinel that
+        // restores the deterministic per-tick classifier behaviour
+        // the sampler shipped with: the per-tick classification
+        // drives the regime directly.
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(TimeSpan.Zero);
+
+        SeedPartition(_treeId, partition: 0, depth: 16, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+
+        var tracker = WalCommitLogWriter._trackers[(_treeId, 0)];
+        while (tracker._inFlight.Count > 0)
+        {
+            tracker.Unlink(tracker._inFlight.First!.Value);
+        }
+
+        // Next tick: depth=0 -> Healthy, no upgrade because window is zero.
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy));
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_infinite_holds_Throttled_forever_after_Saturated()
+    {
+        // Infinite recovery window: once Saturated has been observed,
+        // every subsequent Healthy tick is upgraded to Throttled.
+        // Useful for tests / defensive deployments.
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(Timeout.InfiniteTimeSpan);
+
+        SeedPartition(_treeId, partition: 0, depth: 16, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+
+        var tracker = WalCommitLogWriter._trackers[(_treeId, 0)];
+        while (tracker._inFlight.Count > 0)
+        {
+            tracker.Unlink(tracker._inFlight.First!.Value);
+        }
+
+        // Advance way past any reasonable window.
+        clock.Advance(TimeSpan.FromHours(1));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "infinite recovery window must hold Throttled regardless of elapsed wall-clock");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_per_tree_independent()
+    {
+        var otherTree = _treeId + "-other";
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(TimeSpan.FromSeconds(1));
+
+        // Tree A reaches Saturated; tree B stays Healthy from the start.
+        SeedPartition(_treeId, partition: 0, depth: 16, cap: 16);
+        SeedPartition(otherTree, partition: 0, depth: 2, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+        Assert.That(signal.GetCurrentState(otherTree), Is.EqualTo(WalSaturationState.Healthy),
+            "tree B was never at-cap; recovery-window upgrade must not bleed into it");
+
+        var trackerA = WalCommitLogWriter._trackers[(_treeId, 0)];
+        while (trackerA._inFlight.Count > 0)
+        {
+            trackerA.Unlink(trackerA._inFlight.First!.Value);
+        }
+
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "tree A is inside its own recovery window");
+        Assert.That(signal.GetCurrentState(otherTree), Is.EqualTo(WalSaturationState.Healthy),
+            "tree B has never been Saturated; recovery-window upgrade does not apply to it");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_refreshes_on_each_Saturated_tick()
+    {
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(TimeSpan.FromMilliseconds(500));
+
+        SeedPartition(_treeId, partition: 0, depth: 16, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+
+        // Drain so the partition is not at-cap, then re-seed Saturated
+        // 300 ms into the original window. The recovery window must
+        // restart from the second Saturated tick, not from the first.
+        var tracker = WalCommitLogWriter._trackers[(_treeId, 0)];
+        while (tracker._inFlight.Count > 0)
+        {
+            tracker.Unlink(tracker._inFlight.First!.Value);
+        }
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        // Re-seed at-cap depth so the next tick observes Saturated again.
+        for (var i = 0; i < 16; i++)
+        {
+            var pending = new WalCommitLogWriter.PendingAppend(_treeId, partition: 0, entryCount: 1, batchBytes: 0);
+            tracker.LinkReturningPreDepth(pending);
+        }
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+
+        // Drain again and advance 400 ms - past the original 500 ms
+        // window but inside the refreshed window from the second
+        // Saturated tick (which fired at t+300 ms, so window expires
+        // at t+800 ms; we're at t+700 ms).
+        while (tracker._inFlight.Count > 0)
+        {
+            tracker.Unlink(tracker._inFlight.First!.Value);
+        }
+        clock.Advance(TimeSpan.FromMilliseconds(400));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "the second Saturated tick must refresh the recovery window");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_does_not_arm_on_Throttled_only_history()
+    {
+        // The recovery-window anchor is set ONLY on Saturated
+        // observations - never on Throttled. This pins the
+        // documented invariant in WalSaturationSampler so a future
+        // "improvement" that refreshes on Throttled (which would
+        // make sustained moderate load sticky-Throttled forever)
+        // is caught immediately. The scenario: a tree that crosses
+        // the throttled ratio but never reaches cap, then drains
+        // back to Healthy. The Healthy classification must NOT be
+        // upgraded because no Saturated tick ever fired.
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(TimeSpan.FromHours(1));
+
+        // Tick 1: depth 12 / cap 16 = 0.75 hits the default
+        // throttled ratio exactly without reaching cap.
+        SeedPartition(_treeId, partition: 0, depth: 12, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "depth 12 / cap 16 = 0.75 must classify Throttled (never Saturated)");
+
+        // Drain back to depth 0.
+        var tracker = WalCommitLogWriter._trackers[(_treeId, 0)];
+        while (tracker._inFlight.Count > 0)
+        {
+            tracker.Unlink(tracker._inFlight.First!.Value);
+        }
+
+        // Tick 2: depth=0 -> Healthy. Despite the 1-hour recovery
+        // window, no upgrade fires because the anchor was never
+        // set (Throttled does not refresh it).
+        clock.Advance(TimeSpan.FromMilliseconds(10));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "Throttled-only history must NOT arm the recovery-window upgrade; only Saturated does");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_recovery_window_does_not_upgrade_a_tree_that_has_never_been_Saturated()
+    {
+        // Pure short-circuit test for the TryGetValue gate: a tree
+        // observed only in the Healthy regime from activation onward
+        // must stay Healthy regardless of the recovery-window value,
+        // because the per-tree anchor dictionary has no entry for it.
+        var (sampler, signal, clock) = CreateRecoveryWindowSampler(Timeout.InfiniteTimeSpan);
+
+        // Tick 1: well below the throttled ratio -> Healthy.
+        SeedPartition(_treeId, partition: 0, depth: 2, cap: 16);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy));
+
+        // Tick 2: still Healthy. An infinite recovery window must
+        // not cause spurious Throttled upgrades for a tree with no
+        // Saturated history - the dictionary lookup short-circuit
+        // is the only thing preventing every fresh tree from
+        // inheriting a phantom Throttled regime.
+        clock.Advance(TimeSpan.FromMinutes(5));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "infinite recovery window must not upgrade a tree with no Saturated history");
+    }
+
+    /// <summary>
+    /// Minimal mutable <see cref="TimeProvider"/> for driving the
+    /// recovery-window check deterministically without a package
+    /// dependency. Mirrors the shape used by
+    /// <c>LatticeStorageUsageMetricsTests</c>.
+    /// </summary>
+    private sealed class MutableTimeProvider(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public void Advance(TimeSpan by) => _now += by;
+
+        public override DateTimeOffset GetUtcNow() => _now;
     }
 }
