@@ -8,9 +8,13 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.2.2 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v6.3.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+## [6.3.0] - 2026-06-08
+
+Lockstep release across the package family. Ships the F-085 / F-086 / FX-028 / FX-029 / FX-030 / FX-031 / FX-032 closeout of the WAL saturation / shutdown back-pressure work-stream, the F-083 caller-visible read-path histograms, and supporting documentation / benchmark / Grafana surface updates. No public API or wire-format break; safe drop-in from v6.2.x.
 
 ### Added
 
@@ -23,6 +27,7 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 ### Changed
 
+- **Documentation-correctness pass across the full markdown corpus for v6.3.0.** Source-of-truth audit caught and corrected six classes of stale claim that had accumulated since v6.2.x: (1) writer-side WAL drain refusal now correctly documented as throwing the typed `LatticeShuttingDownException` (preserving the legacy `TimeoutException(WalDrainBudget)` as `InnerException` for diagnostic tooling) rather than `TimeoutException` / `InvalidOperationException` across `docs/lattice/wal.md` and `docs/lattice/wal-tuning.md`; (2) atomic-write saga Phase 2 prose corrected from the historical per-key `SetAsync` loop to the current per-batch `SetManyAsync` dispatch with cross-shard `Task.WhenAll` fan-out and per-batch retry budget; (3) `WalMaxBatchBytes` configuration subsection populated with the missing description (default `4 MiB`, exact-encoded sizing, interaction with `WalMaxBatchEntries`); (4) `wal.saturation.transitions` metric tag table updated to attribute the `shard` tag to both dispatch-timeout-driven and provider-failure-rate-driven transitions (the new FX-032 third Saturated input also stamps `AttributedShard`); (5) replication `direction` tag (`outbound` / `inbound`) added to the core `metrics.md` tag-conventions table, with a new `Per-peer health (observable gauges)` subsection documenting the `peer.bytes_behind`, `peer.consecutive_errors`, `peer.entries_behind`, and `peer.last_contact_seconds` gauges; (6) XML doc comments on `LatticeMetrics.AtomicWriteCompleted`, `AtomicWriteDuration`, and `AtomicWriteBatchSize` updated to list the `shutdown_refused` outcome added by FX-032 alongside the existing `committed` / `compensated` / `failed`. No behavioural change.
 - **`benchmark/performance-report.ps1` default `-Fidelity` is now `quick` (was `dry`).** Job.Dry's "1 warmup + 1 measurement" pattern was producing nonsensical Layer 1 cells dominated by JIT / tier-0 cold-start cost (e.g. `GetAsync` at 36 ms instead of the actual 1.32 us). The `quick` default (Job.ShortRun: 1 launch, 3 warmup, 3 measurement iterations) restores the per-method steady-state distribution that the doc has historically published.
 - **`docs/lattice/performance-single-silo.md` now stamps the actual `.NET` SDK version into both meta-headers and the trailing `> Measured ...` provenance lines.** The script ssh's into the just-provisioned VM after `Invoke-Provision` and persists `/usr/bin/dotnet --version` onto the cohort's state, replacing the hard-coded `10.0.x` placeholder that previously rendered into every published refresh.
 - **`docs/lattice/performance-single-silo.md` adds a "Note on read-side caching" section** explaining how the new `get.duration` / `get_many.duration` envelopes blend cache-hit and cache-miss outcomes, that `GetWithVersionAsync` bypasses the `LeafCacheGrain` by design (and should therefore run systematically higher than `GetAsync` on the same key distribution - if dashboards ever invert that, treat it as a regression signal), and how the new envelopes are honest about what the caller's `await` actually waits for under both regimes.
@@ -329,7 +334,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.2...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.0...HEAD
+[6.3.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.2...v6.3.0
 [6.2.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.1...v6.2.2
 [6.2.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.1.3...v6.2.0

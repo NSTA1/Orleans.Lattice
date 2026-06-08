@@ -182,7 +182,7 @@ the lattice grain boundary down to the leaf commit pipeline.
 | `orleans.lattice.wal.writer.append.admission_wait` | `Histogram<double>` | `ms` | Wall-clock ms a `WalCommitLogWriter` dispatch waited for a per-partition admission slot before linking a new `PendingAppend` stamp. Tagged `tree` and `partition`. Reliability intent: under healthy operation this histogram sits at the floor (a sub-microsecond uncontended semaphore acquire). A spreading distribution indicates the per-partition tracker is approaching its `WalMaxPendingBatches` ceiling, surfacing back-pressure as an honest tail-latency signal long before any caller hits the `wal.writer.append.admission_timeouts` deadline. Recorded for every dispatch that successfully acquired a slot (timed-out dispatches feed the counter only). |
 | `orleans.lattice.wal.writer.append.drain.releases` | `Counter<long>` | `{release}` | Count of writer-side parked admission callers released by a silo-drain signal on host shutdown. Tagged `tree` and `partition`. One sample per parked caller faulted out of `PartitionTracker.AcquireAsync` when the owning `WalCommitLogWriter` drains on host shutdown; zero on a healthy shutdown that has no parked callers. Distinct from `wal.writer.append.admission_timeouts` (per-call deadline expiries during steady-state operation) and from `wal.shard.drain.budget.expirations` (shard-grain deactivation drains that had to force-fault). This counter names writer-side parked callers released by the silo's drain on shutdown - the surface that closes the writer-admission-semaphore-wedged-at-SIGTERM phenotype documented in `benchmark/azure-throughput/throughput.md` section 32.6. A non-zero rate on shutdown is normal when the silo was under storage saturation at drain entry; a non-zero rate during steady-state operation indicates the drain hook fired spuriously and is a regression signal. Per-silo: each silo process emits its own samples for the trackers its `WalCommitLogWriter` owns. |
 | `orleans.lattice.wal.saturation.state` | observable `Gauge<long>` | `{state}` | Current per-tree WAL saturation regime as an ordinal step function: `0` = Healthy, `1` = Throttled, `2` = Saturated. Tagged `tree` and `state` (the lowercased enum name). Published by the silo-scoped `WalSaturationSampler`; a tree contributes a measurement only after the sampler has observed at least one signal for it, so an unwritten tree does not appear in the series. Pair with `wal.saturation.transitions` to plot regime flips alongside the current regime. See [WAL Saturation Signal](wal-saturation-signal.md). |
-| `orleans.lattice.wal.saturation.transitions` | `Counter<long>` | `{transition}` | Count of per-tree saturation-state transitions observed by the silo-scoped sampler. Tagged `tree`, `state` (new state, lowercased), `previous_state` (lowercased), and optionally `partition` (admission-depth-driven transitions) or `shard` (dispatch-timeout-driven transitions) when a single source dominated. A flat-zero series is the healthy steady state. A rising rate of `state=throttled` is the leading edge of a saturation episode; `state=saturated` is the regime itself. Flapping between Throttled and Saturated is a different operational signal from a sustained Saturated. |
+| `orleans.lattice.wal.saturation.transitions` | `Counter<long>` | `{transition}` | Count of per-tree saturation-state transitions observed by the silo-scoped sampler. Tagged `tree`, `state` (new state, lowercased), `previous_state` (lowercased), and optionally `partition` (admission-depth-driven transitions) or `shard` (dispatch-timeout-driven or provider-failure-rate-driven transitions) when a single source dominated. A flat-zero series is the healthy steady state. A rising rate of `state=throttled` is the leading edge of a saturation episode; `state=saturated` is the regime itself. Flapping between Throttled and Saturated is a different operational signal from a sustained Saturated. |
 
 ### WAL append pipeline (sourced from `WalShardGrain` and `WalCommitLogWriter`)
 
@@ -284,11 +284,12 @@ in the replication package; subscribe to it the same way as the core meter.
 | Tag key | Applies to | Value |
 |---|---|---|
 | `tree` | every instrument | Logical tree id |
-| `peer` | ship-side instruments | Configured peer cluster identifier |
+| `peer` | ship-side and per-peer instruments | Configured peer cluster identifier |
 | `origin` | apply-side instruments | Origin cluster id stamped on the inbound mutation |
 | `shard` | causal-apply buffer gauges | Physical shard index |
 | `outcome` | ship / bootstrap instruments | `success`, `transient_fault`, `permanent_fault`, etc. |
 | `reason` | dead-letter counters | Discriminator describing why the entry was parked / removed |
+| `direction` | per-peer `consecutive_errors` and `last_contact_seconds` gauges | `outbound` (recorded by the local sender after a ship attempt) or `inbound` (recorded by the local receiver after an apply attempt) |
 
 ### Outbound (ship) and replog throughput
 
@@ -318,6 +319,15 @@ in the replication package; subscribe to it the same way as the core meter.
 |---|---|---|---|
 | `orleans.lattice.replication.dead_letter.enqueued` | `Counter<long>` | `{entry}` | Replog entries parked on the per-tree dead-letter queue. Tagged `tree`, `reason`. |
 | `orleans.lattice.replication.dead_letter.removed` | `Counter<long>` | `{entry}` | Entries removed from the per-tree dead-letter queue. Tagged `tree`, `reason`. |
+
+### Per-peer health (observable gauges)
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.replication.peer.entries_behind` | observable `Gauge<long>` | `{entry}` | Number of replog entries the local sender has appended to its WAL but has yet to ship to the named peer. Tagged `tree`, `peer`. Outbound-only - the receiver does not track a per-peer backlog into itself - so no `direction` tag. |
+| `orleans.lattice.replication.peer.bytes_behind` | observable `Gauge<long>` | `By` | Serialised byte cost of the same backlog. Tagged `tree`, `peer`. Outbound-only; no `direction` tag. |
+| `orleans.lattice.replication.peer.consecutive_errors` | observable `Gauge<long>` | `{error}` | Number of consecutive recent failures observed for the named peer. Tagged `tree`, `peer`, `direction` (`outbound` for ship-side, `inbound` for apply-side). A persistent non-zero value indicates the cohort runner's exponential backoff has not yet observed a success. |
+| `orleans.lattice.replication.peer.last_contact_seconds` | observable `Gauge<double>` | `s` | Wall-clock seconds since the most recent successful contact with the named peer. Tagged `tree`, `peer`, `direction` (`outbound`, `inbound`). A monotonically rising value is the leading indicator that the peer has gone silent. |
 
 ### Bootstrap (receiver-side coordinator)
 

@@ -159,16 +159,19 @@ The library handles this automatically: `WalCommitLogWriter` exposes
 a per-silo drain entry that the host's `StopAsync` lifecycle stage
 invokes via a registered `IHostedService`. The drain signals every
 parked `AcquireAsync` caller on the owning silo's writer; each
-parked caller surfaces a typed `TimeoutException` whose message
-names `WalDrainBudget` so operators can grep-attribute the trip,
-and a counter sample lands on
-`orleans.lattice.wal.writer.append.drain.releases` tagged with
-`(tree, partition)` so dashboards can graph "how many parked callers
-were released on this silo's shutdown". Post-drain
-`AppendAsync` / `AppendManyAsync` calls on the draining silo
-fail fast with `InvalidOperationException` or a
-`TimeoutException` naming `WalDrainBudget` rather than blocking
-on a drained admission gate.
+parked caller surfaces a typed `LatticeShuttingDownException` (a
+sealed `InvalidOperationException` subclass whose message names
+`WalDrainBudget` for grep-attribution and whose `InnerException`
+preserves the legacy `TimeoutException(WalDrainBudget)` shape so
+existing diagnostic tooling continues to work), and a counter
+sample lands on `orleans.lattice.wal.writer.append.drain.releases`
+tagged with `(tree, partition)` so dashboards can graph "how many
+parked callers were released on this silo's shutdown". Post-drain
+`AppendAsync` / `AppendManyAsync` calls on the draining silo fail
+fast with the same `LatticeShuttingDownException` rather than
+blocking on a drained admission gate. See
+[API Reference - Shutdown back-pressure](api.md#shutdown-back-pressure---latticeshuttingdownexception)
+for the caller contract.
 
 The drain is **per-silo, local-only**. Each silo process in a
 multi-silo cluster has its own `WalCommitLogWriter` singleton with

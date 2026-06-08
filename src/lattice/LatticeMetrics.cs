@@ -433,7 +433,12 @@ public static class LatticeMetrics
     /// Counter incremented once per terminal transition of an <c>AtomicWriteGrain</c>
     /// saga. Tagged with <see cref="TagOutcome"/> = <c>committed</c> (all writes
     /// applied), <c>compensated</c> (prepare / execute failure rolled back via LWW),
-    /// or <c>failed</c> (post-compensation surrogate failure).
+    /// <c>failed</c> (post-compensation surrogate failure), or <c>shutdown_refused</c>
+    /// (the saga's batched dispatch tripped the writer-side drain refusal
+    /// because the silo is shutting down; the saga short-circuited the retry loop
+    /// and the compensate-broadcast pass and surfaced
+    /// <see cref="LatticeShuttingDownException"/> to the caller without persisting
+    /// post-detection state).
     /// </summary>
     public static readonly Counter<long> AtomicWriteCompleted =
         Meter.CreateCounter<long>("orleans.lattice.atomic_write.completed", unit: "{saga}",
@@ -447,8 +452,10 @@ public static class LatticeMetrics
     /// <c>AtomicWritePhase.Prepare</c> ran (persisted on the saga state
     /// so it survives a silo crash) to the time the saga reached
     /// <c>AtomicWritePhase.Completed</c>. Tagged with <see cref="TagOutcome"/>
-    /// = <c>committed</c>, <c>compensated</c>, or <c>failed</c> so operators
-    /// can plot rollback-path latency separately from happy-path latency.
+    /// = <c>committed</c>, <c>compensated</c>, <c>failed</c>, or
+    /// <c>shutdown_refused</c> so operators can plot rollback-path latency
+    /// separately from happy-path latency, and shutdown-coincidence sagas
+    /// separately from genuine commit-conflict sagas.
     /// <para>
     /// Combine with <see cref="AtomicWriteBatchSize"/> when building dashboards:
     /// duration is meaningful only relative to the size of the batch that
@@ -466,8 +473,9 @@ public static class LatticeMetrics
     /// an <c>AtomicWriteGrain</c> saga next to <see cref="AtomicWriteCompleted"/>.
     /// The value is the entry count submitted to <c>SetManyAtomicAsync</c>
     /// (or the per-entry list length on apply-mode sagas). Tagged with
-    /// <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>, or
-    /// <c>failed</c>. Lets operators interpret <see cref="AtomicWriteDuration"/>
+    /// <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>,
+    /// <c>failed</c>, or <c>shutdown_refused</c>. Lets operators interpret
+    /// <see cref="AtomicWriteDuration"/>
     /// in context - a 10-entry batch and a 1000-entry batch both appear as one
     /// data point on the duration histogram, and only the batch-size histogram
     /// disambiguates them.
