@@ -1556,8 +1556,23 @@ function Main {
 	try {
 		# Provision (unless -ReuseVm).
 		if (-not $ReuseVm) {
-			Invoke-Provision -Prefix $prefix -VmSize $VmSize -ParametersFilePath $paramFile
+			# Flag teardown-needed BEFORE calling Invoke-Provision, not
+			# after. Invoke-Provision wraps deploy.ps1, which internally
+			# (a) creates the resource group + VM + storage account, and
+			# only then (b) chains into update.ps1 to publish the silo +
+			# producer binaries on the VM. Step (b) is where the remote
+			# `dotnet publish` runs - any compile error there throws
+			# *after* the Azure resources from step (a) already exist
+			# and are billing. The teardown gate must therefore reflect
+			# "did we ask Azure for a resource group?" (i.e., always on
+			# the path that called Invoke-Provision), not "did
+			# Invoke-Provision return successfully?". Otherwise a remote
+			# build failure orphans the resource group and the VM burns
+			# paid compute until the deploy script's auto-shutdown
+			# timer (default 1900 UTC) fires - hours later, at the
+			# operator's expense.
 			$provisioned = $true
+			Invoke-Provision -Prefix $prefix -VmSize $VmSize -ParametersFilePath $paramFile
 		} else {
 			Write-Host "[main] -ReuseVm ${ReuseVm}: skipping provisioning" -ForegroundColor Yellow
 		}

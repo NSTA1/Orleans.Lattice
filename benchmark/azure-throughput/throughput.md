@@ -774,3 +774,87 @@ In priority order:
 4. **The drain-wedge reliability hand-off is unchanged from §31.2.** Repeat for emphasis: this is a real, reproducible reliability gap; F-084 papers over it by reducing single-account pressure but does not eliminate it. The right long-term fix is upstream SDK-cancellation cooperation on drain - separate from the storage-fan-out work.
 
 5. **`Aggregate-Layer2Cells` doc-pipeline blindness** (item 2 above) is the cheapest near-term win and is independent of F-084 or any reliability work.
+
+## 33. Bench adoption of the F-085 saturation back-pressure surface (F-086)
+
+The §32 wedge is the silo's single saturation regime sitting against a single Azure Tables Standard storage account: the producer continues to push at the offered rate, the silo's writer admission semaphore stays pinned at cap with parked callers, dispatches trip `WalAppendDispatchTimeout`, and the cohort surfaces `failed=N` on FINAL with a `WEDGE` verdict. The structural fix for the regime is F-084 (multi-account fan-out, which moves the wall higher); the shutdown surface is closed by FX-028 (writer-side drain). The leading edge between "healthy" and "wedge" is closed by F-085 (the per-tree saturation back-pressure signal on the core library) and consumed here in the bench silo by F-086.
+
+### 33.1 What this section commits to
+
+The bench silo's `TcpIngestService.HandleConnectionAsync` now subscribes to the F-085 surface via the public `IWalSaturationSignal` polling getter and gates its `await reader.ReadLineAsync(...)` loop on the per-tree saturation state. The diff is entirely within `benchmark/azure-throughput/Silo/`:
+
+- **Polling on the read loop (hot path).** Before each `ReadLineAsync` the reader calls `signal.GetCurrentState(treeId)` - one concurrent-dictionary lookup returning an enum, no allocation. On `Saturated` the reader awaits `signal.WaitForHealthyAsync(treeId, ct)`, which parks the read loop until the F-085 sampler observes the tree return to `Healthy`. The kernel's per-connection receive buffer fills, the TCP window shrinks to zero, the producer's `socket.SendAsync` blocks, and the producer's `slipMaxMs` reporter window over the same wall-clock interval rises. **No application-protocol back-pressure** - the kernel TCP window does all the work. On `Throttled` the reader yields the scheduler once per accepted line, producing measurable producer slowdown without a full pause-and-resume oscillation against the `Saturated` boundary.
+
+- **Push observer (out-of-band).** A new `BenchSaturationLogger` registered as `IWalSaturationObserver` lands one `[silo:saturation]` line on stdout per transition, naming the direction (`previous -> new`), the underlying source attribution (partition for admission-depth-driven transitions, shard for dispatch-timeout-driven transitions), and the UTC instant the sampler observed it. The line is the cross-process correlation hook: the post-mortem analysis can grep `[silo:saturation]` in the silo log and align the producer's `slipMaxMs` spikes with the silo's recorded transition windows without scraping the OpenTelemetry meter.
+
+- **Three new `BENCH_*` knobs** to pin the F-085 sampler cadence and thresholds for per-cohort A/B sweeps:
+  - `BENCH_SATURATION_SAMPLE_MS` (default 200 ms) - sampler tick interval; lower for faster transition propagation, set to 0 to disable the sampler entirely.
+  - `BENCH_SATURATION_THROTTLED_RATIO` (default 0.75) - admission-depth ratio at or above which the signal raises a tree to `Throttled`.
+  - `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` (default 1) - minimum `WalAppendDispatchTimeout` trips per sample window that raise the tree to `Saturated`.
+
+The producer is **unchanged**. The bench's open-loop producer (`benchmark/azure-throughput/Producer/Program.cs`) has no knowledge of the saturation signal, and the existing `slipMaxMs` instrument becomes the cross-process correlation signal for the cohort acceptance test.
+
+### 33.2 Hot-path cost
+
+`signal.GetCurrentState(treeId)` is one `ConcurrentDictionary.TryGetValue` returning an enum value - zero allocation, no grain call, sub-microsecond wall-clock. The check runs once per accepted TCP line; against the §28 baseline of ~21 ke/s on D4as_v5 that is ~21,000 dictionary lookups/second, which is below the noise floor of every existing metric on the silo. The sampler itself runs on its own timer at the configured cadence and never touches the `SetAsync` / `SetManyAsync` hot path inside the lattice.
+
+A `Saturated` regime under the §32 reproducer rung settles the reader on `WaitForHealthyAsync`'s TCS, so the reader thread parks on the awaiter rather than spinning on the gate - the per-line check disappears entirely during the parked window. The reader resumes on the next sampler tick that observes the tree at `Healthy`; the worst-case resume latency is therefore one `BENCH_SATURATION_SAMPLE_MS` interval (200 ms default) beyond the actual writer-admission-gate recovery.
+
+### 33.3 Acceptance test plan
+
+A clean cohort sweep at the §32 reproducer rung serves as the acceptance test:
+
+```
+./benchmark/performance-report.ps1 -Layer 2 -Workloads set-many \
+    -Rung '4000:5:45' -N 3
+```
+
+| Surface | Pre-F-086 (reproduces §32) | Post-F-086 measured | F-086 closes? |
+|---|---|---|---|
+| `failed=N` during the producer-active window (`t=0` -> producer stop) | `failed > 0` accumulates from saturation onset | `failed=0` through the producer-active window on 3/3 `set-many` cohorts | **Yes - this is the F-086 surface.** |
+| `failed=N` on FINAL (includes the post-producer drain tail) | `failed > 0` on 3/3 | `failed=0` on 1/3; `failed=4,096` / `failed=19,903` on 2/3 (drain-phase trips, not producer-phase) | **No - tracked as FX-029 (#613).** |
+| Cohort runner `Verdict` | `WEDGE` on 3/3 | mixed: `DEGRADED` / `WEDGE` / `WEDGE` on the three `set-many` cohorts | **Partial.** The DEGRADED cohort actually had `failed=0` on FINAL; its DEGRADED tag comes from cross-cohort residual-grain exceptions (tracked as FX-031 / #615), not from current-cohort failures. The two WEDGE tags are FX-029's drain tail. |
+| Producer `slipMaxMs` | indistinguishable from baseline | non-zero in the windows that overlap the silo's `Saturated` transitions | **Yes.** |
+| Silo `steady_mean` | overshoots and wedges immediately | settles at ~15-19 ke/s under saturation, recovers to ~16-17 ke/s steady state | **Yes** - the offered rate is now bounded by the kernel TCP window rather than overshooting. |
+| `[silo:saturation]` lines | absent (no signal source) | ~50 transitions per cohort, partition attribution preserved | **Yes** - the observer fan-out works. |
+| Saturation regime distribution across transitions | n/a (no signal) | binary `Healthy <-> Saturated` (~28 each direction per cohort); `Throttled` observed in only ~4-8 transitions per cohort, not as a stable regime | **No - tracked as FX-030 (#614).** The advisory `Throttled` state was meant to be the stable lead-up regime; in practice the classifier flaps over it. |
+| Drain wedge at SIGTERM | closed by FX-028 (re-confirmed here) | clean SIGTERM-to-exit settle in all 3 cohorts | **Yes** - the silo exits within `WalDrainBudget` regardless of the drain-tail trips. |
+
+The producer-active window is the surface F-086 was scoped to address (per the parent issue's AC #2: "Pauses TCP ingest reading on `Saturated`"). That surface is now clean: the kernel TCP window naturally back-pressures the producer once the silo crosses the saturation threshold, and the producer-active window holds `failed=0` consistently. The three remaining gaps (drain tail FX-029, classifier flapping FX-030, cohort-runner verdict noise FX-031) are tracked as discrete follow-ups; together they constitute the path to a `HEALTHY` runner verdict across 3/3 `set-many` cohorts.
+
+### 33.4 Observed remaining gaps (post-F-086)
+
+Three sibling FX issues track the path from "producer-phase clean" to "end-to-end clean":
+
+- **[FX-029 / #613](https://github.com/NSTA1/Orleans.Lattice/issues/613)** - **Drain-tail wedge.** Producer-active window reaches `failed=0`, but the silo's bounded ingest channel has 5-8 batches buffered at the producer-stop boundary. The drain loop pushes them into `SetManyAsync` against a storage account that is still residually back-pressured from the saturation episode; the dispatches trip `WalAppendDispatchTimeout` 30 s later and surface as `failed=N` on FINAL. The fix is either bench-side (abandon the channel backlog when the silo is `Saturated` at shutdown) or library-side (an opt-in `WalAbandonInFlightOnSaturation` knob); the issue body lays out both options. This is the highest-priority follow-up because it directly determines whether a clean `failed=0` shows up on FINAL.
+
+- **[FX-030 / #614](https://github.com/NSTA1/Orleans.Lattice/issues/614)** - **Classifier flapping.** The per-tick `max(depth_ratio)` across the tree's WAL partitions is bursty: one partition fills to cap, drains, the next partition fills, and the max ratio oscillates between ~1.0 and ~0.0 within a single 200 ms sample window. The classifier sees `Saturated` then `Healthy` in alternating ticks, jumping over the `Throttled` band that should have been the stable lead-up regime. The result is the binary `H<->S` flap pattern visible in the `[silo:saturation]` lines. The fix is in the sampler's classification logic (smoothing, hysteresis, or per-partition history); the F-085 public surface is unchanged.
+
+- **[FX-031 / #615](https://github.com/NSTA1/Orleans.Lattice/issues/615)** - **Cross-cohort verdict noise.** The cohort runner's `Verdict` calculation counts every `fail:` / `Exception` line in the cohort window without filtering by tree id. Prior cohorts' wedged WAL partitions stay in the silo's `_trackers` map and surface `LatticeWalUsageGrain` polling exceptions that get attributed to the *current* cohort's exception tally. The fix is in `run-cohort.ps1`'s log-parsing logic: filter exception lines by the current cohort's `treeId` before counting. This is the smallest of the three and is a strict accuracy fix to the runner's reporting; it does not change anything about the silo's behaviour.
+
+The three are independent: FX-029 closes the drain-tail surface, FX-030 makes the advisory `Throttled` regime observable, FX-031 makes the runner verdict an honest reflection of the current cohort. They can ship in any order; together they collapse the §33.3 acceptance table's "No - tracked as FX-NNN" entries into "Yes" entries and deliver the parent issue's AC #7 end-to-end.
+
+### 33.5 What this section is NOT
+
+- **The F-085 library surface.** That shipped in F-085 / #609. This section documents the bench's consumption of it.
+- **A production ingest gateway reference implementation.** The bench's TCP reader pattern is sufficient for this issue's deliverable; documenting the pattern for production gateways (gRPC, MQTT, HTTP/2 SSE) is a separate doc-only follow-up and out of scope here.
+- **Producer-side back-pressure.** The producer is unchanged. The whole point of the adoption is that producers see the back-pressure via TCP, not via any new protocol.
+- **The §32.5 doc-pipeline wedge-cohort blindness.** That stays as §32.7 item 5; this section does not absorb it.
+- **F-084 (multi-account) interaction.** Whether to subscribe to per-account saturation when running against the multi-account topology is an F-084 sibling consideration. This section's adoption applies unchanged to either topology - it reads a per-tree signal, not a per-account one.
+- **End-to-end `failed=0` on FINAL.** F-086 closes the producer-active window; the drain-tail closure is the FX-029 follow-up.
+- **A stable `Throttled` regime.** F-086 adopts the surface; making the regime observable as a stable state is the FX-030 follow-up.
+- **An accurate cohort runner verdict.** F-086's behaviour is correct; the runner's interpretation of cross-cohort residual exceptions is the FX-031 follow-up.
+
+### 33.6 References
+
+- §31 - D8as_v5 ceiling discovery (~22-24 ke/s on a single Azure Tables Standard account).
+- §32 - D4as_v5 reproduction at 4k:5 + the open-loop producer topology that motivated F-085.
+- Issue F-085 / #609 - the library surface this section consumes.
+- Issue FX-028 / #611 - the writer-side drain that closes the SIGTERM half of the saturation phenotype.
+- Issue F-084 / #602 - multi-account fan-out. Complementary, not blocking.
+- Issue FX-029 / #613 - drain-tail follow-up.
+- Issue FX-030 / #614 - classifier flapping follow-up.
+- Issue FX-031 / #615 - cohort runner verdict-accuracy follow-up.
+- `docs/lattice/wal-saturation-signal.md` - the per-tree back-pressure surface design reference.
+- `benchmark/azure-throughput/Silo/Program.cs` - `TcpIngestService.HandleConnectionAsync` and the `IWalSaturationSignal` consumption.
+- `benchmark/azure-throughput/Silo/BenchSaturationLogger.cs` - the `IWalSaturationObserver` log surface.
