@@ -102,6 +102,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
+- [FX-032](https://github.com/NSTA1/Orleans.Lattice/issues/620) - WAL saturation surface leaks `failed=N` under single-account 409-burst regime (set-point silent loss, set-many in-flight tail, set-many-atomic saga-retry burndown) and has no Grafana panels
+
 ### Shipped
 
 - [FX-001](https://github.com/NSTA1/Orleans.Lattice/issues/401) - Leaf split publish ordering
