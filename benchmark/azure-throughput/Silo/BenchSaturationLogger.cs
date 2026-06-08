@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Orleans.Lattice;
 
 namespace VehicleFleetSimulator.AzureThroughput.Silo;
@@ -20,12 +21,57 @@ namespace VehicleFleetSimulator.AzureThroughput.Silo;
 /// the cohort closeout in <c>throughput.md</c> can quote the exact
 /// instant the producer back-pressure path engaged.
 /// </para>
+/// <para>
+/// FX-029: the observer also records a per-tree wall-clock timestamp
+/// of the most-recent <c>Saturated</c> transition via
+/// <see cref="LastSaturatedUtc"/>. The bench's drain loop consults
+/// this at the producer-stop boundary to decide whether to dispatch
+/// the residual ingest-channel batch (when the tree has not recently
+/// been saturated) or abandon it (when a saturation episode is in
+/// progress or just ended). Using a recency timestamp rather than a
+/// monotonic "ever-saturated" flag tolerates the F-085 classifier's
+/// known <c>Healthy &lt;-&gt; Saturated</c> flap (tracked as FX-030):
+/// a tree that flapped Saturated 200 ms ago is treated as
+/// still-saturated for the purposes of the drain decision even if
+/// the sampler's current tick reads Healthy.
+/// </para>
 /// </summary>
 internal sealed class BenchSaturationLogger : IWalSaturationObserver
 {
+    // Per-tree wall-clock UTC of the most recently observed
+    // Healthy -> Saturated (or Throttled -> Saturated) transition.
+    // Reads are lock-free via ConcurrentDictionary; writes happen
+    // only on transitions (rare). Trees that never reached Saturated
+    // are absent from the map and the drain-decision helper returns
+    // false (no recent saturation).
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSaturatedUtc
+        = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the wall-clock UTC at which the named tree most recently
+    /// transitioned into <see cref="WalSaturationState.Saturated"/>, or
+    /// <c>null</c> if the tree has never been observed saturated.
+    /// Consulted by <c>TcpIngestService.DrainAsync</c> at the
+    /// producer-stop boundary to decide whether to dispatch the
+    /// residual batch or abandon it (FX-029).
+    /// </summary>
+    public DateTimeOffset? LastSaturatedUtc(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return _lastSaturatedUtc.TryGetValue(treeId, out var ts) ? ts : null;
+    }
+
     /// <inheritdoc />
     public ValueTask OnStateChangedAsync(WalSaturationStateChange change, CancellationToken cancellationToken)
     {
+        // FX-029: record the per-tree last-Saturated wall-clock so the
+        // drain loop can detect recent saturation episodes even when
+        // the current sampler tick reads Healthy (flap window).
+        if (change.NewState == WalSaturationState.Saturated)
+        {
+            _lastSaturatedUtc[change.TreeId] = change.ObservedAt;
+        }
+
         // Build a short attribution suffix so the line carries
         // partition / shard context when the sampler attributed the
         // transition to a single source. Aggregate-driven transitions
