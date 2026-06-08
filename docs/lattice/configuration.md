@@ -595,6 +595,24 @@ The default of 75 seconds is `5 * WalFlushTimeout` - sized so a healthy chain wi
 
 This option can be changed freely at any time. The new value takes effect on the next deactivation.
 
+### `WalSaturationSampleInterval`
+
+Cadence at which the silo-scoped sampler that backs `IWalSaturationSignal` and `IWalSaturationObserver` recomputes the per-tree saturation state from the writer-side admission gate and the recent dispatch-timeout-trip rate (default: 200 ms). A shorter interval lowers the worst-case transition latency observers see (the bound is one sample interval beyond the underlying signal crossing the threshold) at the cost of slightly more timer-driven sampler work. The 200 ms default keeps subscribers well within the one-second transition-latency promise on the public surface while keeping the sampler at a negligible CPU footprint on an idle silo. Set to `InfiniteTimeSpan` to disable the sampler entirely - every tree's signal stays `Healthy` forever, the observable gauge reports `0` for any tree it has observed, and `IWalSaturationObserver` callbacks never fire. The options validator rejects any other non-positive value. See [WAL Saturation Signal](wal-saturation-signal.md).
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
+
+### `WalSaturationThrottledRatio`
+
+Per-partition admission-depth ratio (in `[0.0, 1.0]`) at or above which the saturation signal raises a tree to `WalSaturationState.Throttled` (default: 0.75). Computed as `in_flight / WalMaxPendingBatches` on each partition; the tree's state is the worst case across its partitions. Below the ratio the tree stays `Healthy`; at or above the ratio it advances to `Throttled`; at the cap with a non-empty wait queue (or when the dispatch-timeout rate crosses `WalSaturationDispatchTimeoutThreshold`) it advances to `Saturated`. The 0.75 default leaves a 25%-of-cap headroom for callers to slow down before the cap pins. Must be in the inclusive range `[0.0, 1.0]`; `NaN` is rejected.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
+
+### `WalSaturationDispatchTimeoutThreshold`
+
+Minimum number of `orleans.lattice.wal.append_dispatch.timeouts` trips observed within a single `WalSaturationSampleInterval` window that raises a tree to `WalSaturationState.Saturated` regardless of admission-semaphore depth (default: 1). Captures the dispatch-deadline failure-tail of the saturation regime (parked dispatches abandoned because a downstream shard wedged) in addition to the admission-depth fast signal. Raise it on dashboards where occasional single trips are expected without operator concern; the value is per-window, so `WalSaturationDispatchTimeoutThreshold = 3` with a 200 ms sample interval permits up to 14 trips/second steady-state before flagging Saturated. Must be greater than or equal to 1.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
+
 ### `WalMaxPendingBatches`
 
 Maximum number of in-flight storage-provider flushes the partition grain admits concurrently (default: 16, the measured Azure Tables Standard sweet spot at 4,000 keys/s offered load on Standard_D4as_v5). Raising this value increases pipeline depth against the storage provider - the next caller can enqueue a new flush as soon as the in-flight count drops below the cap, rather than waiting for the head of the in-flight chain to settle. The previous default was 8; raising it to 16 produced a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression.

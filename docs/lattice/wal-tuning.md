@@ -131,6 +131,19 @@ seam in `LatticeOptions.WalStorageProvider` is purpose-built for
 exactly this), or to a Premium account with a higher per-account
 throughput target.
 
+**Throttle the producer before the regime fires.** The per-tree
+saturation back-pressure signal (`IWalSaturationSignal`,
+`IWalSaturationObserver`; see [WAL Saturation Signal](wal-saturation-signal.md))
+exposes the writer-side admission gate as a typed, `Healthy` /
+`Throttled` / `Saturated` per-tree state, so callers driving offered
+load into the silo can slow down or pause *before* the failure tail
+above surfaces. The signal is silo-scoped and zero-cost on the
+`SetAsync` / `SetManyAsync` hot path - it is the leading-edge surface
+that pairs with the structural fix above (multi-account fan-out) and
+the shutdown drain below (bounded SIGTERM). The storage-account
+ceiling is still the binding constraint; the signal stops callers
+from offering past it.
+
 ## Bounded shutdown when the writer is wedged
 
 The above section describes the **steady-state** wedge: the silo is
@@ -215,6 +228,15 @@ Three instruments tell you which regime you are in:
   envelope). If p99 sits well below the cap, the cap is not binding
   and lifting it is a no-op.
 
+- **`wal.saturation.state`** - the per-tree saturation regime,
+  emitted as a `0` / `1` / `2` step function for `Healthy` /
+  `Throttled` / `Saturated`. A tree at `2` is the leading-edge
+  signal that the offered rate exceeds the silo's drain rate;
+  pair with `wal.saturation.transitions` to plot how often the
+  regime flips. The same signal is exposed to callers via
+  `IWalSaturationSignal` / `IWalSaturationObserver` so producers
+  can throttle without scraping the meter.
+
 See [Metrics](metrics.md) for the full set of WAL-side instruments
 and their tags.
 
@@ -225,6 +247,9 @@ and their tags.
 - [WAL Storage Providers](wal-storage-providers.md) - the
   `IWalStorageProvider` seam and the Azure Tables provider's
   two-phase batch protocol.
+- [WAL Saturation Signal](wal-saturation-signal.md) - the per-tree
+  back-pressure surface that lets callers throttle their offered
+  load before the saturation regime's failure tail surfaces.
 - [Configuration](configuration.md) - the full options reference,
   including the validator rules that reject non-positive values.
 - [Benchmarks](benchmarks.md) - the measurement harness and how to

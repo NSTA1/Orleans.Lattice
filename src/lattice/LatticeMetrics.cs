@@ -1542,6 +1542,70 @@ public static class LatticeMetrics
             description: "Count of writer-side parked admission callers released by a silo-drain signal on host shutdown.");
 
     /// <summary>
+    /// Tag key for the per-tree saturation state on
+    /// <see cref="WalSaturationTransitions"/> and the
+    /// <see cref="WalSaturationStateGaugeName"/> observable gauge.
+    /// Value is the lowercased state name (<c>healthy</c>,
+    /// <c>throttled</c>, <c>saturated</c>).
+    /// </summary>
+    public const string TagWalSaturationState = "state";
+
+    /// <summary>
+    /// Tag key for the previous saturation state on
+    /// <see cref="WalSaturationTransitions"/>. Lets dashboards filter
+    /// by direction of transition (e.g. <c>previous_state=healthy</c>
+    /// + <c>state=throttled</c> isolates the leading edge of every
+    /// saturation episode).
+    /// </summary>
+    public const string TagWalSaturationPreviousState = "previous_state";
+
+    /// <summary>
+    /// Counter incremented once per per-tree WAL saturation-state
+    /// transition observed by the silo-scoped sampler. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagWalSaturationState"/>
+    /// (the new state), and
+    /// <see cref="TagWalSaturationPreviousState"/> (the state the tree
+    /// was in before the transition). Optional <see cref="TagPartition"/>
+    /// and <see cref="TagShard"/> tags are added when the transition
+    /// is attributable to a single partition (admission-depth-driven)
+    /// or shard (dispatch-timeout-driven).
+    /// <para>
+    /// Wedge-investigation intent: a healthy silo's series is a flat
+    /// zero. A rising rate of <c>state=throttled</c> transitions on a
+    /// specific <c>(tree)</c> is the leading edge of the saturation
+    /// regime; a rising rate of <c>state=saturated</c> is the regime
+    /// itself. Pair with the observable
+    /// <see cref="WalSaturationStateGaugeName"/> gauge for "what is
+    /// the current regime" and with this counter for "how often is
+    /// the regime changing" - flapping between Throttled and
+    /// Saturated is a different operational signal from a sustained
+    /// Saturated.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalSaturationTransitions =
+        Meter.CreateCounter<long>("orleans.lattice.wal.saturation.transitions", unit: "{transition}",
+            description: "Count of per-tree WAL saturation-state transitions observed by the silo-scoped sampler.");
+
+    /// <summary>
+    /// Instrument name of the observable gauge that reports the current
+    /// per-tree WAL saturation state. Published with
+    /// <see cref="TagTree"/> and
+    /// <see cref="TagWalSaturationState"/>; the value is the ordinal
+    /// of the <see cref="WalSaturationState"/> enum
+    /// (<c>0</c> = Healthy, <c>1</c> = Throttled, <c>2</c> = Saturated)
+    /// so dashboards can plot the regime as a step function.
+    /// <para>
+    /// Idle cost is zero - the observable callback only runs on scrape
+    /// and reads a concurrent-dictionary cache populated by the silo-
+    /// scoped sampler. A tree contributes a measurement only after the
+    /// sampler has observed at least one signal for it; a tree that
+    /// has never been written to does not appear in the gauge series
+    /// at all (rather than reporting an incorrect Healthy zero).
+    /// </para>
+    /// </summary>
+    public const string WalSaturationStateGaugeName = "orleans.lattice.wal.saturation.state";
+
+    /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf
     /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
     /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via

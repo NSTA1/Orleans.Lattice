@@ -103,6 +103,18 @@ public class LatticeOptionsResolverPropagationGuardTests
             "MaxSnapshotReplayEntries",
             "SnapshotLeafIdleTtl",
             "PrefetchEntriesScan",
+            // WAL saturation back-pressure surface: the silo-scoped
+            // WalSaturationSampler reads these directly from
+            // IOptionsMonitor.Get(string.Empty) on every tick. They are
+            // process-wide / silo-wide cadence + threshold knobs, not
+            // per-tree gates - a single sampler classifies every tree
+            // on a shared interval, so a per-tree override would not
+            // change its behaviour. Bypassing the resolver is therefore
+            // intentional; the sampler never goes through the per-call
+            // ResolvedLatticeOptions path.
+            "WalSaturationSampleInterval",
+            "WalSaturationThrottledRatio",
+            "WalSaturationDispatchTimeoutThreshold",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

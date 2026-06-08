@@ -1304,6 +1304,79 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalDrainBudget = TimeSpan.FromSeconds(75);
 
     /// <summary>
+    /// Cadence at which the silo-scoped sampler that backs
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal"/> and
+    /// <see cref="Orleans.Lattice.IWalSaturationObserver"/> recomputes
+    /// the per-tree saturation state from the writer-side admission
+    /// gate and the recent dispatch-timeout-trip rate. A shorter
+    /// interval lowers the worst-case transition latency observers
+    /// see (the bound is one sample interval beyond the underlying
+    /// signal crossing the threshold) at the cost of slightly more
+    /// timer-driven sampler work. Defaults to
+    /// <see cref="DefaultWalSaturationSampleInterval"/> (200 ms),
+    /// chosen so subscribers transition well within the one-second
+    /// bound the public surface promises while keeping the sampler
+    /// at a negligible CPU footprint on an idle silo. Set to
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to
+    /// disable the sampler entirely (the signal stays
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>
+    /// forever); the registered options validator rejects any other
+    /// non-positive value at first-resolve time.
+    /// </summary>
+    public TimeSpan WalSaturationSampleInterval { get; set; } = DefaultWalSaturationSampleInterval;
+
+    /// <summary>Default value for <see cref="WalSaturationSampleInterval"/> (200 ms).</summary>
+    public static readonly TimeSpan DefaultWalSaturationSampleInterval = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Per-partition admission-depth ratio (in <c>[0.0, 1.0]</c>) at or
+    /// above which the saturation signal raises a tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>. The
+    /// ratio is computed as
+    /// <c>in_flight / <see cref="WalMaxPendingBatches"/></c> on each
+    /// partition; the tree's state is the worst-case across its
+    /// partitions. Below the ratio the tree stays
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>; at or
+    /// above the ratio it advances to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>; at
+    /// the cap with a non-empty wait queue (or when the dispatch-timeout
+    /// rate crosses
+    /// <see cref="WalSaturationDispatchTimeoutThreshold"/>) it advances
+    /// to <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>.
+    /// Defaults to <see cref="DefaultWalSaturationThrottledRatio"/>
+    /// (0.75) - far enough above steady-state pipeline depth that
+    /// healthy bursts do not flap the state, while still leaving a
+    /// 25%-of-cap headroom for callers to slow down before the cap
+    /// pins. Must be in the inclusive range <c>[0.0, 1.0]</c>.
+    /// </summary>
+    public double WalSaturationThrottledRatio { get; set; } = DefaultWalSaturationThrottledRatio;
+
+    /// <summary>Default value for <see cref="WalSaturationThrottledRatio"/> (0.75).</summary>
+    public const double DefaultWalSaturationThrottledRatio = 0.75;
+
+    /// <summary>
+    /// Minimum number of
+    /// <c>orleans.lattice.wal.append_dispatch.timeouts</c> trips
+    /// observed within a single
+    /// <see cref="WalSaturationSampleInterval"/> sample window that
+    /// raises a tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// regardless of admission-semaphore depth. Captures the
+    /// dispatch-deadline failure-tail of the saturation regime
+    /// (parked dispatches abandoned because a downstream shard wedged)
+    /// in addition to the admission-depth fast signal. Defaults to
+    /// <see cref="DefaultWalSaturationDispatchTimeoutThreshold"/>
+    /// (1), so even a single dispatch-timeout trip in a sample window
+    /// flags the affected tree as saturated; raise it on dashboards
+    /// where occasional single trips are expected without operator
+    /// concern. Must be greater than or equal to 1.
+    /// </summary>
+    public int WalSaturationDispatchTimeoutThreshold { get; set; } = DefaultWalSaturationDispatchTimeoutThreshold;
+
+    /// <summary>Default value for <see cref="WalSaturationDispatchTimeoutThreshold"/> (1).</summary>
+    public const int DefaultWalSaturationDispatchTimeoutThreshold = 1;
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's

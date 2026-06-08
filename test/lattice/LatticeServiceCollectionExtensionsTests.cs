@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests;
 
@@ -176,5 +178,97 @@ public class LatticeServiceCollectionExtensionsTests
                 Is.EqualTo(1),
                 "Replace must not stack descriptors.");
         });
+    }
+
+    [Test]
+    public void AddLattice_registers_IWalSaturationSignal_singleton()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLattice((_, _) => { });
+
+        var provider = services.BuildServiceProvider();
+        var signal = provider.GetService<IWalSaturationSignal>();
+        Assert.That(signal, Is.Not.Null, "AddLattice must register the public saturation signal singleton");
+
+        // Same instance resolved twice (singleton lifetime).
+        Assert.That(provider.GetService<IWalSaturationSignal>(), Is.SameAs(signal));
+    }
+
+    [Test]
+    public void AddLattice_registers_saturation_sampler_as_hosted_service()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLattice((_, _) => { });
+
+        // Inspect the descriptors directly rather than materialising every
+        // IHostedService: other hosted services (LatticeStorageUsagePoller,
+        // CrdtShapeStartup, WalCommitLogWriterDrainer) require an
+        // IGrainFactory that this DI container does not provide, so calling
+        // GetServices<IHostedService>() would throw on them regardless of
+        // whether the saturation sampler is registered.
+        var samplerDescriptor = services.SingleOrDefault(d =>
+            d.ServiceType == typeof(IHostedService)
+            && d.ImplementationType == typeof(WalSaturationSampler));
+        Assert.That(
+            samplerDescriptor,
+            Is.Not.Null,
+            "AddLattice must register the WalSaturationSampler as an IHostedService so the per-silo cadence ticks under host lifecycle");
+        Assert.That(
+            samplerDescriptor!.Lifetime,
+            Is.EqualTo(ServiceLifetime.Singleton),
+            "the sampler must be a singleton so it owns the per-silo state");
+    }
+
+    [Test]
+    public void AddLattice_registers_signal_and_concrete_type_as_same_instance()
+    {
+        // The public interface and the internal concrete type resolve
+        // to the same singleton so callers reaching for either side
+        // (public IWalSaturationSignal in production code, internal
+        // WalSaturationSignal in tests + the sampler) see consistent
+        // state.
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLattice((_, _) => { });
+
+        var provider = services.BuildServiceProvider();
+        var iface = provider.GetRequiredService<IWalSaturationSignal>();
+        var concrete = provider.GetRequiredService<WalSaturationSignal>();
+        Assert.That(iface, Is.SameAs(concrete));
+    }
+
+    [Test]
+    public void AddLattice_registers_WalSaturationObserverDispatcher_singleton()
+    {
+        // The dispatcher is the second-of-three saturation-surface
+        // singletons (signal + dispatcher + sampler hosted service).
+        // The sampler resolves it as a constructor dependency, so its
+        // absence would fail container validation - but inspect the
+        // descriptor directly to keep this test independent of the
+        // sampler test above.
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLattice((_, _) => { });
+
+        var dispatcherDescriptor = services.SingleOrDefault(d =>
+            d.ServiceType == typeof(WalSaturationObserverDispatcher));
+        Assert.That(
+            dispatcherDescriptor,
+            Is.Not.Null,
+            "AddLattice must register the WalSaturationObserverDispatcher so DI-registered observers fan out on transitions");
+        Assert.That(
+            dispatcherDescriptor!.Lifetime,
+            Is.EqualTo(ServiceLifetime.Singleton),
+            "the dispatcher must be a singleton so the per-silo observer collection is stable");
     }
 }

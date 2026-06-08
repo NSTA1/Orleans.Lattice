@@ -220,4 +220,108 @@ public class WalCommitLogWriterDispatchTimeoutTests
 
         release.TrySetResult(Array.Empty<long>());
     }
+
+    [Test]
+    public void AppendAsync_dispatch_timeout_increments_per_tree_shard_counter_consumed_by_saturation_sampler()
+    {
+        // The writer publishes a cumulative per-(tree, shard) dispatch-
+        // timeout trip count into a static dictionary that the silo-
+        // scoped WalSaturationSampler reads on each tick to derive the
+        // dispatch-timeout half of the Saturated classification. This
+        // test pins the writer-side increment contract: one trip
+        // increments the (tree, shard) slot by exactly one, and the
+        // shard component matches the writer partition the dispatch
+        // targeted.
+        WalCommitLogWriter._dispatchTimeoutCounts.Clear();
+
+        var release = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shard = Substitute.For<IWalShardGrain>();
+        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(release.Task);
+
+        var writer = CreateWriter(shard, new LatticeOptions
+        {
+            WalAppendDispatchTimeout = TimeSpan.FromMilliseconds(50),
+        });
+
+        Assert.That(
+            async () => await writer.AppendAsync(MakeMutation()),
+            Throws.TypeOf<TimeoutException>());
+
+        // Locate the increment. The writer partition of the synthetic
+        // mutation is deterministic for the configured tree id but
+        // varies with the partition hash; rather than recomputing the
+        // hash, the test asserts that exactly one slot in the dictionary
+        // was incremented to 1 and that slot belongs to the test tree.
+        var hits = WalCommitLogWriter._dispatchTimeoutCounts
+            .Where(kv => kv.Key.TreeId == TreeId)
+            .ToList();
+        Assert.That(hits, Has.Count.EqualTo(1),
+            "exactly one (tree, shard) slot must be incremented by a single dispatch-timeout trip");
+        Assert.That(hits[0].Value, Is.EqualTo(1L),
+            "first trip on a fresh slot must initialise the cumulative count to 1");
+
+        release.TrySetResult(0L);
+    }
+
+    [Test]
+    public void AppendAsync_repeated_dispatch_timeouts_accumulate_per_tree_shard_count()
+    {
+        // The counter is cumulative across the lifetime of the writer
+        // singleton; the sampler subtracts the prior tick's reading to
+        // derive a per-window delta. This test pins the "monotonic
+        // counter" half of that contract: two trips on the same
+        // (tree, shard) slot leave the count at 2.
+        WalCommitLogWriter._dispatchTimeoutCounts.Clear();
+
+        var release = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shard = Substitute.For<IWalShardGrain>();
+        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(release.Task);
+
+        var writer = CreateWriter(shard, new LatticeOptions
+        {
+            WalAppendDispatchTimeout = TimeSpan.FromMilliseconds(50),
+        });
+
+        Assert.That(async () => await writer.AppendAsync(MakeMutation("k1")), Throws.TypeOf<TimeoutException>());
+        Assert.That(async () => await writer.AppendAsync(MakeMutation("k1")), Throws.TypeOf<TimeoutException>());
+
+        // Both dispatches with the same key land on the same partition
+        // (deterministic hash on the same string). The slot count must
+        // therefore be 2 in exactly one slot for this tree.
+        var hits = WalCommitLogWriter._dispatchTimeoutCounts
+            .Where(kv => kv.Key.TreeId == TreeId)
+            .ToList();
+        Assert.That(hits, Has.Count.EqualTo(1),
+            "two trips on the same key must land in exactly one (tree, shard) slot");
+        Assert.That(hits[0].Value, Is.EqualTo(2L),
+            "cumulative count must accumulate across trips on the same slot");
+
+        release.TrySetResult(0L);
+    }
+
+    [Test]
+    public async Task AppendAsync_successful_dispatch_does_not_touch_per_tree_shard_counter()
+    {
+        // The counter is a failure-tail signal; a happy-path dispatch
+        // must not increment it, otherwise the sampler would observe a
+        // false positive delta and classify a healthy tree as
+        // Saturated.
+        WalCommitLogWriter._dispatchTimeoutCounts.Clear();
+
+        var shard = Substitute.For<IWalShardGrain>();
+        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(42L));
+
+        var writer = CreateWriter(shard, new LatticeOptions
+        {
+            WalAppendDispatchTimeout = TimeSpan.FromSeconds(5),
+        });
+
+        var offset = await writer.AppendAsync(MakeMutation());
+        Assert.That(offset, Is.EqualTo(42L));
+
+        Assert.That(
+            WalCommitLogWriter._dispatchTimeoutCounts.Count(kv => kv.Key.TreeId == TreeId),
+            Is.EqualTo(0),
+            "happy-path dispatch must never touch the dispatch-timeout counter");
+    }
 }

@@ -1,0 +1,89 @@
+# WAL saturation back-pressure signal
+
+This document is the design reference for the per-tree saturation signal exposed by `IWalSaturationSignal`, `IWalSaturationObserver`, and `WalSaturationStateChange`. It complements the call-site reference in [`api.md`](api.md#wal-saturation-back-pressure) and the operational sizing context in [`wal-tuning.md`](wal-tuning.md#when-lifting-the-cap-stops-helping).
+
+## Motivation
+
+The WAL write path on a single silo has two implicit ceilings:
+
+1. The writer-side admission semaphore, capped per partition at `LatticeOptions.WalMaxPendingBatches` (default 16). When the cap is reached, new `AppendAsync` callers park on the semaphore until a peer dispatch releases its slot.
+2. The downstream shard activation and its storage provider. A wedged shard or a saturating storage account holds dispatches in flight long enough that the admission semaphore stays at cap, and parked callers eventually trip `WalAppendDispatchTimeout` (default 30 seconds) and surface a `TimeoutException` to the foreground commit path.
+
+Before this signal existed, the only way a caller knew the silo was approaching either ceiling was to observe the failure tail - a `TimeoutException` from `SetAsync` / `SetManyAsync`. By the time the failure surfaced, the silo had already accumulated hundreds of in-flight transactions, many of which would surface as `failed=N` on a benchmark cohort or as `UnobservedTaskException` in production apps whose dispatchers had forgotten to await.
+
+The saturation signal exposes the writer-side admission gate's pressure as a typed, observable, per-tree state so callers can throttle their offered load *before* the failure tail surfaces. It does **not** change the underlying mechanics: `WalMaxPendingBatches` still caps the in-flight depth, and `WalAppendDispatchTimeout` still bounds individual dispatches. The signal makes the existing pressure visible.
+
+## State contract
+
+| State | Meaning | Caller action |
+|-------|---------|---------------|
+| `Healthy` | Admission depth well under cap, no recent dispatch-timeout trips. | Continue dispatching at full rate. |
+| `Throttled` | Admission depth at or above `WalSaturationThrottledRatio` (default 0.75) of the cap on at least one partition. | Slow down the offered rate. Continue dispatching - new appends will land, possibly after a brief admission wait. |
+| `Saturated` | Admission semaphore at cap with parked callers, **or** recent dispatch-timeout trip rate at or above `WalSaturationDispatchTimeoutThreshold` (default 1) in a single sample window. | Pause new appends until the state returns to `Healthy`. Continuing to dispatch will fault parked callers with `TimeoutException` rather than improving throughput. |
+
+States are totally ordered (`Healthy < Throttled < Saturated`), and the tree's state is the worst case across every partition / shard for that tree. The state space is open for additive extension - future minor releases may introduce intermediate or recovery states (for example a `Recovering` state when pressure has just dropped) without breaking subscribers that switch on the three documented values.
+
+## Resolution and scope
+
+- **Per-tree.** A multi-tree silo does not lump every tree's pressure together. A `Saturated` tree A does not affect tree B's signal. `IWalSaturationSignal.GetAggregateState()` exists for callers that want a single global signal across every observed tree (a TCP listener that fronts every tree at once, for example) and returns the worst case across the per-tree views.
+- **Per-silo.** The signal is scoped to a single silo process. Each silo's `WalCommitLogWriter` singleton owns the admission gate for traffic it dispatches; the sampler reads only that singleton's tracker map. A multi-silo cluster's aggregate health is a dashboard concern (sum the `orleans.lattice.wal.saturation.state` observable gauge across silos), not a runtime one.
+- **Per-tick.** The signal is recomputed by a silo-scoped `IHostedService` (`WalSaturationSampler`) that ticks at `LatticeOptions.WalSaturationSampleInterval` (default 200 ms). The worst-case subscriber transition latency is therefore one sample interval beyond the underlying signal crossing the threshold - well under the one-second bound documented on the public surface.
+
+## Idle cost
+
+The sampler is the only piece of the signal that runs unconditionally:
+
+- **When no callers are subscribed** (no observers, no polling getters, no awaiters): the sampler still ticks, but per-tick work is a small `ConcurrentDictionary` enumeration plus per-tree state arithmetic. On an idle silo with no tree traffic the loop's work is a no-op - the dictionary is empty.
+- **When polling getters are called**: one `ConcurrentDictionary.TryGetValue` returning an `enum`. No allocation, no grain call.
+- **When `WaitForHealthyAsync` is called on an already-Healthy tree**: returns `Task.CompletedTask` synchronously. No allocation.
+- **When `WaitForHealthyAsync` is called on a non-Healthy tree**: one `TaskCompletionSource` plus an optional `CancellationTokenRegistration`. The TCS settles on the next sample tick that observes the tree at `Healthy`.
+- **When observers are registered**: one `ValueTask` per transition per observer. Transitions are rare (one per regime change), not per-call.
+- **On the `SetAsync` / `SetManyAsync` hot path**: zero. The writer paths are unchanged - they record metrics and update the per-(tree, shard) cumulative dispatch-timeout count via an `AddOrUpdate` on a static dictionary, which the sampler reads on its own thread.
+
+## Choosing a shape
+
+The three surfaces are designed to compose. Pick the one that matches the consumer's natural control flow.
+
+| Consumer shape | Recommended surface |
+|----------------|---------------------|
+| A TCP read loop that wants to check before each `ReadAsync` | Polling: `signal.GetCurrentState(treeId)`. Cost is a single dictionary lookup per check. |
+| A producer whose mainline needs to "pause until the silo recovers" before continuing | Await: `await signal.WaitForHealthyAsync(treeId, ct)`. Synchronous fast-path when already `Healthy`. |
+| A control plane / circuit breaker / sidecar that reacts to *transitions* as events | Push: `IWalSaturationObserver` registered in DI. Single callback per regime change. |
+| A Grafana dashboard or alert | Metrics: `orleans.lattice.wal.saturation.state` (gauge) + `orleans.lattice.wal.saturation.transitions` (counter). |
+
+A host may use all three at once without drift - they all read from the same per-tree state cache populated by the sampler.
+
+## Strategy is the caller's
+
+The signal carries no strategy. A caller seeing `Saturated` may:
+
+- Pause TCP reads (the canonical bench pattern - the kernel TCP window naturally back-pressures the producer).
+- Shed offered traffic at a load balancer.
+- Write the offered request to a side buffer / outbox / queue.
+- Reject the request to the upstream caller with a typed back-pressure error.
+- Slow the producer down to a heartbeat dispatch rate while keeping the connection open.
+
+The library is agnostic. The surface is the **signal**; the strategy is the application's.
+
+## Relationship to other surfaces
+
+- **`LatticeOptions.WalMaxPendingBatches`.** The admission semaphore the signal reads from. This is the underlying cap; the signal makes it observable. Lifting the cap reduces how often the signal fires but does not change its contract.
+- **`LatticeOptions.WalAppendDispatchTimeout`.** The dispatch deadline whose trips feed the second source of the `Saturated` classification. A non-zero dispatch-timeout trip rate is the failure-tail surface; the saturation signal turns it into a leading-edge surface.
+- **`WalCommitLogWriter` writer-side drain on host shutdown** ([wal-tuning.md - bounded shutdown](wal-tuning.md#bounded-shutdown-when-the-writer-is-wedged)). The drain closes the shutdown half of the saturation problem - parked callers are released within bounded time of SIGTERM. The saturation signal closes the runtime half - callers can stop offering load before parking becomes the dominant regime.
+- **`LatticeMetrics.WalAppendDispatchTimeouts`, `WalAppendAdmissionTimeouts`, `WalAppendAdmissionWait`.** The existing instruments that surface the underlying signals. The saturation gauge / counter sit one layer up: they classify the regime rather than counting the individual events.
+
+## Disabling the sampler
+
+Setting `LatticeOptions.WalSaturationSampleInterval = Timeout.InfiniteTimeSpan` leaves the sampler dormant. Every tree's signal stays at `Healthy` forever, the observable gauge reports `0` for any tree it has not observed, and `IWalSaturationObserver` callbacks never fire. Polling getters and `WaitForHealthyAsync` continue to return the cached state - which is `Healthy` for every tree, because the sampler never wrote anything else. The hosted-service startup hook logs a debug message at silo start when this option is set so operators see the disablement decision in the silo log.
+
+This is the right shape when:
+
+- The host already has an external back-pressure surface (a load balancer or service mesh observing the same workload) and does not want the per-silo signal duplicated.
+- A test fixture needs deterministic state and wants to drive the sampler manually via `WalSaturationSampler.SampleOnceAsync`.
+
+## See also
+
+- [API Reference - WAL saturation back-pressure](api.md#wal-saturation-back-pressure) - the call-site reference with code snippets.
+- [WAL Tuning - When lifting the cap stops helping](wal-tuning.md#when-lifting-the-cap-stops-helping) - the operational context that motivated this signal.
+- [Metrics](metrics.md) - the full instrument set including the saturation gauge and transitions counter.
+- [Configuration](configuration.md) - the options reference, including the validator rules that reject out-of-range values.
