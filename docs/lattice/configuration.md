@@ -105,6 +105,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalAppendDispatchTimeout`](#walappenddispatchtimeout) | `TimeSpan` | 30 seconds | Yes |
 | [`WalBytePressureReclaimTarget`](#walbytepressurereclaimtarget) | `double` | 0.8 | Yes |
+| [`WalDrainBudget`](#waldrainbudget) | `TimeSpan` | 75 seconds | Yes |
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB | Yes |
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
 | [`WalFlushPreflightTimeout`](#walflushpreflighttimeout) | `TimeSpan` | 5 seconds | Yes |
@@ -113,6 +114,11 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
+| [`WalSaturationDispatchTimeoutThreshold`](#walsaturationdispatchtimeoutthreshold) | `int` | 1 | Yes |
+| [`WalSaturationProviderFailureRateThreshold`](#walsaturationproviderfailureratethreshold) | `int` | 1 | Yes |
+| [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) | `TimeSpan` | 1 second | Yes |
+| [`WalSaturationSampleInterval`](#walsaturationsampleinterval) | `TimeSpan` | 200 milliseconds | Yes |
+| [`WalSaturationThrottledRatio`](#walsaturationthrottledratio) | `double` | 0.75 | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
 ### Structural sizing (registry-pinned)
@@ -612,6 +618,14 @@ This option can be changed freely at any time. The new value takes effect on the
 Minimum number of `orleans.lattice.wal.append_dispatch.timeouts` trips observed within a single `WalSaturationSampleInterval` window that raises a tree to `WalSaturationState.Saturated` regardless of admission-semaphore depth (default: 1). Captures the dispatch-deadline failure-tail of the saturation regime (parked dispatches abandoned because a downstream shard wedged) in addition to the admission-depth fast signal. Raise it on dashboards where occasional single trips are expected without operator concern; the value is per-window, so `WalSaturationDispatchTimeoutThreshold = 3` with a 200 ms sample interval permits up to 14 trips/second steady-state before flagging Saturated. Must be greater than or equal to 1.
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
+
+### `WalSaturationProviderFailureRateThreshold`
+
+Minimum number of provider-side commit failures (any exception surfaced from a downstream `IWalShardGrain.AppendAsync` / `AppendBatchAsync` dispatch other than the writer-side `TimeoutException` already captured by `WalSaturationDispatchTimeoutThreshold`) observed within a single `WalSaturationSampleInterval` window that raises a tree to `WalSaturationState.Saturated` regardless of admission-semaphore depth and dispatch-timeout trips (default: 1). Captures the third saturation regime the writer side cannot otherwise surface: a downstream storage provider whose commit calls return quickly (so neither the admission depth nor the dispatch deadline crosses the threshold) but terminally fail at a high rate, e.g. an Azure Tables single-account 409-Conflict burst where the SDK retry races a server-side-already-committed transaction.
+
+Without this input the caller saw the failure tail (a `SetAsync` / `SetManyAsync` faulted) but the per-tree saturation signal stayed `Healthy` and any back-pressure consumer (the bench TCP reader, an upstream load balancer) had no leading-edge surface to slow down before the leak became visible at the operator level. Caller-driven cancellation paths are excluded from the counter (an `OperationCanceledException` whose token matches the caller's cancellation token is not counted) so a healthy caller-side abandonment never inflates the saturation signal.
+
+Set to `0` to disable the trigger entirely (matches the `Timeout.InfiniteTimeSpan` sentinel on the sample-interval option). The validator rejects any other negative value. This option can be changed freely at any time; the new value takes effect on the next sampler tick.
 
 ### `WalSaturationRecoveryWindow`
 

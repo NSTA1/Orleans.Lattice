@@ -1135,16 +1135,32 @@ internal sealed class TcpIngestService(
         var remote = client.Client.RemoteEndPoint?.ToString() ?? "?";
         Console.WriteLine($"[silo] accepted {remote}");
         var treeTag = new KeyValuePair<string, object?>("tree", settings.TreeId);
-        // F-086: small per-line yield count applied while the tree is
-        // Throttled. The intermediate state is advisory only - the
-        // reader still drains the socket, but it surrenders the
-        // current thread on every line via Task.Yield() so the producer
-        // observes a measurable slowdown that gives the silo's writer
-        // a window to catch up before the regime escalates to
-        // Saturated. Stays well under the cost of a kernel TCP
-        // round-trip so a healthy regime is not penalised when the
-        // signal flaps near the throttled ratio threshold.
-        const int ThrottledYieldsPerLine = 1;
+        // Per-line back-pressure response uses the canonical library
+        // helper IWalSaturationSignal.ApplyBackPressureAsync (no-op
+        // on Healthy, honest per-line delay on Throttled, full
+        // park-on-Saturated). The Throttled per-line delay is
+        // tunable via BENCH_THROTTLED_LINE_DELAY_MICROS so operators
+        // can dial back-pressure strength without recompiling; the
+        // default (1 ms, matching the library helper's default)
+        // slows a 10 k events/sec offered stream to ~1 k events/sec
+        // during Throttled, the TCP receive buffer fills, the
+        // producer's socket.SendAsync blocks, and the writer's
+        // admission gate drains before the regime escalates to
+        // Saturated. The original F-086 design (one Task.Yield per
+        // line) was too soft - the reader still drained the socket
+        // at near-full speed during Throttled, and operationally
+        // surfaced as the 409-Conflict burst when the in-flight
+        // saga count crossed the Azure-Tables single-account
+        // ceiling because the bench kept reading at producer-rate
+        // during the brief Throttled windows between Saturated
+        // transitions.
+        var throttledLineDelayMicrosRaw = Environment.GetEnvironmentVariable("BENCH_THROTTLED_LINE_DELAY_MICROS");
+        var throttledLineDelayMicros = int.TryParse(throttledLineDelayMicrosRaw, out var v) && v >= 0
+            ? v
+            : (int)WalSaturationSignalExtensions.DefaultThrottledDelay.TotalMicroseconds;
+        var throttledLineDelay = throttledLineDelayMicros > 0
+            ? TimeSpan.FromMicroseconds(throttledLineDelayMicros)
+            : TimeSpan.Zero;
         try
         {
             using (client)
@@ -1155,36 +1171,29 @@ internal sealed class TcpIngestService(
                 while (true)
                 {
                     // F-086 adoption: gate the TCP-read loop on the
-                    // per-tree saturation signal from F-085. On Saturated
-                    // we PARK the reader by awaiting WaitForHealthyAsync
-                    // - the kernel's per-connection receive buffer fills,
-                    // the TCP window shrinks to zero, the producer's
-                    // socket.SendAsync blocks, and slipMaxMs rises in
-                    // the producer reporter window that overlaps. No
-                    // application-protocol back-pressure: the kernel
-                    // TCP window does all the work, so this same pattern
-                    // applies unchanged to any TCP-fronted ingest path.
-                    // On Throttled we keep draining but yield the
-                    // scheduler so the producer observes a measurable
-                    // slowdown without a full pause-and-resume
-                    // oscillation against the Saturated boundary.
-                    var state = saturationSignal.GetCurrentState(settings.TreeId);
-                    if (state == WalSaturationState.Saturated)
-                    {
-                        // Park the read loop until the sampler observes
-                        // the tree return to Healthy. The wait is
-                        // bounded by LatticeOptions.WalSaturationSampleInterval
-                        // (default 200ms) so the resume happens promptly
-                        // once the silo's writer admission gate drains.
-                        await saturationSignal.WaitForHealthyAsync(settings.TreeId, ct).ConfigureAwait(false);
-                    }
-                    else if (state == WalSaturationState.Throttled)
-                    {
-                        for (var i = 0; i < ThrottledYieldsPerLine; i++)
-                        {
-                            await Task.Yield();
-                        }
-                    }
+                    // per-tree saturation signal from F-085 using the
+                    // canonical IWalSaturationSignal.ApplyBackPressureAsync
+                    // helper. The helper translates the three-state
+                    // signal into the right per-call action:
+                    //
+                    // - Healthy: no-op (synchronous fast path, one
+                    //   ConcurrentDictionary lookup).
+                    // - Throttled: per-call delay so the producer
+                    //   observes a measurable slowdown that gives
+                    //   the silo's writer admission gate time to
+                    //   drain before the regime escalates to
+                    //   Saturated.
+                    // - Saturated: park the reader by awaiting
+                    //   WaitForHealthyAsync - the kernel's per-
+                    //   connection receive buffer fills, the TCP
+                    //   window shrinks to zero, the producer's
+                    //   socket.SendAsync blocks, and slipMaxMs rises
+                    //   in the producer reporter window that overlaps.
+                    //   No application-protocol back-pressure: the
+                    //   kernel TCP window does all the work, so this
+                    //   same pattern applies unchanged to any
+                    //   TCP-fronted ingest path.
+                    await saturationSignal.ApplyBackPressureAsync(settings.TreeId, throttledLineDelay, ct).ConfigureAwait(false);
 
                     line = await reader.ReadLineAsync(ct);
                     if (line is null) break;
@@ -1509,6 +1518,49 @@ internal sealed class TcpIngestService(
             outstanding = new Task[flushTasks.Count];
             flushTasks.CopyTo(outstanding);
         }
+
+        // FX-032 Symptom 2: in-flight-tail quiesce. The FX-029 gate
+        // above guards only the residual ingest-channel batch (the
+        // last batch the producer assembled but had not yet
+        // dispatched). Batches that DispatchFlushAsync already
+        // accepted into `flushTasks` before the producer-stop are
+        // still racing the storage account at this point; under the
+        // single-account 409-Conflict regime they sit parked on the
+        // writer-side admission cap for up to ~30 s (WalAppendDispatchTimeout)
+        // and surface as failed=N on FINAL even though the producer
+        // exited cleanly. Mirror the FX-029 recency check here:
+        // when the silo was Saturated within RecentSaturationWindow,
+        // park on IWalSaturationSignal.WaitForHealthyAsync (bounded
+        // by InFlightTailQuiesceBudget so the host shutdown lifecycle
+        // still settles inside WalDrainBudget) so the in-flight tail
+        // gets a chance to settle against a recovered storage account
+        // instead of bleeding through the deadline. The wait short-
+        // circuits on signal recovery, on the budget timeout, or on
+        // cancellation - on every exit path the existing
+        // Task.WhenAll(outstanding) below releases the tail. This
+        // gate is best-effort accounting (the failed=N count is
+        // smaller when the storage account cools off in time) and
+        // not a correctness guarantee.
+        var lastSatTail = saturationLogger.LastSaturatedUtc(settings.TreeId);
+        var recentlySaturatedTail = lastSatTail.HasValue
+            && (DateTimeOffset.UtcNow - lastSatTail.Value) < RecentSaturationWindow;
+        if (recentlySaturatedTail && outstanding.Length > 0)
+        {
+            Console.WriteLine($"[silo:ingest] in-flight-tail quiesce: awaiting WaitForHealthyAsync for up to {InFlightTailQuiesceBudget} before releasing {outstanding.Length} in-flight flushes (last Saturated at {lastSatTail:O}).");
+            using var quiesceCts = new CancellationTokenSource(InFlightTailQuiesceBudget);
+            var quiesceStartTicks = Stopwatch.GetTimestamp();
+            try
+            {
+                await saturationSignal.WaitForHealthyAsync(settings.TreeId, quiesceCts.Token);
+                var quiesceElapsed = Stopwatch.GetElapsedTime(quiesceStartTicks);
+                Console.WriteLine($"[silo:ingest] in-flight-tail quiesce: signal recovered after {quiesceElapsed.TotalSeconds:0.0}s; releasing {outstanding.Length} in-flight flushes.");
+            }
+            catch (OperationCanceledException) when (quiesceCts.IsCancellationRequested)
+            {
+                Console.WriteLine($"[silo:ingest] in-flight-tail quiesce: budget {InFlightTailQuiesceBudget} expired without recovery; falling through to in-flight WhenAll (in-flight batches will settle through their dispatch deadlines).");
+            }
+        }
+
         try { await Task.WhenAll(outstanding); } catch { /* per-task failures already accounted for */ }
 
         reporterCts.Cancel();
@@ -1589,6 +1641,30 @@ internal sealed class TcpIngestService(
     // is measuring steady-state throughput, not residual-batch
     // accounting precision).
     private static readonly TimeSpan RecentSaturationWindow = TimeSpan.FromSeconds(30);
+
+    // FX-032 Symptom 2: hard ceiling on the in-flight-tail quiesce
+    // wait at drain entry. After abandoning the residual ingest-
+    // channel batch (FX-029) and before releasing the in-flight tail
+    // via Task.WhenAll(outstanding), the drain awaits
+    // IWalSaturationSignal.WaitForHealthyAsync for at most this
+    // duration when the silo was recently Saturated. Sized to leave
+    // a safety margin below the WAL drain budget so the host's
+    // shutdown lifecycle is preserved: the default
+    // LatticeOptions.WalDrainBudget is 75 seconds (5x the default
+    // WalFlushTimeout of 15 s), and this 30-second cap on the
+    // pre-WhenAll wait leaves the WAL writer drain ~45 s of its own
+    // budget to settle in-flight provider calls. The wait short-
+    // circuits the moment the signal observes recovery, so the
+    // common case (the storage account cools off within a few
+    // seconds of the producer stop) returns well under the cap. On
+    // an unrecovered tree the wait times out and the drain falls
+    // through to the existing Task.WhenAll(outstanding) path - the
+    // in-flight tail still settles, but accounted as failed=N
+    // through the normal dispatch-deadline path rather than
+    // discarded=N. The trade-off matches the FX-029 contract: this
+    // gate is best-effort, not a correctness guarantee, and the
+    // outer WAL drain budget remains the hard cap on host shutdown.
+    private static readonly TimeSpan InFlightTailQuiesceBudget = TimeSpan.FromSeconds(30);
 
     private async Task<int> FlushAsync(ILattice lattice, List<KeyValuePair<string, byte[]>> batch, CancellationToken ct)
     {
@@ -1691,6 +1767,20 @@ internal sealed class TcpIngestService(
 
     private static bool IsShutdownRejection(Exception ex)
     {
+        // The library surfaces shutdown-refused failures (from the
+        // saga coordinator AND from direct SetAsync / SetManyAsync
+        // calls that race the writer drain) as the typed public
+        // LatticeShuttingDownException. The bench treats this as
+        // ShutdownDiscarded so the residual at-shutdown failures
+        // attribute to discarded=N rather than failed=N on FINAL,
+        // mirroring the existing residual-channel-abandon contract.
+        // This gate runs only when ApplicationStopping is requested,
+        // so it cannot mask a steady-state error.
+        if (ex is LatticeShuttingDownException)
+        {
+            return true;
+        }
+
         // Match the two messages Orleans emits when an activation cannot
         // be created because the silo is draining. Type-name match keeps
         // the check resilient to Orleans internalising the type.

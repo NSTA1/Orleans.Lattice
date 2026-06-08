@@ -131,9 +131,9 @@ public class WalCommitLogWriterDrainerTests
 
         Assert.That(
             async () => await parked,
-            Throws.InstanceOf<TimeoutException>()
+            Throws.InstanceOf<LatticeShuttingDownException>()
                 .With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)),
-            "StopAsync must invoke DrainAsync so parked admission callers surface a typed TimeoutException naming WalDrainBudget; if it stops at no-op the parked caller stays parked forever and the host's bounded shutdown grace would expire");
+            "StopAsync must invoke DrainAsync so parked admission callers surface a typed LatticeShuttingDownException naming WalDrainBudget; if it stops at no-op the parked caller stays parked forever and the host's bounded shutdown grace would expire");
 
         heldRelease.TrySetResult(0L);
     }
@@ -186,7 +186,7 @@ public class WalCommitLogWriterDrainerTests
 
         Assert.That(
             async () => await parked,
-            Throws.InstanceOf<TimeoutException>()
+            Throws.InstanceOf<LatticeShuttingDownException>()
                 .With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)));
 
         heldRelease.TrySetResult(0L);

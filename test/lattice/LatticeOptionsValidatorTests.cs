@@ -484,6 +484,40 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void WalSaturationProviderFailureRateThreshold_default_is_one()
+    {
+        Assert.That(new LatticeOptions().WalSaturationProviderFailureRateThreshold, Is.EqualTo(1));
+        Assert.That(LatticeOptions.DefaultWalSaturationProviderFailureRateThreshold, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void WalSaturationProviderFailureRateThreshold_positive_passes()
+    {
+        var result = Validate(o => o.WalSaturationProviderFailureRateThreshold = 5);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationProviderFailureRateThreshold_zero_passes()
+    {
+        // Zero is the documented "disable the provider-failure-rate
+        // trigger entirely" sentinel. The validator must accept it
+        // (unlike the dispatch-timeout-threshold counterpart, where
+        // zero is rejected because the dispatch-timeout signal cannot
+        // be opted out of independently of the sampler interval).
+        var result = Validate(o => o.WalSaturationProviderFailureRateThreshold = 0);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationProviderFailureRateThreshold_negative_fails()
+    {
+        var result = Validate(o => o.WalSaturationProviderFailureRateThreshold = -1);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationProviderFailureRateThreshold)));
+    }
+
+    [Test]
     public void WalSaturationRecoveryWindow_default_is_one_second()
     {
         Assert.That(new LatticeOptions().WalSaturationRecoveryWindow, Is.EqualTo(TimeSpan.FromSeconds(1)));

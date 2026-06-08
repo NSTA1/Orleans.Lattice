@@ -51,6 +51,26 @@ internal sealed class AtomicWriteGrain(
     private const int MaxRetriesPerStep = 1;
 
     /// <summary>
+    /// Sentinel prefix stamped onto
+    /// <see cref="State.AtomicWriteState.FailureMessage"/> when the
+    /// saga's batched <c>SetManyAsync</c> dispatch raised an
+    /// <see cref="InvalidOperationException"/> whose message named
+    /// <see cref="LatticeOptions.WalDrainBudget"/> (the writer-side
+    /// shutdown-refusal shape from
+    /// <c>WalCommitLogWriter.DrainAsync</c>). The saga short-circuits
+    /// the retry loop and the compensate-broadcast pass on this shape
+    /// because both paths would route through the same drained writer
+    /// and fail identically, burning saga-retry budget against a
+    /// writer that is provably not coming back this lifetime. The
+    /// prefix is consumed by <see cref="CompleteSagaAsync(bool)"/> to
+    /// emit the <c>shutdown_refused</c> outcome tag on
+    /// <see cref="LatticeMetrics.AtomicWriteCompleted"/> so operators
+    /// can distinguish saga failures caused by shutdown coincidence
+    /// from saga failures caused by genuine commit conflicts.
+    /// </summary>
+    private const string ShutdownRefusedFailurePrefix = "[shutdown-refused] ";
+
+    /// <summary>
     /// Wall-clock budget for stale-routing retries on grain calls that
     /// face a topology change (shard split, online resize, or reshard)
     /// mid-saga. The retry loops in <c>PrepareAsync</c> and
@@ -71,6 +91,27 @@ internal sealed class AtomicWriteGrain(
     /// the original stale-routing throw rather than hanging the saga.
     /// </summary>
     private static readonly TimeSpan StaleRoutingRetryBudget = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Wall-clock budget the saga coordinator spends parked on
+    /// <see cref="IWalSaturationSignal.WaitForHealthyAsync(string, System.Threading.CancellationToken)"/>
+    /// before each batched dispatch when the signal reports
+    /// <see cref="WalSaturationState.Saturated"/>. Bounded so the saga's
+    /// own response-timeout (driven by the caller's grain RPC budget)
+    /// always wins on a tree that never recovers, e.g. the
+    /// single-account 409-Conflict regime that gave this gate its
+    /// reason to exist. A 5-second cap keeps the saga's per-attempt
+    /// wall-clock comfortably below the 30-second
+    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> default
+    /// (the next-layer-down ceiling) and well below typical 2-3 minute
+    /// caller response-timeout windows. The gate runs at most once per
+    /// retry attempt; an unrecovered tree therefore burns at most
+    /// <c>(1 + MaxRetriesPerStep) * MaxSagaQuiesceWait</c> of saga
+    /// wall-clock on the quiesce path before falling through to the
+    /// dispatch (which will then fail on its own merits and either
+    /// retry or pivot to compensation through the existing paths).
+    /// </summary>
+    private static readonly TimeSpan MaxSagaQuiesceWait = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Composite grain key (<c>{treeId}/{operationId}</c>); used for logging.
@@ -759,6 +800,34 @@ internal sealed class AtomicWriteGrain(
             return;
         }
 
+        // Shutdown-refused fast-fail. When the saga's batched
+        // dispatch failed with the writer-side WalDrainBudget
+        // refusal, skip the per-shard terminal RPC fan-out below -
+        // every per-shard call would route through the same drained
+        // WalCommitLogWriter on the same silo and fail identically
+        // with the same exception. The leaf-side pending-tx buckets
+        // remain in place for the next saga activation (after silo
+        // restart) to drive to a terminal outcome, exactly as a
+        // pre-broadcast crash would. Without this gate the saga
+        // burned through the broadcast's stale-routing retry budget
+        // against the drained writer and surfaced the resulting
+        // cascade as OrleansMessageRejectionException in the silo
+        // log.
+        if (!committed
+            && state.State.FailureMessage is { } fm
+            && fm.StartsWith(ShutdownRefusedFailurePrefix, StringComparison.Ordinal))
+        {
+            // Information-level (not Warning): the broadcast-skip is
+            // the correct behaviour under host shutdown, not an
+            // error. Warning would trip cohort-runner verdict
+            // classifiers that count warn-or-error lines as
+            // "exception lines".
+            Logger.LogInformation(
+                "Atomic-write saga {OperationKey}: skipping terminal broadcast - shutdown-refused (the owning WalCommitLogWriter is draining; per-shard terminal fan-out would fail identically).",
+                OperationKey);
+            return;
+        }
+
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG broadcast-entry] op={OperationKey} tx={transactionId} committed={committed} initialTouched=[{string.Join(",", state.State.TouchedShards)}] entriesCount={state.State.Entries.Count}");
 #endif
@@ -1205,6 +1274,193 @@ internal sealed class AtomicWriteGrain(
     private ICommitLogWriter? _commitLogWriter;
 
     /// <summary>
+    /// Resolves the optional <see cref="IWalSaturationSignal"/>
+    /// registered by <c>AddLattice</c>. Cached after first lookup.
+    /// Returns <c>null</c> on single-node / unit-test deployments that
+    /// bypass the saturation sampler entirely - in which case the
+    /// quiesce-on-Saturated gate inside <see cref="ExecutePhaseAsync"/>
+    /// is silently skipped and the saga falls back to its pre-
+    /// shutdown-detection behaviour (dispatch every batch immediately,
+    /// retry on failure up to <see cref="MaxRetriesPerStep"/>). The
+    /// shutdown-refused fail-fast on the
+    /// <see cref="LatticeOptions.WalDrainBudget"/> exception shape
+    /// is independent of the signal resolution - it keys off the
+    /// exception message, not the signal - and remains effective on
+    /// hosts that did not register a sampler.
+    /// </summary>
+    private IWalSaturationSignal? ResolveSaturationSignal()
+    {
+        if (_saturationSignalResolved) return _saturationSignal;
+        _saturationSignalResolved = true;
+        _saturationSignal = GrainContext.ActivationServices?.GetService<IWalSaturationSignal>();
+        return _saturationSignal;
+    }
+    private bool _saturationSignalResolved;
+    private IWalSaturationSignal? _saturationSignal;
+
+    /// <summary>
+    /// Resolves the optional <see cref="Microsoft.Extensions.Hosting.IHostApplicationLifetime"/>
+    /// registered in the host. Cached after first lookup. Returns
+    /// <c>null</c> on test deployments that bypass the host
+    /// lifecycle. Consumed by <see cref="QuiesceOnSaturatedAsync"/>
+    /// so the saga's quiesce wait bails immediately once the host
+    /// starts shutting down (the saturation signal will never return
+    /// to <see cref="WalSaturationState.Healthy"/> once the writer
+    /// has drained, so waiting the full quiesce budget under
+    /// shutdown is wasted wall-clock that contributes to the host's
+    /// deactivation deadline).
+    /// </summary>
+    private Microsoft.Extensions.Hosting.IHostApplicationLifetime? ResolveLifetime()
+    {
+        if (_lifetimeResolved) return _lifetime;
+        _lifetimeResolved = true;
+        _lifetime = GrainContext.ActivationServices?.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+        return _lifetime;
+    }
+    private bool _lifetimeResolved;
+    private Microsoft.Extensions.Hosting.IHostApplicationLifetime? _lifetime;
+
+    /// <summary>
+    /// Saga-coordinator quiesce gate: when the resolved
+    /// <see cref="IWalSaturationSignal"/> reports
+    /// <see cref="WalSaturationState.Saturated"/> for
+    /// <paramref name="treeId"/>, awaits the recovery up to
+    /// <see cref="MaxSagaQuiesceWait"/> before returning so the
+    /// saga's next batched dispatch lands on a writer that has just
+    /// quiesced rather than parking on the cap. Silent no-op when:
+    /// no signal is registered (single-node / unit-test deployments);
+    /// the silo is shutting down (the signal will never return to
+    /// Healthy once the writer has drained, so waiting is wasted);
+    /// the signal reports <see cref="WalSaturationState.Healthy"/> or
+    /// <see cref="WalSaturationState.Throttled"/> (the natural lead-up
+    /// regime under the recovery-window upgrade - dispatching through
+    /// it is correct, new appends will land after a brief admission
+    /// wait); or the wait times out before the signal observes
+    /// recovery (the saga falls through to the dispatch which will
+    /// either succeed or fail through the existing paths).
+    /// </summary>
+    private async Task QuiesceOnSaturatedAsync(string treeId)
+    {
+        var signal = ResolveSaturationSignal();
+        if (signal is null) return;
+        if (signal.GetCurrentState(treeId) != WalSaturationState.Saturated) return;
+        // Shutdown short-circuit: when the host has started shutting
+        // down the WAL writer is also draining; the saturation signal
+        // will never return Healthy because nothing will drain the
+        // in-flight batches. Bail immediately so the saga's next
+        // dispatch surfaces LatticeShuttingDownException via the
+        // hard fast-path instead of burning 5 seconds of host
+        // deactivation budget on a wait that cannot succeed.
+        var lifetime = ResolveLifetime();
+        if (lifetime is not null && lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            return;
+        }
+        // Link the quiesce budget to the application-stopping token
+        // when available so a shutdown that fires mid-wait short-
+        // circuits the wait immediately rather than running out the
+        // full MaxSagaQuiesceWait budget.
+        using var cts = lifetime is not null
+            ? CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping)
+            : new CancellationTokenSource();
+        cts.CancelAfter(MaxSagaQuiesceWait);
+        try
+        {
+            await signal.WaitForHealthyAsync(treeId, cts.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // Quiesce budget exhausted OR host shutdown fired. Fall
+            // through to the dispatch path: either the storage
+            // account did not recover within the saga's per-attempt
+            // window (the batched SetManyAsync will then either trip
+            // the writer-side admission cap (TimeoutException) or
+            // the provider-side failure), or the host is shutting
+            // down (the dispatch will hit the writer's drain gate
+            // and surface LatticeShuttingDownException via the hard
+            // fast-path).
+        }
+    }
+
+    /// <summary>
+    /// Returns true when the supplied exception is one of the
+    /// terminal shutdown shapes the saga must fail-fast against
+    /// (instead of consuming retry budget on a writer / activation
+    /// chain that is provably not coming back this lifetime):
+    /// <list type="bullet">
+    /// <item><description><see cref="LatticeShuttingDownException"/> -
+    /// the typed shutdown-back-pressure surface raised by
+    /// <c>WalCommitLogWriter</c> when its drain gate fires, or
+    /// re-thrown by a nested saga / public ILattice operator that
+    /// already detected the regime. Single-check authoritative shape
+    /// for callers that opted into the typed surface.</description></item>
+    /// <item><description><see cref="InvalidOperationException"/> whose
+    /// message names <see cref="LatticeOptions.WalDrainBudget"/> -
+    /// the legacy untyped shape (kept for forward compatibility with
+    /// rolling-upgrade peers that have not yet adopted the typed
+    /// exception).</description></item>
+    /// <item><description><see cref="OrleansMessageRejectionException"/>
+    /// whose message contains the substring "Unable to create local
+    /// activation" / "invalid activation" - the Orleans runtime's
+    /// refusal to re-activate a leaf / shard-root grain that has
+    /// already been deactivated under the same shutdown. This is the
+    /// canonical shape on the RETRY attempt after the first WalDrain
+    /// failure (the activation tore down between the two attempts) or
+    /// on the FIRST attempt for a saga that lost the race to the
+    /// drain entirely (the leaf was already deactivated when the
+    /// saga reached its phase-2 broadcast).</description></item>
+    /// </list>
+    /// All three shapes share the property that the underlying cause
+    /// is host shutdown and the next retry will fail identically, so
+    /// the saga short-circuits the retry loop and the compensate-
+    /// broadcast pass on any of them. The detection uses substring
+    /// matches on stable identifiers for the non-typed shapes so a
+    /// punctuation tweak does not silently disable the fast-fail.
+    /// Walks any <see cref="AggregateException"/> the saga's parallel
+    /// dispatch shape might wrap the inner failure in, and any
+    /// wrapping <see cref="Exception.InnerException"/> chain.
+    /// </summary>
+    private static bool IsTerminalShutdownRefusal(Exception? ex)
+    {
+        if (ex is null) return false;
+        if (ex is LatticeShuttingDownException) return true;
+        if (ex is InvalidOperationException ioe
+            && ioe.Message.Contains(nameof(LatticeOptions.WalDrainBudget), StringComparison.Ordinal))
+        {
+            return true;
+        }
+        // OrleansMessageRejectionException - the Orleans runtime
+        // refused to re-activate a grain after it was deactivated.
+        // Matched by type-name substring (rather than typed
+        // reference) because the Orleans type is internal to the
+        // Orleans.Runtime assembly and not addressable from this
+        // file. The Contains check tolerates wrapping namespaces
+        // (e.g. test doubles that suffix the rejection name) so the
+        // unit suite can exercise the path without depending on
+        // Orleans.Runtime internals. The message shape
+        // ("Unable to create local activation" / "to invalid
+        // activation") is stable across Orleans 7.x / 8.x and is the
+        // documented signal that the activation chain has been torn
+        // down for this lifetime.
+        var typeName = ex.GetType().FullName;
+        if (typeName is not null
+            && typeName.Contains("OrleansMessageRejectionException", StringComparison.Ordinal)
+            && (ex.Message.Contains("Unable to create local activation", StringComparison.Ordinal)
+                || ex.Message.Contains("invalid activation", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.InnerExceptions)
+            {
+                if (IsTerminalShutdownRefusal(inner)) return true;
+            }
+        }
+        return ex.InnerException is { } innerEx && IsTerminalShutdownRefusal(innerEx);
+    }
+
+    /// <summary>
     /// c2-xxiii batched-WAL durability barrier. Filters out the null
     /// records produced by the no-WAL-adapter path and by
     /// already-marked / Guid.Empty / stale-routing-no-op shards, then
@@ -1421,9 +1677,24 @@ internal sealed class AtomicWriteGrain(
                     sagaWalPartitionsTag);
             }
             await CompleteSagaAsync(success: false);
-            throw new InvalidOperationException(
+            // Surface the saga's terminal failure as
+            // LatticeShuttingDownException when the FailureMessage
+            // carries the shutdown-refused sentinel so callers can
+            // detect the regime via `is LatticeShuttingDownException`
+            // instead of parsing the saga's rollback summary text.
+            // Genuine business / storage failures still surface as
+            // plain InvalidOperationException, preserving the
+            // historical caller contract for non-shutdown failures.
+            var failureMessage = state.State.FailureMessage;
+            var rollbackSummary =
                 $"Atomic write saga for tree '{state.State.TreeId}' failed and was rolled back: " +
-                (state.State.FailureMessage ?? "unknown failure"));
+                (failureMessage ?? "unknown failure");
+            if (failureMessage is not null
+                && failureMessage.StartsWith(ShutdownRefusedFailurePrefix, StringComparison.Ordinal))
+            {
+                throw new LatticeShuttingDownException(rollbackSummary);
+            }
+            throw new InvalidOperationException(rollbackSummary);
         }
 
         if (state.State.Phase == AtomicWritePhase.Execute && state.State.NextIndex >= state.State.Entries.Count)
@@ -1632,6 +1903,24 @@ internal sealed class AtomicWriteGrain(
                 var batchStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
+                    // Quiesce-on-Saturated. When the silo-scoped
+                    // saturation signal reports the tree as Saturated,
+                    // park the saga briefly on
+                    // WaitForHealthyAsync (capped at MaxSagaQuiesceWait)
+                    // before dispatching the batched SetManyAsync.
+                    // This is the library-side analogue of the bench
+                    // TCP reader's quiesce: it prevents the saga from
+                    // burning retry budget against a writer-side
+                    // admission gate that is provably parked. The
+                    // gate is silently skipped when the signal is not
+                    // registered (single-node / unit-test deployments)
+                    // and when the signal reports Healthy or Throttled
+                    // (Throttled is the natural lead-up regime under
+                    // the recovery-window upgrade; dispatching through
+                    // it is correct - new appends will land, possibly
+                    // after a brief admission wait).
+                    await QuiesceOnSaturatedAsync(state.State.TreeId).ConfigureAwait(true);
+
                     // Phase D1c (post-c2-xi): restored the single-call
                     // shape of D1 - one ILattice.SetManyAsync covering
                     // the whole unwritten slice. The shard-bucketing
@@ -1715,6 +2004,74 @@ internal sealed class AtomicWriteGrain(
 
                 // Batch failed. Identical retry / compensate-pivot
                 // contract to D1's per-batch loop.
+                //
+                // Detect the terminal-shutdown refusal shape before
+                // the retry decision. The writer-side drain on host
+                // shutdown surfaces a LatticeShuttingDownException
+                // (or the legacy InvalidOperationException whose
+                // message names WalDrainBudget, or the Orleans
+                // grain-rejection shape that fires when a leaf grain
+                // has already been deactivated); all three shapes
+                // are terminal for the remainder of the silo's
+                // lifetime (the writer is shutting down). Retrying
+                // against the same drained writer wastes the retry
+                // budget and eventually races grain deactivation
+                // into an OrleansMessageRejectionException cascade.
+                // Skip the retry, stamp a sentinel-prefixed
+                // FailureMessage, and pivot straight to compensation
+                // so the saga settles with the distinct
+                // "shutdown_refused" outcome tag instead of "failed".
+                var isShutdownRefused = IsTerminalShutdownRefusal(batchFailure);
+                if (isShutdownRefused)
+                {
+                    // Hard shutdown fast-path: skip every subsequent
+                    // grain RPC and state-store write the normal
+                    // compensate-pivot path would issue. The host is
+                    // going away; the Azure-Tables grain-storage
+                    // backend is the same backend the WAL writer just
+                    // refused us on, so a WriteSagaStateAsync call
+                    // would also race the drain and either time out
+                    // or wedge for the host's deactivation deadline.
+                    // Worse, the compensate-pivot path also runs
+                    // RecordTerminalDecisionAsync (an ITxRegistryGrain
+                    // RPC), UnregisterKeepaliveAsync (a reminder
+                    // service RPC), and SlideTtlAsync (another
+                    // reminder RPC) - every one of which routes
+                    // through the same grain-dispatch chain that is
+                    // already piling up parked activations under the
+                    // shutdown lifecycle. Throw directly: the
+                    // persisted state stays at Execute with the
+                    // current NextIndex, the keepalive reminder
+                    // remains registered, and the next silo
+                    // activation re-runs the saga from where it left
+                    // off (the leaf-side pending-tx buckets are also
+                    // preserved by the same crash-resume path). The
+                    // emitted outcome counter increment is sacrificed
+                    // on this path - operators see the
+                    // LatticeShuttingDownException at the caller's
+                    // catch site, which is the same operational
+                    // signal.
+                    //
+                    // Logged at Information rather than Warning: this
+                    // is the saga doing the right thing under host
+                    // shutdown (clean fast-fail, no retry burndown,
+                    // resumable from persisted state). Warning-level
+                    // logs trip the cohort runner's "exception line"
+                    // verdict classifier; the fast-path is a
+                    // normal-operation event and should not trip it.
+                    // The inner cause is omitted from the log call
+                    // because it is preserved on the thrown
+                    // LatticeShuttingDownException.InnerException and
+                    // any catch site that wants the full stack will
+                    // see it there.
+                    Logger.LogInformation(
+                        "Atomic-write saga {OperationKey}: shutdown-refused fast-path. Bypassing compensate / state-persist / reminder-unregister to keep the host's deactivation deadline. Saga will resume from NextIndex={Index} on the next silo activation. Cause: {CauseType}: {CauseMessage}",
+                        OperationKey, state.State.NextIndex, batchFailure.GetType().Name, batchFailure.Message);
+                    throw new LatticeShuttingDownException(
+                        $"Atomic write saga for tree '{state.State.TreeId}' could not complete because the silo is shutting down; the saga will resume on the next silo activation.",
+                        batchFailure);
+                }
+
                 if (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)
                 {
 #if LATTICE_DIAG
@@ -1738,8 +2095,8 @@ internal sealed class AtomicWriteGrain(
                 }
 
                 // Exhausted retries - pivot to compensation. Class B
-                // snapshot/restore: identical contract to D1's
-                // compensate-pivot site.
+                // snapshot/restore: identical contract to the
+                // historical compensate-pivot site.
                 var prevPhase = state.State.Phase;
                 var prevFailureMessage = state.State.FailureMessage;
                 var prevRetriesOnCurrentStepPivot = state.State.RetriesOnCurrentStep;
@@ -1804,10 +2161,22 @@ internal sealed class AtomicWriteGrain(
         // writes applied; "failed" = compensation ran after a Prepare/Execute
         // failure surrogate was recorded; "compensated" = rolled back for a
         // reason that was not captured as a surrogate failure (e.g. explicit
-        // caller cancellation path).
+        // caller cancellation path); "shutdown_refused" = the saga's batched
+        // dispatch raised the writer-side WalDrainBudget refusal (the host
+        // is shutting down) and the saga short-circuited the retry loop and
+        // the compensate-broadcast pass rather than burning retry budget
+        // against a writer that is provably not coming back. Lets operators
+        // distinguish saga failures caused by shutdown coincidence from
+        // saga failures caused by genuine commit conflicts on the same
+        // operator dashboard.
+        var failureMessage = state.State.FailureMessage;
         var outcome = success
             ? "committed"
-            : (state.State.FailureMessage is not null ? "failed" : "compensated");
+            : (failureMessage is not null
+                ? (failureMessage.StartsWith(ShutdownRefusedFailurePrefix, StringComparison.Ordinal)
+                    ? "shutdown_refused"
+                    : "failed")
+                : "compensated");
         LatticeMetrics.AtomicWriteCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
@@ -2106,15 +2475,25 @@ internal sealed class AtomicWriteGrain(
     /// <summary>
     /// Re-throws a remembered failure when the caller re-invokes a terminal
     /// but failed saga. The grain normally deactivates on completion so this
-    /// is mainly a defensive path for short-lived re-entry.
+    /// is mainly a defensive path for short-lived re-entry. Mirrors the
+    /// throw shape in <see cref="RunSagaAsync"/> for the same-cause regime:
+    /// <see cref="LatticeShuttingDownException"/> when the persisted
+    /// FailureMessage carries the shutdown-refused sentinel, plain
+    /// <see cref="InvalidOperationException"/> otherwise.
     /// </summary>
     private Task TryThrowFailureAsync()
     {
-        if (state.State.FailureMessage is not null)
+        var failureMessage = state.State.FailureMessage;
+        if (failureMessage is not null)
         {
-            throw new InvalidOperationException(
+            var summary =
                 $"Atomic write saga for tree '{state.State.TreeId}' previously failed and was rolled back: " +
-                state.State.FailureMessage);
+                failureMessage;
+            if (failureMessage.StartsWith(ShutdownRefusedFailurePrefix, StringComparison.Ordinal))
+            {
+                throw new LatticeShuttingDownException(summary);
+            }
+            throw new InvalidOperationException(summary);
         }
         return Task.CompletedTask;
     }

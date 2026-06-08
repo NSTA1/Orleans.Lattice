@@ -75,6 +75,11 @@ internal static class TypeAliases
     internal const string StaleShardRouting = "ol.ssr";
     internal const string ShardActivationTimeout = "ol.sat";
 
+    // Lattice host / silo shutdown back-pressure surface. Thrown by
+    // any public ILattice operator that cannot complete because the
+    // owning silo's WalCommitLogWriter is draining (host shutdown).
+    internal const string LatticeShuttingDown = "ol.lsd";
+
     // Online reshard
     internal const string TreeReshardState = "ol.txs";
     internal const string ReshardPhase = "ol.rxp";

@@ -48,6 +48,18 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     // static counter.
     private readonly ConcurrentDictionary<(string TreeId, int Shard), long> _priorDispatchTimeoutCounts
         = new();
+
+    // Per-(tree, shard) prior reading of the cumulative provider-
+    // failure counter; same per-tick delta-from-prior pattern as the
+    // dispatch-timeout counter above. Feeds the third Saturated branch
+    // (provider-side commit failure rate, e.g. the Azure-Tables-
+    // single-account 409-Conflict burst), which the dispatch-timeout
+    // counter cannot reach because terminal provider failures surface
+    // well within the dispatch deadline. First-tick deltas are skipped
+    // for the same reason (no double-counting of historical failures
+    // inherited from the static counter on a late-starting silo).
+    private readonly ConcurrentDictionary<(string TreeId, int Shard), long> _priorProviderFailureCounts
+        = new();
     private bool _priorInitialised;
 
     // Per-tree wall-clock of the most recent tick at which the
@@ -251,19 +263,47 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             acc.DispatchTimeoutDeltaInWindow += delta;
             acc.AttributedShard ??= shard;
         }
+
+        // Snapshot the per-(tree, shard) cumulative provider-failure
+        // counts and compute the per-window delta from the previous
+        // reading. Mirrors the dispatch-timeout loop above by
+        // construction so a peer call site that increments either
+        // counter from a writer broad catch is observed on the next
+        // sampler tick with the same first-tick-baseline semantics.
+        // Feeds the third Saturated branch in Classify.
+        foreach (var kv in WalCommitLogWriter._providerFailureCounts)
+        {
+            var (treeId, shard) = kv.Key;
+            var current = kv.Value;
+            var prior = _priorProviderFailureCounts.TryGetValue(kv.Key, out var p) ? p : 0L;
+            _priorProviderFailureCounts[kv.Key] = current;
+            if (!_priorInitialised) continue;
+
+            var delta = current - prior;
+            if (delta <= 0) continue;
+
+            if (!perTree.TryGetValue(treeId, out var acc))
+            {
+                acc = new TreeAccumulator { TreeId = treeId };
+                perTree[treeId] = acc;
+            }
+            acc.ProviderFailureDeltaInWindow += delta;
+            acc.AttributedShard ??= shard;
+        }
         _priorInitialised = true;
 
         if (perTree.Count == 0) return;
 
         var opts = _options.Get(string.Empty);
         var dispatchThreshold = opts.WalSaturationDispatchTimeoutThreshold;
+        var providerFailureThreshold = opts.WalSaturationProviderFailureRateThreshold;
         var throttledRatio = opts.WalSaturationThrottledRatio;
         var recoveryWindow = opts.WalSaturationRecoveryWindow;
         var observedAt = _time.GetUtcNow();
 
         foreach (var acc in perTree.Values)
         {
-            var newState = Classify(acc, throttledRatio, dispatchThreshold);
+            var newState = Classify(acc, throttledRatio, dispatchThreshold, providerFailureThreshold);
 
             // Apply the recovery-window upgrade. When the current-
             // tick classification is Healthy but the tree was observed
@@ -355,13 +395,27 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// <summary>
     /// Classifies a tree's per-tick accumulator into the three-state
     /// <see cref="WalSaturationState"/> regime. Saturated wins over
-    /// Throttled which wins over Healthy.
+    /// Throttled which wins over Healthy. Saturated is triggered by
+    /// any of three independent signals (in the order they are
+    /// evaluated, but the choice is symmetric):
+    /// dispatch-timeout-rate, provider-failure-rate, or admission
+    /// semaphore at-cap with parked callers. The provider-failure-
+    /// rate trigger is disabled when
+    /// <paramref name="providerFailureThreshold"/> is zero (the
+    /// documented sentinel).
     /// </summary>
-    private static WalSaturationState Classify(TreeAccumulator acc, double throttledRatio, int dispatchThreshold)
+    private static WalSaturationState Classify(
+        TreeAccumulator acc,
+        double throttledRatio,
+        int dispatchThreshold,
+        int providerFailureThreshold)
     {
         // Saturated wins: dispatch-timeout threshold crossed OR
+        // provider-failure threshold crossed (when enabled) OR
         // semaphore at cap with parked callers.
-        if (acc.DispatchTimeoutDeltaInWindow >= dispatchThreshold || acc.HasParkedCallers)
+        if (acc.DispatchTimeoutDeltaInWindow >= dispatchThreshold
+            || (providerFailureThreshold > 0 && acc.ProviderFailureDeltaInWindow >= providerFailureThreshold)
+            || acc.HasParkedCallers)
         {
             return WalSaturationState.Saturated;
         }
@@ -379,6 +433,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         public double MaxDepthRatio;
         public bool HasParkedCallers;
         public long DispatchTimeoutDeltaInWindow;
+        public long ProviderFailureDeltaInWindow;
         public int? AttributedPartition;
         public int? AttributedShard;
     }

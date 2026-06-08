@@ -127,6 +127,12 @@ if (options.WalSaturationDispatchTimeoutThreshold < 1)
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalSaturationDispatchTimeoutThreshold)} must be greater than or equal to 1.");
 }
+if (options.WalSaturationProviderFailureRateThreshold < 0)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationProviderFailureRateThreshold)} must be greater than or equal to 0 "
+        + "(zero disables the provider-failure-rate trigger entirely; a positive value sets the per-sample-window failure count that raises a tree to Saturated regardless of admission depth).");
+}
 if (options.WalSaturationRecoveryWindow < TimeSpan.Zero
     && options.WalSaturationRecoveryWindow != Timeout.InfiniteTimeSpan)
 {

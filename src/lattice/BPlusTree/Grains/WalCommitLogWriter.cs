@@ -84,6 +84,27 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _dispatchTimeoutCounts
         = new();
 
+    // Per-(tree, shard) cumulative provider-failure counter,
+    // incremented every time the writer observes a non-timeout, non-
+    // cancellation exception escape from an outbound
+    // IWalShardGrain.AppendAsync / AppendBatchAsync RPC. Captures
+    // the third saturation regime (the 409-Conflict burst on Azure
+    // Tables single-account, an SDK retry-exhausted failure on any
+    // provider, etc.) that the dispatch-timeout counter cannot reach
+    // because the provider's terminal failure surfaces well within
+    // the dispatch deadline. The silo-scoped saturation sampler
+    // subtracts the previous tick's reading to derive the per-window
+    // failure delta and uses it to drive the Saturated state when the
+    // delta crosses WalSaturationProviderFailureRateThreshold.
+    // Caller-cancellation paths are deliberately excluded (an
+    // OperationCanceledException whose token matches the caller's CT)
+    // so a healthy caller-driven cancellation never inflates the
+    // saturation signal. Same static-singleton shape as
+    // _dispatchTimeoutCounts so the sampler can read both maps off a
+    // fixed root regardless of writer-instance lifetime in tests.
+    internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _providerFailureCounts
+        = new();
+
     // Per-instance drain CTS. Each WalCommitLogWriter owns its own
     // token; DrainAsync cancels it; AcquireAsync observes it alongside
     // the caller's CT. Because the token lives on the writer instance
@@ -114,10 +135,87 @@ internal sealed class WalCommitLogWriter(
         // so successor writers in the same process see a clean gate.
         if (_isDraining)
         {
-            throw new InvalidOperationException(
+            // Typed shutdown-back-pressure exception (part of the
+            // typed shutdown-refusal surface exposed by the public
+            // LatticeShuttingDownException type). Derives
+            // from InvalidOperationException so the historical catch-
+            // by-type call sites still match, but lets callers that
+            // care about the shutdown regime detect it cleanly via
+            // `is LatticeShuttingDownException` without parsing
+            // exception messages. The downstream
+            // WalCommitLogWriter.AppendAsync / AppendBatchAsync
+            // dispatch-deadline catches preserve the typed exception
+            // when they discriminate the drain-release path from the
+            // genuine dispatch-deadline path (the message-substring
+            // check on WalDrainBudget still works because this
+            // exception's message names WalDrainBudget too).
+            throw new LatticeShuttingDownException(
                 $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the owning WalCommitLogWriter is shutting down ({nameof(LatticeOptions.WalDrainBudget)}).");
         }
         return _trackers.GetOrAdd((treeId, partition), static key => new PartitionTracker(key.TreeId, key.Partition));
+    }
+
+    /// <summary>
+    /// Increments the per-(tree, shard) cumulative provider-failure
+    /// counter consumed by the silo-scoped saturation sampler. Invoked
+    /// from the writer's broad catches whenever a downstream
+    /// <see cref="IWalShardGrain"/> RPC fails for a reason other than
+    /// the writer's own dispatch-deadline timeout (already counted via
+    /// <see cref="_dispatchTimeoutCounts"/>) and other than caller-
+    /// driven cancellation. <see cref="ConcurrentDictionary{TKey, TValue}.AddOrUpdate(TKey, System.Func{TKey, TValue}, System.Func{TKey, TValue, TValue})"/>
+    /// runs under the dictionary's internal striped-lock so concurrent
+    /// dispatches from peer call sites cannot drop an increment.
+    /// </summary>
+    private static void IncrementProviderFailureCount(string treeId, int partition)
+    {
+        _providerFailureCounts.AddOrUpdate(
+            (treeId, partition),
+            static _ => 1L,
+            static (_, prior) => prior + 1L);
+    }
+
+    /// <summary>
+    /// Returns true when the supplied exception is one of the shapes
+    /// the provider-failure counter must exclude (so a cancellation
+    /// event or a peer-silo / writer drain release never inflates
+    /// the saturation signal):
+    /// <list type="bullet">
+    /// <item><description>Any <see cref="OperationCanceledException"/>
+    /// regardless of which token it carries. Cancellation is an
+    /// abandonment-of-the-call event, not a "provider failed" event:
+    /// the caller stopped waiting (caller-driven) or the writer
+    /// stopped waiting (deadline-driven - already attributed via the
+    /// separate dispatch-deadline catch + the
+    /// <c>WalAppendDispatchTimeouts</c> counter). Counting either
+    /// shape as a provider failure would inflate the saturation
+    /// signal during routine control-flow events.</description></item>
+    /// <item><description><see cref="LatticeShuttingDownException"/>
+    /// from this writer's drain gate or from a downstream peer's
+    /// drain gate. The shutdown regime is its own caller-detectable
+    /// surface; counting it as a "provider failure" would conflate
+    /// the steady-state saturation regime with the one-way
+    /// shutdown-back-pressure regime.</description></item>
+    /// </list>
+    /// All other exception shapes (SDK-retry-exhausted failures,
+    /// 409-Conflict bursts, transient transport errors that are not
+    /// cancellation) flow through to <see cref="IncrementProviderFailureCount"/>.
+    /// </summary>
+    private static bool IsExcludedFromProviderFailureCount(Exception ex)
+    {
+        // Shutdown back-pressure - distinct regime from provider
+        // saturation, has its own typed caller-detection surface.
+        if (ex is LatticeShuttingDownException) return true;
+        // All cancellation events are abandonments, not provider
+        // failures. The token-slot inspection performed by an earlier
+        // implementation could not distinguish caller-driven OCEs
+        // from writer-deadline-linked OCEs reliably because the
+        // writer's bounded-deadline branch wraps the caller's token
+        // in a linked CTS, so the OCE that escapes a cancelled
+        // grain.AppendAsync carries the linked token, not the bare
+        // caller token. The conservative rule "no OCE counts toward
+        // provider failure" is both simpler and correct.
+        if (ex is OperationCanceledException) return true;
+        return false;
     }
 
     /// <summary>
@@ -230,8 +328,15 @@ internal sealed class WalCommitLogWriter(
             {
                 System.Console.WriteLine($"[wal-admission-timeout] tree={stamped.TreeId} partition={partition} entries=1 cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
                 LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTagWriter, partitionTagWriter);
+                throw;
             }
-            throw;
+            // Surface the drain-release path as
+            // LatticeShuttingDownException so caller-side detection
+            // is a single `is` check instead of a TimeoutException
+            // catch followed by a WalDrainBudget message substring
+            // check. The original TimeoutException is preserved as
+            // the inner exception for log diagnostics.
+            throw new LatticeShuttingDownException(ex.Message, ex);
         }
         LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTagWriter, partitionTagWriter);
 
@@ -285,8 +390,23 @@ internal sealed class WalCommitLogWriter(
                     pending.AdvanceTo(WalAppendStage.Acked);
                     return offsetInf;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    // Provider-failure counter feed for the silo-scoped
+                    // saturation sampler. The infinite-timeout branch
+                    // cannot surface a dispatch-deadline trip so every
+                    // non-excluded exception that escapes the await
+                    // is a downstream provider failure (the canonical
+                    // shape on the Azure-Tables-single-account
+                    // 409-Conflict regime). Caller-driven cancellation
+                    // and shutdown-back-pressure shapes are excluded
+                    // so neither a healthy caller-side abandonment
+                    // nor a peer-silo drain release inflates the
+                    // saturation signal.
+                    if (!IsExcludedFromProviderFailureCount(ex))
+                    {
+                        IncrementProviderFailureCount(stamped.TreeId, partition);
+                    }
                     pending.AdvanceTo(WalAppendStage.Failed);
                     throw;
                 }
@@ -333,12 +453,30 @@ internal sealed class WalCommitLogWriter(
                 throw new TimeoutException(
                     $"WAL append dispatch to shard {partition} of tree '{stamped.TreeId}' exceeded the {dispatchTimeout} dispatch deadline ({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the target WalShardGrain activation did not return within the deadline, indicating a wedged shard.");
             }
-            catch
+            catch (Exception ex)
             {
                 // Any other path that escapes the awaits (cancellation,
                 // shard exception) is a Failed terminus from the writer's
                 // perspective so the heap-snapshot stamp is correct
                 // before the unlink in the finally below.
+                //
+                // Provider-failure counter feed for the silo-scoped
+                // saturation sampler. The dispatch-deadline path is
+                // caught above (its own counter); any non-excluded
+                // exception that reaches this branch is a downstream
+                // provider failure (the canonical shape on the
+                // Azure-Tables-single-account 409-Conflict regime,
+                // SDK retry-exhausted failures, or any other terminal
+                // provider error that surfaces within the dispatch
+                // deadline). Caller-driven cancellation and
+                // shutdown-back-pressure shapes are excluded so
+                // neither a healthy caller-side abandonment nor a
+                // peer-silo drain release inflates the saturation
+                // signal.
+                if (!IsExcludedFromProviderFailureCount(ex))
+                {
+                    IncrementProviderFailureCount(stamped.TreeId, partition);
+                }
                 pending.AdvanceTo(WalAppendStage.Failed);
                 throw;
             }
@@ -468,8 +606,12 @@ internal sealed class WalCommitLogWriter(
             {
                 System.Console.WriteLine($"[wal-admission-timeout] tree={treeId} partition={partition} entries={entries.Count} cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
                 LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTag, partitionTag);
+                throw;
             }
-            throw;
+            // Surface the drain-release path as
+            // LatticeShuttingDownException (see the single-entry
+            // overload above for the rationale).
+            throw new LatticeShuttingDownException(ex.Message, ex);
         }
         LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTag, partitionTag);
 
@@ -499,8 +641,18 @@ internal sealed class WalCommitLogWriter(
                     offsets = await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    // Provider-failure counter feed (batched path); see
+                    // the single-entry infinite-timeout branch above for
+                    // the rationale. Caller-cancellation and shutdown
+                    // shapes are excluded so neither a healthy caller-
+                    // side abandonment nor a peer-silo drain release
+                    // inflates the saturation signal.
+                    if (!IsExcludedFromProviderFailureCount(ex))
+                    {
+                        IncrementProviderFailureCount(treeId, partition);
+                    }
                     pending.AdvanceTo(WalAppendStage.Failed);
                     throw;
                 }
@@ -538,8 +690,15 @@ internal sealed class WalCommitLogWriter(
                     throw new TimeoutException(
                         $"WAL append-batch dispatch to shard {partition} of tree '{treeId}' ({entries.Count} entries) exceeded the {dispatchTimeout} dispatch deadline ({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the target WalShardGrain activation did not return within the deadline, indicating a wedged shard.");
                 }
-                catch
+                catch (Exception ex)
                 {
+                    // Provider-failure counter feed (batched, bounded-
+                    // deadline path); see the single-entry bounded
+                    // branch above for the rationale.
+                    if (!IsExcludedFromProviderFailureCount(ex))
+                    {
+                        IncrementProviderFailureCount(treeId, partition);
+                    }
                     pending.AdvanceTo(WalAppendStage.Failed);
                     throw;
                 }

@@ -1377,6 +1377,45 @@ public class LatticeOptions
     public const int DefaultWalSaturationDispatchTimeoutThreshold = 1;
 
     /// <summary>
+    /// Minimum number of provider-side commit failures (any
+    /// <see cref="System.Exception"/> surfaced from a downstream
+    /// <see cref="IWalShardGrain.AppendAsync(WalRecord, System.Threading.CancellationToken)"/>
+    /// / <see cref="IWalShardGrain.AppendBatchAsync(System.Collections.Generic.IReadOnlyList{WalRecord}, System.Threading.CancellationToken)"/>
+    /// dispatch other than the writer-side
+    /// <see cref="System.TimeoutException"/> already captured by
+    /// <see cref="WalSaturationDispatchTimeoutThreshold"/>) observed
+    /// within a single <see cref="WalSaturationSampleInterval"/>
+    /// sample window that raises a tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// regardless of admission-semaphore depth and dispatch-timeout
+    /// trips. Captures the third saturation regime the writer side
+    /// cannot otherwise surface: a downstream storage provider whose
+    /// commit calls return quickly (so neither the admission depth nor
+    /// the dispatch deadline ever crosses the threshold) but
+    /// terminally fail at a high rate, e.g. an Azure Tables single-
+    /// account 409-Conflict burst where the SDK retry races a server-
+    /// side-already-committed transaction. Without this input, a
+    /// caller saw the failure tail (a <c>SetAsync</c> /
+    /// <c>SetManyAsync</c> faulted) but the per-tree saturation signal
+    /// stayed <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>
+    /// and any back-pressure consumer (the bench TCP reader, an
+    /// upstream load balancer) had no leading-edge surface to slow
+    /// down before the leak became visible at the operator level.
+    /// Defaults to <see cref="DefaultWalSaturationProviderFailureRateThreshold"/>
+    /// (1), so even a single provider failure in a sample window
+    /// flags the affected tree as saturated; raise it on dashboards
+    /// where occasional single failures are expected without operator
+    /// concern. Set to <c>0</c> to disable the trigger entirely
+    /// (matches the <c>InfiniteTimeSpan</c> sentinel on the other
+    /// saturation options); the registered options validator rejects
+    /// any other non-negative value at first-resolve time.
+    /// </summary>
+    public int WalSaturationProviderFailureRateThreshold { get; set; } = DefaultWalSaturationProviderFailureRateThreshold;
+
+    /// <summary>Default value for <see cref="WalSaturationProviderFailureRateThreshold"/> (1).</summary>
+    public const int DefaultWalSaturationProviderFailureRateThreshold = 1;
+
+    /// <summary>
     /// Window after the most-recently observed
     /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
     /// transition during which the saturation classifier holds a tree
