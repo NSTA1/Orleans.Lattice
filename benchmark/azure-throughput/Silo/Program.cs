@@ -408,7 +408,20 @@ builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.Pha
 // observer surfaces the transitions as log events so the cohort
 // post-mortem can correlate the producer's slipMaxMs spike with the
 // silo's recorded transition windows without scraping the meter.
-builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver, VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
+//
+// FX-029: the same logger also tracks per-tree "most-recently
+// Saturated" wall-clock so TcpIngestService.DrainAsync can detect a
+// recent saturation episode at the producer-stop boundary and
+// abandon the residual ingest-channel batch (rather than dispatching
+// it against a residually back-pressured storage account where it
+// would trip WalAppendDispatchTimeout 30 s later and surface as
+// failed=N on FINAL). Register the concrete type as a singleton, then
+// forward the IWalSaturationObserver interface registration to the
+// same instance so the saturation sampler's dispatcher and the bench's
+// drain loop see consistent state.
+builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
+builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
+    sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
 builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec));
 
 builder.UseOrleans(silo =>
@@ -760,6 +773,7 @@ internal sealed class TcpIngestService(
     IngestSettings settings,
     IHostApplicationLifetime lifetime,
     IWalSaturationSignal saturationSignal,
+    BenchSaturationLogger saturationLogger,
     ILogger<TcpIngestService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1243,6 +1257,19 @@ internal sealed class TcpIngestService(
         long failedTotal = 0;
         long failedSinceReport = 0;
         long inFlight = 0;
+        // FX-029: count entries that were discarded from the channel
+        // because the producer-stop boundary coincided with a Saturated
+        // signal regime. These are neither `written` nor `failed` -
+        // they were never dispatched to ILattice in the first place;
+        // the bench deliberately abandons them rather than feeding them
+        // into the in-flight queue against a residually back-pressured
+        // storage account where they would trip
+        // `WalAppendDispatchTimeout` 30 s later and surface as failed=N
+        // on FINAL. The trade-off is documented in the FX-029 issue
+        // body: a benchmark whose entire point is measuring steady-
+        // state throughput correctly drops the post-producer backlog
+        // when the silo is saturated.
+        long discardedTotal = 0;
 
         using var flushGate = new SemaphoreSlim(settings.FlushConcurrency, settings.FlushConcurrency);
         var flushTasks = new HashSet<Task>();
@@ -1422,8 +1449,54 @@ internal sealed class TcpIngestService(
             {
                 var ready = batch;
                 batch = new List<KeyValuePair<string, byte[]>>(0);
-                var flushTask = await DispatchFlushAsync(ready);
-                TrackFlush(flushTask);
+                // FX-029: at the producer-stop boundary, if the silo
+                // has been observed Saturated at any point within the
+                // recent-saturation window, do NOT dispatch the residual
+                // batch as a new SetManyAsync. Dispatching it would add
+                // another batch to the in-flight queue against a
+                // storage account that is back-pressured; the dispatch
+                // would trip WalAppendDispatchTimeout 30 s later and
+                // surface as failed=N on FINAL. The entries are
+                // discarded instead - counted under `discardedTotal` so
+                // the FINAL accounting is honest (neither `written` nor
+                // `failed`). The previous failure mode is documented in
+                // benchmark/azure-throughput/throughput.md section 33.4
+                // and was the root cause of the WEDGE verdicts in 2/3
+                // set-many cohorts of the F-086 closeout run.
+                //
+                // The recency check (vs. consulting GetCurrentState
+                // directly) defends against the F-085 classifier's known
+                // Healthy<->Saturated flap (FX-030): a tree that flapped
+                // Saturated within RecentSaturationWindow is treated as
+                // still-saturated for the drain decision even if the
+                // current sampler tick reads Healthy. The window is
+                // sized to the WalAppendDispatchTimeout the in-flight
+                // batches sit on so a recently-Saturated tree is
+                // assumed to have storage-side back-pressure that
+                // persists at least that long.
+                //
+                // The check is intentionally narrow: only the FINAL
+                // residual batch at producer-stop is guarded. In-flight
+                // batches already dispatched through DispatchFlushAsync
+                // are allowed to settle through the existing
+                // Task.WhenAll(outstanding) path below; if they trip
+                // WalAppendDispatchTimeout they still count as failed
+                // (bounded by FlushConcurrency, so worst-case 8 batches
+                // = 32k entries, vs. the unbounded post-stop channel
+                // backlog that was the dominant contributor).
+                var lastSat = saturationLogger.LastSaturatedUtc(settings.TreeId);
+                var recentlySaturated = lastSat.HasValue
+                    && (DateTimeOffset.UtcNow - lastSat.Value) < RecentSaturationWindow;
+                if (recentlySaturated)
+                {
+                    Interlocked.Add(ref discardedTotal, ready.Count);
+                    Console.WriteLine($"[silo:ingest] FX-029 abandon residual batch entries={ready.Count} (last Saturated at {lastSat:O})");
+                }
+                else
+                {
+                    var flushTask = await DispatchFlushAsync(ready);
+                    TrackFlush(flushTask);
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -1447,6 +1520,7 @@ internal sealed class TcpIngestService(
         var totalElapsed = (endedAt - startedAt) / (double)Stopwatch.Frequency;
         var opsFinal = Interlocked.Read(ref writtenTotal);
         var failedFinal = Interlocked.Read(ref failedTotal);
+        var discardedFinal = Interlocked.Read(ref discardedTotal);
         // "Active" window: from first accepted batch to last drained flush.
         // Excludes the idle pre-connect window and is the most accurate
         // measure of sustained ingest throughput. Falls back to total
@@ -1458,7 +1532,17 @@ internal sealed class TcpIngestService(
             : totalElapsed;
         var avgTotal = opsFinal / Math.Max(0.001, totalElapsed);
         var avgActive = opsFinal / Math.Max(0.001, activeElapsed);
-        Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0}");
+        // FX-029: include `discarded=N` on the FINAL line so the cohort
+        // runner and any external parser can attribute the at-shutdown
+        // abandon-on-Saturated path independently of `failed=N` (which
+        // counts genuine dispatch-deadline trips against the storage
+        // account). A non-zero `discarded` count is the operational
+        // signal that the producer's natural-stop window coincided with
+        // a Saturated regime and the bench correctly chose to drop the
+        // residual backlog. The token is suffix-appended and does not
+        // affect the existing `ops=` / `failed=` regex parses in
+        // run-cohort.ps1.
+        Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0}");
     }
 
     // Sentinel returned by FlushAsync when a SetManyAsync was rejected
@@ -1487,6 +1571,24 @@ internal sealed class TcpIngestService(
     private const int FlushMaxAttempts = 5;
     private const int FlushRetryBaseMs = 50;
     private const int FlushRetryMaxMs = 800;
+
+    // FX-029: time window after the most-recently observed Saturated
+    // transition during which the bench's drain loop treats the silo
+    // as still-saturated for the purposes of the residual-batch
+    // dispatch decision. Sized to the WalAppendDispatchTimeout the
+    // in-flight batches sit on so a recently-Saturated tree is
+    // assumed to have storage-side back-pressure that persists at
+    // least that long; a producer-stop that lands within 30 s of the
+    // last Saturated transition abandons the residual batch rather
+    // than dispatching it into a queue that would trip the deadline.
+    // Matches LatticeOptions.DefaultWalAppendDispatchTimeout (the
+    // bench inherits the library default unless an operator overrides
+    // it via BENCH_WAL_APPEND_DISPATCH_TIMEOUT_SEC, in which case the
+    // bench's behaviour here may slightly over- or under-shoot the
+    // optimal window - acceptable for a benchmark whose entire point
+    // is measuring steady-state throughput, not residual-batch
+    // accounting precision).
+    private static readonly TimeSpan RecentSaturationWindow = TimeSpan.FromSeconds(30);
 
     private async Task<int> FlushAsync(ILattice lattice, List<KeyValuePair<string, byte[]>> batch, CancellationToken ct)
     {
