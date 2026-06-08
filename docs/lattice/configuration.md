@@ -545,6 +545,8 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalMaxBatchBytes`
 
+Maximum byte budget the WAL partition grain accumulates into a single storage flush (default: **4 MiB**, `4L * 1024 * 1024`). Whichever of `WalMaxBatchBytes` or `WalMaxBatchEntries` is reached first triggers the flush. Measured against the *exact* serialised size of each `WalRecord` under the WAL grain's wire format - the per-entry encoder walks every field through the same Orleans-binary codec the storage provider sees, and the bytes it produces are handed straight to `IWalStorageProvider.AppendEncodedBatchAsync`, so the grain pays exactly one encode per append and the budget is an exact ceiling suitable for sizing against the Azure Table Storage 4 MB transactional-batch limit (which has zero tolerance for under-counts).
+
 This option can be changed freely at any time. The new value takes effect on the next batch boundary.
 
 ### `WalMaxBatchEntries`

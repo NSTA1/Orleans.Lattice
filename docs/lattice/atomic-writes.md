@@ -123,17 +123,25 @@ with a `WriteStateAsync` that flips the persisted phase to `Execute`.
 
 ### Phase 2 - Execute
 
-The coordinator walks the batch in order, calling `ILattice.SetAsync(key,
-value)` for each entry under an ambient `LatticePreparedContext.BeginScope()`.
-The leaf grain's commit pipeline observes the prepared-context flag and
-routes each per-key write into its in-memory `_pendingTx[txid]` bucket
-rather than into the visible `Entries` projection - so prepared writes
-are **invisible to concurrent readers** for the duration of the
-prepare window. `NextIndex` is incremented and persisted after every
-successful step, so crash-resume can pick up exactly where it left off
-without replaying committed prepares. Each step has a bounded retry
-budget (`MaxRetriesPerStep = 1`); a persistent fault pivots the saga
-into `Compensate` without re-throwing.
+The coordinator dispatches the saga's unwritten remainder in a single
+`ILattice.SetManyAsync` call under an ambient
+`LatticePreparedContext.BeginScope()`. The shard-bucketing fan-out
+inside `LatticeGrain.SetManyAsync` runs cross-leaf calls in parallel
+via `Task.WhenAll`, giving the saga concurrent per-shard dispatch.
+The leaf grain's commit pipeline observes the prepared-context flag
+and routes each per-key write into its in-memory `_pendingTx[txid]`
+bucket rather than into the visible `Entries` projection - so prepared
+writes are **invisible to concurrent readers** for the duration of
+the prepare window. `NextIndex` is incremented and persisted after
+each successful batch, so crash-resume can pick up exactly where it
+left off without replaying committed prepares. Retry semantics are
+**per-batch**: `MaxRetriesPerStep = 1` is the per-batch retry budget;
+on any task's failure the whole unwritten remainder is re-attempted,
+and on budget exhaustion the saga pivots to `Compensate` without
+re-throwing. The shutdown-refused fast-path (writer-side drain refusal
+or post-deactivation leaf rejection) bypasses the retry budget
+entirely - see [Shutdown back-pressure](#shutdown-back-pressure)
+below.
 
 ### Phase 3 - Compensate (failure path only)
 
