@@ -222,6 +222,12 @@ internal static class TypeAliases
     // package today; foreground commit-log adapter tomorrow)
     internal const string WalEntry = "ol.we";
 
+    // WAL saturation back-pressure surface (push + poll + await
+    // shapes exposed to callers driving offered load into ILattice;
+    // see IWalSaturationSignal / IWalSaturationObserver).
+    internal const string WalSaturationState = "ol.wss";
+    internal const string WalSaturationStateChange = "ol.wsc";
+
     // WAL grain & wire-record surface (ship-time envelope and per-shard
     // sequenced storage shape). Originally declared with the legacy
     // <c>olr.</c> prefix from the replication package; preserved

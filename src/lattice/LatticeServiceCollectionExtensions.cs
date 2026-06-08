@@ -94,6 +94,21 @@ public static class LatticeServiceCollectionExtensions
         // ICommitLogWriter is replaced with a non-WalCommitLogWriter
         // implementation (test doubles, future alternates).
         builder.Services.AddSingleton<IHostedService, BPlusTree.Grains.WalCommitLogWriterDrainer>();
+        // Per-silo WAL saturation back-pressure surface: the signal
+        // singleton backs the public IWalSaturationSignal (polling +
+        // await-able gate), the observer dispatcher fans out per-
+        // transition notifications to every registered
+        // IWalSaturationObserver, and the sampler hosted-service
+        // recomputes the per-tree classification on a fixed cadence
+        // (LatticeOptions.WalSaturationSampleInterval, default 200 ms).
+        // All three are zero-cost when no caller queries the signal
+        // and no observer is registered - the sampler still runs but
+        // its per-tick work is a small dictionary enumeration that
+        // never reaches a grain.
+        builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationSignal>();
+        builder.Services.TryAddSingleton<IWalSaturationSignal>(sp => sp.GetRequiredService<BPlusTree.Grains.WalSaturationSignal>());
+        builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationObserverDispatcher>();
+        builder.Services.AddSingleton<IHostedService, BPlusTree.Grains.WalSaturationSampler>();
         // WAL byte-budget encoder: the canonical Orleans-binary
         // implementation produces the exact serialised bytes for each
         // captured WalRecord, so WalShardGrain pays one encode per

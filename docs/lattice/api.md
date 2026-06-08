@@ -746,6 +746,95 @@ The slots are independent of `OriginClusterId`, `VectorClock`, and
 `Category`. Wire-compatible: missing slots on legacy persisted state
 decode to `0`.
 
+## WAL saturation back-pressure
+
+Lattice publishes a per-tree, three-state saturation signal so callers driving offered load into `ILattice` can throttle their own input *before* the saturation regime's failure tail surfaces to them as a `TimeoutException` from `SetAsync` / `SetManyAsync`. The surface has three shapes - polling, await, and push - all backed by a single silo-scoped sampler that ticks at `LatticeOptions.WalSaturationSampleInterval` (default 200 ms).
+
+| Type | Shape | Description |
+|------|-------|-------------|
+| `WalSaturationState` | `enum` (`Healthy`, `Throttled`, `Saturated`) | The classification a tree is in. `Healthy` = admit without waiting; `Throttled` = admission depth near cap, callers should slow down; `Saturated` = semaphore at cap with parked callers, callers should pause new appends. |
+| `IWalSaturationSignal` | DI singleton (polling + await) | `GetCurrentState(treeId)` returns the cached per-tree state in one concurrent-dictionary lookup; `GetAggregateState()` returns the worst case across every observed tree; `WaitForHealthyAsync(treeId, ct)` returns a task that completes when the tree returns to `Healthy` (synchronous fast-path when already `Healthy`). |
+| `IWalSaturationObserver` | DI hook (push) | `OnStateChangedAsync(change, ct)` is invoked once per transition with a `WalSaturationStateChange` payload. Registered via `services.AddSingleton<IWalSaturationObserver, MyObserver>()`. Exceptions are caught and logged; the dispatcher continues to the next observer. |
+| `WalSaturationStateChange` | `readonly record struct` | `TreeId`, `PreviousState`, `NewState`, `AttributedPartition?`, `AttributedShard?`, `ObservedAt`. The attribution slots are populated when a single partition (admission-depth-driven) or shard (dispatch-timeout-driven) dominated the transition. |
+
+The signal is driven by two underlying sources:
+
+- **Admission-semaphore depth.** Per-partition `in_flight / WalMaxPendingBatches` ratio. `>= WalSaturationThrottledRatio` (default 0.75) raises a tree to `Throttled`; depth at cap with parked callers raises it to `Saturated`.
+- **Dispatch-timeout rate.** Trips of `WalAppendDispatchTimeout` observed within a single sample window. `>= WalSaturationDispatchTimeoutThreshold` (default 1) raises a tree to `Saturated` regardless of admission depth.
+
+The tree's state is the worst case across these two signals across every partition / shard.
+
+### Polling (canonical TCP-read-loop pattern)
+
+```csharp verify
+var signal = client.ServiceProvider.GetRequiredService<IWalSaturationSignal>();
+while (!cancellationToken.IsCancellationRequested)
+{
+    if (signal.GetCurrentState("my-tree") == WalSaturationState.Saturated)
+    {
+        await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+        continue;
+    }
+    // Continue reading from the producer transport (TCP, gRPC, queue, ...)
+    // and dispatching SetAsync / SetManyAsync calls.
+}
+```
+
+The polling getter costs one concurrent-dictionary lookup returning an `enum` - it is safe to call inside any per-message check on the producer hot path. The `SetAsync` / `SetManyAsync` hot path on `ILattice` is unchanged: the sampler runs on its own timer and never adds per-call work.
+
+### Await (single recovery wait)
+
+```csharp verify
+var signal = client.ServiceProvider.GetRequiredService<IWalSaturationSignal>();
+// Block until the tree returns to Healthy, or until the caller's CT fires.
+await signal.WaitForHealthyAsync("my-tree", cancellationToken);
+```
+
+`WaitForHealthyAsync` returns `Task.CompletedTask` synchronously when the tree is already `Healthy`, so the fast-path is allocation-free. When the tree is not `Healthy`, the awaiter completes on the next sample tick that observes the tree at `Healthy` - the worst-case wake-up is one `WalSaturationSampleInterval` beyond the underlying recovery.
+
+### Push (subscription model)
+
+Implement the observer:
+
+```csharp verify
+public sealed class MyBackPressurePolicy : IWalSaturationObserver
+{
+    public ValueTask OnStateChangedAsync(WalSaturationStateChange change, CancellationToken cancellationToken)
+    {
+        // React to the transition. Keep this fast - long-running work
+        // belongs on a channel drained by an IHostedService.
+        return ValueTask.CompletedTask;
+    }
+}
+```
+
+Register it on the silo's DI container:
+
+```csharp
+siloBuilder.Services.AddSingleton<IWalSaturationObserver, MyBackPressurePolicy>();
+```
+
+Multiple observers may coexist; they are invoked in registration order. Exceptions thrown by one observer are logged as a warning and suppressed - the others continue to run. Observers do not see the per-tick state; they see only the transitions, so a tree that holds `Throttled` for an hour produces one `Healthy -> Throttled` callback at the start and one `Throttled -> Healthy` callback at the end.
+
+### Metrics
+
+| Instrument | Type | Tags | Description |
+|------------|------|------|-------------|
+| `orleans.lattice.wal.saturation.state` | observable gauge (long) | `tree`, `state` | Current per-tree state as a step function. Values: `0` = Healthy, `1` = Throttled, `2` = Saturated. |
+| `orleans.lattice.wal.saturation.transitions` | counter (long) | `tree`, `state`, `previous_state`, optional `partition`, optional `shard` | Incremented once per per-tree transition. The state tag values are lowercased enum names (`healthy`, `throttled`, `saturated`). |
+
+A flat-zero series on `transitions` is the healthy steady state. A rising rate of `state=throttled` transitions on a tree is the leading edge of the saturation regime; `state=saturated` is the regime itself. Pair with the `state` observable gauge for "what is the current regime" and with the `transitions` counter for "how often is the regime changing" - flapping between `Throttled` and `Saturated` is a different operational signal from a sustained `Saturated`.
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WalSaturationSampleInterval` | `200 ms` | Sampler cadence. The worst-case observer / await transition latency is one interval beyond the underlying signal crossing the threshold. Set to `Timeout.InfiniteTimeSpan` to disable the sampler entirely (signal pins to `Healthy`). |
+| `WalSaturationThrottledRatio` | `0.75` | Per-partition admission-depth ratio at or above which the signal raises a tree to `Throttled`. Range `[0.0, 1.0]`. |
+| `WalSaturationDispatchTimeoutThreshold` | `1` | Minimum dispatch-timeout trips per sample window that raise a tree to `Saturated` regardless of admission depth. |
+
+See [WAL Saturation Signal](wal-saturation-signal.md) for the full design including the per-tree resolution contract, the multi-tree aggregate view, and the bench-side adoption pattern.
+
 ## Leaf-projection digest
 
 `LeafProjectionDigest { byte[] Hash; long EntryCount; long CheckpointOffset; int Version; }` (alias `ol.lpd`).

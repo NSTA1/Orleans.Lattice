@@ -392,4 +392,94 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalDrainBudget)));
     }
+
+    [Test]
+    public void WalSaturationSampleInterval_default_is_two_hundred_milliseconds()
+    {
+        Assert.That(new LatticeOptions().WalSaturationSampleInterval, Is.EqualTo(TimeSpan.FromMilliseconds(200)));
+        Assert.That(LatticeOptions.DefaultWalSaturationSampleInterval, Is.EqualTo(TimeSpan.FromMilliseconds(200)));
+    }
+
+    [Test]
+    public void WalSaturationSampleInterval_positive_passes()
+    {
+        var result = Validate(o => o.WalSaturationSampleInterval = TimeSpan.FromMilliseconds(50));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationSampleInterval_infinite_passes()
+    {
+        // Infinite explicitly disables the sampler - signal pins to Healthy.
+        var result = Validate(o => o.WalSaturationSampleInterval = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalSaturationSampleInterval_zero_fails()
+    {
+        var result = Validate(o => o.WalSaturationSampleInterval = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationSampleInterval)));
+    }
+
+    [Test]
+    public void WalSaturationSampleInterval_negative_fails()
+    {
+        // Use -1s (not -1ms) because -1ms equals Timeout.InfiniteTimeSpan
+        // and is therefore explicitly allowed as the "disable sampler"
+        // sentinel.
+        var result = Validate(o => o.WalSaturationSampleInterval = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationSampleInterval)));
+    }
+
+    [Test]
+    public void WalSaturationThrottledRatio_default_is_zero_point_seventy_five()
+    {
+        Assert.That(new LatticeOptions().WalSaturationThrottledRatio, Is.EqualTo(0.75));
+        Assert.That(LatticeOptions.DefaultWalSaturationThrottledRatio, Is.EqualTo(0.75));
+    }
+
+    [TestCase(0.0)]
+    [TestCase(0.5)]
+    [TestCase(1.0)]
+    public void WalSaturationThrottledRatio_in_range_passes(double value)
+    {
+        var result = Validate(o => o.WalSaturationThrottledRatio = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(-0.01)]
+    [TestCase(1.01)]
+    [TestCase(double.NaN)]
+    public void WalSaturationThrottledRatio_out_of_range_fails(double value)
+    {
+        var result = Validate(o => o.WalSaturationThrottledRatio = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationThrottledRatio)));
+    }
+
+    [Test]
+    public void WalSaturationDispatchTimeoutThreshold_default_is_one()
+    {
+        Assert.That(new LatticeOptions().WalSaturationDispatchTimeoutThreshold, Is.EqualTo(1));
+        Assert.That(LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void WalSaturationDispatchTimeoutThreshold_positive_passes()
+    {
+        var result = Validate(o => o.WalSaturationDispatchTimeoutThreshold = 5);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void WalSaturationDispatchTimeoutThreshold_non_positive_fails(int value)
+    {
+        var result = Validate(o => o.WalSaturationDispatchTimeoutThreshold = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationDispatchTimeoutThreshold)));
+    }
 }

@@ -109,6 +109,24 @@ if (options.WalDrainBudget <= TimeSpan.Zero
         $"{nameof(LatticeOptions.WalDrainBudget)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the per-shard deactivation drain budget that prevents a wedged provider call from holding host shutdown indefinitely).");
 }
+if (options.WalSaturationSampleInterval <= TimeSpan.Zero
+    && options.WalSaturationSampleInterval != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationSampleInterval)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the saturation sampler cadence; infinite disables the sampler entirely and pins every tree's signal to Healthy).");
+}
+if (options.WalSaturationThrottledRatio < 0.0 || options.WalSaturationThrottledRatio > 1.0
+    || double.IsNaN(options.WalSaturationThrottledRatio))
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationThrottledRatio)} must be in the inclusive range [0.0, 1.0].");
+}
+if (options.WalSaturationDispatchTimeoutThreshold < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationDispatchTimeoutThreshold)} must be greater than or equal to 1.");
+}
 return ValidateOptionsResult.Success;
     }
 }

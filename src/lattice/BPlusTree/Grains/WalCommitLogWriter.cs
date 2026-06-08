@@ -69,6 +69,21 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Partition), PartitionTracker> _trackers
         = new();
 
+    // Per-(tree, shard) cumulative dispatch-timeout trip counter,
+    // incremented every time the writer abandons an outbound
+    // IWalShardGrain.AppendAsync / AppendBatchAsync await because
+    // the per-tree WalAppendDispatchTimeout fired. Read by the silo-
+    // scoped saturation sampler that backs IWalSaturationSignal: the
+    // sampler subtracts the previous tick's reading to derive the
+    // per-window trip delta and uses it to drive the Saturated state
+    // when the delta crosses WalSaturationDispatchTimeoutThreshold.
+    // Static so the sampler has a fixed root to find (the sampler is
+    // a hosted singleton constructed off the same DI container as the
+    // writer); zero per-call allocation cost - dispatch-timeout trips
+    // are exceptional, not a hot path.
+    internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _dispatchTimeoutCounts
+        = new();
+
     // Per-instance drain CTS. Each WalCommitLogWriter owns its own
     // token; DrainAsync cancels it; AcquireAsync observes it alongside
     // the caller's CT. Because the token lives on the writer instance
@@ -305,6 +320,15 @@ internal sealed class WalCommitLogWriter(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                // Per-(tree, shard) cumulative trip count consumed by
+                // the silo-scoped saturation sampler (IWalSaturationSignal).
+                // AddOrUpdate runs under the dictionary's internal
+                // striped-lock so concurrent dispatches from peer call
+                // sites cannot drop an increment.
+                _dispatchTimeoutCounts.AddOrUpdate(
+                    (stamped.TreeId, partition),
+                    static _ => 1L,
+                    static (_, prior) => prior + 1L);
                 pending.AdvanceTo(WalAppendStage.Failed);
                 throw new TimeoutException(
                     $"WAL append dispatch to shard {partition} of tree '{stamped.TreeId}' exceeded the {dispatchTimeout} dispatch deadline ({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the target WalShardGrain activation did not return within the deadline, indicating a wedged shard.");
@@ -502,6 +526,14 @@ internal sealed class WalCommitLogWriter(
                         1,
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
                         new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                    // Per-(tree, shard) cumulative trip count consumed
+                    // by the silo-scoped saturation sampler
+                    // (IWalSaturationSignal). See the single-entry catch
+                    // above for the rationale.
+                    _dispatchTimeoutCounts.AddOrUpdate(
+                        (treeId, partition),
+                        static _ => 1L,
+                        static (_, prior) => prior + 1L);
                     pending.AdvanceTo(WalAppendStage.Failed);
                     throw new TimeoutException(
                         $"WAL append-batch dispatch to shard {partition} of tree '{treeId}' ({entries.Count} entries) exceeded the {dispatchTimeout} dispatch deadline ({nameof(LatticeOptions.WalAppendDispatchTimeout)}); the target WalShardGrain activation did not return within the deadline, indicating a wedged shard.");
@@ -933,5 +965,64 @@ internal sealed class WalCommitLogWriter(
                 _inFlight.Remove(pending);
             }
         }
+
+        /// <summary>
+        /// Snapshot read used by the silo-scoped saturation sampler
+        /// that backs <see cref="Orleans.Lattice.IWalSaturationSignal"/>.
+        /// Returns the partition's current in-flight depth, the
+        /// admission cap (<c>0</c> when the semaphore is in the
+        /// opt-out / unbounded shape), and a heuristic indicating
+        /// whether the admission semaphore has any parked callers
+        /// (depth at-or-above cap with cap &gt; 0).
+        /// <para>
+        /// Reads <see cref="_inFlight"/>.Count under the same lock the
+        /// link / unlink paths use so the snapshot cannot tear; the
+        /// cap and parked-callers heuristic are derived from the
+        /// already-snapshotted depth so the result is internally
+        /// consistent. The sampler invokes this every
+        /// <see cref="LatticeOptions.WalSaturationSampleInterval"/>
+        /// across every live partition tracker, so the snapshot must
+        /// be allocation-free; the returned value type satisfies that.
+        /// </para>
+        /// </summary>
+        internal PartitionDepthSnapshot SnapshotDepth()
+        {
+            int depth;
+            lock (_gate)
+            {
+                depth = _inFlight.Count;
+            }
+            var cap = _admissionCap;
+            // Parked callers heuristic: when the cap is in effect
+            // (cap > 0) and the tracker's in-flight depth has reached
+            // the cap, AcquireAsync callers parked on the semaphore
+            // are blocked waiting for a peer dispatch to release a
+            // slot. We do not have an exact wait-queue count from
+            // SemaphoreSlim, but the depth-at-cap condition is the
+            // condition the public surface AC#3 names for the
+            // Saturated state ("semaphore at cap with non-empty wait
+            // queue"); the wait-queue side is implied by any caller
+            // that arrived after the cap was reached.
+            var hasParkedCallers = cap > 0 && depth >= cap;
+            return new PartitionDepthSnapshot(TreeId, Partition, depth, cap, hasParkedCallers);
+        }
     }
+
+    /// <summary>
+    /// Allocation-free snapshot of a single
+    /// <see cref="PartitionTracker"/>'s current admission state.
+    /// Consumed by the silo-scoped saturation sampler that backs
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal"/>.
+    /// </summary>
+    /// <param name="TreeId">The tree id owning this partition tracker.</param>
+    /// <param name="Partition">The partition index within the tree.</param>
+    /// <param name="InFlightDepth">Current count of in-flight dispatches linked into the partition's chain.</param>
+    /// <param name="AdmissionCap">The per-partition admission cap (the <see cref="LatticeOptions.WalMaxPendingBatches"/> value snapshotted at first use). <c>0</c> when the semaphore is in the opt-out / unbounded shape.</param>
+    /// <param name="HasParkedCallers">Heuristic: <c>true</c> when the admission semaphore is at cap and any further <c>AcquireAsync</c> caller is parked.</param>
+    internal readonly record struct PartitionDepthSnapshot(
+        string TreeId,
+        int Partition,
+        int InFlightDepth,
+        int AdmissionCap,
+        bool HasParkedCallers);
 }
