@@ -137,6 +137,35 @@
 //                           Memory storage NumStorageGrains override (default 0 = keep
 //                           the Orleans library default of 10). Only consulted when
 //                           BENCH_LEAF_STORAGE_KIND=memory.
+//   BENCH_SATURATION_SAMPLE_MS
+//                           F-085 WAL saturation sampler tick interval in ms.
+//                           Defaults to LatticeOptions.DefaultWalSaturationSampleInterval
+//                           (200 ms). Lower values reduce the worst-case
+//                           transition latency the bench TCP reader sees
+//                           when the silo crosses Saturated, at the cost
+//                           of slightly more timer-driven sampler work.
+//                           0 explicitly disables the sampler (signal pins
+//                           to Healthy and the TCP-read gating in
+//                           HandleConnectionAsync becomes a no-op).
+//   BENCH_SATURATION_THROTTLED_RATIO
+//                           F-085 admission-depth ratio at-or-above which
+//                           the saturation signal raises the tree to
+//                           Throttled. Defaults to
+//                           LatticeOptions.DefaultWalSaturationThrottledRatio
+//                           (0.75). Lower the ratio for an earlier-engaging
+//                           throttled regime; raise to keep the bench
+//                           dispatching at full rate until later in the
+//                           saturation episode. Range [0.0, 1.0].
+//   BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD
+//                           F-085 minimum WalAppendDispatchTimeout trips
+//                           per sample window that raise the tree to
+//                           Saturated regardless of admission depth.
+//                           Defaults to
+//                           LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold
+//                           (1). Raise for less aggressive failure-tail
+//                           classification (e.g. a noisy storage account
+//                           where occasional single trips are expected
+//                           without operator concern).
 
 using System.Diagnostics;
 using System.Net;
@@ -240,6 +269,26 @@ var pipelinePhase2 = ReadBool("BENCH_PIPELINE_PHASE2", AzureTableWalStorageOptio
 var eliminateCandidateRow = ReadBool("BENCH_WAL_ELIMINATE_CANDIDATE_ROW", AzureTableWalStorageOptions.DefaultEliminateCandidateRowOnHotPath);
 var phaseTwoCoalescingMs = ReadIntAllowZero("BENCH_WAL_PHASE2_COALESCING_WINDOW_MS", (int)AzureTableWalStorageOptions.DefaultPhaseTwoCoalescingWindow.TotalMilliseconds);
 var digestCoalescingMs = ReadIntAllowZero("BENCH_DIGEST_COALESCING_WINDOW_MS", 5);
+// F-086: BENCH_* knobs pinning the F-085 saturation sampler cadence
+// and thresholds. Defaults match the library shipping defaults so
+// removing the env-vars reproduces the out-of-the-box behaviour
+// exactly; the bench can pin them for per-cohort A/B sweeps without
+// re-deploying. ReadDouble allows zero so a bench operator can set
+// WalSaturationThrottledRatio=0 (every depth at-or-above 0 raises
+// Throttled - exercises the always-throttled regime) without the
+// option being silently rejected by ReadInt's >0 guard. The library
+// validator already rejects out-of-range / NaN values on first
+// IOptionsMonitor resolution, so an invalid env-var crashes the silo
+// at startup rather than producing a wrong-but-running configuration.
+var saturationSampleMs = ReadIntAllowZero(
+    "BENCH_SATURATION_SAMPLE_MS",
+    (int)LatticeOptions.DefaultWalSaturationSampleInterval.TotalMilliseconds);
+var saturationThrottledRatio = ReadDouble(
+    "BENCH_SATURATION_THROTTLED_RATIO",
+    LatticeOptions.DefaultWalSaturationThrottledRatio);
+var saturationDispatchTimeoutThreshold = ReadInt(
+    "BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD",
+    LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold);
 var reportSec   = ReadInt("BENCH_REPORT_SEC", 1);
 var totalDurationSec = ReadIntAllowZero("BENCH_TOTAL_DURATION_SEC", 600);
 var responseTimeoutSec = ReadInt("BENCH_RESPONSE_TIMEOUT_SEC", 30);
@@ -318,6 +367,11 @@ var walAppendDispatchTimeoutBanner = $"default({LatticeOptions.DefaultWalAppendD
 var walFlushPreflightTimeoutBanner = $"default({LatticeOptions.DefaultWalFlushPreflightTimeout.TotalSeconds:0.##}s)";
 Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
+// F-086: echo the saturation knobs so the cohort log shows the exact
+// values the TCP-read gating + the silo's sampler use. A "default"
+// suffix on the sample interval is implicit when the env-var was not
+// supplied; the actual value the silo will use is shown for clarity.
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -347,6 +401,14 @@ builder.Logging.AddFilter("Orleans.Runtime.Placement.PlacementService", LogLevel
 
 builder.Services.AddHostedService<TcpIngestService>();
 builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.PhaseADiagnosticReporter>();
+// F-086: register the per-silo saturation-transition logger so each
+// transition lands a [silo:saturation] line on stdout. Pure
+// observability: the TCP-read loop in TcpIngestService consumes the
+// same F-085 signal via the polling getter on its hot path; this
+// observer surfaces the transitions as log events so the cohort
+// post-mortem can correlate the producer's slipMaxMs spike with the
+// silo's recorded transition windows without scraping the meter.
+builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver, VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
 builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec));
 
 builder.UseOrleans(silo =>
@@ -453,6 +515,16 @@ builder.UseOrleans(silo =>
         // read-your-own-digest-after-write invariant integration tests
         // pin); the bench has no such consumer.
         o.DigestCoalescingWindowMs = digestCoalescingMs;
+        // F-086: pin the F-085 saturation sampler cadence + thresholds
+        // for this tree. Defaults are the library shipping defaults so
+        // a cohort with no env-vars set reproduces the out-of-the-box
+        // behaviour exactly; the env-vars exist for per-cohort A/B
+        // sweeps. The signal is silo-scoped per F-085, so per-tree
+        // overrides here only affect the sampler's classification of
+        // *this* tree - aligned with the bench's single-tree topology.
+        o.WalSaturationSampleInterval = TimeSpan.FromMilliseconds(saturationSampleMs);
+        o.WalSaturationThrottledRatio = saturationThrottledRatio;
+        o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
     });
 
     // Storage-usage poller cadence is left at the library default (15s).
@@ -616,6 +688,15 @@ static int ReadIntAllowZero(string name, int @default)
     return int.TryParse(raw, out var v) && v >= 0 ? v : @default;
 }
 
+static double ReadDouble(string name, double @default)
+{
+    var raw = Environment.GetEnvironmentVariable(name);
+    return double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v)
+        && !double.IsNaN(v) && v >= 0
+        ? v
+        : @default;
+}
+
 static bool ReadBool(string name, bool @default)
 {
     var raw = Environment.GetEnvironmentVariable(name);
@@ -678,6 +759,7 @@ internal sealed class TcpIngestService(
     IGrainFactory grainFactory,
     IngestSettings settings,
     IHostApplicationLifetime lifetime,
+    IWalSaturationSignal saturationSignal,
     ILogger<TcpIngestService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1039,6 +1121,16 @@ internal sealed class TcpIngestService(
         var remote = client.Client.RemoteEndPoint?.ToString() ?? "?";
         Console.WriteLine($"[silo] accepted {remote}");
         var treeTag = new KeyValuePair<string, object?>("tree", settings.TreeId);
+        // F-086: small per-line yield count applied while the tree is
+        // Throttled. The intermediate state is advisory only - the
+        // reader still drains the socket, but it surrenders the
+        // current thread on every line via Task.Yield() so the producer
+        // observes a measurable slowdown that gives the silo's writer
+        // a window to catch up before the regime escalates to
+        // Saturated. Stays well under the cost of a kernel TCP
+        // round-trip so a healthy regime is not penalised when the
+        // signal flaps near the throttled ratio threshold.
+        const int ThrottledYieldsPerLine = 1;
         try
         {
             using (client)
@@ -1046,8 +1138,42 @@ internal sealed class TcpIngestService(
             using (var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 64 * 1024))
             {
                 string? line;
-                while ((line = await reader.ReadLineAsync(ct)) is not null)
+                while (true)
                 {
+                    // F-086 adoption: gate the TCP-read loop on the
+                    // per-tree saturation signal from F-085. On Saturated
+                    // we PARK the reader by awaiting WaitForHealthyAsync
+                    // - the kernel's per-connection receive buffer fills,
+                    // the TCP window shrinks to zero, the producer's
+                    // socket.SendAsync blocks, and slipMaxMs rises in
+                    // the producer reporter window that overlaps. No
+                    // application-protocol back-pressure: the kernel
+                    // TCP window does all the work, so this same pattern
+                    // applies unchanged to any TCP-fronted ingest path.
+                    // On Throttled we keep draining but yield the
+                    // scheduler so the producer observes a measurable
+                    // slowdown without a full pause-and-resume
+                    // oscillation against the Saturated boundary.
+                    var state = saturationSignal.GetCurrentState(settings.TreeId);
+                    if (state == WalSaturationState.Saturated)
+                    {
+                        // Park the read loop until the sampler observes
+                        // the tree return to Healthy. The wait is
+                        // bounded by LatticeOptions.WalSaturationSampleInterval
+                        // (default 200ms) so the resume happens promptly
+                        // once the silo's writer admission gate drains.
+                        await saturationSignal.WaitForHealthyAsync(settings.TreeId, ct).ConfigureAwait(false);
+                    }
+                    else if (state == WalSaturationState.Throttled)
+                    {
+                        for (var i = 0; i < ThrottledYieldsPerLine; i++)
+                        {
+                            await Task.Yield();
+                        }
+                    }
+
+                    line = await reader.ReadLineAsync(ct);
+                    if (line is null) break;
                     if (line.Length == 0) continue;
 
                     VehicleTelemetryEvent ev;
