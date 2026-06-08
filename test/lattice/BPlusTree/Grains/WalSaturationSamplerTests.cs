@@ -28,11 +28,12 @@ public class WalSaturationSamplerTests
     public void SetUp()
     {
         // Hermetic isolation: each test uses a unique tree id and a
-        // freshly-cleared partition / dispatch-timeout tracker map so
-        // cross-test concurrency (NUnit's per-fixture parallelism on
-        // CI) cannot share static state.
+        // freshly-cleared partition / dispatch-timeout / provider-
+        // failure tracker map so cross-test concurrency (NUnit's
+        // per-fixture parallelism on CI) cannot share static state.
         WalCommitLogWriter._trackers.Clear();
         WalCommitLogWriter._dispatchTimeoutCounts.Clear();
+        WalCommitLogWriter._providerFailureCounts.Clear();
         _treeId = $"tree-sampler-{Interlocked.Increment(ref _treeIdSeed)}";
     }
 
@@ -902,5 +903,203 @@ public class WalSaturationSamplerTests
         public void Advance(TimeSpan by) => _now += by;
 
         public override DateTimeOffset GetUtcNow() => _now;
+    }
+
+    // ----- Provider-failure-rate Saturated branch -----
+
+    [Test]
+    public async Task SampleOnceAsync_returns_Saturated_when_provider_failure_delta_crosses_threshold()
+    {
+        // Healthy depth and zero dispatch-timeout trips so the
+        // admission and dispatch-timeout paths stay at Healthy; the
+        // provider-failure path is the sole source of the transition.
+        // This is the canonical provider-failure-rate regime: the silo's
+        // 409-Conflict burst surfaces as provider-failure counter
+        // increments well within the dispatch deadline, the admission
+        // semaphore never approaches its cap, and the dispatch-timeout
+        // counter never trips - yet the silo bleeds entries.
+        SeedPartition(_treeId, partition: 0, depth: 0, cap: 16);
+        var sampler = CreateSampler(
+            options: new LatticeOptions { WalSaturationProviderFailureRateThreshold = 1 },
+            observers: null,
+            out var signal,
+            out _);
+
+        // First tick: initialises the per-shard prior baseline. No
+        // transitions fire because the per-window delta is undefined
+        // until the second tick.
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "first tick is provider-failure baseline-only");
+
+        // Simulate one provider failure on shard 5 between ticks (the
+        // shape WalCommitLogWriter._providerFailureCounts holds after
+        // a downstream IWalShardGrain RPC raises a non-cancellation
+        // exception).
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 5)] = 1;
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated),
+            "a single provider-failure increment in the second tick must cross the default threshold of 1");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_provider_failure_delta_is_per_window_not_cumulative()
+    {
+        SeedPartition(_treeId, partition: 0, depth: 0, cap: 16);
+        var sampler = CreateSampler(
+            options: new LatticeOptions { WalSaturationProviderFailureRateThreshold = 1 },
+            observers: null,
+            out var signal,
+            out _);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        // Tick 2: one failure, signal saturates.
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 5)] = 1;
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+
+        // Tick 3: no new failures, signal recovers to Healthy (depth=0,
+        // dispatch trips=0). The delta is the per-window per-shard
+        // cumulative-minus-prior, not the cumulative count itself,
+        // so a quiescent shard returns to Healthy on the next tick.
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "with no new provider failures and healthy depth, the signal must recover - the delta is per-window, not cumulative");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_provider_failure_threshold_zero_disables_branch()
+    {
+        // Zero is the documented sentinel that disables the provider-
+        // failure-rate trigger entirely. With the trigger disabled, a
+        // burst of provider failures must NOT raise the tree to
+        // Saturated - admission depth stays healthy and the dispatch-
+        // timeout counter never trips.
+        SeedPartition(_treeId, partition: 0, depth: 0, cap: 16);
+        var sampler = CreateSampler(
+            options: new LatticeOptions { WalSaturationProviderFailureRateThreshold = 0 },
+            observers: null,
+            out var signal,
+            out _);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        // A huge per-window delta: still no Saturated transition.
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 5)] = 1000;
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "zero threshold must disable the provider-failure-rate branch entirely");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_provider_failure_path_independent_of_dispatch_timeout()
+    {
+        // Both the dispatch-timeout counter and the provider-failure
+        // counter are wired into the Saturated branch via OR. The
+        // dispatch-timeout counter is at zero; the provider-failure
+        // counter alone must drive the regime. Mirrors the per-window-
+        // delta-not-cumulative test for the dispatch-timeout branch.
+        SeedPartition(_treeId, partition: 0, depth: 0, cap: 16);
+        var sampler = CreateSampler(
+            options: new LatticeOptions
+            {
+                WalSaturationDispatchTimeoutThreshold = 100, // very high - never crosses
+                WalSaturationProviderFailureRateThreshold = 3,
+            },
+            observers: null,
+            out var signal,
+            out _);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        // Trip 2 provider failures - below threshold of 3 - still Healthy.
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 5)] = 2;
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "2 < 3 provider failures stays Healthy");
+
+        // Trip 3 more in the next window (cumulative 5, delta 3) -
+        // crosses the threshold.
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 5)] = 5;
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated),
+            "per-window delta of 3 must reach the threshold and saturate");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_provider_failure_keeps_trees_independent()
+    {
+        var otherTree = _treeId + "-other";
+        SeedPartition(_treeId, partition: 0, depth: 0, cap: 16);
+        SeedPartition(otherTree, partition: 0, depth: 0, cap: 16);
+        var sampler = CreateSampler(
+            options: new LatticeOptions { WalSaturationProviderFailureRateThreshold = 1 },
+            observers: null,
+            out var signal,
+            out _);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        // Only the targeted tree's provider failure increments.
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 0)] = 1;
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+        Assert.That(signal.GetCurrentState(otherTree), Is.EqualTo(WalSaturationState.Healthy),
+            "per-tree resolution: a provider-saturated tree must not pollute a peer tree's signal");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_attributes_provider_failure_transition_to_shard()
+    {
+        using var capture = new MeterCapture();
+        SeedPartition(_treeId, partition: 0, depth: 0, cap: 16);
+        var sampler = CreateSampler(
+            options: new LatticeOptions { WalSaturationProviderFailureRateThreshold = 1 },
+            observers: null,
+            out _,
+            out _);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 9)] = 1;
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        var sample = capture.For("orleans.lattice.wal.saturation.transitions").Single();
+        Assert.That(
+            sample.Tags.Any(t => t.Key == LatticeMetrics.TagShard && t.Value is int s && s == 9),
+            Is.True,
+            "provider-failure-driven transition must be attributed to the affected shard");
+    }
+
+    [Test]
+    public async Task SampleOnceAsync_provider_failure_first_tick_is_baseline_only()
+    {
+        using var capture = new MeterCapture();
+        SeedPartition(_treeId, partition: 0, depth: 0, cap: 16);
+
+        // Pre-seed a non-zero failure count BEFORE the sampler starts -
+        // simulates a silo that crashed mid-burst and reactivated
+        // against a static counter that already carries the historical
+        // failures. The first sampler tick must initialise the prior
+        // baseline at the current count without firing any Saturated
+        // transition.
+        WalCommitLogWriter._providerFailureCounts[(_treeId, 0)] = 1000;
+
+        var sampler = CreateSampler(
+            options: new LatticeOptions { WalSaturationProviderFailureRateThreshold = 1 },
+            observers: null,
+            out var signal,
+            out _);
+
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "first tick must initialise the baseline at the current count without firing transitions");
+        Assert.That(capture.Sum("orleans.lattice.wal.saturation.transitions"), Is.EqualTo(0L),
+            "no transition counter must fire on the baseline-init tick");
     }
 }

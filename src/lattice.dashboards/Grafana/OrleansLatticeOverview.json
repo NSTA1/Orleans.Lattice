@@ -1001,6 +1001,84 @@
         { "refId": "E", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_exists_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 ExistsAsync" },
         { "refId": "V", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_get_with_version_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 GetWithVersionAsync" }
       ]
+    },
+    {
+      "id": 32,
+      "title": "WAL saturation regime - current state per tree",
+      "description": "Step-plot of the per-tree WAL saturation state observable gauge (orleans.lattice.wal.saturation.state). Values: 0 = Healthy (normal traffic), 1 = Throttled (per-partition admission depth at-or-above WalSaturationThrottledRatio, default 0.75 - callers should slow down but appends still land), 2 = Saturated (admission cap reached with parked callers, OR recent dispatch-timeout trips OR provider-failure rate crossed the configured thresholds - callers should pause new appends). A sustained non-zero series is the leading-edge surface for the WAL back-pressure regime the silo cannot otherwise expose to operators without a live SSH session. Pair with the transition counters below for direction attribution.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 103 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 2,
+          "custom": { "lineInterpolation": "stepAfter", "fillOpacity": 20 },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "Healthy", "color": "green" } } },
+            { "type": "value", "options": { "1": { "text": "Throttled", "color": "yellow" } } },
+            { "type": "value", "options": { "2": { "text": "Saturated", "color": "red" } } }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_saturation_state{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 33,
+      "title": "WAL saturation regime - transition rate by direction (ops/s)",
+      "description": "Per-direction transition rate on the orleans.lattice.wal.saturation.transitions counter, broken out by the new state tag. Each series shows how often the classifier flips into the named state per second. A rising rate of state=throttled is the leading edge of the saturation regime; state=saturated is the regime itself; state=healthy is the recovery edge. Flapping between Throttled and Saturated at a high frequency is a different operational signal from a sustained Saturated regime - the latter is the genuine cap, the former is the bursty per-partition WAL drain pattern (defended against by WalSaturationRecoveryWindow).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 103 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, state) (rate(orleans_lattice_wal_saturation_transitions_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))", "legendFormat": "{{tree}} -> {{state}}" }
+      ]
+    },
+    {
+      "id": 34,
+      "title": "WAL saturation regime - per-partition attribution (heat-map)",
+      "description": "Per-partition transition-rate heat-map on the orleans.lattice.wal.saturation.transitions counter, grouped by the partition tag. Identifies which underlying WAL partition is driving the regime when one partition's drain pattern dominates the tree's worst-case rollup. A solitary hot partition is the canonical pattern under the single-account 409-Conflict regime (the 409s back up against the partition the SDK chose; the others stay clear). A spread across every partition indicates a true cluster-wide cap saturation. Transitions without a partition tag (provider-failure-rate triggered, attributed by shard rather than partition) appear as the empty label series.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 110 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, partition) (rate(orleans_lattice_wal_saturation_transitions_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\",state=\"saturated\"}[$__rate_interval]))", "legendFormat": "{{tree}} partition={{partition}}" }
+      ]
+    },
+    {
+      "id": 35,
+      "title": "WAL saturation regime - % time non-Healthy (1h)",
+      "description": "Per-tree fraction of the last hour the tree spent in a non-Healthy regime (Throttled or Saturated), as a percentage. A one-tile KPI suitable for at-a-glance dashboards: 0% = the tree never left Healthy; 100% = the tree has been continuously back-pressured for the full hour. Intermediate values quantify how much of the operational hour the silo was telling callers to slow down. Uses avg_over_time on the state observable gauge (values 0/1/2 ordered as Healthy<Throttled<Saturated) divided by 2 to normalise to [0, 1] then multiplied by 100. Operationally: <5% is the steady-state target for a non-saturating workload; sustained values above ~20% are the cue to raise WalMaxPendingBatches, the storage account count (F-084), or the offered load.",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 110 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "colorMode": "background" },
+      "targets": [
+        { "refId": "A", "expr": "max by (tree) (avg_over_time(orleans_lattice_wal_saturation_state{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1h])) / 2 * 100", "legendFormat": "{{tree}}" }
+      ]
     }
   ]
 }

@@ -25,7 +25,7 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 
 | Element | Convention | Example |
 |---|---|---|
-| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `LatticeMetrics`, `IMutationObserver`, `IWalSaturationSignal`, `IWalSaturationObserver`, `WalSaturationState`, `WalSaturationStateChange`, `MvRegisterAccessor`, `OrMapAccessor`, `RgaAccessor`, `LeafProjectionDigest`, `LatticeScopedCursor`, `ILatticeCompressor`, `LatticeCompression`, `ZstdLatticeCompressor`, `LatticeCompressionServiceCollectionExtensions` |
+| Public API namespace | `Orleans.Lattice` | `ILattice`, `LatticeOptions`, `LatticeMetrics`, `IMutationObserver`, `IWalSaturationSignal`, `IWalSaturationObserver`, `WalSaturationState`, `WalSaturationStateChange`, `WalSaturationSignalExtensions`, `LatticeShuttingDownException`, `MvRegisterAccessor`, `OrMapAccessor`, `RgaAccessor`, `LeafProjectionDigest`, `LatticeScopedCursor`, `ILatticeCompressor`, `LatticeCompression`, `ZstdLatticeCompressor`, `LatticeCompressionServiceCollectionExtensions` |
 | Internal namespace | `Orleans.Lattice.{Area}` | `Orleans.Lattice.BPlusTree.Grains` |
 | Test namespace | `Orleans.Lattice.Tests.{Area}` | `Orleans.Lattice.Tests.BPlusTree.Grains` |
 | Replication public API namespace | `Orleans.Lattice.Replication` | `IReceiverFlowControlPolicy`, `ReceiverFlowControlContext`, `ReceiverFlowControlHint`, `NoOpReceiverFlowControlPolicy`, `ITypedReplicationTransport`, `ReplicationContactDirection` |

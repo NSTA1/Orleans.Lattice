@@ -138,11 +138,11 @@ realistic latency the storage provider contributes.
   batchSize=4096
   cohortN=3
   dotnet=10.0.108
-  gitSha=f9afdfb
+  gitSha=75bd693
   host=Standard_D4as_v5
   region=westus3
   responseTimeoutSec=180
-  rowsMeasured=2026-06-06
+  rowsMeasured=2026-06-08
   rung=4000 vehicles / 5 Hz / 45s
   walMaxPendingBatches=16
   walPartitions=8
@@ -152,15 +152,15 @@ realistic latency the storage provider contributes.
 
 | Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |
 |------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|
-| `GetAsync` (point read) | **~19.9 k keys/s** | ~60 us | ~80 us | ~110 us | ~110 us |
-| `SetAsync` (point write) | **~4 k keys/s** | ~25.08 ms | ~41.24 ms | ~62.79 ms | ~132.18 ms |
-| `GetManyAsync` (4,096 keys/call) | **~19.6 k keys/s** | ~3.47 ms | ~3.66 ms | ~4.55 ms | ~8.3 ms |
-| `SetManyAsync` (4,096 keys/call) | **~15.6 k keys/s** | ~2274.7 ms | ~2750.88 ms | ~2750.88 ms | ~2750.88 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | **~4.2 k keys/s** | ~74.41 ms | ~92.78 ms | ~153.91 ms | ~727.24 ms |
+| `GetAsync` (point read) | **~19.9 k keys/s** | ~60 us | ~80 us | ~130 us | ~200 us |
+| `SetAsync` (point write) | **~4.3 k keys/s** | ~23.06 ms | ~37.28 ms | ~53.8 ms | ~96.36 ms |
+| `GetManyAsync` (4,096 keys/call) | **~19.7 k keys/s** | ~3.16 ms | ~3.5 ms | ~3.7 ms | ~5.32 ms |
+| `SetManyAsync` (4,096 keys/call) | **~11.4 k keys/s** | ~447.19 ms | ~556.09 ms | ~647.66 ms | ~702.8 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | **~3.9 k keys/s** | ~32.7 ms | ~58.76 ms | ~66.48 ms | ~72.3 ms |
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-06-06 on Standard_D4as_v5 in westus3 (.NET 10.0.108) at git sha f9afdfb, n=3 cohorts at 4000 vehicles / 5 Hz / 45s.
+> Measured 2026-06-08 on Standard_D4as_v5 in westus3 (.NET 10.0.108) at git sha 75bd693, n=3 cohorts at 4000 vehicles / 5 Hz / 45s.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across

@@ -102,7 +102,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-- [FX-032](https://github.com/NSTA1/Orleans.Lattice/issues/620) - WAL saturation surface leaks `failed=N` under single-account 409-burst regime (set-point silent loss, set-many in-flight tail, set-many-atomic saga-retry burndown) and has no Grafana panels
+_None._
 
 ### Shipped
 
@@ -135,6 +135,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-029](https://github.com/NSTA1/Orleans.Lattice/issues/613) - F-086 bench drain-tail: in-flight `SetManyAsync` batches at producer-stop boundary trip `WalAppendDispatchTimeout` during drain and surface as `failed=N` on FINAL
 - [FX-030](https://github.com/NSTA1/Orleans.Lattice/issues/614) - F-085 saturation classifier flaps `Healthy<->Saturated` under bursty per-partition WAL drain, leaving the `Throttled` advisory state effectively unobservable
 - [FX-031](https://github.com/NSTA1/Orleans.Lattice/issues/615) - Azure-throughput cohort runner counts cross-cohort residual-grain exceptions toward the current cohort's verdict, inflating HEALTHY runs to DEGRADED
+- [FX-032](https://github.com/NSTA1/Orleans.Lattice/issues/620) - WAL saturation surface leaks `failed=N` under single-account 409-burst regime (set-point silent loss, set-many in-flight tail, set-many-atomic saga-retry burndown) and has no Grafana panels
 
 ## Gaps & potential additions
 

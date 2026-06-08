@@ -246,6 +246,50 @@ splitting.
   completes mid-enumeration still has its verdict resolvable for the
   cursor's lifetime; see [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors).
 
+## Shutdown back-pressure
+
+A saga that is dispatched while the silo is shutting down (the host
+has received SIGTERM and the WAL writer is draining) cannot reach the
+storage layer - the writer-side drain refuses new appends with the
+typed `LatticeShuttingDownException`. The saga coordinator detects
+this regime (and the related Orleans grain-rejection shape that fires
+when a leaf grain has been deactivated as part of the same shutdown)
+and **fast-fails without consuming retry budget**: the next retry
+would route through the same drained writer and fail identically, so
+the saga short-circuits both the per-batch retry loop and the per-
+shard compensate-broadcast pass and surfaces the failure to the
+caller as `LatticeShuttingDownException`.
+
+The terminal outcome is recorded on the
+`orleans.lattice.atomic_write.completed` counter as
+`outcome=shutdown_refused` so operators can distinguish saga failures
+caused by shutdown coincidence from saga failures caused by genuine
+commit conflicts on the same operator dashboard.
+
+Caller contract: treat the `LatticeShuttingDownException` as back-
+pressure. The entries the saga carried were never durably committed,
+but the silo refused to accept them because the host is going away
+rather than because the storage layer rejected them. Long-lived
+clients should either fail over to a peer silo (if the cluster is
+multi-node) or surface the back-pressure to upstream callers (drop
+the request, queue it to a side outbox, or rate-limit). Re-issuing
+the same `operationId` after the host restarts is the normal recovery
+path: the saga's persisted state was never committed past the
+prepare phase, so the re-issued saga runs against a fresh silo
+activation as a brand-new saga. See [API Reference - Shutdown back-
+pressure](api.md#shutdown-back-pressure---latticeshuttingdownexception)
+for the cross-feature contract.
+
+The saga also opportunistically quiesces on the per-tree
+`IWalSaturationSignal` before each batched dispatch when the signal
+reports `Saturated`. The wait is capped at a small saga-local budget
+so the saga's own per-attempt deadline always wins on a tree that
+never recovers, and is silently skipped when no
+`IWalSaturationSignal` is registered in DI. The gate prevents the
+saga from burning retry budget against a writer-side admission
+semaphore that is provably parked, in addition to the terminal
+shutdown-refused fast-fail above.
+
 ## Caller-supplied idempotency keys
 
 The default `SetManyAtomicAsync(entries)` overload generates a fresh

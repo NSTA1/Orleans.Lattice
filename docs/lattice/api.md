@@ -757,12 +757,13 @@ Lattice publishes a per-tree, three-state saturation signal so callers driving o
 | `IWalSaturationObserver` | DI hook (push) | `OnStateChangedAsync(change, ct)` is invoked once per transition with a `WalSaturationStateChange` payload. Registered via `services.AddSingleton<IWalSaturationObserver, MyObserver>()`. Exceptions are caught and logged; the dispatcher continues to the next observer. |
 | `WalSaturationStateChange` | `readonly record struct` | `TreeId`, `PreviousState`, `NewState`, `AttributedPartition?`, `AttributedShard?`, `ObservedAt`. The attribution slots are populated when a single partition (admission-depth-driven) or shard (dispatch-timeout-driven) dominated the transition. |
 
-The signal is driven by two underlying sources:
+The signal is driven by three underlying sources:
 
 - **Admission-semaphore depth.** Per-partition `in_flight / WalMaxPendingBatches` ratio. `>= WalSaturationThrottledRatio` (default 0.75) raises a tree to `Throttled`; depth at cap with parked callers raises it to `Saturated`.
 - **Dispatch-timeout rate.** Trips of `WalAppendDispatchTimeout` observed within a single sample window. `>= WalSaturationDispatchTimeoutThreshold` (default 1) raises a tree to `Saturated` regardless of admission depth.
+- **Provider-failure rate.** Non-cancellation exceptions surfaced from a downstream `IWalShardGrain.AppendAsync` / `AppendBatchAsync` dispatch within a single sample window. `>= WalSaturationProviderFailureRateThreshold` (default 1; set to `0` to disable) raises a tree to `Saturated` regardless of admission depth and dispatch-timeout trips. Captures the regime where the provider's commit calls return quickly but terminally fail (e.g. the Azure Tables single-account 409-Conflict burst), so the silo surfaces the saturation regime instead of silently leaking entries.
 
-The tree's state is the worst case across these two signals across every partition / shard.
+The tree's state is the worst case across these signals across every partition / shard.
 
 ### Polling (canonical TCP-read-loop pattern)
 
@@ -781,6 +782,26 @@ while (!cancellationToken.IsCancellationRequested)
 ```
 
 The polling getter costs one concurrent-dictionary lookup returning an `enum` - it is safe to call inside any per-message check on the producer hot path. The `SetAsync` / `SetManyAsync` hot path on `ILattice` is unchanged: the sampler runs on its own timer and never adds per-call work.
+
+### Canonical per-call back-pressure helper (`ApplyBackPressureAsync`)
+
+For TCP listeners, saga coordinators, and other consumers that drive offered load through a per-call decision loop, the library packages the three-state response pattern in a single call:
+
+```csharp verify
+var signal = client.ServiceProvider.GetRequiredService<IWalSaturationSignal>();
+while (!cancellationToken.IsCancellationRequested)
+{
+    // Per-call back-pressure: no-op on Healthy, brief delay on
+    // Throttled (1 ms default - tunable via the overload), full
+    // park-until-Healthy on Saturated.
+    await signal.ApplyBackPressureAsync("my-tree", cancellationToken);
+
+    // Continue reading from the producer transport and dispatching
+    // SetAsync / SetManyAsync calls.
+}
+```
+
+The helper centralises the canonical response pattern so consumers do not roll their own (a recurring source of "the signal fires but back-pressure is too soft" when the consumer's Throttled response is `Task.Yield()` instead of an honest delay). The default Throttled delay (1 ms) slows a 10 k events/sec offered stream to ~1 k events/sec - enough to give the writer's admission gate time to drain before the regime escalates to Saturated, without producing a perceptible per-call latency penalty when the regime is transient. Pass an explicit `TimeSpan` to the four-argument overload to tune the strength of the Throttled response.
 
 ### Await (single recovery wait)
 
@@ -832,9 +853,44 @@ A flat-zero series on `transitions` is the healthy steady state. A rising rate o
 | `WalSaturationSampleInterval` | `200 ms` | Sampler cadence. The worst-case observer / await transition latency is one interval beyond the underlying signal crossing the threshold. Set to `Timeout.InfiniteTimeSpan` to disable the sampler entirely (signal pins to `Healthy`). |
 | `WalSaturationThrottledRatio` | `0.75` | Per-partition admission-depth ratio at or above which the signal raises a tree to `Throttled`. Range `[0.0, 1.0]`. |
 | `WalSaturationDispatchTimeoutThreshold` | `1` | Minimum dispatch-timeout trips per sample window that raise a tree to `Saturated` regardless of admission depth. |
+| `WalSaturationProviderFailureRateThreshold` | `1` | Minimum provider-side commit failures per sample window that raise a tree to `Saturated` regardless of admission depth and dispatch-timeout trips. Captures the regime where provider commit calls return quickly but terminally fail (e.g. Azure Tables 409-Conflict bursts) so the silo surfaces the saturation regime instead of silently leaking entries. Set to `0` to disable the trigger entirely. |
 | `WalSaturationRecoveryWindow` | `1 s` | Window after the most-recently observed `Saturated` transition during which the classifier holds a tree at or above `Throttled` even if the current sampler tick's depth observation classifies it as `Healthy`. Defends against bursty per-partition WAL drain where the per-tick `max(depth_ratio)` oscillates `~1.0 <-> ~0.0` and the classifier would otherwise flap `Healthy <-> Saturated` at the sampler cadence with `Throttled` never observed as a stable state. Set to `TimeSpan.Zero` to disable the upgrade (per-tick depth observation drives the regime directly); set to `Timeout.InfiniteTimeSpan` to hold `Throttled` forever after the first `Saturated` observation. |
 
 See [WAL Saturation Signal](wal-saturation-signal.md) for the full design including the per-tree resolution contract, the multi-tree aggregate view, and the bench-side adoption pattern.
+
+## Shutdown back-pressure - `LatticeShuttingDownException`
+
+Public typed exception thrown by any `ILattice` operator (and by the internal saga coordinator on its caller-facing throw path) when the operation cannot complete because the owning silo's write-ahead-log writer is draining as part of host shutdown. Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot lets callers that care about the shutdown regime explicitly distinguish it from genuine `InvalidOperationException` failures (which are not back-pressure).
+
+Surfaces from three distinct shutdown failure shapes that share the same operational meaning ("this silo is going away; the operation was refused"):
+
+- **Writer-side drain refusal.** `WalCommitLogWriter.DrainAsync` flips the per-instance drain flag; any new `AppendAsync` / `AppendBatchAsync` dispatch after the flip throws this exception inline.
+- **Admission-semaphore drain release.** A caller already parked on the per-partition admission semaphore when the drain fired sees the release-by-drain surface as this exception (rather than the legacy `TimeoutException(WalDrainBudget)` shape).
+- **Saga-coordinator short-circuit.** When the internal `AtomicWriteGrain` detects either of the above (or the Orleans `OrleansMessageRejectionException("Unable to create local activation")` shape that fires when a leaf grain has been deactivated as part of the same shutdown), the saga short-circuits the retry loop and the per-shard compensate-broadcast pass and wraps the cause in this exception so consumers can detect the regime via a single `is` check.
+
+Caller contract: treat as back-pressure, not as a real failure. The entries the operation carried were never durably committed, but the silo refused to accept them because the host is going away rather than because the storage layer rejected them. A caller observing this exception should abandon the operation rather than retry it - every subsequent attempt against the same silo activation in this lifetime will fail with the same exception, because the writer drain is a one-way transition. Long-lived clients should either fail over to a peer silo (if the cluster is multi-node) or surface the back-pressure to upstream callers (drop the request, queue it to a side outbox, or rate-limit). Re-issuing the same operation after the host restarts is the normal recovery path; the previously failed entries are not durable, so the re-issue is a fresh attempt against a fresh silo activation.
+
+```csharp verify
+var entries = new List<KeyValuePair<string, byte[]>>
+{
+    new("k1", new byte[] { 0x01 }),
+    new("k2", new byte[] { 0x02 }),
+};
+
+try
+{
+    await lattice.SetManyAsync(entries);
+}
+catch (LatticeShuttingDownException)
+{
+    // The host is shutting down. The entries did not commit.
+    // Queue them to a side buffer / fail over to a peer silo /
+    // surface back-pressure to the caller; do NOT retry against
+    // this lattice activation.
+}
+```
+
+On the `SetManyAtomicAsync` path, the saga's outcome is recorded on the `orleans.lattice.atomic_write.completed` counter as `outcome=shutdown_refused` so operators can distinguish saga failures caused by shutdown coincidence from saga failures caused by genuine commit conflicts on the same dashboard.
 
 ## Leaf-projection digest
 
@@ -1199,6 +1255,7 @@ they are implementation details not intended for direct use.
 | `TreeStorageUsageReport` | `ol.tsu` | public | `readonly record struct` returned by `ILattice.GetStorageUsageAsync`. Byte-accurate per-tree storage footprint. |
 | `ClusterStorageUsageReport` | `ol.csu` | public | `readonly record struct` returned by `ILatticeAdmin.GetTotalStorageUsageAsync`. Cluster-wide storage roll-up. |
 | `ShardStorageUsage` | `ol.ssu` | internal | `readonly record struct` per-shard leaf-state + snapshot byte roll-up. |
+| `LatticeShuttingDownException` | `ol.lsd` | public | Typed `InvalidOperationException` subclass thrown by `ILattice` operators (and the internal `AtomicWriteGrain` saga coordinator) when an operation cannot complete because the owning silo's WAL writer is draining as part of host shutdown. See [Shutdown back-pressure](#shutdown-back-pressure---latticeshuttingdownexception) and [Atomic Writes](atomic-writes.md). |
 
 ## Public but not usable
 

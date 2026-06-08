@@ -256,8 +256,16 @@ public class WalCommitLogWriterDrainTests
             "drain must release every parked admission caller within WalDrainBudget + grace");
         foreach (var t in parked)
         {
-            Assert.That(async () => await t, Throws.InstanceOf<TimeoutException>(),
-                "every parked AcquireAsync caller must surface a typed TimeoutException naming WalDrainBudget so the wedge is attributable");
+            // The parked admission caller must surface a typed
+            // LatticeShuttingDownException naming WalDrainBudget so
+            // the wedge is attributable AND callers can detect the
+            // regime via a single `is` check instead of
+            // TimeoutException-with-message-parsing. The underlying
+            // TimeoutException is preserved as InnerException for
+            // log diagnostics.
+            Assert.That(async () => await t, Throws.InstanceOf<LatticeShuttingDownException>()
+                .With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)),
+                "every parked AcquireAsync caller must surface a typed LatticeShuttingDownException naming WalDrainBudget so the wedge is attributable");
         }
 
         heldRelease.TrySetResult(0L);
@@ -265,16 +273,20 @@ public class WalCommitLogWriterDrainTests
 
     /// <summary>
     /// AC2 (admission-semaphore drain attribution): the failure that
-    /// releases parked callers on drain must name <c>WalDrainBudget</c>
-    /// in its message so operators grepping the silo log can
+    /// releases parked callers on drain must be a typed
+    /// <see cref="LatticeShuttingDownException"/> whose message names
+    /// <c>WalDrainBudget</c> so operators grepping the silo log can
     /// distinguish the drain-trigger release from the normal
-    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> release.
-    /// Mirrors the assertion the existing
+    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> release,
+    /// and so caller-side code can detect the shutdown regime by type
+    /// instead of by message parsing. Mirrors the assertion the existing
     /// <c>WalShardGrainTests.DrainBudget.cs</c> uses for the shard
-    /// grain's force-fault path.
+    /// grain's force-fault path (the shard grain still surfaces
+    /// <see cref="TimeoutException"/> on that path because it does not
+    /// participate in the typed-shutdown surface).
     /// </summary>
     [Test]
-    public async Task AppendAsync_parked_callers_surface_TimeoutException_naming_WalDrainBudget()
+    public async Task AppendAsync_parked_callers_surface_LatticeShuttingDownException_naming_WalDrainBudget()
     {
         var heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var shard = Substitute.For<IWalShardGrain>();
@@ -294,9 +306,17 @@ public class WalCommitLogWriterDrainTests
         await writer.DrainAsync(CancellationToken.None);
         Assert.That(
             async () => await parked[0],
-            Throws.InstanceOf<TimeoutException>()
+            Throws.InstanceOf<LatticeShuttingDownException>()
                 .With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)),
-            "the parked admission caller's surfaced exception must name WalDrainBudget so operators can grep-attribute the silo-drain release path vs the per-call WalAppendDispatchTimeout release path");
+            "the parked admission caller's surfaced exception must be a typed LatticeShuttingDownException naming WalDrainBudget so operators can grep-attribute the silo-drain release path vs the per-call WalAppendDispatchTimeout release path AND callers can detect the shutdown regime by type");
+
+        // The underlying TimeoutException is preserved as the
+        // InnerException so log diagnostics keep the original
+        // failure shape; the typed wrapper is purely additive on
+        // top of the existing TimeoutException surface.
+        var ex = Assert.ThrowsAsync<LatticeShuttingDownException>(async () => await parked[0]);
+        Assert.That(ex!.InnerException, Is.InstanceOf<TimeoutException>(),
+            "LatticeShuttingDownException must preserve the underlying TimeoutException as InnerException for log diagnostics");
 
         heldRelease.TrySetResult(0L);
     }
@@ -489,10 +509,10 @@ public class WalCommitLogWriterDrainTests
 
         await writerA.DrainAsync(CancellationToken.None);
 
-        // Writer A's parked caller surfaces TimeoutException naming WalDrainBudget.
+        // Writer A's parked caller surfaces LatticeShuttingDownException naming WalDrainBudget.
         Assert.That(async () => await parkedA,
-            Throws.InstanceOf<TimeoutException>().With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)),
-            "writer A's parked caller must surface a typed TimeoutException naming WalDrainBudget after writer A drains");
+            Throws.InstanceOf<LatticeShuttingDownException>().With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)),
+            "writer A's parked caller must surface a typed LatticeShuttingDownException naming WalDrainBudget after writer A drains");
 
         // Writer B's parked caller is untouched by writer A's drain - it is
         // still parked on its own admission semaphore (whose held dispatch
@@ -508,7 +528,7 @@ public class WalCommitLogWriterDrainTests
         // dispatch unwind cleanly before the fixture tears down.
         await writerB.DrainAsync(CancellationToken.None);
         Assert.That(async () => await parkedB,
-            Throws.InstanceOf<TimeoutException>().With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)));
+            Throws.InstanceOf<LatticeShuttingDownException>().With.Message.Contains(nameof(LatticeOptions.WalDrainBudget)));
 
         // Release the substitute-held tasks so the abandoned shard-RPC tasks
         // settle and GC can reclaim them, instead of leaking into the test

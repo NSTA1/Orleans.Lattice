@@ -115,6 +115,7 @@ public class LatticeOptionsResolverPropagationGuardTests
             "WalSaturationSampleInterval",
             "WalSaturationThrottledRatio",
             "WalSaturationDispatchTimeoutThreshold",
+            "WalSaturationProviderFailureRateThreshold",
             "WalSaturationRecoveryWindow",
         };
 
