@@ -23,6 +23,21 @@ The saturation signal exposes the writer-side admission gate's pressure as a typ
 
 States are totally ordered (`Healthy < Throttled < Saturated`), and the tree's state is the worst case across every partition / shard for that tree. The state space is open for additive extension - future minor releases may introduce intermediate or recovery states (for example a `Recovering` state when pressure has just dropped) without breaking subscribers that switch on the three documented values.
 
+### Throttled regime stability (recovery window)
+
+The per-tick `max(depth_ratio)` across the tree's WAL partitions is structurally bursty: one partition fills to cap, drains entirely in the next tick, the next partition fills. The cross-partition `max` consequently oscillates between `~1.0` (one partition at cap) and `~0.0` (the partition just emptied, the next one not yet filling) inside a single sampler period. Without smoothing, the classifier would see `Saturated` then `Healthy` in alternating ticks and the advisory `Throttled` band (the inclusive range `[WalSaturationThrottledRatio, 1.0)` of `max(depth_ratio)`) is never observed as a stable regime.
+
+The classifier applies an **upgrade rule** to make `Throttled` observable across the burst cycle: when the current-tick classification is `Healthy` but the tree was observed at `Saturated` within the past `LatticeOptions.WalSaturationRecoveryWindow` (default 1 second), the classifier upgrades the tree to `Throttled` instead. The upgrade rule preserves three invariants:
+
+- **`Healthy -> Saturated` latency is unchanged.** `Saturated` still fires on the current tick's at-cap condition, so the public saturation-signal surface's bound (transition latency under one `WalSaturationSampleInterval`) still holds.
+- **Recovery is bounded.** Once the recovery window elapses AND the current tick observes no saturation pressure, the tree drops to `Healthy` and any pending `WaitForHealthyAsync` completes. The window only delays recovery by its own value.
+- **Per-tree independence is preserved.** A tree that has never been observed `Saturated` is never upgraded, regardless of any other tree's regime.
+
+Two sentinels disable or invert the upgrade:
+
+- `WalSaturationRecoveryWindow = TimeSpan.Zero`: the upgrade is disabled entirely. The classifier behaves the way the sampler shipped originally - the per-tick depth observation drives the regime directly. Use this when the workload's WAL drain pattern is non-bursty (single-partition trees, or workloads where every partition tracks closely in lockstep) and the upgrade introduces no benefit.
+- `WalSaturationRecoveryWindow = Timeout.InfiniteTimeSpan`: the upgrade is sticky. Once `Saturated` has been observed, every subsequent `Healthy`-classified tick is upgraded to `Throttled` forever. Useful for tests that want a deterministic sticky-Throttled floor without arming wall-clock dependencies, and for defensive production deployments that prefer the saturation regime to be sticky.
+
 ## Resolution and scope
 
 - **Per-tree.** A multi-tree silo does not lump every tree's pressure together. A `Saturated` tree A does not affect tree B's signal. `IWalSaturationSignal.GetAggregateState()` exists for callers that want a single global signal across every observed tree (a TCP listener that fronts every tree at once, for example) and returns the worst case across the per-tree views.

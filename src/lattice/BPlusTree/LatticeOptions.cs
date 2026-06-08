@@ -1377,6 +1377,79 @@ public class LatticeOptions
     public const int DefaultWalSaturationDispatchTimeoutThreshold = 1;
 
     /// <summary>
+    /// Window after the most-recently observed
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// transition during which the saturation classifier holds a tree
+    /// at or above <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>
+    /// regardless of the current sampler tick's per-partition depth
+    /// observation. Defends against the bursty per-partition WAL
+    /// drain pattern where one partition fills to cap, drains
+    /// entirely in the next tick, and the next partition then fills:
+    /// without the window, the per-tick <c>max(depth_ratio)</c> across
+    /// partitions oscillates between ~1.0 and ~0.0 inside a single
+    /// sampler period and the classifier flaps
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/> &lt;-&gt;
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/> at
+    /// the sampler cadence, leaving the
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>
+    /// advisory regime effectively unobservable. With the window the
+    /// classifier upgrades a transient
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>
+    /// classification to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> for
+    /// the duration of the window after a
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// observation, so callers see the regime persist as the natural
+    /// lead-up and fall-back state around saturation episodes.
+    /// <para>
+    /// Does not affect the
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// detection itself - that still fires on the current tick's
+    /// at-cap condition, so the
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>
+    /// -&gt;
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// transition latency remains bounded by one
+    /// <see cref="WalSaturationSampleInterval"/>. Does not affect
+    /// the recovery path either: once the window expires AND the
+    /// current tick observes no saturation pressure, the tree drops
+    /// to <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>
+    /// and any pending
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal.WaitForHealthyAsync(string, System.Threading.CancellationToken)"/>
+    /// completes - so the public saturation-signal contract that
+    /// recovery latency is bounded by one sample interval after the
+    /// underlying signal clears still holds; the window only delays
+    /// it by the configured value.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalSaturationRecoveryWindow"/>
+    /// (1 second) - long enough to span the typical multi-partition
+    /// burst cycle at <see cref="WalPartitions"/> = 8 and
+    /// <see cref="WalMaxPendingBatches"/> = 16 (one partition
+    /// completing its cycle within several sampler ticks of the
+    /// previous), short enough that a genuinely-recovered tree
+    /// surfaces back to <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>
+    /// within one second of the underlying signal clearing. Set to
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to
+    /// hold a tree at <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>
+    /// forever after the first
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// observation - useful for tests that want a sticky
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>
+    /// floor without arming a wall-clock dependency. Set to
+    /// <see cref="System.TimeSpan.Zero"/> to disable the window
+    /// entirely and restore the pre-fix classifier behaviour where
+    /// the per-tick depth observation drives the regime directly;
+    /// the registered options validator rejects any other negative
+    /// value at first-resolve time.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalSaturationRecoveryWindow { get; set; } = DefaultWalSaturationRecoveryWindow;
+
+    /// <summary>Default value for <see cref="WalSaturationRecoveryWindow"/> (1 second).</summary>
+    public static readonly TimeSpan DefaultWalSaturationRecoveryWindow = TimeSpan.FromSeconds(1);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's
