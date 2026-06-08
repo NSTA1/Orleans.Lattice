@@ -36,6 +36,11 @@ Set-StrictMode -Version Latest
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $here '../../..')
 
+# Dot-source the verdict-computation helpers. Kept in a separate module
+# so the regression test under scripts/Test-CohortVerdict.ps1 can
+# exercise them in isolation without provisioning an Azure VM.
+. (Join-Path $here '_run-cohort-helpers.ps1')
+
 if (-not $ParametersFile) {
 	$local = Join-Path $here 'parameters.local.ps1'
 	$default = Join-Path $here 'parameters.ps1'
@@ -383,10 +388,19 @@ for ($i = @($siloPerSec).Count - 1; $i -ge 0; $i--) {
 	if ($siloPerSec[$i].rate -eq 0) { $drainTailSamples++ } else { break }
 }
 
-# Any Exception line at all - including silo-side TableTransactionFailedException
-# bursts and uncaught grain RPC faults - is a degradation signal even when
-# the silo recovered in time to emit FINAL.
-$exceptionCount = @(Select-String -Path $siloLog -Pattern 'Exception' -SimpleMatch).Count
+# Exception lines in the silo journal during this cohort's window
+# include cross-cohort residual-grain noise: the silo runs for the
+# lifetime of performance-report.ps1 (not per cohort), so wedged WAL
+# grains from prior cohorts' trees continue to throw against their
+# saturation-residual storage rows under the current cohort's wall
+# clock. Filtering by the current cohort's tree id before counting
+# yields an accurate per-cohort exception tally for the verdict.
+# The raw count is preserved as a diagnostic so the operator can still
+# see total log noise when triaging.
+$exceptionCounts = Get-CohortExceptionCount -LogPath $siloLog -CurrentTreeId $treeId
+$exceptionCount  = [int]$exceptionCounts.Filtered
+$exceptionRaw    = [int]$exceptionCounts.Raw
+$exceptionCrossCohort = [int]$exceptionCounts.Excluded
 
 # Pull written / elapsed / active out of the FINAL line. Tolerates the
 # older single-avg FINAL line (active== reported as N/A in that case).
@@ -494,7 +508,12 @@ Write-Host ("Drain tail   : {0} trailing rate=0 sample(s) post-producer" -f $dra
 Write-Host ("Silo CPU     : avg {0}% / peak {1}% (of one vCPU)" -f $avgSiloCpu, $maxSiloCpu)
 Write-Host ("System CPU   : avg {0}% / peak {1}%" -f $avgSysCpu, $maxSysCpu)
 Write-Host ("Silo RSS peak: {0} GiB (of {1} GiB)" -f $peakRssGiB, $memTotalGiB)
-Write-Host ("Diagnostics  : stall-watchdog={0}  wal-slot={1}  wal-append={2}  exceptions={3}  failed-samples={4}" -f $watchdog, $walSlot, $walAppend, $exceptionCount, $failedSamples)
+$exceptionsDisplay = if ($exceptionCrossCohort -gt 0) {
+	"{0} (raw={1}; cross-cohort={2})" -f $exceptionCount, $exceptionRaw, $exceptionCrossCohort
+} else {
+	"$exceptionCount"
+}
+Write-Host ("Diagnostics  : stall-watchdog={0}  wal-slot={1}  wal-append={2}  exceptions={3}  failed-samples={4}" -f $watchdog, $walSlot, $walAppend, $exceptionsDisplay, $failedSamples)
 $verdictColor = switch ($verdictState) {
 	'HEALTHY'  { 'Green' }
 	'DEGRADED' { 'Yellow' }
