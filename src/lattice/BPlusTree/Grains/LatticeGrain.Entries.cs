@@ -112,7 +112,7 @@ internal sealed partial class LatticeGrain
                 pq.Enqueue(i, cursors[i].Current.Key);
         }
 
-        HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(capacity: pageSize, comparer: StringComparer.Ordinal);
         var maxRetries = isSystemTree ? 0 : Math.Max(1, Options.MaxScanRetries);
         var retriesUsed = 0;
         var coveredSlots = isSystemTree ? null : new HashSet<int>();
