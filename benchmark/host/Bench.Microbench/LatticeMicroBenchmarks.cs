@@ -97,6 +97,50 @@ public class LatticeMicroBenchmarks
     private int _mixedCursor;
     private int _getManyCursor;
 
+    // ===== Per-call retry-envelope cohort instrument (cycle 45+) =====
+    // Six dedicated cursors + two dedicated never-seeded keyspaces, added
+    // so every public ILattice mutation surface that routes through
+    // LatticeGrain.RetryOnStaleRoutingAsync has a steady-state allocation
+    // baseline. Each cursor rotates over an existing pre-seeded keyspace
+    // (PointWrite-style) so no per-iteration state drift contaminates the
+    // measured _alloc_b. PointDelete / DeleteRangeAbsent route against a
+    // dedicated keyspace that is never seeded (so every iteration returns
+    // false / 0 - the same closure / delegate construction in the retry
+    // envelope is exercised on the not-present path). PointApplyCrdtDelta
+    // also routes against its own dedicated keyspace so the leaf's
+    // PnCounter merge always succeeds (the pre-seeded _keys[] hold random
+    // bytes from _value, which fail PnCounter JSON decode).
+    private string[] _deleteAbsentKeys = null!;
+    private string[] _crdtDeltaKeys = null!;
+    private int _deleteCursor;
+    private int _getOrSetCursor;
+    private int _setIfVersionCursor;
+    private int _ttlCursor;
+    private int _crdtDeltaCursor;
+    // Fixed range outside every seeded keyspace; DeleteRange returns 0 on
+    // every iteration. The range bounds are kept identity-stable across
+    // iterations so the per-iteration allocation is dominated by the retry
+    // envelope (the LatticeGrain.cs side-effect under measurement), not by
+    // range-string construction. Lexicographic ordering vs the seeded
+    // "k-*" / "bulk-*" / "fbulk-*" / "del-absent-*" keyspaces is preserved
+    // by the "zz-empty-*" prefix.
+    private const string DeleteRangeAbsentStart = "zz-empty-00000000";
+    private const string DeleteRangeAbsentEnd = "zz-empty-99999999";
+    // Idempotent constant TTL used by PointSetWithTtl. Large enough that
+    // entries never expire mid-iteration even under -Fidelity full so the
+    // measured path is always the cold-set / overwrite branch, never the
+    // tombstone branch.
+    private static readonly TimeSpan SetWithTtlIdempotent = TimeSpan.FromHours(1);
+    // Tiny CRDT delta payload (PnCounter mode) reused identity-stable
+    // across iterations so the per-iteration allocation is dominated by
+    // the retry envelope's closure / delegate cost, not by delta
+    // construction. Mode + payload are bit-identical for every call,
+    // making the measurement repeatable. ApplyCrdtDeltaAsync rejects
+    // LatticeMergeMode.LwwRegister by design (LWW writes go through
+    // SetAsync / SetIfVersionAsync); PnCounter is the cheapest CRDT
+    // mode whose delta payload survives leaf-side JSON decode.
+    private byte[] _crdtDeltaPayload = null!;
+
     // ===== Cycle 11 fanout instrument: 4-physical-shard sibling tree =====
     // A second ILattice activation rooted at FanoutTreeName routes through
     // the same NSubstitute IGrainFactory but resolves to a TreeRegistryEntry
@@ -421,6 +465,49 @@ public class LatticeMicroBenchmarks
             _bulkBatch.Add(new(k, _value));
         }
 
+        // Per-call retry-envelope cohort instrument: dedicated
+        // never-seeded keyspace for PointDelete. Each iteration deletes a
+        // key that was never set, hitting the "absent" return-false branch.
+        // The closure / delegate construction inside
+        // LatticeGrain.DeleteAsyncCore -> RetryOnStaleRoutingAsync happens
+        // before the underlying shard probes the leaf, so the per-call
+        // allocation we are measuring is identical on the present vs
+        // absent paths - the absent path just lets us run for unbounded
+        // iterations without consuming the seeded keyspace.
+        _deleteAbsentKeys = new string[keyCount];
+        for (var i = 0; i < keyCount; i++)
+        {
+            _deleteAbsentKeys[i] = "del-absent-" + i.ToString("D8", CultureInfo.InvariantCulture);
+        }
+
+        // Per-call retry-envelope cohort instrument: dedicated keyspace
+        // for PointApplyCrdtDelta. The pre-seeded _keys[] hold random
+        // bytes from _value (an LWW byte payload) which fail the leaf's
+        // PnCounter JSON decode; routing the CRDT delta against a fresh
+        // key range means the first merge per key creates a valid
+        // PnCounter state and every subsequent merge (when the cursor
+        // wraps) folds an additional increment into a well-formed
+        // PnCounter. Either path exercises the
+        // ApplyCrdtDeltaAsyncCore -> RetryOnStaleRoutingAsync envelope
+        // identically.
+        _crdtDeltaKeys = new string[keyCount];
+        for (var i = 0; i < keyCount; i++)
+        {
+            _crdtDeltaKeys[i] = "crdt-" + i.ToString("D8", CultureInfo.InvariantCulture);
+        }
+
+        // Tiny CRDT delta payload for the PointApplyCrdtDelta benchmark.
+        // A single-replica single-increment PnCounter delta is the
+        // smallest payload that survives the leaf-side JSON decode
+        // (~40 bytes of UTF-8) while still exercising the
+        // ApplyCrdtDeltaAsyncCore -> RetryOnStaleRoutingAsync envelope.
+        var seedDelta = new PnCounterDelta
+        {
+            Increments = new Dictionary<string, long>(StringComparer.Ordinal) { ["bench"] = 1 },
+            Decrements = new Dictionary<string, long>(0, StringComparer.Ordinal),
+        };
+        _crdtDeltaPayload = JsonLatticeSerializer<PnCounterDelta>.Default.Serialize(seedDelta);
+
         // Fixed 4-key GetMany batch drawn from the pre-seeded keyspace.
         // The batch is reused across iterations; rotating offsets via
         // _getManyCursor would only add a per-iteration allocation
@@ -705,6 +792,130 @@ public class LatticeMicroBenchmarks
         var i = unchecked(_readCursor++) & int.MaxValue;
         var key = _keys[i % _keys.Length];
         return _lattice.ExistsAsync(key);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.DeleteAsync(string, CancellationToken)"/>
+    /// against a rotating key drawn from a dedicated never-seeded
+    /// keyspace, hitting the "key absent" return-false branch on every
+    /// iteration. The closure / delegate construction inside
+    /// <c>LatticeGrain.DeleteAsyncCore</c> -&gt;
+    /// <c>RetryOnStaleRoutingAsync</c> happens BEFORE the underlying
+    /// shard probes the leaf, so the per-call allocation we are measuring
+    /// is identical on the present and absent paths. The absent path is
+    /// chosen because it lets the bench run for unbounded iterations
+    /// without consuming the pre-seeded keyspace that PointRead /
+    /// PointExists / GetMany rely on. Surfaced as
+    /// <c>microbench_point_delete_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Point delete")]
+    public Task<bool> PointDelete()
+    {
+        var i = unchecked(_deleteCursor++) & int.MaxValue;
+        var key = _deleteAbsentKeys[i % _deleteAbsentKeys.Length];
+        return _lattice.DeleteAsync(key);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.DeleteRangeAsync(string, string, CancellationToken)"/>
+    /// against a fixed range outside every seeded keyspace, hitting the
+    /// "no matches" return-0 branch on every iteration. Same rationale
+    /// as <see cref="PointDelete"/>: the closure / delegate construction
+    /// inside <c>DeleteRangeAsyncOuter</c> -&gt;
+    /// <c>RetryOnStaleRoutingAsync</c> happens before the underlying
+    /// range-scan probes leaves, so the per-call allocation we measure is
+    /// identical regardless of how many tombstones the scan would
+    /// produce; the absent range lets the bench run for unbounded
+    /// iterations without state drift. Surfaced as
+    /// <c>microbench_delete_range_absent_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Delete range absent")]
+    public Task<int> DeleteRangeAbsent()
+    {
+        return _lattice.DeleteRangeAsync(DeleteRangeAbsentStart, DeleteRangeAbsentEnd);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.GetOrSetAsync(string, byte[], CancellationToken)"/>
+    /// against a rotating key drawn from the pre-seeded keyspace. Every
+    /// iteration hits the "key already present" return-existing branch -
+    /// the steady-state cost a caller pays when an entry already exists.
+    /// Drives the <c>GetOrSetAsyncCore</c> -&gt;
+    /// <c>RetryOnStaleRoutingAsync</c> closure / delegate envelope.
+    /// Surfaced as <c>microbench_point_get_or_set_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Point get or set")]
+    public Task<byte[]?> PointGetOrSet()
+    {
+        var i = unchecked(_getOrSetCursor++) & int.MaxValue;
+        var key = _keys[i % _keys.Length];
+        return _lattice.GetOrSetAsync(key, _value);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.SetIfVersionAsync(string, byte[], HybridLogicalClock, CancellationToken)"/>
+    /// against a rotating key drawn from the pre-seeded keyspace, always
+    /// passing <see cref="HybridLogicalClock.Zero"/> as the expected
+    /// version. The pre-seeded keys all carry a non-zero stamped HLC so
+    /// every iteration returns <c>false</c> (CAS rejected). Same
+    /// allocation rationale as <see cref="PointDelete"/>: the closure /
+    /// delegate construction inside <c>SetIfVersionAsyncCore</c> -&gt;
+    /// <c>RetryOnStaleRoutingAsync</c> is identical whether the CAS
+    /// succeeds or fails - the failing path is chosen so per-iteration
+    /// state does not drift. Surfaced as
+    /// <c>microbench_point_set_if_version_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Point set if version")]
+    public Task<bool> PointSetIfVersion()
+    {
+        var i = unchecked(_setIfVersionCursor++) & int.MaxValue;
+        var key = _keys[i % _keys.Length];
+        return _lattice.SetIfVersionAsync(key, _value, HybridLogicalClock.Zero);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>
+    /// against a rotating key drawn from the pre-seeded keyspace with a
+    /// fixed 1-hour TTL. Drives the <c>SetAsyncTtlCore</c> -&gt;
+    /// <c>RetryOnStaleRoutingAsync</c> envelope - distinct from the
+    /// TTL-less <see cref="PointWrite"/> path, which uses a different
+    /// inline retry shape. The 1-hour TTL is large enough that no entry
+    /// expires during any fidelity's measurement window so the path is
+    /// always cold-set / overwrite, never tombstone. Surfaced as
+    /// <c>microbench_point_set_with_ttl_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Point set with ttl")]
+    public Task PointSetWithTtl()
+    {
+        var i = unchecked(_ttlCursor++) & int.MaxValue;
+        var key = _keys[i % _keys.Length];
+        return _lattice.SetAsync(key, _value, SetWithTtlIdempotent);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>
+    /// against a rotating key drawn from the pre-seeded keyspace, with
+    /// mode <see cref="LatticeMergeMode.PnCounter"/> and a fixed
+    /// single-replica single-increment <see cref="PnCounterDelta"/>
+    /// payload (~40 UTF-8 bytes). Drives the
+    /// <c>ApplyCrdtDeltaAsyncCore</c> -&gt;
+    /// <c>RetryOnStaleRoutingAsync</c> envelope.
+    /// <see cref="LatticeMergeMode.LwwRegister"/> is rejected by
+    /// <c>ApplyCrdtDeltaAsync</c> by design (LWW writes use
+    /// <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>);
+    /// PnCounter is the cheapest CRDT mode whose delta payload
+    /// survives leaf-side JSON decode. Identity-stable payload keeps
+    /// the merge resolution deterministic across iterations so
+    /// per-iteration allocation is dominated by the retry envelope,
+    /// not by the merge algorithm. Surfaced as
+    /// <c>microbench_point_apply_crdt_delta_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Point apply crdt delta")]
+    public Task<HybridLogicalClock> PointApplyCrdtDelta()
+    {
+        var i = unchecked(_crdtDeltaCursor++) & int.MaxValue;
+        var key = _crdtDeltaKeys[i % _crdtDeltaKeys.Length];
+        return _lattice.ApplyCrdtDeltaAsync(key, LatticeMergeMode.PnCounter, _crdtDeltaPayload);
     }
 
     /// <summary>
