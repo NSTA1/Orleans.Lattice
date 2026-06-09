@@ -102,6 +102,17 @@ internal static class TypeAliases
     // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
 
+    // Server-side predicate push-down IR (the allowlisted, wire-stable
+    // lowering of a client Expression<Func<T,bool>> evaluated against a
+    // value's JSON document view inside the leaf scan).
+    internal const string LatticePredicateNode = "ol.pn";
+    internal const string LatticePredicateNodeKind = "ol.pnk";
+    internal const string LatticeConstant = "ol.pc";
+    internal const string LatticeConstantKind = "ol.pck";
+    internal const string LatticeComparisonOperator = "ol.pco";
+    internal const string LatticeBooleanOperator = "ol.pbo";
+    internal const string LatticeStringMethod = "ol.psm";
+
     // Raw-entry bulk load (snapshot TTL preservation)
     internal const string LwwEntry = "ol.lwe";
 
