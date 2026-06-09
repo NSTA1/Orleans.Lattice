@@ -281,6 +281,7 @@ internal sealed class LeafCacheGrain(
         // the partition collapses to a no-op and the legacy cache
         // path runs unchanged.
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var predicate = LatticePredicateContext.Current;
         List<string>? delegated = null;
         HashSet<string>? delegatedSet = null;
         foreach (var key in keys)
@@ -333,6 +334,11 @@ internal sealed class LeafCacheGrain(
             if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
                 && !cached.IsExpired(nowTicks))
             {
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(cached.Value, predicate.Value))
+                {
+                    hits++;
+                    continue;
+                }
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG cache-hit-many] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} valRound={DiagSink.DecodeRound(cached.Value!)} hlc={cached.Timestamp} isMig={cached.IsMigrated}");
 #endif

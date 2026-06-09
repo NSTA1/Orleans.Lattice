@@ -135,7 +135,7 @@ public class TypedLatticeExtensionsTests
     {
         var lattice = CreateMock();
         Assert.ThrowsAsync<ArgumentNullException>(
-            () => lattice.GetManyAsync<TestItem>(["a"], null!));
+            () => lattice.GetManyAsync<TestItem>(["a"], (ILatticeSerializer<TestItem>)null!));
     }
 
     // ── SetManyAsync ────────────────────────────────────────────

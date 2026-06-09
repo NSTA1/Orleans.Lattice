@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
@@ -131,6 +132,46 @@ public static class TypedLatticeExtensions
         List<string> keys,
         CancellationToken cancellationToken = default) =>
         lattice.GetManyAsync(keys, JsonLatticeSerializer<T>.Default, cancellationToken);
+
+    /// <summary>
+    /// Fetches multiple keys and returns only those whose deserialized value
+    /// satisfies <paramref name="predicate"/>. The predicate is lowered to a
+    /// serializable IR and evaluated <b>server-side</b> against each value's
+    /// JSON document view, so values that do not match are dropped on the
+    /// owning leaf and never cross the wire. Missing/tombstoned keys are
+    /// omitted as usual.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static async Task<Dictionary<string, T>> GetManyAsync<T>(
+        this ILattice lattice,
+        List<string> keys,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        using (LatticePredicateContext.With(ir))
+        {
+            var raw = await lattice.GetManyAsync(keys, cancellationToken);
+            var result = new Dictionary<string, T>(raw.Count);
+            foreach (var (k, v) in raw)
+                result[k] = serializer.Deserialize(v);
+            return result;
+        }
+    }
+
+    /// <inheritdoc cref="GetManyAsync{T}(ILattice, List{string}, Expression{Func{T, bool}}, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<Dictionary<string, T>> GetManyAsync<T>(
+        this ILattice lattice,
+        List<string> keys,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default) =>
+        lattice.GetManyAsync(keys, predicate, JsonLatticeSerializer<T>.Default, cancellationToken);
 
     /// <summary>
     /// Serializes and inserts/updates multiple key-value pairs in parallel across shards.

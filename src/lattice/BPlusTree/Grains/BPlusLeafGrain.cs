@@ -538,6 +538,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var predicate = LatticePredicateContext.Current;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
@@ -561,7 +562,8 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
                     {
-                        result[key] = pending.value.Value!;
+                        if (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value))
+                            result[key] = pending.value.Value!;
 #if LATTICE_DIAG
                         // DIAG: pending-bucket-committed read path.
                         DiagSink.Write($"[DIAG read-pending-committed] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid} valRound={DiagDecodeRound(pending.value.Value)} hlc={pending.value.Timestamp}");
@@ -610,6 +612,8 @@ internal sealed partial class BPlusLeafGrain(
                         throw new StaleShardRoutingException(-1, -1, -1);
                     }
                 }
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
+                    continue;
                 result[key] = lww.Value!;
 #if LATTICE_DIAG
                 // DIAG: read-return path - capture what each leaf returns per key.

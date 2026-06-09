@@ -171,4 +171,67 @@ public class TypedLatticeExtensionsIntegrationTests
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
             tree.SetAsync("p1", new Product("x", 1m), TimeSpan.Zero));
     }
+
+    // --- Predicate push-down (GetMany) ---
+
+    [Test]
+    public async Task GetMany_with_predicate_returns_only_matching_values()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred");
+        await tree.SetAsync("a", new Product("Cheap", 5.00m));
+        await tree.SetAsync("b", new Product("Mid", 50.00m));
+        await tree.SetAsync("c", new Product("Pricey", 500.00m));
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b", "c"],
+            p => p.Price > 40m);
+
+        Assert.That(result.Keys, Is.EquivalentTo(new[] { "b", "c" }));
+        Assert.That(result["b"], Is.EqualTo(new Product("Mid", 50.00m)));
+        Assert.That(result["c"], Is.EqualTo(new Product("Pricey", 500.00m)));
+    }
+
+    [Test]
+    public async Task GetMany_with_predicate_omits_missing_and_nonmatching_keys()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred-miss");
+        await tree.SetAsync("a", new Product("A", 1.00m));
+        await tree.SetAsync("b", new Product("B", 99.00m));
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b", "missing"],
+            p => p.Name == "B");
+
+        Assert.That(result.Keys, Is.EquivalentTo(new[] { "b" }));
+    }
+
+    [Test]
+    public async Task GetMany_with_predicate_matching_none_returns_empty()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred-none");
+        await tree.SetAsync("a", new Product("A", 1.00m));
+        await tree.SetAsync("b", new Product("B", 2.00m));
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b"],
+            p => p.Price > 1000m);
+
+        Assert.That(result, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetMany_with_predicate_honours_explicit_serializer()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred-ser");
+        var serializer = new JsonLatticeSerializer<Product>();
+        await tree.SetAsync("a", new Product("A", 10.00m), serializer);
+        await tree.SetAsync("b", new Product("B", 20.00m), serializer);
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b"],
+            p => p.Price >= 20m,
+            serializer);
+
+        Assert.That(result.Keys, Is.EquivalentTo(new[] { "b" }));
+    }
 }
