@@ -8,9 +8,22 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.3.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v6.3.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.3.1] - 2026-06-09
+
+Core-library patch release (`Orleans.Lattice` only). Ships four perf-only optimisations on `LatticeGrain`'s public `ILattice` surface, all measured at the microbench tier (BDN `InProcessEmitToolchain` with `MemoryDiagnoser`, n=3 cohorts) and validated against per-allocation controls. Companion package versions (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Dashboards`) remain at `6.3.0` - this release ships the core library only. Safe drop-in upgrade from v6.3.0; no public-API break, no wire-format change, no observable behavioural change on any path.
+
+Headline per-call allocation reductions on the `ILattice` read / write surface:
+
+- `GetManyAsync` (4 k keys/call): per-call allocation **down 43.6 %** at batch=64, **down 21.4 %** at batch=16, **down 6.9 %** at batch=1 (PR #626).
+- `EntriesAsync` (page scan): per-call allocation **down 23.8 %** (-40,504 B/op) on the cross-cursor dedup path (PR #627).
+- `ExistsAsync` / `GetWithVersionAsync`: per-call allocation **down 2.6 % / 12.7 %** by inlining the stale-routing retry envelope on the success path (PR #624).
+- The `RetryOnStaleRoutingAsync` helper itself was refactored to the BCL anti-closure pattern across eleven internal callsites, **eliminating ~100-112 B/op** per call on every measurable helper-consumer surface (`SetManyAsync`, `GetOrSetAsync`, `DeleteRangeAsync`, `SetAsync(ttl)`, plus three sub-noise-band callsites; PR #625).
 
 ### Changed
 
@@ -348,7 +361,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.0...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.1...HEAD
+[6.3.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.0...v6.3.1
 [6.3.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.2...v6.3.0
 [6.2.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.1...v6.2.2
 [6.2.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.0...v6.2.1
