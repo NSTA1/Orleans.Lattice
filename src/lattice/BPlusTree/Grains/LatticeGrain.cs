@@ -629,10 +629,18 @@ internal sealed partial class LatticeGrain(
                 // absent on the leaf). concurrencyLevel is the
                 // distinct-shard count - one writer per shard task -
                 // which matches the actual parallel-TryAdd fan-in
-                // without over-segmenting the bucket array.
+                // without over-segmenting the bucket array. Both
+                // arguments must be >= 1 (ConcurrentDictionary's
+                // constructor rejects 0); the keys.Count == 0 entry
+                // point (legal per the public ILattice.GetManyAsync
+                // surface, exercised by GetManyAsync_returns_empty_for_no_keys)
+                // makes both shardBuckets.Count and keys.Count zero,
+                // so a Math.Max(1, ...) floor on each preserves the
+                // presize semantics on the common path while keeping
+                // the empty-batch path well-defined.
                 concurrent = new ConcurrentDictionary<string, byte[]>(
-                    concurrencyLevel: shardBuckets.Count,
-                    capacity: keys.Count);
+                    concurrencyLevel: Math.Max(1, shardBuckets.Count),
+                    capacity: Math.Max(1, keys.Count));
                 using (LatticeRegistrySnapshotContext.BeginScope(snap1))
                 {
                     var tasks = new List<Task>(shardBuckets.Count);
