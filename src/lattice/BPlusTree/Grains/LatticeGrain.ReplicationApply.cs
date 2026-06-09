@@ -108,7 +108,8 @@ internal sealed partial class LatticeGrain
             sourceHlc == HybridLogicalClock.Zero ? null : sourceHlc);
 
         await RetryOnStaleRoutingAsync(
-            () => ApplyDeleteRangeCoreAsync(startInclusive, endExclusive),
+            (self: this, startInclusive, endExclusive),
+            static args => args.self.ApplyDeleteRangeCoreAsync(args.startInclusive, args.endExclusive),
             CancellationToken.None);
     }
 
@@ -124,10 +125,11 @@ internal sealed partial class LatticeGrain
     {
         var batch = new Dictionary<string, LwwValue<byte[]>>(capacity: 1) { [key] = lww };
         await RetryOnStaleRoutingAsync(
-            async () =>
+            (self: this, key, batch),
+            static async args =>
             {
-                var shard = await GetShardGrainAsync(key);
-                await shard.MergeManyAsync(batch);
+                var shard = await args.self.GetShardGrainAsync(args.key);
+                await shard.MergeManyAsync(args.batch);
             },
             CancellationToken.None);
     }
@@ -170,7 +172,8 @@ internal sealed partial class LatticeGrain
         }
 
         await RetryOnStaleRoutingAsync(
-            () => ApplyMergeManyCoreAsync(items),
+            (self: this, items),
+            static args => args.self.ApplyMergeManyCoreAsync(args.items),
             CancellationToken.None);
     }
 
@@ -521,11 +524,12 @@ internal sealed partial class LatticeGrain
         // captured at fan-out time. GetRoutingAsync hits the per-activation
         // cache on the steady-state path so this adds no per-call cost.
         return RetryOnStaleRoutingAsync(
-            async () =>
+            (self: this, grainFactory, transactionId, shardIndex, committed, cancellationToken),
+            static async args =>
             {
-                var (resolvedPhysicalTreeId, _) = await GetRoutingAsync();
-                var shard = grainFactory.GetGrain<IShardRootGrain>($"{resolvedPhysicalTreeId}/{shardIndex}");
-                await shard.AppendTxTerminalAsync(transactionId, committed, committedValues: null, cancellationToken);
+                var (resolvedPhysicalTreeId, _) = await args.self.GetRoutingAsync();
+                var shard = args.grainFactory.GetGrain<IShardRootGrain>($"{resolvedPhysicalTreeId}/{args.shardIndex}");
+                await shard.AppendTxTerminalAsync(args.transactionId, args.committed, committedValues: null, args.cancellationToken);
             },
             cancellationToken);
     }
