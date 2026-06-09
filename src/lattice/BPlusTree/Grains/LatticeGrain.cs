@@ -901,10 +901,11 @@ internal sealed partial class LatticeGrain(
     private Task SetAsyncTtlCore(string key, byte[] value, long expiresAtTicks, CancellationToken cancellationToken)
     {
         return RetryOnStaleRoutingAsync(
-            async () =>
+            (self: this, key, value, expiresAtTicks),
+            static async args =>
             {
-                var shard = await GetShardGrainAsync(key);
-                await shard.SetAsync(key, value, expiresAtTicks);
+                var shard = await args.self.GetShardGrainAsync(args.key);
+                await shard.SetAsync(args.key, args.value, args.expiresAtTicks);
             },
             cancellationToken);
     }
@@ -929,10 +930,11 @@ internal sealed partial class LatticeGrain(
     private Task<bool> SetIfVersionAsyncCore(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
     {
         return RetryOnStaleRoutingAsync(
-            async () =>
+            (self: this, key, value, expectedVersion),
+            static async args =>
             {
-                var shard = await GetShardGrainAsync(key);
-                return await shard.SetIfVersionAsync(key, value, expectedVersion);
+                var shard = await args.self.GetShardGrainAsync(args.key);
+                return await shard.SetIfVersionAsync(args.key, args.value, args.expectedVersion);
             },
             cancellationToken);
     }
@@ -957,10 +959,11 @@ internal sealed partial class LatticeGrain(
     private Task<HybridLogicalClock> ApplyCrdtDeltaAsyncCore(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken)
     {
         return RetryOnStaleRoutingAsync(
-            async () =>
+            (self: this, key, mode, deltaBytes),
+            static async args =>
             {
-                var shard = await GetShardGrainAsync(key);
-                return await shard.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
+                var shard = await args.self.GetShardGrainAsync(args.key);
+                return await shard.ApplyCrdtDeltaAsync(args.key, args.mode, args.deltaBytes);
             },
             cancellationToken);
     }
@@ -986,10 +989,11 @@ internal sealed partial class LatticeGrain(
     private Task<byte[]?> GetOrSetAsyncCore(string key, byte[] value, CancellationToken cancellationToken)
     {
         return RetryOnStaleRoutingAsync(
-            async () =>
+            (self: this, key, value),
+            static async args =>
             {
-                var shard = await GetShardGrainAsync(key);
-                return await shard.GetOrSetAsync(key, value);
+                var shard = await args.self.GetShardGrainAsync(args.key);
+                return await shard.GetOrSetAsync(args.key, args.value);
             },
             cancellationToken);
     }
@@ -1028,7 +1032,8 @@ internal sealed partial class LatticeGrain(
             }
             cancellationToken.ThrowIfCancellationRequested();
             await RetryOnStaleRoutingAsync(
-                () => SetManyAsyncCore(entries, stageTagTree),
+                (self: this, entries, stageTagTree),
+                static args => args.self.SetManyAsyncCore(args.entries, args.stageTagTree),
                 cancellationToken);
 
             // Publish one Set event per entry. Emitted only after all shard writes
@@ -1251,10 +1256,11 @@ internal sealed partial class LatticeGrain(
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var existed = await RetryOnStaleRoutingAsync(
-            async () =>
+            (self: this, key),
+            static async args =>
             {
-                var shard = await GetShardGrainAsync(key);
-                return await shard.DeleteAsync(key);
+                var shard = await args.self.GetShardGrainAsync(args.key);
+                return await shard.DeleteAsync(args.key);
             },
             cancellationToken);
         if (existed) await PublishEventAsync(LatticeTreeEventKind.Delete, key);
@@ -1281,7 +1287,8 @@ internal sealed partial class LatticeGrain(
     private Task<int> DeleteRangeAsyncOuter(string startInclusive, string endExclusive, CancellationToken cancellationToken)
     {
         return RetryOnStaleRoutingAsync(
-            () => DeleteRangeAsyncCore(startInclusive, endExclusive, cancellationToken),
+            (self: this, startInclusive, endExclusive, cancellationToken),
+            static args => args.self.DeleteRangeAsyncCore(args.startInclusive, args.endExclusive, args.cancellationToken),
             cancellationToken);
     }
 
@@ -1964,7 +1971,7 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Linear backoff applied inside <see cref="RetryOnStaleRoutingAsync{T}"/>
+    /// Linear backoff applied inside <see cref="RetryOnStaleRoutingAsync{TResult, TState}(TState, Func{TState, Task{TResult}}, CancellationToken)"/>
     /// (and its void overload) between consecutive
     /// <see cref="ShardActivationTimeoutException"/> retries. The seed
     /// timeout itself is the dominant per-attempt cost (~15 s default);
@@ -2028,9 +2035,29 @@ internal sealed partial class LatticeGrain(
     /// timeout. A deleted tree therefore surfaces on the second throw, not
     /// after the full budget elapses.
     /// </para>
+    /// <para>
+    /// The <typeparamref name="TState"/> parameter is the BCL anti-closure
+    /// pattern (mirrors <see cref="System.Threading.LazyInitializer"/> and
+    /// <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey, TValue}.GetOrAdd{TArg}(TKey, Func{TKey, TArg, TValue}, TArg)"/>):
+    /// callers pass per-invocation data through <paramref name="state"/>
+    /// (typically a value-tuple capturing <c>this</c> plus the method's
+    /// parameters) so the lambda passed as <paramref name="operation"/>
+    /// can be declared <c>static</c> and Roslyn cache its
+    /// <see cref="Func{T, TResult}"/> instance as a singleton on first
+    /// use. Compared to the historic <c>async () =&gt; { ... }</c> shape
+    /// this eliminates one <see cref="Func{T}"/> delegate object and one
+    /// <c>&lt;&gt;c__DisplayClass*</c> closure object per call on the
+    /// success path; the inner lambda's async state machine box is the
+    /// only residual heap allocation imposed by the retry envelope, and
+    /// callers on the hottest paths
+    /// (<see cref="GetAsyncCore"/> / <see cref="SetAsyncCore"/> /
+    /// <see cref="ExistsAsyncCore"/> / <see cref="GetWithVersionAsync"/>)
+    /// inline the loop directly to elide that residual too.
+    /// </para>
     /// </summary>
-    private async Task<T> RetryOnStaleRoutingAsync<T>(
-        Func<Task<T>> operation,
+    private async Task<TResult> RetryOnStaleRoutingAsync<TResult, TState>(
+        TState state,
+        Func<TState, Task<TResult>> operation,
         CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
@@ -2040,7 +2067,7 @@ internal sealed partial class LatticeGrain(
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return await operation();
+                return await operation(state);
             }
             catch (StaleShardRoutingException)
             {
@@ -2074,13 +2101,16 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Non-generic overload of <see cref="RetryOnStaleRoutingAsync{T}"/> for
-    /// operations that do not produce a value. Duplicates the loop body
-    /// rather than wrapping the generic version in a sentinel closure so
-    /// the void path takes no extra closure allocation.
+    /// Non-generic overload of <see cref="RetryOnStaleRoutingAsync{TResult, TState}(TState, Func{TState, Task{TResult}}, CancellationToken)"/>
+    /// for operations that do not produce a value. Duplicates the loop
+    /// body rather than wrapping the generic version in a sentinel
+    /// closure so the void path takes no extra closure allocation. See
+    /// the generic overload for the <typeparamref name="TState"/>
+    /// anti-closure rationale.
     /// </summary>
-    private async Task RetryOnStaleRoutingAsync(
-        Func<Task> operation,
+    private async Task RetryOnStaleRoutingAsync<TState>(
+        TState state,
+        Func<TState, Task> operation,
         CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
@@ -2090,7 +2120,7 @@ internal sealed partial class LatticeGrain(
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                await operation();
+                await operation(state);
                 return;
             }
             catch (StaleShardRoutingException)
