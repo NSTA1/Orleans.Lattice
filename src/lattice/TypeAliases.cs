@@ -129,6 +129,7 @@ internal static class TypeAliases
     internal const string AtomicWriteState = "ol.aws";
     internal const string AtomicWritePhase = "ol.awp";
     internal const string AtomicPreValue = "ol.apv";
+    internal const string AtomicWriteOutcome = "ol.awo";
     internal const string TxRegistryState = "ol.txr";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";

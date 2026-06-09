@@ -23,4 +23,12 @@ internal enum AtomicWritePhase
 
     /// <summary>Saga finished - either all writes committed or compensation completed.</summary>
     Completed = 4,
+
+    /// <summary>
+    /// Terminal: a guard predicate evaluated against the pre-saga snapshot
+    /// failed for at least one key, so the saga aborted before any write and
+    /// committed nothing. Distinct from <see cref="Completed"/> so a guarded
+    /// caller can read back the memoized precondition-miss outcome on re-attach.
+    /// </summary>
+    PreconditionFailed = 5,
 }

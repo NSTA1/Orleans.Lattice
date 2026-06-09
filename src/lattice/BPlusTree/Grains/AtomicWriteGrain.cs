@@ -186,6 +186,7 @@ internal sealed class AtomicWriteGrain(
                 }
                 break;
             case AtomicWritePhase.Completed:
+            case AtomicWritePhase.PreconditionFailed:
             case AtomicWritePhase.NotStarted:
                 await UnregisterKeepaliveAsync();
                 this.DeactivateOnIdle();
@@ -273,7 +274,68 @@ internal sealed class AtomicWriteGrain(
     public Task<bool> IsCompleteAsync() =>
         Task.FromResult(
             state.State.Phase == AtomicWritePhase.NotStarted ||
-            state.State.Phase == AtomicWritePhase.Completed);
+            state.State.Phase == AtomicWritePhase.Completed ||
+            state.State.Phase == AtomicWritePhase.PreconditionFailed);
+
+    /// <inheritdoc />
+    public async Task<AtomicWriteOutcome> ExecuteGuardedAsync(
+        string treeId,
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode predicate)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(entries);
+
+        // Empty batch: vacuously all-match, nothing to write, commit outcome.
+        if (entries.Count == 0) return AtomicWriteOutcome.Committed;
+
+        // Caller-supplied idempotency keys: reject a re-submit whose key set
+        // differs from the original, mirroring ExecuteAsync.
+        if (state.State.Phase != AtomicWritePhase.NotStarted
+            && state.State.KeyFingerprint is { } persistedFingerprint)
+        {
+            var incomingFingerprint = ComputeKeyFingerprint(entries);
+            if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
+            {
+                throw new InvalidOperationException(
+                    $"Atomic-write operation '{OperationKey}' was previously submitted with a different key set; " +
+                    "reuse of a caller-supplied operationId requires the exact same set of keys.");
+            }
+        }
+
+        // Memoized terminal re-entry: a guard that already rejected the batch
+        // returns its outcome without re-evaluating the (pure) predicate
+        // against possibly-moved data.
+        if (state.State.Phase == AtomicWritePhase.PreconditionFailed)
+        {
+            return AtomicWriteOutcome.PreconditionFailed;
+        }
+
+        // A completed saga reports success again; a saga that completed via
+        // compensation after a genuine write failure rethrows through the
+        // existing failure path.
+        if (state.State.Phase == AtomicWritePhase.Completed)
+        {
+            await TryThrowFailureAsync();
+            return AtomicWriteOutcome.Committed;
+        }
+
+        if (state.State.Phase == AtomicWritePhase.NotStarted)
+        {
+            ValidateInputs(entries);
+            // Capture the guard before Prepare so a reminder-driven Prepare
+            // replay re-applies the identical predicate.
+            state.State.Guard = predicate;
+            await RegisterKeepaliveAsync();
+            await PrepareAsync(treeId, entries);
+        }
+
+        await RunSagaAsync();
+
+        return state.State.Phase == AtomicWritePhase.PreconditionFailed
+            ? AtomicWriteOutcome.PreconditionFailed
+            : AtomicWriteOutcome.Committed;
+    }
 
     /// <summary>
     /// Validates the batch: non-null values and no duplicate keys.
@@ -557,7 +619,30 @@ internal sealed class AtomicWriteGrain(
             state.State.PreValues.Add(preValuesArray[i]);
         }
 
-        state.State.Phase = AtomicWritePhase.Execute;
+        // Guarded atomic batch: evaluate the predicate against every key's
+        // pre-saga snapshot. The whole batch is gated - a single non-match
+        // (or a key with no live pre-saga value) aborts before any write, so
+        // the saga commits nothing. The decision is made here, once, against
+        // the captured snapshot rather than against post-prepare data, so a
+        // reminder-driven replay re-derives the identical verdict from the
+        // persisted Guard + PreValues.
+        var guardFailed = false;
+        if (state.State.Guard is { } guardNode)
+        {
+            for (int i = 0; i < preValuesArray.Length; i++)
+            {
+                var pre = preValuesArray[i];
+                if (!pre.Existed || !LatticePredicateEvaluator.Matches(pre.Value, guardNode))
+                {
+                    guardFailed = true;
+                    break;
+                }
+            }
+        }
+
+        state.State.Phase = guardFailed
+            ? AtomicWritePhase.PreconditionFailed
+            : AtomicWritePhase.Execute;
 #if LATTICE_DIAG
         var swPersist = System.Diagnostics.Stopwatch.StartNew();
         DiagSink.Write($"[DIAG saga-prepare-persist-enter] op={OperationKey} tree={treeId}");
@@ -589,6 +674,18 @@ internal sealed class AtomicWriteGrain(
             state.State.SagaStartedAtTicks = prevSagaStartedAtTicks;
             state.State.TouchedShards = prevTouchedShards;
             throw;
+        }
+
+        // Guard rejected the batch: the saga is terminal in
+        // PreconditionFailed with no prepare-phase writes issued (those happen
+        // later, in ExecutePhaseAsync), so there is nothing to compensate.
+        // Tear down the keepalive reminder and start the retention countdown,
+        // mirroring CompleteSagaAsync's terminal cleanup.
+        if (guardFailed)
+        {
+            await UnregisterKeepaliveAsync();
+            await SlideTtlAsync();
+            return;
         }
 
         // Bulk pre-register the saga's pre-computed touched-shard set

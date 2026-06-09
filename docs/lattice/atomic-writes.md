@@ -86,6 +86,42 @@ var typedBatch = new List<KeyValuePair<string, Order>>
 await tree.SetManyAtomicAsync(typedBatch);
 ```
 
+## Guarded atomic writes
+
+`SetManyAtomicAsync<T>(entries, predicate)` adds an all-or-nothing
+precondition: the batch commits only if **every** targeted key's pre-saga
+value satisfies the predicate. The predicate is compiled to the serializable
+predicate IR and evaluated once, server-side, against each key's captured
+pre-saga document during the saga's prepare phase - a key with no live
+pre-saga value counts as a non-match. When any key fails the saga aborts
+before any write and the call returns `AtomicWriteOutcome.PreconditionFailed`
+with nothing committed; when all match it returns
+`AtomicWriteOutcome.Committed`. A precondition miss is reported as a value,
+not an exception, so a guarded conflict is ordinary control flow. Genuine
+write failures still throw and compensate exactly as the unguarded overload.
+
+The idempotency-key overload re-attaches to the original saga and returns its
+memoized outcome without re-evaluating the (pure) predicate against
+possibly-moved data.
+
+```csharp verify
+var tree = grainFactory.GetGrain<ILattice>("orders");
+var guardedBatch = new List<KeyValuePair<string, Order>>
+{
+    new("order:42", new Order("42", 99.95m)),
+    new("order:43", new Order("43", 12.50m)),
+};
+
+// Only commit the whole batch if every order's current Total is below 1000.
+AtomicWriteOutcome outcome =
+    await tree.SetManyAtomicAsync<Order>(guardedBatch, o => o.Total < 1000m);
+
+if (outcome == AtomicWriteOutcome.PreconditionFailed)
+{
+    // At least one order's pre-saga value failed the guard; nothing was written.
+}
+```
+
 ## How It Works
 
 ### Saga Coordinator Grain

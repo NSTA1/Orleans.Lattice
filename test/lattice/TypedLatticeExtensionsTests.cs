@@ -316,6 +316,92 @@ public class TypedLatticeExtensionsTests
             () => lattice.SetManyAtomicAsync(new List<KeyValuePair<string, TestItem>>(), "op-1", (ILatticeSerializer<TestItem>)null!));
     }
 
+    // ── SetManyAtomicAsync (guarded) ────────────────────────────
+
+    [Test]
+    public async Task SetManyAtomicAsync_predicate_compiles_ir_and_dispatches_serialized_entries()
+    {
+        var lattice = CreateMock();
+        lattice.SetManyAtomicWhereAsync(
+                Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<LatticePredicateNode>())
+            .Returns(Task.FromResult(AtomicWriteOutcome.Committed));
+        var entries = new List<KeyValuePair<string, TestItem>>
+        {
+            new("a", new TestItem("a", 1)),
+            new("b", new TestItem("b", 2)),
+        };
+
+        var outcome = await lattice.SetManyAtomicAsync<TestItem>(entries, t => t.Score >= 5);
+
+        Assert.That(outcome, Is.EqualTo(AtomicWriteOutcome.Committed));
+        await lattice.Received(1).SetManyAtomicWhereAsync(
+            Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 2),
+            Arg.Any<LatticePredicateNode>());
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_predicate_with_operationId_dispatches_to_idempotent_overload()
+    {
+        var lattice = CreateMock();
+        lattice.SetManyAtomicWhereAsync(
+                Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<LatticePredicateNode>(), "op-1")
+            .Returns(Task.FromResult(AtomicWriteOutcome.PreconditionFailed));
+        var entries = new List<KeyValuePair<string, TestItem>>
+        {
+            new("a", new TestItem("a", 1)),
+        };
+
+        var outcome = await lattice.SetManyAtomicAsync<TestItem>(entries, t => t.Score >= 5, "op-1");
+
+        Assert.That(outcome, Is.EqualTo(AtomicWriteOutcome.PreconditionFailed));
+        await lattice.Received(1).SetManyAtomicWhereAsync(
+            Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 1),
+            Arg.Any<LatticePredicateNode>(),
+            "op-1");
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_predicate_throws_for_null_entries()
+    {
+        var lattice = CreateMock();
+        var ex = Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync<TestItem>(null!, t => t.Score >= 1));
+        Assert.That(ex!.ParamName, Is.EqualTo("entries"));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_predicate_throws_for_null_predicate()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync(
+                new List<KeyValuePair<string, TestItem>>(),
+                (System.Linq.Expressions.Expression<Func<TestItem, bool>>)null!));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_predicate_throws_for_null_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync(
+                new List<KeyValuePair<string, TestItem>>(),
+                t => t.Score >= 1,
+                (ILatticeSerializer<TestItem>)null!));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_predicate_with_operationId_throws_for_null_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAtomicAsync(
+                new List<KeyValuePair<string, TestItem>>(),
+                t => t.Score >= 1,
+                "op-1",
+                (ILatticeSerializer<TestItem>)null!));
+    }
+
     // ── BulkLoadAsync ───────────────────────────────────────────
 
     [Test]

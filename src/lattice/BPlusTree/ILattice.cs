@@ -193,6 +193,38 @@ public interface ILattice : IGrainWithStringKey
     /// <exception cref="InvalidOperationException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set, or when a write fails and compensation completes.</exception>
     Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Guarded atomic bulk write: commits <paramref name="entries"/>
+    /// all-or-nothing, but only if <b>every</b> targeted key's pre-saga value
+    /// satisfies the server-side predicate IR <paramref name="predicate"/>
+    /// (evaluated once, during the saga's prepare phase, against each key's
+    /// captured pre-saga JSON document view). A key with no live pre-saga value
+    /// counts as a non-match. When any key fails the saga aborts before any
+    /// write and the call returns
+    /// <see cref="AtomicWriteOutcome.PreconditionFailed"/> with nothing
+    /// committed; when all match it returns
+    /// <see cref="AtomicWriteOutcome.Committed"/>. A precondition miss is
+    /// reported as a value, not an exception. Genuine write failures still
+    /// throw and compensate exactly as in <see cref="SetManyAtomicAsync"/>.
+    /// <para>
+    /// Intended to be reached through the typed
+    /// <c>SetManyAtomicAsync&lt;T&gt;</c> extension, which compiles the
+    /// predicate expression to IR.
+    /// </para>
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Caller-supplied idempotency-key overload of
+    /// <see cref="SetManyAtomicWhereAsync(List{KeyValuePair{string, byte[]}}, LatticePredicateNode, CancellationToken)"/>.
+    /// Re-attaching with the same <paramref name="operationId"/> returns the
+    /// original memoized <see cref="AtomicWriteOutcome"/> without re-evaluating
+    /// the predicate against possibly-moved data; the predicate must be pure.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, string operationId, CancellationToken cancellationToken = default);
+
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>
     Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default);
 

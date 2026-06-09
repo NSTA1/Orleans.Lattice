@@ -1362,6 +1362,53 @@ internal sealed partial class LatticeGrain(
                 nameof(operationId));
     }
 
+    /// <summary>
+    /// Guarded atomic multi-key write. Activates a dedicated
+    /// <see cref="IAtomicWriteGrain"/> and awaits its guarded saga, which
+    /// commits all-or-nothing only if every key's pre-saga value satisfies
+    /// <paramref name="predicate"/>. Returns the terminal outcome rather than
+    /// throwing on a precondition miss.
+    /// </summary>
+    public async Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode predicate,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(entries);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (entries.Count == 0) return AtomicWriteOutcome.Committed;
+
+        var operationId = Guid.NewGuid().ToString("N");
+        var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
+        return await ShardActivationRetry.RunAsync(
+            () => saga.ExecuteGuardedAsync(TreeId, entries, predicate),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Caller-supplied idempotency-key overload of the guarded atomic write.
+    /// Re-submitting with the same <paramref name="operationId"/> re-attaches
+    /// to the original saga and returns its memoized outcome.
+    /// </summary>
+    public async Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode predicate,
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(entries);
+        ValidateOperationId(operationId);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (entries.Count == 0) return AtomicWriteOutcome.Committed;
+
+        var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
+        return await ShardActivationRetry.RunAsync(
+            () => saga.ExecuteGuardedAsync(TreeId, entries, predicate),
+            cancellationToken);
+    }
+
     public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
