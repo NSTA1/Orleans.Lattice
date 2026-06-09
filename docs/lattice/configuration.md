@@ -119,6 +119,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) | `TimeSpan` | 1 second | Yes |
 | [`WalSaturationSampleInterval`](#walsaturationsampleinterval) | `TimeSpan` | 200 milliseconds | Yes |
 | [`WalSaturationThrottledRatio`](#walsaturationthrottledratio) | `double` | 0.75 | Yes |
+| [`WalAdmissionSaturationWaitBudget`](#waladmissionsaturationwaitbudget) | `TimeSpan` | 5 seconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
 ### Structural sizing (registry-pinned)
@@ -638,6 +639,18 @@ The window does NOT affect the `Healthy -> Saturated` transition latency - `Satu
 Set to `TimeSpan.Zero` to disable the upgrade entirely and restore the per-tick classifier behaviour the sampler shipped with. Set to `Timeout.InfiniteTimeSpan` to hold `Throttled` forever after the first `Saturated` observation - useful for tests that want a sticky `Throttled` floor without arming a wall-clock dependency, or for defensive deployments that prefer the saturation regime to be sticky. The validator rejects any other negative value.
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick (or the next tick that would otherwise upgrade a tree, if the tree was Saturated more than `WalSaturationRecoveryWindow` ago).
+
+### `WalAdmissionSaturationWaitBudget`
+
+Wall-clock budget the WAL writer admission gate (`WalCommitLogWriter` -> `PartitionTracker.AcquireAsync`) spends parked on `IWalSaturationSignal.WaitForHealthyAsync` before refusing a dispatch with [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) when the per-tree saturation signal stays `Saturated` past the budget (default: 5 seconds). Closes the consumer-coverage gap where the admission semaphore was previously signal-blind: under the storage-account 409-Conflict regime the classifier raised `Saturated` many times before the first observable failure, but every new dispatch still admitted into the semaphore and parked at the cap, taking the full `WalAppendDispatchTimeout` (default 30 seconds) to surface as `TimeoutException` instead of the configured shorter budget.
+
+Mechanically: before each `_admission.WaitAsync` the tracker calls `signal.GetCurrentState(treeId)`. On `Healthy` / `Throttled` the check is a single concurrent-dictionary lookup and the caller proceeds directly into the semaphore (no allocation, no extra await). On `Saturated` the tracker awaits `WaitForHealthyAsync` bounded by this budget; if the signal recovers within the budget the caller proceeds into the semaphore as normal, if the budget expires with the tree still `Saturated` the tracker throws `LatticeSaturatedException` carrying the originating tree id, so the caller can detect the saturation regime via a single `is` check instead of waiting out the full `WalAppendDispatchTimeout`. A borderline-recovery race (the wait expires AND the signal recovered between the wait expiring and the re-check firing) is suppressed: the tracker re-reads the signal once after budget expiry and proceeds without refusal when the tree is observed `Healthy`.
+
+The budget should be shorter than `WalAppendDispatchTimeout` (so the saturation refusal wins over the dispatch timeout) and longer than one `WalSaturationSampleInterval` (so a transient classifier flap does not surface as a refusal). The default (5 seconds) leaves `WalAppendDispatchTimeout`'s 30-second default as a strict outer bound and gives the storage account a realistic recovery window for the canonical 409-Conflict burst (typical recovery 1-3 seconds once offered load drops). Refusals are counted on the `orleans.lattice.wal.writer.append.admission_saturation_refusals` counter (tagged `tree`, `partition`), distinct from the dispatch-timeout counter (`admission_timeouts`) and the drain-release counter (`drain.releases`).
+
+Set to `TimeSpan.Zero` to disable the admission-gate saturation check entirely (the historical pre-admission-gate behaviour). Set to `Timeout.InfiniteTimeSpan` to wait forever on `WaitForHealthyAsync`. The validator rejects any other negative value.
+
+This option can be changed freely at any time. The new value takes effect on the next admission acquire (which is per-dispatch on the WAL writer hot path).
 
 ### `WalMaxPendingBatches`
 

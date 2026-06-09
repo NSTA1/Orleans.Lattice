@@ -1489,6 +1489,78 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalSaturationRecoveryWindow = TimeSpan.FromSeconds(1);
 
     /// <summary>
+    /// Wall-clock budget the WAL writer admission gate
+    /// (<c>PartitionTracker.AcquireAsync</c>) spends parked on
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal.WaitForHealthyAsync(string, System.Threading.CancellationToken)"/>
+    /// before refusing a dispatch with
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> when
+    /// the per-tree saturation signal reports
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>.
+    /// Closes the pre-FX consumer-coverage gap where the writer
+    /// admission semaphore was signal-blind: under the storage-account
+    /// 409-Conflict regime the saturation classifier raised
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// many times before the first observable failure, but every new
+    /// dispatch still admitted into the semaphore and parked at the
+    /// cap, taking the full
+    /// <see cref="WalAppendDispatchTimeout"/> to surface as
+    /// <see cref="System.TimeoutException"/> instead of the configured
+    /// shorter budget.
+    /// <para>
+    /// <b>Mechanics.</b> Before each
+    /// <see cref="System.Threading.SemaphoreSlim.WaitAsync(System.Threading.CancellationToken)"/>
+    /// on the admission semaphore, the tracker calls
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal.GetCurrentState(string)"/>.
+    /// On <see cref="Orleans.Lattice.WalSaturationState.Healthy"/> /
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>
+    /// the check is a single concurrent-dictionary lookup and the
+    /// caller proceeds directly into the semaphore (no allocation,
+    /// no extra await). On <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// the tracker awaits
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal.WaitForHealthyAsync(string, System.Threading.CancellationToken)"/>
+    /// bounded by this budget; if the signal recovers within the
+    /// budget the caller proceeds into the semaphore as normal, if
+    /// the budget expires with the tree still
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// the tracker throws
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> with
+    /// the originating tree id, so the caller can detect the
+    /// saturation regime via a single <see langword="is"/> check
+    /// instead of waiting out the full
+    /// <see cref="WalAppendDispatchTimeout"/>.
+    /// </para>
+    /// <para>
+    /// <b>Sizing rule.</b> The budget should be shorter than
+    /// <see cref="WalAppendDispatchTimeout"/> (so the saturation
+    /// refusal wins over the dispatch timeout) and longer than one
+    /// <see cref="WalSaturationSampleInterval"/> (so a transient
+    /// classifier flap does not surface as a refusal). The default
+    /// (<see cref="DefaultWalAdmissionSaturationWaitBudget"/>,
+    /// 5 seconds) leaves
+    /// <see cref="WalAppendDispatchTimeout"/>'s 30-second default
+    /// as a strict outer bound and gives the storage account a
+    /// realistic recovery window for the canonical 409-Conflict
+    /// burst (typical recovery 1-3 seconds once offered load drops).
+    /// </para>
+    /// <para>
+    /// Set to <see cref="System.TimeSpan.Zero"/> to disable the
+    /// admission-gate saturation check entirely (the historical
+    /// pre-admission-gate behaviour; the gate falls through directly to
+    /// <see cref="System.Threading.SemaphoreSlim.WaitAsync(System.Threading.CancellationToken)"/>
+    /// regardless of the saturation signal). Set to
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to
+    /// wait forever on
+    /// <see cref="Orleans.Lattice.IWalSaturationSignal.WaitForHealthyAsync(string, System.Threading.CancellationToken)"/>;
+    /// the registered options validator rejects any other negative
+    /// value at first-resolve time.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalAdmissionSaturationWaitBudget { get; set; } = DefaultWalAdmissionSaturationWaitBudget;
+
+    /// <summary>Default value for <see cref="WalAdmissionSaturationWaitBudget"/> (5 seconds).</summary>
+    public static readonly TimeSpan DefaultWalAdmissionSaturationWaitBudget = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of every public <see cref="ILattice"/> mutating call. When
     /// <c>null</c> (the default), the library preserves today's

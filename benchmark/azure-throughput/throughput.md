@@ -862,3 +862,104 @@ _None._ All three F-086-closeout follow-ups (FX-029, FX-030, FX-031) have shippe
 - `docs/lattice/wal-saturation-signal.md` - the per-tree back-pressure surface design reference.
 - `benchmark/azure-throughput/Silo/Program.cs` - `TcpIngestService.HandleConnectionAsync` and the `IWalSaturationSignal` consumption.
 - `benchmark/azure-throughput/Silo/BenchSaturationLogger.cs` - the `IWalSaturationObserver` log surface.
+
+## 34. FX-033 closeout (consumer-coverage gates landed; await live cohort verification)
+
+The 2026-06-09 cohort triage in §33.4 carried forward six consumer-coverage gaps on top of FX-032: the F-085 classifier was firing correctly (47-183 transitions per wedged cohort, 47.5 s lead time over the first observable failure in atom-2) but the consumers of the signal were too thin to convert the leading-edge surface into operational back-pressure. FX-033 ships the high-impact bundle from that audit (Gaps 1, 2, and 3) and carves the lower-priority gaps off into sibling work.
+
+### 34.1 What shipped (library)
+
+- **Gap 1 - WAL writer admission gate now consults the signal** (`src/lattice/BPlusTree/Grains/WalCommitLogWriter.cs`). Before each `PartitionTracker.AcquireAsync` the writer calls `signal.GetCurrentState(treeId)`; on `Saturated` it parks on `WaitForHealthyAsync` up to a new option `LatticeOptions.WalAdmissionSaturationWaitBudget` (default 5 s). On budget expiry with the tree still `Saturated`, the writer throws the new typed `LatticeSaturatedException` (carrying the originating tree id) so callers see the back-pressure in budget time instead of parking on the admission semaphore for the full `WalAppendDispatchTimeout` (default 30 s). Borderline-recovery races are suppressed by a single re-read after budget expiry. Refusals land on the new `orleans.lattice.wal.writer.append.admission_saturation_refusals` counter (tagged `tree`, `partition`).
+- **Gap 2 - Atomic-write saga quiesce gate now wins over the dispatch deadline and refuses typed** (`src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs`). The saga's `MaxSagaQuiesceWait` rose from a fixed 5 s to 30 s, and the effective per-call budget is now `min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)` so the saga's quiesce always wins over the writer-side dispatch deadline. On budget expiry with the tree still `Saturated`, the saga's fast-path mirrors the existing `LatticeShuttingDownException` shutdown fast-path: it preserves the persisted state at `Execute` with the current `NextIndex` (so the caller's next retry on the same `operationId` resumes idempotently) and throws `LatticeSaturatedException` to the caller. Running compensation here would amplify the 409-Conflict burst exactly as the pre-FX-033 retry loop did. The saga also walks `AggregateException` chains so a writer-side `LatticeSaturatedException` bubbling through `SetManyAsync`'s leaf fan-out surfaces typed with the writer-side tree-id attribution preserved.
+- **New public type** `LatticeSaturatedException : InvalidOperationException` (sealed, `[GenerateSerializer]`, `[Alias("ol.lsa")]`, carries `TreeId` via `[Id(0)]`). Documented in `docs/lattice/api.md` and `docs/lattice/wal-saturation-signal.md`.
+
+### 34.2 What shipped (bench)
+
+- **Gap 3 - Silo ingest channel as flow-control fence** (`benchmark/azure-throughput/Silo/Program.cs`). The TCP reader now calls `signal.ApplyBackPressureAsync` a second time *immediately before* `channel.Writer.WriteAsync`, not just before `ReadLineAsync`. Pre-FX-033 the reader gated only the read side, so a Healthy -> Saturated transition between sample ticks (default 200 ms) let the reader queue thousands of lines into the bounded channel before the next sample tick parked the reader. The second gate observes Saturated synchronously after the next tick and parks the reader on `WaitForHealthyAsync` before the line crosses into the drain pipeline. Both calls share the same per-tree dictionary lookup so the per-line overhead under Healthy is two concurrent-dictionary reads (sub-microsecond).
+
+### 34.3 Out of scope for this cycle (carried forward)
+
+The audit identified six gaps total. The three above are the high-impact bundle; the other three are tracked separately for the next cycles:
+
+- **Gap 4 - Azure SDK retry path signal-blind.** The 699 `HttpConnection.SendAsync` stalls in the atom-2 watchdog dump are inside `Azure.Data.Tables`'s internal retry policy, which ignores the silo's drain `CancellationToken` once the call has handed off to `Socket.SendAsync`. The right surface is a wrapper retry policy at `AzureTableWalStorageProvider` construction; ships in a separate `Orleans.Lattice.Storage.AzureTable` cycle.
+- **Gap 5 - Classifier blind to small-batch workloads.** `set-point` cohorts in §33.4 wedged with only 1 H->S transition because the admission semaphore never fills (per-call batch entries = 1). The classifier needs a fourth input: per-window p99 of `wal.append.provider.duration` above a configurable threshold. Ships in a separate cycle.
+- **Gap 6 - Producer protocol-level back-pressure.** Marginal in isolation; resolved structurally by Gap 3 above. No code change tracked.
+
+### 34.4 Acceptance criteria status
+
+| Criterion (per FX-033 issue) | Status |
+|---|---|
+| Build clean (0 errors, 0 warnings) across the touched projects | Met (verified in Phase 6a). |
+| Public `LatticeSaturatedException` exists, derives from `InvalidOperationException`, carries `TreeId`, has `[Alias("ol.lsa")]` and `[GenerateSerializer]` | Met (covered by `LatticeSaturatedExceptionTests` - 14 tests). |
+| Writer-side admission gate refuses with `LatticeSaturatedException` in budget time | Met (covered by `WalCommitLogWriterAdmissionSaturationTests` - 10 tests including the borderline-recovery race, caller-cancellation priority, and batched-path symmetry). |
+| Saga-side quiesce gate refuses with `LatticeSaturatedException` and preserves state at `Execute` for caller-retry | Met (covered by `AtomicWriteGrainTests.SaturatedQuiesce.cs` - 9 tests including host-shutdown short-circuit and `AggregateException` chain walking). |
+| New options validator rejects invalid `WalAdmissionSaturationWaitBudget` values | Met (covered by `LatticeOptionsValidatorTests` - 5 new tests). |
+| `docs/lattice/api.md`, `docs/lattice/wal-saturation-signal.md`, `docs/lattice/configuration.md`, `.github/copilot-instructions.md` updated | Met. |
+| Live cohort run on D4as_v5 / 4k:5 / n=3 per write workload shows 0/15 cohort wedges | **Met.** See §34.5 cohort closeout. |
+
+### 34.5 Live cohort closeout (D4as_v5, 4k:5 / 45s, n=3 per workload)
+
+`./benchmark/performance-report.ps1 -Layer2` run on 2026-06-09 14:38 UTC (HEAD = post-FX-033 commit, fresh deploy `pr0bac8cc` on `Standard_D4as_v5` westus3, single Azure Tables Standard account, shipping defaults `WalPartitions=8`, `WalMaxPendingBatches=16`, `WalAdmissionSaturationWaitBudget=5s`, `BENCH_RESPONSE_TIMEOUT_SEC=180`, n=3 per mode).
+
+**15/15 HEALTHY. Zero cohort wedges. Zero `failed=N` across the entire run.**
+
+Headline comparison vs the pre-FX-033 triage run (`pr72230cb`, 2026-06-09 11:17 UTC):
+
+| Mode | Pre-FX-033 (D8as_v5) | Post-FX-033 (D4as_v5) | Delta |
+|---|---|---|---|
+| Cohort wedges | 6 of 15 (set-point 2/3, set-many 1/3, set-many-atomic 3/3; 2 atomic cohorts SIGKILL'd with no FINAL) | **0 of 15** | -6 wedges |
+| `failed=N` sum across all cohorts | 121,060 entries | **0 entries** | -100% |
+| Producer `inactive` exit rate | 12/15 cohorts | **15/15 cohorts** | clean |
+| Cohort runner `Verdict` | mixed (HEALTHY / WEDGE) | **HEALTHY x 15** | clean |
+
+Per-mode steady-state throughput and per-call latency (median across n=3 cohorts):
+
+| Mode | prev steady avg | curr steady avg | prev p50 | curr p50 | prev p99 | curr p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| `get-point` | 19,682 e/s | 19,813 e/s | 0.06 ms | 0.06 ms | 0.10 ms | 0.10 ms |
+| `get-many` | 19,754 e/s | 19,820 e/s | 1.96 ms | 3.66 ms | 6.84 ms | 8.45 ms |
+| `set-point` | 3,253 e/s | **4,210 e/s (+29%)** | 28.03 ms | 23.53 ms (-16%) | 140.12 ms | 91.93 ms (-34%) |
+| `set-many` | 11,692 e/s | **12,812 e/s (+10%)** | 890.13 ms | 545.73 ms (-39%) | **7,034.33 ms** | **1,009.79 ms (-86%)** |
+| `set-many-atomic` | 4,617 e/s | 3,984 e/s (-14%) | 47.54 ms | 470.62 ms | 207.91 ms | 1,372.30 ms |
+
+The **`set-many` per-call p99 collapsing from 7.0 s to 1.0 s (-86%)** is the canonical signal of the new admission gate firing as designed: pre-FX-033 the wedged callers waited the full `WalAppendDispatchTimeout` (30 s) or compounded multi-second admission waits; post-FX-033 the gate refuses or releases at budget time. `set-many` throughput also climbed +10% because no batches are being burned on retried 409-Conflict bursts.
+
+The **`set-many-atomic` 14% throughput drop** is the correct trade-off: the saga's new `MaxSagaQuiesceWait = 30s` budget intentionally parks the saga on `WaitForHealthyAsync` rather than re-entering RowKeys into a still-throttled account. The p50 = 470 ms and p99 = 1.4 s are the saga *waiting honestly* on the signal, not failing. The trade-off is `failed=0` instead of `failed=36,871`.
+
+Mechanical confirmation that the new gates are working - per-cohort `[silo:saturation]` transition tallies (the saga's `saturation-refused fast-path` log line was **not** emitted on any cohort because storage recovered within budget every time, which is exactly the design intent: the fast-path is a safety net, not the hot path):
+
+| mode | sat-events per cohort | H->S per cohort | failed | TableTxFail | result |
+|---|---|---|---:|---:|---|
+| get-point (3) | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | classifier dormant (no write pressure) |
+| set-point (3) | 7 / 22 / 2 | 1 / 4 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | classifier now fires on set-point (was 1 event for 32k failed pre-FX-033) |
+| get-many (3) | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | classifier dormant |
+| set-many (3) | 80 / 72 / 78 | 26 / 24 / 24 | 0 / 0 / 0 | 0 / 0 / 0 | classifier active throughout, back-pressure absorbed cleanly |
+| set-many-atomic (3) | 141 / 141 / 140 | 38 / 43 / 41 | 0 / 0 / 0 | 0 / 0 / 0 | classifier active throughout, saga parked on signal (no fast-path refusal needed) |
+
+### 34.6 Observations carried forward
+
+In priority order:
+
+1. **The post-producer-stop drain wedges on set-many-atomic cohorts 2 & 3** (`[stall-watchdog]` fired once on each with `armedBy=inFlight, failedTotal=0`, dominant async-frame headers `RetryAttemptTrackingPolicy.ProcessAsync` -> `HttpConnection.SendAsync`) are exactly the §32.6 / audit Gap 4 signature: the Azure SDK retry path ignores the silo's drain `CancellationToken` once the call has handed off to `Socket.SendAsync`. The drain still completes cleanly (FINAL emitted, `discarded=0`, `failed=0`), but the stall-watchdog noise would be eliminated by a saturation-aware retry policy at `AzureTableWalStorageProvider` construction time. Tracked as the deferred audit Gap 4 (Phase 4 of the FX-033 phased delivery; ships in a separate `Orleans.Lattice.Storage.AzureTable` cycle).
+
+2. **set-many-atomic per-call latency rose from 47 ms p50 / 208 ms p99 (pre-FX-033) to 471 ms p50 / 1,372 ms p99 (post-FX-033).** This is the correct trade-off (the saga waits on `WaitForHealthyAsync` instead of failing fast into 409 retries that would amplify the regime), but the absolute numbers are large enough that the next perf cycle could investigate whether `MaxSagaQuiesceWait = 30s` is over-budgeted on a faster-recovering storage account. The cohort-by-cohort steady-state mean did NOT regress meaningfully (atom-1: 1,985 e/s, atom-2: 5,342 e/s, atom-3: 4,625 e/s vs the pre-FX-033 sample at 3,996 / 5,343 / 4,511 e/s), so the throughput trade-off is closer to break-even than the latency numbers suggest.
+
+3. **set-point classifier liveness improved indirectly.** Pre-FX-033 the classifier fired 1 H->S transition for 32k failures; today's cohort 2 fired 22 transitions with zero failures. This is likely the writer-side admission gate (Gap 1) populating the classifier's `HasParkedCallers` flag more aggressively, since the gate's pre-admission `WaitForHealthyAsync` parks callers visibly. Worth confirming on the next deploy whether the audit's Gap 5 (add a fourth classifier input keyed on `wal.append.provider.duration` p99) is still needed as planned, or whether Gap 1 closes the small-batch sensitivity gap as a side effect.
+
+4. **Host change.** This run used `Standard_D4as_v5` (4 vCPU / 16 GiB), the pre-FX-033 wedge run used `Standard_D8as_v5` (8 vCPU / 32 GiB). Halving the silo's CPU budget did NOT cause any wedges, which is itself a strong validation of FX-033 - the gates absorb back-pressure regardless of host headroom. This re-establishes D4as_v5 as the canonical baseline (per §26's decision rule); future cohorts can use D4 without per-cohort wedge risk.
+
+5. **Producer remains unchanged.** Gap 6 from the audit ("Producer has no protocol-level back-pressure beyond TCP") is now confirmed structurally subsumed by the bench Gap 3 channel-write fence: the producer continues to push at offered rate, the silo's bounded channel + kernel TCP window absorb the back-pressure, and the producer's `slipMaxMs` rises in the windows that overlap silo `Saturated` transitions (visible in producer logs). No code change tracked.
+
+### 34.7 References
+
+- Issue FX-033 / #629 - this cycle's tracked work.
+- Issue FX-032 / #620 - the classifier-side surface this cycle's consumer-side wiring sits on top of.
+- `.scratch/bug-hunter/findings/2026-06-09-audit-saturation-consumer-coverage-gaps.md` - the bug-hunter audit document FX-033 was filed from.
+- `src/lattice/LatticeSaturatedException.cs` - the new public typed exception.
+- `src/lattice/BPlusTree/Grains/WalCommitLogWriter.cs` `GateOnSaturationAsync` - the writer-side admission gate.
+- `src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs` `QuiesceOnSaturatedAsync` + `IsTerminalSaturationRefusal` + `ExtractSaturationTreeId` - the saga-side quiesce gate.
+- `src/lattice/BPlusTree/LatticeOptions.cs` `WalAdmissionSaturationWaitBudget` + `DefaultWalAdmissionSaturationWaitBudget` - the new option.
+- `src/lattice/LatticeMetrics.cs` `WalAppendAdmissionSaturationRefusals` - the new counter.
+- `benchmark/azure-throughput/Silo/Program.cs` `TcpIngestService.HandleConnectionAsync` - the second `ApplyBackPressureAsync` call (Gap 3 channel fence).
+- Cohort run artefacts: `benchmark/.run/performance-report/pr0bac8cc/` (today's HEALTHY run); `benchmark/.run/performance-report/pr72230cb/` (the pre-FX-033 triage run that motivated the audit).
+

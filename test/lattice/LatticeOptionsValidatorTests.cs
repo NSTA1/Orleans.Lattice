@@ -561,4 +561,51 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalSaturationRecoveryWindow)));
     }
+
+    // --- Admission-gate saturation wait budget ---
+
+    [Test]
+    public void WalAdmissionSaturationWaitBudget_default_is_five_seconds()
+    {
+        Assert.That(new LatticeOptions().WalAdmissionSaturationWaitBudget, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        Assert.That(LatticeOptions.DefaultWalAdmissionSaturationWaitBudget, Is.EqualTo(TimeSpan.FromSeconds(5)));
+    }
+
+    [Test]
+    public void WalAdmissionSaturationWaitBudget_positive_passes()
+    {
+        var result = Validate(o => o.WalAdmissionSaturationWaitBudget = TimeSpan.FromSeconds(10));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalAdmissionSaturationWaitBudget_zero_passes()
+    {
+        // Zero is the documented operator opt-out: the admission
+        // gate is bypassed entirely (the historical
+        // pre-admission-gate behaviour). The validator must accept
+        // it (unlike most TimeSpan options where zero is rejected
+        // as a no-op).
+        var result = Validate(o => o.WalAdmissionSaturationWaitBudget = TimeSpan.Zero);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalAdmissionSaturationWaitBudget_infinite_passes()
+    {
+        // Infinite waits forever on WaitForHealthyAsync - the
+        // documented sentinel.
+        var result = Validate(o => o.WalAdmissionSaturationWaitBudget = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalAdmissionSaturationWaitBudget_negative_fails()
+    {
+        // -1s is not the InfiniteTimeSpan sentinel (which is -1ms);
+        // it is a genuine negative TimeSpan and must be rejected.
+        var result = Validate(o => o.WalAdmissionSaturationWaitBudget = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)));
+    }
 }

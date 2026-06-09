@@ -80,6 +80,16 @@ internal static class TypeAliases
     // owning silo's WalCommitLogWriter is draining (host shutdown).
     internal const string LatticeShuttingDown = "ol.lsd";
 
+    // Lattice steady-state saturation back-pressure surface. Thrown by
+    // the WAL writer admission gate when the per-tree saturation signal
+    // reports Saturated for longer than WalAdmissionSaturationWaitBudget
+    // and by the atomic-write saga when the same regime persists past
+    // the saga's quiesce budget. Distinct from LatticeShuttingDown:
+    // saturation is a transient regime the operator can recover from by
+    // reducing offered load or scaling storage; shutdown is a one-way
+    // transition for that silo activation.
+    internal const string LatticeSaturated = "ol.lsa";
+
     // Online reshard
     internal const string TreeReshardState = "ol.txs";
     internal const string ReshardPhase = "ol.rxp";
@@ -92,7 +102,7 @@ internal static class TypeAliases
     // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
 
-    // Raw-entry bulk load ( snapshot TTL preservation)
+    // Raw-entry bulk load (snapshot TTL preservation)
     internal const string LwwEntry = "ol.lwe";
 
     // Retroactive shadow-forward of in-flight prepared mutations.

@@ -346,6 +346,7 @@ internal sealed class LatticeOptionsResolver(
             WalAppendDispatchTimeout = baseOptions.WalAppendDispatchTimeout,
             WalFlushPreflightTimeout = baseOptions.WalFlushPreflightTimeout,
             WalDrainBudget = baseOptions.WalDrainBudget,
+            WalAdmissionSaturationWaitBudget = baseOptions.WalAdmissionSaturationWaitBudget,
             WalMaxRetainedBytes = baseOptions.WalMaxRetainedBytes,
             WalBytePressureReclaimTarget = baseOptions.WalBytePressureReclaimTarget,
             MaterialiserCheckpointInterval = baseOptions.MaterialiserCheckpointInterval,
