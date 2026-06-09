@@ -178,8 +178,12 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <summary>
     /// Tombstones all live keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
     /// by walking the leaf chain. Returns the total number of keys tombstoned.
+    /// When <paramref name="predicate"/> is non-<see langword="null"/> only the
+    /// in-range live keys whose value satisfies the predicate are tombstoned,
+    /// and the matched key set is propagated to observers / the WAL so replay
+    /// and replication reproduce it without re-evaluating the predicate.
     /// </summary>
-    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
+    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns the total number of live (non-tombstoned) keys in this shard's B+ tree

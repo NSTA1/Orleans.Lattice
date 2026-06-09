@@ -1313,22 +1313,39 @@ internal sealed partial class LatticeGrain(
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var deleted = LatticeIdempotencyContext.IsActive
-            ? await RunMutationAsync(ct => DeleteRangeAsyncOuter(startInclusive, endExclusive, ct), cancellationToken)
-            : await DeleteRangeAsyncOuter(startInclusive, endExclusive, cancellationToken);
+            ? await RunMutationAsync(ct => DeleteRangeAsyncOuter(startInclusive, endExclusive, null, ct), cancellationToken)
+            : await DeleteRangeAsyncOuter(startInclusive, endExclusive, null, cancellationToken);
         if (deleted > 0)
             await PublishEventAsync(LatticeTreeEventKind.DeleteRange, $"{startInclusive}..{endExclusive}");
         return deleted;
     }
 
-    private Task<int> DeleteRangeAsyncOuter(string startInclusive, string endExclusive, CancellationToken cancellationToken)
+    public async Task<int> DeleteRangeWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
+        await EnsureCompactionReminderAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        var deleted = LatticeIdempotencyContext.IsActive
+            ? await RunMutationAsync(ct => DeleteRangeAsyncOuter(startInclusive, endExclusive, predicate, ct), cancellationToken)
+            : await DeleteRangeAsyncOuter(startInclusive, endExclusive, predicate, cancellationToken);
+        if (deleted > 0)
+            await PublishEventAsync(LatticeTreeEventKind.DeleteRange, $"{startInclusive}..{endExclusive}");
+        return deleted;
+    }
+
+    private Task<int> DeleteRangeAsyncOuter(string startInclusive, string endExclusive, LatticePredicateNode? predicate, CancellationToken cancellationToken)
     {
         return RetryOnStaleRoutingAsync(
-            (self: this, startInclusive, endExclusive, cancellationToken),
-            static args => args.self.DeleteRangeAsyncCore(args.startInclusive, args.endExclusive, args.cancellationToken),
+            (self: this, startInclusive, endExclusive, predicate, cancellationToken),
+            static args => args.self.DeleteRangeAsyncCore(args.startInclusive, args.endExclusive, args.predicate, args.cancellationToken),
             cancellationToken);
     }
 
-    private async Task<int> DeleteRangeAsyncCore(string startInclusive, string endExclusive, CancellationToken cancellationToken)
+    private async Task<int> DeleteRangeAsyncCore(string startInclusive, string endExclusive, LatticePredicateNode? predicate, CancellationToken cancellationToken)
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -1361,7 +1378,7 @@ internal sealed partial class LatticeGrain(
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
             tasks[i] = ShardActivationRetry.RunAsync(
-                () => shard.DeleteRangeAsync(startInclusive, endExclusive));
+                () => shard.DeleteRangeAsync(startInclusive, endExclusive, predicate));
         }
 
         await Task.WhenAll(tasks);

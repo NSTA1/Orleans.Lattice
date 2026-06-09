@@ -124,12 +124,22 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// frontier. Stamped onto every per-leaf tombstone via the ambient
     /// <see cref="LatticeVectorClockContext"/>.
     /// </param>
+    /// <param name="explicitMatchedKeys">
+    /// The explicit set of keys a predicate-filtered range delete matched at
+    /// the authoring cluster, or <c>null</c> for an unconditional range delete.
+    /// When non-<c>null</c> the receiver tombstones exactly this set (each key
+    /// routed to its owning shard) instead of re-deriving membership from the
+    /// range bounds, so a conditional delete reproduces the producer's tombstone
+    /// closure without re-evaluating the predicate against the receiver's
+    /// (possibly divergent) values.
+    /// </param>
     Task ApplyDeleteRangeAsync(
         string startInclusive,
         string endExclusive,
         HybridLogicalClock sourceHlc,
         string originClusterId,
-        VersionVector? sourceVectorClock);
+        VersionVector? sourceVectorClock,
+        IReadOnlyList<string>? explicitMatchedKeys = null);
 
     /// <summary>
     /// Installs a batch of LWW Set/Delete mutations authored on remote

@@ -94,7 +94,53 @@ public class WalRecordConverterTests
             Assert.That(entry.Key, Is.EqualTo("a"));
             Assert.That(entry.EndExclusiveKey, Is.EqualTo("z"));
             Assert.That(entry.IsTombstone, Is.True);
+            Assert.That(entry.MatchedKeys, Is.Null, "unconditional range delete carries no explicit key set");
         });
+    }
+
+    [Test]
+    public void ToWalRecord_round_trips_predicate_filtered_DeleteRange_MatchedKeys()
+    {
+        var matched = new[] { "a", "c", "e" };
+        var mutation = new LatticeMutation
+        {
+            TreeId = "tree-A",
+            Kind = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "z",
+            IsTombstone = true,
+            Timestamp = HybridLogicalClock.Zero,
+            MatchedKeys = matched,
+        };
+
+        var entry = WalRecordConverter.ToWalRecord(mutation, LatticeMergeMode.LwwRegister, "cluster-A");
+        var roundTripped = WalRecordConverter.FromWalRecord(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.MatchedKeys, Is.EqualTo(matched), "ToWalRecord must copy the matched key set");
+            Assert.That(roundTripped.MatchedKeys, Is.EqualTo(matched), "FromWalRecord must restore the matched key set");
+            Assert.That(roundTripped.Kind, Is.EqualTo(MutationKind.DeleteRange));
+        });
+    }
+
+    [Test]
+    public void FromWalRecord_defaults_MatchedKeys_to_null_for_unconditional_range_delete()
+    {
+        var mutation = new LatticeMutation
+        {
+            TreeId = "tree-A",
+            Kind = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "z",
+            IsTombstone = true,
+            Timestamp = HybridLogicalClock.Zero,
+        };
+
+        var roundTripped = WalRecordConverter.FromWalRecord(
+            WalRecordConverter.ToWalRecord(mutation, LatticeMergeMode.LwwRegister, "cluster-A"));
+
+        Assert.That(roundTripped.MatchedKeys, Is.Null);
     }
 
     [Test]

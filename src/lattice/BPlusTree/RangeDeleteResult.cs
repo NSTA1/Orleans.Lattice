@@ -34,4 +34,15 @@ public readonly record struct RangeDeleteResult
     /// signalling that no subsequent leaf in the chain can contain range-matching keys.
     /// </summary>
     [Id(1)] public bool PastRange { get; init; }
+
+    /// <summary>
+    /// The explicit set of keys this leaf tombstoned when the range delete
+    /// carried a predicate, or <see langword="null"/> for an unconditional
+    /// range delete. The shard-root coordinator aggregates these per-leaf sets
+    /// into the single per-shard <see cref="MutationKind.DeleteRange"/>
+    /// notification so replication apply tombstones exactly the matched set
+    /// rather than re-deriving it from the range bounds. <see langword="null"/>
+    /// keeps the unconditional range-delete observer payload unchanged.
+    /// </summary>
+    [Id(2)] public IReadOnlyList<string>? MatchedKeys { get; init; }
 }

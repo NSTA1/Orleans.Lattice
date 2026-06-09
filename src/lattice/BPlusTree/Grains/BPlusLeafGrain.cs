@@ -1337,7 +1337,7 @@ internal sealed partial class BPlusLeafGrain(
         return true;
     }
 
-    public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive)
+    public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         // Collect matching keys. Entries is a SortedDictionary so we can
         // break early once we pass endExclusive - but we must still report
@@ -1356,7 +1356,16 @@ internal sealed partial class BPlusLeafGrain(
 
             if (string.Compare(key, startInclusive, StringComparison.Ordinal) >= 0
                 && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+            {
+                // Predicate-filtered delete evaluates the predicate once,
+                // here at write time, against the live value. The matched
+                // keys are the only rows tombstoned and are recorded in the
+                // WAL record / result so replay and replication reproduce
+                // exactly this set without re-evaluating the predicate.
+                if (predicate is { } pred && !LatticePredicateEvaluator.Matches(lww.Value, pred))
+                    continue;
                 (keysToDelete ??= []).Add(key);
+            }
         }
 
         if (keysToDelete is null)
@@ -1405,7 +1414,8 @@ internal sealed partial class BPlusLeafGrain(
                 state.State.ShardIndex ?? 0,
                 startInclusive,
                 endExclusive,
-                tombstone);
+                tombstone,
+                predicate is null ? null : keysToDelete);
             await writer.AppendAsync(entry);
         }
         RecordCommitStep("wal", walStartTicks);
@@ -1446,7 +1456,12 @@ internal sealed partial class BPlusLeafGrain(
         // tombstone ratio sharply on a single leaf.
         EvaluateCompactionTrigger();
 
-        return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
+        return new RangeDeleteResult
+        {
+            Deleted = keysToDelete.Count,
+            PastRange = pastRange,
+            MatchedKeys = predicate is null ? null : keysToDelete,
+        };
     }
 
     public async Task<int> CountAsync()

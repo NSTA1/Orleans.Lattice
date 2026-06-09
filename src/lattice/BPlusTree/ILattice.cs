@@ -184,6 +184,21 @@ public interface ILattice : IGrainWithStringKey
     Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="DeleteRangeAsync"/>, but tombstones only the in-range
+    /// keys whose value matches the server-side predicate IR
+    /// <paramref name="predicate"/>, evaluated once at write time against each
+    /// candidate value's JSON document view inside the owning leaf. The matched
+    /// key set is persisted to the WAL and shipped to replication consumers so
+    /// replay and cross-cluster apply reproduce exactly that set without
+    /// re-evaluating the predicate. Returns the total number of keys tombstoned
+    /// across all shards. Intended to be reached through the typed
+    /// <c>DeleteRangeAsync&lt;T&gt;</c> extension, which compiles the predicate
+    /// expression to IR.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<int> DeleteRangeWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the total number of live (non-tombstoned) keys across all shards.
     /// Fans out to every shard in parallel and sums the per-shard counts.
     /// </summary>

@@ -766,4 +766,47 @@ public static class TypedLatticeExtensions
         bool reverse = false,
         CancellationToken cancellationToken = default) =>
         lattice.OpenSnapshotEntryCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, cancellationToken);
+
+    /// <summary>
+    /// Conditionally deletes the keys in the lexicographic range
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
+    /// whose value of type <typeparamref name="T"/> matches
+    /// <paramref name="predicate"/>. The predicate expression is compiled to the
+    /// serializable predicate IR with <paramref name="serializer"/> and pushed
+    /// down to the owning leaves, which evaluate it once at write time against
+    /// each candidate value's JSON document view and tombstone only the matched
+    /// keys. The matched key set is persisted to the WAL and shipped to
+    /// replication consumers, so recovery and cross-cluster apply reproduce
+    /// exactly that set without re-evaluating the predicate. No values cross the
+    /// wire. Returns the total number of keys tombstoned across all shards.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<int> DeleteRangeAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.DeleteRangeWherePredicateAsync(ir, startInclusive, endExclusive, cancellationToken);
+    }
+
+    /// <inheritdoc cref="DeleteRangeAsync{T}(ILattice, Expression{Func{T, bool}}, string, string, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<int> DeleteRangeAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken = default) =>
+        lattice.DeleteRangeAsync(predicate, startInclusive, endExclusive, JsonLatticeSerializer<T>.Default, cancellationToken);
 }

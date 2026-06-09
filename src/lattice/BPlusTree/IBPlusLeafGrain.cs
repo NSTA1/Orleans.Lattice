@@ -172,8 +172,16 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// stop walking the leaf chain deterministically on sparse multi-shard trees, where
     /// a leaf may legitimately delete zero keys even when later leaves contain
     /// range-matching entries.
+    /// <para>
+    /// When <paramref name="predicate"/> is non-<see langword="null"/> the leaf
+    /// tombstones only the in-range live keys whose value satisfies the
+    /// predicate (evaluated once, here, at write time) and records the matched
+    /// key set on <see cref="RangeDeleteResult.MatchedKeys"/> and in the WAL
+    /// record, so replay and replication reproduce exactly that set without
+    /// re-evaluating the predicate.
+    /// </para>
     /// </summary>
-    Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive);
+    Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();

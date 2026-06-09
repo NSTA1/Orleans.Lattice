@@ -62,7 +62,8 @@ internal sealed partial class LatticeGrain
         string endExclusive,
         HybridLogicalClock sourceHlc,
         string originClusterId,
-        VersionVector? sourceVectorClock)
+        VersionVector? sourceVectorClock,
+        IReadOnlyList<string>? explicitMatchedKeys = null)
     {
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(startInclusive);
@@ -71,6 +72,39 @@ internal sealed partial class LatticeGrain
 
         if (string.CompareOrdinal(startInclusive, endExclusive) >= 0)
         {
+            return;
+        }
+
+        // A predicate-filtered range delete ships the explicit set of keys the
+        // authoring leaf matched. The receiver must tombstone exactly that set
+        // - never re-deriving membership from the range bounds (its stored
+        // values may differ, and re-evaluating a predicate it does not carry is
+        // impossible). Route those keys through the batched merge-apply path as
+        // tombstone items so each lands on its owning shard with the producer's
+        // origin / frontier / HLC preserved bit-identically.
+        if (explicitMatchedKeys is not null)
+        {
+            if (explicitMatchedKeys.Count == 0)
+            {
+                return;
+            }
+
+            var items = new ApplyMergeItem[explicitMatchedKeys.Count];
+            for (var i = 0; i < explicitMatchedKeys.Count; i++)
+            {
+                items[i] = new ApplyMergeItem
+                {
+                    Key = explicitMatchedKeys[i],
+                    Value = null,
+                    SourceHlc = sourceHlc,
+                    OriginClusterId = originClusterId,
+                    SourceVectorClock = sourceVectorClock,
+                    ExpiresAtTicks = 0,
+                    IsTombstone = true,
+                };
+            }
+
+            await ApplyMergeManyAsync(items);
             return;
         }
 

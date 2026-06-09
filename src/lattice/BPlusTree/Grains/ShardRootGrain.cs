@@ -833,7 +833,7 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
-    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)
+    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         await PrepareForOperationAsync();
         // range deletes do not currently shadow-forward tombstones - see
@@ -845,8 +845,9 @@ internal sealed partial class ShardRootGrain(
 
         // For online resize, forward the same range delete to the destination
         // in parallel - LWW on the destination shard absorbs any interleaving
-        // with drain and live forwards.
-        var forwardTask = TrackShadowForward((startInclusive, endExclusive), static (t, s) => t.DeleteRangeAsync(s.startInclusive, s.endExclusive));
+        // with drain and live forwards. The predicate rides along so the
+        // destination filters identically.
+        var forwardTask = TrackShadowForward((startInclusive, endExclusive, predicate), static (t, s) => t.DeleteRangeAsync(s.startInclusive, s.endExclusive, s.predicate));
 
         // Find the starting leaf for the range.
         GrainId leafId;
@@ -864,14 +865,22 @@ internal sealed partial class ShardRootGrain(
         // deleting zero is NOT a valid termination signal on multi-shard trees,
         // where early leaves can be sparse yet later leaves contain range-matching
         // entries.
+        //
+        // For a predicate-filtered delete, accumulate every leaf's matched
+        // key set so the single per-shard DeleteRange notification carries the
+        // exact tombstone closure - replication apply then reproduces it
+        // without re-evaluating the predicate.
         var totalDeleted = 0;
+        List<string>? matchedKeys = predicate is null ? null : [];
         while (true)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive);
+            var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive, predicate);
             totalDeleted += result.Deleted;
             if (result.Deleted > 0)
                 await MarkLeafDirtyAsync(leafId);
+            if (matchedKeys is not null && result.MatchedKeys is { Count: > 0 })
+                matchedKeys.AddRange(result.MatchedKeys);
 
             if (result.PastRange)
                 break;
@@ -884,7 +893,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         await forwardTask;
-        await PublishDeleteRangeAsync(startInclusive, endExclusive);
+        await PublishDeleteRangeAsync(startInclusive, endExclusive, matchedKeys);
         return totalDeleted;
     }
 

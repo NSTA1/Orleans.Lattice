@@ -410,13 +410,31 @@ internal sealed class SnapshotLeafGrain(
             return;
 
         List<string>? toRewrite = null;
-        foreach (var (key, _) in _entries)
+        var matchedKeys = mutation.MatchedKeys;
+        if (matchedKeys is not null)
         {
-            if (string.CompareOrdinal(key, startInclusive) < 0)
-                continue;
-            if (string.CompareOrdinal(key, endExclusive) >= 0)
-                break;
-            (toRewrite ??= []).Add(key);
+            // Predicate-filtered range delete: tombstone exactly the matched
+            // key set the authoring leaf recorded, without re-evaluating the
+            // predicate against the snapshot's (possibly divergent) values.
+            foreach (var key in matchedKeys)
+            {
+                if (string.CompareOrdinal(key, startInclusive) < 0
+                    || string.CompareOrdinal(key, endExclusive) >= 0)
+                    continue;
+                if (_entries.ContainsKey(key))
+                    (toRewrite ??= []).Add(key);
+            }
+        }
+        else
+        {
+            foreach (var (key, _) in _entries)
+            {
+                if (string.CompareOrdinal(key, startInclusive) < 0)
+                    continue;
+                if (string.CompareOrdinal(key, endExclusive) >= 0)
+                    break;
+                (toRewrite ??= []).Add(key);
+            }
         }
 
         if (toRewrite is null)
