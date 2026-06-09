@@ -593,10 +593,10 @@ singleton with `grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin")`
 | `GetTotalStorageUsageAsync` | `Task<ClusterStorageUsageReport> GetTotalStorageUsageAsync(CancellationToken cancellationToken = default)` | Enumerates every registered tree, fans out to each tree's `GetStorageUsageAsync` (cache-respecting), and aggregates the per-tree `TreeStorageUsageReport`s into a single cluster-wide roll-up. `Partial` is `true` when any tree's report was partial. Activates every shard root, leaf, and snapshot storage grain - **diagnostic / capacity-planning use only**; not safe to call on a polling cadence. |
 | `PollWalUsageAsync` | `Task PollWalUsageAsync(CancellationToken cancellationToken = default)` | Cluster-wide WAL-only refresh. Fans out across every registered tree's WAL-only aggregator, touching only `IWalShardGrain` activations - never a leaf, internal node, snapshot storage, or shard-root grain. Drives the `storage.wal_bytes` / `storage.policy.over_threshold` observable gauges plus the byte-pressure WAL retention policy. This is the cheap path the per-silo background poller uses on its default 15 s cadence, so an idle tree is never activated by polling. |
 | `RefreshStorageUsageAsync` | `Task<ClusterStorageUsageReport> RefreshStorageUsageAsync(CancellationToken cancellationToken = default)` | Operator-driven deep refresh. Same return shape as `GetTotalStorageUsageAsync`, but **bypasses every tree's `StorageUsageCacheTtl` cache** and forces a fresh fan-out. Reserved for explicit operator action (post-migration validation, manual reconciliation); the background poller never invokes it. |
-| `GetWalPlacementAsync` | `Task<WalPlacement> GetWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` | Returns the tree''s durable WAL placement pin: the default catalogue key, any per-partition key overrides, and the pin''s compare-and-swap `Version`. A tree that has never been moved reports the `default` key for every partition. |
-| `AuditWalPlacementAsync` | `Task<WalPlacementAudit> AuditWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` | Like `GetWalPlacementAsync` but additionally reports, **for the silo serving this call**, whether every pinned catalogue key is registered there (`AllResolvableOnThisSilo`) plus the silo''s known key set. The cheapest way to catch a missing-key misconfiguration before it fails a partition closed. |
+| `GetWalPlacementAsync` | `Task<WalPlacement> GetWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` | Returns the tree's durable WAL placement pin: the default catalogue key, any per-partition key overrides, and the pin's compare-and-swap `Version`. A tree that has never been moved reports the `default` key for every partition. |
+| `AuditWalPlacementAsync` | `Task<WalPlacementAudit> AuditWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` | Like `GetWalPlacementAsync` but additionally reports, **for the silo serving this call**, whether every pinned catalogue key is registered there (`AllResolvableOnThisSilo`) plus the silo's known key set. The cheapest way to catch a missing-key misconfiguration before it fails a partition closed. |
 | `PlanWalMoveAsync` | `Task<WalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)` | Read-only dry run. Reports what moving `partition` to `targetProviderKey` would copy (offset range, entry count), whether the partition is already at the target, and whether the target key resolves on the serving silo. Mutates nothing. |
-| `ExecuteWalMoveAsync` | `Task<WalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, WalMoveOptions? options = null, CancellationToken cancellationToken = default)` | Performs the quiesce-copy-cutover move saga: fences the partition''s WAL grain, offset-preservingly copies the retained range to the target provider, re-converges on any appends that landed during the copy, flips the durable pin under compare-and-swap, then forces the WAL grain to deactivate so its next activation (any silo) binds the new provider. Non-destructive (`WalMoveReceipt.SourceRetained`); fails closed if the target key is unregistered on the serving silo. Single partition per call. |
+| `ExecuteWalMoveAsync` | `Task<WalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, WalMoveOptions? options = null, CancellationToken cancellationToken = default)` | Performs the quiesce-copy-cutover move saga: fences the partition's WAL grain, offset-preservingly copies the retained range to the target provider, re-converges on any appends that landed during the copy, flips the durable pin under compare-and-swap, then forces the WAL grain to deactivate so its next activation (any silo) binds the new provider. Non-destructive (`WalMoveReceipt.SourceRetained`); fails closed if the target key is unregistered on the serving silo. Single partition per call. |
 | `ReclaimMovedWalSourceAsync` | `Task<WalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)` | Reclaims the now-redundant copy left on the **source** provider after a permanent move by trimming it. Refuses (throws) if the partition is still pinned to `sourceProviderKey` - you can only reclaim a placement the pin has already moved away from. |
 
 ```csharp verify
@@ -860,6 +860,7 @@ A flat-zero series on `transitions` is the healthy steady state. A rising rate o
 | `WalSaturationDispatchTimeoutThreshold` | `1` | Minimum dispatch-timeout trips per sample window that raise a tree to `Saturated` regardless of admission depth. |
 | `WalSaturationProviderFailureRateThreshold` | `1` | Minimum provider-side commit failures per sample window that raise a tree to `Saturated` regardless of admission depth and dispatch-timeout trips. Captures the regime where provider commit calls return quickly but terminally fail (e.g. Azure Tables 409-Conflict bursts) so the silo surfaces the saturation regime instead of silently leaking entries. Set to `0` to disable the trigger entirely. |
 | `WalSaturationRecoveryWindow` | `1 s` | Window after the most-recently observed `Saturated` transition during which the classifier holds a tree at or above `Throttled` even if the current sampler tick's depth observation classifies it as `Healthy`. Defends against bursty per-partition WAL drain where the per-tick `max(depth_ratio)` oscillates `~1.0 <-> ~0.0` and the classifier would otherwise flap `Healthy <-> Saturated` at the sampler cadence with `Throttled` never observed as a stable state. Set to `TimeSpan.Zero` to disable the upgrade (per-tick depth observation drives the regime directly); set to `Timeout.InfiniteTimeSpan` to hold `Throttled` forever after the first `Saturated` observation. |
+| `WalAdmissionSaturationWaitBudget` | `5 s` | Wall-clock budget the WAL writer admission gate (`PartitionTracker.AcquireAsync`) spends parked on `IWalSaturationSignal.WaitForHealthyAsync` before refusing a dispatch with [`LatticeSaturatedException`](#saturation-back-pressure---latticesaturatedexception) when the per-tree saturation signal stays `Saturated` past the budget. Sized shorter than `WalAppendDispatchTimeout` (so the saturation refusal wins over the dispatch timeout) and longer than one `WalSaturationSampleInterval` (so a transient classifier flap does not surface as a refusal). Set to `TimeSpan.Zero` to disable the gate entirely (the historical pre-admission-gate behaviour). Set to `Timeout.InfiniteTimeSpan` to wait forever on recovery. |
 
 See [WAL Saturation Signal](wal-saturation-signal.md) for the full design including the per-tree resolution contract, the multi-tree aggregate view, and the bench-side adoption pattern.
 
@@ -896,6 +897,44 @@ catch (LatticeShuttingDownException)
 ```
 
 On the `SetManyAtomicAsync` path, the saga's outcome is recorded on the `orleans.lattice.atomic_write.completed` counter as `outcome=shutdown_refused` so operators can distinguish saga failures caused by shutdown coincidence from saga failures caused by genuine commit conflicts on the same dashboard.
+
+## Saturation back-pressure - `LatticeSaturatedException`
+
+Public typed exception thrown by the WAL writer admission gate and the atomic-write saga coordinator when an operation cannot complete because the per-tree `IWalSaturationSignal` reported `WalSaturationState.Saturated` for longer than the caller's configured wait budget. Distinct from [`LatticeShuttingDownException`](#shutdown-back-pressure---latticeshuttingdownexception): saturation is a *recoverable* steady-state regime (offered load is exceeding the storage layer's sustained drain rate), not a one-way silo shutdown. Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot lets callers that care about the saturation regime explicitly distinguish it from genuine `InvalidOperationException` failures.
+
+Surfaces from two distinct saturation failure shapes that share the same operational meaning ("this tree's storage layer is back-pressured; the operation was refused"):
+
+- **Writer-side admission refusal.** `WalCommitLogWriter` consults the per-tree saturation signal before each `PartitionTracker.AcquireAsync`. On `Saturated`, the writer awaits `IWalSaturationSignal.WaitForHealthyAsync` up to `LatticeOptions.WalAdmissionSaturationWaitBudget` (default 5 seconds) and, if the regime persists, throws this exception so callers observe the back-pressure in budget time instead of parking on the admission semaphore for up to `WalAppendDispatchTimeout` (default 30 seconds).
+- **Saga-coordinator quiesce refusal.** `AtomicWriteGrain.QuiesceOnSaturatedAsync` runs before each batched dispatch and parks the saga on `WaitForHealthyAsync` up to `min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)`. On budget expiry with the tree still `Saturated`, the saga's fast-path refuses with this exception rather than re-dispatching the same RowKeys into a still-throttled storage account (the canonical 409-Conflict amplification regime); the saga's persisted state stays at `Execute` with the current `NextIndex` so the caller's next retry on the same `operationId` resumes from where the refusal stopped.
+
+Carries the originating tree id in the `TreeId` property so caller-side diagnostics can attribute the back-pressure to the specific tree without parsing the exception message. When the writer-side admission gate refused, the property names the tree whose admission semaphore observed the saturation; when the saga refused, the property names the saga's tree (or, when an underlying writer-side `LatticeSaturatedException` was wrapped through `SetManyAsync`'s leaf fan-out, the extracted tree id of the writer-side refusal).
+
+Caller contract: treat as back-pressure and **retry after backing off**. Typical recovery is 1-10 seconds (until the underlying storage account or per-partition WAL admission gate drains). Long-lived consumers should also reduce offered load on the affected tree until the per-tree signal returns to `Healthy`. Unlike `LatticeShuttingDownException`, retries against the same silo activation can succeed once the regime clears.
+
+```csharp verify
+var entries = new List<KeyValuePair<string, byte[]>>
+{
+    new("k1", new byte[] { 0x01 }),
+    new("k2", new byte[] { 0x02 }),
+};
+
+try
+{
+    await lattice.SetManyAsync(entries);
+}
+catch (LatticeSaturatedException ex)
+{
+    // The per-tree saturation signal stayed Saturated past the
+    // admission budget. The entries did not commit. Back off
+    // (typical 1-10s), then retry. The TreeId property attributes
+    // the back-pressure to the specific tree.
+    Console.WriteLine($"tree {ex.TreeId} is saturated; backing off");
+    await Task.Delay(TimeSpan.FromSeconds(2));
+    // retry...
+}
+```
+
+The writer-side admission refusal is also recorded on the `orleans.lattice.wal.writer.append.admission_saturation_refusals` counter (tagged `tree`, `partition`) so operators can dashboard the back-pressure rate separately from the dispatch-timeout counter (`orleans.lattice.wal.writer.append.admission_timeouts`) and the drain-release counter (`orleans.lattice.wal.writer.append.drain.releases`).
 
 ## Leaf-projection digest
 
@@ -1261,13 +1300,14 @@ they are implementation details not intended for direct use.
 | `ClusterStorageUsageReport` | `ol.csu` | public | `readonly record struct` returned by `ILatticeAdmin.GetTotalStorageUsageAsync`. Cluster-wide storage roll-up. |
 | `ShardStorageUsage` | `ol.ssu` | internal | `readonly record struct` per-shard leaf-state + snapshot byte roll-up. |
 | `LatticeShuttingDownException` | `ol.lsd` | public | Typed `InvalidOperationException` subclass thrown by `ILattice` operators (and the internal `AtomicWriteGrain` saga coordinator) when an operation cannot complete because the owning silo's WAL writer is draining as part of host shutdown. See [Shutdown back-pressure](#shutdown-back-pressure---latticeshuttingdownexception) and [Atomic Writes](atomic-writes.md). |
-| `WalPlacement` | `ol.wpl` | public | `readonly record struct` returned by `ILatticeAdmin.GetWalPlacementAsync`. A tree''s durable WAL placement pin: default catalogue key, per-partition overrides, and CAS `Version`. See [WAL Storage Providers](wal-storage-providers.md#multi-account-fan-out-named-providers-and-pinned-placement). |
-| `WalPartitionPlacement` | `ol.wpe` | public | `readonly record struct` - one partition''s resolved catalogue key inside a `WalPlacement` / `WalPlacementAudit`. |
+| `WalPlacement` | `ol.wpl` | public | `readonly record struct` returned by `ILatticeAdmin.GetWalPlacementAsync`. A tree's durable WAL placement pin: default catalogue key, per-partition overrides, and CAS `Version`. See [WAL Storage Providers](wal-storage-providers.md#multi-account-fan-out-named-providers-and-pinned-placement). |
+| `WalPartitionPlacement` | `ol.wpe` | public | `readonly record struct` - one partition's resolved catalogue key inside a `WalPlacement` / `WalPlacementAudit`. |
 | `WalPlacementAudit` | `ol.wpa` | public | `readonly record struct` returned by `ILatticeAdmin.AuditWalPlacementAsync`. Placement plus per-silo resolvability of every pinned key. |
 | `WalMovePlan` | `ol.wmp` | public | `readonly record struct` returned by `ILatticeAdmin.PlanWalMoveAsync`. Read-only dry run of a partition move. |
 | `WalMoveOptions` | `ol.wmo` | public | `readonly record struct` tuning a move (`QuiesceLease`, `CopyPageSize`, `VerifyAfterCopy`); `WalMoveOptions.Default` for the defaults. |
 | `WalMoveReceipt` | `ol.wmr` | public | `readonly record struct` returned by `ILatticeAdmin.ExecuteWalMoveAsync` / `ReclaimMovedWalSourceAsync`. Records the offset range copied, the new pin version, and the move `Outcome`. |
 | `WalMoveOutcome` | `ol.wmc` | public | Enum: `Moved`, `AlreadyAtTarget`, `SourceReclaimed`, `NoOp`. The terminal disposition of a move / reclaim call. |
+| `LatticeSaturatedException` | `ol.lsa` | public | Typed `InvalidOperationException` subclass thrown by the WAL writer admission gate and the `AtomicWriteGrain` saga coordinator when an operation cannot complete because the per-tree saturation signal stayed `Saturated` past the caller's configured wait budget. Carries the originating `TreeId` for caller-side attribution. See [Saturation back-pressure](#saturation-back-pressure---latticesaturatedexception) and [WAL Saturation Signal](wal-saturation-signal.md). |
 
 ## Public but not usable
 

@@ -1550,6 +1550,35 @@ public static class LatticeMetrics
             description: "Count of writer-side parked admission callers released by a silo-drain signal on host shutdown.");
 
     /// <summary>
+    /// Count of writer-side admission dispatches refused with
+    /// <see cref="LatticeSaturatedException"/> because the per-tree
+    /// saturation signal reported
+    /// <see cref="WalSaturationState.Saturated"/> for longer than
+    /// <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/>.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
+    /// <para>
+    /// Reliability intent: distinct from
+    /// <see cref="WalAppendAdmissionTimeouts"/> (which counts the
+    /// per-call <see cref="LatticeOptions.WalAppendDispatchTimeout"/>
+    /// deadline) and from <see cref="WalAppendDrainReleases"/> (which
+    /// counts host-shutdown drain releases). This counter names
+    /// callers refused fast by the
+    /// <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/>
+    /// gate during steady-state saturation episodes - the surface
+    /// that closes the storage-account 409-Conflict-burst phenotype
+    /// documented in <c>benchmark/azure-throughput/throughput.md</c>
+    /// section 32. A non-zero rate during steady-state operation is
+    /// the canonical signal that offered load is exceeding the
+    /// storage layer's sustained drain rate; under healthy operation
+    /// the counter stays at zero because the saturation signal does
+    /// not enter <see cref="WalSaturationState.Saturated"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalAppendAdmissionSaturationRefusals =
+        Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.admission_saturation_refusals", unit: "{refusal}",
+            description: "Count of writer-side admission dispatches refused with LatticeSaturatedException because the saturation signal stayed Saturated beyond WalAdmissionSaturationWaitBudget.");
+
+    /// <summary>
     /// Tag key for the per-tree saturation state on
     /// <see cref="WalSaturationTransitions"/> and the
     /// <see cref="WalSaturationStateGaugeName"/> observable gauge.

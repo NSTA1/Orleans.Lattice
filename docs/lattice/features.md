@@ -21,7 +21,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
 - [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
-- [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-tree pinned WAL placement with `ILatticeAdmin` move surface for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
 
 ### Shipped
 
@@ -95,6 +94,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-081](https://github.com/NSTA1/Orleans.Lattice/issues/535) - Byte-accurate storage-usage visibility + advisory byte-pressure WAL retention policy
 - [F-082](https://github.com/NSTA1/Orleans.Lattice/issues/598) - End-to-end `performance-report.ps1`: provision VM -> measure Layers 1+2 -> deprovision -> update `docs/lattice/performance-single-silo.md`
 - [F-083](https://github.com/NSTA1/Orleans.Lattice/issues/600) - Caller-visible per-call read-path histograms on `LatticeGrain` (`get.duration` / `get_many.duration`) + Grafana panels + `performance-report.ps1` consumption
+- [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-tree pinned WAL placement with `ILatticeAdmin` move surface for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
 - [F-085](https://github.com/NSTA1/Orleans.Lattice/issues/609) - Transport-agnostic WAL saturation back-pressure surface on the core library so callers throttle offered load before silent queueing on the writer-side admission gate
 - [F-086](https://github.com/NSTA1/Orleans.Lattice/issues/610) - Adopt the F-085 saturation back-pressure surface in the Azure-throughput bench silo so the open-loop producer throttles via the kernel TCP window when the storage account saturates
 
@@ -103,6 +103,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 ### Planned / open
 
 - [FX-034](https://github.com/NSTA1/Orleans.Lattice/issues/633) - Batch / multi-partition WAL move (extend `ExecuteWalMoveAsync` to accept multiple `(partition, targetProviderKey)` pairs)
+- [FX-035](https://github.com/NSTA1/Orleans.Lattice/issues/634) - Azure SDK retry policy signal-awareness (Phase 4 of FX-033 consumer-coverage audit)
+- [FX-036](https://github.com/NSTA1/Orleans.Lattice/issues/635) - WAL saturation classifier flush-latency input (Phase 3 of FX-033 consumer-coverage audit)
 
 ### Shipped
 
@@ -136,6 +138,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-030](https://github.com/NSTA1/Orleans.Lattice/issues/614) - F-085 saturation classifier flaps `Healthy<->Saturated` under bursty per-partition WAL drain, leaving the `Throttled` advisory state effectively unobservable
 - [FX-031](https://github.com/NSTA1/Orleans.Lattice/issues/615) - Azure-throughput cohort runner counts cross-cohort residual-grain exceptions toward the current cohort's verdict, inflating HEALTHY runs to DEGRADED
 - [FX-032](https://github.com/NSTA1/Orleans.Lattice/issues/620) - WAL saturation surface leaks `failed=N` under single-account 409-burst regime (set-point silent loss, set-many in-flight tail, set-many-atomic saga-retry burndown) and has no Grafana panels
+- [FX-033](https://github.com/NSTA1/Orleans.Lattice/issues/629) - WAL saturation back-pressure consumer-coverage gaps after FX-032 (admission cap, saga quiesce wait, ingest channel, classifier sensitivity)
 
 ## Gaps & potential additions
 
