@@ -370,6 +370,26 @@ var options = new AzureTableWalStorageOptions
 
 When the deadline fires, the commit's batch and every later still-pending commit on the shard fault with a `TimeoutException` (the same fault-the-window semantics as a transaction error, because their tail offsets are now stale relative to the recovered `TAIL`), the worker keeps draining new arrivals, and the `orleans.lattice.provider.phase2.commit.timeouts` counter increments once - tagged `tree` and `shard` - so operators can prove whether the deadline ever fired. Size it comfortably above the observed phase-2 commit p99 (so healthy commits never trip it) but below the silo-level activation / request timeout (so a wedged shard is broken before it cascades). `Validate()` rejects a zero or negative value.
 
+#### Honoring the WAL saturation signal in the SDK retry loop
+
+`RetryNetworkTimeout` and `MaxRetries` bound a *single* request's retry budget, but they do not look beyond the request itself. Once the silo-scoped WAL saturation classifier has escalated to `Saturated` - because admission depth is at cap, the dispatch-timeout counter has tripped, or the provider-failure counter has tripped - every in-flight Azure SDK retry is unproductive: it occupies a WAL slot for the rest of its retry budget while the writer has already concluded the storage tier is shedding load. The same provider-failure path that drove the classifier into `Saturated` will fire again on the next attempt; the SDK is just burning wall-clock and admission-slot time before that happens.
+
+`AzureTableWalStorageOptions.HonorSaturationSignal` (default `true`) attaches a per-retry `HttpPipelinePolicy` that consults `IWalSaturationSignal.GetAggregateState()` on every retry attempt and, on `Saturated`, stamps the request with a synthetic 503 + `Retry-After: 0` response so the SDK's outer retry policy exits the chain deterministically. The first attempt for any request always reaches the network (the policy never short-circuits a request that has not yet failed at least once), so the healthy steady state is unaffected. The caller's catch site sees the same `RequestFailedException` shape as a retry-exhausted failure, which the writer's existing provider-failure-count path attributes to the third Saturated classifier input - looping the failure back through the saturation classifier instead of waiting out the full SDK retry budget.
+
+```csharp verify
+var options = new AzureTableWalStorageOptions
+{
+    ConnectionString = "UseDevelopmentStorage=true",
+    // Default: true. Set to false to restore the historical unguarded
+    // SDK retry behaviour; the provider then never attaches the
+    // saturation-aware policy and the SDK retries every transient
+    // fault to the configured budget regardless of saturation state.
+    HonorSaturationSignal = false,
+};
+```
+
+The policy operates on the silo-scoped *aggregate* saturation state rather than per-tree, because the HTTP pipeline message has no per-call tree context (the policy sits below the `TableClient` abstraction). For a single-tree silo, aggregate equals per-tree exactly; for a multi-tree silo sharing one Azure Tables account, saturation episodes are almost always correlated because the storage account is the shared resource that throttles. The `orleans.lattice.provider.retry.short_circuited` counter increments once per abandoned retry, tagged `status=503`, so operators can prove whether the policy ever fired and how often. Hosts that build their own `TableServiceClient` and pass it via `PreBuiltServiceClient` bypass the policy entirely - the host owns the pipeline in that mode.
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.

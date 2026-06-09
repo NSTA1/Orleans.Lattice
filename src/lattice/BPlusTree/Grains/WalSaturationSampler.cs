@@ -60,6 +60,17 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     // inherited from the static counter on a late-starting silo).
     private readonly ConcurrentDictionary<(string TreeId, int Shard), long> _priorProviderFailureCounts
         = new();
+
+    // Per-(tree, shard) prior reading of the cumulative flush-latency
+    // trip counter; same per-tick delta-from-prior pattern as the
+    // dispatch-timeout / provider-failure counters above. Feeds the
+    // fourth Saturated branch (sustained slow flushes on small-batch
+    // workloads where the indirect HasParkedCallers signal is too
+    // thin). First-tick deltas are skipped for the same baseline
+    // reason - no double-counting of historical trips inherited from
+    // the static counter on a late-starting silo.
+    private readonly ConcurrentDictionary<(string TreeId, int Shard), long> _priorFlushLatencyTripCounts
+        = new();
     private bool _priorInitialised;
 
     // Per-tree wall-clock of the most recent tick at which the
@@ -73,6 +84,21 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     // matching the bounded cardinality of the underlying
     // WalSaturationSignal._states dictionary.
     private readonly Dictionary<string, DateTimeOffset> _lastSaturatedTickUtc
+        = new(StringComparer.Ordinal);
+
+    // Per-tree consecutive-window counter for the flush-latency
+    // classifier input. Incremented on every sampler tick
+    // whose per-window flush-latency trip delta is non-zero for the
+    // tree and reset to zero on every tick whose delta is zero. The
+    // classifier escalates the tree to Saturated via the flush-latency
+    // branch when the counter reaches
+    // LatticeOptions.WalSaturationFlushLatencySampleWindows. Single-
+    // threaded (sampler thread only); no concurrency primitives
+    // needed. Grows monotonically with the set of trees ever observed
+    // with the flush-latency input enabled, matching the bounded
+    // cardinality of the underlying WalSaturationSignal._states
+    // dictionary.
+    private readonly Dictionary<string, int> _consecutiveFlushLatencyWindows
         = new(StringComparer.Ordinal);
 
     private CancellationTokenSource? _loopCts;
@@ -290,20 +316,106 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             acc.ProviderFailureDeltaInWindow += delta;
             acc.AttributedShard ??= shard;
         }
-        _priorInitialised = true;
 
-        if (perTree.Count == 0) return;
+        // Snapshot the per-(tree, shard) cumulative flush-latency trip
+        // counts and compute the per-window delta from the previous
+        // reading. Mirrors the dispatch-timeout / provider-failure
+        // loops above by construction; the writer-side increment site
+        // (WalShardGrain after WalAppendProviderDuration.Record) is
+        // gated on LatticeOptions.WalSaturationFlushLatencyThreshold
+        // being non-null, so when the input is disabled the map stays
+        // empty and this loop is a no-op. Feeds the fourth Saturated
+        // branch in Classify via the per-tree consecutive-window
+        // counter on _consecutiveFlushLatencyWindows.
+        foreach (var kv in WalCommitLogWriter._flushLatencyTripCounts)
+        {
+            var (treeId, shard) = kv.Key;
+            var current = kv.Value;
+            var prior = _priorFlushLatencyTripCounts.TryGetValue(kv.Key, out var p) ? p : 0L;
+            _priorFlushLatencyTripCounts[kv.Key] = current;
+            if (!_priorInitialised) continue;
+
+            var delta = current - prior;
+            if (delta <= 0) continue;
+
+            if (!perTree.TryGetValue(treeId, out var acc))
+            {
+                acc = new TreeAccumulator { TreeId = treeId };
+                perTree[treeId] = acc;
+            }
+            acc.FlushLatencyTripDeltaInWindow += delta;
+            acc.AttributedShard ??= shard;
+        }
+        _priorInitialised = true;
 
         var opts = _options.Get(string.Empty);
         var dispatchThreshold = opts.WalSaturationDispatchTimeoutThreshold;
         var providerFailureThreshold = opts.WalSaturationProviderFailureRateThreshold;
         var throttledRatio = opts.WalSaturationThrottledRatio;
         var recoveryWindow = opts.WalSaturationRecoveryWindow;
+        var flushLatencyEnabled = opts.WalSaturationFlushLatencyThreshold is not null;
+        var flushLatencySampleWindows = opts.WalSaturationFlushLatencySampleWindows;
         var observedAt = _time.GetUtcNow();
+
+        // Reset the per-tree consecutive-window counter for every tree
+        // whose flush-latency delta this tick was zero, so the
+        // classifier's escalation requires CONSECUTIVE non-zero
+        // windows. Iterates a snapshot of the keys so the in-loop
+        // mutations are safe; the counter dictionary is bounded by the
+        // tree cardinality. Skipped entirely when the flush-latency
+        // input is disabled (the dictionary stays empty by
+        // construction in that case because the writer-side increment
+        // site is also gated).
+        if (flushLatencyEnabled && _consecutiveFlushLatencyWindows.Count > 0)
+        {
+            // Snapshot keys to avoid mutation-during-enumeration.
+            var staleKeys = default(List<string>);
+            foreach (var treeId in _consecutiveFlushLatencyWindows.Keys)
+            {
+                if (!perTree.TryGetValue(treeId, out var acc) || acc.FlushLatencyTripDeltaInWindow == 0)
+                {
+                    staleKeys ??= new List<string>();
+                    staleKeys.Add(treeId);
+                }
+            }
+            if (staleKeys is not null)
+            {
+                foreach (var treeId in staleKeys)
+                {
+                    _consecutiveFlushLatencyWindows[treeId] = 0;
+                }
+            }
+        }
+
+        if (perTree.Count == 0) return;
 
         foreach (var acc in perTree.Values)
         {
-            var newState = Classify(acc, throttledRatio, dispatchThreshold, providerFailureThreshold);
+            // Maintain the per-tree consecutive-window counter for the
+            // flush-latency input. Increment on every tick whose per-
+            // window flush-latency trip delta is non-zero; the stale-
+            // tree reset sweep above already handled trees whose
+            // delta was zero this tick (counter reset to 0) or whose
+            // delta was missing entirely (no perTree entry). The
+            // counter is read by Classify and gates the fourth
+            // Saturated branch.
+            if (flushLatencyEnabled && acc.FlushLatencyTripDeltaInWindow > 0)
+            {
+                var prior = _consecutiveFlushLatencyWindows.TryGetValue(acc.TreeId, out var c) ? c : 0;
+                _consecutiveFlushLatencyWindows[acc.TreeId] = prior + 1;
+            }
+            var flushLatencyConsecutiveWindows = flushLatencyEnabled
+                && _consecutiveFlushLatencyWindows.TryGetValue(acc.TreeId, out var cw)
+                ? cw
+                : 0;
+
+            var newState = Classify(
+                acc,
+                throttledRatio,
+                dispatchThreshold,
+                providerFailureThreshold,
+                flushLatencyConsecutiveWindows,
+                flushLatencyEnabled ? flushLatencySampleWindows : 0);
 
             // Apply the recovery-window upgrade. When the current-
             // tick classification is Healthy but the tree was observed
@@ -396,25 +508,33 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// Classifies a tree's per-tick accumulator into the three-state
     /// <see cref="WalSaturationState"/> regime. Saturated wins over
     /// Throttled which wins over Healthy. Saturated is triggered by
-    /// any of three independent signals (in the order they are
+    /// any of four independent signals (in the order they are
     /// evaluated, but the choice is symmetric):
-    /// dispatch-timeout-rate, provider-failure-rate, or admission
-    /// semaphore at-cap with parked callers. The provider-failure-
-    /// rate trigger is disabled when
+    /// dispatch-timeout-rate, provider-failure-rate, sustained
+    /// flush-latency, or admission semaphore at-cap with parked
+    /// callers. The provider-failure-rate trigger is disabled when
     /// <paramref name="providerFailureThreshold"/> is zero (the
-    /// documented sentinel).
+    /// documented sentinel); the flush-latency trigger is disabled
+    /// when <paramref name="flushLatencySampleWindows"/> is zero (the
+    /// internal sentinel used when
+    /// <see cref="LatticeOptions.WalSaturationFlushLatencyThreshold"/>
+    /// is <c>null</c>).
     /// </summary>
     private static WalSaturationState Classify(
         TreeAccumulator acc,
         double throttledRatio,
         int dispatchThreshold,
-        int providerFailureThreshold)
+        int providerFailureThreshold,
+        int flushLatencyConsecutiveWindows,
+        int flushLatencySampleWindows)
     {
         // Saturated wins: dispatch-timeout threshold crossed OR
         // provider-failure threshold crossed (when enabled) OR
-        // semaphore at cap with parked callers.
+        // flush-latency consecutive-window threshold crossed (when
+        // enabled) OR semaphore at cap with parked callers.
         if (acc.DispatchTimeoutDeltaInWindow >= dispatchThreshold
             || (providerFailureThreshold > 0 && acc.ProviderFailureDeltaInWindow >= providerFailureThreshold)
+            || (flushLatencySampleWindows > 0 && flushLatencyConsecutiveWindows >= flushLatencySampleWindows)
             || acc.HasParkedCallers)
         {
             return WalSaturationState.Saturated;
@@ -434,6 +554,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         public bool HasParkedCallers;
         public long DispatchTimeoutDeltaInWindow;
         public long ProviderFailureDeltaInWindow;
+        public long FlushLatencyTripDeltaInWindow;
         public int? AttributedPartition;
         public int? AttributedShard;
     }

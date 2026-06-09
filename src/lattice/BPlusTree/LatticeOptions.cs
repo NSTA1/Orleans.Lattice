@@ -1489,6 +1489,106 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalSaturationRecoveryWindow = TimeSpan.FromSeconds(1);
 
     /// <summary>
+    /// Optional per-flush latency threshold that, when crossed for
+    /// <see cref="WalSaturationFlushLatencySampleWindows"/> consecutive
+    /// sampler ticks, escalates the affected tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// regardless of admission-semaphore depth, dispatch-timeout count,
+    /// or provider-failure count. Defaults to <c>null</c> (disabled);
+    /// when set, the classifier gains a fourth Saturated input on top of
+    /// the existing depth-ratio, dispatch-timeout, and provider-failure
+    /// branches.
+    /// <para>
+    /// <b>Why a flush-latency input.</b> The original three classifier
+    /// inputs leave a workload-shape blind spot on small-batch
+    /// workloads (e.g. single-entry <c>SetAsync</c>): the per-call batch
+    /// entries are 1, so the per-partition WAL admission semaphore
+    /// never fills to the
+    /// <see cref="WalSaturationThrottledRatio"/> cap and the depth-
+    /// ratio path never trips; the writer-side
+    /// <see cref="WalAppendDispatchTimeout"/> takes longer to expire
+    /// than the wedge takes to form; and terminal provider failures
+    /// happen late in the regime (after the SDK has exhausted internal
+    /// retries). Sustained slow flushes are the leading-edge signal on
+    /// these workloads. When the per-shard
+    /// <c>orleans.lattice.wal.append.provider.duration</c> observation
+    /// crosses this threshold the writer increments a per-(tree, shard)
+    /// trip counter; the sampler reads the per-window delta and applies
+    /// the consecutive-window check described on
+    /// <see cref="WalSaturationFlushLatencySampleWindows"/>.
+    /// </para>
+    /// <para>
+    /// <b>Why opt-in and consecutive-window-gated.</b> The default
+    /// classifier-input set (admission depth, dispatch-timeout count,
+    /// provider-failure count) already closes the canonical large-batch
+    /// regime via the indirect <c>HasParkedCallers</c> signal that the
+    /// writer-side admission gate produces under saturation. The
+    /// flush-latency input is a belt-and-braces leading-edge surface
+    /// for workload shapes where the indirect signal is too thin; it
+    /// stays disabled by default so a single flush-latency spike on a
+    /// healthy host cannot flip the regime. The consecutive-window
+    /// requirement defends against single-shot flush-latency outliers
+    /// (a GC pause, a transient transport hiccup) so only sustained
+    /// slow-flush regimes escalate.
+    /// </para>
+    /// <para>
+    /// <b>Sizing.</b> Pick a threshold well above the steady-state
+    /// p99 of <c>orleans.lattice.wal.append.provider.duration</c> on the
+    /// healthy host so routine latency variance never trips it. A
+    /// typical Azure Tables operating point sits at sub-100 ms p99 on a
+    /// well-provisioned account; a threshold of 500 ms - 1 s with
+    /// <see cref="WalSaturationFlushLatencySampleWindows"/> = 3 yields a
+    /// 600 ms - 3 s detection latency at the default
+    /// <see cref="WalSaturationSampleInterval"/> (200 ms) - faster than
+    /// the writer-side <see cref="WalAppendDispatchTimeout"/> default
+    /// (30 s) and still inside the
+    /// <see cref="WalAdmissionSaturationWaitBudget"/> default (5 s),
+    /// so the new input arms the admission gate's saturation refusal
+    /// before the dispatch deadline would otherwise surface as a
+    /// timeout.
+    /// </para>
+    /// <para>
+    /// Set to <c>null</c> (the default) to disable the input entirely;
+    /// the classifier observes its historical three-input behaviour
+    /// exactly. The registered options validator rejects any
+    /// non-positive value when the option is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? WalSaturationFlushLatencyThreshold { get; set; }
+
+    /// <summary>
+    /// Number of consecutive sampler ticks during which the per-(tree,
+    /// shard) <c>orleans.lattice.wal.append.provider.duration</c>
+    /// observation must exceed
+    /// <see cref="WalSaturationFlushLatencyThreshold"/> before the
+    /// classifier escalates the tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/> via
+    /// the flush-latency branch. Defaults to
+    /// <see cref="DefaultWalSaturationFlushLatencySampleWindows"/> (3),
+    /// which at the default <see cref="WalSaturationSampleInterval"/>
+    /// (200 ms) means the trip must persist for 600 ms before the
+    /// regime escalates - long enough to suppress single-shot
+    /// flush-latency spikes (GC pauses, transient transport hiccups)
+    /// while still leading the writer-side
+    /// <see cref="WalAppendDispatchTimeout"/> by an order of magnitude.
+    /// <para>
+    /// Has no effect when
+    /// <see cref="WalSaturationFlushLatencyThreshold"/> is <c>null</c>
+    /// (the flush-latency input is disabled entirely). When the
+    /// threshold is set, the classifier maintains a per-tree counter
+    /// that increments on every sampler tick whose per-window flush-
+    /// latency trip delta is non-zero, and resets to zero on every
+    /// tick whose delta is zero. The Saturated escalation fires when
+    /// the counter reaches this value. Must be greater than or equal
+    /// to 1.
+    /// </para>
+    /// </summary>
+    public int WalSaturationFlushLatencySampleWindows { get; set; } = DefaultWalSaturationFlushLatencySampleWindows;
+
+    /// <summary>Default value for <see cref="WalSaturationFlushLatencySampleWindows"/> (3).</summary>
+    public const int DefaultWalSaturationFlushLatencySampleWindows = 3;
+
+    /// <summary>
     /// Wall-clock budget the WAL writer admission gate
     /// (<c>PartitionTracker.AcquireAsync</c>) spends parked on
     /// <see cref="Orleans.Lattice.IWalSaturationSignal.WaitForHealthyAsync(string, System.Threading.CancellationToken)"/>

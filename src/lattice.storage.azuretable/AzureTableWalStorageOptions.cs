@@ -483,6 +483,75 @@ public sealed class AzureTableWalStorageOptions
     public static readonly TimeSpan DefaultPhaseTwoCommitTimeout = TimeSpan.FromSeconds(3);
 
     /// <summary>
+    /// When <see langword="true"/> (the default), the provider attaches
+    /// a <see cref="SaturationAwareRetryPolicy"/> to the constructed
+    /// <see cref="TableClientOptions"/> so the Azure SDK's internal
+    /// retry loop short-circuits on retries whenever the silo-scoped
+    /// <see cref="IWalSaturationSignal"/> reports
+    /// <see cref="WalSaturationState.Saturated"/>. Has no effect when
+    /// no <see cref="IWalSaturationSignal"/> is registered in DI (the
+    /// single-node / unit-test deployment shape that does not call
+    /// <c>AddLattice</c>; the provider falls back to the historical
+    /// unguarded behaviour with no policy attached).
+    /// <para>
+    /// <b>Why honor the signal.</b> Under the canonical Azure Tables
+    /// single-account 409-Conflict regime the <c>Azure.Data.Tables</c>
+    /// SDK's internal retry policy ignores the silo's drain
+    /// <see cref="System.Threading.CancellationToken"/> once the call
+    /// has handed off to the underlying <c>Socket.SendAsync</c>. This
+    /// produces a post-producer-stop signature where the saturation
+    /// classifier and writer-side admission gate release cleanly but
+    /// the SDK's retry queue keeps re-issuing the same in-flight
+    /// transactions, polluting the silo's drain wall-clock and the
+    /// stall-watchdog with hundreds of parked async frames. The
+    /// signal-aware policy abandons each retry as soon as the
+    /// classifier escalates the regime, looping the failure back
+    /// through the writer's provider-failure-count path on the next
+    /// sampler tick instead of waiting out the SDK's full retry
+    /// budget.
+    /// </para>
+    /// <para>
+    /// <b>What changes on a saturated retry.</b> The policy stamps a
+    /// synthetic 503 <see cref="Azure.Response"/> with a zero
+    /// <c>Retry-After</c> onto the in-flight message and returns
+    /// without invoking the rest of the pipeline. The SDK's outer
+    /// retry policy observes the 503 and exits the retry chain; the
+    /// caller's catch site sees the same
+    /// <see cref="Azure.RequestFailedException"/> shape it would see
+    /// for an SDK-exhausted retry, which the writer's existing
+    /// provider-failure-count path attributes to the third Saturated
+    /// classifier input. The
+    /// <c>orleans.lattice.provider.retry.short_circuited</c> counter
+    /// increments once per short-circuited attempt so operators can
+    /// prove the policy is doing its job.
+    /// </para>
+    /// <para>
+    /// <b>First attempts are never short-circuited.</b> Only retries
+    /// are abandoned; a fresh request always reaches the network at
+    /// least once, even under
+    /// <see cref="WalSaturationState.Saturated"/>. This preserves
+    /// the steady-state hot path exactly and keeps the policy purely
+    /// additive on the healthy path.
+    /// </para>
+    /// <para>
+    /// <b>Opt-out.</b> Set to <see langword="false"/> to restore the
+    /// historical unguarded retry behaviour: the provider does not
+    /// attach the policy regardless of whether
+    /// <see cref="IWalSaturationSignal"/> is registered, and the
+    /// SDK's internal retry policy runs unmodified. Operators who
+    /// front a pre-built <see cref="ServiceClient"/> own the policy
+    /// list on the <see cref="TableClientOptions"/> they constructed
+    /// and can attach <see cref="SaturationAwareRetryPolicy"/>
+    /// directly if needed; this option only affects the provider's
+    /// own pipeline construction.
+    /// </para>
+    /// </summary>
+    public bool HonorSaturationSignal { get; set; } = DefaultHonorSaturationSignal;
+
+    /// <summary>Default value for <see cref="HonorSaturationSignal"/> (<see langword="true"/>; the policy is purely additive so opt-in is the safe default).</summary>
+    public const bool DefaultHonorSaturationSignal = true;
+
+    /// <summary>
     /// Validates that exactly one authentication mode is configured and
     /// that <see cref="TableName"/> is non-empty. Called by the provider
     /// at first use.
@@ -585,8 +654,18 @@ public sealed class AzureTableWalStorageOptions
     /// <see cref="ServiceClient"/> verbatim when that mode is in use.
     /// Called once per provider instance at first use; the resulting
     /// client is reused for the lifetime of the provider.
+    /// <para>
+    /// When <paramref name="saturationSignal"/> is non-<c>null</c> and
+    /// <see cref="HonorSaturationSignal"/> is <see langword="true"/>,
+    /// the provider attaches a
+    /// <see cref="SaturationAwareRetryPolicy"/> to the constructed
+    /// pipeline at <see cref="HttpPipelinePosition.PerRetry"/>; see
+    /// the option's documentation for the regime details. Skipped in
+    /// pre-built <see cref="ServiceClient"/> mode (the host owns the
+    /// pipeline).
+    /// </para>
     /// </summary>
-    internal TableServiceClient BuildServiceClient()
+    internal TableServiceClient BuildServiceClient(IWalSaturationSignal? saturationSignal = null)
     {
         Validate();
 
@@ -640,6 +719,25 @@ public sealed class AzureTableWalStorageOptions
         // RetryAttemptTrackingPolicy.Instance themselves if they want
         // the counter populated.
         clientOptions.AddPolicy(RetryAttemptTrackingPolicy.Instance, HttpPipelinePosition.PerRetry);
+
+        // Layered alongside RetryAttemptTrackingPolicy for the same
+        // reason: PerRetry attachment AFTER the host's
+        // ConfigureClientOptions callback so the host cannot
+        // accidentally drop the saturation short-circuit by replacing
+        // the policy list wholesale. Purely additive: never replaces
+        // clientOptions.Retry. Only attached when the host both
+        // registered an IWalSaturationSignal in DI (the AddLattice
+        // path) and left HonorSaturationSignal at its default; opt
+        // out by setting HonorSaturationSignal = false. Hosts using
+        // the pre-built ServiceClient mode (the early return above)
+        // attach SaturationAwareRetryPolicy themselves if they want
+        // the short-circuit.
+        if (HonorSaturationSignal && saturationSignal is not null)
+        {
+            clientOptions.AddPolicy(
+                new SaturationAwareRetryPolicy(saturationSignal),
+                HttpPipelinePosition.PerRetry);
+        }
 
         if (!string.IsNullOrWhiteSpace(ConnectionString))
         {
