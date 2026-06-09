@@ -1478,7 +1478,8 @@ internal sealed partial class ShardRootGrain(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null)
+        string? continuationToken = null,
+        LatticePredicateNode? predicate = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
@@ -1507,8 +1508,9 @@ internal sealed partial class ShardRootGrain(
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids transferring keys that would be
-            // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken);
+            // discarded here. The optional predicate is evaluated inside the
+            // leaf so non-matching values never cross the wire.
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken, predicate: predicate);
 
             foreach (var key in leafKeys)
             {
@@ -1549,7 +1551,8 @@ internal sealed partial class ShardRootGrain(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null)
+        string? continuationToken = null,
+        LatticePredicateNode? predicate = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
@@ -1579,7 +1582,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as beforeExclusive so the leaf filters
             // at the source - avoids transferring keys that would be
             // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken, predicate: predicate);
 
             // Walk the leaf's keys in reverse order.
             for (int i = leafKeys.Count - 1; i >= 0; i--)
@@ -1622,7 +1625,8 @@ internal sealed partial class ShardRootGrain(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null)
+        string? continuationToken = null,
+        LatticePredicateNode? predicate = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
@@ -1650,7 +1654,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken);
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken, predicate: predicate);
 
             foreach (var entry in leafEntries)
             {
@@ -1691,7 +1695,8 @@ internal sealed partial class ShardRootGrain(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null)
+        string? continuationToken = null,
+        LatticePredicateNode? predicate = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
@@ -1719,7 +1724,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as beforeExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken);
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken, predicate: predicate);
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
             {
@@ -1764,7 +1769,8 @@ internal sealed partial class ShardRootGrain(
         int pageSize,
         string? continuationToken,
         int[] sortedSlots,
-        int virtualShardCount)
+        int virtualShardCount,
+        LatticePredicateNode? predicate = null)
     {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
@@ -1795,7 +1801,7 @@ internal sealed partial class ShardRootGrain(
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken);
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken, predicate: predicate);
 
             foreach (var key in leafKeys)
             {
@@ -1824,7 +1830,8 @@ internal sealed partial class ShardRootGrain(
         int pageSize,
         string? continuationToken,
         int[] sortedSlots,
-        int virtualShardCount)
+        int virtualShardCount,
+        LatticePredicateNode? predicate = null)
     {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
@@ -1855,7 +1862,7 @@ internal sealed partial class ShardRootGrain(
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken);
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken, predicate: predicate);
 
             foreach (var entry in leafEntries)
             {

@@ -2307,7 +2307,7 @@ internal sealed partial class BPlusLeafGrain(
         await PublishDigestUpwardInlineAsync();
     }
 
-    public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -2350,7 +2350,8 @@ internal sealed partial class BPlusLeafGrain(
                 var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
                 if (status == TxStatus.Committed)
                 {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
+                        && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
                         keys.Add(key);
                     continue;
                 }
@@ -2364,6 +2365,9 @@ internal sealed partial class BPlusLeafGrain(
             }
 
             if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                continue;
+
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
                 continue;
 
             keys.Add(key);
@@ -2381,6 +2385,7 @@ internal sealed partial class BPlusLeafGrain(
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
             keys.Add(key);
         }
         keys.Sort(StringComparer.Ordinal);
@@ -2392,7 +2397,7 @@ internal sealed partial class BPlusLeafGrain(
         return keys;
     }
 
-    public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -2424,7 +2429,8 @@ internal sealed partial class BPlusLeafGrain(
                 var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
                 if (status == TxStatus.Committed)
                 {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
+                        && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
                         entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
                     continue;
                 }
@@ -2433,6 +2439,9 @@ internal sealed partial class BPlusLeafGrain(
             }
 
             if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                continue;
+
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
                 continue;
 
             entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
@@ -2450,6 +2459,7 @@ internal sealed partial class BPlusLeafGrain(
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
         }
         entries.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));

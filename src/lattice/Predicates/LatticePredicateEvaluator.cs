@@ -224,6 +224,16 @@ internal static class LatticePredicateEvaluator
 
     private static bool TryGetProperty(JsonElement obj, ReadOnlySpan<char> name, out JsonElement value)
     {
+        // Fast path: ordinal lookup straight off the parsed metadata - no
+        // per-property name string is materialized. This is the common case
+        // because the predicate member path is the CLR property name and the
+        // default JSON serialization preserves that casing.
+        if (obj.TryGetProperty(name, out value))
+            return true;
+
+        // Fallback: case-insensitive match, reached only on an ordinal miss
+        // (e.g. the serializer applied a camelCase naming policy). Only here
+        // do we pay the per-property name allocation, and only until a match.
         foreach (var property in obj.EnumerateObject())
         {
             if (name.Equals(property.Name.AsSpan(), StringComparison.OrdinalIgnoreCase))

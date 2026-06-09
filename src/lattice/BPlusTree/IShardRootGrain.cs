@@ -197,7 +197,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live keys in <em>reverse</em> sorted order,
@@ -209,7 +210,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in this shard's B+ tree in sorted order,
@@ -221,7 +223,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in <em>reverse</em> sorted order,
@@ -233,7 +236,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns the <see cref="GrainId"/> of the leftmost leaf in this shard's B+ tree,
@@ -627,7 +631,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         int pageSize,
         string? continuationToken,
         int[] sortedSlots,
-        int virtualShardCount);
+        int virtualShardCount,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in this shard whose virtual slot
@@ -650,7 +655,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         int pageSize,
         string? continuationToken,
         int[] sortedSlots,
-        int virtualShardCount);
+        int virtualShardCount,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     // ==========================================================================
     //  Online shadow-forwarding primitive

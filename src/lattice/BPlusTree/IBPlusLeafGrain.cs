@@ -469,7 +469,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// strictly less than that value are returned. These parameters support continuation-token
     /// pagination to avoid transferring keys that will be discarded by the caller.
     /// </summary>
-    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
+    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns the sorted list of live (non-tombstoned) key-value pairs in this leaf
@@ -480,7 +480,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// support continuation-token pagination to avoid transferring values that will be
     /// discarded by the caller.
     /// </summary>
-    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
+    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Removes tombstones whose wall-clock age exceeds <paramref name="gracePeriod"/>.

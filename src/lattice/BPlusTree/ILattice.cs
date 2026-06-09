@@ -208,6 +208,17 @@ public interface ILattice : IGrainWithStringKey
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="KeysAsync"/>, but evaluates the server-side predicate IR
+    /// <paramref name="predicate"/> against each candidate value's JSON document
+    /// view inside the owning leaf, yielding only the <b>keys</b> whose value
+    /// matches. No values cross the wire. The predicate travels as an explicit
+    /// argument (not ambient state), so it is applied consistently on every
+    /// per-shard page and reconciliation drain across the whole scan.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    IAsyncEnumerable<string> KeysWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns all live key-value entries in the tree as an ordered async stream.
     /// Entries are returned in lexicographic key order (or reverse if <paramref name="reverse"/> is <c>true</c>).
     /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
@@ -219,6 +230,18 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="EntriesAsync"/>, but evaluates the server-side predicate IR
+    /// <paramref name="predicate"/> against each candidate value's JSON document
+    /// view inside the owning leaf, yielding only the entries whose value matches.
+    /// Non-matching values are dropped server-side before paging. The predicate
+    /// travels as an explicit argument (not ambient state), so it is applied
+    /// consistently on every per-shard page and reconciliation drain across the
+    /// whole scan.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Bulk-loads key-value pairs into an empty tree, building leaves and
