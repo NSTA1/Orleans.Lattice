@@ -890,6 +890,74 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <summary>
+    /// Conditional bulk write: commits only the entries whose <b>current</b>
+    /// stored value satisfies <paramref name="predicate"/>, evaluated once
+    /// here at write time against each key's committed JSON document view. A
+    /// key with no live committed value is treated as non-matching and is
+    /// skipped. The matched entries are committed through the same batched
+    /// commit path as <see cref="SetManyAsync"/> (so replication ships an
+    /// ordinary per-key Set for each written entry and no predicate is
+    /// re-evaluated downstream); the returned <see cref="ConditionalSetManyResult.WrittenKeys"/>
+    /// reports exactly the committed subset.
+    /// </summary>
+    public async Task<ConditionalSetManyResult> SetManyWherePredicateAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
+        {
+            return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
+        }
+
+        // Guard pass: keep only entries whose current committed value matches
+        // the predicate. We allocate the matched/written lists lazily on the
+        // first hit so an all-guarded-out batch stays allocation-free past the
+        // single dictionary probe per key.
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        List<KeyValuePair<string, byte[]>>? matched = null;
+        List<string>? writtenKeys = null;
+        foreach (var entry in entries)
+        {
+            if (Cache.TryGetRow(entry.Key, out var lww)
+                && !lww.IsTombstone
+                && !lww.IsExpired(nowTicks)
+                && LatticePredicateEvaluator.Matches(lww.Value, predicate))
+            {
+                (matched ??= new List<KeyValuePair<string, byte[]>>(entries.Count)).Add(entry);
+                (writtenKeys ??= new List<string>(entries.Count)).Add(entry.Key);
+            }
+        }
+
+        if (matched is null)
+        {
+            return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
+        }
+
+        SplitResult? split;
+        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        if (splitInProgress)
+        {
+            // Mirror SetManyAsync's split-in-progress fallback: the split
+            // recovery in SetCoreAsync forwards mid-batch entries across two
+            // grains, so the matched entries are committed one at a time.
+            SplitResult? lastSplit = null;
+            foreach (var entry in matched)
+            {
+                var s = await SetAsync(entry.Key, entry.Value);
+                if (s is not null)
+                    lastSplit = s;
+            }
+            split = lastSplit;
+        }
+        else
+        {
+            split = await CommitSetManyAsync(matched);
+        }
+
+        return new ConditionalSetManyResult { Split = split, WrittenKeys = writtenKeys! };
+    }
+
+    /// <summary>
     /// Per-call threshold above which <see cref="CommitSetManyAsync"/>
     /// rents the <see cref="WalRecord"/> buffer from
     /// <see cref="ArrayPool{T}.Shared"/>. Below this threshold the

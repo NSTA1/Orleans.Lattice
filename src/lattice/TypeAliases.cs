@@ -102,6 +102,9 @@ internal static class TypeAliases
     // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
 
+    // Conditional bulk write (guard predicate against existing value)
+    internal const string ConditionalSetManyResult = "ol.csm";
+
     // Server-side predicate push-down IR (the allowlisted, wire-stable
     // lowering of a client Expression<Func<T,bool>> evaluated against a
     // value's JSON document view inside the leaf scan).

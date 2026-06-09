@@ -153,6 +153,21 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
+    /// Conditional bulk write: commits only the entries whose <b>current</b>
+    /// stored value satisfies <paramref name="predicate"/> (the guard),
+    /// evaluated once here at write time against each key's committed value.
+    /// A key with no live committed value is treated as non-matching and is
+    /// skipped. Returns a <see cref="ConditionalSetManyResult"/> carrying the
+    /// committed key subset and any resulting <see cref="SplitResult"/>.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same
+    /// interleave-safety reason as <see cref="SetManyAsync"/>.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<ConditionalSetManyResult> SetManyWherePredicateAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate);
+
+    /// <summary>
     /// Marks <paramref name="key"/> as deleted (tombstone).
     /// Returns <c>true</c> if the key was present and live.
     /// <para>

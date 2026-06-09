@@ -112,6 +112,26 @@ public interface ILattice : IGrainWithStringKey
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Conditional bulk write: writes each entry only if the key's
+    /// <b>current</b> stored value satisfies the server-side predicate IR
+    /// <paramref name="predicate"/> (a compare-then-set guard evaluated once,
+    /// server-side, at write time against each key's JSON document view). A key
+    /// with no live stored value is treated as non-matching and is skipped.
+    /// Returns the set of keys actually written, so the caller can distinguish
+    /// guarded-out keys. Committed entries become ordinary Set writes that
+    /// replicate without re-evaluating the predicate.
+    /// <para>
+    /// <b>Not atomic.</b> Like <see cref="SetManyAsync"/>, a partial failure
+    /// leaves the batch half-applied; use the guarded atomic variant when
+    /// all-or-nothing semantics are required. Intended to be reached through
+    /// the typed <c>SetManyAsync&lt;T&gt;</c> extension, which compiles the
+    /// predicate expression to IR.
+    /// </para>
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<IReadOnlyList<string>> SetManyWherePredicateAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Atomically writes <paramref name="entries"/> as a saga: reads each key's
     /// pre-saga value up front, applies the writes sequentially, and
     /// compensates (reverts) any already-committed entries if a subsequent

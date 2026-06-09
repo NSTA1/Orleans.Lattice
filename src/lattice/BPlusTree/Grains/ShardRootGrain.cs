@@ -759,6 +759,220 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> SetManyWherePredicateAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        await PrepareForOperationAsync();
+        ThrowIfRejectedForAnyKey(entries.Select(e => e.Key));
+        RecordWrite();
+
+        if (entries.Count == 0) return Array.Empty<string>();
+
+        // Online-resize shadow-forward of the whole conditional batch in
+        // parallel with the local apply. The destination shard re-evaluates
+        // the guard against its own copy; LWW reconciles any interleaving with
+        // the drain reader. The forwarded written set is discarded - this
+        // shard's local apply is authoritative for the returned set.
+        var forwardTask = TrackShadowForward(
+            (entries, predicate),
+            static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate));
+
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
+        IReadOnlyList<string> written = Array.Empty<string>();
+        var localApplyTs = Stopwatch.GetTimestamp();
+        try
+        {
+            written = await SetManyWhereLocalOnlyAsync(entries, predicate);
+        }
+        catch (Exception ex)
+        {
+            localFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
+        }
+        LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
+            Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+
+        if (localFailure is null)
+        {
+            var forwardTs = Stopwatch.GetTimestamp();
+            try
+            {
+                await forwardTask;
+            }
+            finally
+            {
+                LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
+                    Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            }
+            return written;
+        }
+
+        localFailure.Throw();
+        return written; // unreachable - Throw() always throws.
+    }
+
+    /// <summary>
+    /// Conditional sibling of <see cref="SetManyLocalOnlyAsync"/>: routes each
+    /// entry to its owning leaf, dispatches one
+    /// <see cref="IBPlusLeafGrain.SetManyWherePredicateAsync"/> per leaf, walks
+    /// the resulting split promotions, and forwards only the actually-written
+    /// entries (those that passed the guard) through the per-key adaptive-split
+    /// shadow path. Returns the aggregated written-key set across this shard's
+    /// leaves.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> SetManyWhereLocalOnlyAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+    {
+        // Flat-tree shortcut: every entry routes to the root leaf.
+        if (state.State.RootIsLeaf)
+        {
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var leaf = ResolveLeafGrain(rootLeafId);
+            await RecordAffectedLeafIfPreparedAsync(rootLeafId);
+            var result = await DispatchConditionalLeafBatchWithRetryAsync(leaf, entries, predicate);
+            var split = result.Split;
+            while (split is not null)
+            {
+                split = await PromoteRootAsync(split);
+            }
+            await ForwardWrittenEntriesToShadowIfNeededAsync(entries, result.WrittenKeys);
+            return result.WrittenKeys;
+        }
+
+        // Non-flat tree: group entries by routed leaf, capturing each leaf's
+        // parent path for split promotion (mirrors SetManyLocalOnlyAsync).
+        var buckets = new Dictionary<GrainId, LeafBucket>(capacity: 4);
+        foreach (var entry in entries)
+        {
+            var leafId = await TraverseToLeafAsync(entry.Key);
+            if (!buckets.TryGetValue(leafId, out var bucket))
+            {
+                var parents = await CaptureLeafParentPathAsync(entry.Key);
+                bucket = new LeafBucket(new List<KeyValuePair<string, byte[]>>(), parents);
+                buckets[leafId] = bucket;
+            }
+            bucket.Slice.Add(entry);
+        }
+
+        var orderedBuckets = new List<(GrainId LeafId, LeafBucket Bucket)>(buckets.Count);
+        foreach (var (leafId, bucket) in buckets)
+        {
+            bucket.Leaf = ResolveLeafGrain(leafId);
+            await RecordAffectedLeafIfPreparedAsync(leafId);
+            orderedBuckets.Add((leafId, bucket));
+        }
+
+        var leafDispatchTasks = new Task<ConditionalSetManyResult>[orderedBuckets.Count];
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var bucket = orderedBuckets[i].Bucket;
+            leafDispatchTasks[i] = DispatchConditionalLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice, predicate);
+        }
+        var leafResults = await Task.WhenAll(leafDispatchTasks);
+
+        // Walk split promotion sequentially per leaf (parent routing tables
+        // and the shard root must be mutated serially).
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var split = leafResults[i].Split;
+            if (split is null) continue;
+
+            var parents = orderedBuckets[i].Bucket.Parents;
+            var parentCursor = parents.Count;
+            while (split is not null && parentCursor > 0)
+            {
+                var parentId = parents[--parentCursor];
+                var parentGrain = ResolveInternalGrain(parentId);
+                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
+                InvalidateRoutingTable(parentId);
+            }
+
+            while (split is not null)
+            {
+                split = await PromoteRootAsync(split);
+            }
+        }
+
+        // Forward only the written entries per leaf, and aggregate the written
+        // set. Each leaf's WrittenKeys is an in-order subsequence of its slice,
+        // so the forward uses an alloc-free two-pointer walk.
+        var totalWritten = 0;
+        for (int i = 0; i < leafResults.Length; i++)
+            totalWritten += leafResults[i].WrittenKeys.Count;
+
+        if (totalWritten == 0)
+            return Array.Empty<string>();
+
+        var aggregated = new List<string>(totalWritten);
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var slice = orderedBuckets[i].Bucket.Slice;
+            var writtenKeys = leafResults[i].WrittenKeys;
+            await ForwardWrittenEntriesToShadowIfNeededAsync(slice, writtenKeys);
+            for (int k = 0; k < writtenKeys.Count; k++)
+                aggregated.Add(writtenKeys[k]);
+        }
+        return aggregated;
+    }
+
+    /// <summary>
+    /// Forwards only the written entries of <paramref name="slice"/> through
+    /// the per-key adaptive-split shadow path. <paramref name="writtenKeys"/>
+    /// is an in-order subsequence of <paramref name="slice"/>'s keys (the leaf
+    /// appends matches while iterating the slice in order), so a two-pointer
+    /// walk pairs each written key with its value without an intermediate set.
+    /// </summary>
+    private async Task ForwardWrittenEntriesToShadowIfNeededAsync(
+        List<KeyValuePair<string, byte[]>> slice, IReadOnlyList<string> writtenKeys)
+    {
+        if (writtenKeys.Count == 0) return;
+        var w = 0;
+        for (int i = 0; i < slice.Count && w < writtenKeys.Count; i++)
+        {
+            if (string.Equals(slice[i].Key, writtenKeys[w], StringComparison.Ordinal))
+            {
+                await ForwardLocalWriteToShadowIfNeededAsync(slice[i].Key, slice[i].Value);
+                w++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Conditional sibling of <see cref="DispatchLeafBatchWithRetryAsync"/>:
+    /// dispatches a single per-leaf
+    /// <see cref="IBPlusLeafGrain.SetManyWherePredicateAsync"/> call under the
+    /// same transient-exception retry envelope. Idempotent under LWW: a retry
+    /// re-evaluates the guard against the same committed values and converges
+    /// to the same projection state.
+    /// </summary>
+    private async Task<ConditionalSetManyResult> DispatchConditionalLeafBatchWithRetryAsync(
+        IBPlusLeafGrain leaf,
+        List<KeyValuePair<string, byte[]>> slice,
+        LatticePredicateNode predicate)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            var rpcTs = Stopwatch.GetTimestamp();
+            try
+            {
+                var result = await leaf.SetManyWherePredicateAsync(slice, predicate);
+                LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
+                    Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                return result;
+            }
+            catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
+            {
+                LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
+                    Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            }
+        }
+    }
+
     /// <summary>
     /// Walks root -> ... -> immediate-parent for <paramref name="key"/>,
     /// returning the list of internal ancestors in root-to-immediate-parent

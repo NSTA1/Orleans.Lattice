@@ -176,7 +176,7 @@ public class TypedLatticeExtensionsTests
     {
         var lattice = CreateMock();
         Assert.ThrowsAsync<ArgumentNullException>(
-            () => lattice.SetManyAsync(new List<KeyValuePair<string, TestItem>>(), null!));
+            () => lattice.SetManyAsync(new List<KeyValuePair<string, TestItem>>(), (ILatticeSerializer<TestItem>)null!));
     }
 
     [Test]
@@ -211,6 +211,59 @@ public class TypedLatticeExtensionsTests
 
         await lattice.Received(1).SetManyAsync(
             Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 0));
+    }
+
+    // ── SetManyAsync (conditional / guarded) ────────────────────
+
+    [Test]
+    public async Task SetManyAsync_predicate_compiles_ir_and_dispatches_serialized_entries()
+    {
+        var lattice = CreateMock();
+        lattice.SetManyWherePredicateAsync(
+                Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<LatticePredicateNode>())
+            .Returns(Task.FromResult<IReadOnlyList<string>>(new[] { "a" }));
+        var entries = new List<KeyValuePair<string, TestItem>>
+        {
+            new("a", new TestItem("a", 1)),
+            new("b", new TestItem("b", 2)),
+        };
+
+        var written = await lattice.SetManyAsync<TestItem>(entries, t => t.Score >= 5);
+
+        Assert.That(written, Is.EquivalentTo(new[] { "a" }));
+        await lattice.Received(1).SetManyWherePredicateAsync(
+            Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 2),
+            Arg.Any<LatticePredicateNode>());
+    }
+
+    [Test]
+    public void SetManyAsync_predicate_throws_for_null_entries()
+    {
+        var lattice = CreateMock();
+        var ex = Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAsync<TestItem>(null!, t => t.Score >= 1));
+        Assert.That(ex!.ParamName, Is.EqualTo("entries"));
+    }
+
+    [Test]
+    public void SetManyAsync_predicate_throws_for_null_predicate()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAsync(
+                new List<KeyValuePair<string, TestItem>>(),
+                (System.Linq.Expressions.Expression<Func<TestItem, bool>>)null!));
+    }
+
+    [Test]
+    public void SetManyAsync_predicate_throws_for_null_serializer()
+    {
+        var lattice = CreateMock();
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => lattice.SetManyAsync(
+                new List<KeyValuePair<string, TestItem>>(),
+                t => t.Score >= 1,
+                (ILatticeSerializer<TestItem>)null!));
     }
 
     // ── SetManyAtomicAsync ──────────────────────────────────────

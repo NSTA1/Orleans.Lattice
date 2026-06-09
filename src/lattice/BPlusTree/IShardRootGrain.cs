@@ -170,6 +170,22 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
+    /// Conditional bulk write: routes <paramref name="entries"/> to their
+    /// owning leaves, where each entry is committed only if its <b>current</b>
+    /// stored value satisfies <paramref name="predicate"/> (the guard). Returns
+    /// the set of keys actually written across this shard's leaves so the
+    /// caller can distinguish guarded-out keys. The guard is evaluated once,
+    /// server-side, at write time; committed entries become ordinary Set
+    /// writes that replicate without re-evaluating the predicate.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason as
+    /// <see cref="SetManyAsync"/>.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<IReadOnlyList<string>> SetManyWherePredicateAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate);
+
+    /// <summary>
     /// Marks <paramref name="key"/> as deleted (tombstone).
     /// Returns <c>true</c> if the key was present and live.
     /// </summary>

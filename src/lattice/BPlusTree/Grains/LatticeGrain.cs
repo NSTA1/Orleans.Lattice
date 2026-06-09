@@ -1182,6 +1182,98 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    public async Task<IReadOnlyList<string>> SetManyWherePredicateAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(entries);
+        cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
+
+        await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (entries.Count == 0) return Array.Empty<string>();
+
+        var written = await RetryOnStaleRoutingAsync(
+            (self: this, entries, predicate),
+            static args => args.self.SetManyWhereAsyncCore(args.entries, args.predicate),
+            cancellationToken);
+
+        // Publish one Set event per actually-written key, after all shard
+        // writes have committed, mirroring SetManyAsync's post-commit
+        // publication but scoped to the guarded-in subset.
+        if (written.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+        {
+            for (int i = 0; i < written.Count; i++)
+            {
+                await PublishEventAsync(LatticeTreeEventKind.Set, written[i]);
+            }
+        }
+
+        return written;
+    }
+
+    private async Task<IReadOnlyList<string>> SetManyWhereAsyncCore(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+    {
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+
+        // Group entries by shard, pre-sizing each bucket to the shard-fair
+        // fraction of the batch (capped at 256) - same bounded pre-size shape
+        // as SetManyAsyncCore.
+        var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
+        var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
+        var bucketCapacity = Math.Min(expectedPerShard, 256);
+        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
+        foreach (var entry in entries)
+        {
+            var idx = shardMap.Resolve(entry.Key);
+            if (!shardBuckets.TryGetValue(idx, out var bucket))
+            {
+                bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
+                shardBuckets[idx] = bucket;
+            }
+            bucket.Add(entry);
+        }
+
+        // Fan out the conditional writes per shard and collect each shard's
+        // written-key set.
+        var tasks = new Task<IReadOnlyList<string>>[shardBuckets.Count];
+        var t = 0;
+        foreach (var (shardIdx, bucket) in shardBuckets)
+        {
+            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+            tasks[t++] = WriteToShardAsync(shard, bucket, predicate);
+        }
+        var perShard = await Task.WhenAll(tasks);
+
+        var total = 0;
+        for (int i = 0; i < perShard.Length; i++)
+            total += perShard[i].Count;
+        if (total == 0)
+            return Array.Empty<string>();
+
+        var aggregated = new List<string>(total);
+        for (int i = 0; i < perShard.Length; i++)
+        {
+            var keys = perShard[i];
+            for (int k = 0; k < keys.Count; k++)
+                aggregated.Add(keys[k]);
+        }
+        return aggregated;
+
+        static async Task<IReadOnlyList<string>> WriteToShardAsync(
+            IShardRootGrain shard,
+            List<KeyValuePair<string, byte[]>> entries,
+            LatticePredicateNode predicate)
+        {
+            return await ShardActivationRetry.RunAsync(
+                () => shard.SetManyWherePredicateAsync(entries, predicate));
+        }
+    }
+
     /// <summary>
     /// Atomic multi-key write. Activates a dedicated
     /// <see cref="IAtomicWriteGrain"/> keyed by <c>{treeId}/{operationId}</c>

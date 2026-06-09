@@ -201,6 +201,50 @@ public static class TypedLatticeExtensions
     }
 
     /// <summary>
+    /// Conditional bulk write: serializes <paramref name="entries"/> and writes
+    /// each one only if the key's <b>current</b> stored value of type
+    /// <typeparamref name="T"/> satisfies <paramref name="predicate"/> (a
+    /// compare-then-set guard). The predicate expression is compiled to the
+    /// serializable predicate IR with <paramref name="serializer"/> and pushed
+    /// down to the owning leaves, which evaluate it once at write time against
+    /// each key's current JSON document view; a key with no live value is
+    /// treated as non-matching and skipped. Returns the set of keys actually
+    /// written so the caller can distinguish guarded-out keys.
+    /// <para>
+    /// <b>Not atomic</b> across keys (matches <see cref="SetManyAsync{T}(ILattice, List{KeyValuePair{string, T}}, ILatticeSerializer{T}, CancellationToken)"/>).
+    /// </para>
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<IReadOnlyList<string>> SetManyAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        foreach (var (k, v) in entries)
+            raw.Add(new KeyValuePair<string, byte[]>(k, serializer.Serialize(v)));
+        return lattice.SetManyWherePredicateAsync(raw, ir, cancellationToken);
+    }
+
+    /// <inheritdoc cref="SetManyAsync{T}(ILattice, List{KeyValuePair{string, T}}, Expression{Func{T, bool}}, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<IReadOnlyList<string>> SetManyAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default) =>
+        lattice.SetManyAsync(entries, predicate, JsonLatticeSerializer<T>.Default, cancellationToken);
+
+    /// <summary>
     /// Serializes and atomically writes multiple key-value pairs via the
     /// saga. See <see cref="ILattice.SetManyAtomicAsync"/> for full semantics
     /// (all-or-nothing commit, partial-visibility window, compensation on failure).
