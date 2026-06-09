@@ -390,6 +390,20 @@ var options = new AzureTableWalStorageOptions
 
 The policy operates on the silo-scoped *aggregate* saturation state rather than per-tree, because the HTTP pipeline message has no per-call tree context (the policy sits below the `TableClient` abstraction). For a single-tree silo, aggregate equals per-tree exactly; for a multi-tree silo sharing one Azure Tables account, saturation episodes are almost always correlated because the storage account is the shared resource that throttles. The `orleans.lattice.provider.retry.short_circuited` counter increments once per abandoned retry, tagged `status=503`, so operators can prove whether the policy ever fired and how often. Hosts that build their own `TableServiceClient` and pass it via `PreBuiltServiceClient` bypass the policy entirely - the host owns the pipeline in that mode.
 
+The policy also keeps a short *sticky window* around any `Saturated` observation: `SaturationShortCircuitCooldown` (default `TimeSpan.FromSeconds(2)`) is the wall-clock interval after the last observed `Saturated` tick during which retry attempts continue to short-circuit even if the present aggregate state has decayed to `Throttled` or `Healthy`. The window closes the gap between the sampler's effective `Saturated`-tick lifetime (one `WalSaturationSampleInterval`, default 200 ms) and the Azure SDK's exponential retry spacing (default 800 ms - 3.2 s between attempts): without it, the SDK retry that fires 800 ms after we observed `Saturated` almost always lands in a `Healthy` or `Throttled` window and passes through to the network, burning storage-side capacity the classifier just told us is exhausted. Set the cooldown to `TimeSpan.Zero` to disable the sticky window (policy then only fires while the signal is presently `Saturated`).
+
+```csharp verify
+var optionsWithCooldownOverride = new AzureTableWalStorageOptions
+{
+    ConnectionString = "UseDevelopmentStorage=true",
+    // Default: 2 seconds. Tune up for storage accounts whose
+    // burst-saturation episodes routinely outlive the default
+    // window, or down to TimeSpan.Zero to disable the sticky
+    // behaviour and consult only the present aggregate state.
+    SaturationShortCircuitCooldown = TimeSpan.FromSeconds(5),
+};
+```
+
 ## Testing
 
 The package's unit tests run without any infrastructure. The end-to-end integration tests are tagged `[Category("AzureTableEmulator")]` and require [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) to be running on the default development endpoint.

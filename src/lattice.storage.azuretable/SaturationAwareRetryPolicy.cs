@@ -84,20 +84,61 @@ public sealed class SaturationAwareRetryPolicy : HttpPipelinePolicy
     private const string AttemptMarkerProperty = "Orleans.Lattice.SaturationAwareRetryPolicy.Attempted";
 
     private readonly IWalSaturationSignal _signal;
+    private readonly TimeSpan _cooldown;
+    private readonly TimeProvider _timeProvider;
+
+    // Wall-clock ticks (UTC) of the most recent observation of
+    // WalSaturationState.Saturated by this policy. Long-typed so the
+    // read/write pair can be observed atomically across the per-
+    // pipeline retry threads without a lock; Interlocked.Read /
+    // Interlocked.Exchange guarantee tear-free reads on 32-bit hosts.
+    // Sentinel long.MinValue means "never observed Saturated", chosen
+    // so the cooldown predicate (now - lastSat >= cooldown) is trivially
+    // satisfied on a fresh policy with any non-negative cooldown.
+    private long _lastSaturatedObservationTicks = long.MinValue;
 
     /// <summary>
     /// Constructs a policy that consults <paramref name="signal"/> on
     /// every retry attempt. The signal is the silo-scoped singleton
     /// registered by <c>AddLattice</c>; a null signal disables the
     /// short-circuit (the provider's registration extension skips
-    /// attaching this policy in that case).
+    /// attaching this policy in that case). Uses
+    /// <see cref="AzureTableWalStorageOptions.DefaultSaturationShortCircuitCooldown"/>
+    /// for the sticky-window duration and the system clock.
     /// </summary>
     /// <param name="signal">The silo-scoped WAL saturation signal.</param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="signal"/> is <c>null</c>.</exception>
     public SaturationAwareRetryPolicy(IWalSaturationSignal signal)
+        : this(signal, AzureTableWalStorageOptions.DefaultSaturationShortCircuitCooldown, TimeProvider.System)
+    {
+    }
+
+    /// <summary>
+    /// Constructs a policy with an explicit cooldown duration and
+    /// clock source. Used by <see cref="AzureTableWalStorageOptions.BuildServiceClient"/>
+    /// to plumb the configured cooldown, and by the test suite to
+    /// inject a deterministic clock.
+    /// </summary>
+    /// <param name="signal">The silo-scoped WAL saturation signal.</param>
+    /// <param name="cooldown">Sticky-window duration after a
+    /// Saturated observation during which subsequent retries are
+    /// short-circuited regardless of the signal's current state.
+    /// Must be non-negative; <see cref="TimeSpan.Zero"/> disables the
+    /// sticky window (only the present state is consulted).</param>
+    /// <param name="timeProvider">Clock source for the sticky window.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="signal"/> or <paramref name="timeProvider"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="cooldown"/> is negative.</exception>
+    public SaturationAwareRetryPolicy(IWalSaturationSignal signal, TimeSpan cooldown, TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(signal);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        if (cooldown < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cooldown), cooldown, "cooldown must be non-negative");
+        }
         _signal = signal;
+        _cooldown = cooldown;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
@@ -135,11 +176,51 @@ public sealed class SaturationAwareRetryPolicy : HttpPipelinePolicy
             return false;
         }
 
-        // Retry attempt: consult the aggregate saturation signal and
-        // short-circuit on Saturated. Healthy / Throttled fall through
-        // to the inner pipeline so transient transport faults still
+        // Retry attempt. Two short-circuit paths:
+        //
+        // 1. Present-state Saturated: the silo's classifier just told
+        //    us the storage account is exhausted. Stamp the
+        //    observation timestamp (for the cooldown predicate below)
+        //    and short-circuit.
+        //
+        // 2. Recent-observation cooldown: even when the present
+        //    aggregate state has decayed to Throttled or Healthy,
+        //    we keep short-circuiting for SaturationShortCircuitCooldown
+        //    after the last Saturated observation. This bridges the
+        //    gap between the sampler's 200 ms tick (which is the
+        //    effective lifetime of any single Saturated observation
+        //    under a transient burst regime) and the SDK's
+        //    exponential-backoff retry spacing of 800 ms - 3.2 s.
+        //    Without it, the SDK retry that would otherwise fire 800
+        //    ms after we observed Saturated almost always lands in
+        //    a Throttled or Healthy window and passes through to the
+        //    network, burning storage-side capacity the classifier
+        //    just told us is gone.
+        //
+        // Healthy + no recent Saturated observation: fall through to
+        // the inner pipeline so transient transport faults still
         // retry per the SDK's default policy.
-        return _signal.GetAggregateState() == WalSaturationState.Saturated;
+        var state = _signal.GetAggregateState();
+        if (state == WalSaturationState.Saturated)
+        {
+            Interlocked.Exchange(ref _lastSaturatedObservationTicks, _timeProvider.GetUtcNow().UtcTicks);
+            return true;
+        }
+
+        if (_cooldown > TimeSpan.Zero)
+        {
+            var lastObsTicks = Interlocked.Read(ref _lastSaturatedObservationTicks);
+            if (lastObsTicks != long.MinValue)
+            {
+                var elapsed = _timeProvider.GetUtcNow().UtcTicks - lastObsTicks;
+                if (elapsed < _cooldown.Ticks)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static void ApplySyntheticSaturatedResponse(HttpMessage message)

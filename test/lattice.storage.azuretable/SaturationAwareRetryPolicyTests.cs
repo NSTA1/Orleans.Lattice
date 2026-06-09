@@ -210,7 +210,15 @@ public class SaturationAwareRetryPolicyTests
         var signal = Substitute.For<IWalSaturationSignal>();
         signal.GetAggregateState().Returns(WalSaturationState.Throttled);
 
-        var policy = new SaturationAwareRetryPolicy(signal);
+        // Cooldown disabled (TimeSpan.Zero) so the sticky-window path
+        // never fires. Without an explicit cooldown the policy keeps
+        // short-circuiting for 2 s after any Saturated observation,
+        // but in this test the signal is steady-Throttled and the
+        // last-observation sentinel is long.MinValue, so even with
+        // a non-zero cooldown Throttled would still fall through.
+        // The explicit zero documents intent: this test asserts the
+        // present-state branch alone.
+        var policy = new SaturationAwareRetryPolicy(signal, TimeSpan.Zero, TimeProvider.System);
         var next = new CountingNextPolicy();
         var pipeline = new HttpPipelinePolicy[] { next };
         var message = NewMessage();
@@ -220,6 +228,101 @@ public class SaturationAwareRetryPolicyTests
 
         Assert.That(next.Invocations, Is.EqualTo(2),
             "Throttled is an advisory state, not a refusal: retries pass through to the inner pipeline");
+    }
+
+    [Test]
+    public async Task Retry_within_cooldown_after_saturated_short_circuits_even_under_healthy_signal()
+    {
+        // Drive the signal Saturated on the first retry, then Healthy
+        // on the second. With a 2-second cooldown and a fake clock
+        // advanced only 500 ms between observations, retry 2 must
+        // STILL short-circuit because the cooldown predicate fires
+        // off the recorded last-Saturated timestamp, independent of
+        // the signal's present state.
+        var states = new Queue<WalSaturationState>(new[]
+        {
+            WalSaturationState.Saturated, // retry 1 - stamps timestamp + short-circuits
+            WalSaturationState.Healthy,   // retry 2 - within cooldown, still short-circuits
+        });
+        var signal = new SequenceSignal(states);
+        var fakeTime = new ManualTimeProvider(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+        var policy = new SaturationAwareRetryPolicy(signal, TimeSpan.FromSeconds(2), fakeTime);
+        var next = new CountingNextPolicy();
+        var pipeline = new HttpPipelinePolicy[] { next };
+        var message = NewMessage();
+
+        using var recorder = new ShortCircuitRecorder();
+
+        await policy.ProcessAsync(message, pipeline); // first attempt - pass through, next.Invocations=1
+        Assert.That(next.Invocations, Is.EqualTo(1));
+
+        await policy.ProcessAsync(message, pipeline); // retry 1: Saturated, short-circuit, stamp ts
+        Assert.That(next.Invocations, Is.EqualTo(1),
+            "retry 1 must not reach the inner pipeline (Saturated)");
+        Assert.That(message.Response.Status, Is.EqualTo(503));
+
+        fakeTime.Advance(TimeSpan.FromMilliseconds(500));
+
+        await policy.ProcessAsync(message, pipeline); // retry 2: signal Healthy, but within cooldown
+        Assert.That(next.Invocations, Is.EqualTo(1),
+            "retry 2 must still short-circuit because the cooldown window has not yet elapsed");
+        Assert.That(message.Response.Status, Is.EqualTo(503));
+
+        lock (recorder.Records)
+        {
+            Assert.That(recorder.Records.Count, Is.EqualTo(2),
+                "both retry 1 and retry 2 should increment the short-circuit counter");
+        }
+    }
+
+    [Test]
+    public async Task Retry_after_cooldown_elapsed_passes_through_to_inner_pipeline()
+    {
+        // Same setup as the cooldown test above, but advance the
+        // fake clock past the cooldown so the second retry's sticky-
+        // window predicate fails and the pass-through path runs.
+        var states = new Queue<WalSaturationState>(new[]
+        {
+            WalSaturationState.Saturated, // retry 1
+            WalSaturationState.Healthy,   // retry 2 - cooldown elapsed, must pass through
+        });
+        var signal = new SequenceSignal(states);
+        var fakeTime = new ManualTimeProvider(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+        var policy = new SaturationAwareRetryPolicy(signal, TimeSpan.FromSeconds(2), fakeTime);
+        var next = new CountingNextPolicy();
+        var pipeline = new HttpPipelinePolicy[] { next };
+        var message = NewMessage();
+
+        await policy.ProcessAsync(message, pipeline);            // first attempt
+        await policy.ProcessAsync(message, pipeline);            // retry 1 - Saturated
+        Assert.That(next.Invocations, Is.EqualTo(1));
+
+        fakeTime.Advance(TimeSpan.FromSeconds(3));               // beyond 2-second cooldown
+
+        await policy.ProcessAsync(message, pipeline);            // retry 2 - Healthy, cooldown elapsed
+        Assert.That(next.Invocations, Is.EqualTo(2),
+            "after the cooldown elapses the policy must let retries reach the network again");
+        Assert.That(message.Response.Status, Is.EqualTo(200));
+    }
+
+    [Test]
+    public void Ctor_throws_on_negative_cooldown()
+    {
+        var signal = Substitute.For<IWalSaturationSignal>();
+        Assert.That(
+            () => new SaturationAwareRetryPolicy(signal, TimeSpan.FromMilliseconds(-1), TimeProvider.System),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void Ctor_throws_when_time_provider_is_null()
+    {
+        var signal = Substitute.For<IWalSaturationSignal>();
+        Assert.That(
+            () => new SaturationAwareRetryPolicy(signal, TimeSpan.FromSeconds(1), null!),
+            Throws.ArgumentNullException);
     }
 
     [Test]
@@ -239,7 +342,13 @@ public class SaturationAwareRetryPolicyTests
         });
         var signal = new SequenceSignal(states);
 
-        var policy = new SaturationAwareRetryPolicy(signal);
+        // Cooldown disabled (TimeSpan.Zero) so this test exercises
+        // ONLY the present-state re-read invariant - retry 2 under
+        // Healthy must reach the inner pipeline regardless of what
+        // retry 1 observed. The sticky-window cooldown path has its
+        // own dedicated coverage in Retry_within_cooldown_after_*
+        // and Retry_after_cooldown_elapsed_*.
+        var policy = new SaturationAwareRetryPolicy(signal, TimeSpan.Zero, TimeProvider.System);
         var next = new CountingNextPolicy();
         var pipeline = new HttpPipelinePolicy[] { next };
         var message = NewMessage();
@@ -256,6 +365,22 @@ public class SaturationAwareRetryPolicyTests
             "the inner pipeline's successful response must replace the prior synthetic 503");
         Assert.That(signal.CallCount, Is.EqualTo(2),
             "GetAggregateState should be consulted on every retry attempt (not on the first attempt)");
+    }
+
+    /// <summary>
+    /// Minimal stub <see cref="TimeProvider"/> the cooldown tests
+    /// drive through a deterministic transcript of UTC instants.
+    /// Hand-rolled rather than referencing
+    /// Microsoft.Extensions.TimeProvider.Testing to keep the
+    /// Storage.AzureTable test project's dependency surface narrow
+    /// (mirrors the same approach taken in the replication test
+    /// project's CachingReplicationSecretProviderTests).
+    /// </summary>
+    private sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan delta) => _now = _now.Add(delta);
     }
 
     /// <summary>

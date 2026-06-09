@@ -552,6 +552,40 @@ public sealed class AzureTableWalStorageOptions
     public const bool DefaultHonorSaturationSignal = true;
 
     /// <summary>
+    /// Sticky-window duration the saturation-aware retry policy keeps
+    /// short-circuiting SDK retries for after the last observation of
+    /// <see cref="WalSaturationState.Saturated"/>. Bridges the gap
+    /// between the silo's sample interval (default 200 ms - the
+    /// effective lifetime of any single Saturated tick) and the SDK's
+    /// exponential retry spacing (default 800 ms - 3.2 s between
+    /// attempts). Without the cooldown the next SDK retry almost
+    /// always arrives well after the Saturated observation has
+    /// decayed to Throttled or Healthy, so the policy would pass the
+    /// retry through to the network and burn additional storage-side
+    /// capacity that the silo's classifier just told us is exhausted.
+    /// <para>
+    /// Mechanically: the policy stamps the wall-clock when it
+    /// observes <see cref="WalSaturationState.Saturated"/>; on every
+    /// subsequent retry attempt it short-circuits if
+    /// <c>now - lastSaturated &lt; SaturationShortCircuitCooldown</c>,
+    /// independent of the current aggregate state. The wall-clock
+    /// source is the standard <see cref="TimeProvider.System"/> in
+    /// production; tests inject a fake clock for determinism.
+    /// </para>
+    /// <para>
+    /// Default 2 seconds: large enough to span the worst-case SDK
+    /// exponential-backoff retry interval at default settings without
+    /// extending into the silo's drain budget. Set to
+    /// <see cref="TimeSpan.Zero"/> to disable the sticky window
+    /// (policy only fires while the signal is presently Saturated).
+    /// </para>
+    /// </summary>
+    public TimeSpan SaturationShortCircuitCooldown { get; set; } = DefaultSaturationShortCircuitCooldown;
+
+    /// <summary>Default value for <see cref="SaturationShortCircuitCooldown"/> (2 seconds).</summary>
+    public static readonly TimeSpan DefaultSaturationShortCircuitCooldown = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// Validates that exactly one authentication mode is configured and
     /// that <see cref="TableName"/> is non-empty. Called by the provider
     /// at first use.
@@ -646,6 +680,12 @@ public sealed class AzureTableWalStorageOptions
             throw new InvalidOperationException(
                 $"{nameof(AzureTableWalStorageOptions)}.{nameof(PhaseTwoCommitTimeout)} must be positive when set.");
         }
+
+        if (SaturationShortCircuitCooldown < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(SaturationShortCircuitCooldown)} must be non-negative.");
+        }
     }
 
     /// <summary>
@@ -735,7 +775,7 @@ public sealed class AzureTableWalStorageOptions
         if (HonorSaturationSignal && saturationSignal is not null)
         {
             clientOptions.AddPolicy(
-                new SaturationAwareRetryPolicy(saturationSignal),
+                new SaturationAwareRetryPolicy(saturationSignal, SaturationShortCircuitCooldown, TimeProvider.System),
                 HttpPipelinePosition.PerRetry);
         }
 
