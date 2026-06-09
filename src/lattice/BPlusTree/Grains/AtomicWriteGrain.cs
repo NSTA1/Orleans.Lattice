@@ -93,25 +93,49 @@ internal sealed class AtomicWriteGrain(
     private static readonly TimeSpan StaleRoutingRetryBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// Wall-clock budget the saga coordinator spends parked on
+    /// Maximum wall-clock budget the saga coordinator will spend
+    /// parked on
     /// <see cref="IWalSaturationSignal.WaitForHealthyAsync(string, System.Threading.CancellationToken)"/>
     /// before each batched dispatch when the signal reports
-    /// <see cref="WalSaturationState.Saturated"/>. Bounded so the saga's
-    /// own response-timeout (driven by the caller's grain RPC budget)
-    /// always wins on a tree that never recovers, e.g. the
-    /// single-account 409-Conflict regime that gave this gate its
-    /// reason to exist. A 5-second cap keeps the saga's per-attempt
-    /// wall-clock comfortably below the 30-second
-    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> default
-    /// (the next-layer-down ceiling) and well below typical 2-3 minute
-    /// caller response-timeout windows. The gate runs at most once per
-    /// retry attempt; an unrecovered tree therefore burns at most
-    /// <c>(1 + MaxRetriesPerStep) * MaxSagaQuiesceWait</c> of saga
-    /// wall-clock on the quiesce path before falling through to the
-    /// dispatch (which will then fail on its own merits and either
-    /// retry or pivot to compensation through the existing paths).
+    /// <see cref="WalSaturationState.Saturated"/>. Acts as the hard
+    /// ceiling on the saga-side quiesce budget; the actual per-call
+    /// budget is the minimum of this value and the per-tree
+    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> so the
+    /// saga's quiesce always wins over the writer-side dispatch
+    /// deadline. The 30-second ceiling matches the default
+    /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/> exactly
+    /// so the saga's quiesce gate covers the same wall-clock window
+    /// the writer would otherwise spend silently parked at the
+    /// admission cap before refusing - if storage recovers within
+    /// that window the saga proceeds normally, and if it does not the
+    /// saga refuses with <see cref="LatticeSaturatedException"/>
+    /// rather than re-dispatching the same RowKeys into a still-
+    /// throttled account (which is the single-account 409-Conflict
+    /// amplification regime documented in
+    /// <c>benchmark/azure-throughput/throughput.md</c> section 32).
     /// </summary>
-    private static readonly TimeSpan MaxSagaQuiesceWait = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxSagaQuiesceWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Sentinel return value from
+    /// <see cref="QuiesceOnSaturatedAsync"/> indicating that the
+    /// saturation regime persisted past the saga's quiesce budget
+    /// AND the host is not shutting down (caller should refuse with
+    /// <see cref="LatticeSaturatedException"/> rather than re-
+    /// dispatching into a still-saturated account). Distinct from
+    /// the other return paths (clean recovery, host shutdown, no
+    /// signal registered) so the caller can react surgically.
+    /// </summary>
+    private enum SagaQuiesceOutcome
+    {
+        /// <summary>Signal recovered within the budget (or was never
+        /// registered, never Saturated, host already shutting down,
+        /// caller cancellation observed); caller proceeds.</summary>
+        Proceed,
+        /// <summary>Budget elapsed with the tree still Saturated;
+        /// caller should refuse with <see cref="LatticeSaturatedException"/>.</summary>
+        StillSaturated,
+    }
 
     /// <summary>
     /// Composite grain key (<c>{treeId}/{operationId}</c>); used for logging.
@@ -1325,60 +1349,106 @@ internal sealed class AtomicWriteGrain(
     /// <see cref="IWalSaturationSignal"/> reports
     /// <see cref="WalSaturationState.Saturated"/> for
     /// <paramref name="treeId"/>, awaits the recovery up to
-    /// <see cref="MaxSagaQuiesceWait"/> before returning so the
-    /// saga's next batched dispatch lands on a writer that has just
-    /// quiesced rather than parking on the cap. Silent no-op when:
-    /// no signal is registered (single-node / unit-test deployments);
-    /// the silo is shutting down (the signal will never return to
-    /// Healthy once the writer has drained, so waiting is wasted);
-    /// the signal reports <see cref="WalSaturationState.Healthy"/> or
-    /// <see cref="WalSaturationState.Throttled"/> (the natural lead-up
-    /// regime under the recovery-window upgrade - dispatching through
-    /// it is correct, new appends will land after a brief admission
-    /// wait); or the wait times out before the signal observes
-    /// recovery (the saga falls through to the dispatch which will
-    /// either succeed or fail through the existing paths).
+    /// <c>min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)</c>
+    /// before returning. Returns
+    /// <see cref="SagaQuiesceOutcome.Proceed"/> on clean recovery, on
+    /// host-shutdown short-circuit, on caller cancellation, or when
+    /// no signal is registered (single-node / unit-test deployments).
+    /// Returns <see cref="SagaQuiesceOutcome.StillSaturated"/> when
+    /// the budget elapses with the tree still
+    /// <see cref="WalSaturationState.Saturated"/> so the caller can
+    /// refuse with <see cref="LatticeSaturatedException"/> rather
+    /// than re-dispatching the same RowKeys into a still-throttled
+    /// storage account (which is the single-account 409-Conflict
+    /// amplification regime documented in
+    /// <c>benchmark/azure-throughput/throughput.md</c> section 32).
+    /// <para>
+    /// <b>Budget sizing.</b> The actual per-call budget is the
+    /// minimum of <see cref="MaxSagaQuiesceWait"/> (30 s) and the
+    /// per-tree <see cref="LatticeOptions.WalAppendDispatchTimeout"/>
+    /// so the quiesce always wins over the writer-side admission
+    /// deadline. The pre-quiesce-gate behaviour bounded the budget at
+    /// a fixed 5 seconds, which was too short to span the typical
+    /// 409-Conflict burst recovery window (1-10 s) and amplified the
+    /// regime via saga-side retries.
+    /// </para>
     /// </summary>
-    private async Task QuiesceOnSaturatedAsync(string treeId)
+    private async Task<SagaQuiesceOutcome> QuiesceOnSaturatedAsync(string treeId)
     {
         var signal = ResolveSaturationSignal();
-        if (signal is null) return;
-        if (signal.GetCurrentState(treeId) != WalSaturationState.Saturated) return;
+        if (signal is null) return SagaQuiesceOutcome.Proceed;
+        if (signal.GetCurrentState(treeId) != WalSaturationState.Saturated) return SagaQuiesceOutcome.Proceed;
         // Shutdown short-circuit: when the host has started shutting
         // down the WAL writer is also draining; the saturation signal
         // will never return Healthy because nothing will drain the
         // in-flight batches. Bail immediately so the saga's next
         // dispatch surfaces LatticeShuttingDownException via the
-        // hard fast-path instead of burning 5 seconds of host
-        // deactivation budget on a wait that cannot succeed.
+        // hard fast-path instead of burning the host-deactivation
+        // budget on a wait that cannot succeed.
         var lifetime = ResolveLifetime();
         if (lifetime is not null && lifetime.ApplicationStopping.IsCancellationRequested)
         {
-            return;
+            return SagaQuiesceOutcome.Proceed;
+        }
+        // Cap the saga's wait at the per-tree WalAppendDispatchTimeout
+        // so the quiesce gate always wins over the writer-side
+        // admission deadline (which would otherwise surface the same
+        // Saturated regime as a generic TimeoutException at the cap).
+        // Read the per-tree options once per quiesce call so an
+        // operator-side override takes effect immediately.
+        var perTree = optionsMonitor.Get(treeId);
+        var dispatchBudget = perTree.WalAppendDispatchTimeout;
+        TimeSpan effectiveBudget;
+        if (MaxSagaQuiesceWait == Timeout.InfiniteTimeSpan && dispatchBudget == Timeout.InfiniteTimeSpan)
+        {
+            effectiveBudget = Timeout.InfiniteTimeSpan;
+        }
+        else if (MaxSagaQuiesceWait == Timeout.InfiniteTimeSpan)
+        {
+            effectiveBudget = dispatchBudget;
+        }
+        else if (dispatchBudget == Timeout.InfiniteTimeSpan)
+        {
+            effectiveBudget = MaxSagaQuiesceWait;
+        }
+        else
+        {
+            effectiveBudget = MaxSagaQuiesceWait < dispatchBudget ? MaxSagaQuiesceWait : dispatchBudget;
         }
         // Link the quiesce budget to the application-stopping token
         // when available so a shutdown that fires mid-wait short-
         // circuits the wait immediately rather than running out the
-        // full MaxSagaQuiesceWait budget.
+        // full quiesce budget.
         using var cts = lifetime is not null
             ? CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping)
             : new CancellationTokenSource();
-        cts.CancelAfter(MaxSagaQuiesceWait);
+        if (effectiveBudget != Timeout.InfiniteTimeSpan)
+        {
+            cts.CancelAfter(effectiveBudget);
+        }
         try
         {
             await signal.WaitForHealthyAsync(treeId, cts.Token).ConfigureAwait(true);
+            return SagaQuiesceOutcome.Proceed;
         }
         catch (OperationCanceledException)
         {
-            // Quiesce budget exhausted OR host shutdown fired. Fall
-            // through to the dispatch path: either the storage
-            // account did not recover within the saga's per-attempt
-            // window (the batched SetManyAsync will then either trip
-            // the writer-side admission cap (TimeoutException) or
-            // the provider-side failure), or the host is shutting
-            // down (the dispatch will hit the writer's drain gate
-            // and surface LatticeShuttingDownException via the hard
-            // fast-path).
+            // Disambiguate the two cancellation sources: host shutdown
+            // (proceed - the dispatch will surface
+            // LatticeShuttingDownException via the writer's drain
+            // gate) versus quiesce budget expiry. On budget expiry,
+            // re-check the signal once - if the tree recovered
+            // between the wait expiring and us re-reading, suppress
+            // the refusal so a borderline recovery is not penalised.
+            if (lifetime is not null && lifetime.ApplicationStopping.IsCancellationRequested)
+            {
+                return SagaQuiesceOutcome.Proceed;
+            }
+            if (signal.GetCurrentState(treeId) != WalSaturationState.Saturated)
+            {
+                return SagaQuiesceOutcome.Proceed;
+            }
+            return SagaQuiesceOutcome.StillSaturated;
         }
     }
 
@@ -1458,6 +1528,66 @@ internal sealed class AtomicWriteGrain(
             }
         }
         return ex.InnerException is { } innerEx && IsTerminalShutdownRefusal(innerEx);
+    }
+
+    /// <summary>
+    /// Saga-coordinator predicate: returns true when
+    /// <paramref name="ex"/> is the
+    /// <see cref="LatticeSaturatedException"/> shape the saga's
+    /// fast-path must catch and re-throw to the caller. Walks any
+    /// <see cref="AggregateException"/> the saga's parallel dispatch
+    /// shape might wrap the inner failure in, and any wrapping
+    /// <see cref="Exception.InnerException"/> chain.
+    /// <para>
+    /// Distinct from <see cref="IsTerminalShutdownRefusal"/>: the
+    /// saturation regime is recoverable (the caller can back off and
+    /// retry), while the shutdown regime is one-way for the silo
+    /// activation. The two predicates are evaluated in shutdown-wins
+    /// order in the call site so a saga that fails under shutdown
+    /// during a saturation episode surfaces as shutdown (which is
+    /// the more-final caller signal).
+    /// </para>
+    /// </summary>
+    private static bool IsTerminalSaturationRefusal(Exception? ex)
+    {
+        if (ex is null) return false;
+        if (ex is LatticeSaturatedException) return true;
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.InnerExceptions)
+            {
+                if (IsTerminalSaturationRefusal(inner)) return true;
+            }
+        }
+        return ex.InnerException is { } innerEx && IsTerminalSaturationRefusal(innerEx);
+    }
+
+    /// <summary>
+    /// Saga-coordinator attribution: walks the exception chain
+    /// looking for a <see cref="LatticeSaturatedException"/> and
+    /// returns its <see cref="LatticeSaturatedException.TreeId"/>.
+    /// Returns <c>null</c> when no saturation exception is found or
+    /// when the found exception's
+    /// <see cref="LatticeSaturatedException.TreeId"/>
+    /// is empty (in which case the call site falls back to the
+    /// saga's own tree id).
+    /// </summary>
+    private static string? ExtractSaturationTreeId(Exception? ex)
+    {
+        if (ex is null) return null;
+        if (ex is LatticeSaturatedException satEx)
+        {
+            return string.IsNullOrEmpty(satEx.TreeId) ? null : satEx.TreeId;
+        }
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.InnerExceptions)
+            {
+                var fromInner = ExtractSaturationTreeId(inner);
+                if (fromInner is not null) return fromInner;
+            }
+        }
+        return ex.InnerException is { } innerEx ? ExtractSaturationTreeId(innerEx) : null;
     }
 
     /// <summary>
@@ -1903,23 +2033,39 @@ internal sealed class AtomicWriteGrain(
                 var batchStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
-                    // Quiesce-on-Saturated. When the silo-scoped
-                    // saturation signal reports the tree as Saturated,
-                    // park the saga briefly on
-                    // WaitForHealthyAsync (capped at MaxSagaQuiesceWait)
+                    // Quiesce-on-Saturated saga gate. When the
+                    // silo-scoped saturation signal reports the tree
+                    // as Saturated, park the saga on
+                    // WaitForHealthyAsync up to
+                    // min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)
                     // before dispatching the batched SetManyAsync.
-                    // This is the library-side analogue of the bench
-                    // TCP reader's quiesce: it prevents the saga from
-                    // burning retry budget against a writer-side
-                    // admission gate that is provably parked. The
-                    // gate is silently skipped when the signal is not
-                    // registered (single-node / unit-test deployments)
-                    // and when the signal reports Healthy or Throttled
-                    // (Throttled is the natural lead-up regime under
-                    // the recovery-window upgrade; dispatching through
-                    // it is correct - new appends will land, possibly
-                    // after a brief admission wait).
-                    await QuiesceOnSaturatedAsync(state.State.TreeId).ConfigureAwait(true);
+                    // The pre-saga-quiesce-gate budget was a fixed 5
+                    // seconds, which was too short to span the
+                    // typical 409-Conflict burst recovery window
+                    // (1-10 s) and amplified the regime via saga-
+                    // side retries.
+                    // Returns StillSaturated when the budget elapsed
+                    // with the tree still Saturated; in that case
+                    // refuse with LatticeSaturatedException instead
+                    // of re-dispatching the same RowKeys into a
+                    // still-throttled account (the single-account
+                    // 409-Conflict amplification regime documented
+                    // in benchmark/azure-throughput/throughput.md
+                    // section 32). The standard batchFailure catch
+                    // path absorbs the exception and either retries
+                    // (which re-runs the quiesce gate, giving the
+                    // tree another full budget to recover) or pivots
+                    // to Compensate when the per-step retry budget
+                    // exhausts - both branches are far cheaper than
+                    // a re-dispatched batched SetManyAsync against
+                    // a throttled account.
+                    var quiesceOutcome = await QuiesceOnSaturatedAsync(state.State.TreeId).ConfigureAwait(true);
+                    if (quiesceOutcome == SagaQuiesceOutcome.StillSaturated)
+                    {
+                        throw new LatticeSaturatedException(
+                            $"Atomic-write saga {OperationKey} refused batch dispatch: the per-tree saturation signal stayed Saturated beyond the saga quiesce budget. The caller should back off and retry the saga once the signal returns to Healthy; re-dispatching now would amplify the storage-side back-pressure.",
+                            state.State.TreeId);
+                    }
 
                     // Phase D1c (post-c2-xi): restored the single-call
                     // shape of D1 - one ILattice.SetManyAsync covering
@@ -2022,6 +2168,25 @@ internal sealed class AtomicWriteGrain(
                 // so the saga settles with the distinct
                 // "shutdown_refused" outcome tag instead of "failed".
                 var isShutdownRefused = IsTerminalShutdownRefusal(batchFailure);
+
+                // Saga-coordinator predicate: detect the saturation
+                // refusal shape (either from the saga's own
+                // QuiesceOnSaturatedAsync gate throwing
+                // LatticeSaturatedException or from the writer-side
+                // admission gate's LatticeSaturatedException bubbling
+                // up through SetManyAsync). The caller-recovery
+                // contract is different from the shutdown case:
+                // saturation is recoverable (the caller can back off
+                // and retry), so the saga preserves its persisted
+                // state at Execute with the current NextIndex (so a
+                // reminder-driven resume can re-try later) and throws
+                // LatticeSaturatedException to the caller for
+                // attribution. Running compensation here would
+                // re-enter the same throttled storage account and
+                // amplify the 409-Conflict burst exactly as the
+                // pre-saga-saturation-fast-path retry loop did.
+                var isSaturationRefused = !isShutdownRefused && IsTerminalSaturationRefusal(batchFailure);
+
                 if (isShutdownRefused)
                 {
                     // Hard shutdown fast-path: skip every subsequent
@@ -2070,6 +2235,43 @@ internal sealed class AtomicWriteGrain(
                     throw new LatticeShuttingDownException(
                         $"Atomic write saga for tree '{state.State.TreeId}' could not complete because the silo is shutting down; the saga will resume on the next silo activation.",
                         batchFailure);
+                }
+
+                if (isSaturationRefused)
+                {
+                    // Saga saturation fast-path. Same shape as the
+                    // shutdown fast-path above: skip the retry,
+                    // skip the compensate-pivot (which would re-enter
+                    // the same throttled storage account and amplify
+                    // the 409-Conflict burst), preserve the saga's
+                    // persisted state at Execute with the current
+                    // NextIndex, and throw LatticeSaturatedException
+                    // to the caller for attribution. The caller's
+                    // recovery contract is to back off and re-issue
+                    // the saga (same operationId) once the per-tree
+                    // saturation signal returns to Healthy - the
+                    // saga's idempotent-replay path on the same
+                    // operationId observes the persisted state and
+                    // resumes from NextIndex without re-running
+                    // already-committed entries.
+                    //
+                    // Logged at Information (same rationale as the
+                    // shutdown fast-path): the saga is doing the
+                    // right thing under saturation, this is a
+                    // normal-operation event, and Warning-level logs
+                    // trip the cohort runner's exception-line
+                    // verdict classifier.
+                    Logger.LogInformation(
+                        "Atomic-write saga {OperationKey}: saturation-refused fast-path. Bypassing retry / compensate to avoid amplifying storage-side back-pressure. Saga will resume from NextIndex={Index} on the caller's next retry once the per-tree saturation signal returns to Healthy. Cause: {CauseType}: {CauseMessage}",
+                        OperationKey, state.State.NextIndex, batchFailure.GetType().Name, batchFailure.Message);
+                    // If the inner is already a LatticeSaturatedException,
+                    // preserve its tree id for caller attribution;
+                    // otherwise fall back to the saga's own tree id.
+                    var attributedTreeId = ExtractSaturationTreeId(batchFailure) ?? state.State.TreeId;
+                    throw new LatticeSaturatedException(
+                        $"Atomic write saga for tree '{state.State.TreeId}' could not complete because the per-tree saturation signal stayed Saturated past the saga quiesce budget; the saga will resume on the caller's next retry once the signal returns to Healthy.",
+                        treeId: attributedTreeId,
+                        innerException: batchFailure);
                 }
 
                 if (state.State.RetriesOnCurrentStep < MaxRetriesPerStep)

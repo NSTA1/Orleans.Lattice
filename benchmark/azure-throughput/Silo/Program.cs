@@ -1214,6 +1214,28 @@ internal sealed class TcpIngestService(
 
                     BenchMetrics.TcpReadLineBytes.Record(value.Length, treeTag);
 
+                    // FX-033 Gap 3: flow-control-fence the channel.
+                    // The per-line ApplyBackPressureAsync above gates
+                    // the READ side of the loop, but a Healthy -> Saturated
+                    // transition between sample ticks (default 200 ms)
+                    // lets the reader queue thousands of lines into the
+                    // bounded channel before the next sample tick
+                    // observes Saturated and the reader parks. Pre-FX-033
+                    // those queued lines drained into SetManyAsync
+                    // against a still-saturated storage account and
+                    // surfaced as failed=N on FINAL despite the producer
+                    // having stopped. Re-applying back-pressure
+                    // immediately before the WriteAsync call turns the
+                    // channel into a flow-control fence rather than a
+                    // burst-absorber: the second call observes Saturated
+                    // synchronously after the next tick and parks the
+                    // reader on WaitForHealthyAsync before the line
+                    // crosses into the drain pipeline. Both calls share
+                    // the same per-tree dictionary lookup so the per-
+                    // line overhead under Healthy is two concurrent-
+                    // dictionary reads (sub-microsecond).
+                    await saturationSignal.ApplyBackPressureAsync(settings.TreeId, throttledLineDelay, ct).ConfigureAwait(false);
+
                     // Time the ChannelWriter.WriteAsync separately so we
                     // can distinguish "TCP read loop is the bottleneck"
                     // (write completes immediately) from "drain is the

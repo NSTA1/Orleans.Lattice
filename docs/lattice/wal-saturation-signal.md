@@ -85,9 +85,54 @@ The library is agnostic. The surface is the **signal**; the strategy is the appl
 - **`LatticeOptions.WalMaxPendingBatches`.** The admission semaphore the signal reads from. This is the underlying cap; the signal makes it observable. Lifting the cap reduces how often the signal fires but does not change its contract.
 - **`LatticeOptions.WalAppendDispatchTimeout`.** The dispatch deadline whose trips feed the second source of the `Saturated` classification. A non-zero dispatch-timeout trip rate is the failure-tail surface; the saturation signal turns it into a leading-edge surface.
 - **`LatticeOptions.WalSaturationProviderFailureRateThreshold`.** The third Saturated input, added so the signal also covers the regime where the downstream storage provider's commit calls return quickly (so neither the admission depth nor the dispatch deadline crosses the threshold) but terminally fail at a high rate - the canonical pattern on the Azure Tables single-account 409-Conflict burst. Counts non-cancellation exceptions surfaced from the writer's outbound `IWalShardGrain.AppendAsync` / `AppendBatchAsync` RPCs, per `(tree, shard)`, per sample window. Set to `0` to disable the trigger entirely.
-- **`LatticeShuttingDownException`.** Typed back-pressure exception the silo throws when an operation cannot complete because the WAL writer is draining for host shutdown. Distinct from the saturation signal (which is a runtime-leading-edge surface) - the exception is the terminal-refusal surface that fires when the silo has already decided to stop accepting traffic. Callers that observe this exception should abandon the operation rather than retry it; see the [API Reference - Shutdown back-pressure](api.md#shutdown-back-pressure---latticeshuttingdownexception) for the caller contract.
+- **`LatticeOptions.WalAdmissionSaturationWaitBudget` and [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception).** The library-side consumer of the signal. The WAL writer admission gate (`PartitionTracker.AcquireAsync`) consults the signal before each acquire; on `Saturated` it parks on `WaitForHealthyAsync` up to the configured budget (default 5 s) and, on expiry, refuses the dispatch with the typed exception. The atomic-write saga's quiesce gate runs the same pattern before each batched dispatch, refusing with the same exception on budget expiry rather than re-entering RowKeys into a still-throttled storage account. Both gates make the *runtime* leading-edge surface load-bearing: callers see typed back-pressure in budget time instead of parking on the admission semaphore until `WalAppendDispatchTimeout` (default 30 s). Set `WalAdmissionSaturationWaitBudget = TimeSpan.Zero` to opt out of the writer-side gate; the saga gate is always on when a signal is registered.
+- **`LatticeShuttingDownException`.** Typed back-pressure exception the silo throws when an operation cannot complete because the WAL writer is draining for host shutdown. Distinct from `LatticeSaturatedException` (the runtime-leading-edge surface) - the shutdown exception is the terminal-refusal surface that fires when the silo has already decided to stop accepting traffic. Callers that observe this exception should abandon the operation rather than retry it; see the [API Reference - Shutdown back-pressure](api.md#shutdown-back-pressure---latticeshuttingdownexception) for the caller contract.
 - **`WalCommitLogWriter` writer-side drain on host shutdown** ([wal-tuning.md - bounded shutdown](wal-tuning.md#bounded-shutdown-when-the-writer-is-wedged)). The drain closes the shutdown half of the saturation problem - parked callers are released within bounded time of SIGTERM. The saturation signal closes the runtime half - callers can stop offering load before parking becomes the dominant regime.
-- **`LatticeMetrics.WalAppendDispatchTimeouts`, `WalAppendAdmissionTimeouts`, `WalAppendAdmissionWait`.** The existing instruments that surface the underlying signals. The saturation gauge / counter sit one layer up: they classify the regime rather than counting the individual events.
+- **`LatticeMetrics.WalAppendDispatchTimeouts`, `WalAppendAdmissionTimeouts`, `WalAppendAdmissionSaturationRefusals`, `WalAppendAdmissionWait`.** The existing instruments that surface the underlying signals. The saturation gauge / counter sit one layer up: they classify the regime rather than counting the individual events. `WalAppendAdmissionSaturationRefusals` is the counter that distinguishes the writer-side saturation-budget refusal path from the dispatch-deadline and drain-release paths.
+
+## Library-side consumers: admission gate and saga quiesce gate
+
+Before the consumer-coverage gates landed, the signal was a *publish-only* surface: the sampler observed the writer's state and emitted the regime to observers, but no in-library hot path consumed the signal to refuse work. Under the canonical Azure Tables single-account 409-Conflict regime that meant the sampler raised `Saturated` many times before the first observable failure, while every new dispatch still admitted into the per-partition semaphore and parked at the cap for the full `WalAppendDispatchTimeout` (default 30 seconds) before surfacing as a generic `TimeoutException` - the saturation signal was correct but operationally inert.
+
+The consumer-coverage gap is closed by wiring two library-side gates that consult the signal directly:
+
+### Writer-side admission gate (`WalCommitLogWriter`)
+
+Before each `PartitionTracker.AcquireAsync` the writer calls `signal.GetCurrentState(treeId)`. On `Healthy` / `Throttled` the check is a single concurrent-dictionary lookup and the caller proceeds directly into the semaphore (sub-microsecond, no allocation). On `Saturated` the writer awaits `WaitForHealthyAsync` bounded by `LatticeOptions.WalAdmissionSaturationWaitBudget` (default 5 s); if the signal recovers within the budget the caller proceeds as normal, if the budget expires with the tree still `Saturated` the writer throws `LatticeSaturatedException` so the caller sees the back-pressure as a typed refusal in budget time. The cumulative refusal rate lands on the `orleans.lattice.wal.writer.append.admission_saturation_refusals` counter (tagged `tree`, `partition`), distinct from the dispatch-timeout counter (`admission_timeouts`) and the drain-release counter (`drain.releases`).
+
+A borderline-recovery race (the wait expires AND the signal recovered between the wait expiring and the re-check firing) is suppressed: the writer re-reads the signal once after budget expiry and proceeds without refusal when the tree is observed `Healthy`.
+
+### Saga-side quiesce gate (`AtomicWriteGrain`)
+
+Before each batched `SetManyAsync` dispatch the saga calls a private `QuiesceOnSaturatedAsync` helper that parks on `WaitForHealthyAsync` up to `min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)` (30 s by default, capped at the writer-side dispatch deadline so the saga's quiesce always wins). On clean recovery the saga proceeds into the dispatch as normal. On budget expiry with the tree still `Saturated`, the saga's fast-path refuses with `LatticeSaturatedException` and preserves its persisted state at `Execute` with the current `NextIndex` - the caller's next retry on the same `operationId` resumes from where the refusal stopped, idempotently. Running the saga's compensation pass here would re-enter the same RowKeys into a still-throttled storage account and amplify the 409-Conflict burst exactly as the historical pre-saga-saturation-fast-path retry loop did.
+
+The saga also detects a writer-side `LatticeSaturatedException` bubbling through `SetManyAsync`'s leaf fan-out (typically wrapped in an `AggregateException`) and re-throws it typed, preserving the originating tree id for caller attribution.
+
+### Caller-side recovery shape
+
+Both gates surface the same typed exception. Caller recovery is uniform regardless of which gate refused:
+
+```csharp verify
+var entries = new List<KeyValuePair<string, byte[]>>
+{
+    new("k1", new byte[] { 0x01 }),
+};
+
+try
+{
+    await lattice.SetManyAsync(entries);
+}
+catch (LatticeSaturatedException ex)
+{
+    // ex.TreeId attributes the back-pressure to the specific
+    // tree. Back off (typical 1-10s), then retry against the
+    // same lattice activation - saturation is recoverable.
+    await Task.Delay(TimeSpan.FromSeconds(2));
+    // retry...
+}
+```
+
+This is distinct from `LatticeShuttingDownException` (where retries against the same silo activation never succeed). See the [API Reference - Saturation back-pressure](api.md#saturation-back-pressure---latticesaturatedexception) for the full caller contract.
 
 ## Disabling the sampler
 
