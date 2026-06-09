@@ -77,6 +77,34 @@ This contract was tightened to fix a silent-drop bug: previously both branches u
 
 The replication package additionally exposes per-tree overrides via `LatticeReplicationOptions.WalStorageProvider` for trees that should opt out of the silo-wide default.
 
+## Per-tree and per-partition provider overrides
+
+`LatticeOptions` exposes two delegate-shaped resolvers that override the DI-registered singleton without forcing the host to swap it out. Both are evaluated lazily at WAL grain activation time, so the per-call cost on the hot path is zero - the resolved provider is captured for the lifetime of the activation.
+
+| Option | Signature | Wins against |
+|---|---|---|
+| `WalStorageProviderForPartition` | `Func<string treeId, int partition, IWalStorageProvider>` | `WalStorageProvider`, DI singleton |
+| `WalStorageProvider` | `Func<string treeId, IWalStorageProvider>` | DI singleton |
+
+Precedence is `WalStorageProviderForPartition` -> `WalStorageProvider` -> the DI singleton. The first non-`null` rung wins; a resolver delegate that itself returns `null` is undefined behaviour (the activation surfaces a `NullReferenceException` at the next dispatch).
+
+The per-partition resolver is the seam that lets a host fan a single tree's WAL across multiple storage backends. The canonical motivator is the Azure Tables single-account throughput ceiling - a single Standard account sustains roughly 22 000-24 000 transactions/sec before throttling collapses per-flush latency - so a tree whose offered load exceeds that envelope must route distinct partitions to distinct accounts to grow further.
+
+```csharp verify
+// Route partitions 0..3 to account "wal-a" and partitions 4..7 to
+// account "wal-b". Each activation resolves once and stays bound to
+// its provider for the lifetime of the activation.
+var accountA = new InMemoryWalStorageProvider(); // stand-in; substitute the real backend
+var accountB = new InMemoryWalStorageProvider();
+siloBuilder.ConfigureLattice(o =>
+{
+    o.WalStorageProviderForPartition = (treeId, partition) =>
+        partition < 4 ? accountA : accountB;
+});
+```
+
+Hosts that want only some partitions of a tree to route to a dedicated backend - and the rest to inherit the silo-wide default - should fall back inside the delegate explicitly (for example, by capturing the DI singleton at startup and returning it for the unrouted partitions). The resolver chain itself does not synthesise the singleton fallback per partition.
+
 ## Provider catalogue
 
 ### `InMemoryWalStorageProvider`

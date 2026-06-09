@@ -288,8 +288,7 @@ internal sealed class WalShardGrain(
         _walMaxPendingBatchesTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagWalMaxPendingBatches, options.WalMaxPendingBatches);
 
-        _provider = options.WalStorageProvider?.Invoke(_treeId)
-            ?? services.GetRequiredService<IWalStorageProvider>();
+        _provider = ResolveStorageProvider(options, services, _treeId, _shardIndex);
         // Reconcile any half-committed state a multi-phase backend
         // (e.g. Azure Table's per-batch partition + manifest layout)
         // may have left from a previous activation's crash between
@@ -1800,6 +1799,64 @@ internal sealed class WalShardGrain(
                 $"{nameof(WalShardGrain)} has not been initialized. The grain is normally activated by Orleans, "
                 + $"which calls {nameof(OnActivateAsync)}; unit tests may bypass that by calling {nameof(InitializeForTestingAsync)}.");
         }
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="IWalStorageProvider"/> that an
+    /// activation for <paramref name="treeId"/> /
+    /// <paramref name="shardIndex"/> should bind to. Consulted by
+    /// <see cref="OnActivateAsync"/> and exposed as an
+    /// <c>internal static</c> seam so the precedence rule is testable
+    /// in isolation from the rest of the activation pipeline.
+    /// <para>
+    /// Precedence, highest first:
+    /// </para>
+    /// <list type="number">
+    /// <item><description>
+    /// <see cref="LatticeOptions.WalStorageProviderForPartition"/>
+    /// invoked with <c>(treeId, shardIndex)</c>. The first non-
+    /// <see langword="null"/> return wins and lets a host fan WAL
+    /// traffic for a single tree across multiple storage backends -
+    /// the seam that lifts the single-storage-account throughput
+    /// ceiling.
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="LatticeOptions.WalStorageProvider"/> invoked with
+    /// <c>treeId</c>. The per-tree shape covers deployments where
+    /// every partition of a tree shares one backend but distinct
+    /// trees pick distinct backends.
+    /// </description></item>
+    /// <item><description>
+    /// The DI-registered <see cref="IWalStorageProvider"/> singleton.
+    /// This is the silo-wide default registered by
+    /// <c>LatticeServiceCollectionExtensions.AddWalStorage</c>
+    /// (or its package-level wrappers); on a host that did not call
+    /// the factory overload it is the in-memory baseline
+    /// <see cref="InMemoryWalStorageProvider"/>.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// A resolver delegate that returns <see langword="null"/> for the
+    /// supplied pair is undefined behaviour - the call surfaces as a
+    /// <see cref="NullReferenceException"/> when the activation tries
+    /// to dispatch against the result. Hosts wanting to route only
+    /// some partitions to a dedicated backend should fall back to the
+    /// singleton explicitly inside the delegate.
+    /// </para>
+    /// </summary>
+    internal static IWalStorageProvider ResolveStorageProvider(
+        LatticeOptions options,
+        IServiceProvider services,
+        string treeId,
+        int shardIndex)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        return options.WalStorageProviderForPartition?.Invoke(treeId, shardIndex)
+            ?? options.WalStorageProvider?.Invoke(treeId)
+            ?? services.GetRequiredService<IWalStorageProvider>();
     }
 
     /// <summary>

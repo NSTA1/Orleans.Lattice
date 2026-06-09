@@ -238,4 +238,48 @@ public sealed class LatticeWalGcBytePressureTests
             Assert.That(pass3.BytePressureTriggered, Is.True);
         });
     }
+
+    [Test]
+    public async Task RunOnceAsync_routes_each_partition_through_per_partition_resolver()
+    {
+        // Two distinct in-memory providers, one per partition. The DI
+        // singleton is a third, unused provider. The trim pass must hit
+        // the per-partition providers (not the singleton) so a host that
+        // fans the tree's WAL across multiple storage accounts gets its
+        // bytes counted and trimmed against the right backend per
+        // partition.
+        var partitionZeroProvider = new InMemoryWalStorageProvider();
+        var partitionOneProvider = new InMemoryWalStorageProvider();
+        var unusedSingleton = new InMemoryWalStorageProvider();
+
+        await SeedAsync(partitionZeroProvider, 0, Entry(0, "p0a", new byte[40], Hlc(10)));
+        await SeedAsync(partitionOneProvider, 1, Entry(0, "p1a", new byte[40], Hlc(15)));
+
+        var registry = new InMemoryWalCursorRegistry();
+        // Advance the cursor past every seeded entry on both partitions so
+        // the trim is unblocked end-to-end through the per-partition
+        // resolver.
+        await registry.ReportCursorAsync(Tree, "peer", Hlc(20));
+
+        var sut = new LatticeWalGc(
+            Services(unusedSingleton),
+            registry,
+            Monitor(new LatticeOptions
+            {
+                WalPartitions = 2,
+                WalMaxRetainedBytes = 1,
+                WalStorageProviderForPartition = (_, partition) =>
+                    partition == 0 ? partitionZeroProvider : partitionOneProvider,
+            }));
+
+        var report = await sut.RunOnceAsync(Tree);
+
+        var unusedHighest = await unusedSingleton.GetHighestOffsetAsync(Tree, 0, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.EntriesTrimmed, Is.EqualTo(2));
+            Assert.That(report.RetainedBytesAfter, Is.EqualTo(0));
+            Assert.That(unusedHighest, Is.EqualTo(-1));
+        });
+    }
 }

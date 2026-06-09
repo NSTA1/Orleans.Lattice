@@ -985,8 +985,55 @@ public class LatticeOptions
     /// matching tree id. <c>null</c> falls back to the singleton default
     /// (<see cref="InMemoryWalStorageProvider"/> unless replaced by the
     /// host).
+    /// <para>
+    /// <see cref="WalStorageProviderForPartition"/> is consulted first
+    /// when set, so a host that needs to fan WAL traffic for a single
+    /// tree across multiple storage backends - typically several Azure
+    /// Storage accounts to lift past the single-account ~22-24 ke/s
+    /// sustained-throughput ceiling - can do so without forfeiting the
+    /// simpler per-tree shape this property covers.
+    /// </para>
     /// </summary>
     public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }
+
+    /// <summary>
+    /// Optional per-partition <see cref="IWalStorageProvider"/> resolver.
+    /// Invoked with the tree id and the per-tree WAL partition index
+    /// (the value the foreground commit-log writer hashes
+    /// <see cref="WalRecord.Key"/> down to, modulo
+    /// <see cref="WalPartitions"/>); when supplied, the value the
+    /// delegate returns is the durable backend the matching per-shard
+    /// WAL grain activates against. <c>null</c> (the default) leaves
+    /// resolution unchanged: the per-tree
+    /// <see cref="WalStorageProvider"/> is consulted next, and if that
+    /// is also <c>null</c> the DI-registered singleton
+    /// <see cref="IWalStorageProvider"/> wins.
+    /// <para>
+    /// Per-partition configurability is the seam that lets a host fan
+    /// the WAL of a single tree across multiple storage accounts. The
+    /// single-account ceiling on the Azure Tables backend is the
+    /// canonical motivator: a single Standard storage account sustains
+    /// roughly 22 000-24 000 transactions/sec before throttling, so a
+    /// tree whose offered load exceeds that envelope must route
+    /// distinct partitions to distinct accounts to grow further. The
+    /// delegate is invoked once per (tree, partition) pair at WAL
+    /// grain activation time and the resolved provider is captured for
+    /// the lifetime of the activation, so the per-call cost is zero on
+    /// the hot path.
+    /// </para>
+    /// <para>
+    /// The delegate <i>must</i> return a non-<c>null</c> provider for
+    /// every <c>(treeId, partition)</c> pair the writer can route to;
+    /// returning <c>null</c> would short-circuit the resolver and
+    /// surface as a <see cref="NullReferenceException"/> at activation
+    /// time. Hosts that want to route only some partitions to a
+    /// dedicated backend and leave the rest on the silo-wide default
+    /// should fall back to the DI-registered singleton explicitly
+    /// (for example, by capturing it from <c>IServiceProvider</c> at
+    /// silo-startup time and returning it for the un-routed partitions).
+    /// </para>
+    /// </summary>
+    public Func<string, int, IWalStorageProvider>? WalStorageProviderForPartition { get; set; }
 
     /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set, the

@@ -127,8 +127,6 @@ public sealed class LatticeWalGc(
 
         var resolved = optionsMonitor.Get(treeName);
         var partitions = resolved.WalPartitions;
-        var provider = resolved.WalStorageProvider?.Invoke(treeName)
-            ?? services.GetRequiredService<IWalStorageProvider>();
 
         var minCursor = await cursors.GetMinCursorAsync(treeName, cancellationToken).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -159,9 +157,13 @@ public sealed class LatticeWalGc(
 
         // Sample retained bytes once up front so a byte-pressure trigger is
         // decided against the pre-trim footprint. Returns null when the
-        // policy is disabled or the provider does not support byte accounting.
+        // policy is disabled or no partition's provider supports byte
+        // accounting. Resolves the provider per partition so a host that
+        // fans the tree's WAL across multiple storage accounts via
+        // LatticeOptions.WalStorageProviderForPartition still sums every
+        // partition's bytes correctly.
         var (ceiling, retainedBefore) = await SampleRetainedBytesAsync(
-            provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+            services, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var triggered = EvaluateBytePressureTrigger(treeName, resolved, ceiling, retainedBefore);
         if (triggered)
         {
@@ -195,7 +197,14 @@ public sealed class LatticeWalGc(
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            totalTrimmed += await TrimShardAsync(provider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, cancellationToken).ConfigureAwait(false);
+            // Resolve per partition: a host that routes distinct
+            // partitions of a tree's WAL to distinct storage backends
+            // (LatticeOptions.WalStorageProviderForPartition) needs
+            // each TrimShardAsync call to go through the matching
+            // provider, not through whichever provider the tree-level
+            // resolver returned.
+            var partitionProvider = WalShardGrain.ResolveStorageProvider(resolved, services, treeName, partition);
+            totalTrimmed += await TrimShardAsync(partitionProvider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, cancellationToken).ConfigureAwait(false);
         }
 
         if (totalTrimmed > 0)
@@ -206,7 +215,7 @@ public sealed class LatticeWalGc(
         }
 
         var (_, retainedAfter) = await SampleRetainedBytesAsync(
-            provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+            services, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var overThreshold = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedAfter);
 
         return new LatticeWalGcReport(
@@ -326,13 +335,18 @@ public sealed class LatticeWalGc(
     /// Samples the advisory WAL byte-pressure inputs: the configured ceiling
     /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/>) and the retained-byte
     /// total summed across every partition. Returns <c>(null, null)</c> when
-    /// the policy is disabled and <c>(ceiling, null)</c> when the provider does
-    /// not support byte accounting (every partition returned the <c>-1</c>
-    /// sentinel). The policy never trims past the safe frontier; the sampled
+    /// the policy is disabled and <c>(ceiling, null)</c> when no partition's
+    /// provider supports byte accounting (every partition returned the
+    /// <c>-1</c> sentinel). Each partition is sampled against the provider
+    /// returned by <see cref="WalShardGrain.ResolveStorageProvider"/> so the
+    /// per-partition resolver
+    /// (<see cref="LatticeOptions.WalStorageProviderForPartition"/>) is
+    /// honoured when a host fans the tree's WAL across multiple storage
+    /// backends. The policy never trims past the safe frontier; the sampled
     /// total only feeds the advisory report and metrics.
     /// </summary>
     private static async Task<(long? Ceiling, long? Retained)> SampleRetainedBytesAsync(
-        IWalStorageProvider provider,
+        IServiceProvider services,
         LatticeOptions resolved,
         string treeName,
         int partitions,
@@ -349,6 +363,7 @@ public sealed class LatticeWalGc(
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var provider = WalShardGrain.ResolveStorageProvider(resolved, services, treeName, partition);
             var bytes = await provider.GetRetainedByteSizeAsync(treeName, partition, cancellationToken).ConfigureAwait(false);
             if (bytes < 0)
             {

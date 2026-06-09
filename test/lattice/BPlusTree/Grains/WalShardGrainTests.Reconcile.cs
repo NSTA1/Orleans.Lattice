@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
@@ -6,7 +7,11 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Activation-time reconciliation coverage for the
 /// <see cref="IWalStorageProvider.ReconcileAsync"/> hook the WAL grain
-/// invokes between resolving its provider and reading the tail offset.
+/// invokes between resolving its provider and reading the tail offset,
+/// plus the matching provider-resolution rule
+/// (<see cref="WalShardGrain.ResolveStorageProvider"/>) that picks the
+/// concrete backend for a given <c>(treeId, partition)</c> activation
+/// key.
 /// </summary>
 public partial class WalShardGrainTests
 {
@@ -177,5 +182,154 @@ public partial class WalShardGrainTests
 
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => Task.CompletedTask;
+    }
+
+    // ---------------------------------------------------------------
+    // Provider-resolution rule coverage.
+    //
+    // ResolveStorageProvider is the static helper OnActivateAsync calls
+    // to decide which IWalStorageProvider a fresh activation binds to.
+    // Its three-rung precedence (per-partition resolver, per-tree
+    // resolver, DI singleton) is the seam that lets a host fan WAL
+    // traffic for a single tree across multiple storage backends - the
+    // shape that lifts past the single-storage-account throughput
+    // ceiling.
+    // ---------------------------------------------------------------
+
+    [Test]
+    public void ResolveStorageProvider_returns_partition_resolver_result_when_set()
+    {
+        var partitionProvider = new InMemoryWalStorageProvider();
+        var treeProvider = new InMemoryWalStorageProvider();
+        var singleton = new InMemoryWalStorageProvider();
+        var services = BuildResolverServices(singleton);
+        var options = new LatticeOptions
+        {
+            WalStorageProviderForPartition = (_, _) => partitionProvider,
+            WalStorageProvider = _ => treeProvider,
+        };
+
+        var resolved = WalShardGrain.ResolveStorageProvider(options, services, "tree", 3);
+
+        Assert.That(resolved, Is.SameAs(partitionProvider));
+    }
+
+    [Test]
+    public void ResolveStorageProvider_passes_tree_id_and_partition_to_partition_resolver()
+    {
+        string? capturedTree = null;
+        var capturedPartition = -1;
+        var captured = new InMemoryWalStorageProvider();
+        var services = BuildResolverServices(new InMemoryWalStorageProvider());
+        var options = new LatticeOptions
+        {
+            WalStorageProviderForPartition = (treeId, partition) =>
+            {
+                capturedTree = treeId;
+                capturedPartition = partition;
+                return captured;
+            },
+        };
+
+        _ = WalShardGrain.ResolveStorageProvider(options, services, "tree-x", 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(capturedTree, Is.EqualTo("tree-x"));
+            Assert.That(capturedPartition, Is.EqualTo(7));
+        });
+    }
+
+    [Test]
+    public void ResolveStorageProvider_falls_through_to_tree_resolver_when_partition_resolver_null()
+    {
+        var treeProvider = new InMemoryWalStorageProvider();
+        var singleton = new InMemoryWalStorageProvider();
+        var services = BuildResolverServices(singleton);
+        var options = new LatticeOptions
+        {
+            WalStorageProvider = _ => treeProvider,
+        };
+
+        var resolved = WalShardGrain.ResolveStorageProvider(options, services, "tree", 0);
+
+        Assert.That(resolved, Is.SameAs(treeProvider));
+    }
+
+    [Test]
+    public void ResolveStorageProvider_falls_through_to_singleton_when_both_resolvers_null()
+    {
+        var singleton = new InMemoryWalStorageProvider();
+        var services = BuildResolverServices(singleton);
+        var options = new LatticeOptions();
+
+        var resolved = WalShardGrain.ResolveStorageProvider(options, services, "tree", 0);
+
+        Assert.That(resolved, Is.SameAs(singleton));
+    }
+
+    [Test]
+    public void ResolveStorageProvider_routes_distinct_partitions_to_distinct_providers()
+    {
+        // The motivating use case: a tree whose WAL partitions are
+        // distributed across multiple storage accounts. Each partition
+        // gets its own provider activation; the resolver delegate is
+        // the only seam that translates the (tree, partition) tuple
+        // into the right backend.
+        var partitionZero = new InMemoryWalStorageProvider();
+        var partitionOne = new InMemoryWalStorageProvider();
+        var partitionTwo = new InMemoryWalStorageProvider();
+        var providers = new[] { partitionZero, partitionOne, partitionTwo };
+        var services = BuildResolverServices(new InMemoryWalStorageProvider());
+        var options = new LatticeOptions
+        {
+            WalStorageProviderForPartition = (_, partition) => providers[partition],
+        };
+
+        var resolvedZero = WalShardGrain.ResolveStorageProvider(options, services, "tree", 0);
+        var resolvedOne = WalShardGrain.ResolveStorageProvider(options, services, "tree", 1);
+        var resolvedTwo = WalShardGrain.ResolveStorageProvider(options, services, "tree", 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolvedZero, Is.SameAs(partitionZero));
+            Assert.That(resolvedOne, Is.SameAs(partitionOne));
+            Assert.That(resolvedTwo, Is.SameAs(partitionTwo));
+        });
+    }
+
+    [Test]
+    public void ResolveStorageProvider_throws_on_null_options()
+    {
+        var services = BuildResolverServices(new InMemoryWalStorageProvider());
+
+        Assert.That(
+            () => WalShardGrain.ResolveStorageProvider(null!, services, "tree", 0),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ResolveStorageProvider_throws_on_null_services()
+    {
+        Assert.That(
+            () => WalShardGrain.ResolveStorageProvider(new LatticeOptions(), null!, "tree", 0),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ResolveStorageProvider_throws_on_null_tree_id()
+    {
+        var services = BuildResolverServices(new InMemoryWalStorageProvider());
+
+        Assert.That(
+            () => WalShardGrain.ResolveStorageProvider(new LatticeOptions(), services, null!, 0),
+            Throws.ArgumentNullException);
+    }
+
+    private static IServiceProvider BuildResolverServices(IWalStorageProvider singleton)
+    {
+        var collection = new ServiceCollection();
+        collection.AddSingleton(singleton);
+        return collection.BuildServiceProvider();
     }
 }
