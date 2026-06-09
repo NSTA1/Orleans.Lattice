@@ -280,17 +280,55 @@ internal sealed partial class LatticeGrain(
         // to GetAsync (one routing + one shard RPC) and the stage split on
         // GetAsync covers the same diagnostic surface. Operators triaging a
         // versioned-read latency tail can pivot on get.stage.duration.
+        //
+        // The retry loop is inlined (rather than delegated to
+        // RetryOnStaleRoutingAsync) so the per-call success path takes no
+        // closure / delegate allocation. Mirrors the hot-path inlining
+        // choice in GetAsyncCore - the cost is a duplicated retry-loop
+        // shape, the benefit is one closure object + one Func<Task<T>>
+        // delegate + one inner async state machine box eliminated per call
+        // on a busy public read entry point. The retry semantics are
+        // bit-identical to RetryOnStaleRoutingAsync (same deadline, same
+        // four catch arms in the same order).
         var stageTagTree = StageTagTree;
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            return await RetryOnStaleRoutingAsync(
-                async () =>
+            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var invalidOpRetried = false;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
                 {
                     var shard = await GetShardGrainAsync(key);
                     return await shard.GetWithVersionAsync(key);
-                },
-                cancellationToken);
+                }
+                catch (StaleShardRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    InvalidateShardMap();
+                }
+                catch (StaleTreeRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                }
+                catch (ShardActivationTimeoutException)
+                {
+                    // Seed-timeout is retriable by construction; absorb
+                    // into the wall-clock budget with a per-attempt
+                    // backoff (mirrors RetryOnStaleRoutingAsync).
+                    if (DateTime.UtcNow >= deadline) throw;
+                    await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+                }
+                catch (InvalidOperationException)
+                {
+                    if (invalidOpRetried) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                    invalidOpRetried = true;
+                }
+            }
         }
         finally
         {
@@ -322,17 +360,55 @@ internal sealed partial class LatticeGrain(
         // is published here today (structurally identical to GetAsync at
         // the LatticeGrain layer; operators triaging an existence-probe
         // latency tail can pivot on get.stage.duration).
+        //
+        // The retry loop is inlined (rather than delegated to
+        // RetryOnStaleRoutingAsync) so the per-call success path takes no
+        // closure / delegate allocation. Mirrors the hot-path inlining
+        // choice in GetAsyncCore - the cost is a duplicated retry-loop
+        // shape, the benefit is one closure object + one Func<Task<T>>
+        // delegate + one inner async state machine box eliminated per call
+        // on a busy public read entry point. The retry semantics are
+        // bit-identical to RetryOnStaleRoutingAsync (same deadline, same
+        // four catch arms in the same order).
         var stageTagTree = StageTagTree;
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            return await RetryOnStaleRoutingAsync(
-                async () =>
+            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var invalidOpRetried = false;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
                 {
                     var shard = await GetShardGrainAsync(key);
                     return await shard.ExistsAsync(key);
-                },
-                cancellationToken);
+                }
+                catch (StaleShardRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    InvalidateShardMap();
+                }
+                catch (StaleTreeRoutingException)
+                {
+                    if (DateTime.UtcNow >= deadline) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                }
+                catch (ShardActivationTimeoutException)
+                {
+                    // Seed-timeout is retriable by construction; absorb
+                    // into the wall-clock budget with a per-attempt
+                    // backoff (mirrors RetryOnStaleRoutingAsync).
+                    if (DateTime.UtcNow >= deadline) throw;
+                    await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+                }
+                catch (InvalidOperationException)
+                {
+                    if (invalidOpRetried) throw;
+                    if (!TryInvalidateStaleAlias()) throw;
+                    invalidOpRetried = true;
+                }
+            }
         }
         finally
         {

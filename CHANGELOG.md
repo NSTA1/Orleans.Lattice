@@ -12,6 +12,10 @@ Items merged into `main` after the v6.3.0 cut accumulate here under the `### Add
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Changed
+
+- **`ILattice.ExistsAsync` and `ILattice.GetWithVersionAsync` per-call allocations reduced (`-96 B/op` and `-528 B/op` respectively, deterministic across n=3 microbench cohorts).** Both methods previously delegated their stale-routing retry to a closure-based helper (`RetryOnStaleRoutingAsync(async () => { ... }, ct)`), which allocated one `Func<Task<T>>` delegate, one `<>c__DisplayClass*` closure capturing `key`, and one async state-machine box for the inner lambda on every success-path call. The retry loop is now inlined directly on the outer async method - mirroring the inlining choice the v6.3.0 `LatticeGrain.GetAsyncCore` already made for exactly the same reason. Retry semantics (deadline, four catch arms, envelope histogram recording) are bit-identical; no public-API change, no observable behavioural change. `GetAsync` (already inlined) and `GetMany` are unaffected. Measured on the microbench tier (BDN `InProcessEmitToolchain`, `MemoryDiagnoser`): `microbench_point_exists_alloc_b` 3,744 -> 3,648 B/op; `microbench_point_read_with_version_alloc_b` 4,144 -> 3,616 B/op.
+
 ## [6.3.0] - 2026-06-08
 
 Lockstep release across the package family. Ships the F-085 / F-086 / FX-028 / FX-029 / FX-030 / FX-031 / FX-032 closeout of the WAL saturation / shutdown back-pressure work-stream, the F-083 caller-visible read-path histograms, and supporting documentation / benchmark / Grafana surface updates. No public API or wire-format break; safe drop-in from v6.2.x.
