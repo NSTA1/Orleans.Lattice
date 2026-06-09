@@ -564,17 +564,35 @@ internal sealed partial class LatticeGrain(
 
             // Group keys by shard under the map snapshot captured for
             // this attempt.
+            //
+            // Presize discipline (see also the ConcurrentDictionary
+            // presize below): the outer shardBuckets dictionary holds
+            // at most one entry per distinct physical shard that owns
+            // at least one of the requested keys - bounded above by
+            // min(keys.Count, distinct-physical-shard-count). The
+            // ShardMap caches its physical-shard set on first call so
+            // the .Count lookup is O(1) after the first resolve. Each
+            // per-shard bucket list holds at most keys.Count entries
+            // (worst case: all keys hash to the same shard); presizing
+            // to keys.Count over-allocates by N x 8 B per list in the
+            // perfectly-distributed case but eliminates the geometric
+            // 0->4->8->...->keys.Count grow chain that an un-presized
+            // List<string>() would walk on the dominant single-shard
+            // hot path. This is the locus called out as carry-forward
+            // item #3 in POSTMORTEM-2026-06-09-retry-on-stale-routing-tstate.
             var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             Dictionary<int, List<string>> shardBuckets;
             try
             {
-                shardBuckets = new Dictionary<int, List<string>>();
+                var physicalShardCount = shardMap.GetPhysicalShardIndices().Count;
+                shardBuckets = new Dictionary<int, List<string>>(
+                    capacity: Math.Min(keys.Count, physicalShardCount));
                 foreach (var key in keys)
                 {
                     var idx = shardMap.Resolve(key);
                     if (!shardBuckets.TryGetValue(idx, out var bucket))
                     {
-                        bucket = [];
+                        bucket = new List<string>(capacity: keys.Count);
                         shardBuckets[idx] = bucket;
                     }
                     bucket.Add(key);
@@ -604,7 +622,17 @@ internal sealed partial class LatticeGrain(
             {
                 snap1Pair = await FetchRegistrySnapshotAsync();
                 var snap1 = snap1Pair.Snap;
-                concurrent = new ConcurrentDictionary<string, byte[]>();
+                // Presize the per-call merge target: the per-shard
+                // FetchFromShardAsync workers TryAdd one entry per
+                // returned key, so the steady-state final size is
+                // bounded by keys.Count (less when some keys are
+                // absent on the leaf). concurrencyLevel is the
+                // distinct-shard count - one writer per shard task -
+                // which matches the actual parallel-TryAdd fan-in
+                // without over-segmenting the bucket array.
+                concurrent = new ConcurrentDictionary<string, byte[]>(
+                    concurrencyLevel: shardBuckets.Count,
+                    capacity: keys.Count);
                 using (LatticeRegistrySnapshotContext.BeginScope(snap1))
                 {
                     var tasks = new List<Task>(shardBuckets.Count);
