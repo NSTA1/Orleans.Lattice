@@ -181,4 +181,45 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// </summary>
     [Obsolete("Use GetLiveEntryCountAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
     Task<long> GetEntryCountAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Quiesces this WAL shard for an administrative placement move: raises a
+    /// fence that refuses new appends, flushes any pending batch, drains every
+    /// in-flight flush so the source provider's tail is stable, and returns the
+    /// stable highest offset for the move coordinator to copy.
+    /// <para>
+    /// The fence is validated against <paramref name="expectedPlacementVersion"/>:
+    /// if the activation resolved its provider against a different placement
+    /// version the call returns a non-quiesced result rather than fencing, so a
+    /// coordinator working from a stale view aborts instead of quiescing the
+    /// wrong activation. The fence self-heals: if the coordinator never completes
+    /// the cutover, the <paramref name="lease"/> expires and a subsequent append
+    /// deactivates the shard so the next activation re-resolves placement from
+    /// the durable pin.
+    /// </para>
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so the fence is raised
+    /// promptly even while appends are queued against the activation.
+    /// </para>
+    /// </summary>
+    /// <param name="expectedPlacementVersion">The placement version the coordinator observed; the fence is only raised when it matches the activation's resolved version.</param>
+    /// <param name="lease">How long the fence stays valid before an append self-heals by deactivating.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<WalMoveQuiesceResult> QuiesceForMoveAsync(long expectedPlacementVersion, TimeSpan lease, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Forces this WAL shard activation to deactivate as the final cutover step
+    /// of an administrative placement move, after the durable pin has been
+    /// flipped. The next activation (on any silo) re-resolves placement from the
+    /// pin and routes to the new provider. Idempotent and safe to call on an
+    /// already-quiesced shard.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so the deactivation request
+    /// is not queued behind a fenced activation's pending turns.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task DeactivateForMoveAsync(CancellationToken cancellationToken);
 }

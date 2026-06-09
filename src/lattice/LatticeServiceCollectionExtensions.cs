@@ -83,6 +83,14 @@ public static class LatticeServiceCollectionExtensions
         // package replaces the resolver via services.Replace(...) so per-
         // tree mode resolution kicks in only when replication is added.
         builder.AddWalStorage();
+        // Per-tree pinned WAL placement: the catalog turns the durable
+        // per-partition provider keys (recorded in TreeRegistryEntry.WalPlacement)
+        // back into live IWalStorageProvider instances at WAL shard activation.
+        // The "default" key always resolves to the IWalStorageProvider baseline
+        // registered just above; named keys are added through
+        // AddLatticeWalStorageProvider. TryAdd so a host or downstream package
+        // can supply an alternate catalog implementation.
+        builder.Services.TryAddSingleton<IWalStorageProviderCatalog, WalStorageProviderCatalog>();
         builder.Services.TryAddSingleton<ICommitLogWriter, WalCommitLogWriter>();
         builder.Services.TryAddSingleton<ICommitLogReader, WalCommitLogReader>();
         // Per-silo writer drain: wire WalCommitLogWriter.DrainAsync into
@@ -225,6 +233,56 @@ public static class LatticeServiceCollectionExtensions
             // overload exists to prevent.
             builder.Services.Replace(ServiceDescriptor.Singleton<IWalStorageProvider>(factory));
         }
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers a named <see cref="IWalStorageProvider"/> in the silo's
+    /// <see cref="IWalStorageProviderCatalog"/> under <paramref name="key"/>, so
+    /// a tree's WAL partitions can be pinned to it (and moved to it through the
+    /// <see cref="ILatticeAdmin"/> move surface) by referencing the key. This is
+    /// the safe, multi-account fan-out seam: register one provider per storage
+    /// backend (for example one Azure Table account each) under distinct keys,
+    /// then place a hot tree's partitions across them to exceed a single
+    /// account's throughput ceiling.
+    /// <para>
+    /// <b>Cluster contract.</b> Every silo in the cluster must register an
+    /// identical set of keys. A partition pinned to a key that a given silo did
+    /// not register fails closed on that silo (see
+    /// <see cref="LatticeWalProviderMissingException"/>) rather than silently
+    /// re-routing to the baseline provider.
+    /// </para>
+    /// <para>
+    /// The reserved key <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/>
+    /// names the baseline provider registered through <see cref="AddWalStorage"/>
+    /// and cannot be registered here. Registering the same key twice follows
+    /// last-call-wins.
+    /// </para>
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="key">The catalog key. Must not be <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/>.</param>
+    /// <param name="factory">Factory producing the provider for this key.</param>
+    public static ISiloBuilder AddLatticeWalStorageProvider(
+        this ISiloBuilder builder,
+        string key,
+        Func<IServiceProvider, IWalStorageProvider> factory)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentNullException.ThrowIfNull(factory);
+        if (string.Equals(key, IWalStorageProviderCatalog.DefaultProviderKey, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"'{IWalStorageProviderCatalog.DefaultProviderKey}' is reserved for the baseline provider registered through AddWalStorage; choose a different key.",
+                nameof(key));
+        }
+
+        // Keyed singleton resolved lazily by the catalog on first use; last-call
+        // -wins via Replace so re-registering a key swaps the factory.
+        builder.Services.Replace(ServiceDescriptor.KeyedSingleton<IWalStorageProvider>(key, (sp, _) => factory(sp)));
+        // Marker enumerated by the catalog to learn its key set. One per key;
+        // de-duplicated by the catalog's HashSet so a re-registration is benign.
+        builder.Services.AddSingleton(new WalStorageProviderRegistration(key));
         return builder;
     }
 

@@ -30,7 +30,6 @@ public partial class WalShardGrainTests
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
-        var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         // Per-tree options are now resolved through the monitor on every
         // grain call (matches the BPlusTree/Grains convention); wire the
@@ -40,7 +39,6 @@ public partial class WalShardGrainTests
         monitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
         var grain = new WalShardGrain(
             grainContext,
-            services,
             monitor,
             TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)),
             CreatePermissiveResolver(),
@@ -659,9 +657,8 @@ public partial class WalShardGrainTests
     public void InitializeForTestingAsync_throws_on_null_treeId()
     {
         var grainContext = Substitute.For<IGrainContext>();
-        var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
+        var grain = new WalShardGrain(grainContext, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), CancellationToken.None),
@@ -672,9 +669,8 @@ public partial class WalShardGrainTests
     public void InitializeForTestingAsync_throws_on_null_provider()
     {
         var grainContext = Substitute.For<IGrainContext>();
-        var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, services, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
+        var grain = new WalShardGrain(grainContext, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, CancellationToken.None),
@@ -703,13 +699,11 @@ public partial class WalShardGrainTests
         // so the assertion measures only the AppendAsync code path.
         var provider = new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
-        var services = Substitute.For<IServiceProvider>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
 
         var grain = new WalShardGrain(
             grainContext,
-            services,
             monitor,
             TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)),
             CreatePermissiveResolver(),

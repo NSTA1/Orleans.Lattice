@@ -250,4 +250,20 @@ internal static class TypeAliases
     internal const string WalShardPage = "olr.wp";
     internal const string WalShardShippingEntry = "olr.ws";
     internal const string WalShardShippingPage = "olr.wg";
+
+    // Per-tree pinned WAL placement + ILatticeAdmin managed-move surface.
+    // The pin is durable registry state; the move DTOs are the public
+    // admin contract for auditing and relocating a partition's log between
+    // storage backends registered in the IWalStorageProviderCatalog.
+    internal const string WalPlacementPin = "ol.wpp";
+    internal const string WalPlacement = "ol.wpl";
+    internal const string WalPlacementAudit = "ol.wpa";
+    internal const string WalPartitionPlacement = "ol.wpe";
+    internal const string WalMovePlan = "ol.wmp";
+    internal const string WalMoveReceipt = "ol.wmr";
+    internal const string WalMoveOptions = "ol.wmo";
+    internal const string WalMoveOutcome = "ol.wmc";
+    internal const string WalMoveQuiesceResult = "ol.wqr";
+    internal const string LatticeWalProviderMissing = "ol.wpm";
+    internal const string LatticeWalQuiescing = "ol.wqx";
 }

@@ -124,4 +124,18 @@ internal sealed record TreeRegistryEntry
     /// </para>
     /// </summary>
     [Id(9)] public int? WalPartitions { get; init; }
+
+    /// <summary>
+    /// Durable per-partition WAL storage placement for this tree, or
+    /// <see langword="null"/> on rows persisted before the placement slot was
+    /// introduced (and on trees that never moved a partition away from the
+    /// baseline provider). When <see langword="null"/>, every partition
+    /// resolves to <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/>,
+    /// exactly matching pre-placement behaviour. Seeded to the default pin at
+    /// first <see cref="ILatticeRegistry.RegisterAsync"/> and mutated only
+    /// through the managed <see cref="ILatticeAdmin"/> move surface via
+    /// <see cref="ILatticeRegistry.UpdateWalPlacementAsync"/>, which version-
+    /// stamps each change for fail-closed fencing.
+    /// </summary>
+    [Id(10)] public WalPlacementPin? WalPlacement { get; init; }
 }

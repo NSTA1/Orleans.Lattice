@@ -147,4 +147,36 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// registered.
     /// </summary>
     Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId);
+
+    /// <summary>
+    /// Returns the durable WAL placement pin for <paramref name="treeId"/>.
+    /// Never returns <see langword="null"/>: a tree with no persisted placement
+    /// (a fresh registry row, or a row persisted before the placement slot was
+    /// introduced) resolves to <see cref="State.WalPlacementPin.Create"/> - the
+    /// default pin in which every partition uses
+    /// <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/>.
+    /// </summary>
+    Task<State.WalPlacementPin> GetWalPlacementAsync(string treeId);
+
+    /// <summary>
+    /// Atomically re-points a single WAL partition to a new provider key using
+    /// compare-and-swap on the placement <see cref="State.WalPlacementPin.Version"/>.
+    /// The registry grain is non-reentrant and singleton-keyed, so the
+    /// read-validate-write sequence is atomic across concurrent callers.
+    /// <para>
+    /// Throws <see cref="InvalidOperationException"/> when the current pin's
+    /// version does not equal <paramref name="expectedVersion"/> - the caller
+    /// observed a stale placement and must re-read and retry. On success the
+    /// returned pin carries the bumped version (<paramref name="expectedVersion"/>
+    /// + 1). Routing a partition back to
+    /// <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/> removes its
+    /// override, so a reversal restores the exact prior shape via the same call.
+    /// Upserts the registry entry if the tree is not yet registered.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL placement is being changed.</param>
+    /// <param name="expectedVersion">The placement version the caller last observed.</param>
+    /// <param name="partition">The WAL partition to re-point.</param>
+    /// <param name="providerKey">The catalog key the partition should resolve to.</param>
+    Task<State.WalPlacementPin> UpdateWalPlacementAsync(string treeId, long expectedVersion, int partition, string providerKey);
 }

@@ -93,4 +93,91 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// </returns>
     [AlwaysInterleave]
     Task<ClusterStorageUsageReport> RefreshStorageUsageAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the current durable WAL placement for <paramref name="treeId"/> -
+    /// which <see cref="IWalStorageProviderCatalog"/> key backs each WAL
+    /// partition and the placement version to use when moving a partition.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<WalPlacement> GetWalPlacementAsync(string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Audits <paramref name="treeId"/>'s WAL placement against this silo's
+    /// <see cref="IWalStorageProviderCatalog"/>, flagging any partition pinned
+    /// to a provider key the silo cannot resolve. Use this to detect
+    /// configuration drift (a silo missing a key another silo registered) before
+    /// WAL shards begin to fail closed.
+    /// </summary>
+    /// <param name="treeId">The tree to audit.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<WalPlacementAudit> AuditWalPlacementAsync(string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Computes a read-only preview of moving partition
+    /// <paramref name="partition"/> of <paramref name="treeId"/> to
+    /// <paramref name="targetProviderKey"/> - the range that would be copied and
+    /// whether the target resolves - without quiescing the partition or changing
+    /// any placement.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect.</param>
+    /// <param name="partition">The WAL partition to preview a move for.</param>
+    /// <param name="targetProviderKey">The catalog key the partition would be moved to.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<WalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves partition <paramref name="partition"/> of <paramref name="treeId"/>
+    /// to <paramref name="targetProviderKey"/>: quiesces the source WAL shard,
+    /// copies its retained tail to the target (preserving offsets and the source
+    /// trim floor), optionally verifies the copy, atomically flips the placement
+    /// pin with compare-and-swap, then forces the shard to deactivate so the
+    /// next activation routes to the target.
+    /// <para>
+    /// The source partition is <b>never trimmed</b> by this call: the moved
+    /// range remains on the source so the move can be reverted (move the
+    /// partition back) until an explicit
+    /// <see cref="ReclaimMovedWalSourceAsync"/> discards it. The operation is
+    /// idempotent - re-executing a move whose pin already points at the target
+    /// re-runs the post-flip repair without copying again.
+    /// </para>
+    /// <para>
+    /// To revert a move, call this method again with the partition's original
+    /// provider key as <paramref name="targetProviderKey"/>.
+    /// </para>
+    /// <para>
+    /// <b>Not</b> marked <see cref="AlwaysInterleaveAttribute"/>: the move saga
+    /// mutates placement and must run as a non-reentrant turn on the admin
+    /// singleton so two concurrent moves of the same partition cannot interleave.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose partition to move.</param>
+    /// <param name="partition">The WAL partition to move.</param>
+    /// <param name="targetProviderKey">The catalog key to move the partition to.</param>
+    /// <param name="options">Move tunables, or <see langword="null"/> for <see cref="WalMoveOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, WalMoveOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Discards the orphaned tail a completed <see cref="ExecuteWalMoveAsync"/>
+    /// left on a partition's former source provider. This is the explicit,
+    /// irreversible second step of a move: after calling it the move can no
+    /// longer be reverted by moving the partition back, because the source no
+    /// longer holds the data.
+    /// <para>
+    /// Fails closed if the placement pin still maps the partition to
+    /// <paramref name="sourceProviderKey"/> (reclaiming the live provider would
+    /// destroy the active log); the partition must already have been moved away
+    /// from the source first.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose former source to reclaim.</param>
+    /// <param name="partition">The WAL partition whose source to reclaim.</param>
+    /// <param name="sourceProviderKey">The provider key the partition was moved away from.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default);
 }

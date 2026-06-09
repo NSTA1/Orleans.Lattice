@@ -9,10 +9,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// cluster-wide administrative queries across every registered tree reported
 /// by the tree registry.
 /// </summary>
-internal sealed class LatticeAdminGrain(
+internal sealed partial class LatticeAdminGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
-    ILogger<LatticeAdminGrain> logger) : ILatticeAdmin, IGrainBase
+    ILogger<LatticeAdminGrain> logger,
+    LatticeOptionsResolver? optionsResolver = null,
+    IWalStorageProviderCatalog? walProviderCatalog = null,
+    IWalRecordEncoder? walRecordEncoder = null) : ILatticeAdmin, IGrainBase
 {
     IGrainContext IGrainBase.GrainContext => context;
 
