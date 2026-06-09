@@ -41,7 +41,8 @@ namespace Orleans.Lattice.BPlusTree;
 internal sealed class LatticeOptionsResolver(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
-    ILogger<LatticeOptionsResolver>? logger = null)
+    ILogger<LatticeOptionsResolver>? logger = null,
+    IWalStorageProviderCatalog? walProviderCatalog = null)
 {
     private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
 
@@ -155,6 +156,94 @@ internal sealed class LatticeOptionsResolver(
     {
         ArgumentNullException.ThrowIfNull(treeId);
         _walPartitionsCache.TryRemove(treeId, out _);
+    }
+
+    /// <summary>
+    /// Reads the durable WAL placement pin for <paramref name="treeId"/> fresh
+    /// from the registry (no caching - the pin is read once per WAL shard
+    /// activation and once per GC tick, never on the append hot path). System
+    /// trees resolve synchronously to the default pin without touching the
+    /// registry, avoiding the registry-tree bootstrap cycle.
+    /// </summary>
+    public ValueTask<State.WalPlacementPin> GetWalPlacementSnapshotAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return new ValueTask<State.WalPlacementPin>(State.WalPlacementPin.Create());
+        }
+        return new ValueTask<State.WalPlacementPin>(LoadWalPlacementAsync(treeId));
+    }
+
+    private async Task<State.WalPlacementPin> LoadWalPlacementAsync(string treeId)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        return await registry.GetWalPlacementAsync(treeId).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="IWalStorageProvider"/> backing
+    /// <paramref name="partition"/> of <paramref name="treeId"/> against the
+    /// supplied placement <paramref name="pin"/>, <b>failing closed</b> if the
+    /// pinned catalog key cannot be resolved on this silo.
+    /// <para>
+    /// For the default key (<see cref="IWalStorageProviderCatalog.DefaultProviderKey"/>)
+    /// the legacy per-tree <see cref="LatticeOptions.WalStorageProvider"/>
+    /// resolver still wins when configured, exactly preserving pre-placement
+    /// behaviour; otherwise the catalog's baseline provider is used. For any
+    /// other key the catalog is the sole source and a missing key throws
+    /// <see cref="LatticeWalProviderMissingException"/> rather than silently
+    /// re-routing the partition's log to the baseline.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL partition is being placed.</param>
+    /// <param name="pin">The placement pin to resolve against.</param>
+    /// <param name="partition">The WAL partition index.</param>
+    /// <returns>The resolved provider and the catalog key it was resolved under.</returns>
+    public (IWalStorageProvider Provider, string ProviderKey) ResolveWalProvider(
+        string treeId, State.WalPlacementPin pin, int partition)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(pin);
+        if (walProviderCatalog is null)
+        {
+            throw new InvalidOperationException(
+                "WAL placement resolution requires an IWalStorageProviderCatalog; none was supplied to LatticeOptionsResolver.");
+        }
+
+        var key = pin.ResolveKey(partition);
+        if (string.Equals(key, IWalStorageProviderCatalog.DefaultProviderKey, StringComparison.Ordinal))
+        {
+            // Backward-compatible default-key path: the per-tree legacy resolver
+            // delegate wins when configured, otherwise the catalog baseline.
+            var legacy = optionsMonitor.Get(treeId).WalStorageProvider?.Invoke(treeId);
+            if (legacy is not null)
+            {
+                return (legacy, key);
+            }
+        }
+
+        if (!walProviderCatalog.TryGet(key, out var provider))
+        {
+            throw new LatticeWalProviderMissingException(treeId, partition, key);
+        }
+        return (provider, key);
+    }
+
+    /// <summary>
+    /// Reads the placement pin fresh and resolves the provider backing
+    /// <paramref name="partition"/> of <paramref name="treeId"/>, returning the
+    /// observed placement version alongside the provider so the caller can fence
+    /// against a concurrent placement change. Fails closed per
+    /// <see cref="ResolveWalProvider"/>.
+    /// </summary>
+    public async Task<(IWalStorageProvider Provider, long PlacementVersion, string ProviderKey)> GetWalProviderAsync(
+        string treeId, int partition)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var pin = await GetWalPlacementSnapshotAsync(treeId).ConfigureAwait(false);
+        var (provider, key) = ResolveWalProvider(treeId, pin, partition);
+        return (provider, pin.Version, key);
     }
 
     /// <summary>Resolves the effective options for <paramref name="treeId"/>.</summary>

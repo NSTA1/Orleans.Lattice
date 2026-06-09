@@ -289,6 +289,11 @@ public partial class ReplicationShipperGrainTests
         public Task<long> GetEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);
 #pragma warning restore LATTICE0001
+
+        public Task<WalMoveQuiesceResult> QuiesceForMoveAsync(long expectedPlacementVersion, TimeSpan lease, CancellationToken cancellationToken) =>
+            Task.FromResult(new WalMoveQuiesceResult(true, Entries.Count - 1, expectedPlacementVersion, "default"));
+
+        public Task DeactivateForMoveAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     /// <summary>

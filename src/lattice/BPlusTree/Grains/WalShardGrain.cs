@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Diagnostics;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Runtime;
 
@@ -48,7 +47,6 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed class WalShardGrain(
     IGrainContext context,
-    IServiceProvider services,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
     ILatticeMergeModeResolver modeResolver,
@@ -60,6 +58,41 @@ internal sealed class WalShardGrain(
     private IWalStorageProvider _provider = null!;
     private long _nextOffset;
     private bool _initialized;
+
+    /// <summary>
+    /// Placement version this activation resolved its <see cref="_provider"/>
+    /// against (read fresh from the durable WAL placement pin at activation).
+    /// Carried through <see cref="QuiesceForMoveAsync"/> so a move coordinator
+    /// working from a stale view aborts rather than quiescing an activation that
+    /// has already re-resolved against a newer placement.
+    /// </summary>
+    private long _placementVersion;
+
+    /// <summary>
+    /// Provider catalog key this activation's <see cref="_provider"/> was
+    /// resolved under (<see cref="IWalStorageProviderCatalog.DefaultProviderKey"/>
+    /// for the baseline / legacy resolver path). Reported back to the move
+    /// coordinator for its audit receipt.
+    /// </summary>
+    private string _providerKey = IWalStorageProviderCatalog.DefaultProviderKey;
+
+    /// <summary>
+    /// When <see langword="true"/>, this activation is fenced for an in-progress
+    /// administrative placement move: new appends are refused with
+    /// <see cref="LatticeWalQuiescingException"/> so the move coordinator can
+    /// copy a stable source tail and flip the placement pin without racing a
+    /// concurrent writer. Mutated and read under <see cref="_stateGate"/>.
+    /// </summary>
+    private bool _moveFenced;
+
+    /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> deadline after which a fenced
+    /// activation self-heals (deactivates so the next activation re-resolves
+    /// placement from the durable pin) on the next append, bounding the outage
+    /// if a move coordinator fails mid-move. Mutated and read under
+    /// <see cref="_stateGate"/>.
+    /// </summary>
+    private long _fenceDeadlineTicks;
 
     /// <summary>
     /// Cached <see cref="LatticeMetrics.TagTree"/> tag bound to this
@@ -288,8 +321,17 @@ internal sealed class WalShardGrain(
         _walMaxPendingBatchesTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagWalMaxPendingBatches, options.WalMaxPendingBatches);
 
-        _provider = options.WalStorageProvider?.Invoke(_treeId)
-            ?? services.GetRequiredService<IWalStorageProvider>();
+        // Resolve the provider through the durable per-partition WAL placement
+        // pin (read fresh from the registry at activation - never on the append
+        // hot path; the resolved provider is cached in _provider for the
+        // activation lifetime). The default-key path preserves the legacy
+        // LatticeOptions.WalStorageProvider resolver exactly; a partition pinned
+        // to a named catalog key that this silo cannot resolve fails closed.
+        var (resolvedProvider, placementVersion, providerKey) =
+            await optionsResolver.GetWalProviderAsync(_treeId, _shardIndex).ConfigureAwait(true);
+        _provider = resolvedProvider;
+        _placementVersion = placementVersion;
+        _providerKey = providerKey;
         // Reconcile any half-committed state a multi-phase backend
         // (e.g. Azure Table's per-batch partition + manifest layout)
         // may have left from a previous activation's crash between
@@ -564,6 +606,7 @@ internal sealed class WalShardGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
+        ThrowIfMoveFenced();
 
         // Phase A horizontal-scaling diagnostic: stamp the wall-clock
         // entry timestamp so we can attribute caller-visible append
@@ -659,46 +702,64 @@ internal sealed class WalShardGrain(
             throw stickyPost;
         }
 
-        TaskCompletionSource<long> tcs;
-        bool kickFlush;
-        int queueDepth;
+        TaskCompletionSource<long> tcs = null!;
+        bool kickFlush = false;
+        int queueDepth = 0;
+        bool fenced = false;
         lock (_stateGate)
         {
-            var offset = _nextOffset++;
-            _pendingSegments.Add(segment);
-            _pendingOffsets.Add(offset);
-            _pendingBatchSizeBytes += size;
+            // Re-check the move fence under the gate: a quiesce may have raised
+            // it during the cutover-loop await above. Refusing here guarantees
+            // no offset is assigned (and so no append commits to the source
+            // provider) once the fence is up.
+            if (_moveFenced)
+            {
+                fenced = true;
+            }
+            else
+            {
+                var offset = _nextOffset++;
+                _pendingSegments.Add(segment);
+                _pendingOffsets.Add(offset);
+                _pendingBatchSizeBytes += size;
 
-            tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pendingAcks.Add(tcs);
+                tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _pendingAcks.Add(tcs);
 
-            // Decide whether to start a flush right now. Three triggers:
-            //   1. _inFlight.Count < maxPending: there is spare capacity
-            //      in the in-flight chain, so admitting this entry into
-            //      its own flush keeps the latency floor flat while
-            //      pipelining against any slots already in motion. The
-            //      original protocol used `== 0` here, which made the
-            //      pipelined cap unreachable under steady fan-in (every
-            //      caller arriving while one flush was in motion parked
-            //      on `acks[i].Task` and the chain depth never grew past
-            //      one). With cap = 1 (the wire-compat default)
-            //      `< maxPending` collapses back to `== 0`, so the
-            //      single-in-flight protocol is unchanged.
-            //   2. pending is full (reached WalMaxBatchEntries): kick a
-            //      flush to fan out under multi-batch caps; otherwise the
-            //      next entry's cutover would block on the head.
-            //   3. pending is at the byte budget: same reasoning for the
-            //      byte limit. Compared with the cutover loop's check,
-            //      this is the "exact-fit" boundary - the next entry would
-            //      definitely cut over.
-            // Always honour the cap: never kick when at it. Once we
-            // are under the cap the lone-entry latency floor (1) alone
-            // is sufficient to admit this caller's flush; the pack
-            // clauses (2) and (3) are subsumed by it. Keeping them out
-            // of the predicate avoids re-evaluating the same boolean
-            // twice on the hot path.
-            kickFlush = _inFlight.Count < maxPending;
-            queueDepth = _pendingSegments.Count;
+                // Decide whether to start a flush right now. Three triggers:
+                //   1. _inFlight.Count < maxPending: there is spare capacity
+                //      in the in-flight chain, so admitting this entry into
+                //      its own flush keeps the latency floor flat while
+                //      pipelining against any slots already in motion. The
+                //      original protocol used `== 0` here, which made the
+                //      pipelined cap unreachable under steady fan-in (every
+                //      caller arriving while one flush was in motion parked
+                //      on `acks[i].Task` and the chain depth never grew past
+                //      one). With cap = 1 (the wire-compat default)
+                //      `< maxPending` collapses back to `== 0`, so the
+                //      single-in-flight protocol is unchanged.
+                //   2. pending is full (reached WalMaxBatchEntries): kick a
+                //      flush to fan out under multi-batch caps; otherwise the
+                //      next entry's cutover would block on the head.
+                //   3. pending is at the byte budget: same reasoning for the
+                //      byte limit. Compared with the cutover loop's check,
+                //      this is the "exact-fit" boundary - the next entry would
+                //      definitely cut over.
+                // Always honour the cap: never kick when at it. Once we
+                // are under the cap the lone-entry latency floor (1) alone
+                // is sufficient to admit this caller's flush; the pack
+                // clauses (2) and (3) are subsumed by it. Keeping them out
+                // of the predicate avoids re-evaluating the same boolean
+                // twice on the hot path.
+                kickFlush = _inFlight.Count < maxPending;
+                queueDepth = _pendingSegments.Count;
+            }
+        }
+        if (fenced)
+        {
+            ReturnSegment(segment);
+            throw new LatticeWalQuiescingException(
+                $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
         }
         LatticeMetrics.WalAppendQueueDepth.Record(queueDepth, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
         if (kickFlush)
@@ -723,6 +784,7 @@ internal sealed class WalShardGrain(
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
+        ThrowIfMoveFenced();
 
         if (entries.Count == 0)
         {
@@ -844,38 +906,61 @@ internal sealed class WalShardGrain(
                 throw stickyPost;
             }
 
-            bool kickFlush;
+            bool kickFlush = false;
+            bool fenced = false;
             lock (_stateGate)
             {
-                var offset = _nextOffset++;
-                offsets[i] = offset;
-                _pendingSegments.Add(segments[i]);
-                _pendingOffsets.Add(offset);
-                _pendingBatchSizeBytes += size;
+                // Re-check the move fence under the gate (a quiesce may have
+                // raised it during a cutover await earlier in this batch loop).
+                if (_moveFenced)
+                {
+                    fenced = true;
+                }
+                else
+                {
+                    var offset = _nextOffset++;
+                    offsets[i] = offset;
+                    _pendingSegments.Add(segments[i]);
+                    _pendingOffsets.Add(offset);
+                    _pendingBatchSizeBytes += size;
 
-                var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-                acks[i] = tcs;
-                _pendingAcks.Add(tcs);
+                    var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    acks[i] = tcs;
+                    _pendingAcks.Add(tcs);
 
-                // Only kick a flush mid-batch when the per-batch caps
-                // are saturated; deferring the latency-floor trigger to
-                // the final entry of the batch is what gives the batched
-                // path its win - the whole batch shares a single flush
-                // window when it fits under the caps.
-                // The final-entry branch reproduces the AppendAsync
-                // protocol's latency-floor guarantee (a lone entry must
-                // not wait for a future cutover) once the entire batch
-                // has been enqueued, and now also opens a new flush when
-                // the chain has spare capacity below WalMaxPendingBatches
-                // so the cap is actually reachable under steady fan-in.
-                // With cap = 1 the outer `_inFlight.Count < maxPending`
-                // guard collapses to `_inFlight.Count == 0`, so the
-                // single-in-flight protocol is preserved bit-for-bit.
-                var isLast = i == count - 1;
-                kickFlush = _inFlight.Count < maxPending
-                    && (_pendingSegments.Count >= maxEntries
-                        || _pendingBatchSizeBytes >= maxBytes
-                        || isLast);
+                    // Only kick a flush mid-batch when the per-batch caps
+                    // are saturated; deferring the latency-floor trigger to
+                    // the final entry of the batch is what gives the batched
+                    // path its win - the whole batch shares a single flush
+                    // window when it fits under the caps.
+                    // The final-entry branch reproduces the AppendAsync
+                    // protocol's latency-floor guarantee (a lone entry must
+                    // not wait for a future cutover) once the entire batch
+                    // has been enqueued, and now also opens a new flush when
+                    // the chain has spare capacity below WalMaxPendingBatches
+                    // so the cap is actually reachable under steady fan-in.
+                    // With cap = 1 the outer `_inFlight.Count < maxPending`
+                    // guard collapses to `_inFlight.Count == 0`, so the
+                    // single-in-flight protocol is preserved bit-for-bit.
+                    var isLast = i == count - 1;
+                    kickFlush = _inFlight.Count < maxPending
+                        && (_pendingSegments.Count >= maxEntries
+                            || _pendingBatchSizeBytes >= maxBytes
+                            || isLast);
+                }
+            }
+            if (fenced)
+            {
+                // Refused mid-batch: return every not-yet-enqueued segment and
+                // surface the transient quiesce signal. Entries already enqueued
+                // at indexes < i are owned by the pending/in-flight batches and
+                // settle (or fault) on their own TCSs.
+                for (var j = i; j < count; j++)
+                {
+                    ReturnSegment(segments[j]);
+                }
+                throw new LatticeWalQuiescingException(
+                    $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
             }
             if (kickFlush)
             {
@@ -1800,6 +1885,109 @@ internal sealed class WalShardGrain(
                 $"{nameof(WalShardGrain)} has not been initialized. The grain is normally activated by Orleans, "
                 + $"which calls {nameof(OnActivateAsync)}; unit tests may bypass that by calling {nameof(InitializeForTestingAsync)}.");
         }
+    }
+
+    /// <summary>
+    /// Throws <see cref="LatticeWalQuiescingException"/> when this activation is
+    /// fenced for an in-progress placement move. If the fence lease has expired
+    /// (the move coordinator failed mid-move), self-heals by requesting
+    /// deactivation so the next activation re-resolves placement from the
+    /// durable pin, then throws so the caller retries against the fresh
+    /// activation.
+    /// </summary>
+    private void ThrowIfMoveFenced()
+    {
+        bool fenced;
+        long deadlineTicks;
+        lock (_stateGate)
+        {
+            fenced = _moveFenced;
+            deadlineTicks = _fenceDeadlineTicks;
+        }
+        if (!fenced)
+        {
+            return;
+        }
+
+        if (Stopwatch.GetTimestamp() < deadlineTicks)
+        {
+            throw new LatticeWalQuiescingException(
+                $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
+        }
+
+        // Lease expired without a cutover: keep the fence raised and request
+        // deactivation. We deliberately do NOT clear _moveFenced here - because
+        // the append methods are [AlwaysInterleave], clearing the flag before
+        // the activation is actually gone would open a window in which an
+        // interleaved append slips through and writes to the stale cached
+        // provider (catastrophic if the move has, by then, flipped the pin).
+        // The fence therefore holds until this activation dies; the next
+        // activation re-resolves placement from the durable pin (resuming on the
+        // old provider if the move aborted, or routing to the new provider if
+        // the pin was already flipped) and comes up unfenced.
+        Trace($"move.quiesce.lease_expired tree={_treeId} shard={_shardIndex}");
+        context.Deactivate(new DeactivationReason(
+            DeactivationReasonCode.ApplicationRequested,
+            "WAL move quiesce lease expired"));
+        throw new LatticeWalQuiescingException(
+            $"WAL shard {_treeId}/{_shardIndex} quiesce lease expired; re-resolving placement.");
+    }
+
+    /// <inheritdoc />
+    public async Task<WalMoveQuiesceResult> QuiesceForMoveAsync(
+        long expectedPlacementVersion, TimeSpan lease, CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+
+        // Abort (without fencing) when the coordinator's expected placement
+        // version does not match the version this activation resolved against:
+        // the activation has already re-resolved placement, so quiescing it
+        // would fence the wrong provider.
+        if (_placementVersion != expectedPlacementVersion)
+        {
+            return new WalMoveQuiesceResult(
+                Quiesced: false,
+                HighestOffsetInclusive: -1,
+                ObservedPlacementVersion: _placementVersion,
+                ProviderKey: _providerKey);
+        }
+
+        // Raise the fence so new offset assignments are refused, then flush the
+        // pending batch and drain every in-flight flush so the source tail is
+        // stable before the coordinator copies it.
+        var leaseTicks = lease <= TimeSpan.Zero
+            ? long.MaxValue
+            : Stopwatch.GetTimestamp() + (long)(lease.TotalSeconds * Stopwatch.Frequency);
+        bool hasPending;
+        lock (_stateGate)
+        {
+            _moveFenced = true;
+            _fenceDeadlineTicks = leaseTicks;
+            hasPending = _pendingSegments.Count > 0;
+        }
+        if (hasPending)
+        {
+            StartFlush();
+        }
+        await DrainInFlightAsync(Options.WalDrainBudget).ConfigureAwait(true);
+
+        var highest = await _provider
+            .GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken)
+            .ConfigureAwait(true);
+        return new WalMoveQuiesceResult(
+            Quiesced: true,
+            HighestOffsetInclusive: highest,
+            ObservedPlacementVersion: _placementVersion,
+            ProviderKey: _providerKey);
+    }
+
+    /// <inheritdoc />
+    public Task DeactivateForMoveAsync(CancellationToken cancellationToken)
+    {
+        context.Deactivate(new DeactivationReason(
+            DeactivationReasonCode.ApplicationRequested,
+            "WAL placement move cutover"));
+        return Task.CompletedTask;
     }
 
     /// <summary>

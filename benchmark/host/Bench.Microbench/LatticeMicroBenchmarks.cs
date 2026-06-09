@@ -1866,7 +1866,6 @@ public class LatticeMicroBenchmarks
 
         _leafQueueWal = new WalShardGrain(
             grainContext,
-            Substitute.For<IServiceProvider>(),
             monitor,
             new LatticeOptionsResolver(_grainFactory, monitor),
             modeResolver,

@@ -76,6 +76,73 @@ Net effect: a host-supplied factory is **order-independent** with respect to `Ad
 This contract was tightened to fix a silent-drop bug: previously both branches used `TryAddSingleton`, so a host that called `AddLattice` before `AddAzureTableWalStorage` would silently end up on the in-memory baseline because `AddLattice`'s own `AddWalStorage()` call had already won the `TryAdd` race.
 
 The replication package additionally exposes per-tree overrides via `LatticeReplicationOptions.WalStorageProvider` for trees that should opt out of the silo-wide default.
+## Multi-account fan-out: named providers and pinned placement
+
+A single storage account has a throughput ceiling (Azure Table tops out around 22-24 ke/s per account). A tree whose write rate exceeds one account's ceiling needs its WAL partitions spread across **several** accounts. The seam for that is a per-silo **provider catalogue** keyed by string, plus a per-tree **placement pin** that maps each WAL partition to a catalogue key. The pin is durable cluster state; a partition's placement only ever changes through the managed `ILatticeAdmin` move surface, never as a side effect of a config edit.
+
+### Naming providers in the catalogue
+
+`AddWalStorage(factory)` still registers the **baseline** provider under the reserved key `default`. Register every *additional* backend under a distinct key with `AddLatticeWalStorageProvider`:
+
+```csharp verify
+siloBuilder.AddWalStorage(sp => new InMemoryWalStorageProvider());
+siloBuilder.AddLatticeWalStorageProvider("table-account-b", sp => new InMemoryWalStorageProvider());
+siloBuilder.AddLatticeWalStorageProvider("table-account-c", sp => new InMemoryWalStorageProvider());
+```
+
+**Cluster contract.** Every silo must register an identical key set. A partition pinned to a key a given silo did not register **fails closed** on that silo (`LatticeWalProviderMissingException`) rather than silently falling back to the baseline. The reserved key `default` cannot be registered through `AddLatticeWalStorageProvider` - it always names the `AddWalStorage` baseline. Re-registering a key is last-call-wins.
+
+Hosts that never call `AddLatticeWalStorageProvider` are unaffected: every tree's pin defaults to `default`, so the resolution path is identical to the pre-placement behaviour.
+
+### Inspecting placement
+
+`ILatticeAdmin` is the cluster-wide administrative singleton; resolve it with `grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin")`. `GetWalPlacementAsync` returns the durable pin (the default key plus any per-partition overrides and the pin's CAS version). `AuditWalPlacementAsync` additionally reports, for the silo that serves the call, whether every pinned key is resolvable there - the cheapest way to catch a missing-key misconfiguration before it fails a partition closed:
+
+```csharp verify
+var admin = grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin");
+WalPlacement placement = await admin.GetWalPlacementAsync("orders", cancellationToken);
+WalPlacementAudit audit = await admin.AuditWalPlacementAsync("orders", cancellationToken);
+if (!audit.AllResolvableOnThisSilo)
+{
+    // One or more partitions are pinned to a key this silo did not register.
+}
+```
+
+### Moving a partition to another account
+
+Moving a partition is a two-call workflow: `PlanWalMoveAsync` is a read-only dry run that reports what a move would copy (offset range, entry count, whether the target is already current, whether the target key resolves on the serving silo); `ExecuteWalMoveAsync` performs the move:
+
+```csharp verify
+var admin = grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin");
+WalMovePlan plan = await admin.PlanWalMoveAsync("orders", partition: 0, "table-account-b", cancellationToken);
+WalMoveReceipt receipt = await admin.ExecuteWalMoveAsync(
+    "orders", partition: 0, "table-account-b", WalMoveOptions.Default, cancellationToken);
+```
+
+`ExecuteWalMoveAsync` runs a quiesce-copy-cutover saga: it fences the partition's WAL grain (briefly refusing appends), copies the retained entry range to the target provider **preserving every offset**, re-converges on any entries that landed during the copy, flips the durable pin under a compare-and-swap, then forces the WAL grain to deactivate so its next activation - on any silo - reads the new pin and binds the new provider. Appends resume against the target with no offset discontinuity. The move is **non-destructive**: the source's entries are retained (`receipt.SourceRetained == true`) so the operation is recoverable.
+
+`WalMoveOptions.Default` is fine for most moves; override `QuiesceLease`, `CopyPageSize`, or `VerifyAfterCopy` for large partitions or stricter post-copy verification.
+
+### Reverting and reclaiming
+
+Because a move only rewrites the pin, **reverting is just another move** back to the original key - the source still holds every entry, so the reverse move copies nothing new and flips the pin back:
+
+```csharp verify
+var admin = grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin");
+WalMoveReceipt reverted = await admin.ExecuteWalMoveAsync(
+    "orders", partition: 0, "default", WalMoveOptions.Default, cancellationToken);
+```
+
+Once you are confident a forward move is permanent, reclaim the now-redundant copy on the **source** provider with `ReclaimMovedWalSourceAsync`. It refuses (throws) if the partition is still pinned to that source - you can only reclaim a placement the pin has already moved away from:
+
+```csharp verify
+var admin = grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin");
+WalMoveReceipt reclaim = await admin.ReclaimMovedWalSourceAsync(
+    "orders", partition: 0, "default", cancellationToken);
+```
+
+> **Single-partition scope.** Each `ExecuteWalMoveAsync` / `ReclaimMovedWalSourceAsync` call moves exactly one partition. Spreading a tree across N accounts today means N-1 sequential move calls. A batch / whole-tree rebalance API is tracked as a follow-up.
+
 
 ## Provider catalogue
 

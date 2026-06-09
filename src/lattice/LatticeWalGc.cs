@@ -117,6 +117,27 @@ public sealed class LatticeWalGc(
         }
     }
 
+    // Resolved lazily so a host (or a unit test) that constructs the GC with a
+    // bare IServiceProvider still works: when the resolver is absent the GC
+    // falls back to the legacy single-provider-per-tree resolution. When
+    // present, the GC resolves a provider per partition from the durable WAL
+    // placement pin so a moved partition is trimmed on its own backend.
+    private BPlusTree.LatticeOptionsResolver? _optionsResolverCache;
+    private bool _optionsResolverResolved;
+
+    private BPlusTree.LatticeOptionsResolver? OptionsResolver
+    {
+        get
+        {
+            if (!_optionsResolverResolved)
+            {
+                _optionsResolverCache = services.GetService<BPlusTree.LatticeOptionsResolver>();
+                _optionsResolverResolved = true;
+            }
+            return _optionsResolverCache;
+        }
+    }
+
     /// <inheritdoc />
     public async Task<LatticeWalGcReport> RunOnceAsync(
         string treeName,
@@ -127,8 +148,35 @@ public sealed class LatticeWalGc(
 
         var resolved = optionsMonitor.Get(treeName);
         var partitions = resolved.WalPartitions;
-        var provider = resolved.WalStorageProvider?.Invoke(treeName)
-            ?? services.GetRequiredService<IWalStorageProvider>();
+
+        // Resolve a provider per partition from the durable WAL placement pin so
+        // a partition that was moved to a named storage backend is sampled and
+        // trimmed on that backend rather than on the baseline provider. When the
+        // resolver is unavailable (a bare-IServiceProvider construction in a
+        // unit test) fall back to the legacy single-provider-per-tree shape.
+        var pin = OptionsResolver is { } pinResolver
+            ? await pinResolver.GetWalPlacementSnapshotAsync(treeName).ConfigureAwait(false)
+            : BPlusTree.State.WalPlacementPin.Create();
+
+        IWalStorageProvider? ResolvePartitionProvider(int partition)
+        {
+            if (OptionsResolver is { } r)
+            {
+                try
+                {
+                    return r.ResolveWalProvider(treeName, pin, partition).Provider;
+                }
+                catch (LatticeWalProviderMissingException)
+                {
+                    // This silo cannot resolve the partition's pinned provider
+                    // key; skip it (another silo that registered the key trims
+                    // it) rather than failing the whole tree's GC pass.
+                    return null;
+                }
+            }
+            return resolved.WalStorageProvider?.Invoke(treeName)
+                ?? services.GetRequiredService<IWalStorageProvider>();
+        }
 
         var minCursor = await cursors.GetMinCursorAsync(treeName, cancellationToken).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
@@ -161,7 +209,7 @@ public sealed class LatticeWalGc(
         // decided against the pre-trim footprint. Returns null when the
         // policy is disabled or the provider does not support byte accounting.
         var (ceiling, retainedBefore) = await SampleRetainedBytesAsync(
-            provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+            ResolvePartitionProvider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var triggered = EvaluateBytePressureTrigger(treeName, resolved, ceiling, retainedBefore);
         if (triggered)
         {
@@ -195,7 +243,14 @@ public sealed class LatticeWalGc(
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            totalTrimmed += await TrimShardAsync(provider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, cancellationToken).ConfigureAwait(false);
+            var partitionProvider = ResolvePartitionProvider(partition);
+            if (partitionProvider is null)
+            {
+                // Partition pinned to a provider key this silo cannot resolve;
+                // skip trimming it here.
+                continue;
+            }
+            totalTrimmed += await TrimShardAsync(partitionProvider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, cancellationToken).ConfigureAwait(false);
         }
 
         if (totalTrimmed > 0)
@@ -206,7 +261,7 @@ public sealed class LatticeWalGc(
         }
 
         var (_, retainedAfter) = await SampleRetainedBytesAsync(
-            provider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
+            ResolvePartitionProvider, resolved, treeName, partitions, cancellationToken).ConfigureAwait(false);
         var overThreshold = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedAfter);
 
         return new LatticeWalGcReport(
@@ -332,7 +387,7 @@ public sealed class LatticeWalGc(
     /// total only feeds the advisory report and metrics.
     /// </summary>
     private static async Task<(long? Ceiling, long? Retained)> SampleRetainedBytesAsync(
-        IWalStorageProvider provider,
+        Func<int, IWalStorageProvider?> resolveProvider,
         LatticeOptions resolved,
         string treeName,
         int partitions,
@@ -349,6 +404,14 @@ public sealed class LatticeWalGc(
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var provider = resolveProvider(partition);
+            if (provider is null)
+            {
+                // Partition pinned to a provider key this silo cannot resolve;
+                // omit it from the sample (its bytes are accounted by the silo
+                // that owns the key).
+                continue;
+            }
             var bytes = await provider.GetRetainedByteSizeAsync(treeName, partition, cancellationToken).ConfigureAwait(false);
             if (bytes < 0)
             {
