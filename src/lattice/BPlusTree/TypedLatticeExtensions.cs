@@ -809,4 +809,46 @@ public static class TypedLatticeExtensions
         string endExclusive,
         CancellationToken cancellationToken = default) =>
         lattice.DeleteRangeAsync(predicate, startInclusive, endExclusive, JsonLatticeSerializer<T>.Default, cancellationToken);
+
+    /// <summary>
+    /// Opens a stateful, resumable <b>conditional</b> range-delete cursor over
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) that
+    /// tombstones only the keys whose value of type <typeparamref name="T"/>
+    /// matches <paramref name="predicate"/>. The predicate expression is compiled
+    /// to the serializable predicate IR with <paramref name="serializer"/> and
+    /// persisted on the cursor spec, so each <see cref="ILattice.DeleteRangeStepAsync"/>
+    /// re-applies the identical filter - including after a silo failover, where
+    /// the continuation resumes against the same logical matched set. Each step
+    /// records its matched key set in the WAL so replay and replication reproduce
+    /// it without re-evaluating the predicate. Returns the opaque cursor id.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenDeleteRangeCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenDeleteRangeCursorWherePredicateAsync(ir, startInclusive, endExclusive, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenDeleteRangeCursorAsync{T}(ILattice, Expression{Func{T, bool}}, string, string, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<string> OpenDeleteRangeCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenDeleteRangeCursorAsync(predicate, startInclusive, endExclusive, JsonLatticeSerializer<T>.Default, cancellationToken);
 }

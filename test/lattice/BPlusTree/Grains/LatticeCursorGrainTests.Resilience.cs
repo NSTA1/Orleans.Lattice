@@ -217,5 +217,56 @@ public class LatticeCursorGrainResilienceTests
         _ = lattice2.DidNotReceive().KeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>());
     }
 
+    [Test]
+    public async Task DeleteRangeStep_persisted_predicate_filters_probe_and_delete_and_resumes_on_fresh_activation()
+    {
+        var predicate = LatticePredicatePushdown.Compile<ResilienceScored>(
+            s => s.Score >= 5, JsonLatticeSerializer<ResilienceScored>.Default);
+        var spec = new LatticeCursorSpec
+        {
+            Kind = LatticeCursorKind.DeleteRange,
+            StartInclusive = "a",
+            EndExclusive = "z",
+            Predicate = predicate,
+        };
+
+        // Step 1: first activation deletes a bounded page of matching keys and
+        // checkpoints the continuation key.
+        var sharedState = new FakePersistentState<LatticeCursorState>();
+        var (grain1, _, lattice1, _) = CreateGrain(existingState: sharedState);
+        lattice1.KeysWherePredicateAsync(Arg.Any<LatticePredicateNode>(), "a", "z", false)
+            .Returns(ToAsyncEnumerable(new[] { "a", "b", "c" })); // > budget => partial step
+        lattice1.DeleteRangeWherePredicateAsync(Arg.Any<LatticePredicateNode>(), "a", "b\0")
+            .Returns(Task.FromResult(2));
+
+        await grain1.OpenAsync(TreeId, spec);
+        var firstProgress = await grain1.DeleteRangeStepAsync(2);
+
+        Assert.That(firstProgress.DeletedThisStep, Is.EqualTo(2));
+        Assert.That(firstProgress.IsComplete, Is.False);
+        Assert.That(sharedState.State.LastYieldedKey, Is.EqualTo("b"));
+        Assert.That(sharedState.State.Spec.Predicate, Is.Not.Null,
+            "compiled predicate must persist on the cursor spec");
+        _ = lattice1.DidNotReceive().KeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>());
+        _ = lattice1.DidNotReceive().DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+        // Step 2: a fresh activation over the same persisted state (failover)
+        // must re-derive the predicate from the spec and continue from the
+        // checkpoint, still using the predicate-filtered probe + delete.
+        var (grain2, _, lattice2, _) = CreateGrain(existingState: sharedState);
+        lattice2.KeysWherePredicateAsync(Arg.Any<LatticePredicateNode>(), "b\0", "z", false)
+            .Returns(ToAsyncEnumerable(new[] { "e" })); // <= budget => final step
+        lattice2.DeleteRangeWherePredicateAsync(Arg.Any<LatticePredicateNode>(), "b\0", "z")
+            .Returns(Task.FromResult(1));
+
+        var secondProgress = await grain2.DeleteRangeStepAsync(2);
+
+        Assert.That(secondProgress.DeletedThisStep, Is.EqualTo(1));
+        Assert.That(secondProgress.IsComplete, Is.True);
+        Assert.That(secondProgress.DeletedTotal, Is.EqualTo(3));
+        _ = lattice2.Received(1).DeleteRangeWherePredicateAsync(Arg.Any<LatticePredicateNode>(), "b\0", "z");
+        _ = lattice2.DidNotReceive().DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
     private sealed record ResilienceScored(int Index, int Score);
 }

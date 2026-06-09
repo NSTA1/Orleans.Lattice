@@ -774,6 +774,21 @@ public interface ILattice : IGrainWithStringKey
     Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="OpenDeleteRangeCursorAsync"/>, but each
+    /// <see cref="DeleteRangeStepAsync"/> tombstones only the in-range keys whose
+    /// value matches the server-side predicate IR <paramref name="predicate"/>.
+    /// The predicate is persisted on the cursor spec, so a durable cursor that
+    /// reactivates after a silo failover re-applies the identical filter and the
+    /// continuation tombstones the same logical set. Each step records its matched
+    /// key set in the WAL so replay and replication reproduce it without
+    /// re-evaluating the predicate. Intended to be reached through the typed
+    /// <c>OpenDeleteRangeCursorAsync&lt;T&gt;</c> extension, which compiles the
+    /// predicate expression to IR.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenDeleteRangeCursorWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the next page of up to <paramref name="pageSize"/> keys from
     /// the cursor identified by <paramref name="cursorId"/>. Returns an empty
     /// page with <see cref="LatticeCursorKeysPage.HasMore"/> <c>false</c>

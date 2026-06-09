@@ -289,7 +289,14 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public async Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
+    public Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
+        => OpenDeleteRangeCursorCoreAsync(startInclusive, endExclusive, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<string> OpenDeleteRangeCursorWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
+        => OpenDeleteRangeCursorCoreAsync(startInclusive, endExclusive, predicate, cancellationToken);
+
+    private async Task<string> OpenDeleteRangeCursorCoreAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(startInclusive);
@@ -303,6 +310,7 @@ internal sealed partial class LatticeGrain
             StartInclusive = startInclusive,
             EndExclusive = endExclusive,
             Reverse = false,
+            Predicate = predicate,
         });
         return cursorId;
     }
