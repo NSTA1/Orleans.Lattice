@@ -21,7 +21,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
 - [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
-- [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-partition WAL storage resolver (`LatticeOptions.WalStorageProvider`) for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
+- [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-tree pinned WAL placement with `ILatticeAdmin` move surface for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
 
 ### Shipped
 
@@ -102,7 +102,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-_None._
+- [FX-034](https://github.com/NSTA1/Orleans.Lattice/issues/633) - Batch / multi-partition WAL move (extend `ExecuteWalMoveAsync` to accept multiple `(partition, targetProviderKey)` pairs)
 
 ### Shipped
 
