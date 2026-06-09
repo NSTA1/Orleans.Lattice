@@ -1077,6 +1077,26 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// Paginated entry scan over the 4-shard fanout tree. Mirror of
+    /// <see cref="KeyScan_PageOver4Shards"/> but exercises
+    /// <see cref="ILattice.EntriesAsync(string, string, bool, bool?, CancellationToken)"/>,
+    /// which uses a parallel per-shard cursor structure in
+    /// LatticeGrain.Entries.cs. The symmetric attribution lane lets
+    /// presize / structural optimisations targeting Entries.cs surface
+    /// against the same scan-window shape as Keys.cs - the only
+    /// difference between the two scan paths is the page payload shape
+    /// (key strings vs key+value pairs) and the per-call dedup HashSet
+    /// presize (which PR #209 added on Keys.cs but missed on Entries.cs).
+    /// </summary>
+    [Benchmark(Description = "Entry scan 4 shards")]
+    public async Task EntryScan_PageOver4Shards()
+    {
+        await foreach (var _ in _fanoutLattice.EntriesAsync(_fanoutScanStart, _fanoutScanEnd))
+        {
+        }
+    }
+
+    /// <summary>
     /// Single <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>
     /// against a depth-2 tree. Each invocation drives
     /// <see cref="ShardRootGrain"/>'s traversal through
