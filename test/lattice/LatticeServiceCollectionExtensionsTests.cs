@@ -271,4 +271,71 @@ public class LatticeServiceCollectionExtensionsTests
             Is.EqualTo(ServiceLifetime.Singleton),
             "the dispatcher must be a singleton so the per-silo observer collection is stable");
     }
+
+    [Test]
+    public void AddLatticeWalStorageProvider_registers_keyed_provider_and_catalog_marker()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        var secondary = new InMemoryWalStorageProvider();
+        builder.AddWalStorage();
+        builder.AddLatticeWalStorageProvider("secondary", _ => secondary);
+
+        var provider = services.BuildServiceProvider();
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetKeyedService<IWalStorageProvider>("secondary"), Is.SameAs(secondary));
+            Assert.That(
+                provider.GetServices<WalStorageProviderRegistration>().Select(r => r.Key),
+                Does.Contain("secondary"));
+        });
+    }
+
+    [Test]
+    public void AddLatticeWalStorageProvider_keeps_baseline_default_provider_intact()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        var baseline = new InMemoryWalStorageProvider();
+        builder.AddWalStorage(_ => baseline);
+        builder.AddLatticeWalStorageProvider("secondary", _ => new InMemoryWalStorageProvider());
+
+        var provider = services.BuildServiceProvider();
+        // Registering a named provider must not displace the default provider.
+        Assert.That(provider.GetRequiredService<IWalStorageProvider>(), Is.SameAs(baseline));
+    }
+
+    [Test]
+    public void AddLatticeWalStorageProvider_rejects_reserved_default_key()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        Assert.That(
+            () => builder.AddLatticeWalStorageProvider(
+                IWalStorageProviderCatalog.DefaultProviderKey, _ => new InMemoryWalStorageProvider()),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void AddLatticeWalStorageProvider_is_last_call_wins_for_same_key()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        var first = new InMemoryWalStorageProvider();
+        var second = new InMemoryWalStorageProvider();
+        builder.AddWalStorage();
+        builder.AddLatticeWalStorageProvider("acct", _ => first);
+        builder.AddLatticeWalStorageProvider("acct", _ => second);
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetKeyedService<IWalStorageProvider>("acct"), Is.SameAs(second));
+    }
 }
