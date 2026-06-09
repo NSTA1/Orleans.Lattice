@@ -9,12 +9,31 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class LatticeGrain
 {
     /// <inheritdoc />
-    public async Task<string> OpenKeyCursorAsync(
+    public Task<string> OpenKeyCursorAsync(
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
         bool pointInTime = false,
         CancellationToken cancellationToken = default)
+        => OpenKeyCursorCoreAsync(startInclusive, endExclusive, reverse, pointInTime, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<string> OpenKeyCursorWherePredicateAsync(
+        LatticePredicateNode predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+        => OpenKeyCursorCoreAsync(startInclusive, endExclusive, reverse, pointInTime, predicate, cancellationToken);
+
+    private async Task<string> OpenKeyCursorCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        bool reverse,
+        bool pointInTime,
+        LatticePredicateNode? predicate,
+        CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
@@ -27,17 +46,37 @@ internal sealed partial class LatticeGrain
             EndExclusive = endExclusive,
             Reverse = reverse,
             PointInTime = pointInTime,
+            Predicate = predicate,
         });
         return cursorId;
     }
 
     /// <inheritdoc />
-    public async Task<string> OpenEntryCursorAsync(
+    public Task<string> OpenEntryCursorAsync(
         string? startInclusive = null,
         string? endExclusive = null,
         bool reverse = false,
         bool pointInTime = false,
         CancellationToken cancellationToken = default)
+        => OpenEntryCursorCoreAsync(startInclusive, endExclusive, reverse, pointInTime, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<string> OpenEntryCursorWherePredicateAsync(
+        LatticePredicateNode predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+        => OpenEntryCursorCoreAsync(startInclusive, endExclusive, reverse, pointInTime, predicate, cancellationToken);
+
+    private async Task<string> OpenEntryCursorCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        bool reverse,
+        bool pointInTime,
+        LatticePredicateNode? predicate,
+        CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
@@ -50,6 +89,7 @@ internal sealed partial class LatticeGrain
             EndExclusive = endExclusive,
             Reverse = reverse,
             PointInTime = pointInTime,
+            Predicate = predicate,
         });
         return cursorId;
     }
@@ -60,7 +100,16 @@ internal sealed partial class LatticeGrain
         string? endExclusive = null,
         bool reverse = false,
         CancellationToken cancellationToken = default)
-        => OpenSnapshotCursorAsync(LatticeCursorKind.Keys, startInclusive, endExclusive, reverse, cancellationToken);
+        => OpenSnapshotCursorAsync(LatticeCursorKind.Keys, startInclusive, endExclusive, reverse, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<string> OpenSnapshotKeyCursorWherePredicateAsync(
+        LatticePredicateNode predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+        => OpenSnapshotCursorAsync(LatticeCursorKind.Keys, startInclusive, endExclusive, reverse, predicate, cancellationToken);
 
     /// <inheritdoc />
     public Task<string> OpenSnapshotEntryCursorAsync(
@@ -68,7 +117,16 @@ internal sealed partial class LatticeGrain
         string? endExclusive = null,
         bool reverse = false,
         CancellationToken cancellationToken = default)
-        => OpenSnapshotCursorAsync(LatticeCursorKind.Entries, startInclusive, endExclusive, reverse, cancellationToken);
+        => OpenSnapshotCursorAsync(LatticeCursorKind.Entries, startInclusive, endExclusive, reverse, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<string> OpenSnapshotEntryCursorWherePredicateAsync(
+        LatticePredicateNode predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+        => OpenSnapshotCursorAsync(LatticeCursorKind.Entries, startInclusive, endExclusive, reverse, predicate, cancellationToken);
 
     /// <summary>
     /// Shared open path for zero-observable-writes snapshot cursors.
@@ -114,6 +172,7 @@ internal sealed partial class LatticeGrain
         string? startInclusive,
         string? endExclusive,
         bool reverse,
+        LatticePredicateNode? predicate,
         CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
@@ -203,6 +262,7 @@ internal sealed partial class LatticeGrain
             Reverse = reverse,
             PointInTime = true,
             ZeroObservableWrites = true,
+            Predicate = predicate,
         }, coordinate);
         return cursorId;
     }

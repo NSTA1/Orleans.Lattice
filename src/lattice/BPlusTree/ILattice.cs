@@ -681,11 +681,28 @@ public interface ILattice : IGrainWithStringKey
     Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="OpenKeyCursorAsync"/>, but persists the predicate IR
+    /// <paramref name="predicate"/> on the cursor spec so every page yields
+    /// only keys whose value matches, server-side. The IR survives silo
+    /// failover (the spec is persisted) and composes with point-in-time mode.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenKeyCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opens a stateful entry-enumeration cursor. Semantically identical to
     /// <see cref="OpenKeyCursorAsync"/> but yields
     /// <see cref="KeyValuePair{TKey,TValue}"/> via <see cref="NextEntriesAsync"/>.
     /// </summary>
     Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="OpenEntryCursorAsync"/>, but persists the predicate IR
+    /// <paramref name="predicate"/> on the cursor spec so every page yields
+    /// only entries whose value matches, server-side.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenEntryCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a zero-observable-writes snapshot key cursor over the given
@@ -707,12 +724,29 @@ public interface ILattice : IGrainWithStringKey
     Task<string> OpenSnapshotKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="OpenSnapshotKeyCursorAsync"/>, but persists the
+    /// predicate IR <paramref name="predicate"/> on the cursor spec so every
+    /// snapshot page yields only matching keys. The filter composes with the
+    /// WAL-coordinate replay and the frozen saga-decision snapshot.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenSnapshotKeyCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opens a zero-observable-writes snapshot entry cursor. Semantically
     /// identical to <see cref="OpenSnapshotKeyCursorAsync"/> but yields
     /// <see cref="KeyValuePair{TKey,TValue}"/> via
     /// <see cref="NextEntriesAsync"/>.
     /// </summary>
     Task<string> OpenSnapshotEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="OpenSnapshotEntryCursorAsync"/>, but persists the
+    /// predicate IR <paramref name="predicate"/> on the cursor spec so every
+    /// snapshot page yields only matching entries.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenSnapshotEntryCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a stateful, resumable range-delete cursor over

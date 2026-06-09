@@ -180,4 +180,42 @@ public class LatticeCursorGrainResilienceTests
             "Resumed activation must continue from persisted LastYieldedKey + \\0.");
         Assert.That(sharedState.State.LastYieldedKey, Is.EqualTo("d"));
     }
+
+    [Test]
+    public async Task Persisted_predicate_is_reapplied_on_fresh_activation()
+    {
+        var predicate = LatticePredicatePushdown.Compile<ResilienceScored>(
+            s => s.Score >= 5, JsonLatticeSerializer<ResilienceScored>.Default);
+        var spec = new LatticeCursorSpec { Kind = LatticeCursorKind.Keys, Predicate = predicate };
+
+        // Step 1: first activation opens with a predicate spec and pages once.
+        var sharedState = new FakePersistentState<LatticeCursorState>();
+        var (grain1, _, lattice1, _) = CreateGrain(existingState: sharedState);
+        lattice1.KeysWherePredicateAsync(Arg.Any<LatticePredicateNode>(), null, null, false)
+            .Returns(ToAsyncEnumerable(new[] { "a", "b" }));
+
+        await grain1.OpenAsync(TreeId, spec);
+        var firstPage = await grain1.NextKeysAsync(2);
+
+        Assert.That(firstPage.Keys, Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(sharedState.State.Spec.Predicate, Is.Not.Null,
+            "The compiled predicate must be persisted on the cursor spec.");
+        _ = lattice1.Received(1).KeysWherePredicateAsync(Arg.Any<LatticePredicateNode>(), null, null, false);
+        _ = lattice1.DidNotReceive().KeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>());
+
+        // Step 2: a fresh activation over the same persisted state (failover)
+        // must re-derive the predicate from the spec, not fall back to an
+        // unfiltered scan.
+        var (grain2, _, lattice2, _) = CreateGrain(existingState: sharedState);
+        lattice2.KeysWherePredicateAsync(Arg.Any<LatticePredicateNode>(), "b\0", null, false)
+            .Returns(ToAsyncEnumerable(new[] { "c", "d" }));
+
+        var secondPage = await grain2.NextKeysAsync(2);
+
+        Assert.That(secondPage.Keys, Is.EqualTo(new[] { "c", "d" }));
+        _ = lattice2.Received(1).KeysWherePredicateAsync(Arg.Any<LatticePredicateNode>(), "b\0", null, false);
+        _ = lattice2.DidNotReceive().KeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>());
+    }
+
+    private sealed record ResilienceScored(int Index, int Score);
 }

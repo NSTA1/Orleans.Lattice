@@ -252,9 +252,13 @@ internal sealed partial class LatticeCursorGrain(
         var (effStart, effEnd) = ComputeEffectiveRange();
 
         var collected = new List<string>(pageSize);
+        var predicate = state.State.Spec.Predicate;
         using (BeginPointInTimeScopeIfNeeded())
         {
-            await foreach (var key in lattice.KeysAsync(effStart, effEnd, state.State.Spec.Reverse))
+            var keys = predicate is { } pred
+                ? lattice.KeysWherePredicateAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
+                : lattice.KeysAsync(effStart, effEnd, state.State.Spec.Reverse);
+            await foreach (var key in keys)
             {
                 collected.Add(key);
                 if (collected.Count >= pageSize) break;
@@ -320,9 +324,13 @@ internal sealed partial class LatticeCursorGrain(
         var (effStart, effEnd) = ComputeEffectiveRange();
 
         var collected = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var predicate = state.State.Spec.Predicate;
         using (BeginPointInTimeScopeIfNeeded())
         {
-            await foreach (var entry in lattice.EntriesAsync(effStart, effEnd, state.State.Spec.Reverse))
+            var entries = predicate is { } pred
+                ? lattice.EntriesWherePredicateAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
+                : lattice.EntriesAsync(effStart, effEnd, state.State.Spec.Reverse);
+            await foreach (var entry in entries)
             {
                 collected.Add(entry);
                 if (collected.Count >= pageSize) break;

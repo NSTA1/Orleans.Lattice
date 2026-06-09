@@ -617,4 +617,153 @@ public static class TypedLatticeExtensions
         bool? prefetch = null,
         CancellationToken cancellationToken = default) =>
         lattice.ValuesAsync(JsonLatticeSerializer<T>.Default, predicate, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+
+    // ── Predicate-filtered cursors ──────────────────────────────
+
+    /// <summary>
+    /// Opens a stateful key cursor whose every page is filtered server-side by
+    /// <paramref name="predicate"/>. The compiled IR is persisted on the cursor
+    /// spec, so a durable cursor that reactivates after a silo failover
+    /// re-applies the identical filter. Composes with point-in-time mode.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenKeyCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool, CancellationToken)"/>
+    public static Task<string> OpenKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenKeyCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+
+    /// <summary>
+    /// Opens a stateful entry cursor whose every page is filtered server-side
+    /// by <paramref name="predicate"/>. See
+    /// <see cref="OpenKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool, CancellationToken)"/>
+    /// for the durability and composition contract.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenEntryCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenEntryCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool, CancellationToken)"/>
+    public static Task<string> OpenEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenEntryCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+
+    /// <summary>
+    /// Opens a zero-observable-writes snapshot key cursor whose every page is
+    /// filtered server-side by <paramref name="predicate"/>. The filter
+    /// composes with the WAL-coordinate replay and frozen saga-decision
+    /// snapshot, and is persisted so a reactivated cursor re-applies it.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenSnapshotKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenSnapshotKeyCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenSnapshotKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, CancellationToken)"/>
+    public static Task<string> OpenSnapshotKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenSnapshotKeyCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, cancellationToken);
+
+    /// <summary>
+    /// Opens a zero-observable-writes snapshot entry cursor whose every page is
+    /// filtered server-side by <paramref name="predicate"/>. See
+    /// <see cref="OpenSnapshotKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, CancellationToken)"/>.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenSnapshotEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenSnapshotEntryCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenSnapshotEntryCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, CancellationToken)"/>
+    public static Task<string> OpenSnapshotEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenSnapshotEntryCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, cancellationToken);
 }

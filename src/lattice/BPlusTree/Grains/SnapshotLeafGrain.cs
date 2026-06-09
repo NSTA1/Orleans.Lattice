@@ -137,7 +137,7 @@ internal sealed class SnapshotLeafGrain(
     }
 
     /// <inheritdoc />
-    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue)
+    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null)
     {
         EnsureOpened();
         if (limit <= 0)
@@ -161,6 +161,8 @@ internal sealed class SnapshotLeafGrain(
             }
             if (value.IsTombstone || value.IsExpired(nowTicks))
                 continue;
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+                continue;
             result.Add(key);
             if (result.Count >= limit)
                 break;
@@ -169,7 +171,7 @@ internal sealed class SnapshotLeafGrain(
     }
 
     /// <inheritdoc />
-    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue)
+    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null)
     {
         EnsureOpened();
         if (limit <= 0)
@@ -189,6 +191,8 @@ internal sealed class SnapshotLeafGrain(
             if (value.IsTombstone || value.IsExpired(nowTicks))
                 continue;
             if (value.Value is null)
+                continue;
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
                 continue;
             result.Add(new KeyValuePair<string, byte[]>(key, value.Value));
             if (result.Count >= limit)
