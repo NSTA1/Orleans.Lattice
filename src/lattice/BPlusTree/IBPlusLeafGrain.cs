@@ -14,9 +14,9 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<byte[]?> GetAsync(string key);
 
     /// <summary>
-    /// Gets the value and its <see cref="Primitives.HybridLogicalClock"/> version for
+    /// Gets the value and its <see cref="Orleans.Lattice.HybridLogicalClock"/> version for
     /// <paramref name="key"/>. Returns a <see cref="VersionedValue"/> with
-    /// <c>null</c> value and <see cref="Primitives.HybridLogicalClock.Zero"/> version
+    /// <c>null</c> value and <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/> version
     /// when the key is absent or tombstoned.
     /// </summary>
     Task<VersionedValue> GetWithVersionAsync(string key);
@@ -105,7 +105,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
-    /// current <see cref="Primitives.HybridLogicalClock"/> matches <paramref name="expectedVersion"/>.
+    /// current <see cref="Orleans.Lattice.HybridLogicalClock"/> matches <paramref name="expectedVersion"/>.
     /// Returns a <see cref="CasResult"/> indicating whether the write was applied.
     /// </summary>
     Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
@@ -521,7 +521,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Returns all live (non-tombstoned, non-expired) entries in this leaf as
     /// raw <see cref="LwwValue{T}"/> records, preserving both the source
-    /// <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/> version and
+    /// <see cref="Orleans.Lattice.HybridLogicalClock"/> version and
     /// the absolute <c>ExpiresAtTicks</c> ( TTL). Used by snapshot /
     /// restore paths that must not lose TTL metadata when transferring entries
     /// between shards or trees. Not a read-path API: public read contracts
@@ -636,7 +636,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// prepare-phase shadow-forward into this leaf was dropped by a mid-saga
     /// shard-split / drain race. In every other case the existing
     /// pending-flip path is the authoritative source and the backstop is a
-    /// no-op. The backstop stamp is <see cref="Primitives.HybridLogicalClock.Tick"/>
+    /// no-op. The backstop stamp is <see cref="Orleans.Lattice.HybridLogicalClock.Tick"/>
     /// of the leaf's current clock, guaranteeing strict-greater HLC ordering
     /// against any stale pre-saga value already in
     /// <see cref="State.LeafNodeState.Entries"/>. The backstop persists via
@@ -663,7 +663,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Returns the leaf's current
-    /// <see cref="Primitives.HybridLogicalClock"/>. Used by
+    /// <see cref="Orleans.Lattice.HybridLogicalClock"/>. Used by
     /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> to compute a
     /// terminal-mark HLC strictly greater than every prepare's stamp in
     /// the saga, so cross-cluster receivers - which merge inbound

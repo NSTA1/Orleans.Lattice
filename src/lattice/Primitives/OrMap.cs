@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Primitives;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// An observed-remove (OR) map CRDT keyed by <typeparamref name="TKey"/>

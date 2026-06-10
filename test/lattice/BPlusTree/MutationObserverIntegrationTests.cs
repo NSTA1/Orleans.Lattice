@@ -190,7 +190,7 @@ public sealed partial class MutationObserverIntegrationTests
     {
         var tree = await _fixture.CreateTreeAsync("obs-e2e-vc");
 
-        var vc = new Orleans.Lattice.Primitives.VersionVector();
+        var vc = new Orleans.Lattice.VersionVector();
         vc.Tick("cluster-peer");
 
         using (LatticeVectorClockContext.With(vc))

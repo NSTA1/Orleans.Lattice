@@ -460,7 +460,7 @@ internal sealed partial class BPlusLeafGrain
             var maxBase = baseTerminalStamp.CompareTo(state.State.Clock) > 0
                 ? baseTerminalStamp
                 : state.State.Clock;
-            var terminalStamp = new Primitives.HybridLogicalClock
+            var terminalStamp = new Orleans.Lattice.HybridLogicalClock
             {
                 WallClockTicks = maxBase.WallClockTicks,
                 Counter = maxBase.Counter + 1,
@@ -1218,7 +1218,7 @@ internal sealed partial class BPlusLeafGrain
                     baseClock = preExisting.Timestamp;
                 }
             }
-            var stamp = Primitives.HybridLogicalClock.Tick(baseClock);
+            var stamp = Orleans.Lattice.HybridLogicalClock.Tick(baseClock);
             var origin = LatticeOriginContext.Current;
             var vc = LatticeVectorClockContext.Current;
             var writer = ResolveCommitLogWriter();

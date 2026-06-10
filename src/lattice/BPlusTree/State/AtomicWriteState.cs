@@ -53,7 +53,7 @@ internal sealed class AtomicPreValue
     /// original frontier. Wire-compatible: missing field on legacy
     /// persisted state decodes to <c>null</c>.
     /// </summary>
-    [Id(5)] public Primitives.VersionVector? VectorClock { get; set; }
+    [Id(5)] public Orleans.Lattice.VersionVector? VectorClock { get; set; }
 }
 
 /// <summary>
@@ -176,7 +176,7 @@ internal sealed class AtomicWriteState
     /// disposes. Wire-compatible: missing field on legacy persisted
     /// state decodes to <see langword="null"/>.
     /// </summary>
-    [Id(11)] public Primitives.VersionVector? VectorClock { get; set; }
+    [Id(11)] public Orleans.Lattice.VersionVector? VectorClock { get; set; }
 
     /// <summary>
     /// Total entry count of the enclosing atomic transaction, captured

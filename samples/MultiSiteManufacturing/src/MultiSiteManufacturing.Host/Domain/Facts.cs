@@ -1,3 +1,4 @@
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using System.Text.Json.Serialization;
 

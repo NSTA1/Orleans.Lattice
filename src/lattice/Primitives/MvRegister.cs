@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Primitives;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// A multi-value register CRDT. Unlike a last-writer-wins register,

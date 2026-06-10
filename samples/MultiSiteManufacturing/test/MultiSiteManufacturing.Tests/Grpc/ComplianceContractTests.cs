@@ -4,6 +4,7 @@ using MultiSiteManufacturing.Contracts.V1;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using DomainFacts = MultiSiteManufacturing.Host.Domain;
 using ProtoV1 = MultiSiteManufacturing.Contracts.V1;

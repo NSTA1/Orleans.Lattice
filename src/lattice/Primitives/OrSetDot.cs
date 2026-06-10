@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Primitives;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// A single causally-tagged add in an <see cref="OrSet"/>: a unique

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Replication;
 /// onwards.
 /// <para>
 /// <b>Why offset, not HLC.</b> The legacy HLC-cursor shape silently
-/// dropped any entry whose <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/>
+/// dropped any entry whose <see cref="Orleans.Lattice.HybridLogicalClock"/>
 /// timestamp was less than or equal to the previously-reported
 /// cursor. That predicate assumed HLC monotonicity per WAL partition,
 /// which does not hold under parallel cross-leaf appends to a shared
@@ -37,7 +37,7 @@ public readonly struct ChangeFeedCursor : IEquatable<ChangeFeedCursor>
     /// <summary>
     /// The initial cursor that yields every entry across every
     /// partition. Equivalent to passing
-    /// <see cref="Orleans.Lattice.Primitives.HybridLogicalClock.Zero"/>
+    /// <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/>
     /// to the legacy HLC overload.
     /// </summary>
     public static ChangeFeedCursor Initial { get; } = default;

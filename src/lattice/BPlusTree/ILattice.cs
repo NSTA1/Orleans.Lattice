@@ -452,7 +452,7 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Merges all entries from <paramref name="sourceTreeId"/> into this tree
     /// using LWW semantics, preserving original timestamps. For each key present
-    /// in both trees, the entry with the higher <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/>
+    /// in both trees, the entry with the higher <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// timestamp wins. Tombstones are also merged, ensuring deletes propagate correctly.
     /// <para>
     /// The source tree remains unmodified. Source and target trees may have different

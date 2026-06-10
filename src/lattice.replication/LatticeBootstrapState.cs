@@ -28,7 +28,7 @@ public enum LatticeBootstrapState
     /// The snapshot stream is open and the coordinator is draining
     /// <see cref="SnapshotStream.Entries"/> through the local
     /// apply seam, preserving each entry's commit-time
-    /// <see cref="Primitives.HybridLogicalClock"/> and stamping the
+    /// <see cref="Orleans.Lattice.HybridLogicalClock"/> and stamping the
     /// supplied source cluster id as the origin.
     /// </summary>
     ApplyingSnapshot = 2,

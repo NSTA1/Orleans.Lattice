@@ -1,6 +1,7 @@
 using Grpc.Core;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using V1 = MultiSiteManufacturing.Contracts.V1;
 

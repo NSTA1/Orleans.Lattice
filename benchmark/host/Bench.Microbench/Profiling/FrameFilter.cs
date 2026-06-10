@@ -70,7 +70,7 @@ public static class FrameFilter
     /// <param name="fullMethodName">
     /// Fully-qualified managed method name as produced by the TraceEvent
     /// symbolicator (e.g.
-    /// <c>Orleans.Lattice.Primitives.VersionVector.Merge</c>).
+    /// <c>Orleans.Lattice.VersionVector.Merge</c>).
     /// </param>
     public static bool IsProductFrame(string? fullMethodName)
     {

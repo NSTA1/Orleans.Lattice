@@ -72,7 +72,7 @@ public readonly record struct RemoteSnapshotMetadata
     /// before draining the entry stream so the causal dependency check
     /// on the first incremental entry runs from a non-empty frontier.
     /// Always non-null; the snapshot of an unreplicated tree carries
-    /// the empty <see cref="Primitives.VersionVector"/>.
+    /// the empty <see cref="Orleans.Lattice.VersionVector"/>.
     /// </summary>
     [Id(3)] public VersionVector CausalStableFrontier { get; init; }
 }

@@ -39,11 +39,11 @@ namespace Orleans.Lattice.Replication;
 /// <b>Side effects.</b> A successful call walks every shard of the
 /// tree (via <see cref="BPlusTree.IShardRootGrain"/> and the leaf
 /// chain), accumulates the pointwise-max
-/// <see cref="Primitives.VersionVector"/> across every non-null
+/// <see cref="Orleans.Lattice.VersionVector"/> across every non-null
 /// <see cref="BPlusTree.LwwEntry.VectorClock"/> slot, then pins the
 /// computed frontier on the per-tree HWM grain
 /// (<see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
-/// with <see cref="Primitives.HybridLogicalClock.Zero"/> as the
+/// with <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/> as the
 /// snapshot as-of HLC, since the intra-cluster path has no
 /// cross-cluster snapshot HLC concept) and primes the
 /// producer-side <see cref="LocalVectorClockCache"/> per-origin so

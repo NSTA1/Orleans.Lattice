@@ -2081,7 +2081,7 @@ public class LatticeMicroBenchmarks
     // ===== VersionVector primitive micro-suite =====
     // Pure-compute CRDT fixtures that route through NO mock IGrainFactory and
     // NO BDN-driven async chain - so the EventPipe profiler attributes every
-    // allocation directly to Orleans.Lattice.Primitives.VersionVector frames
+    // allocation directly to Orleans.Lattice.VersionVector frames
     // with zero mock/Castle contamination. Two same-size operand vectors with
     // a controllable overlap fraction exercise the pointwise-max Merge/Clone
     // allocation surface. Sized by BENCH_MICROBENCH_VV_ENTRIES (default 16),

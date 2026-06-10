@@ -21,7 +21,7 @@ namespace Orleans.Lattice;
 [Immutable]
 public readonly record struct OrMapDeltaEntry<TKey, TValue>
     where TKey : notnull
-    where TValue : Orleans.Lattice.Primitives.ICrdt<TValue>, new()
+    where TValue : Orleans.Lattice.ICrdt<TValue>, new()
 {
     /// <summary>The map key the entry is attached to.</summary>
     [Id(0)] public TKey Key { get; init; }

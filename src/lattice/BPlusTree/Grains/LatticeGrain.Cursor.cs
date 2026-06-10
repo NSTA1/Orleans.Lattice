@@ -274,7 +274,7 @@ internal sealed partial class LatticeGrain
     /// visibility gating is driven by the snapshot dictionary itself,
     /// not by this anchor.
     /// </summary>
-    private static Primitives.HybridLogicalClock ComputeRegistrySnapshotHlc(
+    private static Orleans.Lattice.HybridLogicalClock ComputeRegistrySnapshotHlc(
         Dictionary<Guid, TxStatus>? snapshot)
     {
         // The registry's per-decision HLCs are not exposed on the
@@ -285,7 +285,7 @@ internal sealed partial class LatticeGrain
         // would require a new registry-side accessor and is not
         // required for correctness here.
         _ = snapshot;
-        return Primitives.HybridLogicalClock.Zero;
+        return Orleans.Lattice.HybridLogicalClock.Zero;
     }
 
     /// <inheritdoc />

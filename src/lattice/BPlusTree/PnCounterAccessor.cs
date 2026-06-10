@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Typed value-surface accessor for a <see cref="Primitives.PnCounter"/>
+/// Typed value-surface accessor for a <see cref="Orleans.Lattice.PnCounter"/>
 /// stored under a single key in an <see cref="ILattice"/>. Mutating
 /// methods read-modify-write under optimistic concurrency, retrying on
 /// CAS failure up to a configurable budget.
@@ -30,7 +30,7 @@ public readonly record struct PnCounterAccessor
     public string Key => _key;
 
     /// <summary>
-    /// Reads the current counter state. Returns an empty <see cref="Primitives.PnCounter"/>
+    /// Reads the current counter state. Returns an empty <see cref="Orleans.Lattice.PnCounter"/>
     /// when the key is absent or tombstoned.
     /// </summary>
     public async Task<PnCounter> GetAsync(CancellationToken cancellationToken = default)

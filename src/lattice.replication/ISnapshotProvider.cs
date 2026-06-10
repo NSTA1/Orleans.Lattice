@@ -26,7 +26,7 @@ public interface ISnapshotProvider
     /// primary state as of <paramref name="asOfHlc"/>. The returned
     /// <see cref="SnapshotStream"/> carries the as-of HLC, the
     /// producer's causal-stable frontier (the pointwise minimum
-    /// <see cref="Primitives.VersionVector"/> across every consumer
+    /// <see cref="Orleans.Lattice.VersionVector"/> across every consumer
     /// that has reported a vector through the
     /// <see cref="IWalCursorRegistry"/>, with a
     /// fallback to the producer's per-tree local vector clock when no

@@ -340,7 +340,7 @@ public class LatticeReplicationOptions
     /// hot path. The pump issues one
     /// <see cref="Grains.IWalShardGrain.ReadAsync"/> call per
     /// partition starting from each partition's saved resume cursor,
-    /// merges the pages by <see cref="Primitives.HybridLogicalClock"/>
+    /// merges the pages by <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// ascending, and emits up to <see cref="ShipBatchSize"/> entries
     /// per outbound batch.
     /// <para>

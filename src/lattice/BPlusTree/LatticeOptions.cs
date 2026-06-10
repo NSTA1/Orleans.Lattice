@@ -533,9 +533,9 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultSnapshotLeafIdleTtl = TimeSpan.FromMinutes(30);
 
     /// <summary>
-    /// Optional retention window for <see cref="Primitives.VersionVector"/>
+    /// Optional retention window for <see cref="Orleans.Lattice.VersionVector"/>
     /// entries.
-    /// <see cref="Primitives.VersionVector.PruneOlderThan(long)"/> with
+    /// <see cref="Orleans.Lattice.VersionVector.PruneOlderThan(long)"/> with
     /// <c>UtcNow - VersionVectorRetention</c>, replica entries whose
     /// wall-clock tick falls before the cutoff are dropped to bound the
     /// vector's memory footprint.
@@ -991,7 +991,7 @@ public class LatticeOptions
     /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set, the
     /// WAL garbage collector (<see cref="ILatticeWalGc"/>) trims entries
-    /// whose <see cref="Orleans.Lattice.Primitives.HybridLogicalClock.WallClockTicks"/>
+    /// whose <see cref="Orleans.Lattice.HybridLogicalClock.WallClockTicks"/>
     /// is older than <c>now - WalRetention</c> regardless of consumer
     /// cursor position - bounding worst-case disk usage even when a
     /// registered consumer is hopelessly behind. The lagging consumer

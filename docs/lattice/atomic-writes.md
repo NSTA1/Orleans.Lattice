@@ -422,7 +422,7 @@ emit, so observers see the same VC across the original commits and the
 post-recovery emits.
 
 ```csharp verify
-var vc = new Orleans.Lattice.Primitives.VersionVector();
+var vc = new Orleans.Lattice.VersionVector();
 vc.Tick("origin-peer");
 
 using (LatticeVectorClockContext.With(vc))

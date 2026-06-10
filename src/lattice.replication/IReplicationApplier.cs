@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Inbound apply seam. Installs a single <see cref="WalRecord"/>
 /// authored on a remote cluster onto the local tree, preserving the
-/// remote cluster's <see cref="Primitives.HybridLogicalClock"/> and
+/// remote cluster's <see cref="Orleans.Lattice.HybridLogicalClock"/> and
 /// origin id end-to-end.
 /// <para>
 /// Implementations are responsible for:
@@ -86,7 +86,7 @@ public interface IReplicationApplier
         ArgumentNullException.ThrowIfNull(entries);
 
         var applied = false;
-        var highest = Primitives.HybridLogicalClock.Zero;
+        var highest = Orleans.Lattice.HybridLogicalClock.Zero;
         for (var i = 0; i < entries.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();

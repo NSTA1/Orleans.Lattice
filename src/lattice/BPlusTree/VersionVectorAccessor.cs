@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Typed value-surface accessor for a <see cref="Primitives.VersionVector"/>
+/// Typed value-surface accessor for a <see cref="Orleans.Lattice.VersionVector"/>
 /// stored under a single key in an <see cref="ILattice"/>. Mutating
 /// methods read-modify-write under optimistic concurrency, retrying on
 /// CAS failure up to a configurable budget.
@@ -30,7 +30,7 @@ public readonly record struct VersionVectorAccessor
     public string Key => _key;
 
     /// <summary>
-    /// Reads the current vector state. Returns an empty <see cref="Primitives.VersionVector"/>
+    /// Reads the current vector state. Returns an empty <see cref="Orleans.Lattice.VersionVector"/>
     /// when the key is absent or tombstoned.
     /// </summary>
     public async Task<VersionVector> GetAsync(CancellationToken cancellationToken = default)

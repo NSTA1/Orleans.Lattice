@@ -159,7 +159,7 @@ public readonly record struct WalRecord
     /// transports that need a more compact form encode through
     /// <see cref="VectorClockCodec"/>
     /// </summary>
-    [Id(10)] public Primitives.VersionVector? VectorClock { get; init; }
+    [Id(10)] public Orleans.Lattice.VersionVector? VectorClock { get; init; }
 
     /// <summary>
     /// Compact representation of the causal predecessors of this entry.
@@ -173,7 +173,7 @@ public readonly record struct WalRecord
     /// <see langword="null"/> for legacy peers and pre-causal-plus
     /// entries.
     /// </summary>
-    [Id(11)] public Primitives.VersionVector? DependencySummary { get; init; }
+    [Id(11)] public Orleans.Lattice.VersionVector? DependencySummary { get; init; }
 
     /// <summary>
     /// Pre-merge author's delta in opaque-bytes form, or

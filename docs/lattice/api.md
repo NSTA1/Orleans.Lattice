@@ -1109,7 +1109,7 @@ re-insert against the same parent still resolves correctly.
 > nest other CRDTs as values.
 
 ```csharp verify
-using Orleans.Lattice.Primitives;
+using Orleans.Lattice;
 
 // Observed-remove set: concurrent adds and removes converge.
 await tree.OrSet("tags:42").AddAsync("urgent"u8.ToArray(), replicaId: "siloA");

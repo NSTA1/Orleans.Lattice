@@ -96,15 +96,15 @@ public static class LatticeEventConstants
 
     /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the source-cluster
-    /// <see cref="Primitives.HybridLogicalClock"/> that the leaf grain
+    /// <see cref="Orleans.Lattice.HybridLogicalClock"/> that the leaf grain
     /// must persist verbatim on the freshly-constructed
     /// <see cref="Primitives.LwwValue{T}"/>'s timestamp slot - bypassing
     /// the standard
-    /// <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>
+    /// <see cref="Orleans.Lattice.HybridLogicalClock.Tick(Orleans.Lattice.HybridLogicalClock)"/>
     /// behaviour - so receiver-side LWW resolution sees the authoring
     /// cluster's HLC bit-identically. The leaf still advances its local
     /// clock past the override via
-    /// <see cref="Primitives.HybridLogicalClock.Merge(Primitives.HybridLogicalClock, Primitives.HybridLogicalClock)"/>
+    /// <see cref="Orleans.Lattice.HybridLogicalClock.Merge(Orleans.Lattice.HybridLogicalClock, Orleans.Lattice.HybridLogicalClock)"/>
     /// to preserve local monotonicity for any subsequent foreground
     /// tick. The supported authoring paths are the receiver-side
     /// cross-cluster atomic-visibility apply seam

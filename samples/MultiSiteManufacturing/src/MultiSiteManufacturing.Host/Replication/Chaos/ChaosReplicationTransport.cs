@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Federation;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 
