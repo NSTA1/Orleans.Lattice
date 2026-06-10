@@ -48,6 +48,9 @@ public static class LatticeMetrics
     /// <summary>Tag key for the logical tree id.</summary>
     public const string TagTree = "tree";
 
+    /// <summary>Tag key for the participating-tree count of a cross-tree atomic write.</summary>
+    public const string TagTreeCount = "tree_count";
+
     /// <summary>Tag key for the physical shard index.</summary>
     public const string TagShard = "shard";
 
@@ -483,6 +486,37 @@ public static class LatticeMetrics
     public static readonly Histogram<int> AtomicWriteBatchSize =
         Meter.CreateHistogram<int>("orleans.lattice.atomic_write.batch_size", unit: "{entry}",
             description: "Entry count of each SetManyAtomicAsync saga, tagged by outcome.");
+
+    /// <summary>
+    /// Counter incremented once per terminal completion of a <b>cross-tree</b>
+    /// atomic write (the coordinator grain), tagged with <see cref="TagOutcome"/>
+    /// = <c>committed</c> or <c>precondition_failed</c> / <c>aborted</c> and a
+    /// <see cref="TagTreeCount"/> bucket. Distinguishes multi-tree saga volume
+    /// from the single-tree <see cref="AtomicWriteCompleted"/> stream.
+    /// </summary>
+    public static readonly Counter<long> CrossTreeAtomicWriteCompleted =
+        Meter.CreateCounter<long>("orleans.lattice.atomic_write.cross_tree.completed", unit: "{saga}",
+            description: "Terminal transitions of cross-tree atomic-write sagas, tagged by outcome and tree count.");
+
+    /// <summary>
+    /// Histogram of end-to-end cross-tree atomic-write coordinator latency,
+    /// measured from first submit to the terminal phase. Tagged with
+    /// <see cref="TagOutcome"/> so commit-path and abort-path latency can be
+    /// plotted separately.
+    /// </summary>
+    public static readonly Histogram<double> CrossTreeAtomicWriteDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.atomic_write.cross_tree.duration", unit: "ms",
+            description: "End-to-end cross-tree atomic-write coordinator duration, tagged by outcome.");
+
+    /// <summary>
+    /// Histogram of the number of participating trees in each cross-tree atomic
+    /// write, recorded once per terminal completion next to
+    /// <see cref="CrossTreeAtomicWriteCompleted"/>. Lets operators interpret
+    /// <see cref="CrossTreeAtomicWriteDuration"/> relative to fan-out width.
+    /// </summary>
+    public static readonly Histogram<int> CrossTreeAtomicWriteParticipants =
+        Meter.CreateHistogram<int>("orleans.lattice.atomic_write.cross_tree.participants", unit: "{tree}",
+            description: "Participating-tree count of each cross-tree atomic-write saga, tagged by outcome.");
 
     /// <summary>
     /// Counter incremented once per successful coordinator-grain completion.

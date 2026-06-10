@@ -31,4 +31,16 @@ internal enum AtomicWritePhase
     /// caller can read back the memoized precondition-miss outcome on re-attach.
     /// </summary>
     PreconditionFailed = 5,
+
+    /// <summary>
+    /// Cross-tree prepare-and-pause: every write has been staged into the leaf
+    /// pending buckets (hidden from readers) and the per-tree registry now
+    /// delegates this saga's txid to the cross-tree coordinator, but the
+    /// terminal decision has not been recorded. The saga stays in this phase
+    /// until the coordinator calls <c>FinalizeAsync</c>, at which point it
+    /// transitions to <see cref="Execute"/>-tail processing (commit) or
+    /// <see cref="Compensate"/> (abort). Reminder ticks observed in this phase
+    /// are a no-op - the coordinator drives the resume.
+    /// </summary>
+    Prepared = 6,
 }

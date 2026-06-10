@@ -24,7 +24,8 @@ public partial class AtomicWriteGrainTests
                      ILattice lattice,
                      IShardRootGrain shard) CreateGrain(
         FakePersistentState<AtomicWriteState>? existingState = null,
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        Action<IGrainFactory>? configureFactory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("atomic-write", $"{TreeId}/{OperationId}"));
@@ -85,6 +86,8 @@ public partial class AtomicWriteGrainTests
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
 
         var state = existingState ?? new FakePersistentState<AtomicWriteState>();
+
+        configureFactory?.Invoke(grainFactory);
 
         var grain = new AtomicWriteGrain(
             context,

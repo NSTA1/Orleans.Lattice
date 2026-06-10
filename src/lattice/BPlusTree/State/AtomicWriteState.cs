@@ -248,4 +248,19 @@ internal sealed class AtomicWriteState
     /// <see langword="null"/> (an unguarded saga).
     /// </summary>
     [Id(18)] public LatticePredicateNode? Guard { get; set; }
+
+    /// <summary>
+    /// Coordinator key of the <see cref="Grains.LatticeCrossTreeTxGrain"/>
+    /// driving this sub-saga when it participates in a cross-tree atomic write,
+    /// or <see langword="null"/> for a standalone single-tree saga. When set,
+    /// the saga runs in prepare-and-pause mode: after staging every write it
+    /// registers the per-tree registry to delegate this saga's txid to the
+    /// coordinator and parks in <see cref="AtomicWritePhase.Prepared"/> instead
+    /// of recording the per-tree terminal decision, waiting for the
+    /// coordinator's <c>FinalizeAsync</c> call. Persisted so a reminder-driven
+    /// resume keeps the saga paused (the coordinator, not the keepalive
+    /// reminder, drives the resume). Wire-compatible: missing field on legacy
+    /// persisted state decodes to <see langword="null"/> (a standalone saga).
+    /// </summary>
+    [Id(19)] public string? ExternalAuthorityKey { get; set; }
 }

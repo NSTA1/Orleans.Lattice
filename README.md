@@ -14,7 +14,7 @@ It supports:
 
 - Point reads, writes, deletes, and per-entry TTL.
 - Ordered key and entry scans - forward, reverse, and range-bounded.
-- Multi-key atomic writes with all-or-nothing visibility.
+- Multi-key atomic writes with all-or-nothing visibility - within a tree, and across multiple trees.
 - Bulk loading from one-shot batches or streaming `IAsyncEnumerable` sources.
 - Durable, resumable cursors that survive silo failovers and client restarts.
 - Online resize, online reshard, and online snapshots (offline mode also available).
@@ -39,7 +39,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | Feature | What it gives you | Docs |
 |---|---|---|
 | **Adaptive shard splitting** | Hot shards rebalance themselves online, transparently to callers. No downtime, no dropped writes, no externally-visible API. | [Shard Splitting](docs/lattice/shard-splitting.md) |
-| **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing semantics across multiple keys - locally, across shards, and across replicating clusters. No reader ever observes a partial-set state. | [Atomic Writes](docs/lattice/atomic-writes.md) |
+| **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing semantics across multiple keys - locally, across shards, and across replicating clusters. `SetManyAtomicAcrossTreesAsync` extends the same all-or-nothing visibility to a batch spanning multiple trees. No reader ever observes a partial-set state. | [Atomic Writes](docs/lattice/atomic-writes.md) |
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion. Idempotent and retryable. | [Bulk Loading](docs/lattice/bulk-loading.md) |
 | **Conflict-free merges** | Concurrent writes converge deterministically. | [State Primitives](docs/lattice/state-primitives.md) |
 | **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. | [Replication](docs/lattice.replication/replication.md) |

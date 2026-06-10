@@ -53,6 +53,22 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task MarkAbortedAsync(Guid txid);
 
     /// <summary>
+    /// Registers that the cross-tree sub-saga identified by
+    /// <paramref name="txid"/> delegates its commit/abort decision to the
+    /// coordinator grain keyed by <paramref name="coordinatorKey"/>. Called
+    /// when a participating tree's saga parks in
+    /// <see cref="AtomicWritePhase.Prepared"/>. While the delegation is active
+    /// and no local terminal decision has been recorded, every status query for
+    /// <paramref name="txid"/> resolves against the coordinator's single global
+    /// decision (caching the verdict locally once terminal), so the cross-tree
+    /// batch flips visibility on this tree at the exact moment the coordinator
+    /// decides. Idempotent: a repeat with the same
+    /// <paramref name="coordinatorKey"/> is a no-op; a repeat after the local
+    /// decision was already recorded is ignored.
+    /// </summary>
+    Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey);
+
+    /// <summary>
     /// Returns the recorded outcome for <paramref name="txid"/>. Returns
     /// <see cref="TxStatus.InFlight"/> when no decision has been recorded
     /// (the saga is still preparing or has been forgotten via

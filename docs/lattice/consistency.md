@@ -148,6 +148,27 @@ See [Atomic Writes](atomic-writes.md) for the saga primitive and
 [Durable Cursors](durable-cursors.md#point-in-time-cursors) for the
 point-in-time cursor mode.
 
+### Cross-tree (multi-tree) atomic visibility
+
+`IGrainFactory.SetManyAtomicAcrossTreesAsync` (and the `BeginAtomicWrite`
+builder) extend the single-tree atomic-visibility contract to a batch
+spanning two or more distinct `ILattice` trees: either every targeted
+key across every participating tree becomes visible, or none of them do.
+A two-level saga drives this - a coordinator grain keyed by the
+`operationId` writes a **single** global commit/abort decision, and each
+participating tree's `ITxRegistryGrain` *delegates* the status of its
+prepared txid to that coordinator until the decision lands. Before the
+decision, every tree returns `InFlight` for the saga (prepared keys are
+invisible, indistinguishable from pre-saga); after it, every tree
+returns the same global verdict. The coordinator's single decision write
+is the cross-tree linearization point.
+
+This guarantees all-or-nothing *commit visibility*, not a simultaneous
+multi-tree read transaction: a reader sampling several trees at
+different instants may observe the global flip between samples, but never
+a partial slice of one cross-tree saga on any single tree. See
+[Atomic Writes: Cross-tree atomic writes](atomic-writes.md#cross-tree-multi-tree-atomic-writes).
+
 ---
 
 ## Topology and durability notes

@@ -48,12 +48,15 @@ Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a s
 
 ### What `SetManyAtomicAsync` does **not** guarantee
 
-- **Cross-tree atomicity.** The per-tree `ITxRegistryGrain` is the unit
-  of atomic visibility. A `SetManyAtomicAsync` call is bound to a single
-  tree (`ILattice`) and gives strict atomic visibility *within* that
-  tree only. Operations that span multiple trees (separate `ILattice`
-  instances) require application-level coordination - Lattice does not
-  offer a cross-tree saga primitive.
+- **Cross-tree atomicity (this call).** A `SetManyAtomicAsync` call is
+  bound to a single tree (`ILattice`) and the per-tree
+  `ITxRegistryGrain` is its unit of atomic visibility. To commit a batch
+  spanning two or more distinct trees all-or-nothing, use
+  `IGrainFactory.SetManyAtomicAcrossTreesAsync` (or the
+  `BeginAtomicWrite` fluent builder) - a two-level saga that layers a
+  single global decision over each tree's per-tree saga. See
+  [Cross-tree (multi-tree) atomic writes](#cross-tree-multi-tree-atomic-writes)
+  below.
 - **Ordering across distinct sagas.** Two concurrent `SetManyAtomicAsync`
   calls touching overlapping keys are resolved pairwise by LWW - the later
   HLC tick wins per key. There is no global transaction order.
@@ -601,6 +604,124 @@ cache also delegates reads back to the primary leaf for any cached
 row carrying `IsMigrated = true`, so the leaf-side shadow guard
 protecting an in-flight cross-shard migration is never bypassed by
 the cache fast path.
+
+## Cross-tree (multi-tree) atomic writes
+
+`SetManyAtomicAsync` is bound to a single tree. To commit a batch that
+spans **two or more distinct `ILattice` trees** all-or-nothing, use the
+`IGrainFactory.SetManyAtomicAcrossTreesAsync` extension (or the
+`BeginAtomicWrite` fluent builder). The cross-tree primitive extends the
+same atomic-visibility guarantee the single-tree saga gives *within* a
+tree to a set of trees: either every targeted key across every
+participating tree becomes visible, or none of them do - observed
+atomically by readers on the local cluster and on every cluster the
+trees replicate to.
+
+### Public surface
+
+| Member | Purpose |
+|---|---|
+| `IGrainFactory.SetManyAtomicAcrossTreesAsync(IReadOnlyList<LatticeTreeBatch>, operationId, ct)` | Commit per-tree slices atomically; returns a `CrossTreeAtomicWriteOutcome`. |
+| `IGrainFactory.BeginAtomicWrite(operationId)` | Open a `LatticeAtomicWriteBuilder` for fluent, per-tree staging. |
+| `LatticeTreeBatch(TreeId, Entries, Predicate = null)` | One tree's slice: tree id, key/value entries, optional server-side guard predicate. |
+| `CrossTreeAtomicWriteOutcome` | `Committed` (all trees committed) or `PreconditionFailed` (a guard failed; nothing committed anywhere). |
+
+A stable `operationId` is **required** (there is no auto-generated
+overload): a cross-tree saga touches multiple registries, so a stable
+idempotency key is mandatory for safe retry. The `operationId` must not
+contain `/` (reserved as the grain-key separator). Tree ids in the batch
+must be distinct and non-empty.
+
+### Usage
+
+```csharp verify
+// Fluent builder: atomically move an order between two trees, only if
+// the source order's total still clears a threshold.
+var outcome = await grainFactory
+    .BeginAtomicWrite("xfer:txn-1001")
+    .ForTree("orders-east")
+        .SetWhere("order:42", new Order("42", 0m), o => o.Total >= 100m)
+    .ForTree("orders-west")
+        .Set("order:42", new Order("42", 250m))
+    .CommitAsync(cancellationToken);
+
+if (outcome == CrossTreeAtomicWriteOutcome.PreconditionFailed)
+{
+    // The guard failed; nothing was committed on either tree.
+}
+```
+
+```csharp verify
+// Explicit batch list form.
+var batches = new List<LatticeTreeBatch>
+{
+    new("orders", new List<KeyValuePair<string, byte[]>>
+    {
+        new("order:42/status", Encoding.UTF8.GetBytes("shipped")),
+    }),
+    new("inventory", new List<KeyValuePair<string, byte[]>>
+    {
+        new("sku:99/reserved", Encoding.UTF8.GetBytes("0")),
+    }),
+};
+
+CrossTreeAtomicWriteOutcome result =
+    await grainFactory.SetManyAtomicAcrossTreesAsync(batches, "fulfil:order-42", cancellationToken);
+```
+
+### How it works - two-level saga
+
+A single **coordinator grain** keyed by `operationId` is the global
+decision authority. The flow is:
+
+1. **Prepare-and-pause.** Each participating tree runs the existing
+   single-tree saga in a new prepare-and-pause mode: it stages the
+   prepared writes into the per-leaf pending-tx buckets, registers a
+   *delegation* mapping its local txid to the coordinator, then pauses
+   without broadcasting any terminal. Each tree votes `Prepared` (or
+   `PreconditionFailed` if its guard missed).
+2. **Single global decision.** Once every tree has voted, the
+   coordinator writes **one** decision - `Committed` or `Aborted` - to
+   its own persistent state. This single write is the cross-tree
+   linearization point.
+3. **Finalize.** The coordinator fans out a `Finalize` call to every
+   tree's saga, which marks its per-tree registry and broadcasts the
+   per-shard terminals exactly as the single-tree saga does.
+
+Between prepare and the coordinator's decision, every participating
+tree's registry *delegates* the status of its prepared txid to the
+coordinator. A reader dialling a per-tree registry
+(`GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync`) for a
+delegated txid resolves it against the coordinator and caches the
+terminal verdict locally. Before the coordinator decides, every
+delegated read returns `InFlight`, so the prepared keys are invisible
+(indistinguishable from pre-saga); after it decides, every tree returns
+the **same** global verdict. The global visibility flip is therefore the
+coordinator's single decision write, applied uniformly across all trees.
+
+### Guarantees and non-guarantees
+
+- **All-or-nothing commit across trees.** On a `Committed` outcome every
+  key on every participating tree holds its target value; on
+  `PreconditionFailed` nothing is committed on any tree. A mid-flight
+  write failure compensates every tree and throws
+  `InvalidOperationException`.
+- **Crash recovery.** The coordinator grain drives the saga to a
+  terminal state via a keepalive reminder if its silo crashes mid-flight,
+  exactly as the single-tree saga does.
+- **Idempotent retry.** Re-submitting the same `operationId` with the
+  same tree-set and key-set re-attaches to the in-flight (or completed)
+  saga and returns its memoized outcome. Re-submitting the same
+  `operationId` with a *different* tree-set or key-set throws.
+- **Not a cross-tree read snapshot.** The guarantee is all-or-nothing
+  *commit visibility*, not a simultaneous multi-tree read transaction. A
+  reader that samples N trees at N different instants may legitimately
+  observe a flip between samples; what it can never observe is a tree
+  showing a *partial* slice of one cross-tree saga.
+
+The cross-tree workload is exercised under concurrent shard splits in
+the chaos suite - see
+[Chaos Tests: Test 11](chaos-tests.md#test-11---cross-tree-atomic-write-under-shard-churn).
 
 ## Related
 

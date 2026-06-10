@@ -16,7 +16,8 @@ public partial class TxRegistryGrainTests
         string treeId = "tree-x",
         TimeSpan? retention = null,
         TimeProvider? timeProvider = null,
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        IGrainFactory? grainFactory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("tx-registry", treeId));
@@ -36,7 +37,8 @@ public partial class TxRegistryGrainTests
         }
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(effectiveOptions);
-        var grain = new TxRegistryGrain(context, optionsMonitor, state);
+        grainFactory ??= Substitute.For<IGrainFactory>();
+        var grain = new TxRegistryGrain(context, grainFactory, optionsMonitor, state);
         if (timeProvider is not null) grain.TimeProvider = timeProvider;
         return (grain, state);
     }
