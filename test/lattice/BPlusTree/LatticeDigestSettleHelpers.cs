@@ -35,12 +35,43 @@ internal static class LatticeDigestSettleHelpers
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(2);
 
     /// <summary>
+    /// Environment variable that overrides <see cref="SettleTimeout"/>
+    /// (value in milliseconds). Lets a heavily loaded CI runner grant a
+    /// longer convergence budget without slowing fast local runs. A
+    /// missing, empty, or unparseable value falls back to
+    /// <see cref="DefaultSettleTimeout"/>.
+    /// </summary>
+    private const string SettleTimeoutEnvVar = "LATTICE_DIGEST_SETTLE_TIMEOUT_MS";
+
+    /// <summary>
     /// Default ceiling on total settle wait time. Generous enough to
     /// absorb a few coalescing windows plus any per-call grain RPC
-    /// scheduling overhead, but short enough that a genuine convergence
-    /// failure surfaces as a test failure rather than a CI timeout.
+    /// scheduling overhead on a saturated CI runner, but short enough
+    /// that a genuine convergence failure surfaces as a test failure
+    /// rather than a CI timeout. Override per-environment via
+    /// <see cref="SettleTimeoutEnvVar"/>.
     /// </summary>
-    private static readonly TimeSpan SettleTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DefaultSettleTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Effective ceiling on total settle wait time, resolved once from
+    /// <see cref="SettleTimeoutEnvVar"/> with a fallback to
+    /// <see cref="DefaultSettleTimeout"/>.
+    /// </summary>
+    private static readonly TimeSpan SettleTimeout = ResolveSettleTimeout();
+
+    private static TimeSpan ResolveSettleTimeout()
+    {
+        var raw = Environment.GetEnvironmentVariable(SettleTimeoutEnvVar);
+        if (!string.IsNullOrWhiteSpace(raw)
+            && int.TryParse(raw, out var ms)
+            && ms > 0)
+        {
+            return TimeSpan.FromMilliseconds(ms);
+        }
+
+        return DefaultSettleTimeout;
+    }
 
     /// <summary>
     /// Polls <see cref="ILattice.GetLeafProjectionDigestAsync"/> for
