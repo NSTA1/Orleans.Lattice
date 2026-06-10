@@ -19,6 +19,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
 - [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
+- [F-098](https://github.com/NSTA1/Orleans.Lattice/issues/671) - Cross-tree atomic writes: an all-or-nothing batch spanning two or more `ILattice` trees, committed through a coordinator-delegated linearization point with the same local and cross-cluster visibility guarantee as the single-tree saga
 
 ### Shipped
 
