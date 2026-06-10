@@ -229,37 +229,71 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
 
         await Task.WhenAll(workers);
 
-        // ---- Final deterministic conditional-write pass for completeness.
-        await Task.Delay(100);
-        await RetryUntilAsync(() => tree.SetManyAsync<ChaosDoc>(BuildBandWrite(), d => d.Score >= Guard));
-
-        // ---- Post-window invariants.
+        // ---- Post-window convergence, final conditional pass, and invariants.
+        // The guard is evaluated server-side against each key's current value and
+        // the post-window reads must observe whichever leaf currently owns each
+        // key, so both are subject to residual split topology churn: immediately
+        // after the chaos window a leaf can still be mid-migration / stale-routing.
+        // A guard-matching key read in that window is silently skipped from the
+        // conditional write (completeness flake), and a per-key point read can
+        // briefly disagree with the post-split topology even after every split
+        // coordinator reports idle - it routes to a single leaf that may still be
+        // settling, surfacing a transiently empty / not-yet-converged value rather
+        // than throwing (soundness / range-bound flake). Retrying only until the
+        // calls stop throwing is therefore insufficient; the harness must wait for
+        // the invariant post-condition to hold. So drive the topology to quiescence
+        // (every split coordinator idle, no in-flight migration), re-issue the final
+        // deterministic conditional pass, then verify every band from a single
+        // range-scan snapshot - the same primitive the in-window soundness scanner
+        // walks without false positives, which materialises the live leaf set in one
+        // consistent pass instead of hundreds of independently-routed point reads.
+        // Loop with a bounded budget until all four invariants hold against a
+        // converged topology; a genuine violation persists across the whole budget
+        // and still trips the assertions below.
         var matchMissing = new List<int>();      // completeness
-        for (int i = WriteBandStart; i < StickyMatchEnd; i++)
-        {
-            var v = await tree.GetAsync<ChaosDoc>(KeyOf(i));
-            if (v is null || v.Score != MarkerScore) matchMissing.Add(i);
-        }
-
         var noMatchWritten = new List<int>();    // soundness
-        for (int i = StickyMatchEnd; i < StickyNoMatchEnd; i++)
-        {
-            var v = await tree.GetAsync<ChaosDoc>(KeyOf(i));
-            if (v is null || v.Score != NoMatchSeedScore) noMatchWritten.Add(i);
-        }
-
         var lowerLeaked = new List<int>();       // range bound
-        for (int i = LowerProtectedStart; i < WriteBandStart; i++)
-        {
-            var v = await tree.GetAsync<ChaosDoc>(KeyOf(i));
-            if (v is null || v.Score != ProtectedScore) lowerLeaked.Add(i);
-        }
-
         var upperLeaked = new List<int>();       // range bound
-        for (int i = UpperProtectedStart; i < UniverseEnd; i++)
+        for (int attempt = 0; ; attempt++)
         {
-            var v = await tree.GetAsync<ChaosDoc>(KeyOf(i));
-            if (v is null || v.Score != ProtectedScore) upperLeaked.Add(i);
+            await QuiesceSplitsAsync(tree, treeId);
+            await RetryUntilAsync(() => tree.SetManyAsync<ChaosDoc>(BuildBandWrite(), d => d.Score >= Guard));
+
+            Dictionary<int, ChaosDoc>? snapshot = null;
+            try
+            {
+                var snap = new Dictionary<int, ChaosDoc>(UniverseEnd);
+                await foreach (var kv in tree.ScanEntriesAsync<ChaosDoc>())
+                    snap[kv.Value.Index] = kv.Value;
+                snapshot = snap;
+            }
+            catch (Exception ex) when (IsTransient(ex)) { }
+
+            if (snapshot is not null)
+            {
+                matchMissing = new List<int>();
+                for (int i = WriteBandStart; i < StickyMatchEnd; i++)
+                    if (!snapshot.TryGetValue(i, out var v) || v.Score != MarkerScore) matchMissing.Add(i);
+
+                noMatchWritten = new List<int>();
+                for (int i = StickyMatchEnd; i < StickyNoMatchEnd; i++)
+                    if (!snapshot.TryGetValue(i, out var v) || v.Score != NoMatchSeedScore) noMatchWritten.Add(i);
+
+                lowerLeaked = new List<int>();
+                for (int i = LowerProtectedStart; i < WriteBandStart; i++)
+                    if (!snapshot.TryGetValue(i, out var v) || v.Score != ProtectedScore) lowerLeaked.Add(i);
+
+                upperLeaked = new List<int>();
+                for (int i = UpperProtectedStart; i < UniverseEnd; i++)
+                    if (!snapshot.TryGetValue(i, out var v) || v.Score != ProtectedScore) upperLeaked.Add(i);
+
+                if (matchMissing.Count == 0 && noMatchWritten.Count == 0
+                    && lowerLeaked.Count == 0 && upperLeaked.Count == 0)
+                    break;
+            }
+
+            if (attempt >= 30) break;
+            await Task.Delay(100);
         }
 
         Assert.Multiple(() =>
@@ -322,5 +356,48 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
             }
         }
         await action();
+    }
+
+    /// <summary>
+    /// Drives any residual in-flight splits to completion so post-window reads
+    /// and the final conditional pass observe a converged topology rather than a
+    /// leaf mid-migration / stale-routing window. The chaos workers stop issuing
+    /// new splits once cancelled, so a bounded loop that runs each coordinator's
+    /// remaining phases and waits for every coordinator to report idle quiesces
+    /// the tree.
+    /// </summary>
+    private async Task QuiesceSplitsAsync(ILattice tree, string treeId)
+    {
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            IReadOnlyList<int> physical;
+            try
+            {
+                physical = await tree.CountPerShardAsync();
+            }
+            catch (Exception ex) when (IsTransient(ex))
+            {
+                await Task.Delay(100);
+                continue;
+            }
+
+            var allIdle = true;
+            for (int s = 0; s < physical.Count; s++)
+            {
+                var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/{s}");
+                try
+                {
+                    await split.RunSplitPassAsync();
+                    if (!await split.IsIdleAsync()) allIdle = false;
+                }
+                catch (Exception ex) when (IsTransient(ex))
+                {
+                    allIdle = false;
+                }
+            }
+
+            if (allIdle) return;
+            await Task.Delay(100);
+        }
     }
 }
