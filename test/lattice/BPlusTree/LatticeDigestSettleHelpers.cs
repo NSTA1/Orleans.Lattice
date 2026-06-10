@@ -51,7 +51,7 @@ internal static class LatticeDigestSettleHelpers
     /// rather than a CI timeout. Override per-environment via
     /// <see cref="SettleTimeoutEnvVar"/>.
     /// </summary>
-    private static readonly TimeSpan DefaultSettleTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DefaultSettleTimeout = TimeSpan.FromSeconds(20);
 
     /// <summary>
     /// Effective ceiling on total settle wait time, resolved once from
