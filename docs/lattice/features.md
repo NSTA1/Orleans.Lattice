@@ -110,7 +110,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-- [FX-034](https://github.com/NSTA1/Orleans.Lattice/issues/633) - Batch / multi-partition WAL move (extend `ExecuteWalMoveAsync` to accept multiple `(partition, targetProviderKey)` pairs)
+_None._
 
 ### Shipped
 
@@ -145,6 +145,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-031](https://github.com/NSTA1/Orleans.Lattice/issues/615) - Azure-throughput cohort runner counts cross-cohort residual-grain exceptions toward the current cohort's verdict, inflating HEALTHY runs to DEGRADED
 - [FX-032](https://github.com/NSTA1/Orleans.Lattice/issues/620) - WAL saturation surface leaks `failed=N` under single-account 409-burst regime (set-point silent loss, set-many in-flight tail, set-many-atomic saga-retry burndown) and has no Grafana panels
 - [FX-033](https://github.com/NSTA1/Orleans.Lattice/issues/629) - WAL saturation back-pressure consumer-coverage gaps after FX-032 (admission cap, saga quiesce wait, ingest channel, classifier sensitivity)
+- [FX-034](https://github.com/NSTA1/Orleans.Lattice/issues/633) - Batch / multi-partition WAL move (batch `ExecuteWalMoveAsync` / `PlanWalMoveAsync` overloads flipping the placement pin once for all partitions)
 - [FX-035](https://github.com/NSTA1/Orleans.Lattice/issues/634) - Azure SDK retry policy signal-awareness (Phase 4 of FX-033 consumer-coverage audit)
 - [FX-036](https://github.com/NSTA1/Orleans.Lattice/issues/635) - WAL saturation classifier flush-latency input (Phase 3 of FX-033 consumer-coverage audit)
 - [FX-037](https://github.com/NSTA1/Orleans.Lattice/issues/639) - De-flake `DigestCoalescingWindow_eventually_publishes_aggregate_to_parent` (fixed 2s digest settle timeout times out under CI load)

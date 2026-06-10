@@ -179,4 +179,29 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <param name="partition">The WAL partition to re-point.</param>
     /// <param name="providerKey">The catalog key the partition should resolve to.</param>
     Task<State.WalPlacementPin> UpdateWalPlacementAsync(string treeId, long expectedVersion, int partition, string providerKey);
+
+    /// <summary>
+    /// Atomically re-points several WAL partitions to new provider keys under a
+    /// single compare-and-swap on the placement
+    /// <see cref="State.WalPlacementPin.Version"/>. The batch analogue of
+    /// <see cref="UpdateWalPlacementAsync(string, long, int, string)"/>: every
+    /// reassignment in <paramref name="moves"/> is applied together and the
+    /// version bumps exactly once (<paramref name="expectedVersion"/> + 1), so a
+    /// multi-partition move flips atomically with no intermediate placement
+    /// observable. The registry grain is non-reentrant and singleton-keyed, so
+    /// the read-validate-write sequence is atomic across concurrent callers.
+    /// <para>
+    /// Throws <see cref="InvalidOperationException"/> when the current pin's
+    /// version does not equal <paramref name="expectedVersion"/> - the caller
+    /// observed a stale placement and must re-read and retry, leaving the whole
+    /// batch un-applied. Throws <see cref="ArgumentException"/> when
+    /// <paramref name="moves"/> is empty. Routing a partition back to
+    /// <see cref="IWalStorageProviderCatalog.DefaultProviderKey"/> removes its
+    /// override. Upserts the registry entry if the tree is not yet registered.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL placement is being changed.</param>
+    /// <param name="expectedVersion">The placement version the caller last observed.</param>
+    /// <param name="moves">The partition-to-key reassignments to apply together.</param>
+    Task<State.WalPlacementPin> UpdateWalPlacementAsync(string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves);
 }

@@ -26,7 +26,8 @@ public partial class WalShardGrainTests
     private static async Task<WalShardGrain> CreateGrainAsync(
         IWalStorageProvider? provider = null,
         LatticeOptions? options = null,
-        IWalRecordEncoder? encoder = null)
+        IWalRecordEncoder? encoder = null,
+        long placementVersion = 0)
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
@@ -44,7 +45,7 @@ public partial class WalShardGrainTests
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
             encoder ?? CreateDefaultEncoder());
-        await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None);
+        await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None, placementVersion);
         return grain;
     }
 

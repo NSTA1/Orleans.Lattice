@@ -286,6 +286,8 @@ internal static class TypeAliases
     internal const string WalPartitionPlacement = "ol.wpe";
     internal const string WalMovePlan = "ol.wmp";
     internal const string WalMoveReceipt = "ol.wmr";
+    internal const string WalMoveBatchPlan = "ol.wbp";
+    internal const string WalMoveBatchReceipt = "ol.wbr";
     internal const string WalMoveOptions = "ol.wmo";
     internal const string WalMoveOutcome = "ol.wmc";
     internal const string WalMoveQuiesceResult = "ol.wqr";

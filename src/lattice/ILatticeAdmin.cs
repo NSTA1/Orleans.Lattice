@@ -131,6 +131,23 @@ public interface ILatticeAdmin : IGrainWithStringKey
     Task<WalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Computes a read-only preview of moving several partitions of
+    /// <paramref name="treeId"/> in one batch - one <see cref="WalMovePlan"/> per
+    /// requested <c>(partition, targetProviderKey)</c> pair - without quiescing any
+    /// partition or changing any placement. Use it to review a wholesale
+    /// relocation (and confirm every target key resolves) before committing.
+    /// <para>
+    /// Throws <see cref="ArgumentException"/> when <paramref name="moves"/> is
+    /// empty or names a partition more than once.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree to inspect.</param>
+    /// <param name="moves">The <c>(partition, targetProviderKey)</c> pairs to preview.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<WalMoveBatchPlan> PlanWalMoveAsync(string treeId, IEnumerable<(int Partition, string TargetProviderKey)> moves, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Moves partition <paramref name="partition"/> of <paramref name="treeId"/>
     /// to <paramref name="targetProviderKey"/>: quiesces the source WAL shard,
     /// copies its retained tail to the target (preserving offsets and the source
@@ -161,6 +178,41 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// <param name="options">Move tunables, or <see langword="null"/> for <see cref="WalMoveOptions.Default"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<WalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, WalMoveOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves several WAL partitions of <paramref name="treeId"/> in one
+    /// all-or-nothing batch. Each requested <c>(partition, targetProviderKey)</c>
+    /// pair runs the same quiesce-copy-verify phases as the single-partition
+    /// <see cref="ExecuteWalMoveAsync(string, int, string, WalMoveOptions?, CancellationToken)"/>,
+    /// bounded by <see cref="WalMoveOptions.MaxConcurrentPartitionMoves"/>, and the
+    /// placement pin then flips <b>once</b> under a single compare-and-swap that
+    /// applies every reassignment together. No intermediate placement is ever
+    /// observable: either all moved partitions flip or the whole batch rolls back.
+    /// <para>
+    /// Any per-partition phase failure aborts the entire batch: the pin is never
+    /// flipped, every fenced source is released back to service, and the partial
+    /// target copies are retained so a re-execute resumes without recopying. As
+    /// with a single move, <b>no source is trimmed</b> - reclaim each moved source
+    /// explicitly with <see cref="ReclaimMovedWalSourceAsync"/>. Partitions already
+    /// pinned to their requested target are an idempotent no-copy repair.
+    /// </para>
+    /// <para>
+    /// Throws <see cref="ArgumentException"/> when <paramref name="moves"/> is
+    /// empty or names a partition more than once, and
+    /// <see cref="LatticeWalProviderMissingException"/> (before touching any log)
+    /// when any target key is unresolvable on this silo.
+    /// </para>
+    /// <para>
+    /// <b>Not</b> marked <see cref="AlwaysInterleaveAttribute"/>: the batch saga
+    /// mutates placement and must run as a non-reentrant turn on the admin
+    /// singleton so two concurrent moves cannot interleave.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose partitions to move.</param>
+    /// <param name="moves">The <c>(partition, targetProviderKey)</c> pairs to move together.</param>
+    /// <param name="options">Move tunables, or <see langword="null"/> for <see cref="WalMoveOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<WalMoveBatchReceipt> ExecuteWalMoveAsync(string treeId, IEnumerable<(int Partition, string TargetProviderKey)> moves, WalMoveOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Discards the orphaned tail a completed <see cref="ExecuteWalMoveAsync"/>
