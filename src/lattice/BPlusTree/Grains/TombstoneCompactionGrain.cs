@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -112,6 +114,41 @@ internal sealed class TombstoneCompactionGrain(
 
     private bool IsCompactionDisabled => Options.TombstoneGracePeriod == Timeout.InfiniteTimeSpan;
 
+    private IHostApplicationLifetime? _lifetime;
+    private bool _lifetimeResolved;
+
+    /// <summary>
+    /// Resolves the optional <see cref="IHostApplicationLifetime"/> from the
+    /// activation's service provider. Cached after first lookup; returns
+    /// <see langword="null"/> on non-hosted test activations. Mirrors the
+    /// lazy-resolve pattern the atomic-write saga coordinator established.
+    /// </summary>
+    private IHostApplicationLifetime? ResolveLifetime()
+    {
+        if (_lifetimeResolved) return _lifetime;
+        _lifetimeResolved = true;
+        _lifetime = context.ActivationServices?.GetService<IHostApplicationLifetime>();
+        return _lifetime;
+    }
+
+    /// <summary>
+    /// Fast-fails an operator-driven compaction pass with
+    /// <see cref="LatticeShuttingDownException"/> when the host has begun
+    /// shutting down, before the pass issues any leaf compaction writes. A
+    /// no-op on a healthy host or a non-hosted test activation. The reminder-
+    /// and timer-driven passes are not guarded here: they have no external
+    /// caller to surface the typed exception to and are resumed from their
+    /// persisted cursor by the keepalive reminder on the next activation.
+    /// </summary>
+    private void ThrowIfShuttingDown()
+    {
+        if (ResolveLifetime() is { } lifetime && lifetime.ApplicationStopping.IsCancellationRequested)
+            throw new LatticeShuttingDownException(
+                $"Tombstone compaction of tree '{TreeId}' refused: the silo is shutting down (ApplicationStopping is signalled); "
+                + "the write was not dispatched to the write-ahead-log writer.");
+    }
+
+
     public async Task EnsureReminderAsync()
     {
         if (IsCompactionDisabled) return;
@@ -127,6 +164,7 @@ internal sealed class TombstoneCompactionGrain(
     public async Task RunCompactionPassAsync()
     {
         if (IsCompactionDisabled) return;
+        ThrowIfShuttingDown();
 
         _currentTriggerKind = TriggerOperator;
         _passStartTimestamp = Stopwatch.GetTimestamp();

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -136,6 +137,42 @@ public static class LatticeServiceCollectionExtensions
         // package replaces this with ConfiguredLatticeOriginClusterIdResolver
         // (reads LatticeReplicationOptions.ClusterId) via services.Replace(...).
         builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, DefaultLatticeOriginClusterIdResolver>();
+
+        // In-library shutdown log demotion. During the host deactivation
+        // window the Orleans runtime emits a Warning per in-flight grain
+        // call from two transport tear-down categories ("Orleans.Messaging"
+        // and the placement service) - the silo is refusing application
+        // messages and cannot create local activations because the
+        // placement directory is being torn down. That is expected
+        // shutdown back-pressure, not a fault, but at steady-state log
+        // verbosity it floods the silo log on every clean stop. The filter
+        // below demotes ONLY those two categories' Warning-level records to
+        // suppressed, and ONLY while IHostApplicationLifetime.ApplicationStopping
+        // is signalled; on a healthy host the categories keep their Warning
+        // floor untouched, and Error/Critical always survive even during
+        // shutdown. The mechanism is a dynamic MEL LoggerFilterRule rather
+        // than an IGrainCallFilter because the offending records originate
+        // in the Orleans runtime's own logging, not in the grain-call
+        // pipeline, so a call filter could never intercept them. The filter
+        // instance resolves the lifetime lazily at first log-time (never at
+        // logging-options build time) so it cannot perturb host startup.
+        builder.Services.TryAddSingleton<LatticeShutdownLogFilter>();
+        builder.Services.AddOptions<LoggerFilterOptions>()
+            .Configure<LatticeShutdownLogFilter>(static (options, filter) =>
+            {
+                foreach (var category in LatticeShutdownLogFilter.DemotedCategories)
+                {
+                    // logLevel:Warning sets the per-category floor so the
+                    // categories behave as on a healthy host (Warning+
+                    // visible); the filter predicate additionally suppresses
+                    // the Warning level once the host is stopping.
+                    options.Rules.Add(new LoggerFilterRule(
+                        providerName: null,
+                        categoryName: category,
+                        logLevel: LogLevel.Warning,
+                        filter: (provider, cat, level) => filter.ShouldEmit(cat, level)));
+                }
+            });
         return builder;
     }
 
@@ -468,5 +505,123 @@ public static class LatticeServiceCollectionExtensions
 
         /// <inheritdoc />
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// In-library logging seam that demotes a narrowly-scoped set of Orleans
+    /// transport tear-down warnings while the host is shutting down, then
+    /// restores their normal Warning visibility once the host is healthy
+    /// again. Registered by <see cref="AddLattice"/> as a dynamic
+    /// <see cref="LoggerFilterRule"/> per managed category.
+    /// <para>
+    /// <b>Why a logger filter and not an <c>IGrainCallFilter</c>.</b> The
+    /// warnings this seam targets ("the silo is blocking application
+    /// messages" from <c>Orleans.Messaging</c> and "Unable to create local
+    /// activation" from the placement service) originate inside the Orleans
+    /// runtime's own logging, not inside the grain-call pipeline, so an
+    /// <c>IGrainCallFilter</c> can never intercept them. A Microsoft.Extensions.Logging
+    /// <see cref="LoggerFilterRule"/> gated on
+    /// <see cref="IHostApplicationLifetime.ApplicationStopping"/> is the
+    /// mechanism that actually sees those records.
+    /// </para>
+    /// <para>
+    /// <b>Conservative scoping.</b> The filter only ever affects the two
+    /// categories in <see cref="DemotedCategories"/> (matched by prefix), it
+    /// only suppresses the <see cref="LogLevel.Warning"/> level, and it only
+    /// suppresses while the host is stopping. On a healthy host the
+    /// categories keep their Warning floor (the registration sets the rule's
+    /// floor to <see cref="LogLevel.Warning"/>) so the same warnings stay
+    /// visible; <see cref="LogLevel.Error"/> and above always survive, even
+    /// during shutdown, so a genuine transport fault is never hidden.
+    /// </para>
+    /// <para>
+    /// The lifetime is resolved lazily on first log-time (never at
+    /// logging-options build time, which runs before
+    /// <see cref="IHostApplicationLifetime"/> is usable) and cached, mirroring
+    /// the lazy-resolve pattern the lattice write grains use for their own
+    /// shutdown fast-fail guard.
+    /// </para>
+    /// </summary>
+    internal sealed class LatticeShutdownLogFilter(IServiceProvider services)
+    {
+        /// <summary>
+        /// The Orleans logger categories whose Warning-level tear-down
+        /// chatter is suppressed while the host is shutting down. Matched by
+        /// prefix so nested sub-categories are covered. Kept in sync with the
+        /// benchmark-side static log filter that performs the same demotion
+        /// unconditionally for the throughput harness.
+        /// </summary>
+        public static readonly string[] DemotedCategories =
+        [
+            "Orleans.Messaging",
+            "Orleans.Runtime.Placement.PlacementService",
+        ];
+
+        private IHostApplicationLifetime? _lifetime;
+        private bool _lifetimeResolved;
+
+        private bool IsApplicationStopping
+        {
+            get
+            {
+                if (!_lifetimeResolved)
+                {
+                    _lifetimeResolved = true;
+                    _lifetime = services.GetService<IHostApplicationLifetime>();
+                }
+                return _lifetime is not null && _lifetime.ApplicationStopping.IsCancellationRequested;
+            }
+        }
+
+        /// <summary>
+        /// Logger-filter predicate: returns whether a record for
+        /// <paramref name="category"/> at <paramref name="level"/> should be
+        /// emitted given the host's current lifetime state.
+        /// </summary>
+        /// <param name="category">The log record's category name.</param>
+        /// <param name="level">The log record's level.</param>
+        /// <returns><see langword="true"/> to emit the record; <see langword="false"/> to suppress it.</returns>
+        public bool ShouldEmit(string? category, LogLevel level)
+            => ShouldEmit(category, level, IsApplicationStopping);
+
+        /// <summary>
+        /// Pure demotion policy. For a managed category (see
+        /// <see cref="IsDemotedCategory"/>) the floor is
+        /// <see cref="LogLevel.Warning"/> (Trace/Debug/Information are
+        /// suppressed, matching the healthy-host Warning floor), the
+        /// Warning level is suppressed only while
+        /// <paramref name="applicationStopping"/> is <see langword="true"/>,
+        /// and Error/Critical always survive. Non-managed categories are
+        /// always emitted (the rule is only ever installed for managed
+        /// categories, so this is a defensive default).
+        /// </summary>
+        /// <param name="category">The log record's category name.</param>
+        /// <param name="level">The log record's level.</param>
+        /// <param name="applicationStopping">Whether the host has begun shutting down.</param>
+        /// <returns><see langword="true"/> to emit the record; <see langword="false"/> to suppress it.</returns>
+        public static bool ShouldEmit(string? category, LogLevel level, bool applicationStopping)
+        {
+            if (!IsDemotedCategory(category)) return true;
+            if (level < LogLevel.Warning) return false;
+            if (level == LogLevel.Warning && applicationStopping) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// Returns whether <paramref name="category"/> is one of the managed
+        /// Orleans transport tear-down categories (prefix match against
+        /// <see cref="DemotedCategories"/>).
+        /// </summary>
+        /// <param name="category">The log record's category name.</param>
+        /// <returns><see langword="true"/> when the category is managed by this filter.</returns>
+        public static bool IsDemotedCategory(string? category)
+        {
+            if (string.IsNullOrEmpty(category)) return false;
+            foreach (var demoted in DemotedCategories)
+            {
+                if (category.StartsWith(demoted, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
     }
 }

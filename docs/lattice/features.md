@@ -18,8 +18,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-042](https://github.com/NSTA1/Orleans.Lattice/issues/362) - Cluster-internal queue abstraction (`ILatticeQueue<T>`)
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
-- [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
+- [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
 
 ### Shipped
 
@@ -149,6 +149,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-036](https://github.com/NSTA1/Orleans.Lattice/issues/635) - WAL saturation classifier flush-latency input (Phase 3 of FX-033 consumer-coverage audit)
 - [FX-037](https://github.com/NSTA1/Orleans.Lattice/issues/639) - De-flake `DigestCoalescingWindow_eventually_publishes_aggregate_to_parent` (fixed 2s digest settle timeout times out under CI load)
 - [FX-038](https://github.com/NSTA1/Orleans.Lattice/issues/641) - set-many-atomic bench cohorts WEDGE on shutdown: in-flight-tail quiesce `WaitForHealthyAsync` 30s budget equalled systemd `TimeoutStopSec`, starving FINAL emission before SIGKILL
+- [FX-039](https://github.com/NSTA1/Orleans.Lattice/issues/651) - De-flake `Chaos_conditional_set_many_under_split_churn`: final completeness pass retries until no exception rather than until the completeness invariant holds, under-stamping a guard-matching key during post-split convergence
 
 ## Gaps & potential additions
 

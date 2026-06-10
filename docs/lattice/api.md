@@ -872,6 +872,7 @@ Public typed exception thrown by any `ILattice` operator (and by the internal sa
 
 Surfaces from three distinct shutdown failure shapes that share the same operational meaning ("this silo is going away; the operation was refused"):
 
+- **Lifetime-aware pre-dispatch fast-fail.** Every public write entry point on `ILattice` - `SetAsync` (both overloads), `SetIfVersionAsync`, `ApplyCrdtDeltaAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyWherePredicateAsync`, `SetManyAtomicAsync`, `SetManyAtomicWhereAsync`, `DeleteAsync`, `DeleteRangeAsync`, and `DeleteRangeWherePredicateAsync` - checks `IHostApplicationLifetime.ApplicationStopping` first and throws this exception *before* it touches the activation directory or dispatches to the WAL writer once the host has begun shutting down. The same pre-check guards the internal shard-root write path and the operator-driven tombstone-compaction pass, so a single `catch`/`is` check covers every write path rather than only the atomic-write saga. The check is null-tolerant: non-hosted test activations (which do not register `IHostApplicationLifetime`) are unaffected.
 - **Writer-side drain refusal.** `WalCommitLogWriter.DrainAsync` flips the per-instance drain flag; any new `AppendAsync` / `AppendBatchAsync` dispatch after the flip throws this exception inline.
 - **Admission-semaphore drain release.** A caller already parked on the per-partition admission semaphore when the drain fired sees the release-by-drain surface as this exception (rather than the legacy `TimeoutException(WalDrainBudget)` shape).
 - **Saga-coordinator short-circuit.** When the internal `AtomicWriteGrain` detects either of the above (or the Orleans `OrleansMessageRejectionException("Unable to create local activation")` shape that fires when a leaf grain has been deactivated as part of the same shutdown), the saga short-circuits the retry loop and the per-shard compensate-broadcast pass and wraps the cause in this exception so consumers can detect the regime via a single `is` check.
@@ -899,6 +900,10 @@ catch (LatticeShuttingDownException)
 ```
 
 On the `SetManyAtomicAsync` path, the saga's outcome is recorded on the `orleans.lattice.atomic_write.completed` counter as `outcome=shutdown_refused` so operators can distinguish saga failures caused by shutdown coincidence from saga failures caused by genuine commit conflicts on the same dashboard.
+
+### Quieter shutdown logs
+
+During the host deactivation window the Orleans runtime emits a `Warning` per in-flight grain call from two transport tear-down categories (`Orleans.Messaging` - "the silo is blocking application messages" - and `Orleans.Runtime.Placement.PlacementService` - "Unable to create local activation"). That is expected shutdown back-pressure, not a fault, but at steady-state verbosity it floods the silo log on every clean stop. `AddLattice` installs an in-library logger filter that demotes **only** those two categories' `Warning` records, and **only** while `IHostApplicationLifetime.ApplicationStopping` is signalled; on a healthy host the categories keep their `Warning` floor, and `Error`/`Critical` always survive even during shutdown so a genuine transport fault is never hidden. The filter is a Microsoft.Extensions.Logging `LoggerFilterRule` (not an `IGrainCallFilter`) because the records originate inside the Orleans runtime's own logging rather than in the grain-call pipeline. No host configuration is required; the demotion is automatic with `AddLattice`.
 
 ## Saturation back-pressure - `LatticeSaturatedException`
 
