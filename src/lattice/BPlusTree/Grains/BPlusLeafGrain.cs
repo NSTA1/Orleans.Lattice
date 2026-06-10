@@ -1181,7 +1181,7 @@ internal sealed partial class BPlusLeafGrain(
         {
             for (var i = 0; i < count; i++)
             {
-                AddPreparedMutation(transactionId, entries[i].Key, values[i]);
+                AddPreparedMutation(transactionId, entries[i].Key, values[i], count);
             }
         }
         else
