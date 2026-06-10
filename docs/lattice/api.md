@@ -1038,6 +1038,42 @@ bool success = await tree.SetIfVersionAsync("user:1", updated, versioned.Version
 Every method also has a parameterless overload that defaults to
 `JsonLatticeSerializer<T>.Default`.
 
+## Predicate operations
+
+Typed overloads that take an `Expression<Func<T, bool>>` and evaluate it
+**server-side** against a JSON document view of each value, so only matching
+keys (or values) cross the wire. Each method has an explicit-serializer overload
+and a `JsonLatticeSerializer<T>`-default overload (shown collapsed below). The
+serializer must implement `ILatticePredicateSerializer` or the call throws
+`NotSupportedException` before any RPC.
+
+This table lists signatures only. For semantics, supported expressions, the
+error surface, and runnable samples see
+[Predicate Operations](predicated-operations.md).
+
+| Method | Signature |
+|--------|-----------|
+| `GetManyAsync` | `Task<Dictionary<string, T>> GetManyAsync<T>(this ILattice, List<string> keys, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, CancellationToken = default)` |
+| `SetManyAsync` | `Task<IReadOnlyList<string>> SetManyAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, CancellationToken = default)` |
+| `SetManyAtomicAsync` | `Task<AtomicWriteOutcome> SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, CancellationToken = default)` |
+| `SetManyAtomicAsync` (idempotent) | `Task<AtomicWriteOutcome> SetManyAtomicAsync<T>(this ILattice, List<KeyValuePair<string, T>> entries, Expression<Func<T, bool>> predicate, string operationId, ILatticeSerializer<T> serializer, CancellationToken = default)` |
+| `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, int? maxAttempts = null, CancellationToken = default)` |
+| `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, int? maxAttempts = null, CancellationToken = default)` |
+| `ScanValuesAsync` | `IAsyncEnumerable<T> ScanValuesAsync<T>(this ILattice, ILatticeSerializer<T> serializer, Expression<Func<T, bool>>? predicate = null, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, int? maxAttempts = null, CancellationToken = default)` |
+| `OpenKeyCursorAsync` | `Task<string> OpenKeyCursorAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken = default)` |
+| `OpenEntryCursorAsync` | `Task<string> OpenEntryCursorAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken = default)` |
+| `OpenSnapshotKeyCursorAsync` | `Task<string> OpenSnapshotKeyCursorAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken = default)` |
+| `OpenSnapshotEntryCursorAsync` | `Task<string> OpenSnapshotEntryCursorAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken = default)` |
+| `DeleteRangeAsync` | `Task<int> DeleteRangeAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, string startInclusive, string endExclusive, ILatticeSerializer<T> serializer, CancellationToken = default)` |
+| `OpenDeleteRangeCursorAsync` | `Task<string> OpenDeleteRangeCursorAsync<T>(this ILattice, Expression<Func<T, bool>> predicate, string startInclusive, string endExclusive, ILatticeSerializer<T> serializer, CancellationToken = default)` |
+
+Supporting public types: `LatticePredicateTranslator`,
+`LatticePredicateNode`, `LatticePredicateNodeKind`, `LatticeConstant`,
+`LatticeConstantKind`, `LatticeComparisonOperator`, `LatticeBooleanOperator`,
+`LatticeStringMethod`, `LatticePredicateContext`,
+`ILatticePredicateSerializer`, and the `AtomicWriteOutcome` enum
+(`Committed`, `PreconditionFailed`).
+
 ## CRDT value-surface accessors
 
 `ILattice.OrSet(key)`, `ILattice.PnCounter(key)`,
