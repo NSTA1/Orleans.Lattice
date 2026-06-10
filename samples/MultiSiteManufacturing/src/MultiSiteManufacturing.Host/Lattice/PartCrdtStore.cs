@@ -14,7 +14,7 @@ namespace MultiSiteManufacturing.Host.Lattice;
 ///     the <c>mfg-part-operator</c> tree, one key per serial. Concurrent
 ///     writes from silo A and silo B resolve to whichever write landed
 ///     with the higher
-///     <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/> tick.
+///     <see cref="Orleans.Lattice.HybridLogicalClock"/> tick.
 ///     Cluster-local: the operator tree is intentionally not opted into
 ///     replication (LWW across clusters with disjoint HLCs is meaningless).
 ///   </item>

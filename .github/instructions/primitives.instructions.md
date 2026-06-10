@@ -14,6 +14,12 @@ All primitive types in this folder are **CRDT building blocks** - they must be:
 
 Document these properties in the `<summary>` of every merge method.
 
+## Namespace Placement
+
+Although these types live in the `Primitives/` folder, **public** CRDT primitives declare `namespace Orleans.Lattice` (not `Orleans.Lattice.Primitives`) so the whole public surface sits behind a single `using Orleans.Lattice;` - the repo convention that public API lives in the root namespace. The public primitives are `HybridLogicalClock`, `ICrdt<TSelf>`, `MvRegister`, `MvRegisterEntry`, `OrMap`, `OrMapEntry`, `OrSet`, `OrSetDot`, `PnCounter`, `Rga`, `RgaNode`, and `VersionVector`.
+
+Area-internal helpers in the same folder (`LwwValue<T>`, `LeafDeliveryCursor`, `SplitState`, `SplitStateExtensions`, `StateDelta`) stay `internal` in `namespace Orleans.Lattice.Primitives`.
+
 ## Type Shape
 
 **Immutable value types** - use `readonly record struct` with `[Immutable]`:

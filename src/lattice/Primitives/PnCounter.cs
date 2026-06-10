@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Primitives;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// A positive-negative (PN) counter CRDT. Each replica tracks its own

@@ -1,7 +1,6 @@
 using System.ComponentModel;
-using Orleans.Lattice;
 
-namespace Orleans.Lattice.Primitives;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// A simple hybrid logical clock (HLC) that combines wall-clock time with a

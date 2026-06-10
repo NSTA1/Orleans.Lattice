@@ -1,6 +1,4 @@
-using Orleans.Lattice;
-
-namespace Orleans.Lattice.Primitives;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// A version vector that tracks causal history per replica (grain).

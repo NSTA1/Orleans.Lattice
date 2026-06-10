@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Typed value-surface accessor for an <see cref="Primitives.OrSet"/>
+/// Typed value-surface accessor for an <see cref="Orleans.Lattice.OrSet"/>
 /// stored under a single key in an <see cref="ILattice"/>. The accessor
 /// is a lightweight, allocation-free wrapper - construct it once via
 /// <see cref="CrdtLatticeExtensions.OrSet(ILattice, string)"/> and reuse
@@ -39,7 +39,7 @@ public readonly record struct OrSetAccessor
     public string Key => _key;
 
     /// <summary>
-    /// Reads the current set state. Returns an empty <see cref="Primitives.OrSet"/>
+    /// Reads the current set state. Returns an empty <see cref="Orleans.Lattice.OrSet"/>
     /// when the key is absent or tombstoned.
     /// </summary>
     public async Task<OrSet> GetAsync(CancellationToken cancellationToken = default)

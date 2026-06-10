@@ -342,7 +342,7 @@ the in-process loopback, or a host-supplied custom binding.
 ## Sample usage
 
 ```csharp verify
-using Orleans.Lattice.Primitives;
+using Orleans.Lattice;
 
 ISnapshotProvider provider = client.ServiceProvider.GetRequiredService<ISnapshotProvider>();
 SnapshotStream snapshot = await provider.ExportAsync("orders", HybridLogicalClock.Zero, cancellationToken);

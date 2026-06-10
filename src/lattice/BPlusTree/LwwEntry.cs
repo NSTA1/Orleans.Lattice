@@ -5,7 +5,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// A single (<c>Key</c>, <see cref="LwwValue{T}"/>) pair used by
 /// snapshot / restore bulk-load paths so TTL metadata and source
-/// <see cref="Primitives.HybridLogicalClock"/> version survive transfer
+/// <see cref="Orleans.Lattice.HybridLogicalClock"/> version survive transfer
 /// between shards or trees.
 /// <para>
 /// The <see cref="LwwValue{T}"/> fields are stored flat (rather than as

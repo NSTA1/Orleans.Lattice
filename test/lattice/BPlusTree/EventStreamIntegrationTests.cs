@@ -156,7 +156,7 @@ public sealed class EventStreamIntegrationTests
             await WaitForEventAsync(sink, e => e.Kind == LatticeTreeEventKind.Set && e.Key == "cas");
 
             // Stale version should not produce a Set event.
-            var stale = new Orleans.Lattice.Primitives.HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+            var stale = new Orleans.Lattice.HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
             var appliedStale = await tree.SetIfVersionAsync("cas", new byte[] { 9 }, stale);
             Assert.That(appliedStale, Is.False);
 

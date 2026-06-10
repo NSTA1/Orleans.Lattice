@@ -484,7 +484,7 @@
         }
     }
 
-    private static string FormatWhen(Orleans.Lattice.Primitives.HybridLogicalClock hlc)
+    private static string FormatWhen(Orleans.Lattice.HybridLogicalClock hlc)
     {
         var ticks = hlc.WallClockTicks;
         if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks)

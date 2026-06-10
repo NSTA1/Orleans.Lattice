@@ -39,7 +39,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<bool> ExistsAsync(string key);
 
     /// <summary>
-    /// Gets the value and its <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/>
+    /// Gets the value and its <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// version for <paramref name="key"/>. Returns a <see cref="VersionedValue"/>
     /// with <c>null</c> value and zero version when the key is absent or tombstoned.
     /// </summary>
@@ -73,7 +73,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <see cref="LwwEntry"/> so the Orleans type-alias encoder handles a
     /// single aliased shape rather than a nested
     /// <c>Nullable&lt;LwwValue&lt;byte[]&gt;&gt;</c>. Preserves both the
-    /// <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/> version
+    /// <see cref="Orleans.Lattice.HybridLogicalClock"/> version
     /// and absolute <c>ExpiresAtTicks</c> ( TTL). Returns <c>null</c>
     /// when the key is absent or tombstoned. Already-expired entries are
     /// returned so callers can introspect expiry metadata; use
@@ -104,7 +104,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the entry's
-    /// current <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/> matches
+    /// current <see cref="Orleans.Lattice.HybridLogicalClock"/> matches
     /// <paramref name="expectedVersion"/>. Returns <c>true</c> if the write was applied.
     /// </summary>
     Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion);
@@ -276,7 +276,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Bulk-loads pre-stamped <see cref="LwwValue{T}"/> entries into an empty
-    /// shard, preserving the original <see cref="Orleans.Lattice.Primitives.HybridLogicalClock"/>
+    /// shard, preserving the original <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// version and <c>ExpiresAtTicks</c> on every entry. Used by
     /// snapshot / restore so TTL and source HLC metadata survive
     /// the transfer end-to-end. Entries must already be sorted in ascending

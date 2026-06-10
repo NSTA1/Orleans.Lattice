@@ -18,7 +18,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-042](https://github.com/NSTA1/Orleans.Lattice/issues/362) - Cluster-internal queue abstraction (`ILatticeQueue<T>`)
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
-- [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
 - [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
 
 ### Shipped
@@ -88,6 +87,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-073](https://github.com/NSTA1/Orleans.Lattice/issues/393) - Intra-shard leaf-walk batching for tombstone compaction
 - [F-074](https://github.com/NSTA1/Orleans.Lattice/issues/394) - Shard-root dirty-leaf tracking to skip idle leaves on compaction
 - [F-077](https://github.com/NSTA1/Orleans.Lattice/issues/397) - Multi-partition WAL replay on leaf activation
+- [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
 - [F-079](https://github.com/NSTA1/Orleans.Lattice/issues/399) - Multi-silo restart chaos test
 - [F-080](https://github.com/NSTA1/Orleans.Lattice/issues/400) - Drop the per-append registry RPC from the WAL hot path (F-077 throughput regression)
 - [F-081](https://github.com/NSTA1/Orleans.Lattice/issues/535) - Byte-accurate storage-usage visibility + advisory byte-pressure WAL retention policy

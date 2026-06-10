@@ -1,3 +1,4 @@
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
 namespace MultiSiteManufacturing.Host.Operator;

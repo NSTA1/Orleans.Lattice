@@ -33,7 +33,7 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// When the context is unset (the default), the leaf grain falls back
-/// to the standard <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>
+/// to the standard <see cref="Orleans.Lattice.HybridLogicalClock.Tick(Orleans.Lattice.HybridLogicalClock)"/>
 /// path and stamps the ambient <see cref="LatticeOriginContext"/>.
 /// The dedup-on-retry behaviour is therefore strictly opt-in and adds
 /// zero ambient cost when the scope is not entered.

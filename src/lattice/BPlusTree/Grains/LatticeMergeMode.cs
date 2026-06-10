@@ -31,7 +31,7 @@ public enum LatticeMergeMode
     LwwRegister = 0,
 
     /// <summary>
-    /// Observed-remove set. Receivers merge the full <see cref="Primitives.OrSet"/>
+    /// Observed-remove set. Receivers merge the full <see cref="Orleans.Lattice.OrSet"/>
     /// state carried by the value bytes (the producer authored the value
     /// through <see cref="CrdtLatticeExtensions.OrSet(ILattice, string)"/>,
     /// which serialises the post-write set state). State-based merge is
@@ -43,7 +43,7 @@ public enum LatticeMergeMode
 
     /// <summary>
     /// Positive-negative counter. Receivers merge the full
-    /// <see cref="Primitives.PnCounter"/> state carried by the value bytes
+    /// <see cref="Orleans.Lattice.PnCounter"/> state carried by the value bytes
     /// (the producer authored the value through
     /// <see cref="CrdtLatticeExtensions.PnCounter(ILattice, string)"/>) by
     /// pointwise-max on each replica's positive and negative components.
@@ -54,17 +54,17 @@ public enum LatticeMergeMode
 
     /// <summary>
     /// Version vector. Receivers merge the full
-    /// <see cref="Primitives.VersionVector"/> state carried by the value
+    /// <see cref="Orleans.Lattice.VersionVector"/> state carried by the value
     /// bytes (the producer authored the value through
     /// <see cref="CrdtLatticeExtensions.VersionVector(ILattice, string)"/>)
-    /// by pointwise-max on each replica's <see cref="Primitives.HybridLogicalClock"/>
+    /// by pointwise-max on each replica's <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// entry. Late or duplicate delivery is a no-op.
     /// </summary>
     VersionVector = 3,
 
     /// <summary>
     /// Multi-value register. Receivers merge the full
-    /// <see cref="Primitives.MvRegister"/> state carried by the value bytes
+    /// <see cref="Orleans.Lattice.MvRegister"/> state carried by the value bytes
     /// (the producer authored the value through
     /// <see cref="CrdtLatticeExtensions.MvRegister{T}(ILattice, string, ILatticeSerializer{T}?)"/>)
     /// by keeping entries whose dots are not dominated by the other side's
@@ -81,9 +81,9 @@ public enum LatticeMergeMode
     /// <c>TValue</c> CRDT values. Receivers fold the typed
     /// <see cref="OrMapDelta{TKey, TValue}"/> carried in
     /// <see cref="WalRecord.Delta"/> into the loaded
-    /// <see cref="Primitives.OrMap{TKey, TValue}"/> via its
+    /// <see cref="Orleans.Lattice.OrMap{TKey, TValue}"/> via its
     /// instance <c>MergeDelta</c> method, recursing into the value CRDT's
-    /// own <see cref="Primitives.ICrdt{TSelf}.MergeFrom(TSelf)"/> for
+    /// own <see cref="Orleans.Lattice.ICrdt{TSelf}.MergeFrom(TSelf)"/> for
     /// concurrent same-key writes. Because the wire shape is generic, the
     /// host must register the <c>(TKey, TValue)</c> pair through
     /// <c>AddOrMapShape&lt;TKey, TValue&gt;()</c> on the

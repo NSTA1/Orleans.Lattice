@@ -6,7 +6,7 @@ namespace Orleans.Lattice;
 /// <c>(replicaId, counter)</c> dot whose corresponding add the
 /// originator has now observed-as-removed; the receiver folds it into
 /// the local tombstone list to cancel the matching entry on the next
-/// <see cref="Orleans.Lattice.Primitives.OrMap{TKey, TValue}.Get(TKey)"/>.
+/// <see cref="Orleans.Lattice.OrMap{TKey, TValue}.Get(TKey)"/>.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.OrMapDeltaTombstone)]

@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Primitives;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// An observed-remove (OR) set CRDT. Each call to

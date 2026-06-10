@@ -1,5 +1,6 @@
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Operator;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
 namespace MultiSiteManufacturing.Tests.Operator;

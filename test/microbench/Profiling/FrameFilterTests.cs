@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Benchmark.Microbench.Tests.Profiling;
 [TestFixture]
 public sealed class FrameFilterTests
 {
-    [TestCase("Orleans.Lattice.Primitives.VersionVector.Merge")]
+    [TestCase("Orleans.Lattice.VersionVector.Merge")]
     [TestCase("Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.SetAsync")]
     [TestCase("System.Collections.Generic.Dictionary`2.Resize")]
     [TestCase("Orleans.Serialization.Buffers.Writer`1.Commit")]

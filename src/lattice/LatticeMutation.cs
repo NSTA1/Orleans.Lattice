@@ -90,19 +90,19 @@ public readonly record struct LatticeMutation
     /// not interpret it.
     /// </summary>
     /// <remarks>
-    /// <see cref="Primitives.VersionVector"/> is a mutable reference type
-    /// whose <see cref="Primitives.VersionVector.Entries"/> dictionary is
+    /// <see cref="Orleans.Lattice.VersionVector"/> is a mutable reference type
+    /// whose <see cref="Orleans.Lattice.VersionVector.Entries"/> dictionary is
     /// publicly mutable. The instance carried on this slot is shared with
     /// the originating commit site and may continue to be advanced after
     /// <see cref="IMutationObserver.OnMutationAsync"/> returns. Observers
     /// that retain the frontier past the observer call - for example to
     /// stamp it on a downstream wire envelope - must defensively snapshot
-    /// the value (typically via <see cref="Primitives.VersionVector.Clone"/>);
+    /// the value (typically via <see cref="Orleans.Lattice.VersionVector.Clone"/>);
     /// the replication package's built-in observer does this internally so
     /// every emitted <c>WalRecord</c> is detached from later producer-side
     /// advances.
     /// </remarks>
-    [Id(9)] public Primitives.VersionVector? VectorClock { get; init; }
+    [Id(9)] public Orleans.Lattice.VersionVector? VectorClock { get; init; }
 
     /// <summary>
     /// Identifier of the logical transaction that produced this mutation.

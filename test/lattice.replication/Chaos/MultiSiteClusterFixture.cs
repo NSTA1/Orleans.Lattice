@@ -129,7 +129,7 @@ internal sealed class MultiSiteClusterFixture
     /// </summary>
     public void RegisterOrMapShape<TKey, TValue>(string treeId)
         where TKey : notnull
-        where TValue : Orleans.Lattice.Primitives.ICrdt<TValue>, new()
+        where TValue : Orleans.Lattice.ICrdt<TValue>, new()
     {
         ArgumentNullException.ThrowIfNull(treeId);
         for (var i = 0; i < SiteCount; i++)

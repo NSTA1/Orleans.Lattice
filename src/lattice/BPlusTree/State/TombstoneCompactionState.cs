@@ -92,5 +92,5 @@ internal sealed class TombstoneCompactionState
     /// completes so deletes that arrived during the in-flight pass are
     /// preserved for the next pass.
     /// </summary>
-    [Id(8)] public Primitives.HybridLogicalClock CurrentShardDirtyAdvance { get; set; }
+    [Id(8)] public Orleans.Lattice.HybridLogicalClock CurrentShardDirtyAdvance { get; set; }
 }

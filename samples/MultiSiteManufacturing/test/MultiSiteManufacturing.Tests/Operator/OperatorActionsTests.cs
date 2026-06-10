@@ -2,6 +2,7 @@ using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Operator;
 using MultiSiteManufacturing.Tests.Federation;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
 namespace MultiSiteManufacturing.Tests.Operator;

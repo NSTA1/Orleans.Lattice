@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Chaos coverage of <see cref="ILattice.DeleteRangeAsync(string, string, CancellationToken)"/>
 /// under sustained split churn. The receiver-side range-delete code path
 /// is materially different from point ops: <c>MutationKind.DeleteRange</c>
-/// carries <see cref="Primitives.HybridLogicalClock.Zero"/>, bypasses
+/// carries <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/>, bypasses
 /// per-origin HWM dedup, and the implementation walks every leaf
 /// in <c>[start, end)</c> tombstoning matching entries. Splits that move
 /// keys between shards while the walk is in flight are a real production

@@ -59,7 +59,7 @@ Typed-delta merge is commutative, associative, and idempotent: late or duplicate
 `OrMap<TKey, TValue>` is generic, so the receiver cannot infer `(TKey, TValue)` from the `WalRecord` alone. Each silo that may apply an OR-Map entry must register the concrete shape once at startup:
 
 ```csharp verify
-using Orleans.Lattice.Primitives;
+using Orleans.Lattice;
 
 siloBuilder.AddOrMapShape<string, OrSet>("tags-by-user");
 ```

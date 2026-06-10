@@ -125,7 +125,7 @@ public class GrpcRemoteSnapshotTransportContractTests : RemoteSnapshotTransportC
         public async Task<RemoteSnapshotMetadata> GetMetadataAsync(
             string treeName,
             string sourceClusterId,
-            Orleans.Lattice.Primitives.HybridLogicalClock fromAsOfHlc,
+            Orleans.Lattice.HybridLogicalClock fromAsOfHlc,
             CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
@@ -155,7 +155,7 @@ public class GrpcRemoteSnapshotTransportContractTests : RemoteSnapshotTransportC
         public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
             string treeName,
             string sourceClusterId,
-            Orleans.Lattice.Primitives.HybridLogicalClock fromAsOfHlc,
+            Orleans.Lattice.HybridLogicalClock fromAsOfHlc,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(treeName);

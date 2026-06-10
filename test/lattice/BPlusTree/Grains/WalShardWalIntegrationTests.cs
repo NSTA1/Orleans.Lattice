@@ -49,7 +49,7 @@ public class WalShardWalIntegrationTests
             Op = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1, 2 },
-            Timestamp = Orleans.Lattice.Primitives.HybridLogicalClock.Tick(Orleans.Lattice.Primitives.HybridLogicalClock.Zero),
+            Timestamp = Orleans.Lattice.HybridLogicalClock.Tick(Orleans.Lattice.HybridLogicalClock.Zero),
             OriginClusterId = ClusterId,
         };
 

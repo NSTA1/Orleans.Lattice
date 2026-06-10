@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
 namespace MultiSiteManufacturing.Host.Inventory;

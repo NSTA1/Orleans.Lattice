@@ -31,7 +31,7 @@ public interface IChangeFeed
 Each `Subscribe` call takes a snapshot of the WAL at invocation time and completes when that snapshot is exhausted. To pick up entries committed after the call, the consumer remembers the timestamp of the last entry it observed and re-subscribes with that value as the new cursor:
 
 ```csharp verify
-using Orleans.Lattice.Primitives;
+using Orleans.Lattice;
 
 IChangeFeed feed = client.ServiceProvider.GetRequiredService<IChangeFeed>();
 string treeName = "orders";

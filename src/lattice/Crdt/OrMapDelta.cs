@@ -7,7 +7,7 @@ namespace Orleans.Lattice;
 /// the public wire contract is type-safe across the producer/receiver
 /// boundary.
 /// <para>
-/// Apply semantics on the receiver mirror <see cref="Orleans.Lattice.Primitives.OrMap{TKey, TValue}.MergeFrom(Orleans.Lattice.Primitives.OrMap{TKey, TValue})"/>:
+/// Apply semantics on the receiver mirror <see cref="Orleans.Lattice.OrMap{TKey, TValue}.MergeFrom(Orleans.Lattice.OrMap{TKey, TValue})"/>:
 /// union <see cref="Adds"/> into the local per-key entry lists (per-dot
 /// dedup, same-dot collisions lattice-merged through the value CRDT),
 /// then union <see cref="Tombstones"/> into the per-key tombstone lists.
@@ -29,7 +29,7 @@ namespace Orleans.Lattice;
 /// </typeparam>
 /// <typeparam name="TValue">
 /// The recursively-mergeable value CRDT, constrained by
-/// <see cref="Orleans.Lattice.Primitives.ICrdt{TSelf}"/> with a public
+/// <see cref="Orleans.Lattice.ICrdt{TSelf}"/> with a public
 /// parameterless constructor.
 /// </typeparam>
 [GenerateSerializer]
@@ -37,7 +37,7 @@ namespace Orleans.Lattice;
 [Immutable]
 public readonly record struct OrMapDelta<TKey, TValue>
     where TKey : notnull
-    where TValue : Orleans.Lattice.Primitives.ICrdt<TValue>, new()
+    where TValue : Orleans.Lattice.ICrdt<TValue>, new()
 {
     /// <summary>
     /// The per-key dot-tagged value snapshots added since the

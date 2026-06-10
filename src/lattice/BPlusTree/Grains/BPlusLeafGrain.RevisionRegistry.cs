@@ -143,8 +143,8 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// Replaces an earlier shape that called
-    /// <see cref="Primitives.VersionVector.Tick(string)"/>, which internally
-    /// invokes <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>
+    /// <see cref="Orleans.Lattice.VersionVector.Tick(string)"/>, which internally
+    /// invokes <see cref="Orleans.Lattice.HybridLogicalClock.Tick(Orleans.Lattice.HybridLogicalClock)"/>
     /// against <c>DateTimeOffset.UtcNow.Ticks</c>. That call would produce a
     /// value that could exceed the just-written <c>Entries[K].Timestamp</c>
     /// (whenever <c>state.State.Clock</c> had been advanced past wall-clock-now
@@ -155,19 +155,19 @@ internal sealed partial class BPlusLeafGrain
     /// An intermediate shape passed the pre-advance Clock snapshot instead,
     /// which avoided the wall-clock overshoot but introduced a different bug:
     /// on the first write to a freshly-activated leaf, both <c>preWriteClock</c>
-    /// and the current <c>Version[ReplicaId]</c> were <see cref="Primitives.HybridLogicalClock.Zero"/>,
+    /// and the current <c>Version[ReplicaId]</c> were <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/>,
     /// the strict-greater guard rejected the publication, and
-    /// <c>Version.Entries</c> stayed empty. <see cref="Primitives.VersionVector.DominatesOrEquals(Primitives.VersionVector)"/>
+    /// <c>Version.Entries</c> stayed empty. <see cref="Orleans.Lattice.VersionVector.DominatesOrEquals(Orleans.Lattice.VersionVector)"/>
     /// then trivially returned <c>true</c> for any caller (the iteration body
     /// never executes on an empty dictionary), and the fast path in
-    /// <see cref="IBPlusLeafGrain.GetDeltaSinceAsync(Primitives.VersionVector)"/>
+    /// <see cref="IBPlusLeafGrain.GetDeltaSinceAsync(Orleans.Lattice.VersionVector)"/>
     /// returned the empty singleton - hiding the just-written entry from the
     /// cache. Publishing the post-advance stamp (which is strictly greater
-    /// than <c>Zero</c> by <see cref="Primitives.HybridLogicalClock.Tick(Primitives.HybridLogicalClock)"/>'s
+    /// than <c>Zero</c> by <see cref="Orleans.Lattice.HybridLogicalClock.Tick(Orleans.Lattice.HybridLogicalClock)"/>'s
     /// monotonicity) closes both holes.
     /// </para>
     /// </summary>
-    private void PublishVersionAdvance(Primitives.HybridLogicalClock newClock)
+    private void PublishVersionAdvance(Orleans.Lattice.HybridLogicalClock newClock)
     {
         var current = state.State.Version.GetClock(ReplicaId);
         if (newClock.CompareTo(current) > 0)

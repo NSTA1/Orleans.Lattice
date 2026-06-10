@@ -350,7 +350,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
 [GenerateSerializer]
 [Alias(TypeAliases.TerminalTallyResult)]
 [Immutable]
-public readonly record struct TerminalTallyResult
+internal readonly record struct TerminalTallyResult
 {
     /// <summary>
     /// <c>true</c> when this arrival was the final per-source-shard
@@ -411,7 +411,7 @@ public readonly record struct TerminalTallyResult
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.TxStatus)]
-public enum TxStatus
+internal enum TxStatus
 {
     /// <summary>
     /// No commit/abort decision is currently visible for this saga. The

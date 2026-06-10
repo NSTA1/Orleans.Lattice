@@ -127,7 +127,7 @@ is required. `OrMap<TKey, TValue>` is open-shape (the host picks
 `TKey` and `TValue`) and **must** be registered per tree:
 
 ```csharp verify
-using Orleans.Lattice.Primitives;
+using Orleans.Lattice;
 
 siloBuilder
     .AddLattice((silo, storageName) => silo.AddMemoryGrainStorage(storageName))

@@ -48,7 +48,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(m.IsTombstone, Is.False);
         Assert.That(m.Value, Is.EqualTo(Encoding.UTF8.GetBytes("v1")));
         Assert.That(m.ExpiresAtTicks, Is.Zero);
-        Assert.That(m.Timestamp, Is.Not.EqualTo(default(Orleans.Lattice.Primitives.HybridLogicalClock)));
+        Assert.That(m.Timestamp, Is.Not.EqualTo(default(Orleans.Lattice.HybridLogicalClock)));
     }
 
     [Test]
@@ -126,7 +126,7 @@ public partial class BPlusLeafGrainTests
         var entries = new Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>>
         {
             ["k"] = Orleans.Lattice.Primitives.LwwValue<byte[]>.Create([1],
-                Orleans.Lattice.Primitives.HybridLogicalClock.Tick(default)),
+                Orleans.Lattice.HybridLogicalClock.Tick(default)),
         };
         await grain.MergeEntriesAsync(entries);
 

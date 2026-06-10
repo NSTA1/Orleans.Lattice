@@ -78,7 +78,7 @@ identity to pin the HLC to (e.g. a queue message id mapped deterministically
 to an HLC, so a crash-and-restart of the worker re-derives the same key):
 
 ```csharp verify
-using Orleans.Lattice.Primitives;
+using Orleans.Lattice;
 
 var key = new LatticeIdempotencyKey
 {
