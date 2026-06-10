@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
@@ -159,6 +161,45 @@ internal sealed partial class LatticeGrain(
             throw new InvalidOperationException(
                 $"Tree ID '{TreeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
     }
+
+    private IHostApplicationLifetime? _lifetime;
+    private bool _lifetimeResolved;
+
+    /// <summary>
+    /// Resolves the optional <see cref="IHostApplicationLifetime"/> from the
+    /// activation's service provider. Cached after first lookup. Returns
+    /// <see langword="null"/> on non-hosted test activations (which do not
+    /// register the lifetime), in which case <see cref="ThrowIfShuttingDown"/>
+    /// is a no-op. Mirrors the lazy-resolve pattern the atomic-write saga
+    /// coordinator established.
+    /// </summary>
+    private IHostApplicationLifetime? ResolveLifetime()
+    {
+        if (_lifetimeResolved) return _lifetime;
+        _lifetimeResolved = true;
+        _lifetime = services.GetService<IHostApplicationLifetime>();
+        return _lifetime;
+    }
+
+    /// <summary>
+    /// Fast-fails a public write entry point with
+    /// <see cref="LatticeShuttingDownException"/> when the host has begun
+    /// shutting down, before the call touches the activation directory or
+    /// dispatches to the write-ahead-log writer. A no-op on a healthy host
+    /// or a non-hosted test activation. Every public mutation method calls
+    /// this first so a single <c>is LatticeShuttingDownException</c> check on
+    /// the caller covers every write path, not just the atomic-write saga.
+    /// The steady-state healthy path is a cached field read plus a struct
+    /// token check - no allocation.
+    /// </summary>
+    private void ThrowIfShuttingDown()
+    {
+        if (ResolveLifetime() is { } lifetime && lifetime.ApplicationStopping.IsCancellationRequested)
+            throw new LatticeShuttingDownException(
+                $"Write to tree '{TreeId}' refused: the silo is shutting down (ApplicationStopping is signalled); "
+                + "the write was not dispatched to the write-ahead-log writer.");
+    }
+
 
     private async Task PublishEventAsync(LatticeTreeEventKind kind, string? key = null, int? shardIndex = null)
     {
@@ -740,6 +781,7 @@ internal sealed partial class LatticeGrain(
     public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
             : SetAsyncCore(key, value, cancellationToken);
@@ -904,6 +946,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         if (ttl <= TimeSpan.Zero)
@@ -949,6 +992,7 @@ internal sealed partial class LatticeGrain(
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
@@ -978,6 +1022,7 @@ internal sealed partial class LatticeGrain(
     public async Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1007,6 +1052,7 @@ internal sealed partial class LatticeGrain(
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1037,6 +1083,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
@@ -1186,6 +1233,7 @@ internal sealed partial class LatticeGrain(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
@@ -1284,6 +1332,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
@@ -1325,6 +1374,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1375,6 +1425,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
@@ -1398,6 +1449,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1412,6 +1464,7 @@ internal sealed partial class LatticeGrain(
     public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
             : DeleteAsyncCore(key, cancellationToken);
@@ -1445,6 +1498,7 @@ internal sealed partial class LatticeGrain(
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1462,6 +1516,7 @@ internal sealed partial class LatticeGrain(
     public async Task<int> DeleteRangeWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();

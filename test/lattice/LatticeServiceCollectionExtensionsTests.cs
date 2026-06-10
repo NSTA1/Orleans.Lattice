@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -337,5 +339,142 @@ public class LatticeServiceCollectionExtensionsTests
 
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetKeyedService<IWalStorageProvider>("acct"), Is.SameAs(second));
+    }
+}
+
+/// <summary>
+/// Tests for the in-library shutdown log-demotion seam
+/// (<see cref="LatticeServiceCollectionExtensions.LatticeShutdownLogFilter"/>):
+/// the targeted Orleans transport tear-down warnings are demoted only while
+/// the host is stopping, and left at Warning on a healthy host.
+/// </summary>
+public class LatticeShutdownLogFilterTests
+{
+    private static IHostApplicationLifetime Lifetime(bool stopping)
+    {
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        var cts = new CancellationTokenSource();
+        if (stopping) cts.Cancel();
+        lifetime.ApplicationStopping.Returns(cts.Token);
+        return lifetime;
+    }
+
+    [Test]
+    public void ShouldEmit_keeps_targeted_warning_when_host_is_healthy()
+    {
+        Assert.That(
+            LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.ShouldEmit(
+                "Orleans.Messaging", LogLevel.Warning, applicationStopping: false),
+            Is.True);
+    }
+
+    [Test]
+    public void ShouldEmit_suppresses_targeted_warning_when_application_stopping()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.ShouldEmit(
+                    "Orleans.Messaging", LogLevel.Warning, applicationStopping: true),
+                Is.False);
+            Assert.That(
+                LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.ShouldEmit(
+                    "Orleans.Runtime.Placement.PlacementService", LogLevel.Warning, applicationStopping: true),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void ShouldEmit_keeps_targeted_error_even_when_application_stopping()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.ShouldEmit(
+                    "Orleans.Messaging", LogLevel.Error, applicationStopping: true),
+                Is.True);
+            Assert.That(
+                LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.ShouldEmit(
+                    "Orleans.Messaging", LogLevel.Critical, applicationStopping: true),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void ShouldEmit_leaves_non_targeted_categories_untouched()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.ShouldEmit(
+                    "Orleans.Lattice.BPlusTree.Grains.ShardRootGrain", LogLevel.Warning, applicationStopping: true),
+                Is.True);
+            Assert.That(
+                LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.ShouldEmit(
+                    null, LogLevel.Warning, applicationStopping: true),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void IsDemotedCategory_matches_targeted_prefixes_only()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.IsDemotedCategory("Orleans.Messaging"), Is.True);
+            Assert.That(LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.IsDemotedCategory("Orleans.Messaging.GatewaySender"), Is.True);
+            Assert.That(LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.IsDemotedCategory("Orleans.Runtime.Placement.PlacementService"), Is.True);
+            Assert.That(LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.IsDemotedCategory("Orleans.Runtime.Catalog"), Is.False);
+            Assert.That(LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.IsDemotedCategory(null), Is.False);
+            Assert.That(LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.IsDemotedCategory(""), Is.False);
+        });
+    }
+
+    [Test]
+    public void Instance_ShouldEmit_resolves_lifetime_lazily_and_demotes_only_when_stopping()
+    {
+        var stoppingProvider = new ServiceCollection().AddSingleton(Lifetime(stopping: true)).BuildServiceProvider();
+        var healthyProvider = new ServiceCollection().AddSingleton(Lifetime(stopping: false)).BuildServiceProvider();
+
+        var stoppingFilter = new LatticeServiceCollectionExtensions.LatticeShutdownLogFilter(stoppingProvider);
+        var healthyFilter = new LatticeServiceCollectionExtensions.LatticeShutdownLogFilter(healthyProvider);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stoppingFilter.ShouldEmit("Orleans.Messaging", LogLevel.Warning), Is.False);
+            Assert.That(healthyFilter.ShouldEmit("Orleans.Messaging", LogLevel.Warning), Is.True);
+            // Error survives in both states.
+            Assert.That(stoppingFilter.ShouldEmit("Orleans.Messaging", LogLevel.Error), Is.True);
+        });
+    }
+
+    [Test]
+    public void Instance_ShouldEmit_keeps_warning_when_no_lifetime_registered()
+    {
+        // Non-hosted activation: no IHostApplicationLifetime in DI means the
+        // host is never observed stopping, so warnings are kept.
+        var provider = new ServiceCollection().BuildServiceProvider();
+        var filter = new LatticeServiceCollectionExtensions.LatticeShutdownLogFilter(provider);
+        Assert.That(filter.ShouldEmit("Orleans.Messaging", LogLevel.Warning), Is.True);
+    }
+
+    [Test]
+    public void AddLattice_registers_a_shutdown_log_filter_rule_per_demoted_category()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLattice((_, _) => { });
+
+        var provider = services.BuildServiceProvider();
+        var filterOptions = provider.GetRequiredService<IOptions<LoggerFilterOptions>>().Value;
+        foreach (var category in LatticeServiceCollectionExtensions.LatticeShutdownLogFilter.DemotedCategories)
+        {
+            Assert.That(
+                filterOptions.Rules.Any(r => r.CategoryName == category && r.Filter is not null),
+                Is.True,
+                $"AddLattice must install a dynamic shutdown log filter rule for '{category}'");
+        }
     }
 }
