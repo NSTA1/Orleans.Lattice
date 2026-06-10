@@ -97,6 +97,15 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-tree pinned WAL placement with `ILatticeAdmin` move surface for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
 - [F-085](https://github.com/NSTA1/Orleans.Lattice/issues/609) - Transport-agnostic WAL saturation back-pressure surface on the core library so callers throttle offered load before silent queueing on the writer-side admission gate
 - [F-086](https://github.com/NSTA1/Orleans.Lattice/issues/610) - Adopt the F-085 saturation back-pressure surface in the Azure-throughput bench silo so the open-loop producer throttles via the kernel TCP window when the storage account saturates
+- [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
+- [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
+- [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down
+- [P-003](https://github.com/NSTA1/Orleans.Lattice/issues/558) - Streaming scans (`KeysAsync`/`EntriesAsync`/`ValuesAsync<T>`) server-side predicate push-down
+- [P-004](https://github.com/NSTA1/Orleans.Lattice/issues/559) - Cursor predicate support (transient + durable)
+- [P-005](https://github.com/NSTA1/Orleans.Lattice/issues/560) - `DeleteRangeAsync<T>` server-side conditional bulk delete
+- [P-006](https://github.com/NSTA1/Orleans.Lattice/issues/561) - `OpenDeleteRangeCursorAsync<T>` conditional resumable delete
+- [P-007](https://github.com/NSTA1/Orleans.Lattice/issues/562) - `SetManyAsync<T>` conditional write (existing-value guard)
+- [P-008](https://github.com/NSTA1/Orleans.Lattice/issues/563) - `SetManyAtomicAsync<T>` guarded atomic batch
 
 ## Follow-up fixes
 
