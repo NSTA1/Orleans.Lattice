@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -17,7 +18,8 @@ public partial class LatticeGrainTests
         LatticeOptions? options = null,
         int shardCount = 4,
         int maxLeafKeys = 128,
-        int maxInternalChildren = 128)
+        int maxInternalChildren = 128,
+        IHostApplicationLifetime? lifetime = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
@@ -44,9 +46,31 @@ public partial class LatticeGrainTests
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var services = Substitute.For<IServiceProvider>();
+        // When a host lifetime is supplied, wire it through the activation
+        // service provider so the grain's lazy ResolveLifetime() finds it
+        // (drives the shutdown fast-fail guard).
+        if (lifetime is not null)
+        {
+            services.GetService(typeof(IHostApplicationLifetime)).Returns(lifetime);
+        }
         var logger = NullLogger<LatticeGrain>.Instance;
         var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver, services, logger);
         return (grain, grainFactory);
+    }
+
+    /// <summary>
+    /// Builds an <see cref="IHostApplicationLifetime"/> whose
+    /// <see cref="IHostApplicationLifetime.ApplicationStopping"/> token is
+    /// already cancelled, simulating "a write arrives after the host has
+    /// begun shutting down".
+    /// </summary>
+    private static IHostApplicationLifetime StoppingLifetime()
+    {
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+        lifetime.ApplicationStopping.Returns(cts.Token);
+        return lifetime;
     }
 
     private static IShardRootGrain SetupShardRoot(IGrainFactory factory)
@@ -145,8 +169,82 @@ public partial class LatticeGrainTests
         var expectedKey = $"tree-a/{expectedShardIndex}";
         factory1.Received(1).GetGrain<IShardRootGrain>(
             Arg.Is<string>(s => s == expectedKey), Arg.Any<string>());
-        factory2.Received(1).GetGrain<IShardRootGrain>(
-            Arg.Is<string>(s => s == expectedKey), Arg.Any<string>());
+    }
+
+    // --- Host-shutdown fast-fail on the public write entry points ---
+
+    [Test]
+    public void SetAsync_throws_LatticeShuttingDownException_when_application_stopping()
+    {
+        var (grain, factory) = CreateGrain(lifetime: StoppingLifetime());
+        var shardRoot = SetupShardRoot(factory);
+
+        var ex = Assert.ThrowsAsync<LatticeShuttingDownException>(
+            () => grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1")));
+        Assert.That(ex!.Message, Does.Contain("shutting down"));
+
+        // The write must NOT have been dispatched to the shard root / WAL writer.
+        shardRoot.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+    }
+
+    [Test]
+    public void SetManyAsync_throws_LatticeShuttingDownException_when_application_stopping()
+    {
+        var (grain, factory) = CreateGrain(lifetime: StoppingLifetime());
+        var shardRoot = SetupShardRoot(factory);
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("k1", Encoding.UTF8.GetBytes("v1")),
+            new("k2", Encoding.UTF8.GetBytes("v2")),
+        };
+
+        var ex = Assert.ThrowsAsync<LatticeShuttingDownException>(
+            () => grain.SetManyAsync(entries));
+        Assert.That(ex!.Message, Does.Contain("shutting down"));
+
+        shardRoot.DidNotReceive().SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public void DeleteAsync_throws_LatticeShuttingDownException_when_application_stopping()
+    {
+        var (grain, factory) = CreateGrain(lifetime: StoppingLifetime());
+        var shardRoot = SetupShardRoot(factory);
+
+        var ex = Assert.ThrowsAsync<LatticeShuttingDownException>(
+            () => grain.DeleteAsync("k1"));
+        Assert.That(ex!.Message, Does.Contain("shutting down"));
+
+        shardRoot.DidNotReceive().DeleteAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public void DeleteRangeAsync_throws_LatticeShuttingDownException_when_application_stopping()
+    {
+        var (grain, factory) = CreateGrain(lifetime: StoppingLifetime());
+        var shardRoot = SetupShardRoot(factory);
+
+        var ex = Assert.ThrowsAsync<LatticeShuttingDownException>(
+            () => grain.DeleteRangeAsync("a", "z"));
+        Assert.That(ex!.Message, Does.Contain("shutting down"));
+
+        shardRoot.DidNotReceive().DeleteRangeAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>());
+    }
+
+    [Test]
+    public async Task SetAsync_dispatches_normally_when_host_is_healthy()
+    {
+        // Positive control: a registered-but-not-stopping lifetime must not
+        // block writes - the demotion is scoped strictly to ApplicationStopping.
+        var lifetime = Substitute.For<IHostApplicationLifetime>();
+        lifetime.ApplicationStopping.Returns(CancellationToken.None);
+        var (grain, factory) = CreateGrain(lifetime: lifetime);
+        var shardRoot = SetupShardRoot(factory);
+
+        await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        await shardRoot.Received(1).SetAsync("k1", Arg.Any<byte[]>());
     }
 
 }

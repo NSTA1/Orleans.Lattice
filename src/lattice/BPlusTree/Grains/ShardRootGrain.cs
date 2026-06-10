@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using Orleans.Lattice.BPlusTree.State;
@@ -185,6 +187,40 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
+    private IHostApplicationLifetime? _lifetime;
+    private bool _lifetimeResolved;
+
+    /// <summary>
+    /// Resolves the optional <see cref="IHostApplicationLifetime"/> from the
+    /// activation's service provider. Cached after first lookup; returns
+    /// <see langword="null"/> on non-hosted test activations. Mirrors the
+    /// lazy-resolve pattern the atomic-write saga coordinator established.
+    /// </summary>
+    private IHostApplicationLifetime? ResolveLifetime()
+    {
+        if (_lifetimeResolved) return _lifetime;
+        _lifetimeResolved = true;
+        _lifetime = context.ActivationServices?.GetService<IHostApplicationLifetime>();
+        return _lifetime;
+    }
+
+    /// <summary>
+    /// Fast-fails a shard-root write entry point with
+    /// <see cref="LatticeShuttingDownException"/> when the host has begun
+    /// shutting down, before the write touches the leaf grains or the
+    /// write-ahead-log writer. A no-op on a healthy host or a non-hosted
+    /// test activation. The steady-state healthy path is a cached field read
+    /// plus a struct token check - no allocation.
+    /// </summary>
+    private void ThrowIfShuttingDown()
+    {
+        if (ResolveLifetime() is { } lifetime && lifetime.ApplicationStopping.IsCancellationRequested)
+            throw new LatticeShuttingDownException(
+                $"Write to shard '{context.GrainId.Key}' refused: the silo is shutting down (ApplicationStopping is signalled); "
+                + "the write was not dispatched to the write-ahead-log writer.");
+    }
+
+
     public async Task<byte[]?> GetAsync(string key)
     {
         await PrepareForOperationAsync();
@@ -312,6 +348,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task SetAsync(string key, byte[] value)
     {
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
@@ -346,6 +383,7 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task SetAsync(string key, byte[] value, long expiresAtTicks)
     {
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
@@ -377,6 +415,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value)
     {
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
@@ -421,6 +460,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
@@ -466,6 +506,7 @@ internal sealed partial class ShardRootGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
@@ -492,6 +533,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         // Reject-check up-front so the batch fails fast rather than partially applying.
         ThrowIfRejectedForAnyKey(entries.Select(e => e.Key));
@@ -784,6 +826,7 @@ internal sealed partial class ShardRootGrain(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
         ArgumentNullException.ThrowIfNull(entries);
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForAnyKey(entries.Select(e => e.Key));
         RecordWrite();
@@ -1020,6 +1063,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<bool> DeleteAsync(string key)
     {
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
         RecordWrite();
@@ -1069,6 +1113,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
+        ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         // range deletes do not currently shadow-forward tombstones - see
         // ForwardLocalWriteToShadowIfNeededAsync XML doc. The cleanup phase of
