@@ -246,4 +246,176 @@ public partial class LeafCacheGrainTests
 
         await mockPrimary.Received(1).GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>());
     }
+
+    // --- Co-location read pass-through (CoLocationReadPassThrough) ---
+    //
+    // When the option is enabled AND the primary BPlusLeafGrain is provably
+    // co-located on this silo (its same-silo revision cookie is published in
+    // the registry), the cache serves reads by delegating straight to the
+    // primary leaf via a same-silo grain dispatch instead of mirroring the
+    // leaf's entries locally. These tests pin the behavioural contracts of
+    // that path: delegation when enabled + co-located, mirror fallback when
+    // disabled or cross-silo, and preservation of the moved-away read gate.
+
+    [Test]
+    public async Task GetAsync_pass_through_enabled_and_colocated_delegates_to_primary_leaf()
+    {
+        var (cache, registryPopulator, mockPrimary, _) =
+            CreateCacheWithRegistryPopulator(
+                nameof(GetAsync_pass_through_enabled_and_colocated_delegates_to_primary_leaf),
+                new LatticeOptions { CacheTtl = TimeSpan.Zero, CoLocationReadPassThrough = true });
+
+        // Co-locate: a real write publishes the same-silo cookie for the
+        // cache's primary id so TryGetLeafRevision returns true.
+        await registryPopulator.SetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        // The refresh delta would mirror "mirror-val" for k1, but the
+        // co-located primary's authoritative GetAsync returns "leaf-val".
+        // Pass-through must return the leaf's value, proving the mirror is
+        // bypassed (and never populated).
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
+            .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("mirror-val"))));
+        mockPrimary.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("leaf-val"));
+
+        var result = await cache.GetAsync("k1");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("leaf-val"));
+        await mockPrimary.Received().GetAsync("k1");
+    }
+
+    [Test]
+    public async Task GetAsync_pass_through_disabled_serves_from_local_mirror()
+    {
+        var (cache, registryPopulator, mockPrimary, _) =
+            CreateCacheWithRegistryPopulator(
+                nameof(GetAsync_pass_through_disabled_serves_from_local_mirror),
+                new LatticeOptions { CacheTtl = TimeSpan.Zero, CoLocationReadPassThrough = false });
+
+        await registryPopulator.SetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
+            .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("mirror-val"))));
+        mockPrimary.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("leaf-val"));
+
+        var result = await cache.GetAsync("k1");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("mirror-val"));
+        await mockPrimary.DidNotReceive().GetAsync("k1");
+    }
+
+    [Test]
+    public async Task GetAsync_pass_through_enabled_but_cross_silo_serves_from_local_mirror()
+    {
+        // Cross-silo simulation: never populate the registry, so
+        // TryGetLeafRevision returns false and pass-through stays inactive
+        // even though the option is enabled. The mirror path must run
+        // unchanged - this is the multi-silo correctness guarantee.
+        var unique = $"colocation-crosssilo-{Guid.NewGuid():N}";
+        var leafId = GrainId.Create("leaf", unique);
+
+        var mockPrimary = Substitute.For<IBPlusLeafGrain>();
+        mockPrimary.GetTreeIdAsync().Returns("test-tree");
+        mockPrimary.GetPendingKeysAsync().Returns(new List<string>());
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
+            .Returns(DeltaWith(("k1", Encoding.UTF8.GetBytes("mirror-val"))));
+        mockPrimary.GetAsync("k1").Returns(Encoding.UTF8.GetBytes("leaf-val"));
+
+        var cacheContext = Substitute.For<IGrainContext>();
+        cacheContext.GrainId.Returns(GrainId.Create("cache", leafId.ToString()));
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(mockPrimary);
+
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>())
+            .Returns(new LatticeOptions { CacheTtl = TimeSpan.Zero, CoLocationReadPassThrough = true });
+
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
+
+        Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
+            "precondition: registry must be empty for the cross-silo simulation");
+
+        var result = await cache.GetAsync("k1");
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("mirror-val"));
+        await mockPrimary.DidNotReceive().GetAsync("k1");
+    }
+
+    [Test]
+    public async Task ExistsAsync_pass_through_enabled_and_colocated_delegates_to_primary_leaf()
+    {
+        var (cache, registryPopulator, mockPrimary, _) =
+            CreateCacheWithRegistryPopulator(
+                nameof(ExistsAsync_pass_through_enabled_and_colocated_delegates_to_primary_leaf),
+                new LatticeOptions { CacheTtl = TimeSpan.Zero, CoLocationReadPassThrough = true });
+
+        await registryPopulator.SetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        // Mirror would report the key absent (empty delta); the co-located
+        // primary reports it present. Pass-through reflects the leaf's
+        // authoritative answer.
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
+        mockPrimary.ExistsAsync("k1").Returns(true);
+
+        var exists = await cache.ExistsAsync("k1");
+
+        Assert.That(exists, Is.True);
+        await mockPrimary.Received().ExistsAsync("k1");
+    }
+
+    [Test]
+    public async Task GetManyAsync_pass_through_enabled_and_colocated_delegates_batch_to_primary_leaf()
+    {
+        var (cache, registryPopulator, mockPrimary, _) =
+            CreateCacheWithRegistryPopulator(
+                nameof(GetManyAsync_pass_through_enabled_and_colocated_delegates_batch_to_primary_leaf),
+                new LatticeOptions { CacheTtl = TimeSpan.Zero, CoLocationReadPassThrough = true });
+
+        await registryPopulator.SetAsync("k1", Encoding.UTF8.GetBytes("ignored"));
+
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
+            .Returns(DeltaWith(
+                ("k1", Encoding.UTF8.GetBytes("mirror-v1")),
+                ("k2", Encoding.UTF8.GetBytes("mirror-v2"))));
+        mockPrimary.GetManyAsync(Arg.Any<List<string>>()).Returns(new Dictionary<string, byte[]>
+        {
+            ["k1"] = Encoding.UTF8.GetBytes("leaf-v1"),
+            ["k2"] = Encoding.UTF8.GetBytes("leaf-v2"),
+        });
+
+        var result = await cache.GetManyAsync(new List<string> { "k1", "k2" });
+
+        Assert.That(result.Count, Is.EqualTo(2));
+        Assert.That(Encoding.UTF8.GetString(result["k1"]), Is.EqualTo("leaf-v1"));
+        Assert.That(Encoding.UTF8.GetString(result["k2"]), Is.EqualTo("leaf-v2"));
+        await mockPrimary.Received().GetManyAsync(Arg.Any<List<string>>());
+    }
+
+    [Test]
+    public async Task GetAsync_pass_through_preserves_moved_away_gate()
+    {
+        var (cache, registryPopulator, mockPrimary, _) =
+            CreateCacheWithRegistryPopulator(
+                nameof(GetAsync_pass_through_preserves_moved_away_gate),
+                new LatticeOptions { CacheTtl = TimeSpan.Zero, CoLocationReadPassThrough = true });
+
+        await registryPopulator.SetAsync("seed", Encoding.UTF8.GetBytes("ignored"));
+
+        // The co-located primary reports that the virtual slot for movedKey
+        // has migrated away. Even on the pass-through path, the cache must
+        // surface StaleShardRoutingException (so LatticeGrain re-routes)
+        // rather than delegating a phantom-absent read.
+        var movedKey = KeyForVirtualSlot(2, "moved-");
+        mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>())
+            .Returns(MovedAwayDelta(new[] { 2 }, MovedAwayVsc));
+
+        Assert.That(async () => await cache.GetAsync(movedKey),
+            Throws.TypeOf<StaleShardRoutingException>());
+        // The moved-away gate fires before delegation, so the primary's
+        // GetAsync must never be reached for the moved key.
+        await mockPrimary.DidNotReceive().GetAsync(movedKey);
+    }
 }

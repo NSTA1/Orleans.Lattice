@@ -60,6 +60,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`AutoSplitEnabled`](#autosplitenabled) | `bool` | `true` | Yes |
 | [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
 | [`CacheTtl`](#cachettl) | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
+| [`CoLocationReadPassThrough`](#colocationreadpassthrough) | `bool` | `false` (keep the local mirror) | Yes |
 | [`CompactionLeafBatchSize`](#compactionleafbatchsize) | `int` | 64 | Yes |
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
 | [`CompactionTriggerCooldown`](tombstone-compaction.md) | `TimeSpan` | 5 minutes | Yes |
@@ -172,6 +173,17 @@ siloBuilder.ConfigureLattice("realtime", o =>
 ```
 
 This option can be changed freely at any time. The new TTL takes effect on the next read. A value of `TimeSpan.Zero` preserves the original behaviour (refresh on every read).
+
+### `CoLocationReadPassThrough`
+
+Experimental memory-versus-latency trade-off for the `LeafCacheGrain` mirror (default: `false`). When `true`, a cache activation that can prove its primary `BPlusLeafGrain` is co-located on the same silo serves reads by delegating straight to the primary leaf via a same-silo grain dispatch, instead of keeping a local mirror of the leaf's entries. This eliminates the per-silo structural duplication of the cache dictionary on the primary leaf's own silo at the cost of one extra in-process grain hop per read. See [Read Caching](caching.md#co-location-read-pass-through-colocationreadpassthrough) for the full rationale and the measured trade-off.
+
+```csharp verify
+// Drop the on-silo mirror duplication; accept one in-process grain hop per read.
+siloBuilder.ConfigureLattice("memory-sensitive-tree", o => o.CoLocationReadPassThrough = true);
+```
+
+Co-location is detected via the process-wide same-silo revision registry: when the primary leaf is on another silo (no local cookie) the cache transparently falls back to its normal delta-refresh mirror path, so cross-silo caching is unaffected. The pending-tx, migrated-saga, and moved-away read gates are all preserved on the pass-through path. This option can be changed freely at any time; the new behaviour takes effect on the next read.
 
 ### `CompactionLeafBatchSize`
 

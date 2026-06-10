@@ -185,14 +185,33 @@ internal sealed class LeafCacheGrain(
     {
         // Always pull a delta from the primary. The VersionVector comparison
         // makes this cheap - if nothing changed, the primary returns an empty
-        // delta without scanning entries.
-        await RefreshAsync();
+        // delta without scanning entries. On the co-location pass-through path
+        // (CoLocationReadPassThrough + provably same-silo primary) RefreshAsync
+        // still refreshes the moved-away / pending metadata but leaves the
+        // mirror empty; it returns true to signal that the value must be
+        // sourced from the co-located primary leaf directly.
+        var passThrough = await RefreshAsync();
 
         // Moved-away gate: a key whose virtual slot has been migrated
         // away from the primary leaf must surface as a routing
         // exception so LatticeGrain re-routes to the new owner instead
         // of seeing a silent null.
         ThrowIfKeyMovedAway(key);
+
+        if (passThrough)
+        {
+            // Co-location pass-through: the mirror is intentionally not
+            // populated, so the co-located primary leaf - which is
+            // authoritative for pending-tx and migrated-saga
+            // linearization - serves the value via a same-silo grain
+            // dispatch. This preserves the pending and migrated
+            // delegation semantics (the leaf consults the per-tree
+            // TxRegistry / shadow guard exactly as it does for the
+            // mirror's own delegation branch below) without keeping a
+            // structural duplicate of state.State.Entries on this silo.
+            var passThroughLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            return await passThroughLeaf.GetAsync(key);
+        }
 
         // Strict atomic-visibility delegation: if this key is covered by
         // a pending-tx prepare on the primary, OR the cached entry has
@@ -230,10 +249,19 @@ internal sealed class LeafCacheGrain(
 
     public async Task<bool> ExistsAsync(string key)
     {
-        await RefreshAsync();
+        var passThrough = await RefreshAsync();
 
         // See GetAsync for the moved-away gate rationale.
         ThrowIfKeyMovedAway(key);
+
+        if (passThrough)
+        {
+            // Co-location pass-through: delegate existence to the
+            // co-located primary leaf so its pending-tx / migrated-saga
+            // guards apply, without keeping a mirror. See GetAsync.
+            var passThroughLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            return await passThroughLeaf.ExistsAsync(key);
+        }
 
         // See GetAsync for the delegation rationale (pending OR
         // IsMigrated=true entries must delegate so the leaf's shadow
@@ -254,7 +282,7 @@ internal sealed class LeafCacheGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
-        await RefreshAsync();
+        var passThrough = await RefreshAsync();
 
         // See GetAsync for the moved-away gate rationale. Surface the
         // exception BEFORE partitioning so a single moved-away key in
@@ -263,6 +291,21 @@ internal sealed class LeafCacheGrain(
         // against the new owner, instead of returning a partial
         // dictionary that silently omits the moved keys.
         ThrowIfAnyKeyMovedAway(keys);
+
+        if (passThrough)
+        {
+            // Co-location pass-through: delegate the whole batch to the
+            // co-located primary leaf. The leaf applies the pending-tx
+            // and migrated-saga guards per key exactly as the mirror's
+            // own partitioned delegation does below, so the strict
+            // atomic-visibility contract is preserved without a mirror.
+            // Keys the leaf omits (tombstoned / aborted / absent) are
+            // intentionally absent from the result, matching the mirror
+            // path's "do not fall back to _cache for delegated keys"
+            // behaviour. See GetAsync.
+            var passThroughLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
+            return await passThroughLeaf.GetManyAsync(keys);
+        }
 
         // Partition the request into delegated and non-delegated keys.
         // A key delegates to the primary leaf when EITHER:
@@ -356,9 +399,44 @@ internal sealed class LeafCacheGrain(
     private KeyValuePair<string, object?> CacheTreeTag() =>
         new(LatticeMetrics.TagTree, _treeId ?? string.Empty);
 
-    private async Task RefreshAsync()
+    private async Task<bool> RefreshAsync()
     {
         var primaryId = PrimaryLeafId;
+
+        // Resolve the tree id (and therefore the resolved options)
+        // eagerly so the co-location pass-through decision is available
+        // on the very first refresh, before any snapshot is merged into
+        // _cache. The baseline mirror path already resolves _treeId on
+        // its first read (via GetCacheTtlAsync below), so this adds no
+        // extra RPC in steady state - it only re-orders the single
+        // first-read resolution ahead of the snapshot merge. Without it
+        // a pass-through-configured cache would mirror the leaf's full
+        // snapshot once on its first read (defeating the memory saving)
+        // and only stop mirroring on the second.
+        if (_treeId is null)
+        {
+            var bootstrapLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(primaryId);
+            _treeId = await bootstrapLeaf.GetTreeIdAsync() ?? string.Empty;
+        }
+
+        // Co-location pass-through is active only when the option is set
+        // AND the primary leaf is provably activated on this silo (its
+        // same-silo revision cookie is published in the registry). On a
+        // cross-silo primary the cookie is absent and the cache keeps its
+        // normal delta-refresh mirror behaviour by construction.
+        var passThrough = optionsMonitor.Get(_treeId).CoLocationReadPassThrough
+            && BPlusLeafGrain.TryGetLeafRevision(primaryId, out _);
+
+        // If pass-through has just become active while the mirror still
+        // holds entries (the option was toggled at runtime, or the
+        // primary leaf migrated onto this silo after this activation had
+        // been mirroring a then-cross-silo primary), drop the mirror now
+        // so the memory saving takes effect immediately rather than
+        // waiting for an epoch flip.
+        if (passThrough && _cache.Count > 0)
+        {
+            _cache.Clear();
+        }
 
         // Same-silo revision-cookie short-circuit. When the primary
         // leaf is activated on this silo, every state-advancing
@@ -384,7 +462,7 @@ internal sealed class LeafCacheGrain(
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG refresh-skip-revision] silo={DiagSiloTag} cache-gid={context.GrainId} primary={primaryId} rev={sameSiloRev}");
 #endif
-                return; // provably fresh; nothing has changed on the primary.
+                return passThrough; // provably fresh; nothing has changed on the primary.
             }
             // Revision changed: skip the TTL gate. The revision is the
             // source of truth on same-silo; the TTL exists only as a
@@ -408,7 +486,7 @@ internal sealed class LeafCacheGrain(
 #if LATTICE_DIAG
                     DiagSink.Write($"[DIAG refresh-skip-ttl] silo={DiagSiloTag} cache-gid={context.GrainId} primary={primaryId} elapsedMs={elapsed} ttlMs={(long)ttl.TotalMilliseconds} lastSeenRev={_lastSeenPrimaryRevision}");
 #endif
-                    return;
+                    return passThrough;
                 }
             }
         }
@@ -585,19 +663,28 @@ internal sealed class LeafCacheGrain(
             // gate has a meaningful starting point.
             _deliveryCursor = delta.DeliveryCursor;
             _lastRefreshTicks = Environment.TickCount64;
-            return;
+            return passThrough;
         }
 
-        // Merge each entry using LWW semantics.
-        foreach (var (key, lww) in delta.Entries)
+        // Merge each entry using LWW semantics. Skipped on the
+        // co-location pass-through path: the mirror is left empty so the
+        // per-silo structural duplicate of state.State.Entries is never
+        // materialised, and reads delegate straight to the co-located
+        // primary leaf. The moved-away / pending / cursor / version
+        // bookkeeping above still runs so the gates and the next
+        // refresh's delta filter remain correct.
+        if (!passThrough)
         {
-            if (_cache.TryGetValue(key, out var existing))
+            foreach (var (key, lww) in delta.Entries)
             {
-                _cache[key] = LwwValue<byte[]>.Merge(existing, lww);
-            }
-            else
-            {
-                _cache[key] = lww;
+                if (_cache.TryGetValue(key, out var existing))
+                {
+                    _cache[key] = LwwValue<byte[]>.Merge(existing, lww);
+                }
+                else
+                {
+                    _cache[key] = lww;
+                }
             }
         }
 
@@ -607,6 +694,7 @@ internal sealed class LeafCacheGrain(
         // refresh ships only the strictly-newer per-key sequences.
         _deliveryCursor = delta.DeliveryCursor;
         _lastRefreshTicks = Environment.TickCount64;
+        return passThrough;
     }
 
     private async Task<TimeSpan> GetCacheTtlAsync()

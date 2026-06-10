@@ -226,6 +226,40 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultCacheTtl = TimeSpan.Zero;
 
     /// <summary>
+    /// When <c>true</c>, a <c>LeafCacheGrain</c> activation that can prove its
+    /// primary <c>BPlusLeafGrain</c> is co-located on the same silo serves reads
+    /// (<c>GetAsync</c> / <c>ExistsAsync</c> / <c>GetManyAsync</c>) by delegating
+    /// straight to the primary leaf via a same-silo grain dispatch, instead of
+    /// maintaining a local mirror of the leaf's entries in the cache dictionary.
+    /// This eliminates the per-silo memory duplication of the cache mirror on the
+    /// primary leaf's own silo, at the cost of one extra in-process grain hop per
+    /// read.
+    /// <para>
+    /// Co-location is detected via the process-wide same-silo revision registry
+    /// (the same cookie that powers the delta-refresh fast path): when the primary
+    /// is on another silo the registry has no local entry and the cache
+    /// transparently keeps its normal delta-refresh mirror behaviour, so
+    /// cross-silo caching is unaffected. The pending-tx delegation, migrated-saga
+    /// delegation, and moved-away read gates are all preserved on the pass-through
+    /// path - the co-located primary leaf is authoritative for the first two, and
+    /// the cache continues to refresh its moved-away metadata for the third.
+    /// </para>
+    /// <para>
+    /// Disabled by default. This is an experimental memory-versus-latency
+    /// trade-off knob whose measured effect is documented in
+    /// <c>docs/lattice/caching.md</c>; on the co-located steady-state read path the
+    /// mirror is already cheap (a revision-cookie check plus a local dictionary
+    /// lookup), so enabling pass-through trades a working-set reduction against a
+    /// per-call wall-time regression. This option can be changed freely at any
+    /// time.
+    /// </para>
+    /// </summary>
+    public bool CoLocationReadPassThrough { get; set; } = DefaultCoLocationReadPassThrough;
+
+    /// <summary>Default value for <see cref="CoLocationReadPassThrough"/> (<c>false</c> - keep the local mirror).</summary>
+    public const bool DefaultCoLocationReadPassThrough = false;
+
+    /// <summary>
     /// When <c>true</c>, <see cref="ILattice.KeysAsync"/> pre-fetches the next page
     /// from each shard in parallel while the current page is being consumed,
     /// hiding per-shard grain-call latency during ordered scans. Because pre-fetched
