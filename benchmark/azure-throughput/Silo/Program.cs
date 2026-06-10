@@ -1553,8 +1553,9 @@ internal sealed class TcpIngestService(
         // exited cleanly. Mirror the FX-029 recency check here:
         // when the silo was Saturated within RecentSaturationWindow,
         // park on IWalSaturationSignal.WaitForHealthyAsync (bounded
-        // by InFlightTailQuiesceBudget so the host shutdown lifecycle
-        // still settles inside WalDrainBudget) so the in-flight tail
+        // by InFlightTailQuiesceBudget so the wait cannot consume the
+        // systemd stop window before FINAL is emitted - see FX-038) so
+        // the in-flight tail
         // gets a chance to settle against a recovered storage account
         // instead of bleeding through the deadline. The wait short-
         // circuits on signal recovery, on the budget timeout, or on
@@ -1583,7 +1584,27 @@ internal sealed class TcpIngestService(
             }
         }
 
-        try { await Task.WhenAll(outstanding); } catch { /* per-task failures already accounted for */ }
+        // FX-038: bound the in-flight-tail release so a tail still parked
+        // on a saturated account cannot consume the systemd stop window
+        // and starve FINAL. Outstanding flushes left unsettled at the
+        // deadline keep running detached and account themselves as
+        // failed=N through their own dispatch deadlines; FINAL is emitted
+        // immediately so the cohort reports HEALTHY-with-failures rather
+        // than WEDGE.
+        if (outstanding.Length > 0)
+        {
+            var whenAll = Task.WhenAll(outstanding);
+            var completed = await Task.WhenAny(whenAll, Task.Delay(InFlightTailWhenAllBudget)).ConfigureAwait(false);
+            if (completed == whenAll)
+            {
+                try { await whenAll; } catch { /* per-task failures already accounted for */ }
+            }
+            else
+            {
+                Console.WriteLine($"[silo:ingest] in-flight-tail release: budget {InFlightTailWhenAllBudget} expired with {outstanding.Length} flush(es) still settling; emitting FINAL now (unsettled batches account as failed=N through their dispatch deadlines).");
+                _ = whenAll.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
+            }
+        }
 
         reporterCts.Cancel();
         try { await reporterTask; } catch { /* shutdown */ }
@@ -1664,29 +1685,52 @@ internal sealed class TcpIngestService(
     // accounting precision).
     private static readonly TimeSpan RecentSaturationWindow = TimeSpan.FromSeconds(30);
 
-    // FX-032 Symptom 2: hard ceiling on the in-flight-tail quiesce
-    // wait at drain entry. After abandoning the residual ingest-
-    // channel batch (FX-029) and before releasing the in-flight tail
-    // via Task.WhenAll(outstanding), the drain awaits
+    // FX-032 Symptom 2 / FX-038: hard ceiling on the in-flight-tail
+    // quiesce wait at drain entry. After abandoning the residual
+    // ingest-channel batch (FX-029) and before releasing the in-flight
+    // tail via the bounded WhenAll below, the drain awaits
     // IWalSaturationSignal.WaitForHealthyAsync for at most this
-    // duration when the silo was recently Saturated. Sized to leave
-    // a safety margin below the WAL drain budget so the host's
-    // shutdown lifecycle is preserved: the default
-    // LatticeOptions.WalDrainBudget is 75 seconds (5x the default
-    // WalFlushTimeout of 15 s), and this 30-second cap on the
-    // pre-WhenAll wait leaves the WAL writer drain ~45 s of its own
-    // budget to settle in-flight provider calls. The wait short-
-    // circuits the moment the signal observes recovery, so the
-    // common case (the storage account cools off within a few
-    // seconds of the producer stop) returns well under the cap. On
-    // an unrecovered tree the wait times out and the drain falls
-    // through to the existing Task.WhenAll(outstanding) path - the
-    // in-flight tail still settles, but accounted as failed=N
-    // through the normal dispatch-deadline path rather than
-    // discarded=N. The trade-off matches the FX-029 contract: this
-    // gate is best-effort, not a correctness guarantee, and the
-    // outer WAL drain budget remains the hard cap on host shutdown.
-    private static readonly TimeSpan InFlightTailQuiesceBudget = TimeSpan.FromSeconds(30);
+    // duration when the silo was recently Saturated.
+    //
+    // FX-038: the binding constraint on this budget is the bench host's
+    // systemd stop deadline (`lattice-silo.service` TimeoutStopSec=30s
+    // and the host ShutdownTimeout, default 30s) - NOT the in-process
+    // LatticeOptions.WalDrainBudget (75s). On SIGTERM the systemd unit
+    // SIGKILLs the dotnet process 30s later regardless of WalDrainBudget,
+    // so the FINAL line must be emitted well inside that 30s window.
+    // The prior 30-second quiesce budget was sized against WalDrainBudget
+    // and so was equal to TimeoutStopSec: when the tree was still
+    // Saturated at the producer-stop boundary (the normal case for the
+    // slow set-many-atomic saga path), WaitForHealthyAsync burned the
+    // entire stop window and the process was SIGKILL'd before FINAL was
+    // ever written - the WEDGE phenotype in 2/3 set-many-atomic cohorts
+    // of the F-086 closeout run.
+    //
+    // The 10-second cap here, paired with the InFlightTailWhenAllBudget
+    // bound on the subsequent Task.WhenAll, keeps the worst-case post-
+    // stop drain (10s quiesce + 12s WhenAll + reporter shutdown + FINAL
+    // write) comfortably under the 30s SIGKILL deadline, so FINAL always
+    // emits. The wait short-circuits the moment the signal observes
+    // recovery, so the common case (the account cools off within a few
+    // seconds of the producer stop) returns well under the cap. On an
+    // unrecovered tree the wait times out and the drain falls through to
+    // the bounded WhenAll - the in-flight tail still settles, accounted
+    // as failed=N through the normal dispatch-deadline path. A FINAL with
+    // failed=N is strictly more useful than a WEDGE (no data): this gate
+    // is best-effort accounting, not a correctness guarantee.
+    private static readonly TimeSpan InFlightTailQuiesceBudget = TimeSpan.FromSeconds(10);
+
+    // FX-038: hard ceiling on the post-quiesce Task.WhenAll(outstanding)
+    // so an in-flight tail that stays parked on a still-saturated storage
+    // account (each in-flight flush can sit on the writer-side admission
+    // cap for up to WalAppendDispatchTimeout, default 30s) cannot itself
+    // consume the systemd stop window and starve FINAL emission. When the
+    // budget expires the outstanding flushes are left to settle/abandon
+    // through their own dispatch deadlines and already account themselves
+    // as failed=N; FINAL is emitted immediately so the cohort is reported
+    // as HEALTHY-with-failures rather than wedged. Sized together with
+    // InFlightTailQuiesceBudget to leave margin below TimeoutStopSec=30s.
+    private static readonly TimeSpan InFlightTailWhenAllBudget = TimeSpan.FromSeconds(12);
 
     private async Task<int> FlushAsync(ILattice lattice, List<KeyValuePair<string, byte[]>> batch, CancellationToken ct)
     {
