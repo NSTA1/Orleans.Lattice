@@ -28,6 +28,35 @@ internal static class LatticePredicateEvaluator
         if (value is null || value.Length == 0)
             return false;
 
+        // Fast path: when the predicate references at least one member and
+        // every member path is a single top-level property name (no nested
+        // 'a.b' paths), fold the tree with a forward-only Utf8JsonReader
+        // instead of materializing a JsonDocument. The reader is a ref struct,
+        // so the common numeric / boolean predicate resolves with zero heap
+        // allocation - the JsonDocument object and its metadata database are
+        // never built. A single zero-alloc validation pass reproduces the
+        // exact "must be well-formed JSON, else false" contract even when the
+        // tree short-circuits before resolving any member; malformed input
+        // throws JsonException from the reader exactly as JsonDocument.Parse
+        // would, and is caught here as a non-match.
+        if (IsFastPathEligible(predicate))
+        {
+            try
+            {
+                ReadOnlySpan<byte> json = value;
+                Validate(json);
+                return EvaluateBoolean(predicate, json);
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        // Slow path: nested ('a.b') member paths - or a constant-only predicate
+        // whose validity gate is the parse itself - fold against a JsonDocument,
+        // whose random-access object model resolves dotted paths without
+        // re-scanning the buffer per segment.
         try
         {
             using var document = JsonDocument.Parse(value);
@@ -36,6 +65,56 @@ internal static class LatticePredicateEvaluator
         catch (JsonException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// True when the predicate references at least one member and every member
+    /// path is a single, non-empty top-level property name. Nested ('a.b')
+    /// paths and member-free predicates fall to the JsonDocument slow path so
+    /// dotted resolution and the parse-as-validation gate are preserved exactly.
+    /// </summary>
+    private static bool IsFastPathEligible(in LatticePredicateNode node)
+    {
+        int memberCount = 0;
+        return CollectFastPathMembers(node, ref memberCount) && memberCount > 0;
+    }
+
+    private static bool CollectFastPathMembers(in LatticePredicateNode node, ref int memberCount)
+    {
+        if (node.Kind == LatticePredicateNodeKind.Member)
+        {
+            var path = node.MemberPath;
+            if (string.IsNullOrEmpty(path) || path.IndexOf('.') >= 0)
+                return false;
+            memberCount++;
+            return true;
+        }
+
+        var children = node.Children;
+        if (children is not null)
+        {
+            foreach (var child in children)
+                if (!CollectFastPathMembers(child, ref memberCount))
+                    return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reads every token of <paramref name="json"/> to force the same
+    /// well-formedness check <see cref="JsonDocument.Parse(System.ReadOnlyMemory{byte}, JsonDocumentOptions)"/>
+    /// performs - malformed input throws <see cref="JsonException"/> - without
+    /// allocating a document. Decoupling the validity gate from evaluation
+    /// keeps the contract exact even when the tree short-circuits before
+    /// resolving (and thereby reading past) the malformed region.
+    /// </summary>
+    private static void Validate(ReadOnlySpan<byte> json)
+    {
+        var reader = new Utf8JsonReader(json);
+        while (reader.Read())
+        {
         }
     }
 
@@ -111,12 +190,17 @@ internal static class LatticePredicateEvaluator
 
         var target = ResolveOperand(children[0], root);
         var argument = ResolveOperand(children[1], root);
+        return ApplyStringMethod(node.StringMethod, target, argument);
+    }
+
+    private static bool ApplyStringMethod(LatticeStringMethod method, in Operand target, in Operand argument)
+    {
         if (target.Kind != OperandKind.String || argument.Kind != OperandKind.String)
             return false;
 
         var s = target.String!;
         var arg = argument.String!;
-        return node.StringMethod switch
+        return method switch
         {
             LatticeStringMethod.StartsWith => s.StartsWith(arg, StringComparison.Ordinal),
             LatticeStringMethod.EndsWith => s.EndsWith(arg, StringComparison.Ordinal),
@@ -254,6 +338,155 @@ internal static class LatticePredicateEvaluator
         JsonValueKind.False => Operand.OfBoolean(false),
         JsonValueKind.String => Operand.OfString(element.GetString() ?? string.Empty),
         JsonValueKind.Number => Operand.OfNumber(element.GetDouble()),
+        // Objects and arrays are not comparable in the allowlist.
+        _ => Operand.Missing(),
+    };
+
+    // ===== Utf8JsonReader fast path (top-level-member predicates) =====
+    // Structural twins of the JsonElement folds above that thread the raw UTF-8
+    // buffer instead of a parsed document. They share the source-agnostic leaf
+    // logic (Compare / AreEqual / ApplyStringMethod / FromConstant / Operand);
+    // only member resolution differs - each Member node is resolved by a fresh
+    // forward scan of the (already validated) buffer.
+
+    private static bool EvaluateBoolean(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    {
+        switch (node.Kind)
+        {
+            case LatticePredicateNodeKind.Boolean:
+                return EvaluateBooleanOperator(node, json);
+
+            case LatticePredicateNodeKind.Compare:
+                return EvaluateComparison(node, json);
+
+            case LatticePredicateNodeKind.StringMethod:
+                return EvaluateStringMethod(node, json);
+
+            case LatticePredicateNodeKind.Member:
+            case LatticePredicateNodeKind.Constant:
+                var operand = ResolveOperand(node, json);
+                return operand.Kind == OperandKind.Boolean && operand.Boolean;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool EvaluateBooleanOperator(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    {
+        var children = node.Children;
+        if (children is null || children.Length == 0)
+            return false;
+
+        switch (node.BooleanOperator)
+        {
+            case LatticeBooleanOperator.And:
+                foreach (var child in children)
+                    if (!EvaluateBoolean(child, json))
+                        return false;
+                return true;
+
+            case LatticeBooleanOperator.Or:
+                foreach (var child in children)
+                    if (EvaluateBoolean(child, json))
+                        return true;
+                return false;
+
+            case LatticeBooleanOperator.Not:
+                return !EvaluateBoolean(children[0], json);
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool EvaluateComparison(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    {
+        var children = node.Children;
+        if (children is null || children.Length != 2)
+            return false;
+
+        var left = ResolveOperand(children[0], json);
+        var right = ResolveOperand(children[1], json);
+        return Compare(node.ComparisonOperator, left, right);
+    }
+
+    private static bool EvaluateStringMethod(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    {
+        var children = node.Children;
+        if (children is null || children.Length != 2)
+            return false;
+
+        var target = ResolveOperand(children[0], json);
+        var argument = ResolveOperand(children[1], json);
+        return ApplyStringMethod(node.StringMethod, target, argument);
+    }
+
+    private static Operand ResolveOperand(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    {
+        switch (node.Kind)
+        {
+            case LatticePredicateNodeKind.Constant:
+                return FromConstant(node.Constant);
+
+            case LatticePredicateNodeKind.Member:
+                return ResolveMember(node.MemberPath, json);
+
+            default:
+                return Operand.OfBoolean(EvaluateBoolean(node, json));
+        }
+    }
+
+    private static Operand ResolveMember(string? memberPath, ReadOnlySpan<byte> json)
+    {
+        // Eligibility guarantees a non-empty, dot-free path; stay defensive.
+        if (string.IsNullOrEmpty(memberPath))
+            return Operand.Missing();
+
+        // Pass 1: ordinal property match - zero-alloc (the reader compares the
+        // member name against the UTF-8 name bytes directly) and short-circuits
+        // at the first hit. This is the common case: the member path is the CLR
+        // property name and default serialization preserves its casing. Mirrors
+        // the slow path's JsonElement.TryGetProperty(span) ordinal lookup.
+        var ordinal = new Utf8JsonReader(json);
+        if (!ordinal.Read() || ordinal.TokenType != JsonTokenType.StartObject)
+            return Operand.Missing();
+
+        while (ordinal.Read() && ordinal.TokenType == JsonTokenType.PropertyName)
+        {
+            bool match = ordinal.ValueTextEquals(memberPath);
+            ordinal.Read();
+            if (match)
+                return OperandFromValue(ref ordinal);
+            ordinal.Skip();
+        }
+
+        // Pass 2: case-insensitive fallback, reached only when no property
+        // ordinally matches (e.g. a camelCase naming policy). Mirrors the slow
+        // path's enumerate-then-compare fallback: it pays the per-name string
+        // only here and returns the first case-insensitive match in document
+        // order.
+        var insensitive = new Utf8JsonReader(json);
+        insensitive.Read();
+        while (insensitive.Read() && insensitive.TokenType == JsonTokenType.PropertyName)
+        {
+            string name = insensitive.GetString()!;
+            insensitive.Read();
+            if (string.Equals(name, memberPath, StringComparison.OrdinalIgnoreCase))
+                return OperandFromValue(ref insensitive);
+            insensitive.Skip();
+        }
+
+        return Operand.Missing();
+    }
+
+    private static Operand OperandFromValue(ref Utf8JsonReader reader) => reader.TokenType switch
+    {
+        JsonTokenType.Null => Operand.Null(),
+        JsonTokenType.True => Operand.OfBoolean(true),
+        JsonTokenType.False => Operand.OfBoolean(false),
+        JsonTokenType.String => Operand.OfString(reader.GetString() ?? string.Empty),
+        JsonTokenType.Number => Operand.OfNumber(reader.GetDouble()),
         // Objects and arrays are not comparable in the allowlist.
         _ => Operand.Missing(),
     };

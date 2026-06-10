@@ -141,6 +141,24 @@ public class LatticeMicroBenchmarks
     // mode whose delta payload survives leaf-side JSON decode.
     private byte[] _crdtDeltaPayload = null!;
 
+    // ===== Predicate push-down scan instrument (predicate Utf8JsonReader fast-path) =====
+    // A dedicated keyspace seeded with small JSON documents. The predicate
+    // evaluator parses each candidate value as a JSON document, so the
+    // existing random-byte keyspaces would short-circuit at
+    // JsonDocument.Parse's JsonException catch and never reach member
+    // resolution - they cannot measure the real predicate cost. PredicateKeyScan
+    // drains KeysWherePredicateAsync over this window, so the measured
+    // allocation isolates the per-row LatticePredicateEvaluator.Matches cost
+    // (JsonDocument.Parse + member resolution); KeysWherePredicateAsync ships
+    // no values over the wire, so value marshalling does not contaminate it.
+    // The "pred-" prefix is lexicographically disjoint from the "k-"/"bulk-"
+    // keyspaces so the other single-shard benchmarks are undisturbed.
+    private const string PredicateKeyPrefix = "pred-";
+    private const int PredicateScanWindowKeys = 1_000;
+    private LatticePredicateNode _predicate;
+    private string _predScanStart = null!;
+    private string _predScanEnd = null!;
+
     // ===== Cycle 11 fanout instrument: 4-physical-shard sibling tree =====
     // A second ILattice activation rooted at FanoutTreeName routes through
     // the same NSubstitute IGrainFactory but resolves to a TreeRegistryEntry
@@ -1050,6 +1068,32 @@ public class LatticeMicroBenchmarks
         var window = Math.Min(FanoutScanWindowKeys, keyCount);
         _fanoutScanStart = _keys[0];
         _fanoutScanEnd = _keys[window - 1] + "\u0000";
+
+        // Predicate-scan fixture: seed a dedicated single-shard keyspace with
+        // small JSON documents so the predicate evaluator's JsonDocument.Parse
+        // + member-resolution path actually runs (random-byte values would
+        // short-circuit on parse failure). The predicate `Age >= 50` matches
+        // ~half the rows (Age = i % 100), exercising both the match and
+        // non-match branches plus the integer member-resolution path. Seeded on
+        // the single-shard _lattice under the disjoint "pred-" prefix.
+        var predCount = Math.Min(PredicateScanWindowKeys, Math.Max(1, keyCount));
+        var predKeys = new string[predCount];
+        for (var i = 0; i < predCount; i++)
+        {
+            predKeys[i] = PredicateKeyPrefix + i.ToString("D8", CultureInfo.InvariantCulture);
+            var age = i % 100;
+            var json = "{\"Age\":" + age.ToString(CultureInfo.InvariantCulture)
+                + ",\"Name\":\"user-" + i.ToString("D8", CultureInfo.InvariantCulture) + "\"}";
+            var jsonBytes = System.Text.Encoding.UTF8.GetBytes(json);
+            _lattice.SetAsync(predKeys[i], jsonBytes).GetAwaiter().GetResult();
+        }
+
+        _predicate = LatticePredicateNode.Compare(
+            LatticeComparisonOperator.GreaterThanOrEqual,
+            LatticePredicateNode.Member("Age"),
+            LatticePredicateNode.Const(LatticeConstant.Integer(50)));
+        _predScanStart = predKeys[0];
+        _predScanEnd = predKeys[predCount - 1] + "\u0000";
     }
 
     /// <summary>
@@ -1092,6 +1136,24 @@ public class LatticeMicroBenchmarks
     public async Task EntryScan_PageOver4Shards()
     {
         await foreach (var _ in _fanoutLattice.EntriesAsync(_fanoutScanStart, _fanoutScanEnd))
+        {
+        }
+    }
+
+    /// <summary>
+    /// Drains <see cref="ILattice.KeysWherePredicateAsync"/> over the
+    /// JSON-seeded predicate keyspace, applying the server-side predicate
+    /// <c>Age &gt;= 50</c> to each candidate row. No values cross the wire, so
+    /// the measured allocation isolates the per-row
+    /// <c>LatticePredicateEvaluator.Matches</c> cost - the
+    /// <c>JsonDocument.Parse</c> + member-resolution path that the
+    /// <c>Utf8JsonReader</c> fast-path targets. The predicate matches ~half the
+    /// seeded rows, so both the match and non-match branches are exercised.
+    /// </summary>
+    [Benchmark(Description = "Predicate key scan")]
+    public async Task PredicateKeyScan()
+    {
+        await foreach (var _ in _lattice.KeysWherePredicateAsync(_predicate, _predScanStart, _predScanEnd))
         {
         }
     }
