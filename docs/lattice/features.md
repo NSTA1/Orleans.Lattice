@@ -155,7 +155,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-- [G-001](https://github.com/NSTA1/Orleans.Lattice/issues/418) - Leaf-level write batching (investigate before committing)
 - [G-003](https://github.com/NSTA1/Orleans.Lattice/issues/420) - Per-key change subscriptions
 - [G-004](https://github.com/NSTA1/Orleans.Lattice/issues/421) - Value compression / encryption
 - [G-005](https://github.com/NSTA1/Orleans.Lattice/issues/422) - Quota / admission control per tree
