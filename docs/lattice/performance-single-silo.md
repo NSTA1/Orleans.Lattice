@@ -70,24 +70,24 @@ mechanical and the prose around the marker is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
   dotnet=10.0.108
-  gitSha=dc8ef37
-  host=Standard_D4as_v5
-  rowsMeasured=2026-06-07
+  gitSha=b8e3402
+  host=Standard_D8as_v5
+  rowsMeasured=2026-06-10
   methodology=Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |
 |------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|
-| `GetAsync` (point read) | **1.34 us** | 4.18 us | 8.53 us | 133.53 us | 216 B | **~745.2 k keys/s** |
-| `SetAsync` (point write) | **9.77 us** | 18.28 us | 21.23 us | 42.57 us | 784 B | **~102.4 k keys/s** |
-| `GetManyAsync` (16 keys/call) | **10.45 us** | 13.41 us | 15.26 us | 74.61 us | 6 KB | **~1.53 M keys/s** |
-| `SetManyAsync` (1,000 keys/call) | **971.54 us** | 980.35 us | 1.51 ms | 2.97 ms | 217 KB | **~1.03 M keys/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **275.92 us** | 338.03 us | 492.59 us | 1.58 ms | 67 KB | **~58 k keys/s** |
+| `GetAsync` (point read) | **1.42 us** | 4.45 us | 10.17 us | 55.36 us | 216 B | **~706.1 k keys/s** |
+| `SetAsync` (point write) | **9.27 us** | 18.13 us | 21.26 us | 45.59 us | 784 B | **~107.9 k keys/s** |
+| `GetManyAsync` (16 keys/call) | **9.45 us** | 13.56 us | 18.7 us | 72.72 us | 6 KB | **~1.69 M keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **940.18 us** | 960.68 us | 1.24 ms | 2.6 ms | 100 KB | **~1.06 M keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **279.34 us** | 346.02 us | 425.87 us | 1.79 ms | 65 KB | **~57.3 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-06-07 on Standard_D4as_v5 (.NET 10.0.108) at git sha 916ea62, n=3 cohorts (BDN quick).
+> Measured 2026-06-10 on Standard_D8as_v5 (.NET 10.0.108) at git sha b8e3402, n=3 cohorts (BDN quick).
 
 **Reading the numbers.** The per-thread call rate is the derived
 `1 / p50` scaled by the per-call batch size (1 for `GetAsync` / `SetAsync`,
@@ -138,11 +138,11 @@ realistic latency the storage provider contributes.
   batchSize=4096
   cohortN=3
   dotnet=10.0.108
-  gitSha=3cb0073
-  host=Standard_D4as_v5
+  gitSha=b8e3402
+  host=Standard_D8as_v5
   region=westus3
   responseTimeoutSec=180
-  rowsMeasured=2026-06-09
+  rowsMeasured=2026-06-10
   rung=4000 vehicles / 5 Hz / 45s
   walMaxPendingBatches=16
   walPartitions=8
@@ -152,21 +152,21 @@ realistic latency the storage provider contributes.
 
 | Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |
 |------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|
-| `GetAsync` (point read) | **~19.9 k keys/s** | ~60 us | ~80 us | ~100 us | ~100 us |
-| `SetAsync` (point write) | **~4.4 k keys/s** | ~23.53 ms | ~37.73 ms | ~54 ms | ~91.93 ms |
-| `GetManyAsync` (4,096 keys/call) | **~19.8 k keys/s** | ~3.66 ms | ~4 ms | ~5.18 ms | ~8.45 ms |
-| `SetManyAsync` (4,096 keys/call) | **~13.1 k keys/s** | ~545.73 ms | ~757.06 ms | ~948.53 ms | ~1009.79 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | **~4.6 k keys/s** | ~470.62 ms | ~923.56 ms | ~1011.16 ms | ~1372.3 ms |
+| `GetAsync` (point read) | **~19.9 k keys/s** | ~40 us | ~80 us | ~90 us | ~90 us |
+| `SetAsync` (point write) | **~4.5 k keys/s** | ~25.19 ms | ~40.24 ms | ~60.63 ms | ~133.04 ms |
+| `GetManyAsync` (4,096 keys/call) | **~19.9 k keys/s** | ~2.11 ms | ~2.28 ms | ~3.71 ms | ~7.18 ms |
+| `SetManyAsync` (4,096 keys/call) | **~14.8 k keys/s** | ~414.63 ms | ~597.8 ms | ~672.67 ms | ~705.05 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | **~3 k keys/s** | ~845.42 ms | ~978.94 ms | ~998.56 ms | ~1061.06 ms |
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-06-09 on Standard_D4as_v5 in westus3 (.NET 10.0.108) at git sha 3cb0073, n=3 cohorts at 4000 vehicles / 5 Hz / 45s.
+> Measured 2026-06-10 on Standard_D8as_v5 in westus3 (.NET 10.0.108) at git sha b8e3402, n=3 cohorts at 4000 vehicles / 5 Hz / 45s.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
 many entries per call, which is why `SetManyAsync` delivers materially
 higher sustained key-write throughput than per-key `SetAsync` at the
-same offered load (the published cells show roughly a 4x gap, with the
+same offered load (the Layer 2 table above shows the gap, with the
 rest of the per-key win absorbed by `SetManyAsync`'s long per-call
 latency tail - each call submits its keys as a sequence of 100-entity
 Azure-Tables transactions against one batch partition). If your workload
@@ -179,7 +179,7 @@ transaction target** (`benchmark/azure-throughput/throughput.md` section
 31 pinned the empirical ceiling at **~22-24 ke/s aggregate key-write
 throughput** against one storage account, with `TableTransactionFailedException`
 (409 Conflict + SDK timeout) bursts as the saturation signal). The
-fastest write cell here (`SetManyAsync` at ~15.6 ke/s) is under that
+fastest write row in the Layer 2 table above (`SetManyAsync`) is under that
 wall, but a workload that combines `SetManyAsync` with other set-side
 traffic on the same account can climb into the saturation regime - see
 [WAL Tuning](wal-tuning.md) for the back-pressure manifestations and
@@ -223,8 +223,8 @@ and fall back to `SetManyAsync` when you don't.
 
 Read paths are uniformly fast, but they are **fast because the
 production read path is cache-served**, not because they exhaust Azure
-Tables' read budget. The `GetAsync` p50 of ~60 us per call and the
-`GetManyAsync` per-key cost of ~850 ns (3.47 ms / 4,096 keys) are each
+Tables' read budget. The `GetAsync` and `GetManyAsync` per-call
+latencies in the Layer 2 table above are each
 roughly two orders of magnitude faster than a single Azure Tables
 round-trip - the difference is the per-silo `LeafCacheGrain`. The
 single-account read budget itself (the same ~2,500 transactions/sec
