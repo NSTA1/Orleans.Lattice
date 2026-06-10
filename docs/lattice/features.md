@@ -148,6 +148,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-033](https://github.com/NSTA1/Orleans.Lattice/issues/629) - WAL saturation back-pressure consumer-coverage gaps after FX-032 (admission cap, saga quiesce wait, ingest channel, classifier sensitivity)
 - [FX-035](https://github.com/NSTA1/Orleans.Lattice/issues/634) - Azure SDK retry policy signal-awareness (Phase 4 of FX-033 consumer-coverage audit)
 - [FX-036](https://github.com/NSTA1/Orleans.Lattice/issues/635) - WAL saturation classifier flush-latency input (Phase 3 of FX-033 consumer-coverage audit)
+- [FX-037](https://github.com/NSTA1/Orleans.Lattice/issues/639) - De-flake `DigestCoalescingWindow_eventually_publishes_aggregate_to_parent` (fixed 2s digest settle timeout times out under CI load)
 
 ## Gaps & potential additions
 
