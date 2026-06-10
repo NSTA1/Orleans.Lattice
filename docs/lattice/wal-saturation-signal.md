@@ -19,7 +19,7 @@ The saturation signal exposes the writer-side admission gate's pressure as a typ
 |-------|---------|---------------|
 | `Healthy` | Admission depth well under cap, no recent dispatch-timeout trips, no recent provider-side commit failures. | Continue dispatching at full rate. |
 | `Throttled` | Admission depth at or above `WalSaturationThrottledRatio` (default 0.75) of the cap on at least one partition. | Slow down the offered rate. Continue dispatching - new appends will land, possibly after a brief admission wait. |
-| `Saturated` | Admission semaphore at cap with parked callers, **or** recent dispatch-timeout trip rate at or above `WalSaturationDispatchTimeoutThreshold` (default 1) in a single sample window, **or** recent provider-side commit failure rate at or above `WalSaturationProviderFailureRateThreshold` (default 1) in a single sample window. | Pause new appends until the state returns to `Healthy`. Continuing to dispatch will fault parked callers with `TimeoutException` rather than improving throughput. |
+| `Saturated` | Admission semaphore at cap with parked callers, **or** recent dispatch-timeout trip rate at or above `WalSaturationDispatchTimeoutThreshold` (default 1) in a single sample window, **or** recent provider-side commit failure rate at or above `WalSaturationProviderFailureRateThreshold` (default 1) in a single sample window, **or** (when enabled) the flush-latency classifier input has observed at least one provider-flush longer than `WalSaturationFlushLatencyThreshold` in each of the last `WalSaturationFlushLatencySampleWindows` sample windows in a row. | Pause new appends until the state returns to `Healthy`. Continuing to dispatch will fault parked callers with `TimeoutException` rather than improving throughput. |
 
 States are totally ordered (`Healthy < Throttled < Saturated`), and the tree's state is the worst case across every partition / shard for that tree. The state space is open for additive extension - future minor releases may introduce intermediate or recovery states (for example a `Recovering` state when pressure has just dropped) without breaking subscribers that switch on the three documented values.
 
@@ -37,6 +37,20 @@ Two sentinels disable or invert the upgrade:
 
 - `WalSaturationRecoveryWindow = TimeSpan.Zero`: the upgrade is disabled entirely. The classifier behaves the way the sampler shipped originally - the per-tick depth observation drives the regime directly. Use this when the workload's WAL drain pattern is non-bursty (single-partition trees, or workloads where every partition tracks closely in lockstep) and the upgrade introduces no benefit.
 - `WalSaturationRecoveryWindow = Timeout.InfiniteTimeSpan`: the upgrade is sticky. Once `Saturated` has been observed, every subsequent `Healthy`-classified tick is upgraded to `Throttled` forever. Useful for tests that want a deterministic sticky-Throttled floor without arming wall-clock dependencies, and for defensive production deployments that prefer the saturation regime to be sticky.
+
+### Flush-latency classifier input (opt-in)
+
+The first three Saturated inputs (admission depth at cap, dispatch-timeout trips, provider-failure trips) all require the WAL writer to have *already* shed work: callers parked on the admission semaphore, dispatch tasks tripped on their per-shard timeout, or the storage provider returned an error. The classifier therefore has a **small-batch blind spot** - a workload whose every flush calls into the provider just *slowly* (provider getting close to capacity, but not yet erroring or throttling enough to back up admission depth) can sail past all three inputs and never register as `Saturated`, even when steady-state flush latency has crept up by an order of magnitude.
+
+`WalSaturationFlushLatencyThreshold` (default `null`, meaning disabled) and `WalSaturationFlushLatencySampleWindows` (default `3`) close that gap. When the threshold is set:
+
+- The WAL writer increments a per-(tree, shard) trip counter every time a provider flush's wall-clock latency meets or exceeds the threshold. The instrument is the same `wal.append.provider.duration` already exposed to dashboards, so there is no second measurement path.
+- On every sample tick the classifier reads the delta from the prior tick. A tree with a non-zero delta in the current window has the per-tree consecutive-window counter incremented; a tree with a zero delta has the counter reset.
+- When the counter reaches `WalSaturationFlushLatencySampleWindows`, the classifier upgrades the tree to `Saturated`. The "sustained over N windows in a row" gate eliminates noisy single-flush blips (a one-off GC pause, a leader-election spike) while still firing well before the writer would otherwise back up to one of the existing inputs.
+
+Sizing guidance: the threshold should be 5-10x the steady-state p99 of `wal.append.provider.duration` for the deployment's normal workload. The sample-window count should be at least 3 so a single noisy tick cannot flip the regime. For most Azure-Tables backed deployments a 500 ms - 1 s threshold over 3 windows (600 ms wall-clock at the default 200 ms sample interval) is a reasonable starting point.
+
+The input is purely additive: leaving `WalSaturationFlushLatencyThreshold` at its default `null` means the writer skips the trip-counter increment entirely and the classifier behaves exactly as it shipped before the input was introduced.
 
 ## Resolution and scope
 

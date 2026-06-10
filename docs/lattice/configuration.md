@@ -115,6 +115,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalSaturationDispatchTimeoutThreshold`](#walsaturationdispatchtimeoutthreshold) | `int` | 1 | Yes |
+| [`WalSaturationFlushLatencySampleWindows`](#walsaturationflushlatencysamplewindows) | `int` | 3 | Yes |
+| [`WalSaturationFlushLatencyThreshold`](#walsaturationflushlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalSaturationProviderFailureRateThreshold`](#walsaturationproviderfailureratethreshold) | `int` | 1 | Yes |
 | [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) | `TimeSpan` | 1 second | Yes |
 | [`WalSaturationSampleInterval`](#walsaturationsampleinterval) | `TimeSpan` | 200 milliseconds | Yes |
@@ -629,6 +631,24 @@ Minimum number of provider-side commit failures (any exception surfaced from a d
 Without this input the caller saw the failure tail (a `SetAsync` / `SetManyAsync` faulted) but the per-tree saturation signal stayed `Healthy` and any back-pressure consumer (the bench TCP reader, an upstream load balancer) had no leading-edge surface to slow down before the leak became visible at the operator level. Caller-driven cancellation paths are excluded from the counter (an `OperationCanceledException` whose token matches the caller's cancellation token is not counted) so a healthy caller-side abandonment never inflates the saturation signal.
 
 Set to `0` to disable the trigger entirely (matches the `Timeout.InfiniteTimeSpan` sentinel on the sample-interval option). The validator rejects any other negative value. This option can be changed freely at any time; the new value takes effect on the next sampler tick.
+
+### `WalSaturationFlushLatencyThreshold`
+
+Per-provider-flush wall-clock latency at or above which the WAL writer increments a per-(tree, shard) flush-latency trip counter that feeds the saturation classifier (default: `null`, disabled). When the threshold is set and the classifier observes a non-zero delta on the trip counter in each of the last `WalSaturationFlushLatencySampleWindows` sample windows in a row, the tree is upgraded to `WalSaturationState.Saturated` regardless of admission-semaphore depth, dispatch-timeout trips, or provider-failure trips.
+
+Captures the **small-batch blind spot** the existing three Saturated inputs cannot see: a workload that issues many small `SetAsync` calls against a saturating storage account never fills the per-partition admission semaphore (every batch is one entry, in-flight is rarely above 1-2), never trips `WalAppendDispatchTimeout` (the dispatch returns quickly with a slow but successful provider flush), and never tallies a `WalSaturationProviderFailureRateThreshold` trip (the flush succeeds, just slowly). The flush-latency input observes the same regime via the per-flush wall-clock cost. Sizing guidance: pick a threshold a few times your steady-state p99 provider flush latency (e.g. 500 ms when steady-state p99 is ~80 ms) so the trip counter stays at zero during healthy traffic and only ticks under genuine saturation.
+
+The input is purely additive. Leaving the threshold at its default `null` is a zero-cost no-op: the writer skips the trip-counter increment entirely and the classifier behaves exactly as it shipped before the input was introduced. Must be positive when set; the validator rejects `TimeSpan.Zero` and any negative value.
+
+This option can be changed freely at any time. The new value takes effect on the next provider flush.
+
+### `WalSaturationFlushLatencySampleWindows`
+
+Number of consecutive `WalSaturationSampleInterval` sample windows that must each observe a non-zero `WalSaturationFlushLatencyThreshold` trip-counter delta before the classifier upgrades the tree to `WalSaturationState.Saturated` (default: 3). Acts as the noise floor for the flush-latency input - a single slow provider flush in an otherwise healthy window is normal jitter; three consecutive windows each containing at least one slow flush is the leading edge of a saturation regime. At the default 200 ms `WalSaturationSampleInterval` the minimum sustained-slow-flush duration that triggers `Saturated` is ~`3 * 200 ms = 600 ms`.
+
+Set lower (minimum 1) to make the input more sensitive at the cost of more transient classifier flaps; set higher to lengthen the sustained-slow regime the classifier requires before flagging. Has no effect when `WalSaturationFlushLatencyThreshold` is left at its default `null`. The validator rejects values less than 1.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
 ### `WalSaturationRecoveryWindow`
 

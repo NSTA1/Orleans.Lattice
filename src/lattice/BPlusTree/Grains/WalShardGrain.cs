@@ -1450,6 +1450,22 @@ internal sealed class WalShardGrain(
                 // catch below subsumes the fault accounting downstream.
                 var providerMs = Stopwatch.GetElapsedTime(providerStartTicks).TotalMilliseconds;
                 LatticeMetrics.WalAppendProviderDuration.Record(providerMs, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+
+                // Flush-latency classifier input (opt-in via
+                // LatticeOptions.WalSaturationFlushLatencyThreshold).
+                // When the per-flush wall-clock duration met or exceeded
+                // the configured threshold, increment the per-(tree,
+                // shard) trip counter the silo-scoped saturation
+                // sampler reads. The threshold is read off the live
+                // IOptionsMonitor so a runtime change takes effect on
+                // the next flush. A null threshold leaves the counter
+                // unchanged - the input is disabled and the historical
+                // three-input classifier behaviour is observed exactly.
+                if (Options.WalSaturationFlushLatencyThreshold is { } flushLatencyThreshold
+                    && providerMs >= flushLatencyThreshold.TotalMilliseconds)
+                {
+                    WalCommitLogWriter.RecordFlushLatencyTrip(_treeId, _shardIndex);
+                }
             }
 
             // If a predecessor already failed and faulted us, our acks

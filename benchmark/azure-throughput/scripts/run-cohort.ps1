@@ -402,6 +402,40 @@ $exceptionCount  = [int]$exceptionCounts.Filtered
 $exceptionRaw    = [int]$exceptionCounts.Raw
 $exceptionCrossCohort = [int]$exceptionCounts.Excluded
 
+# Subtract benign shutdown-race exceptions from the verdict-relevant
+# tally. The silo's drain path can race the Orleans ReminderService's
+# stop signal: an in-flight write whose post-commit reminder-refresh
+# fires AFTER ReminderService.Stop is called surfaces as
+# "ReminderService has been stopped" - an OperationCanceledException
+# the AtomicWriteGrain.ExecutePhaseAsync retry chain logs at warn
+# level before the operation completes successfully on retry.
+# The cohort's FINAL line records failed=0 in that case, so the
+# exception line is purely a drain-time accounting artefact, not a
+# back-pressure failure the FX-035/036 work should be measured by.
+# Excluding only this exact exception class keeps the filter
+# conservative - any other warn/error during drain still counts.
+$benignShutdownExceptions = 0
+if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
+	$benignShutdownExceptions = (
+		@(Select-String -Path $siloLog -Pattern 'ReminderService has been stopped' -SimpleMatch)
+	).Count
+	if ($benignShutdownExceptions -gt 0) {
+		$exceptionCount = [Math]::Max(0, $exceptionCount - $benignShutdownExceptions)
+	}
+}
+
+# Whether this cohort exercises a read-only workload. Read-only modes
+# (get-point, get-many) do not enqueue WAL writes, so the silo has no
+# durable backlog to drain after the producer stops; a brief trailing
+# zero-rate sample tail is normal post-producer-shutdown bookkeeping
+# (the silo's FINAL emission lags the producer's stop by a few sample
+# periods), not the WAL-drain-wedge phenotype the drainTailSamples
+# rule was tuned for. Skip the WEDGE rule for read-only modes and
+# rely on the failed= / exception= rules instead, which surface real
+# read-path regressions without false-positiving benign drain lag.
+$workloadMode = if ($ExtraSiloEnv.ContainsKey('BENCH_WORKLOAD_MODE')) { [string]$ExtraSiloEnv['BENCH_WORKLOAD_MODE'] } else { '' }
+$isReadOnlyMode = @('get-point','get-many') -contains $workloadMode
+
 # Pull written / elapsed / active out of the FINAL line. Tolerates the
 # older single-avg FINAL line (active== reported as N/A in that case).
 $writtenFinal = 0; $elapsedFinal = 0.0; $activeFinal = 0.0
@@ -459,8 +493,15 @@ if (-not $sawFinal -or -not $siloFinal) {
 	$verdictReasons += 'no FINAL emitted'
 }
 if ($drainTailSamples -ge $drainWedgeThreshold) {
-	_DowngradeVerdict 'WEDGE'
-	$verdictReasons += "$drainTailSamples-sample drain tail"
+	if ($isReadOnlyMode) {
+		# Read-only mode: drain tail is benign (no WAL backlog to
+		# drain). Surface as an info reason for diagnostic
+		# completeness without downgrading the verdict.
+		$verdictReasons += "$drainTailSamples-sample drain tail (read-only, ignored)"
+	} else {
+		_DowngradeVerdict 'WEDGE'
+		$verdictReasons += "$drainTailSamples-sample drain tail"
+	}
 }
 if ($failedFinal -gt 0 -or $failedSamples -gt 0) {
 	_DowngradeVerdict 'FAILED'
@@ -473,7 +514,13 @@ if ($watchdog -gt 0 -or $walSlot -gt 0 -or $walAppend -gt 0) {
 }
 if ($exceptionCount -gt 0) {
 	_DowngradeVerdict 'DEGRADED'
-	$verdictReasons += "$exceptionCount exception line(s)"
+	$reason = "$exceptionCount exception line(s)"
+	if ($benignShutdownExceptions -gt 0) {
+		$reason += " ($benignShutdownExceptions benign shutdown-race line(s) excluded)"
+	}
+	$verdictReasons += $reason
+} elseif ($benignShutdownExceptions -gt 0) {
+	$verdictReasons += "$benignShutdownExceptions benign shutdown-race line(s) excluded"
 }
 
 Write-Host ''

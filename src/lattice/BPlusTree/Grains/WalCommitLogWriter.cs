@@ -106,6 +106,27 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _providerFailureCounts
         = new();
 
+    // Per-(tree, shard) cumulative flush-latency trip counter,
+    // incremented every time the WAL shard grain observes a provider
+    // flush whose wall-clock duration met or exceeded the per-tree
+    // LatticeOptions.WalSaturationFlushLatencyThreshold. Captures the
+    // small-batch workload-shape blind spot the other three classifier
+    // inputs miss: under a per-call entries=1 workload (single-entry
+    // SetAsync) the per-partition admission semaphore never reaches
+    // the throttled ratio so the depth-ratio path never trips, the
+    // writer's dispatch-deadline takes too long to surface, and
+    // terminal provider failures arrive late in the regime. A
+    // sustained slow-flush regime is the leading-edge signal on these
+    // shapes. The silo-scoped saturation sampler subtracts the
+    // previous tick's reading to derive the per-window trip delta and
+    // applies the consecutive-window check on
+    // LatticeOptions.WalSaturationFlushLatencySampleWindows. Same
+    // static-singleton shape as _providerFailureCounts so the sampler
+    // can read every classifier-input map off a fixed root regardless
+    // of WalShardGrain activation lifetime in tests.
+    internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _flushLatencyTripCounts
+        = new();
+
     // Per-instance drain CTS. Each WalCommitLogWriter owns its own
     // token; DrainAsync cancels it; AcquireAsync observes it alongside
     // the caller's CT. Because the token lives on the writer instance
@@ -171,6 +192,25 @@ internal sealed class WalCommitLogWriter(
     {
         _providerFailureCounts.AddOrUpdate(
             (treeId, partition),
+            static _ => 1L,
+            static (_, prior) => prior + 1L);
+    }
+
+    /// <summary>
+    /// Increments the per-(tree, shard) cumulative flush-latency trip
+    /// counter consumed by the silo-scoped saturation sampler. Invoked
+    /// from <c>WalShardGrain</c> after a provider flush whose wall-
+    /// clock duration met or exceeded
+    /// <see cref="LatticeOptions.WalSaturationFlushLatencyThreshold"/>.
+    /// Hot-path-cheap: a single <see cref="ConcurrentDictionary{TKey, TValue}.AddOrUpdate(TKey, System.Func{TKey, TValue}, System.Func{TKey, TValue, TValue})"/>
+    /// under the dictionary's internal striped-lock; the caller already
+    /// owns the wall-clock measurement so this is purely
+    /// fire-and-forget book-keeping.
+    /// </summary>
+    internal static void RecordFlushLatencyTrip(string treeId, int shard)
+    {
+        _flushLatencyTripCounts.AddOrUpdate(
+            (treeId, shard),
             static _ => 1L,
             static (_, prior) => prior + 1L);
     }

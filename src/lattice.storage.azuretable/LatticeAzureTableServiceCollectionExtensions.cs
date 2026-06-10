@@ -40,7 +40,8 @@ public static class LatticeAzureTableServiceCollectionExtensions
         builder.Services.AddOptions<AzureTableWalStorageOptions>();
         builder.AddWalStorage(static sp => new AzureTableWalStorageProvider(
             sp.GetRequiredService<IOptions<AzureTableWalStorageOptions>>(),
-            sp.GetRequiredService<Serializer<WalRecord>>()));
+            sp.GetRequiredService<Serializer<WalRecord>>(),
+            sp.GetService<IWalSaturationSignal>()));
 
         return builder;
     }
