@@ -19,8 +19,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-066](https://github.com/NSTA1/Orleans.Lattice/issues/386) - Caching call-path co-location candidates
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
-- [F-076](https://github.com/NSTA1/Orleans.Lattice/issues/396) - Clean silo shutdown for benchmark / production hosts
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
+- [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
 
 ### Shipped
 
