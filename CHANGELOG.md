@@ -12,6 +12,11 @@ Items merged into `main` after the v6.4.0 cut accumulate here under the `### Add
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Changed
+
+- **Internal-node digest upward-publish reuses a single per-activation deadline timer instead of allocating one per publish.** `BPlusInternalGrain.PublishUpwardAsync` bounded each cross-grain digest publish with a freshly constructed `CancellationTokenSource(timeout)`, which arms a one-shot timer on every publish, at every internal level, on every mutation - the dominant allocation of the bulk-write digest-propagation path (profiled at ~40.7% / ~205 MB of the bulk-write profile). Because upward publishes only run while the activation holds its non-reentrant `_splitGate`, at most one publish is ever in flight per activation, so the grain now arms and recycles a single reusable `CancellationTokenSource` per activation (`CancelAfter` to arm; `TryReset()` to disarm and recycle after each non-fired publish; dropped and re-created only on the rare timeout path). The timeout contract is unchanged in every observable way - the `Timeout.InfiniteTimeSpan` unbounded fast path, the `TimeoutException`-on-park gate-release behaviour, the `orleans.lattice...DigestPublishTimeouts` metric, and the staleness-tolerant re-drive on the next mutation all behave exactly as before. Measured on the microbench tier (BDN dry, `MemoryDiagnoser`, isolated A/B): `microbench_bulk_load_deeper_tree_alloc_b` 145,912 -> 142,464 B/op (-2.36%, deterministic IQR=0), with no change on the shallower bulk-load shapes; the production bulk-write win is larger where the upward-publish path is exercised at depth. No public API or wire-format change.
+
+
 ---
 
 ## [6.4.0] - 2026-06-10

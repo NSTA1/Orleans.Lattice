@@ -778,4 +778,47 @@ public partial class BPlusInternalGrainTests
         await parentStub.Received(1).OnChildDigestPublishedAsync(
             Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>());
     }
+
+    [Test]
+    public async Task OnChildDigestPublishedAsync_recycles_deadline_across_sequential_publishes()
+    {
+        // The finite-timeout path reuses a single per-activation deadline
+        // source across publishes (arm via CancelAfter, disarm via TryReset
+        // after each non-fired publish) instead of allocating a fresh
+        // CancellationTokenSource(timeout) per publish. Drive several
+        // sequential successful publishes through that recycle path and
+        // confirm every one lands at the parent and the cumulative subtree
+        // aggregate is exact - i.e. a recycled (TryReset'd) source never
+        // carries a stale deadline into the next publish nor drops one.
+        var options = new LatticeOptions { DigestPublishTimeout = TimeSpan.FromSeconds(30) };
+        var fakeState = new FakePersistentState<InternalNodeState>
+        {
+            State = { ParentId = DigestParent }
+        };
+        var (grain, state, factory) = CreateDigestGrain(options, fakeState);
+        var promptParent = Substitute.For<IBPlusInternalGrain>();
+        promptParent.OnChildDigestPublishedAsync(Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>())
+            .Returns(Task.CompletedTask);
+        factory.GetGrain<IBPlusInternalGrain>(DigestParent).Returns(promptParent);
+
+        var children = new[]
+        {
+            GrainId.Create("leaf", "recycle-0"),
+            GrainId.Create("leaf", "recycle-1"),
+            GrainId.Create("leaf", "recycle-2"),
+            GrainId.Create("leaf", "recycle-3"),
+        };
+        for (var i = 0; i < children.Length; i++)
+        {
+            await grain.OnChildDigestPublishedAsync(children[i], new ChildDigestSnapshot
+            {
+                Hash = Bytes16((byte)(0x10 + i)), EntryCount = i + 1, CheckpointOffset = i,
+            });
+        }
+
+        await promptParent.Received(children.Length).OnChildDigestPublishedAsync(
+            Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>());
+        Assert.That(state.State.SubtreeEntryCount, Is.EqualTo(1 + 2 + 3 + 4),
+            "every recycled-deadline publish folds its child's entry count exactly once");
+    }
 }
