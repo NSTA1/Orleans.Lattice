@@ -156,7 +156,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/> so the
     /// strictly-greater HLC always wins.
     /// </summary>
-    private void AddPreparedMutation(Guid transactionId, string key, in LwwValue<byte[]> incoming)
+    private void AddPreparedMutation(Guid transactionId, string key, in LwwValue<byte[]> incoming, int capacityHint = 1)
     {
         if (transactionId == Guid.Empty)
         {
@@ -173,7 +173,13 @@ internal sealed partial class BPlusLeafGrain
         var pending = _pendingTx ??= new Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>>();
         if (!pending.TryGetValue(transactionId, out var bucket))
         {
-            bucket = new Dictionary<string, LwwValue<byte[]>>();
+            // Presize to the caller-supplied saga slice size. A batched
+            // prepare (CommitSetManyAsync) inserts `capacityHint` distinct
+            // keys into a freshly-created bucket; sizing it up front elides
+            // the per-saga 0->3->7->17 resize chain (and its intermediate
+            // backing-array garbage) that grows the bucket key-by-key.
+            // Single-key prepared writes pass the default hint of 1.
+            bucket = new Dictionary<string, LwwValue<byte[]>>(capacityHint);
             pending[transactionId] = bucket;
         }
 
