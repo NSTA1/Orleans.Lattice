@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
@@ -68,61 +69,57 @@ public sealed class CrdtShape
     /// <summary>Factory for the <see cref="LatticeMergeMode.OrSet"/> shape.</summary>
     public static CrdtShape ForOrSet()
     {
-        var s = JsonLatticeSerializer<OrSet>.Default;
-        var d = JsonLatticeSerializer<OrSetDelta>.Default;
+        var ctx = CrdtJsonSerializerContext.Default;
         return new CrdtShape(
             LatticeMergeMode.OrSet,
-            bytes => s.Deserialize(bytes),
-            bytes => d.Deserialize(bytes),
+            bytes => JsonSerializer.Deserialize(bytes, ctx.OrSet)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.OrSetDelta),
             (state, delta) => ((OrSet)state).MergeDelta((OrSetDelta)delta),
             (state, other) => ((OrSet)state).MergeFrom((OrSet)other),
             () => new OrSet(),
-            state => s.Serialize((OrSet)state));
+            state => JsonSerializer.SerializeToUtf8Bytes((OrSet)state, ctx.OrSet));
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.PnCounter"/> shape.</summary>
     public static CrdtShape ForPnCounter()
     {
-        var s = JsonLatticeSerializer<PnCounter>.Default;
-        var d = JsonLatticeSerializer<PnCounterDelta>.Default;
+        var ctx = CrdtJsonSerializerContext.Default;
         return new CrdtShape(
             LatticeMergeMode.PnCounter,
-            bytes => s.Deserialize(bytes),
-            bytes => d.Deserialize(bytes),
+            bytes => JsonSerializer.Deserialize(bytes, ctx.PnCounter)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.PnCounterDelta),
             (state, delta) => ((PnCounter)state).MergeDelta((PnCounterDelta)delta),
             (state, other) => ((PnCounter)state).MergeFrom((PnCounter)other),
             () => new PnCounter(),
-            state => s.Serialize((PnCounter)state));
+            state => JsonSerializer.SerializeToUtf8Bytes((PnCounter)state, ctx.PnCounter));
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.VersionVector"/> shape.</summary>
     public static CrdtShape ForVersionVector()
     {
-        var s = JsonLatticeSerializer<VersionVector>.Default;
-        var d = JsonLatticeSerializer<VersionVectorDelta>.Default;
+        var ctx = CrdtJsonSerializerContext.Default;
         return new CrdtShape(
             LatticeMergeMode.VersionVector,
-            bytes => s.Deserialize(bytes),
-            bytes => d.Deserialize(bytes),
+            bytes => JsonSerializer.Deserialize(bytes, ctx.VersionVector)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.VersionVectorDelta),
             (state, delta) => ((VersionVector)state).MergeDelta((VersionVectorDelta)delta),
             (state, other) => ((VersionVector)state).MergeFrom((VersionVector)other),
             () => new VersionVector(),
-            state => s.Serialize((VersionVector)state));
+            state => JsonSerializer.SerializeToUtf8Bytes((VersionVector)state, ctx.VersionVector));
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.MvRegister"/> shape.</summary>
     public static CrdtShape ForMvRegister()
     {
-        var s = JsonLatticeSerializer<MvRegister>.Default;
-        var d = JsonLatticeSerializer<MvRegisterDelta>.Default;
+        var ctx = CrdtJsonSerializerContext.Default;
         return new CrdtShape(
             LatticeMergeMode.MvRegister,
-            bytes => s.Deserialize(bytes),
-            bytes => d.Deserialize(bytes),
+            bytes => JsonSerializer.Deserialize(bytes, ctx.MvRegister)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.MvRegisterDelta),
             (state, delta) => ((MvRegister)state).MergeDelta((MvRegisterDelta)delta),
             (state, other) => ((MvRegister)state).MergeFrom((MvRegister)other),
             () => new MvRegister(),
-            state => s.Serialize((MvRegister)state));
+            state => JsonSerializer.SerializeToUtf8Bytes((MvRegister)state, ctx.MvRegister));
     }
 
     /// <summary>
