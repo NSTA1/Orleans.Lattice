@@ -117,6 +117,8 @@ public class LatticeOptionsResolverPropagationGuardTests
             "WalSaturationDispatchTimeoutThreshold",
             "WalSaturationProviderFailureRateThreshold",
             "WalSaturationRecoveryWindow",
+            "WalSaturationFlushLatencyThreshold",
+            "WalSaturationFlushLatencySampleWindows",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

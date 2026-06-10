@@ -891,6 +891,34 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.provider.retry.attempts", unit: "{attempt}",
             description: "Individual retry attempts performed by the storage SDK on provider calls, tagged by the HTTP status that triggered each retry.");
 
+    /// <summary>
+    /// Counter of SDK retry attempts that
+    /// <c>SaturationAwareRetryPolicy</c> short-circuited by stamping a
+    /// synthetic 503 response onto the message because the silo-scoped
+    /// WAL saturation signal reports
+    /// <see cref="WalSaturationState.Saturated"/>. Fires only on the
+    /// post-saturation-classifier path; first attempts and retries
+    /// under <see cref="WalSaturationState.Healthy"/> /
+    /// <see cref="WalSaturationState.Throttled"/> never fire it.
+    /// Tagged by the synthetic status (<c>503</c> today; reserved for
+    /// future expansion).
+    /// <para>
+    /// Closes the diagnostic gap that the existing
+    /// <see cref="ProviderRetryAttempts"/> counter does not
+    /// distinguish SDK-driven retries (a transient transport hiccup,
+    /// a 429 throttle) from policy-driven short-circuits (the
+    /// saturation signal abandoning the retry). A non-zero rate on
+    /// this counter is the operator-visible signal that the
+    /// saturation policy is doing its job; a zero rate with a
+    /// non-zero <see cref="ProviderRetryExhausted"/> means the SDK
+    /// burned its full retry budget without the policy intervening,
+    /// which is the pre-policy historical behaviour.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ProviderRetryShortCircuited =
+        Meter.CreateCounter<long>("orleans.lattice.provider.retry.short_circuited", unit: "{attempt}",
+            description: "SDK retry attempts short-circuited by SaturationAwareRetryPolicy because the WAL saturation signal reports Saturated, tagged by the synthetic HTTP status used to abort the retry chain.");
+
     // --- Saga fan-out diagnostic instruments (AtomicWriteGrain) -------------
 
     /// <summary>

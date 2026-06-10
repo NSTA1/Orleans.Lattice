@@ -219,6 +219,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
     private readonly AzureTableWalStorageOptions _options;
     private readonly Serializer<WalRecord> _serializer;
+    private readonly IWalSaturationSignal? _saturationSignal;
 
     /// <summary>
     /// Cached <see cref="LatticeMetrics.TagPipelinePhaseTwo"/> tag
@@ -269,10 +270,25 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// (<see cref="LatticeAzureTableServiceCollectionExtensions.AddAzureTableWalStorage}/>);
     /// tests construct it directly with a serializer pulled from
     /// <c>new ServiceCollection().AddSerializer().BuildServiceProvider()</c>.
+    /// <para>
+    /// The <paramref name="saturationSignal"/> argument is optional
+    /// (nullable). When non-<c>null</c> and
+    /// <see cref="AzureTableWalStorageOptions.HonorSaturationSignal"/>
+    /// is <see langword="true"/>, the provider attaches a
+    /// <see cref="SaturationAwareRetryPolicy"/> to the
+    /// constructed Azure SDK pipeline so the SDK's internal retry
+    /// loop short-circuits on retries whenever the silo-scoped
+    /// signal reports <see cref="WalSaturationState.Saturated"/>. A
+    /// <see langword="null"/> signal (the historical single-node /
+    /// unit-test deployment shape that does not call
+    /// <c>AddLattice</c>) leaves the pipeline unchanged and the
+    /// SDK's retry policy runs unmodified.
+    /// </para>
     /// </summary>
     public AzureTableWalStorageProvider(
         IOptions<AzureTableWalStorageOptions> options,
-        Serializer<WalRecord> serializer)
+        Serializer<WalRecord> serializer,
+        IWalSaturationSignal? saturationSignal = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -280,6 +296,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             $"{nameof(IOptions<AzureTableWalStorageOptions>)}.{nameof(IOptions<AzureTableWalStorageOptions>.Value)} returned null.",
             nameof(options));
         _serializer = serializer;
+        _saturationSignal = saturationSignal;
         _pipelinePhaseTwoTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagPipelinePhaseTwo,
             _options.PipelinePhaseTwoCommits);
@@ -1535,7 +1552,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 return _tableClient!;
             }
 
-            var client = _options.BuildServiceClient().GetTableClient(_options.TableName);
+            var client = _options.BuildServiceClient(_saturationSignal).GetTableClient(_options.TableName);
             await client.CreateIfNotExistsAsync(cancellationToken).ConfigureAwait(false);
             _tableClient = client;
             Volatile.Write(ref _tableInitialised, 1);

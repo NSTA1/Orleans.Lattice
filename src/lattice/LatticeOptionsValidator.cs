@@ -140,6 +140,21 @@ if (options.WalSaturationRecoveryWindow < TimeSpan.Zero
         $"{nameof(LatticeOptions.WalSaturationRecoveryWindow)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the recovery window holds a tree at Throttled after the most-recent Saturated observation; zero disables the window entirely, infinite holds Throttled forever after the first Saturated observation).");
 }
+if (options.WalSaturationFlushLatencyThreshold is { } flushLatencyThreshold
+    && flushLatencyThreshold <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationFlushLatencyThreshold)} must be positive when set "
+        + "(null disables the flush-latency classifier input entirely; a positive value sets the per-flush "
+        + "wal.append.provider.duration above which the per-(tree, shard) trip counter is incremented).");
+}
+if (options.WalSaturationFlushLatencySampleWindows < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationFlushLatencySampleWindows)} must be greater than or equal to 1 "
+        + "(the number of consecutive sampler ticks the per-tree flush-latency trip delta must be non-zero "
+        + "before the classifier escalates to Saturated via the flush-latency branch).");
+}
 if (options.WalAdmissionSaturationWaitBudget < TimeSpan.Zero
     && options.WalAdmissionSaturationWaitBudget != Timeout.InfiniteTimeSpan)
 {
