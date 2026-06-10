@@ -928,7 +928,12 @@ internal sealed partial class ReplicationApplier(
             entry.EndExclusiveKey,
             entry.Timestamp,
             entry.OriginClusterId!,
-            sourceVectorClock: null);
+            sourceVectorClock: null,
+            // A predicate-filtered range delete ships the explicit matched key
+            // set; the receiver tombstones exactly those keys rather than
+            // re-deriving membership from the range bounds. Null for an
+            // unconditional range delete.
+            explicitMatchedKeys: entry.MatchedKeys);
     }
 
     private IReplicationHighWaterMarkGrain GetHwmGrain(string treeId) =>

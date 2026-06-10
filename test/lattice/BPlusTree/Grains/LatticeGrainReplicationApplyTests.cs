@@ -122,6 +122,63 @@ public partial class LatticeGrainReplicationApplyTests
     }
 
     [Test]
+    public async Task ApplyDeleteRangeAsync_with_explicit_matched_keys_tombstones_only_that_set()
+    {
+        const string tree = "rapply-range-predicate";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        await lattice.SetAsync("a", new byte[] { 1 });
+        await lattice.SetAsync("b", new byte[] { 2 });
+        await lattice.SetAsync("c", new byte[] { 3 });
+        await lattice.SetAsync("d", new byte[] { 4 });
+
+        // The producer matched only "a" and "c" inside the range; the receiver
+        // must tombstone exactly that set and leave the in-range non-matching
+        // key "b" untouched, never re-deriving membership from the bounds.
+        await apply.ApplyDeleteRangeAsync(
+            "a",
+            "d",
+            Hlc(long.MaxValue / 2, 0),
+            "site-x",
+            sourceVectorClock: null,
+            explicitMatchedKeys: new[] { "a", "c" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lattice.GetAsync("a").Result, Is.Null, "matched key tombstoned");
+            Assert.That(lattice.GetAsync("b").Result, Is.EqualTo(new byte[] { 2 }), "in-range non-matching key survives");
+            Assert.That(lattice.GetAsync("c").Result, Is.Null, "matched key tombstoned");
+            Assert.That(lattice.GetAsync("d").Result, Is.EqualTo(new byte[] { 4 }), "end-exclusive bound survives");
+        });
+    }
+
+    [Test]
+    public async Task ApplyDeleteRangeAsync_with_empty_matched_keys_is_noop()
+    {
+        const string tree = "rapply-range-empty-predicate";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        var lattice = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        await lattice.SetAsync("a", new byte[] { 1 });
+        await lattice.SetAsync("b", new byte[] { 2 });
+
+        await apply.ApplyDeleteRangeAsync(
+            "a",
+            "z",
+            Hlc(long.MaxValue / 2, 0),
+            "site-x",
+            sourceVectorClock: null,
+            explicitMatchedKeys: Array.Empty<string>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lattice.GetAsync("a").Result, Is.EqualTo(new byte[] { 1 }));
+            Assert.That(lattice.GetAsync("b").Result, Is.EqualTo(new byte[] { 2 }));
+        });
+    }
+
+    [Test]
     public async Task ApplyDeleteRangeAsync_with_inverted_range_is_noop()
     {
         const string tree = "rapply-range-inv";

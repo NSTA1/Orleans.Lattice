@@ -79,5 +79,19 @@ public readonly record struct LatticeCursorSpec
     /// </para>
     /// </summary>
     [Id(5)] public bool ZeroObservableWrites { get; init; }
+
+    /// <summary>
+    /// Optional server-side predicate IR applied to every page this cursor
+    /// yields (or, for a <see cref="LatticeCursorKind.DeleteRange"/> cursor,
+    /// every key it tombstones). <c>null</c> - the default - means the cursor
+    /// is unfiltered, so existing persisted specs stay valid. The IR is
+    /// evaluated inside the owning leaf against each candidate value's JSON
+    /// document view, exactly like the streaming-scan push-down. Because the
+    /// whole spec is persisted via <c>LatticeCursorState.Spec</c>, a durable
+    /// cursor that reactivates after a silo failover re-applies the identical
+    /// filter without any extra state, and the deterministic IR serialization
+    /// guarantees a resumed cursor re-evaluates exactly as the original open.
+    /// </summary>
+    [Id(6)] public LatticePredicateNode? Predicate { get; init; }
 }
 

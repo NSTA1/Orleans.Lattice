@@ -74,6 +74,61 @@ public class ShardRootGrainMutationObserverTests
     }
 
     [Test]
+    public async Task DeleteRangeAsync_with_predicate_publishes_aggregated_matched_keys()
+    {
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("shard", ShardKey));
+        var state = new FakePersistentState<ShardRootState>();
+        var leafId = GrainId.Create("leaf", "pred-obs-leaf");
+        state.State.RootNodeId = leafId;
+        state.State.RootIsLeaf = true;
+
+        var predicate = LatticePredicateNode.Member("Score");
+
+        var leaf = Substitute.For<IBPlusLeafGrain>();
+        leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>())
+            .Returns(Task.FromResult(new RangeDeleteResult
+            {
+                Deleted = 2,
+                PastRange = true,
+                MatchedKeys = new[] { "a", "c" },
+            }));
+        leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
+
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
+        factory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
+
+        var resolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
+        var observer = new RecordingMutationObserver();
+        var grain = new ShardRootGrain(
+            context, state, factory, resolver,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance,
+            TestMutationObservers.With(observer));
+
+        var deleted = await grain.DeleteRangeAsync("a", "z", predicate);
+
+        Assert.That(deleted, Is.EqualTo(2));
+        Assert.That(observer.Mutations, Has.Count.EqualTo(1));
+        var m = observer.Mutations[0];
+        Assert.That(m.Kind, Is.EqualTo(MutationKind.DeleteRange));
+        Assert.That(m.MatchedKeys, Is.EqualTo(new[] { "a", "c" }),
+            "predicate-filtered range delete must publish the aggregated matched key set");
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_without_predicate_publishes_null_matched_keys()
+    {
+        var h = CreateHarness(leafDeletedCount: 4);
+
+        await h.Grain.DeleteRangeAsync("a", "z");
+
+        Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
+        Assert.That(h.Observer.Mutations[0].MatchedKeys, Is.Null,
+            "unconditional range delete must not carry an explicit matched key set");
+    }
+
+    [Test]
     public async Task DeleteRangeAsync_publishes_even_when_zero_keys_matched()
     {
         var h = CreateHarness(leafDeletedCount: 0);

@@ -376,14 +376,35 @@ internal sealed partial class BPlusLeafGrain
         // carries one HLC for the whole batch; replays converge under LWW
         // because the tombstone's timestamp dominates any earlier write
         // and is dominated by any later write.
+        //
+        // A predicate-filtered range delete carries the explicit set of
+        // matched keys (evaluated once at the authoring leaf). Replay
+        // tombstones exactly that set - never re-deriving membership from a
+        // predicate - so recovery is deterministic and independent of the
+        // value bytes this projection currently holds.
         List<string>? toRewrite = null;
-        foreach (var (key, _) in Cache.EnumerateRows())
+        var matchedKeys = mutation.MatchedKeys;
+        if (matchedKeys is not null)
         {
-            if (string.CompareOrdinal(key, startInclusive) < 0)
-                continue;
-            if (string.CompareOrdinal(key, endExclusive) >= 0)
-                break;
-            (toRewrite ??= []).Add(key);
+            foreach (var key in matchedKeys)
+            {
+                if (string.CompareOrdinal(key, startInclusive) < 0
+                    || string.CompareOrdinal(key, endExclusive) >= 0)
+                    continue;
+                if (Cache.TryGetRow(key, out _))
+                    (toRewrite ??= []).Add(key);
+            }
+        }
+        else
+        {
+            foreach (var (key, _) in Cache.EnumerateRows())
+            {
+                if (string.CompareOrdinal(key, startInclusive) < 0)
+                    continue;
+                if (string.CompareOrdinal(key, endExclusive) >= 0)
+                    break;
+                (toRewrite ??= []).Add(key);
+            }
         }
 
         if (toRewrite is null)

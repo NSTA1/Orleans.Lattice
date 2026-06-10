@@ -24,7 +24,7 @@ internal sealed partial class ShardRootGrain
     /// which collapses zero-delete ranges into a no-op event for UI / audit
     /// consumers.
     /// </summary>
-    private Task PublishDeleteRangeAsync(string startInclusive, string endExclusive)
+    private Task PublishDeleteRangeAsync(string startInclusive, string endExclusive, IReadOnlyList<string>? matchedKeys = null)
     {
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
         var delta = LatticeDeltaContext.Current;
@@ -81,6 +81,11 @@ internal sealed partial class ShardRootGrain
             // delete, but the slot is shape-stable for that case.
             AtomicBatchSize = batch?.Size ?? 0,
             AtomicBatchIndex = batch?.Index ?? 0,
+            // Predicate-filtered range deletes carry the explicit matched key
+            // set so replication apply tombstones exactly those keys instead
+            // of re-deriving membership from the range bounds. Null for an
+            // unconditional range delete, preserving the legacy payload shape.
+            MatchedKeys = matchedKeys is { Count: > 0 } ? matchedKeys : null,
         };
         return mutationObservers.PublishAsync(mutation);
     }

@@ -234,4 +234,18 @@ internal sealed class AtomicWriteState
     /// on the next Prepare entry as a best-effort fallback.
     /// </summary>
     [Id(17)] public long SagaStartedAtTicks { get; set; }
+
+    /// <summary>
+    /// Guard predicate for a guarded atomic batch
+    /// (<c>SetManyAtomicAsync&lt;T&gt;</c> with a predicate), evaluated once
+    /// against each key's pre-saga snapshot during
+    /// <see cref="AtomicWritePhase.Prepare"/>. <see langword="null"/> for an
+    /// unguarded saga. Persisted so a reminder-driven Prepare replay re-applies
+    /// the identical guard without the original caller context. When the guard
+    /// rejects any key the saga transitions to
+    /// <see cref="AtomicWritePhase.PreconditionFailed"/> and commits nothing.
+    /// Wire-compatible: missing field on legacy persisted state decodes to
+    /// <see langword="null"/> (an unguarded saga).
+    /// </summary>
+    [Id(18)] public LatticePredicateNode? Guard { get; set; }
 }

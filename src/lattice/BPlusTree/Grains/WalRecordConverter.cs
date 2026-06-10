@@ -69,6 +69,7 @@ internal static class WalRecordConverter
             IsMerge = mutation.IsMerge,
             IsBackstop = mutation.IsBackstop,
             Category = mutation.Category,
+            MatchedKeys = mutation.MatchedKeys,
         };
     }
 
@@ -116,6 +117,7 @@ internal static class WalRecordConverter
             AtomicShardCount = entry.AtomicShardCount,
             IsMerge = entry.IsMerge,
             IsBackstop = entry.IsBackstop,
+            MatchedKeys = entry.MatchedKeys,
         };
     }
 }

@@ -8,7 +8,7 @@ namespace Orleans.Lattice;
 /// implement <see cref="ILatticeSerializer{T}"/> directly.
 /// </summary>
 /// <typeparam name="T">The value type to serialize.</typeparam>
-public sealed class JsonLatticeSerializer<T>(JsonSerializerOptions? options = null) : ILatticeSerializer<T>
+public sealed class JsonLatticeSerializer<T>(JsonSerializerOptions? options = null) : ILatticeSerializer<T>, ILatticePredicateSerializer
 {
     /// <summary>Shared default instance (default <see cref="JsonSerializerOptions"/>).</summary>
     public static JsonLatticeSerializer<T> Default { get; } = new();

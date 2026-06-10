@@ -171,4 +171,172 @@ public class TypedLatticeExtensionsIntegrationTests
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
             tree.SetAsync("p1", new Product("x", 1m), TimeSpan.Zero));
     }
+
+    // --- Predicate push-down (GetMany) ---
+
+    [Test]
+    public async Task GetMany_with_predicate_returns_only_matching_values()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred");
+        await tree.SetAsync("a", new Product("Cheap", 5.00m));
+        await tree.SetAsync("b", new Product("Mid", 50.00m));
+        await tree.SetAsync("c", new Product("Pricey", 500.00m));
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b", "c"],
+            p => p.Price > 40m);
+
+        Assert.That(result.Keys, Is.EquivalentTo(new[] { "b", "c" }));
+        Assert.That(result["b"], Is.EqualTo(new Product("Mid", 50.00m)));
+        Assert.That(result["c"], Is.EqualTo(new Product("Pricey", 500.00m)));
+    }
+
+    [Test]
+    public async Task GetMany_with_predicate_omits_missing_and_nonmatching_keys()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred-miss");
+        await tree.SetAsync("a", new Product("A", 1.00m));
+        await tree.SetAsync("b", new Product("B", 99.00m));
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b", "missing"],
+            p => p.Name == "B");
+
+        Assert.That(result.Keys, Is.EquivalentTo(new[] { "b" }));
+    }
+
+    [Test]
+    public async Task GetMany_with_predicate_matching_none_returns_empty()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred-none");
+        await tree.SetAsync("a", new Product("A", 1.00m));
+        await tree.SetAsync("b", new Product("B", 2.00m));
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b"],
+            p => p.Price > 1000m);
+
+        Assert.That(result, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetMany_with_predicate_honours_explicit_serializer()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("typed-getmany-pred-ser");
+        var serializer = new JsonLatticeSerializer<Product>();
+        await tree.SetAsync("a", new Product("A", 10.00m), serializer);
+        await tree.SetAsync("b", new Product("B", 20.00m), serializer);
+
+        var result = await tree.GetManyAsync<Product>(
+            ["a", "b"],
+            p => p.Price >= 20m,
+            serializer);
+
+        Assert.That(result.Keys, Is.EquivalentTo(new[] { "b" }));
+    }
+
+    // --- Predicate push-down (streaming scans) ---
+
+    private async Task<ILattice> SeededScanTreeAsync(string id)
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(id);
+        await tree.SetAsync("k1", new Product("A", 5.00m));
+        await tree.SetAsync("k2", new Product("B", 15.00m));
+        await tree.SetAsync("k3", new Product("C", 25.00m));
+        await tree.SetAsync("k4", new Product("D", 35.00m));
+        return tree;
+    }
+
+    [Test]
+    public async Task ScanKeys_with_predicate_returns_only_matching_keys()
+    {
+        var tree = await SeededScanTreeAsync("scan-keys-pred");
+
+        var keys = new List<string>();
+        await foreach (var k in tree.ScanKeysAsync<Product>(p => p.Price >= 15m))
+            keys.Add(k);
+
+        Assert.That(keys, Is.EqualTo(new[] { "k2", "k3", "k4" }));
+    }
+
+    [Test]
+    public async Task ScanKeys_with_predicate_preserves_reverse_order()
+    {
+        var tree = await SeededScanTreeAsync("scan-keys-pred-rev");
+
+        var keys = new List<string>();
+        await foreach (var k in tree.ScanKeysAsync<Product>(p => p.Price >= 15m, reverse: true))
+            keys.Add(k);
+
+        Assert.That(keys, Is.EqualTo(new[] { "k4", "k3", "k2" }));
+    }
+
+    [Test]
+    public async Task ScanEntries_with_predicate_returns_only_matching_entries()
+    {
+        var tree = await SeededScanTreeAsync("scan-entries-pred");
+
+        var entries = new List<KeyValuePair<string, Product>>();
+        await foreach (var e in tree.ScanEntriesAsync<Product>(p => p.Price < 20m))
+            entries.Add(e);
+
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "k1", "k2" }));
+        Assert.That(entries[0].Value, Is.EqualTo(new Product("A", 5.00m)));
+        Assert.That(entries[1].Value, Is.EqualTo(new Product("B", 15.00m)));
+    }
+
+    [Test]
+    public async Task ScanValues_with_predicate_yields_only_matching_values()
+    {
+        var tree = await SeededScanTreeAsync("scan-values-pred");
+
+        var values = new List<Product>();
+        await foreach (var v in tree.ScanValuesAsync<Product>(p => p.Price > 20m))
+            values.Add(v);
+
+        Assert.That(values, Is.EqualTo(new[] { new Product("C", 25.00m), new Product("D", 35.00m) }));
+    }
+
+    [Test]
+    public async Task ScanValues_without_predicate_yields_all_values_in_order()
+    {
+        var tree = await SeededScanTreeAsync("scan-values-all");
+
+        var values = new List<Product>();
+        await foreach (var v in tree.ScanValuesAsync<Product>())
+            values.Add(v);
+
+        Assert.That(values, Is.EqualTo(new[]
+        {
+            new Product("A", 5.00m),
+            new Product("B", 15.00m),
+            new Product("C", 25.00m),
+            new Product("D", 35.00m),
+        }));
+    }
+
+    [Test]
+    public async Task ScanEntries_with_predicate_honours_explicit_serializer()
+    {
+        var tree = await SeededScanTreeAsync("scan-entries-pred-ser");
+        var serializer = new JsonLatticeSerializer<Product>();
+
+        var keys = new List<string>();
+        await foreach (var e in tree.ScanEntriesAsync<Product>(p => p.Name == "C", serializer))
+            keys.Add(e.Key);
+
+        Assert.That(keys, Is.EqualTo(new[] { "k3" }));
+    }
+
+    [Test]
+    public async Task ScanKeys_with_predicate_respects_range_bounds()
+    {
+        var tree = await SeededScanTreeAsync("scan-keys-pred-range");
+
+        var keys = new List<string>();
+        await foreach (var k in tree.ScanKeysAsync<Product>(p => p.Price >= 5m, startInclusive: "k2", endExclusive: "k4"))
+            keys.Add(k);
+
+        Assert.That(keys, Is.EqualTo(new[] { "k2", "k3" }));
+    }
 }

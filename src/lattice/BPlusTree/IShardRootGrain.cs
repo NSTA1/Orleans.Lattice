@@ -170,6 +170,22 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
+    /// Conditional bulk write: routes <paramref name="entries"/> to their
+    /// owning leaves, where each entry is committed only if its <b>current</b>
+    /// stored value satisfies <paramref name="predicate"/> (the guard). Returns
+    /// the set of keys actually written across this shard's leaves so the
+    /// caller can distinguish guarded-out keys. The guard is evaluated once,
+    /// server-side, at write time; committed entries become ordinary Set
+    /// writes that replicate without re-evaluating the predicate.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason as
+    /// <see cref="SetManyAsync"/>.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<IReadOnlyList<string>> SetManyWherePredicateAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate);
+
+    /// <summary>
     /// Marks <paramref name="key"/> as deleted (tombstone).
     /// Returns <c>true</c> if the key was present and live.
     /// </summary>
@@ -178,8 +194,12 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <summary>
     /// Tombstones all live keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
     /// by walking the leaf chain. Returns the total number of keys tombstoned.
+    /// When <paramref name="predicate"/> is non-<see langword="null"/> only the
+    /// in-range live keys whose value satisfies the predicate are tombstoned,
+    /// and the matched key set is propagated to observers / the WAL so replay
+    /// and replication reproduce it without re-evaluating the predicate.
     /// </summary>
-    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive);
+    Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns the total number of live (non-tombstoned) keys in this shard's B+ tree
@@ -197,7 +217,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live keys in <em>reverse</em> sorted order,
@@ -209,7 +230,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in this shard's B+ tree in sorted order,
@@ -221,7 +243,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in <em>reverse</em> sorted order,
@@ -233,7 +256,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? startInclusive,
         string? endExclusive,
         int pageSize,
-        string? continuationToken = null);
+        string? continuationToken = null,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns the <see cref="GrainId"/> of the leftmost leaf in this shard's B+ tree,
@@ -627,7 +651,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         int pageSize,
         string? continuationToken,
         int[] sortedSlots,
-        int virtualShardCount);
+        int virtualShardCount,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in this shard whose virtual slot
@@ -650,7 +675,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         int pageSize,
         string? continuationToken,
         int[] sortedSlots,
-        int virtualShardCount);
+        int virtualShardCount,
+        Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     // ==========================================================================
     //  Online shadow-forwarding primitive

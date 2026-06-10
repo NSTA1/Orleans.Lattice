@@ -45,7 +45,19 @@ internal sealed partial class LatticeGrain
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
-        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, cancellationToken);
+    }
+
+    public IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesWherePredicateAsync(
+        LatticePredicateNode predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, predicate, cancellationToken);
     }
 
     IAsyncEnumerable<KeyValuePair<string, byte[]>> ISystemLattice.EntriesAsync(
@@ -54,13 +66,14 @@ internal sealed partial class LatticeGrain
         bool reverse,
         bool? prefetch,
         CancellationToken cancellationToken)
-        => EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+        => EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, cancellationToken);
 
     private async IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsyncCore(
         string? startInclusive,
         string? endExclusive,
         bool reverse,
         bool? prefetch,
+        LatticePredicateNode? predicate,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -98,7 +111,7 @@ internal sealed partial class LatticeGrain
         {
             var sc = new EntriesCursor(
                 GetShardGrainByIndex(physicalTreeId, physicalShards[i]),
-                startInclusive, endExclusive, pageSize, reverse, usePrefetch, movedReported);
+                startInclusive, endExclusive, pageSize, reverse, usePrefetch, movedReported, predicate);
             cursors.Add(sc);
             initTasks[i] = ShardActivationRetry.RunAsync(
                 () => sc.MoveNextAsync());
@@ -113,6 +126,14 @@ internal sealed partial class LatticeGrain
         }
 
         HashSet<string>? yielded = isSystemTree ? null : new HashSet<string>(capacity: pageSize, comparer: StringComparer.Ordinal);
+        // Frontier of the k-way merge: the last key emitted to the caller.
+        // Used only on predicate scans to suppress reconciliation entries the
+        // merge has already passed. A churn key can be filtered out when its
+        // position is first scanned, then cross the predicate threshold via a
+        // concurrent write and be re-surfaced by a slot-move drain; injecting
+        // it behind the frontier would break global ordering. Dropping it keeps
+        // the scan's "value as-of visit time" semantics consistent and ordered.
+        string? lastYieldedKey = null;
         var maxRetries = isSystemTree ? 0 : Math.Max(1, Options.MaxScanRetries);
         var retriesUsed = 0;
         var coveredSlots = isSystemTree ? null : new HashSet<int>();
@@ -161,7 +182,8 @@ internal sealed partial class LatticeGrain
                 {
                     var buffer = await DrainEntrySlotsToBufferAsync(
                         physicalTreeId, startInclusive, endExclusive, pageSize,
-                        needSlots, shardMapNow, virtualShardCount, yielded);
+                        needSlots, shardMapNow, virtualShardCount, yielded, predicate,
+                        comparer, lastYieldedKey);
 
                     foreach (var s in needSlots) coveredSlots!.Add(s);
 
@@ -208,7 +230,8 @@ internal sealed partial class LatticeGrain
 
                 var finalBuffer = await DrainEntrySlotsToBufferAsync(
                     physicalTreeId, startInclusive, endExclusive, pageSize,
-                    finalNeedSlots, shardMapFinal, virtualShardCount, yielded);
+                    finalNeedSlots, shardMapFinal, virtualShardCount, yielded, predicate,
+                    comparer, lastYieldedKey);
 
                 foreach (var s in finalNeedSlots) coveredSlots!.Add(s);
 
@@ -227,7 +250,10 @@ internal sealed partial class LatticeGrain
             var entry = cursors[idx].Current;
 
             if (yielded is null || yielded.Add(entry.Key))
+            {
+                lastYieldedKey = entry.Key;
                 yield return entry;
+            }
 
             await cursors[idx].MoveNextAsync();
             if (cursors[idx].HasCurrent)
@@ -256,9 +282,16 @@ internal sealed partial class LatticeGrain
         HashSet<int> needSlots,
         ShardMap shardMapNow,
         int virtualShardCount,
-        HashSet<string>? yielded)
+        HashSet<string>? yielded,
+        LatticePredicateNode? predicate,
+        IComparer<string> comparer,
+        string? frontier)
     {
         var buffer = new List<KeyValuePair<string, byte[]>>();
+        // On predicate scans, drop any drained key the merge frontier has
+        // already passed: its position was scanned earlier (and filtered), so
+        // re-surfacing it now would emit it behind already-yielded keys.
+        var suppressBehindFrontier = predicate is not null && frontier is not null;
         var byOwner = GroupSlotsByOwner(needSlots, shardMapNow);
         foreach (var (owner, slotList) in byOwner)
         {
@@ -269,10 +302,12 @@ internal sealed partial class LatticeGrain
             {
                 var page = await shard.GetSortedEntriesBatchForSlotsAsync(
                     startInclusive, endExclusive, pageSize, continuation,
-                    sortedSlots, virtualShardCount);
+                    sortedSlots, virtualShardCount, predicate);
 
                 foreach (var entry in page.Entries)
                 {
+                    if (suppressBehindFrontier && comparer.Compare(entry.Key, frontier!) <= 0)
+                        continue;
                     if (yielded is null || !yielded.Contains(entry.Key))
                         buffer.Add(entry);
                 }
@@ -323,7 +358,8 @@ internal sealed partial class LatticeGrain
         int pageSize,
         bool reverse,
         bool prefetch,
-        HashSet<int>? movedSlotSink) : IEntriesCursor
+        HashSet<int>? movedSlotSink,
+        LatticePredicateNode? predicate) : IEntriesCursor
     {
         private List<KeyValuePair<string, byte[]>>? _page;
         private int _index;
@@ -375,9 +411,9 @@ internal sealed partial class LatticeGrain
         {
             return reverse
                 ? shard.GetSortedEntriesBatchReverseAsync(
-                    startInclusive, endExclusive, pageSize, continuation)
+                    startInclusive, endExclusive, pageSize, continuation, predicate)
                 : shard.GetSortedEntriesBatchAsync(
-                    startInclusive, endExclusive, pageSize, continuation);
+                    startInclusive, endExclusive, pageSize, continuation, predicate);
         }
     }
 }

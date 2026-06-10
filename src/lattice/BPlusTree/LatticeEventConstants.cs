@@ -265,4 +265,16 @@ public static class LatticeEventConstants
     /// <see cref="LatticeCompactionPathContext"/>.
     /// </summary>
     internal const string CompactionPathRequestContextKey = "ol.cpath";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry an optional
+    /// server-side predicate IR (<see cref="LatticePredicateNode"/>) from a
+    /// typed predicate overload on the extension layer down into the leaf
+    /// read / scan / conditional-mutation paths, so non-matching values are
+    /// filtered server-side before they cross the wire. When the key is
+    /// absent (the default) every operation behaves exactly as its
+    /// un-predicated form. Internal - set through
+    /// <see cref="LatticePredicateContext"/>.
+    /// </summary>
+    internal const string PredicateRequestContextKey = "ol.pred";
 }

@@ -229,7 +229,27 @@ public static class LatticeExtensions
         // invokes `ScanKeysAsync(...)` (e.g. via `.GetAsyncEnumerator()`
         // without iterating).
         ArgumentNullException.ThrowIfNull(lattice);
-        return ScanKeysAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+        return ScanKeysAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Resilient forward/reverse key scan whose keys are filtered server-side by
+    /// the predicate IR <paramref name="predicate"/>. Mirrors
+    /// <see cref="ScanKeysAsync"/>'s <c>EnumerationAbortedException</c> recovery,
+    /// re-supplying the predicate as an explicit argument on every reconnect.
+    /// </summary>
+    internal static IAsyncEnumerable<string> ScanKeysWhereAsync(
+        this ILattice lattice,
+        LatticePredicateNode predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        return ScanKeysAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, predicate, cancellationToken);
     }
 
     private static async IAsyncEnumerable<string> ScanKeysAsyncCore(
@@ -239,6 +259,7 @@ public static class LatticeExtensions
         bool reverse,
         bool? prefetch,
         int? maxAttempts,
+        LatticePredicateNode? predicate,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var budget = maxAttempts ?? DefaultScanReconnectAttempts;
@@ -251,7 +272,10 @@ public static class LatticeExtensions
         {
             cancellationToken.ThrowIfCancellationRequested();
             var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
-            var enumerator = lattice.KeysAsync(s, e, reverse, prefetch, cancellationToken).GetAsyncEnumerator();
+            var enumerator = (predicate is null
+                ? lattice.KeysAsync(s, e, reverse, prefetch, cancellationToken)
+                : lattice.KeysWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))
+                .GetAsyncEnumerator();
             var completedNormally = false;
             var shouldReopen = false;
             try
@@ -326,7 +350,27 @@ public static class LatticeExtensions
         // See `ScanKeysAsync` for why the null-guard lives in a non-async
         // wrapper rather than inside the iterator core.
         ArgumentNullException.ThrowIfNull(lattice);
-        return ScanEntriesAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+        return ScanEntriesAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Resilient forward/reverse entry scan whose entries are filtered
+    /// server-side by the predicate IR <paramref name="predicate"/>. Mirrors
+    /// <see cref="ScanEntriesAsync"/>'s recovery, re-supplying the predicate as
+    /// an explicit argument on every reconnect.
+    /// </summary>
+    internal static IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesWhereAsync(
+        this ILattice lattice,
+        LatticePredicateNode predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        return ScanEntriesAsyncCore(lattice, startInclusive, endExclusive, reverse, prefetch, maxAttempts, predicate, cancellationToken);
     }
 
     private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsyncCore(
@@ -336,6 +380,7 @@ public static class LatticeExtensions
         bool reverse,
         bool? prefetch,
         int? maxAttempts,
+        LatticePredicateNode? predicate,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var budget = maxAttempts ?? DefaultScanReconnectAttempts;
@@ -348,7 +393,10 @@ public static class LatticeExtensions
         {
             cancellationToken.ThrowIfCancellationRequested();
             var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
-            var enumerator = lattice.EntriesAsync(s, e, reverse, prefetch, cancellationToken).GetAsyncEnumerator();
+            var enumerator = (predicate is null
+                ? lattice.EntriesAsync(s, e, reverse, prefetch, cancellationToken)
+                : lattice.EntriesWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))
+                .GetAsyncEnumerator();
             var completedNormally = false;
             var shouldReopen = false;
             try

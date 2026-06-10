@@ -112,6 +112,26 @@ public interface ILattice : IGrainWithStringKey
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Conditional bulk write: writes each entry only if the key's
+    /// <b>current</b> stored value satisfies the server-side predicate IR
+    /// <paramref name="predicate"/> (a compare-then-set guard evaluated once,
+    /// server-side, at write time against each key's JSON document view). A key
+    /// with no live stored value is treated as non-matching and is skipped.
+    /// Returns the set of keys actually written, so the caller can distinguish
+    /// guarded-out keys. Committed entries become ordinary Set writes that
+    /// replicate without re-evaluating the predicate.
+    /// <para>
+    /// <b>Not atomic.</b> Like <see cref="SetManyAsync"/>, a partial failure
+    /// leaves the batch half-applied; use the guarded atomic variant when
+    /// all-or-nothing semantics are required. Intended to be reached through
+    /// the typed <c>SetManyAsync&lt;T&gt;</c> extension, which compiles the
+    /// predicate expression to IR.
+    /// </para>
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<IReadOnlyList<string>> SetManyWherePredicateAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Atomically writes <paramref name="entries"/> as a saga: reads each key's
     /// pre-saga value up front, applies the writes sequentially, and
     /// compensates (reverts) any already-committed entries if a subsequent
@@ -173,6 +193,38 @@ public interface ILattice : IGrainWithStringKey
     /// <exception cref="InvalidOperationException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set, or when a write fails and compensation completes.</exception>
     Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Guarded atomic bulk write: commits <paramref name="entries"/>
+    /// all-or-nothing, but only if <b>every</b> targeted key's pre-saga value
+    /// satisfies the server-side predicate IR <paramref name="predicate"/>
+    /// (evaluated once, during the saga's prepare phase, against each key's
+    /// captured pre-saga JSON document view). A key with no live pre-saga value
+    /// counts as a non-match. When any key fails the saga aborts before any
+    /// write and the call returns
+    /// <see cref="AtomicWriteOutcome.PreconditionFailed"/> with nothing
+    /// committed; when all match it returns
+    /// <see cref="AtomicWriteOutcome.Committed"/>. A precondition miss is
+    /// reported as a value, not an exception. Genuine write failures still
+    /// throw and compensate exactly as in <see cref="SetManyAtomicAsync"/>.
+    /// <para>
+    /// Intended to be reached through the typed
+    /// <c>SetManyAtomicAsync&lt;T&gt;</c> extension, which compiles the
+    /// predicate expression to IR.
+    /// </para>
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Caller-supplied idempotency-key overload of
+    /// <see cref="SetManyAtomicWhereAsync(List{KeyValuePair{string, byte[]}}, LatticePredicateNode, CancellationToken)"/>.
+    /// Re-attaching with the same <paramref name="operationId"/> returns the
+    /// original memoized <see cref="AtomicWriteOutcome"/> without re-evaluating
+    /// the predicate against possibly-moved data; the predicate must be pure.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, string operationId, CancellationToken cancellationToken = default);
+
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>
     Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default);
 
@@ -182,6 +234,21 @@ public interface ILattice : IGrainWithStringKey
     /// Returns the total number of keys that were tombstoned across all shards.
     /// </summary>
     Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="DeleteRangeAsync"/>, but tombstones only the in-range
+    /// keys whose value matches the server-side predicate IR
+    /// <paramref name="predicate"/>, evaluated once at write time against each
+    /// candidate value's JSON document view inside the owning leaf. The matched
+    /// key set is persisted to the WAL and shipped to replication consumers so
+    /// replay and cross-cluster apply reproduce exactly that set without
+    /// re-evaluating the predicate. Returns the total number of keys tombstoned
+    /// across all shards. Intended to be reached through the typed
+    /// <c>DeleteRangeAsync&lt;T&gt;</c> extension, which compiles the predicate
+    /// expression to IR.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<int> DeleteRangeWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the total number of live (non-tombstoned) keys across all shards.
@@ -208,6 +275,17 @@ public interface ILattice : IGrainWithStringKey
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="KeysAsync"/>, but evaluates the server-side predicate IR
+    /// <paramref name="predicate"/> against each candidate value's JSON document
+    /// view inside the owning leaf, yielding only the <b>keys</b> whose value
+    /// matches. No values cross the wire. The predicate travels as an explicit
+    /// argument (not ambient state), so it is applied consistently on every
+    /// per-shard page and reconciliation drain across the whole scan.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    IAsyncEnumerable<string> KeysWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns all live key-value entries in the tree as an ordered async stream.
     /// Entries are returned in lexicographic key order (or reverse if <paramref name="reverse"/> is <c>true</c>).
     /// Optionally filters to keys in the range [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
@@ -219,6 +297,18 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="EntriesAsync"/>, but evaluates the server-side predicate IR
+    /// <paramref name="predicate"/> against each candidate value's JSON document
+    /// view inside the owning leaf, yielding only the entries whose value matches.
+    /// Non-matching values are dropped server-side before paging. The predicate
+    /// travels as an explicit argument (not ambient state), so it is applied
+    /// consistently on every per-shard page and reconciliation drain across the
+    /// whole scan.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Bulk-loads key-value pairs into an empty tree, building leaves and
@@ -658,11 +748,28 @@ public interface ILattice : IGrainWithStringKey
     Task<string> OpenKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="OpenKeyCursorAsync"/>, but persists the predicate IR
+    /// <paramref name="predicate"/> on the cursor spec so every page yields
+    /// only keys whose value matches, server-side. The IR survives silo
+    /// failover (the spec is persisted) and composes with point-in-time mode.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenKeyCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opens a stateful entry-enumeration cursor. Semantically identical to
     /// <see cref="OpenKeyCursorAsync"/> but yields
     /// <see cref="KeyValuePair{TKey,TValue}"/> via <see cref="NextEntriesAsync"/>.
     /// </summary>
     Task<string> OpenEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="OpenEntryCursorAsync"/>, but persists the predicate IR
+    /// <paramref name="predicate"/> on the cursor spec so every page yields
+    /// only entries whose value matches, server-side.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenEntryCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool pointInTime = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a zero-observable-writes snapshot key cursor over the given
@@ -684,12 +791,29 @@ public interface ILattice : IGrainWithStringKey
     Task<string> OpenSnapshotKeyCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Like <see cref="OpenSnapshotKeyCursorAsync"/>, but persists the
+    /// predicate IR <paramref name="predicate"/> on the cursor spec so every
+    /// snapshot page yields only matching keys. The filter composes with the
+    /// WAL-coordinate replay and the frozen saga-decision snapshot.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenSnapshotKeyCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opens a zero-observable-writes snapshot entry cursor. Semantically
     /// identical to <see cref="OpenSnapshotKeyCursorAsync"/> but yields
     /// <see cref="KeyValuePair{TKey,TValue}"/> via
     /// <see cref="NextEntriesAsync"/>.
     /// </summary>
     Task<string> OpenSnapshotEntryCursorAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="OpenSnapshotEntryCursorAsync"/>, but persists the
+    /// predicate IR <paramref name="predicate"/> on the cursor spec so every
+    /// snapshot page yields only matching entries.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenSnapshotEntryCursorWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a stateful, resumable range-delete cursor over
@@ -700,6 +824,21 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="DeleteRangeAsync"/> remains available for short ranges.
     /// </summary>
     Task<string> OpenDeleteRangeCursorAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="OpenDeleteRangeCursorAsync"/>, but each
+    /// <see cref="DeleteRangeStepAsync"/> tombstones only the in-range keys whose
+    /// value matches the server-side predicate IR <paramref name="predicate"/>.
+    /// The predicate is persisted on the cursor spec, so a durable cursor that
+    /// reactivates after a silo failover re-applies the identical filter and the
+    /// continuation tombstones the same logical set. Each step records its matched
+    /// key set in the WAL so replay and replication reproduce it without
+    /// re-evaluating the predicate. Intended to be reached through the typed
+    /// <c>OpenDeleteRangeCursorAsync&lt;T&gt;</c> extension, which compiles the
+    /// predicate expression to IR.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<string> OpenDeleteRangeCursorWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the next page of up to <paramref name="pageSize"/> keys from

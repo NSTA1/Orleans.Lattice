@@ -364,5 +364,24 @@ public readonly record struct WalRecord
     /// <c>WalRecordConverter.FromWalRecord</c>.
     /// </summary>
     [Id(22)] public MutationCategory Category { get; init; }
+
+    /// <summary>
+    /// Explicit set of keys a predicate-filtered
+    /// <see cref="MutationKind.DeleteRange"/> matched at write time, or
+    /// <see langword="null"/> for an ordinary (unconditional) range delete.
+    /// <para>
+    /// A predicate-filtered range delete is not a pure
+    /// "tombstone <c>[Key, EndExclusiveKey)</c>" closure: the authoring leaf
+    /// evaluates the predicate <b>once</b> against each candidate value and
+    /// records the matched keys here, so replay and replication apply tombstone
+    /// exactly this set with no predicate re-evaluation. This keeps recovery
+    /// deterministic and lets receivers - whose stored values may differ -
+    /// reproduce the identical tombstone set. When <see langword="null"/> the
+    /// range bounds drive the closure exactly as before, so entries persisted
+    /// before this slot existed (and every non-predicate range delete) decode
+    /// unchanged. Strictly additive on the wire.
+    /// </para>
+    /// </summary>
+    [Id(23)] public IReadOnlyList<string>? MatchedKeys { get; init; }
 }
 

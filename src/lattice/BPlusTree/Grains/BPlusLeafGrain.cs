@@ -538,6 +538,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var predicate = LatticePredicateContext.Current;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
@@ -561,7 +562,8 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
                     {
-                        result[key] = pending.value.Value!;
+                        if (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value))
+                            result[key] = pending.value.Value!;
 #if LATTICE_DIAG
                         // DIAG: pending-bucket-committed read path.
                         DiagSink.Write($"[DIAG read-pending-committed] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid} valRound={DiagDecodeRound(pending.value.Value)} hlc={pending.value.Timestamp}");
@@ -610,6 +612,8 @@ internal sealed partial class BPlusLeafGrain(
                         throw new StaleShardRoutingException(-1, -1, -1);
                     }
                 }
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
+                    continue;
                 result[key] = lww.Value!;
 #if LATTICE_DIAG
                 // DIAG: read-return path - capture what each leaf returns per key.
@@ -883,6 +887,74 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         return await CommitSetManyAsync(entries);
+    }
+
+    /// <summary>
+    /// Conditional bulk write: commits only the entries whose <b>current</b>
+    /// stored value satisfies <paramref name="predicate"/>, evaluated once
+    /// here at write time against each key's committed JSON document view. A
+    /// key with no live committed value is treated as non-matching and is
+    /// skipped. The matched entries are committed through the same batched
+    /// commit path as <see cref="SetManyAsync"/> (so replication ships an
+    /// ordinary per-key Set for each written entry and no predicate is
+    /// re-evaluated downstream); the returned <see cref="ConditionalSetManyResult.WrittenKeys"/>
+    /// reports exactly the committed subset.
+    /// </summary>
+    public async Task<ConditionalSetManyResult> SetManyWherePredicateAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
+        {
+            return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
+        }
+
+        // Guard pass: keep only entries whose current committed value matches
+        // the predicate. We allocate the matched/written lists lazily on the
+        // first hit so an all-guarded-out batch stays allocation-free past the
+        // single dictionary probe per key.
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        List<KeyValuePair<string, byte[]>>? matched = null;
+        List<string>? writtenKeys = null;
+        foreach (var entry in entries)
+        {
+            if (Cache.TryGetRow(entry.Key, out var lww)
+                && !lww.IsTombstone
+                && !lww.IsExpired(nowTicks)
+                && LatticePredicateEvaluator.Matches(lww.Value, predicate))
+            {
+                (matched ??= new List<KeyValuePair<string, byte[]>>(entries.Count)).Add(entry);
+                (writtenKeys ??= new List<string>(entries.Count)).Add(entry.Key);
+            }
+        }
+
+        if (matched is null)
+        {
+            return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
+        }
+
+        SplitResult? split;
+        var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
+        if (splitInProgress)
+        {
+            // Mirror SetManyAsync's split-in-progress fallback: the split
+            // recovery in SetCoreAsync forwards mid-batch entries across two
+            // grains, so the matched entries are committed one at a time.
+            SplitResult? lastSplit = null;
+            foreach (var entry in matched)
+            {
+                var s = await SetAsync(entry.Key, entry.Value);
+                if (s is not null)
+                    lastSplit = s;
+            }
+            split = lastSplit;
+        }
+        else
+        {
+            split = await CommitSetManyAsync(matched);
+        }
+
+        return new ConditionalSetManyResult { Split = split, WrittenKeys = writtenKeys! };
     }
 
     /// <summary>
@@ -1333,7 +1405,7 @@ internal sealed partial class BPlusLeafGrain(
         return true;
     }
 
-    public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive)
+    public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         // Collect matching keys. Entries is a SortedDictionary so we can
         // break early once we pass endExclusive - but we must still report
@@ -1352,7 +1424,16 @@ internal sealed partial class BPlusLeafGrain(
 
             if (string.Compare(key, startInclusive, StringComparison.Ordinal) >= 0
                 && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+            {
+                // Predicate-filtered delete evaluates the predicate once,
+                // here at write time, against the live value. The matched
+                // keys are the only rows tombstoned and are recorded in the
+                // WAL record / result so replay and replication reproduce
+                // exactly this set without re-evaluating the predicate.
+                if (predicate is { } pred && !LatticePredicateEvaluator.Matches(lww.Value, pred))
+                    continue;
                 (keysToDelete ??= []).Add(key);
+            }
         }
 
         if (keysToDelete is null)
@@ -1401,7 +1482,8 @@ internal sealed partial class BPlusLeafGrain(
                 state.State.ShardIndex ?? 0,
                 startInclusive,
                 endExclusive,
-                tombstone);
+                tombstone,
+                predicate is null ? null : keysToDelete);
             await writer.AppendAsync(entry);
         }
         RecordCommitStep("wal", walStartTicks);
@@ -1442,7 +1524,12 @@ internal sealed partial class BPlusLeafGrain(
         // tombstone ratio sharply on a single leaf.
         EvaluateCompactionTrigger();
 
-        return new RangeDeleteResult { Deleted = keysToDelete.Count, PastRange = pastRange };
+        return new RangeDeleteResult
+        {
+            Deleted = keysToDelete.Count,
+            PastRange = pastRange,
+            MatchedKeys = predicate is null ? null : keysToDelete,
+        };
     }
 
     public async Task<int> CountAsync()
@@ -2303,7 +2390,7 @@ internal sealed partial class BPlusLeafGrain(
         await PublishDigestUpwardInlineAsync();
     }
 
-    public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -2346,7 +2433,8 @@ internal sealed partial class BPlusLeafGrain(
                 var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
                 if (status == TxStatus.Committed)
                 {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
+                        && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
                         keys.Add(key);
                     continue;
                 }
@@ -2360,6 +2448,9 @@ internal sealed partial class BPlusLeafGrain(
             }
 
             if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                continue;
+
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
                 continue;
 
             keys.Add(key);
@@ -2377,6 +2468,7 @@ internal sealed partial class BPlusLeafGrain(
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
             keys.Add(key);
         }
         keys.Sort(StringComparer.Ordinal);
@@ -2388,7 +2480,7 @@ internal sealed partial class BPlusLeafGrain(
         return keys;
     }
 
-    public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null)
+    public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
         var startTicks = Stopwatch.GetTimestamp();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
@@ -2420,7 +2512,8 @@ internal sealed partial class BPlusLeafGrain(
                 var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
                 if (status == TxStatus.Committed)
                 {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
+                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
+                        && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
                         entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
                     continue;
                 }
@@ -2429,6 +2522,9 @@ internal sealed partial class BPlusLeafGrain(
             }
 
             if (lww.IsTombstone || lww.IsExpired(nowTicks))
+                continue;
+
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
                 continue;
 
             entries.Add(new KeyValuePair<string, byte[]>(key, lww.Value!));
@@ -2446,6 +2542,7 @@ internal sealed partial class BPlusLeafGrain(
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
         }
         entries.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));

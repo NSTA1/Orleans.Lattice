@@ -153,6 +153,21 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
+    /// Conditional bulk write: commits only the entries whose <b>current</b>
+    /// stored value satisfies <paramref name="predicate"/> (the guard),
+    /// evaluated once here at write time against each key's committed value.
+    /// A key with no live committed value is treated as non-matching and is
+    /// skipped. Returns a <see cref="ConditionalSetManyResult"/> carrying the
+    /// committed key subset and any resulting <see cref="SplitResult"/>.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same
+    /// interleave-safety reason as <see cref="SetManyAsync"/>.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<ConditionalSetManyResult> SetManyWherePredicateAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate);
+
+    /// <summary>
     /// Marks <paramref name="key"/> as deleted (tombstone).
     /// Returns <c>true</c> if the key was present and live.
     /// <para>
@@ -172,8 +187,16 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// stop walking the leaf chain deterministically on sparse multi-shard trees, where
     /// a leaf may legitimately delete zero keys even when later leaves contain
     /// range-matching entries.
+    /// <para>
+    /// When <paramref name="predicate"/> is non-<see langword="null"/> the leaf
+    /// tombstones only the in-range live keys whose value satisfies the
+    /// predicate (evaluated once, here, at write time) and records the matched
+    /// key set on <see cref="RangeDeleteResult.MatchedKeys"/> and in the WAL
+    /// record, so replay and replication reproduce exactly that set without
+    /// re-evaluating the predicate.
+    /// </para>
     /// </summary>
-    Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive);
+    Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();
@@ -469,7 +492,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// strictly less than that value are returned. These parameters support continuation-token
     /// pagination to avoid transferring keys that will be discarded by the caller.
     /// </summary>
-    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
+    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Returns the sorted list of live (non-tombstoned) key-value pairs in this leaf
@@ -480,7 +503,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// support continuation-token pagination to avoid transferring values that will be
     /// discarded by the caller.
     /// </summary>
-    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null);
+    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, Orleans.Lattice.LatticePredicateNode? predicate = null);
 
     /// <summary>
     /// Removes tombstones whose wall-clock age exceeds <paramref name="gracePeriod"/>.

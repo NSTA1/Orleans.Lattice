@@ -107,7 +107,8 @@ internal static class WalRecordBuilder
         int shardIndex,
         string startInclusive,
         string endExclusive,
-        LwwValue<byte[]> tombstone)
+        LwwValue<byte[]> tombstone,
+        IReadOnlyList<string>? matchedKeys = null)
     {
         var delta = LatticeDeltaContext.Current;
         return new WalRecord
@@ -124,6 +125,7 @@ internal static class WalRecordBuilder
             Category = LatticeMaintenanceContext.Current,
             Delta = delta,
             ShardIndex = shardIndex,
+            MatchedKeys = matchedKeys,
         };
     }
 

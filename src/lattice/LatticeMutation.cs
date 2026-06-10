@@ -294,4 +294,18 @@ public readonly record struct LatticeMutation
     /// with mutations persisted before this field existed.
     /// </summary>
     [Id(20)] public bool IsMerge { get; init; }
+
+    /// <summary>
+    /// Explicit set of keys a predicate-filtered
+    /// <see cref="MutationKind.DeleteRange"/> matched at write time, or
+    /// <see langword="null"/> for an ordinary (unconditional) range delete.
+    /// The authoring leaf evaluates the predicate once and records the matched
+    /// keys here so replay and replication apply tombstone exactly this set
+    /// with no predicate re-evaluation - keeping recovery deterministic and
+    /// predicate-free. When <see langword="null"/> the half-open range
+    /// <c>[Key, EndExclusiveKey)</c> drives the closure as before. Defaults to
+    /// <see langword="null"/> for wire compatibility with observers persisted
+    /// before this field existed.
+    /// </summary>
+    [Id(21)] public IReadOnlyList<string>? MatchedKeys { get; init; }
 }

@@ -33,6 +33,25 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries);
 
     /// <summary>
+    /// Starts (or resumes) a <em>guarded</em> atomic write saga: the batch is
+    /// committed all-or-nothing only if every key's pre-saga value satisfies
+    /// <paramref name="predicate"/>. The predicate is evaluated once, during
+    /// the prepare phase, against each key's captured pre-saga snapshot; a key
+    /// with no live pre-saga value counts as a non-match. When any key fails
+    /// the saga transitions to <see cref="AtomicWritePhase.PreconditionFailed"/>
+    /// and commits nothing. Returns the terminal outcome rather than throwing
+    /// on a precondition miss. Re-attach (same operationId) returns the
+    /// memoized outcome without re-evaluating the predicate.
+    /// </summary>
+    /// <param name="treeId">Logical tree ID to write into.</param>
+    /// <param name="entries">Key-value pairs to commit atomically. Must not contain duplicate keys.</param>
+    /// <param name="predicate">Server-side predicate IR evaluated against each key's pre-saga value.</param>
+    Task<AtomicWriteOutcome> ExecuteGuardedAsync(
+        string treeId,
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode predicate);
+
+    /// <summary>
     /// Returns <c>true</c> when the saga has finished (either all writes
     /// committed or compensation completed) or has not been started.
     /// </summary>

@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
@@ -133,6 +134,46 @@ public static class TypedLatticeExtensions
         lattice.GetManyAsync(keys, JsonLatticeSerializer<T>.Default, cancellationToken);
 
     /// <summary>
+    /// Fetches multiple keys and returns only those whose deserialized value
+    /// satisfies <paramref name="predicate"/>. The predicate is lowered to a
+    /// serializable IR and evaluated <b>server-side</b> against each value's
+    /// JSON document view, so values that do not match are dropped on the
+    /// owning leaf and never cross the wire. Missing/tombstoned keys are
+    /// omitted as usual.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static async Task<Dictionary<string, T>> GetManyAsync<T>(
+        this ILattice lattice,
+        List<string> keys,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        using (LatticePredicateContext.With(ir))
+        {
+            var raw = await lattice.GetManyAsync(keys, cancellationToken);
+            var result = new Dictionary<string, T>(raw.Count);
+            foreach (var (k, v) in raw)
+                result[k] = serializer.Deserialize(v);
+            return result;
+        }
+    }
+
+    /// <inheritdoc cref="GetManyAsync{T}(ILattice, List{string}, Expression{Func{T, bool}}, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<Dictionary<string, T>> GetManyAsync<T>(
+        this ILattice lattice,
+        List<string> keys,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default) =>
+        lattice.GetManyAsync(keys, predicate, JsonLatticeSerializer<T>.Default, cancellationToken);
+
+    /// <summary>
     /// Serializes and inserts/updates multiple key-value pairs in parallel across shards.
     /// </summary>
     public static Task SetManyAsync<T>(
@@ -158,6 +199,50 @@ public static class TypedLatticeExtensions
         ArgumentNullException.ThrowIfNull(entries);
         return lattice.SetManyAsync(entries, JsonLatticeSerializer<T>.Default, cancellationToken);
     }
+
+    /// <summary>
+    /// Conditional bulk write: serializes <paramref name="entries"/> and writes
+    /// each one only if the key's <b>current</b> stored value of type
+    /// <typeparamref name="T"/> satisfies <paramref name="predicate"/> (a
+    /// compare-then-set guard). The predicate expression is compiled to the
+    /// serializable predicate IR with <paramref name="serializer"/> and pushed
+    /// down to the owning leaves, which evaluate it once at write time against
+    /// each key's current JSON document view; a key with no live value is
+    /// treated as non-matching and skipped. Returns the set of keys actually
+    /// written so the caller can distinguish guarded-out keys.
+    /// <para>
+    /// <b>Not atomic</b> across keys (matches <see cref="SetManyAsync{T}(ILattice, List{KeyValuePair{string, T}}, ILatticeSerializer{T}, CancellationToken)"/>).
+    /// </para>
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<IReadOnlyList<string>> SetManyAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        foreach (var (k, v) in entries)
+            raw.Add(new KeyValuePair<string, byte[]>(k, serializer.Serialize(v)));
+        return lattice.SetManyWherePredicateAsync(raw, ir, cancellationToken);
+    }
+
+    /// <inheritdoc cref="SetManyAsync{T}(ILattice, List{KeyValuePair{string, T}}, Expression{Func{T, bool}}, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<IReadOnlyList<string>> SetManyAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default) =>
+        lattice.SetManyAsync(entries, predicate, JsonLatticeSerializer<T>.Default, cancellationToken);
 
     /// <summary>
     /// Serializes and atomically writes multiple key-value pairs via the
@@ -221,6 +306,89 @@ public static class TypedLatticeExtensions
         ArgumentNullException.ThrowIfNull(entries);
         return lattice.SetManyAtomicAsync(entries, operationId, JsonLatticeSerializer<T>.Default, cancellationToken);
     }
+
+    /// <summary>
+    /// Guarded atomic bulk write: serializes <paramref name="entries"/> and
+    /// commits them all-or-nothing, but only if <b>every</b> targeted key's
+    /// <b>current</b> stored value of type <typeparamref name="T"/> satisfies
+    /// <paramref name="predicate"/>. The predicate is compiled to the
+    /// serializable predicate IR with <paramref name="serializer"/> and
+    /// evaluated once, server-side, against each key's pre-saga JSON document
+    /// view; a key with no live value counts as a non-match. Returns
+    /// <see cref="AtomicWriteOutcome.PreconditionFailed"/> (with nothing
+    /// committed) when any key fails, or <see cref="AtomicWriteOutcome.Committed"/>
+    /// when all match. A precondition miss is reported as a value, not an
+    /// exception. See
+    /// <see cref="ILattice.SetManyAtomicWhereAsync(List{KeyValuePair{string, byte[]}}, LatticePredicateNode, CancellationToken)"/>
+    /// for full saga semantics.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<AtomicWriteOutcome> SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        foreach (var (k, v) in entries)
+            raw.Add(new KeyValuePair<string, byte[]>(k, serializer.Serialize(v)));
+        return lattice.SetManyAtomicWhereAsync(raw, ir, cancellationToken);
+    }
+
+    /// <inheritdoc cref="SetManyAtomicAsync{T}(ILattice, List{KeyValuePair{string, T}}, Expression{Func{T, bool}}, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<AtomicWriteOutcome> SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default) =>
+        lattice.SetManyAtomicAsync(entries, predicate, JsonLatticeSerializer<T>.Default, cancellationToken);
+
+    /// <summary>
+    /// Caller-supplied idempotency-key overload of the guarded atomic write.
+    /// Re-submitting with the same <paramref name="operationId"/> re-attaches
+    /// to the original saga and returns its memoized outcome without
+    /// re-evaluating the predicate.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<AtomicWriteOutcome> SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        string operationId,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        var raw = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        foreach (var (k, v) in entries)
+            raw.Add(new KeyValuePair<string, byte[]>(k, serializer.Serialize(v)));
+        return lattice.SetManyAtomicWhereAsync(raw, ir, operationId, cancellationToken);
+    }
+
+    /// <inheritdoc cref="SetManyAtomicAsync{T}(ILattice, List{KeyValuePair{string, T}}, Expression{Func{T, bool}}, string, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<AtomicWriteOutcome> SetManyAtomicAsync<T>(
+        this ILattice lattice,
+        List<KeyValuePair<string, T>> entries,
+        Expression<Func<T, bool>> predicate,
+        string operationId,
+        CancellationToken cancellationToken = default) =>
+        lattice.SetManyAtomicAsync(entries, predicate, operationId, JsonLatticeSerializer<T>.Default, cancellationToken);
 
     // ── Bulk Loading ────────────────────────────────────────────
 
@@ -328,4 +496,486 @@ public static class TypedLatticeExtensions
         int? maxAttempts = null,
         CancellationToken cancellationToken = default) =>
         lattice.ScanEntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+
+    // ── Predicate push-down (streaming scans) ───────────────────
+    //
+    // The predicate is lowered to the serializable LatticePredicateNode IR
+    // (gated on the serializer's ILatticePredicateSerializer capability) and
+    // carried to every shard's leaf-scan via the ambient
+    // LatticePredicateContext scope. The leaf evaluates the IR against each
+    // candidate value's JSON document view and drops non-matching keys before
+    // they are paged, so the filter is applied consistently across the k-way
+    // merge and reconciliation drains, and filtered keys never materialize
+    // client-side. The scope stays open for the whole enumeration (including
+    // transparent reconnects in the resilient Scan* wrappers), so the
+    // predicate survives an EnumerationAbortedException intact.
+
+    /// <summary>
+    /// Resilient typed key scan whose keys are filtered server-side by a value
+    /// <paramref name="predicate"/>. The leaf reads each candidate's value to
+    /// evaluate the predicate but only the matching <b>keys</b> stream back -
+    /// no values cross the wire. Recovers from
+    /// <c>Orleans.Runtime.EnumerationAbortedException</c> with the predicate
+    /// intact.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static async IAsyncEnumerable<string> ScanKeysAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        await foreach (var key in lattice.ScanKeysWhereAsync(ir, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken).ConfigureAwait(false))
+            yield return key;
+    }
+
+    /// <inheritdoc cref="ScanKeysAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool?, int?, CancellationToken)"/>
+    public static IAsyncEnumerable<string> ScanKeysAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default) =>
+        lattice.ScanKeysAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+
+    /// <summary>
+    /// Low-level single-page typed key scan filtered server-side by a value
+    /// <paramref name="predicate"/>. Prefer the resilient
+    /// <see cref="ScanKeysAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool?, int?, CancellationToken)"/>.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static async IAsyncEnumerable<string> KeysAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        await foreach (var key in lattice.KeysWherePredicateAsync(ir, startInclusive, endExclusive, reverse, prefetch, cancellationToken).ConfigureAwait(false))
+            yield return key;
+    }
+
+    /// <inheritdoc cref="KeysAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool?, CancellationToken)"/>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static IAsyncEnumerable<string> KeysAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        CancellationToken cancellationToken = default) =>
+        lattice.KeysAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+
+    /// <summary>
+    /// Resilient typed entry scan filtered server-side by
+    /// <paramref name="predicate"/>. Non-matching entries are dropped on the
+    /// owning leaf and never cross the wire. Recovers from
+    /// <c>Orleans.Runtime.EnumerationAbortedException</c> with the predicate
+    /// intact.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static async IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        await foreach (var entry in lattice.ScanEntriesWhereAsync(ir, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken).ConfigureAwait(false))
+            yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
+    }
+
+    /// <inheritdoc cref="ScanEntriesAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool?, int?, CancellationToken)"/>
+    public static IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default) =>
+        lattice.ScanEntriesAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+
+    /// <summary>
+    /// Low-level single-page typed entry scan filtered server-side by
+    /// <paramref name="predicate"/>. Prefer the resilient
+    /// <see cref="ScanEntriesAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool?, int?, CancellationToken)"/>.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static async IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        await foreach (var entry in lattice.EntriesWherePredicateAsync(ir, startInclusive, endExclusive, reverse, prefetch, cancellationToken).ConfigureAwait(false))
+            yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
+    }
+
+    /// <inheritdoc cref="EntriesAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool?, CancellationToken)"/>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static IAsyncEnumerable<KeyValuePair<string, T>> EntriesAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        CancellationToken cancellationToken = default) =>
+        lattice.EntriesAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+
+    /// <summary>
+    /// Resilient typed value projection over the entry scan, optionally
+    /// filtered server-side by <paramref name="predicate"/>. Yields only the
+    /// deserialized values in key order; when a predicate is supplied,
+    /// non-matching values are dropped on the owning leaf and never cross the
+    /// wire. Recovers from <c>Orleans.Runtime.EnumerationAbortedException</c>
+    /// with the predicate intact.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// A non-null <paramref name="predicate"/> is supplied and the serializer
+    /// does not implement <see cref="ILatticePredicateSerializer"/>, or the
+    /// predicate contains an unsupported construct.
+    /// </exception>
+    public static async IAsyncEnumerable<T> ScanValuesAsync<T>(
+        this ILattice lattice,
+        ILatticeSerializer<T> serializer,
+        Expression<Func<T, bool>>? predicate = null,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = predicate is null ? (LatticePredicateNode?)null : LatticePredicatePushdown.Compile(predicate, serializer);
+        var entries = ir is null
+            ? lattice.ScanEntriesAsync(startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken)
+            : lattice.ScanEntriesWhereAsync(ir.Value, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+        await foreach (var entry in entries.ConfigureAwait(false))
+            yield return serializer.Deserialize(entry.Value);
+    }
+
+    /// <inheritdoc cref="ScanValuesAsync{T}(ILattice, ILatticeSerializer{T}, Expression{Func{T, bool}}, string?, string?, bool, bool?, int?, CancellationToken)"/>
+    public static IAsyncEnumerable<T> ScanValuesAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>>? predicate = null,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default) =>
+        lattice.ScanValuesAsync(JsonLatticeSerializer<T>.Default, predicate, startInclusive, endExclusive, reverse, prefetch, maxAttempts, cancellationToken);
+
+    /// <summary>
+    /// Low-level single-page typed value projection, optionally filtered
+    /// server-side by <paramref name="predicate"/>. Prefer the resilient
+    /// <see cref="ScanValuesAsync{T}(ILattice, ILatticeSerializer{T}, Expression{Func{T, bool}}, string?, string?, bool, bool?, int?, CancellationToken)"/>.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static async IAsyncEnumerable<T> ValuesAsync<T>(
+        this ILattice lattice,
+        ILatticeSerializer<T> serializer,
+        Expression<Func<T, bool>>? predicate = null,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = predicate is null ? (LatticePredicateNode?)null : LatticePredicatePushdown.Compile(predicate, serializer);
+        var entries = ir is null
+            ? lattice.EntriesAsync(startInclusive, endExclusive, reverse, prefetch, cancellationToken)
+            : lattice.EntriesWherePredicateAsync(ir.Value, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+        await foreach (var entry in entries.ConfigureAwait(false))
+            yield return serializer.Deserialize(entry.Value);
+    }
+
+    /// <inheritdoc cref="ValuesAsync{T}(ILattice, ILatticeSerializer{T}, Expression{Func{T, bool}}, string?, string?, bool, bool?, CancellationToken)"/>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static IAsyncEnumerable<T> ValuesAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>>? predicate = null,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool? prefetch = null,
+        CancellationToken cancellationToken = default) =>
+        lattice.ValuesAsync(JsonLatticeSerializer<T>.Default, predicate, startInclusive, endExclusive, reverse, prefetch, cancellationToken);
+
+    // ── Predicate-filtered cursors ──────────────────────────────
+
+    /// <summary>
+    /// Opens a stateful key cursor whose every page is filtered server-side by
+    /// <paramref name="predicate"/>. The compiled IR is persisted on the cursor
+    /// spec, so a durable cursor that reactivates after a silo failover
+    /// re-applies the identical filter. Composes with point-in-time mode.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenKeyCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool, CancellationToken)"/>
+    public static Task<string> OpenKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenKeyCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+
+    /// <summary>
+    /// Opens a stateful entry cursor whose every page is filtered server-side
+    /// by <paramref name="predicate"/>. See
+    /// <see cref="OpenKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool, CancellationToken)"/>
+    /// for the durability and composition contract.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenEntryCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenEntryCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, bool, CancellationToken)"/>
+    public static Task<string> OpenEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        bool pointInTime = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenEntryCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, pointInTime, cancellationToken);
+
+    /// <summary>
+    /// Opens a zero-observable-writes snapshot key cursor whose every page is
+    /// filtered server-side by <paramref name="predicate"/>. The filter
+    /// composes with the WAL-coordinate replay and frozen saga-decision
+    /// snapshot, and is persisted so a reactivated cursor re-applies it.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenSnapshotKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenSnapshotKeyCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenSnapshotKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, CancellationToken)"/>
+    public static Task<string> OpenSnapshotKeyCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenSnapshotKeyCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, cancellationToken);
+
+    /// <summary>
+    /// Opens a zero-observable-writes snapshot entry cursor whose every page is
+    /// filtered server-side by <paramref name="predicate"/>. See
+    /// <see cref="OpenSnapshotKeyCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, CancellationToken)"/>.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenSnapshotEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenSnapshotEntryCursorWherePredicateAsync(ir, startInclusive, endExclusive, reverse, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenSnapshotEntryCursorAsync{T}(ILattice, Expression{Func{T, bool}}, ILatticeSerializer{T}, string?, string?, bool, CancellationToken)"/>
+    public static Task<string> OpenSnapshotEntryCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        bool reverse = false,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenSnapshotEntryCursorAsync(predicate, JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, reverse, cancellationToken);
+
+    /// <summary>
+    /// Conditionally deletes the keys in the lexicographic range
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
+    /// whose value of type <typeparamref name="T"/> matches
+    /// <paramref name="predicate"/>. The predicate expression is compiled to the
+    /// serializable predicate IR with <paramref name="serializer"/> and pushed
+    /// down to the owning leaves, which evaluate it once at write time against
+    /// each candidate value's JSON document view and tombstone only the matched
+    /// keys. The matched key set is persisted to the WAL and shipped to
+    /// replication consumers, so recovery and cross-cluster apply reproduce
+    /// exactly that set without re-evaluating the predicate. No values cross the
+    /// wire. Returns the total number of keys tombstoned across all shards.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<int> DeleteRangeAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.DeleteRangeWherePredicateAsync(ir, startInclusive, endExclusive, cancellationToken);
+    }
+
+    /// <inheritdoc cref="DeleteRangeAsync{T}(ILattice, Expression{Func{T, bool}}, string, string, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<int> DeleteRangeAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken = default) =>
+        lattice.DeleteRangeAsync(predicate, startInclusive, endExclusive, JsonLatticeSerializer<T>.Default, cancellationToken);
+
+    /// <summary>
+    /// Opens a stateful, resumable <b>conditional</b> range-delete cursor over
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) that
+    /// tombstones only the keys whose value of type <typeparamref name="T"/>
+    /// matches <paramref name="predicate"/>. The predicate expression is compiled
+    /// to the serializable predicate IR with <paramref name="serializer"/> and
+    /// persisted on the cursor spec, so each <see cref="ILattice.DeleteRangeStepAsync"/>
+    /// re-applies the identical filter - including after a silo failover, where
+    /// the continuation resumes against the same logical matched set. Each step
+    /// records its matched key set in the WAL so replay and replication reproduce
+    /// it without re-evaluating the predicate. Returns the opaque cursor id.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The serializer does not implement <see cref="ILatticePredicateSerializer"/>,
+    /// or <paramref name="predicate"/> contains an unsupported construct.
+    /// </exception>
+    public static Task<string> OpenDeleteRangeCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        ILatticeSerializer<T> serializer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        ArgumentNullException.ThrowIfNull(serializer);
+        var ir = LatticePredicatePushdown.Compile(predicate, serializer);
+        return lattice.OpenDeleteRangeCursorWherePredicateAsync(ir, startInclusive, endExclusive, cancellationToken);
+    }
+
+    /// <inheritdoc cref="OpenDeleteRangeCursorAsync{T}(ILattice, Expression{Func{T, bool}}, string, string, ILatticeSerializer{T}, CancellationToken)"/>
+    public static Task<string> OpenDeleteRangeCursorAsync<T>(
+        this ILattice lattice,
+        Expression<Func<T, bool>> predicate,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken = default) =>
+        lattice.OpenDeleteRangeCursorAsync(predicate, startInclusive, endExclusive, JsonLatticeSerializer<T>.Default, cancellationToken);
 }

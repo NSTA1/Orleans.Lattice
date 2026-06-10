@@ -252,9 +252,13 @@ internal sealed partial class LatticeCursorGrain(
         var (effStart, effEnd) = ComputeEffectiveRange();
 
         var collected = new List<string>(pageSize);
+        var predicate = state.State.Spec.Predicate;
         using (BeginPointInTimeScopeIfNeeded())
         {
-            await foreach (var key in lattice.KeysAsync(effStart, effEnd, state.State.Spec.Reverse))
+            var keys = predicate is { } pred
+                ? lattice.KeysWherePredicateAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
+                : lattice.KeysAsync(effStart, effEnd, state.State.Spec.Reverse);
+            await foreach (var key in keys)
             {
                 collected.Add(key);
                 if (collected.Count >= pageSize) break;
@@ -320,9 +324,13 @@ internal sealed partial class LatticeCursorGrain(
         var (effStart, effEnd) = ComputeEffectiveRange();
 
         var collected = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var predicate = state.State.Spec.Predicate;
         using (BeginPointInTimeScopeIfNeeded())
         {
-            await foreach (var entry in lattice.EntriesAsync(effStart, effEnd, state.State.Spec.Reverse))
+            var entries = predicate is { } pred
+                ? lattice.EntriesWherePredicateAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
+                : lattice.EntriesAsync(effStart, effEnd, state.State.Spec.Reverse);
+            await foreach (var entry in entries)
             {
                 collected.Add(entry);
                 if (collected.Count >= pageSize) break;
@@ -376,14 +384,23 @@ internal sealed partial class LatticeCursorGrain(
 
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
         var (effStart, effEnd) = ComputeEffectiveRange();
+        var predicate = state.State.Spec.Predicate;
 
         // Probe the range: collect up to maxToDelete+1 keys so we can tell
         // whether this step exhausts the range. One-past-budget lets us pick
         // a correct sub-range end without an extra round-trip.
         // Forward-only: OpenAsync rejects reverse DeleteRange specs, so the
         // default KeysAsync direction is correct here.
+        //
+        // When the cursor carries a predicate the probe filters to matching
+        // keys only (re-applied from the persisted spec on every step, so a
+        // post-failover resume sees the identical filter), so the step budget
+        // counts and bounds the keys actually tombstoned.
         var probe = new List<string>(maxToDelete + 1);
-        await foreach (var key in lattice.KeysAsync(effStart, effEnd))
+        var probeKeys = predicate is { } pred
+            ? lattice.KeysWherePredicateAsync(pred, effStart, effEnd)
+            : lattice.KeysAsync(effStart, effEnd);
+        await foreach (var key in probeKeys)
         {
             probe.Add(key);
             if (probe.Count > maxToDelete) break;
@@ -422,7 +439,9 @@ internal sealed partial class LatticeCursorGrain(
         if (probe.Count <= maxToDelete)
         {
             // Final step: delete everything remaining in one call.
-            deletedThisStep = await lattice.DeleteRangeAsync(effStart!, effEnd!);
+            deletedThisStep = predicate is { } finalPred
+                ? await lattice.DeleteRangeWherePredicateAsync(finalPred, effStart!, effEnd!)
+                : await lattice.DeleteRangeAsync(effStart!, effEnd!);
             state.State.LastYieldedKey = probe[^1];
             state.State.Phase = LatticeCursorPhase.Exhausted;
             isComplete = true;
@@ -433,7 +452,9 @@ internal sealed partial class LatticeCursorGrain(
             // included. The next step resumes from stopKey + "\0".
             var stopKey = probe[maxToDelete - 1];
             var subEnd = stopKey + "\0";
-            deletedThisStep = await lattice.DeleteRangeAsync(effStart!, subEnd);
+            deletedThisStep = predicate is { } partialPred
+                ? await lattice.DeleteRangeWherePredicateAsync(partialPred, effStart!, subEnd)
+                : await lattice.DeleteRangeAsync(effStart!, subEnd);
             state.State.LastYieldedKey = stopKey;
             isComplete = false;
         }

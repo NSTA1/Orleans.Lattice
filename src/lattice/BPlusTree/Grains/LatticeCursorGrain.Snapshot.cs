@@ -163,7 +163,7 @@ internal sealed partial class LatticeCursorGrain
         var (effStart, effEnd) = ComputeEffectiveRange();
         var reverse = state.State.Spec.Reverse;
 
-        var perShardLists = await FetchPerShardKeysAsync(coord, effStart, effEnd, pageSize);
+        var perShardLists = await FetchPerShardKeysAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate);
         var collected = new List<string>(pageSize);
         MergeSortedKeyLists(perShardLists, reverse, pageSize, collected);
 
@@ -205,7 +205,7 @@ internal sealed partial class LatticeCursorGrain
         var (effStart, effEnd) = ComputeEffectiveRange();
         var reverse = state.State.Spec.Reverse;
 
-        var perShardLists = await FetchPerShardEntriesAsync(coord, effStart, effEnd, pageSize);
+        var perShardLists = await FetchPerShardEntriesAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate);
         var collected = new List<KeyValuePair<string, byte[]>>(pageSize);
         MergeSortedEntryLists(perShardLists, reverse, pageSize, collected);
 
@@ -249,14 +249,15 @@ internal sealed partial class LatticeCursorGrain
         LatticeSnapshotCoordinate coord,
         string? effStart,
         string? effEnd,
-        int pageSize)
+        int pageSize,
+        LatticePredicateNode? predicate)
     {
         var shards = ResolvePerShardPerPartitionOffsets(coord);
         var tasks = new Task<List<string>>[shards.Count];
         var index = 0;
         foreach (var (shardIdx, capturedOffsets) in shards)
         {
-            tasks[index++] = FetchSnapshotShardKeysAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize);
+            tasks[index++] = FetchSnapshotShardKeysAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize, predicate);
         }
 
         return await Task.WhenAll(tasks);
@@ -268,11 +269,12 @@ internal sealed partial class LatticeCursorGrain
         LatticeSnapshotCoordinate coord,
         string? effStart,
         string? effEnd,
-        int pageSize)
+        int pageSize,
+        LatticePredicateNode? predicate)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
-        return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize);
+        return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize, predicate: predicate);
     }
 
     private async Task<List<KeyValuePair<string, byte[]>>> FetchSnapshotShardEntriesAsync(
@@ -281,11 +283,12 @@ internal sealed partial class LatticeCursorGrain
         LatticeSnapshotCoordinate coord,
         string? effStart,
         string? effEnd,
-        int pageSize)
+        int pageSize,
+        LatticePredicateNode? predicate)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
-        return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize);
+        return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate);
     }
 
     /// <summary>
@@ -295,14 +298,15 @@ internal sealed partial class LatticeCursorGrain
         LatticeSnapshotCoordinate coord,
         string? effStart,
         string? effEnd,
-        int pageSize)
+        int pageSize,
+        LatticePredicateNode? predicate)
     {
         var shards = ResolvePerShardPerPartitionOffsets(coord);
         var tasks = new Task<List<KeyValuePair<string, byte[]>>>[shards.Count];
         var index = 0;
         foreach (var (shardIdx, capturedOffsets) in shards)
         {
-            tasks[index++] = FetchSnapshotShardEntriesAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize);
+            tasks[index++] = FetchSnapshotShardEntriesAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize, predicate);
         }
 
         return await Task.WhenAll(tasks);

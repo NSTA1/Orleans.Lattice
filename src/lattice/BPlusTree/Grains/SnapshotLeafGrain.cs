@@ -137,7 +137,7 @@ internal sealed class SnapshotLeafGrain(
     }
 
     /// <inheritdoc />
-    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue)
+    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null)
     {
         EnsureOpened();
         if (limit <= 0)
@@ -161,6 +161,8 @@ internal sealed class SnapshotLeafGrain(
             }
             if (value.IsTombstone || value.IsExpired(nowTicks))
                 continue;
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+                continue;
             result.Add(key);
             if (result.Count >= limit)
                 break;
@@ -169,7 +171,7 @@ internal sealed class SnapshotLeafGrain(
     }
 
     /// <inheritdoc />
-    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue)
+    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null)
     {
         EnsureOpened();
         if (limit <= 0)
@@ -189,6 +191,8 @@ internal sealed class SnapshotLeafGrain(
             if (value.IsTombstone || value.IsExpired(nowTicks))
                 continue;
             if (value.Value is null)
+                continue;
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
                 continue;
             result.Add(new KeyValuePair<string, byte[]>(key, value.Value));
             if (result.Count >= limit)
@@ -406,13 +410,31 @@ internal sealed class SnapshotLeafGrain(
             return;
 
         List<string>? toRewrite = null;
-        foreach (var (key, _) in _entries)
+        var matchedKeys = mutation.MatchedKeys;
+        if (matchedKeys is not null)
         {
-            if (string.CompareOrdinal(key, startInclusive) < 0)
-                continue;
-            if (string.CompareOrdinal(key, endExclusive) >= 0)
-                break;
-            (toRewrite ??= []).Add(key);
+            // Predicate-filtered range delete: tombstone exactly the matched
+            // key set the authoring leaf recorded, without re-evaluating the
+            // predicate against the snapshot's (possibly divergent) values.
+            foreach (var key in matchedKeys)
+            {
+                if (string.CompareOrdinal(key, startInclusive) < 0
+                    || string.CompareOrdinal(key, endExclusive) >= 0)
+                    continue;
+                if (_entries.ContainsKey(key))
+                    (toRewrite ??= []).Add(key);
+            }
+        }
+        else
+        {
+            foreach (var (key, _) in _entries)
+            {
+                if (string.CompareOrdinal(key, startInclusive) < 0)
+                    continue;
+                if (string.CompareOrdinal(key, endExclusive) >= 0)
+                    break;
+                (toRewrite ??= []).Add(key);
+            }
         }
 
         if (toRewrite is null)
