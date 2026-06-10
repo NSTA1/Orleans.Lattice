@@ -100,4 +100,42 @@ internal sealed record WalPlacementPin
             Overrides = overrides.Count == 0 ? null : overrides,
         };
     }
+
+    /// <summary>
+    /// Produces a copy of this pin with every <c>(partition, providerKey)</c> pair
+    /// in <paramref name="moves"/> applied together and <see cref="Version"/> set
+    /// to <paramref name="newVersion"/>. This is the batch analogue of
+    /// <see cref="WithPartition"/>: a single version bump covers the whole batch,
+    /// so a multi-partition move flips atomically. Routing a partition back to
+    /// <see cref="DefaultProviderKey"/> removes its override entry. When two pairs
+    /// name the same partition the last one wins.
+    /// </summary>
+    /// <param name="moves">The partition-to-key reassignments to apply.</param>
+    /// <param name="newVersion">The version to stamp on the returned pin.</param>
+    public WalPlacementPin WithPartitions(IEnumerable<(int Partition, string ProviderKey)> moves, long newVersion)
+    {
+        ArgumentNullException.ThrowIfNull(moves);
+        var overrides = Overrides is null
+            ? new Dictionary<int, string>()
+            : new Dictionary<int, string>(Overrides);
+
+        foreach (var (partition, providerKey) in moves)
+        {
+            ArgumentNullException.ThrowIfNull(providerKey);
+            if (string.Equals(providerKey, DefaultProviderKey, StringComparison.Ordinal))
+            {
+                overrides.Remove(partition);
+            }
+            else
+            {
+                overrides[partition] = providerKey;
+            }
+        }
+
+        return this with
+        {
+            Version = newVersion,
+            Overrides = overrides.Count == 0 ? null : overrides,
+        };
+    }
 }

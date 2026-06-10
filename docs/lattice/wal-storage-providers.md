@@ -141,7 +141,28 @@ WalMoveReceipt reclaim = await admin.ReclaimMovedWalSourceAsync(
     "orders", partition: 0, "default", cancellationToken);
 ```
 
-> **Single-partition scope.** Each `ExecuteWalMoveAsync` / `ReclaimMovedWalSourceAsync` call moves exactly one partition. Spreading a tree across N accounts today means N-1 sequential move calls. A batch / whole-tree rebalance API is tracked as a follow-up.
+> **Per-call scope.** A `ReclaimMovedWalSourceAsync` call reclaims exactly one partition's former source. To discard the retained sources after a batch move, reclaim each moved partition in turn.
+
+### Moving several partitions at once
+
+To relocate a whole tree (or a subset of its partitions) to a different account, use the batch overloads of `PlanWalMoveAsync` / `ExecuteWalMoveAsync`, which take a sequence of `(partition, targetProviderKey)` pairs. The batch flips the placement pin **once**, under a single compare-and-swap, so every partition moves together to the same new placement version - no intermediate placement is ever observable:
+
+```csharp verify
+var admin = grainFactory.GetGrain<ILatticeAdmin>("_lattice_admin");
+var moves = new (int Partition, string TargetProviderKey)[]
+{
+    (0, "table-account-b"),
+    (1, "table-account-b"),
+    (2, "table-account-b"),
+};
+WalMoveBatchPlan batchPlan = await admin.PlanWalMoveAsync("orders", moves, cancellationToken);
+WalMoveBatchReceipt batchReceipt = await admin.ExecuteWalMoveAsync(
+    "orders", moves, new WalMoveOptions { MaxConcurrentPartitionMoves = 2 }, cancellationToken);
+```
+
+Each partition runs the same quiesce-copy-verify phases as a single move; `WalMoveOptions.MaxConcurrentPartitionMoves` (default `1` = sequential) bounds how many run in parallel, so you can trade a faster cutover against the extra storage-tier pressure of concurrent copies. `batchReceipt.Moves` carries one `WalMoveReceipt` per requested partition, in request order, and `batchReceipt.Outcome` is `Moved` when at least one partition was relocated (or `AlreadyAtTarget` when every partition was already pinned to its target).
+
+The batch is **all-or-nothing**: if any partition's phase fails, the pin is never flipped, every fenced source is released back to service, and the partial target copies are retained so a re-execute resumes without recopying. The batch fails closed before touching any log (throwing `LatticeWalProviderMissingException`) if **any** target key is unresolvable on the serving silo, and rejects an empty batch or a partition named more than once with `ArgumentException`. As with a single move, sources are never trimmed - reclaim each one explicitly with `ReclaimMovedWalSourceAsync` once the move is permanent.
 
 
 ## Provider catalogue

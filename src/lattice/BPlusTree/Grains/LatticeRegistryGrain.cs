@@ -294,6 +294,36 @@ internal sealed class LatticeRegistryGrain(
         return updatedPin;
     }
 
+    public async Task<WalPlacementPin> UpdateWalPlacementAsync(string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(moves);
+        if (moves.Count == 0)
+        {
+            throw new ArgumentException("A batch WAL placement update must contain at least one move.", nameof(moves));
+        }
+        foreach (var (_, providerKey) in moves)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(providerKey, nameof(moves));
+        }
+
+        // Atomic read-validate-write: the registry grain is non-reentrant and
+        // singleton-keyed, so the compare-and-swap below applies every move under
+        // one version bump with no intermediate placement observable.
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var current = existing.WalPlacement ?? WalPlacementPin.Create();
+        if (current.Version != expectedVersion)
+        {
+            throw new InvalidOperationException(
+                $"WAL placement for tree '{treeId}' changed concurrently: expected version {expectedVersion} but found {current.Version}. Re-read the placement and retry.");
+        }
+
+        var updatedPin = current.WithPartitions(moves, expectedVersion + 1);
+        var updatedEntry = existing with { WalPlacement = updatedPin };
+        await UpdateAsync(treeId, updatedEntry);
+        return updatedPin;
+    }
+
     private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
         JsonSerializer.SerializeToUtf8Bytes(entry, RegistryEntryContext.Default.TreeRegistryEntry);
 

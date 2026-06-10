@@ -37,10 +37,22 @@ public sealed class WalMovePlacementTypeTests
         {
             QuiesceLease = TimeSpan.FromSeconds(5),
             CopyPageSize = 32,
+            MaxConcurrentPartitionMoves = 4,
         };
 
         Assert.That(custom.EffectiveQuiesceLease, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(custom.EffectiveCopyPageSize, Is.EqualTo(32));
+        Assert.That(custom.EffectiveMaxConcurrentPartitionMoves, Is.EqualTo(4));
+    }
+
+    [Test]
+    public void WalMoveOptions_default_max_concurrency_is_sequential()
+    {
+        Assert.That(WalMoveOptions.Default.MaxConcurrentPartitionMoves, Is.EqualTo(WalMoveOptions.DefaultMaxConcurrentPartitionMoves));
+        Assert.That(WalMoveOptions.DefaultMaxConcurrentPartitionMoves, Is.EqualTo(1));
+        // An unset (zero or negative) value falls back to the sequential default.
+        Assert.That(new WalMoveOptions().EffectiveMaxConcurrentPartitionMoves, Is.EqualTo(1));
+        Assert.That(new WalMoveOptions { MaxConcurrentPartitionMoves = -3 }.EffectiveMaxConcurrentPartitionMoves, Is.EqualTo(1));
     }
 
     [Test]

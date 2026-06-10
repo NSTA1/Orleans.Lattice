@@ -64,7 +64,9 @@ internal sealed class WalShardGrain(
     /// against (read fresh from the durable WAL placement pin at activation).
     /// Carried through <see cref="QuiesceForMoveAsync"/> so a move coordinator
     /// working from a stale view aborts rather than quiescing an activation that
-    /// has already re-resolved against a newer placement.
+    /// has already re-resolved against a <em>newer</em> placement. A lagging
+    /// activation (older version) is still safe to quiesce - see the comment in
+    /// <see cref="QuiesceForMoveAsync"/>.
     /// </summary>
     private long _placementVersion;
 
@@ -1955,11 +1957,19 @@ internal sealed class WalShardGrain(
     {
         EnsureInitialized();
 
-        // Abort (without fencing) when the coordinator's expected placement
-        // version does not match the version this activation resolved against:
-        // the activation has already re-resolved placement, so quiescing it
-        // would fence the wrong provider.
-        if (_placementVersion != expectedPlacementVersion)
+        // Abort (without fencing) only when this activation has resolved a
+        // placement *newer* than the coordinator's expected version: it has
+        // already moved past the move the coordinator is planning, so quiescing
+        // it could fence the wrong provider. A *lagging* activation (an older
+        // resolved version) is safe to quiesce: the placement version is global
+        // per tree, so a partition the coordinator is not moving keeps the same
+        // provider across the version bump, and any partition that *was* remapped
+        // by an intervening move was force-deactivated and would re-resolve to
+        // the new version rather than linger here. Without this, moving any
+        // partition after the tree's first move (which advances the global
+        // version) would spuriously abort against shards still on the old
+        // version - exactly the case a multi-partition batch hits.
+        if (_placementVersion > expectedPlacementVersion)
         {
             return new WalMoveQuiesceResult(
                 Quiesced: false,
@@ -2024,7 +2034,8 @@ internal sealed class WalShardGrain(
         string treeId,
         int shardIndex,
         IWalStorageProvider provider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long placementVersion = 0)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(provider);
@@ -2032,6 +2043,7 @@ internal sealed class WalShardGrain(
         _treeId = treeId;
         _shardIndex = shardIndex;
         _provider = provider;
+        _placementVersion = placementVersion;
         // Mirror OnActivateAsync's metric-tag initialisation so the
         // test seam observes the same (tree, shard) tag attribution
         // on every metric record (including the deactivation hook
