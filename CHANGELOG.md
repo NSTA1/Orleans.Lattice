@@ -8,9 +8,15 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.3.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v6.4.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [6.4.0] - 2026-06-10
+
+Lockstep release across the package family. Headlines: server-side predicate push-down on the typed `ILattice` read / scan / cursor / conditional-mutation surface (P-000 umbrella); per-tree pinned WAL storage placement with an `ILatticeAdmin` managed-move surface for multi-account fan-out (F-084) and its batch / multi-partition single-CAS extension (FX-034); clean-silo-shutdown write fast-fail via `LatticeShuttingDownException` across every write entry point plus quieter shutdown logs (F-087); the WAL-saturation back-pressure closeout - a `LatticeSaturatedException` admission gate, a flush-latency classifier input, and Azure-SDK retry short-circuiting that honours the saturation signal (FX-033 / FX-035 / FX-036); source-generated closed-shape CRDT JSON that cuts reflection off the delta-apply hot path; and a batch of allocation-reduction optimisations on the read / write / scan paths. Also ships several benchmark-infrastructure and test-harness de-flakes. No public-API or wire-format break; safe drop-in from v6.3.x.
 
 ### Added
 
@@ -391,7 +397,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.1...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.4.0...HEAD
+[6.4.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.1...v6.4.0
 [6.3.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.0...v6.3.1
 [6.3.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.2...v6.3.0
 [6.2.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.1...v6.2.2

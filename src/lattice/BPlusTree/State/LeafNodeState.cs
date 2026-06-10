@@ -4,8 +4,14 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
-/// Persistent state for a leaf grain. Keys are stored in a sorted dictionary
-/// wrapped in <see cref="LwwValue{T}"/> for monotonic merge semantics.
+/// Persistent state for a leaf grain. The per-key projection was collapsed out
+/// of this row: per-key data now lives in a per-activation in-memory cache
+/// (<c>LeafEntryCache</c>) rehydrated from the WAL on every activation, gated by
+/// <see cref="ProjectionCheckpointOffset"/>. This persisted row carries only
+/// topology (sibling/parent pointers, key range, shard index, split lifecycle),
+/// the projection-digest fold (<see cref="ProjectionHash"/>), the checkpoint
+/// offsets, and the HLC clock plus version vectors. See the reserved
+/// <c>[Id(0)]</c> slot note below.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafNodeState)]
