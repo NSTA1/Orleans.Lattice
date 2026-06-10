@@ -139,7 +139,7 @@ public class ChaosPredicateRangeDeleteIntegrationTests
                         failures.Add($"writer{writerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Predicate-delete worker: periodically issues the conditional
@@ -166,7 +166,7 @@ public class ChaosPredicateRangeDeleteIntegrationTests
                     failures.Add($"predicate-delete-worker threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Soundness scanner: walk the whole universe; every observed key's
         // value must carry an Index that matches its key (no cross-key bleed
@@ -197,7 +197,7 @@ public class ChaosPredicateRangeDeleteIntegrationTests
                     failures.Add($"scan threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Split coordinator: identical to the main chaos suite.
         workers.Add(Task.Run(async () =>
@@ -226,7 +226,7 @@ public class ChaosPredicateRangeDeleteIntegrationTests
                     failures.Add($"split-coordinator threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         await Task.WhenAll(workers);
 

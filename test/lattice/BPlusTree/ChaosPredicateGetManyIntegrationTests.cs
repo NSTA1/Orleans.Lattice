@@ -142,7 +142,7 @@ public class ChaosPredicateGetManyIntegrationTests
                         failures.Add($"writer{writerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Soundness workers: query a random churn-band subset with a
@@ -184,7 +184,7 @@ public class ChaosPredicateGetManyIntegrationTests
                         failures.Add($"soundness{workerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Completeness worker: the stable band never mutates, so a
@@ -228,7 +228,7 @@ public class ChaosPredicateGetManyIntegrationTests
                         failures.Add($"completeness{workerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Split coordinator: identical to the main chaos suite.
@@ -258,7 +258,7 @@ public class ChaosPredicateGetManyIntegrationTests
                     failures.Add($"split-coordinator threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         await Task.WhenAll(workers);
 

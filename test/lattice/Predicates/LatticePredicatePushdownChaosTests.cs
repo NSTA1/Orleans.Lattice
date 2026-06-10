@@ -169,7 +169,7 @@ public class LatticePredicatePushdownChaosTests
                 }
 
                 evaluations[workerId] = local;
-            }, ct));
+            }));
         }
 
         await Task.WhenAll(workers);

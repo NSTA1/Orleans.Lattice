@@ -153,7 +153,7 @@ public class ChaosPredicateAtomicSetManyIntegrationTests
                         failures.Add($"writer{writerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Always-commit worker: the always-match band must commit every time.
@@ -179,7 +179,7 @@ public class ChaosPredicateAtomicSetManyIntegrationTests
                     failures.Add($"commit-worker threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Always-abort worker: the poison-bearing band must always abort
         // with PreconditionFailed and never write.
@@ -205,7 +205,7 @@ public class ChaosPredicateAtomicSetManyIntegrationTests
                     failures.Add($"abort-worker threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Soundness scanner: the always-fail band must never surface the
         // marker, and the poison key must stay at its seed score.
@@ -235,7 +235,7 @@ public class ChaosPredicateAtomicSetManyIntegrationTests
                     failures.Add($"scan threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Split coordinator.
         workers.Add(Task.Run(async () =>
@@ -264,7 +264,7 @@ public class ChaosPredicateAtomicSetManyIntegrationTests
                     failures.Add($"split-coordinator threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         await Task.WhenAll(workers);
 

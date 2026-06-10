@@ -140,7 +140,7 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
                         failures.Add($"writer{writerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Conditional-write worker: stamps the marker onto guard-matching
@@ -169,7 +169,7 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
                     failures.Add($"conditional-write-worker threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Soundness scanner: no guarded-out key may ever surface the marker.
         workers.Add(Task.Run(async () =>
@@ -196,7 +196,7 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
                     failures.Add($"scan threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Split coordinator.
         workers.Add(Task.Run(async () =>
@@ -225,7 +225,7 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
                     failures.Add($"split-coordinator threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         await Task.WhenAll(workers);
 

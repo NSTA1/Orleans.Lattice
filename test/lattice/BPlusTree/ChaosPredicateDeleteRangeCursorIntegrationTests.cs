@@ -127,7 +127,7 @@ public class ChaosPredicateDeleteRangeCursorIntegrationTests
                         failures.Add($"writer{writerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Conditional-delete-cursor worker: opens a cursor and steps it to
@@ -150,7 +150,7 @@ public class ChaosPredicateDeleteRangeCursorIntegrationTests
                     failures.Add($"delete-cursor-worker threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Soundness scanner.
         workers.Add(Task.Run(async () =>
@@ -177,7 +177,7 @@ public class ChaosPredicateDeleteRangeCursorIntegrationTests
                     failures.Add($"scan threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Split coordinator.
         workers.Add(Task.Run(async () =>
@@ -206,7 +206,7 @@ public class ChaosPredicateDeleteRangeCursorIntegrationTests
                     failures.Add($"split-coordinator threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         await Task.WhenAll(workers);
 

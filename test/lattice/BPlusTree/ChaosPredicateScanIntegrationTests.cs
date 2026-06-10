@@ -133,7 +133,7 @@ public class ChaosPredicateScanIntegrationTests
                         failures.Add($"writer{writerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Entry-scan soundness + ordering: every surfaced entry must
@@ -164,7 +164,7 @@ public class ChaosPredicateScanIntegrationTests
                     failures.Add($"entry-scan threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Value-scan soundness: every surfaced value satisfies the
         // predicate (the value projection drops non-matching values server-side).
@@ -189,7 +189,7 @@ public class ChaosPredicateScanIntegrationTests
                     failures.Add($"value-scan threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Key-scan completeness + ordering over the stable band: the band
         // never mutates, so a filtered key scan must surface exactly the
@@ -230,7 +230,7 @@ public class ChaosPredicateScanIntegrationTests
                     failures.Add($"key-scan threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         // ---- Split coordinator: identical to the main chaos suite.
         workers.Add(Task.Run(async () =>
@@ -259,7 +259,7 @@ public class ChaosPredicateScanIntegrationTests
                     failures.Add($"split-coordinator threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         await Task.WhenAll(workers);
 

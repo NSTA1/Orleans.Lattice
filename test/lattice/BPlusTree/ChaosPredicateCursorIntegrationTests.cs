@@ -136,7 +136,7 @@ public class ChaosPredicateCursorIntegrationTests
                         failures.Add($"writer{writerId} threw: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
-            }, ct));
+            }));
         }
 
         // ---- Entry-cursor soundness + ordering: every surfaced entry must
@@ -181,7 +181,7 @@ public class ChaosPredicateCursorIntegrationTests
                         try { await tree.CloseCursorAsync(cursorId); } catch { /* best effort */ }
                 }
             }
-        }, ct));
+        }));
 
         // ---- Snapshot-cursor soundness: the zero-observable-writes snapshot
         // path evaluates the predicate inside the per-shard snapshot leaf. We
@@ -231,7 +231,7 @@ public class ChaosPredicateCursorIntegrationTests
                         try { await tree.CloseCursorAsync(cursorId); } catch { /* best effort */ }
                 }
             }
-        }, ct));
+        }));
 
         // ---- Key-cursor completeness + ordering over the stable band: the band
         // never mutates, so a filtered key cursor must surface exactly the
@@ -284,7 +284,7 @@ public class ChaosPredicateCursorIntegrationTests
                         try { await tree.CloseCursorAsync(cursorId); } catch { /* best effort */ }
                 }
             }
-        }, ct));
+        }));
 
         // ---- Split coordinator: identical to the main chaos suite.
         workers.Add(Task.Run(async () =>
@@ -313,7 +313,7 @@ public class ChaosPredicateCursorIntegrationTests
                     failures.Add($"split-coordinator threw: {ex.GetType().Name}: {ex.Message}");
                 }
             }
-        }, ct));
+        }));
 
         await Task.WhenAll(workers);
 
