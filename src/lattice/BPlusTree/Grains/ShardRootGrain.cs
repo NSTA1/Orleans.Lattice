@@ -760,7 +760,27 @@ internal sealed partial class ShardRootGrain(
     /// to the post-split owner shard, preserving the same per-entry
     /// semantics the single-key <c>SetAsync</c> path provides.
     /// </summary>
-    private async Task ForwardLocalWritesToShadowIfNeededAsync(List<KeyValuePair<string, byte[]>> entries)
+    private Task ForwardLocalWritesToShadowIfNeededAsync(List<KeyValuePair<string, byte[]>> entries)
+    {
+        // Steady-state fast path: a per-entry forward only ever has work to do
+        // when an adaptive split is in progress (SplitInProgress non-null) or
+        // when this shard has already moved slots away (MovedAwaySlots
+        // populated). When neither holds - the dominant single-silo,
+        // no-resize case - every per-entry ForwardLocalWriteToShadowIfNeededAsync
+        // resolves to a null target and returns synchronously, so the whole
+        // batch loop is dead work. Skip it entirely (and its async state
+        // machine) by returning a completed task. The steady-state caller
+        // already resumed synchronously here, so this preserves the existing
+        // yield behaviour while eliminating the per-batch async machinery.
+        if (state.State.SplitInProgress is null && state.State.MovedAwaySlots.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return ForwardLocalWritesToShadowSlowAsync(entries);
+    }
+
+    private async Task ForwardLocalWritesToShadowSlowAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         foreach (var entry in entries)
         {
