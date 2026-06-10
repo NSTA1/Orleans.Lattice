@@ -19,6 +19,22 @@ internal sealed partial class BPlusInternalGrain
 {
     private const int SubtreeHashSize = 16;
 
+    /// <summary>
+    /// Reusable deadline source for <see cref="PublishUpwardAsync"/>. Upward
+    /// publishes only run while the activation holds its non-reentrant
+    /// <c>_splitGate</c>, so at most one publish is in flight per activation at
+    /// a time and this single source is never armed concurrently. Recycling it
+    /// (arm with <see cref="CancellationTokenSource.CancelAfter(System.TimeSpan)"/>,
+    /// disarm with <see cref="CancellationTokenSource.TryReset"/> after a
+    /// non-fired publish) reuses the underlying timer object across the hot path
+    /// instead of allocating a fresh <c>CancellationTokenSource(timeout)</c> -
+    /// and the one-shot timer it arms - on every publish, every internal level,
+    /// every mutation. At rest the source is always disarmed (no scheduled
+    /// timer), so it needs no deactivation disposal beyond GC, matching the
+    /// activation-lifetime convention of <c>_splitGate</c>.
+    /// </summary>
+    private CancellationTokenSource? _publishDeadline;
+
     /// <inheritdoc />
     public async Task SetParentAsync(GrainId? parentId)
     {
@@ -344,7 +360,15 @@ internal sealed partial class BPlusInternalGrain
             return;
         }
 
-        using var deadline = new CancellationTokenSource(timeout);
+        // Recycle a single per-activation deadline source rather than allocating
+        // a CancellationTokenSource(timeout) - and arming a fresh one-shot timer -
+        // on every publish. Safe because the gate serialises publishes to one
+        // in-flight per activation. On the non-fired path TryReset() unschedules
+        // the timer and returns the source to the pool; on the fired (timeout)
+        // path the source can no longer be reset, so it is dropped and a fresh
+        // one is created next publish.
+        var deadline = _publishDeadline ??= new CancellationTokenSource();
+        deadline.CancelAfter(timeout);
         try
         {
             await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot)
@@ -352,6 +376,8 @@ internal sealed partial class BPlusInternalGrain
         }
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
         {
+            deadline.Dispose();
+            _publishDeadline = null;
             LatticeMetrics.DigestPublishTimeouts.Add(
                 1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty));
             throw new TimeoutException(
@@ -360,6 +386,16 @@ internal sealed partial class BPlusInternalGrain
                 + $"{timeout} publish deadline ({nameof(LatticeOptions.DigestPublishTimeout)}); the "
                 + "parent is likely mid-mutation. The publish is abandoned and the split gate "
                 + "released; the next mutation's digest publish re-drives convergence.", oce);
+        }
+
+        // Non-fired publish: disarm the timer and recycle the source. If the
+        // timer fired in the race window after the await resumed successfully,
+        // TryReset() fails and we drop the source (the publish still landed, so
+        // no false timeout is reported).
+        if (!deadline.TryReset())
+        {
+            deadline.Dispose();
+            _publishDeadline = null;
         }
     }
 
