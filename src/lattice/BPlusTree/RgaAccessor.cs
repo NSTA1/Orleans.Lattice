@@ -11,12 +11,20 @@ namespace Orleans.Lattice;
 /// <see cref="CrdtLatticeExtensions.Sequence{T}(ILattice, string, ILatticeSerializer{T}?)"/>
 /// and reuse it for any number of operations on the same key.
 /// <para>
-/// Each mutating method performs a single local read to resolve the
-/// dot-explicit operation (the index-resolving overloads
+/// The position-resolving and dot-minting methods perform a single local
+/// read to resolve the dot-explicit operation: the index-resolving
+/// overloads
 /// <see cref="InsertAtAsync(int, string, T, CancellationToken, int)"/> and
 /// <see cref="RemoveAtAsync(int, CancellationToken, int)"/> resolve the
-/// visible position to a dot / parent-dot against that snapshot), then
-/// authors a typed <see cref="RgaDelta"/> and commits it through the
+/// visible position to a dot / parent-dot against that snapshot, and
+/// <see cref="InsertAfterAsync(OrSetDot, string, T, CancellationToken, int)"/>
+/// reads to mint the next per-replica counter. The state-independent
+/// mutations
+/// (<see cref="RemoveAsync(OrSetDot, CancellationToken, int)"/> by dot and
+/// <see cref="MergeAsync(Rga, CancellationToken, int)"/> from a
+/// caller-supplied snapshot) author their delta without reading the
+/// current value at all. Every method then authors a typed
+/// <see cref="RgaDelta"/> and commits it through the
 /// <see cref="LatticeMergeMode.Sequence"/> typed-delta WAL seam via
 /// <c>ILattice.ApplyCrdtDeltaAsync</c>. The delta captures the
 /// structural intent (the dots and parent dots), not the post-merge
@@ -177,7 +185,6 @@ public readonly record struct RgaAccessor<T>
                     $"Remove index {index} is at or beyond the resolved sequence length {snapshot.Count}.");
             }
             var dot = snapshot[index].Dot;
-            rga.Remove(dot);
             return new RgaDelta
             {
                 Inserts = Array.Empty<RgaDeltaNode>(),
@@ -193,7 +200,9 @@ public readonly record struct RgaAccessor<T>
     public Task RemoveAsync(OrSetDot dot, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         EnsureInitialised();
-        return ApplyDeltaAsync(_ =>
+        // The tombstone delta is fully determined by `dot`; there is no
+        // need to read or deserialise the current sequence state here.
+        return ApplyDeltaNoReadAsync(
             new RgaDelta
             {
                 Inserts = Array.Empty<RgaDeltaNode>(),
@@ -213,30 +222,34 @@ public readonly record struct RgaAccessor<T>
     public Task MergeAsync(Rga other, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentNullException.ThrowIfNull(other);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         EnsureInitialised();
-        return ApplyDeltaAsync(rga =>
+        // The shipped delta is derived entirely from `other`, so there is
+        // no need to read or merge the local snapshot here - every node
+        // ships its structural info as an insert (giving the receiver the
+        // correct parent and value) and tombstoned nodes additionally ship
+        // their dot. ApplyCrdtDeltaAsync folds the delta into the persisted
+        // state on the grain.
+        var inserts = new RgaDeltaNode[other.Nodes.Count];
+        var tombstones = new List<OrSetDot>();
+        for (var i = 0; i < other.Nodes.Count; i++)
         {
-            rga.MergeFrom(other);
-            var inserts = new RgaDeltaNode[other.Nodes.Count];
-            var tombstones = new List<OrSetDot>();
-            for (var i = 0; i < other.Nodes.Count; i++)
+            var n = other.Nodes[i];
+            inserts[i] = new RgaDeltaNode
             {
-                var n = other.Nodes[i];
-                inserts[i] = new RgaDeltaNode
-                {
-                    ReplicaId = n.ReplicaId,
-                    Counter = n.Counter,
-                    ParentDot = n.ParentDot,
-                    Value = n.Value,
-                };
-                if (n.IsTombstone) tombstones.Add(n.Dot);
-            }
-            return new RgaDelta
+                ReplicaId = n.ReplicaId,
+                Counter = n.Counter,
+                ParentDot = n.ParentDot,
+                Value = n.Value,
+            };
+            if (n.IsTombstone) tombstones.Add(n.Dot);
+        }
+        return ApplyDeltaNoReadAsync(
+            new RgaDelta
             {
                 Inserts = inserts,
                 Tombstones = tombstones.Count == 0 ? Array.Empty<OrSetDot>() : tombstones,
-            };
-        }, cancellationToken, maxAttempts);
+            }, cancellationToken, maxAttempts);
     }
 
     private static RgaDelta SingleInsertDelta(OrSetDot dot, OrSetDot parent, byte[] encoded) =>
@@ -282,6 +295,20 @@ public readonly record struct RgaAccessor<T>
         cancellationToken.ThrowIfCancellationRequested();
         var current = await GetAsync(cancellationToken).ConfigureAwait(false);
         var delta = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<RgaDelta>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.Sequence, deltaBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ApplyDeltaNoReadAsync(RgaDelta delta, CancellationToken cancellationToken, int maxAttempts)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        // State-independent mutations (RemoveAsync by dot, MergeAsync from a
+        // caller-supplied snapshot) author the complete delta without
+        // consulting the current value, so this path skips the GetAsync read
+        // and full-state deserialisation entirely; ApplyCrdtDeltaAsync folds
+        // the delta into the persisted state on the grain.
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
         var deltaBytes = JsonLatticeSerializer<RgaDelta>.Default.Serialize(delta);
         await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.Sequence, deltaBytes, cancellationToken).ConfigureAwait(false);
     }

@@ -607,6 +607,27 @@ public class CrdtAccessorIntegrationTests
     }
 
     [Test]
+    public async Task Sequence_MergeAsync_propagates_remote_tombstone()
+    {
+        var tree = await CreateTreeAsync();
+        var seq = tree.Sequence<string>("k");
+        await seq.InsertAtAsync(0, "r1", "local");
+
+        // The remote sequence inserts two nodes and tombstones one of them;
+        // MergeAsync must ship that tombstone so the removed value is absent
+        // from the local visible projection after the merge.
+        var remote = new Rga();
+        remote.InsertAfter(Rga.Root, "r2", JsonLatticeSerializer<string>.Default.Serialize("keep"));
+        var doomed = remote.InsertAfter(Rga.Root, "r2", JsonLatticeSerializer<string>.Default.Serialize("drop"));
+        remote.Remove(doomed);
+        await seq.MergeAsync(remote);
+
+        var values = await seq.ToListAsync();
+        Assert.That(values, Is.EquivalentTo(new[] { "local", "keep" }));
+        Assert.That(values, Does.Not.Contain("drop"));
+    }
+
+    [Test]
     public async Task Sequence_InsertAtAsync_throws_on_empty_replica_id()
     {
         var tree = await CreateTreeAsync();

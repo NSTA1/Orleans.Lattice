@@ -464,4 +464,60 @@ public class RgaTests
         Assert.That(Strings(ab), Is.EqualTo(Strings(ba)));
         Assert.That(Strings(ab), Is.EqualTo(new[] { "H", "b", "a" }));
     }
+
+    [Test]
+    public void MergeDelta_insert_with_unobserved_parent_is_suppressed_then_converges()
+    {
+        // An insert whose ParentDot references a dot the receiver has not
+        // yet observed must not crash and must stay invisible until the
+        // parent arrives; once it does, both nodes resolve. Applying the
+        // two inserts in either order yields an identical ordered traversal.
+        var parentDot = new OrSetDot { ReplicaId = "r1", Counter = 1 };
+
+        var childFirst = new Rga();
+        childFirst.MergeDelta(new RgaDelta
+        {
+            Inserts = new[] { Insert("r1", 2, parentDot, B("child")) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        });
+        // Child's parent is unobserved, so it is unreachable from Root.
+        Assert.That(Strings(childFirst), Is.Empty);
+
+        childFirst.MergeDelta(new RgaDelta
+        {
+            Inserts = new[] { Insert("r1", 1, Rga.Root, B("parent")) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        });
+
+        var parentFirst = new Rga();
+        parentFirst.MergeDelta(new RgaDelta
+        {
+            Inserts = new[] { Insert("r1", 1, Rga.Root, B("parent")) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        });
+        parentFirst.MergeDelta(new RgaDelta
+        {
+            Inserts = new[] { Insert("r1", 2, parentDot, B("child")) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        });
+
+        Assert.That(Strings(childFirst), Is.EqualTo(new[] { "parent", "child" }));
+        Assert.That(Strings(childFirst), Is.EqualTo(Strings(parentFirst)));
+    }
+
+    [Test]
+    public void MergeDelta_insert_with_null_value_coalesces_to_empty()
+    {
+        var r = new Rga();
+        r.MergeDelta(new RgaDelta
+        {
+            Inserts = new[] { Insert("r1", 1, Rga.Root, null!) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        });
+
+        var resolved = r.ToList();
+        Assert.That(resolved, Has.Count.EqualTo(1));
+        Assert.That(resolved[0].Value, Is.Not.Null);
+        Assert.That(resolved[0].Value, Is.Empty);
+    }
 }
