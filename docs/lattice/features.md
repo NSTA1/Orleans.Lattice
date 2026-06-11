@@ -19,6 +19,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
 - [F-099](https://github.com/NSTA1/Orleans.Lattice/issues/674) - Add single-tree vs multi-tree atomic-write rows to the performance-report Layer 1 and Layer 2 tables (2-key and 64-key batches) so single- and multi-tree atomic-write throughput are directly comparable
+- [F-100](https://github.com/NSTA1/Orleans.Lattice/issues/676) - Expose Azure Table WAL compression savings (uncompressed vs stored bytes per tree) as counters on the `orleans.lattice` meter so compression effectiveness is observable without an external baseline
 
 ### Shipped
 
