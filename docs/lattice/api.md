@@ -1093,7 +1093,7 @@ safe retry; it must be non-empty and must not contain `'/'`.
 
 | Method | Signature |
 |--------|-----------|
-| `SetManyAtomicAcrossTreesAsync` | `Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAcrossTreesAsync(this IGrainFactory factory, IReadOnlyList<LatticeTreeBatch> batches, string operationId, CancellationToken = default)` |
+| `SetManyAtomicAsync` | `Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAsync(this IGrainFactory factory, IReadOnlyList<LatticeTreeBatch> batches, string operationId, CancellationToken = default)` |
 | `BeginAtomicWrite` | `LatticeAtomicWriteBuilder BeginAtomicWrite(this IGrainFactory factory, string operationId)` |
 
 The fluent builder `LatticeAtomicWriteBuilder` accumulates per-tree slices and
@@ -1109,7 +1109,7 @@ commits them as one cross-tree saga:
 | `SetWhere<T>` (default serializer) | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate)` |
 | `CommitAsync` | `Task<CrossTreeAtomicWriteOutcome> CommitAsync(CancellationToken = default)` |
 
-`CommitAsync` (and `SetManyAtomicAcrossTreesAsync`) returns
+`CommitAsync` (and `SetManyAtomicAsync`) returns
 `CrossTreeAtomicWriteOutcome.Committed` when every tree''s optional guard passed
 and all writes committed, or `CrossTreeAtomicWriteOutcome.PreconditionFailed`
 when a guard failed and nothing committed on any tree. It throws

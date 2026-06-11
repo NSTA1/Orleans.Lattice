@@ -34,7 +34,7 @@ public class CrossTreeAtomicWriteIntegrationTests
         pairs.Select(p => new KeyValuePair<string, byte[]>(p.k, Bytes(p.v))).ToList();
 
     [Test]
-    public async Task SetManyAtomicAcrossTreesAsync_commits_every_tree()
+    public async Task SetManyAtomicAsync_commits_every_tree()
     {
         var suffix = Guid.NewGuid().ToString("N");
         var t1 = $"orders-{suffix}";
@@ -42,7 +42,7 @@ public class CrossTreeAtomicWriteIntegrationTests
         var tree1 = _cluster.GrainFactory.GetGrain<ILattice>(t1);
         var tree2 = _cluster.GrainFactory.GetGrain<ILattice>(t2);
 
-        var outcome = await _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+        var outcome = await _cluster.GrainFactory.SetManyAtomicAsync(
             [
                 new LatticeTreeBatch(t1, Entries(("order:1", "A"), ("order:2", "B"))),
                 new LatticeTreeBatch(t2, Entries(("sku:1", "X"))),
@@ -56,12 +56,12 @@ public class CrossTreeAtomicWriteIntegrationTests
     }
 
     [Test]
-    public async Task SetManyAtomicAcrossTreesAsync_commits_three_trees()
+    public async Task SetManyAtomicAsync_commits_three_trees()
     {
         var suffix = Guid.NewGuid().ToString("N");
         var trees = Enumerable.Range(0, 3).Select(i => $"t{i}-{suffix}").ToArray();
 
-        var outcome = await _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+        var outcome = await _cluster.GrainFactory.SetManyAtomicAsync(
             trees.Select(t => new LatticeTreeBatch(t, Entries(($"{t}:k", "v")))).ToList(),
             operationId: $"xop3-{suffix}");
 
@@ -76,7 +76,7 @@ public class CrossTreeAtomicWriteIntegrationTests
     private sealed record Doc(string Name, int Score);
 
     [Test]
-    public async Task SetManyAtomicAcrossTreesAsync_guard_miss_commits_nothing_in_any_tree()
+    public async Task SetManyAtomicAsync_guard_miss_commits_nothing_in_any_tree()
     {
         var suffix = Guid.NewGuid().ToString("N");
         var t1 = $"g1-{suffix}";
@@ -101,16 +101,16 @@ public class CrossTreeAtomicWriteIntegrationTests
     }
 
     [Test]
-    public async Task SetManyAtomicAcrossTreesAsync_is_idempotent_by_operationId()
+    public async Task SetManyAtomicAsync_is_idempotent_by_operationId()
     {
         var suffix = Guid.NewGuid().ToString("N");
         var t1 = $"i1-{suffix}";
         var opId = $"xopi-{suffix}";
         var tree1 = _cluster.GrainFactory.GetGrain<ILattice>(t1);
 
-        var first = await _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+        var first = await _cluster.GrainFactory.SetManyAtomicAsync(
             [new LatticeTreeBatch(t1, Entries(("k", "v1")))], opId);
-        var second = await _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+        var second = await _cluster.GrainFactory.SetManyAtomicAsync(
             [new LatticeTreeBatch(t1, Entries(("k", "v1")))], opId);
 
         Assert.That(first, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
@@ -119,10 +119,10 @@ public class CrossTreeAtomicWriteIntegrationTests
     }
 
     [Test]
-    public void SetManyAtomicAcrossTreesAsync_requires_operationId()
+    public void SetManyAtomicAsync_requires_operationId()
     {
         Assert.ThrowsAsync<ArgumentException>(() =>
-            _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+            _cluster.GrainFactory.SetManyAtomicAsync(
                 [new LatticeTreeBatch("t", Entries(("k", "v")))], operationId: ""));
     }
 
@@ -194,7 +194,7 @@ public class CrossTreeAtomicWriteIntegrationTests
         {
             for (var i = 0; i < generations; i++)
             {
-                var commit = _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+                var commit = _cluster.GrainFactory.SetManyAtomicAsync(
                     [
                         new LatticeTreeBatch(t1, Entries(("k", $"{i}"))),
                         new LatticeTreeBatch(t2, Entries(("k", $"{i}"))),

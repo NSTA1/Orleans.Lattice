@@ -2,7 +2,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Terminal result of a cross-tree atomic write
-/// (<see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAcrossTreesAsync"/>).
+/// (<see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAsync"/>).
 /// Reported without an exception so callers can branch on a precondition miss
 /// as ordinary control flow rather than catching one, mirroring the single-tree
 /// <see cref="AtomicWriteOutcome"/>.

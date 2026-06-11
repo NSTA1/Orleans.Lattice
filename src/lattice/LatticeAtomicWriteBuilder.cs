@@ -112,7 +112,7 @@ public sealed class LatticeAtomicWriteBuilder
 
     /// <summary>
     /// Commits every staged tree slice atomically. See
-    /// <see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAcrossTreesAsync"/>
+    /// <see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAsync"/>
     /// for the outcome and idempotency contract.
     /// </summary>
     public Task<CrossTreeAtomicWriteOutcome> CommitAsync(CancellationToken cancellationToken = default)
@@ -122,7 +122,7 @@ public sealed class LatticeAtomicWriteBuilder
         {
             batches.Add(new LatticeTreeBatch(slice.TreeId, slice.Entries, slice.Predicate));
         }
-        return _factory.SetManyAtomicAcrossTreesAsync(batches, _operationId, cancellationToken);
+        return _factory.SetManyAtomicAsync(batches, _operationId, cancellationToken);
     }
 
     private TreeSlice Current() =>

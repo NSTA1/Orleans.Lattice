@@ -52,7 +52,7 @@ Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a s
   bound to a single tree (`ILattice`) and the per-tree
   `ITxRegistryGrain` is its unit of atomic visibility. To commit a batch
   spanning two or more distinct trees all-or-nothing, use
-  `IGrainFactory.SetManyAtomicAcrossTreesAsync` (or the
+  `IGrainFactory.SetManyAtomicAsync` (or the
   `BeginAtomicWrite` fluent builder) - a two-level saga that layers a
   single global decision over each tree's per-tree saga. See
   [Cross-tree (multi-tree) atomic writes](#cross-tree-multi-tree-atomic-writes)
@@ -609,7 +609,7 @@ the cache fast path.
 
 `SetManyAtomicAsync` is bound to a single tree. To commit a batch that
 spans **two or more distinct `ILattice` trees** all-or-nothing, use the
-`IGrainFactory.SetManyAtomicAcrossTreesAsync` extension (or the
+`IGrainFactory.SetManyAtomicAsync` extension (or the
 `BeginAtomicWrite` fluent builder). The cross-tree primitive extends the
 same atomic-visibility guarantee the single-tree saga gives *within* a
 tree to a set of trees: either every targeted key across every
@@ -621,7 +621,7 @@ trees replicate to.
 
 | Member | Purpose |
 |---|---|
-| `IGrainFactory.SetManyAtomicAcrossTreesAsync(IReadOnlyList<LatticeTreeBatch>, operationId, ct)` | Commit per-tree slices atomically; returns a `CrossTreeAtomicWriteOutcome`. |
+| `IGrainFactory.SetManyAtomicAsync(IReadOnlyList<LatticeTreeBatch>, operationId, ct)` | Commit per-tree slices atomically; returns a `CrossTreeAtomicWriteOutcome`. |
 | `IGrainFactory.BeginAtomicWrite(operationId)` | Open a `LatticeAtomicWriteBuilder` for fluent, per-tree staging. |
 | `LatticeTreeBatch(TreeId, Entries, Predicate = null)` | One tree's slice: tree id, key/value entries, optional server-side guard predicate. |
 | `CrossTreeAtomicWriteOutcome` | `Committed` (all trees committed) or `PreconditionFailed` (a guard failed; nothing committed anywhere). |
@@ -666,7 +666,7 @@ var batches = new List<LatticeTreeBatch>
 };
 
 CrossTreeAtomicWriteOutcome result =
-    await grainFactory.SetManyAtomicAcrossTreesAsync(batches, "fulfil:order-42", cancellationToken);
+    await grainFactory.SetManyAtomicAsync(batches, "fulfil:order-42", cancellationToken);
 ```
 
 ### How it works - two-level saga

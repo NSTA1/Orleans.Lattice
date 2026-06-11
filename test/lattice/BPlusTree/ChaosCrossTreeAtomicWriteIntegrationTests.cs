@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// Chaos coverage of cross-tree atomic writes
-/// (<see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAcrossTreesAsync"/>)
+/// (<see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAsync"/>)
 /// under sustained per-tree split churn. A single commit worker repeatedly writes
 /// a fresh per-generation key into the <b>same logical slot</b> of three distinct
 /// trees as one all-or-nothing cross-tree saga, while reader workers continuously
@@ -107,7 +107,7 @@ public class ChaosCrossTreeAtomicWriteIntegrationTests
                         .Select(tid => new LatticeTreeBatch(tid,
                             [new KeyValuePair<string, byte[]>(GenKey(g), Bytes($"v-{g}"))]))
                         .ToList();
-                    var outcome = await _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+                    var outcome = await _cluster.GrainFactory.SetManyAtomicAsync(
                         batches, operationId: $"xctop-{runId}-{g}", ct);
                     if (outcome != CrossTreeAtomicWriteOutcome.Committed)
                     {

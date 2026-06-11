@@ -7,7 +7,7 @@ namespace Orleans.Lattice;
 /// value during the prepare phase.
 /// <para>
 /// Passed as a list to
-/// <see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAcrossTreesAsync"/>.
+/// <see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAsync"/>.
 /// Every <see cref="TreeId"/> in the list must be distinct - a single
 /// cross-tree operation touches each tree at most once.
 /// </para>

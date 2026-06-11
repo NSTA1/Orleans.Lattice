@@ -215,7 +215,7 @@ public sealed class ImmutableRecordCopyAliasingTests
         Assert.That(
             ReferenceEquals(copy.Entries[0].Value, original.Entries[0].Value),
             Is.False,
-            "LatticeTreeBatch is passed to SetManyAtomicAcrossTreesAsync and persisted by the " +
+            "LatticeTreeBatch is passed to SetManyAtomicAsync and persisted by the " +
             "cross-tree coordinator grain; if it were marked [Immutable] Orleans would alias the " +
             "caller's Entries list and inner byte[] straight into the grain's persisted state, " +
             "letting a caller-side mutation corrupt an in-flight cross-tree saga.");

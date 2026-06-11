@@ -40,7 +40,7 @@ public static class LatticeCrossTreeAtomicWriteExtensions
     /// <param name="batches">Per-tree slices to commit atomically. Tree ids must be distinct and non-empty.</param>
     /// <param name="operationId">Required cross-tree idempotency key. Must not contain '/'.</param>
     /// <param name="cancellationToken">Cancellation observed before dispatch.</param>
-    public static Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAcrossTreesAsync(
+    public static Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAsync(
         this IGrainFactory factory,
         IReadOnlyList<LatticeTreeBatch> batches,
         string operationId,

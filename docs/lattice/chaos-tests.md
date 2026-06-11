@@ -13,7 +13,7 @@ reshards; that point-mutation public-API calls (`DeleteRangeAsync`,
 invariants under concurrent contention; that `SetManyAtomicAsync`
 remains atomically visible (zero-or-all keys per poll) on the
 authoring site and on every receiver site; that
-`SetManyAtomicAcrossTreesAsync` keeps a multi-tree saga's keys
+`SetManyAtomicAsync` keeps a multi-tree saga's keys
 all-or-nothing across every participating tree under concurrent shard
 splits; and that the per-merge-mode
 CRDT dispatch paths (`LwwRegister`, `OrSet`, `PnCounter`, `MvRegister`,
@@ -46,7 +46,7 @@ Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to 
 | Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Many concurrent `SetIfVersionAsync` (CAS) callers racing on a small key universe produce exactly one observed `success=true` per logical CAS round; lost-update rounds report `success=false` with the actual current envelope so the call-site retry loop can make progress. |
 | Scan cancellation under load | `ScanCancellationChaosTests.cs` | An in-flight `ScanKeysAsync` / `ScanEntriesAsync` enumerator that observes a cancellation token transition surfaces `OperationCanceledException` within a bounded delay and leaks no grain-side resources; subsequent scans against the same range succeed normally. |
 | Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | Two-silo `TestCluster`, sustained write/read load on an `ILattice` tree, secondary silo restarted every ~2.5 s via `TestCluster.RestartSiloAsync`. Post-window invariants: pinned `CountAsync`, envelope-valid value on every key, no caller-visible exception outside the documented transient class. Uses `ProcessScopeMemoryGrainStorage` (a static-dictionary-backed `IGrainStorage` shared across every silo in the test process) so secondary-silo restart does not wipe the shard-root / registry topology - per-silo Orleans memory storage would otherwise let a re-placed `ShardRootGrain` activation read empty state and overwrite the live topology with a fresh leaf root (the underlying split-brain that previously surfaced as `InvalidCastException`). |
-| Cross-tree atomic write under shard churn | `ChaosCrossTreeAtomicWriteIntegrationTests.cs` | A commit worker drives one all-or-nothing `SetManyAtomicAcrossTreesAsync` saga per generation into the same logical slot of three distinct trees, while per-tree split coordinators churn shards and reader workers probe every settled committed generation. Asserts cross-tree all-or-nothing: a settled committed key is present in **all three trees or none**, and every committed generation is durably present in all trees post-window, even as splits move keys between shards mid-saga on every tree. |
+| Cross-tree atomic write under shard churn | `ChaosCrossTreeAtomicWriteIntegrationTests.cs` | A commit worker drives one all-or-nothing `SetManyAtomicAsync` saga per generation into the same logical slot of three distinct trees, while per-tree split coordinators churn shards and reader workers probe every settled committed generation. Asserts cross-tree all-or-nothing: a settled committed key is present in **all three trees or none**, and every committed generation is durably present in all trees post-window, even as splits move keys between shards mid-saga on every tree. |
 
 ### Cross-cluster chaos suite (`test/lattice.replication/Chaos/`)
 
@@ -587,7 +587,7 @@ None - these tests run on a quiescent 2-site fixture with no partition / concurr
 ## Test 11 - Cross-tree atomic write under shard churn (`ChaosCrossTreeAtomicWriteIntegrationTests`)
 
 This test asserts the **cross-tree all-or-nothing visibility invariant**
-for `SetManyAtomicAcrossTreesAsync`: a key committed by a cross-tree saga
+for `SetManyAtomicAsync`: a key committed by a cross-tree saga
 is present in **every** participating tree or in **none** of them - a
 reader must never observe a partial cross-tree commit (some trees
 flipped, others not), even while shard splits move keys between shards

@@ -150,7 +150,7 @@ point-in-time cursor mode.
 
 ### Cross-tree (multi-tree) atomic visibility
 
-`IGrainFactory.SetManyAtomicAcrossTreesAsync` (and the `BeginAtomicWrite`
+`IGrainFactory.SetManyAtomicAsync` (and the `BeginAtomicWrite`
 builder) extend the single-tree atomic-visibility contract to a batch
 spanning two or more distinct `ILattice` trees: either every targeted
 key across every participating tree becomes visible, or none of them do.
@@ -235,7 +235,7 @@ own, and the matching `Is*CompleteAsync` eventually returns `true`.
   `MergeAsync`, `SnapshotAsync`): those are LWW-convergent on the
   destination but not atomic-visible, so readers of both trees may observe the
   in-flight state. For an explicit all-or-nothing write spanning multiple
-  trees, use the cross-tree saga primitive (`SetManyAtomicAcrossTreesAsync` /
+  trees, use the cross-tree saga primitive (`SetManyAtomicAsync` /
   the `BeginAtomicWrite` builder), which extends atomic visibility across
   every participating tree - see
   [Cross-tree (multi-tree) atomic visibility](#cross-tree-multi-tree-atomic-visibility) above.
