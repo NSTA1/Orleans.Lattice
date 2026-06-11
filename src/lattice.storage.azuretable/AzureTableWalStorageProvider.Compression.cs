@@ -175,4 +175,84 @@ public sealed partial class AzureTableWalStorageProvider
             uncompressedLength);
         return result;
     }
+
+    /// <summary>
+    /// Per-batch accumulator for the WAL compression-savings counters. Summed
+    /// across a batch's entries by the encode helpers and emitted once on the
+    /// <see cref="LatticeMetrics.Meter"/> after the batch's phase-1 rows land.
+    /// </summary>
+    internal struct WalCompressionStats
+    {
+        public long UncompressedBytes;
+        public long StoredBytes;
+        public int SkippedDisabled;
+        public int SkippedBelowThreshold;
+        public int SkippedInflationGuard;
+    }
+
+    /// <summary>
+    /// Folds one encoded row into <paramref name="stats"/>: adds its pre- and
+    /// post-compression byte lengths and, when the row was stored verbatim
+    /// (tag <see cref="LatticeCompression.None"/>), attributes the skip to the
+    /// reason it would have taken in <see cref="CompressPayload"/> - the same
+    /// disabled / below-threshold / inflation-guard branches - derived from
+    /// the tag, the uncompressed length, and the active-compressor
+    /// configuration rather than threaded back out of the encode call.
+    /// </summary>
+    private void AccumulateCompressionStats(
+        ref WalCompressionStats stats,
+        byte compressionTag,
+        long uncompressedLength,
+        long storedLength)
+    {
+        stats.UncompressedBytes += uncompressedLength;
+        stats.StoredBytes += storedLength;
+
+        if (compressionTag != (byte)LatticeCompression.None)
+        {
+            return;
+        }
+
+        if (_activeCompressor is null)
+        {
+            stats.SkippedDisabled++;
+        }
+        else if (uncompressedLength < _compressionMinPayloadBytes)
+        {
+            stats.SkippedBelowThreshold++;
+        }
+        else
+        {
+            stats.SkippedInflationGuard++;
+        }
+    }
+
+    /// <summary>
+    /// Emits the WAL compression-savings counters for one append batch on the
+    /// <see cref="LatticeMetrics.Meter"/>, tagged by tree. The two byte totals
+    /// always emit (so a tree with traffic but no savings still reports);
+    /// each skip-reason bucket emits only when non-zero.
+    /// </summary>
+    internal static void RecordWalCompressionMetrics(string treeId, in WalCompressionStats stats)
+    {
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        LatticeMetrics.StorageWalUncompressedBytes.Add(stats.UncompressedBytes, treeTag);
+        LatticeMetrics.StorageWalStoredBytes.Add(stats.StoredBytes, treeTag);
+
+        if (stats.SkippedDisabled > 0)
+        {
+            LatticeMetrics.StorageWalCompressionSkipped.Add(
+                stats.SkippedDisabled, treeTag, LatticeMetrics.ReasonCompressionDisabled);
+        }
+        if (stats.SkippedBelowThreshold > 0)
+        {
+            LatticeMetrics.StorageWalCompressionSkipped.Add(
+                stats.SkippedBelowThreshold, treeTag, LatticeMetrics.ReasonBelowThreshold);
+        }
+        if (stats.SkippedInflationGuard > 0)
+        {
+            LatticeMetrics.StorageWalCompressionSkipped.Add(
+                stats.SkippedInflationGuard, treeTag, LatticeMetrics.ReasonInflationGuard);
+        }
+    }
 }

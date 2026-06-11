@@ -438,7 +438,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // same shard get true parallelism.
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
         var phaseOneActions = new List<TableTransactionAction>(entries.Count);
-        EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions, out var payloadBytes);
+        EncodeEntriesForBatch(batchPartitionKey, entries, phaseOneActions, out var compressionStats);
         var phaseOneTask = SubmitPhaseOneAsync(table, phaseOneActions, treeId, shardIndex, cancellationToken);
 
         // Await both before enqueueing phase 2 so a failure in either
@@ -447,6 +447,10 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         await candidateTask.ConfigureAwait(false);
         await phaseOneTask.ConfigureAwait(false);
 
+        // The phase-1 rows have landed, so the batch's payload bytes are
+        // now durable; attribute the compression savings to the tree.
+        RecordWalCompressionMetrics(treeId, in compressionStats);
+
         // Phase 2: hand the (startOffset, endOffsetInclusive) pair to
         // the per-shard worker. The worker batches up to 49 phase-2
         // commits (each contributing 1 C-delete + 1 M-insert action,
@@ -454,7 +458,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // Azure Tables transaction cap) into one manifest-partition
         // transaction in strict ascending start-offset order, then
         // upserts TAIL to the group's highest endOffsetInclusive.
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, payloadBytes, cancellationToken).ConfigureAwait(false);
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -500,7 +504,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var firstOffset = offsets.Span[0];
         var endOffsetInclusive = firstOffset + offsets.Length - 1;
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
-        var phaseOneActions = BuildEncodedBatchActions(batchPartitionKey, encodedEntries.Span, offsets.Span, out var payloadBytes);
+        var phaseOneActions = BuildEncodedBatchActions(batchPartitionKey, encodedEntries.Span, offsets.Span, out var compressionStats);
 
         // Phase 0 / phase 1 / phase 2 split mirrors AppendBatchAsync;
         // see the comments there for the parallelism, candidate-row,
@@ -515,7 +519,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         await candidateTask.ConfigureAwait(false);
         await phaseOneTask.ConfigureAwait(false);
 
-        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, payloadBytes, cancellationToken).ConfigureAwait(false);
+        RecordWalCompressionMetrics(treeId, in compressionStats);
+
+        await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -830,10 +836,10 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         string partitionKey,
         ReadOnlySpan<ArraySegment<byte>> segments,
         ReadOnlySpan<long> offsetSpan,
-        out long payloadBytes)
+        out WalCompressionStats compressionStats)
     {
         var actions = new List<TableTransactionAction>(segments.Length);
-        payloadBytes = 0L;
+        compressionStats = default;
 
         // Each segment is the already-encoded WalRecord bytes from the
         // shipper one-encode fast path - no re-encode. CompressPayload
@@ -847,8 +853,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // the verbatim encoded bytes.
         for (var i = 0; i < segments.Length; i++)
         {
-            var payload = CompressPayload(segments[i].AsSpan(), out var compressionTag);
-            payloadBytes += payload.Length;
+            var segment = segments[i];
+            var payload = CompressPayload(segment.AsSpan(), out var compressionTag);
+            AccumulateCompressionStats(ref compressionStats, compressionTag, segment.Count, payload.Length);
             actions.Add(new TableTransactionAction(
                 TableTransactionActionType.Add,
                 new AzureTableWalEntity
@@ -890,30 +897,33 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         EncodeEntriesForBatch(partitionKey, entries, actions, out _);
 
     /// <summary>
-    /// Encode overload that also reports the summed encoded payload
-    /// byte length across the batch via <paramref name="payloadBytes"/>.
-    /// The byte-accurate storage-usage aggregator records this total on
-    /// the batch's manifest M-row so a shard's retained WAL footprint is
-    /// summable in O(manifest-rows) without reading any entry payload.
+    /// Encode overload that also reports per-batch compression accounting via
+    /// <paramref name="compressionStats"/>. Its stored-byte total is recorded
+    /// on the batch's manifest M-row so a shard's retained WAL footprint is
+    /// summable in O(manifest-rows) without reading any entry payload, and its
+    /// uncompressed total plus skip-reason buckets feed the compression-savings
+    /// counters emitted once the batch's phase-1 rows land.
     /// </summary>
     internal void EncodeEntriesForBatch(
         string partitionKey,
         IReadOnlyList<WalEntry> entries,
         List<TableTransactionAction> actions,
-        out long payloadBytes)
+        out WalCompressionStats compressionStats)
     {
         var writer = new ArrayBufferWriter<byte>();
-        payloadBytes = 0L;
+        compressionStats = default;
         for (var i = 0; i < entries.Count; i++)
         {
             writer.ResetWrittenCount();
             var entity = BuildEntryEntity(partitionKey, entries[i], writer);
             actions.Add(new TableTransactionAction(TableTransactionActionType.Add, entity));
             // Account the bytes actually written to the row's Payload
-            // column (the compressed length when compression applied) so
-            // the manifest M-row's PayloadBytes total reflects retained
-            // on-disk footprint rather than the pre-compression size.
-            payloadBytes += entity.Payload?.Length ?? 0L;
+            // column (the compressed length when compression applied) as
+            // the stored total so the manifest M-row's PayloadBytes
+            // reflects retained on-disk footprint, and the writer's pre-
+            // compression WrittenCount as the uncompressed total.
+            AccumulateCompressionStats(
+                ref compressionStats, (byte)entity.Compression, writer.WrittenCount, entity.Payload?.Length ?? 0L);
         }
     }
 
