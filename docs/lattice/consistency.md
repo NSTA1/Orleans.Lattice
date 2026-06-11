@@ -229,11 +229,16 @@ own, and the matching `Is*CompleteAsync` eventually returns `true`.
   stage it via `SetManyAtomicAsync` or gate visibility with an
   application-level marker key. (`SetManyAtomicAsync` itself does
   guarantee reader isolation tree-wide.)
-- **Cross-tree atomicity.** Atomic visibility is scoped to a single
-  `ILattice` tree. Operations that touch more than one tree (e.g.
-  `MergeAsync`, `SnapshotAsync`) are LWW-convergent on the destination
-  but readers of both trees may observe the in-flight state. There is
-  no cross-tree saga primitive.
+- **Cross-tree atomicity of incidental multi-tree operations.** A single
+  `ILattice` tree's per-operation atomic visibility does not automatically
+  extend to operations that touch more than one tree as a side effect (e.g.
+  `MergeAsync`, `SnapshotAsync`): those are LWW-convergent on the
+  destination but not atomic-visible, so readers of both trees may observe the
+  in-flight state. For an explicit all-or-nothing write spanning multiple
+  trees, use the cross-tree saga primitive (`SetManyAtomicAcrossTreesAsync` /
+  the `BeginAtomicWrite` builder), which extends atomic visibility across
+  every participating tree - see
+  [Cross-tree (multi-tree) atomic visibility](#cross-tree-multi-tree-atomic-visibility) above.
 - **Cross-tree causality.** The causal+ guarantees shipped in the
   replication package are scoped to single-tree writes; a multi-tree
   operation does not establish a causal edge between those trees on

@@ -262,6 +262,7 @@ jobs:
               echo "::group::Test sample: $sampleName / $testName"
               dotnet test "$testProj" --no-build --configuration Release \
                 --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
+                --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
                 --logger "trx;LogFileName=samples-${sampleName}-${testName}.trx"
               echo "::endgroup::"
             done
@@ -298,6 +299,7 @@ jobs:
             echo "::group::Test ${name} (chaos)"
             dotnet test "$proj" --no-build --configuration Release \
               --filter "TestCategory=Chaos" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=${name}-chaos.trx"
             echo "::endgroup::"
           done
@@ -314,6 +316,7 @@ jobs:
             echo "::group::Test ${name} (deterministic)"
             dotnet test "$proj" --no-build --configuration Release \
               --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=${name}-results.trx"
             echo "::endgroup::"
           done
@@ -326,4 +329,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: "**/*.trx"
+          # Include blame-hang crash dumps (*.dmp) and the sequence file
+          # alongside the trx logs so a hung test can be diagnosed from the
+          # captured process state, not just inferred from a missing result.
+          path: |
+            **/*.trx
+            **/*.dmp
+            **/Sequence_*.xml

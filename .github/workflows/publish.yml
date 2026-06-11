@@ -74,7 +74,7 @@ jobs:
 
       - name: Test (chaos first - isolate flaky-prone surface)
         if: steps.parse.outputs.TEST_PROJECT != ''
-        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos"
+        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
       # The Azurite-gated AzureTableEmulator category is excluded because
       # the GitHub-hosted runner has no Azurite instance. This mirrors the
@@ -82,7 +82,7 @@ jobs:
       # that don't define the category.
       - name: Test (deterministic, no Azurite)
         if: steps.parse.outputs.TEST_PROJECT != ''
-        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator"
+        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
       - name: Pack
         run: dotnet pack "${{ steps.parse.outputs.CSPROJ }}" --no-build --configuration Release -p:PackageVersion=${{ steps.parse.outputs.VERSION }} --output ./artifacts

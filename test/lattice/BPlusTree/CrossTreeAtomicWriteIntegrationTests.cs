@@ -154,11 +154,20 @@ public class CrossTreeAtomicWriteIntegrationTests
 
         const int generations = 25;
 
+        // Defensive per-commit budget. A healthy cross-tree commit completes in
+        // well under a second; this bound turns a stalled commit (a regression
+        // that would otherwise hang this test - and the whole CI job -
+        // indefinitely, since a grain call cannot be cancelled mid-flight) into
+        // a deterministic failure instead.
+        var perCommitBudget = TimeSpan.FromSeconds(30);
+
         var stop = false;
         var violations = 0;
+        using var readerCts = new CancellationTokenSource();
+        var readerToken = readerCts.Token;
         var reader = Task.Run(async () =>
         {
-            while (!Volatile.Read(ref stop))
+            while (!Volatile.Read(ref stop) && !readerToken.IsCancellationRequested)
             {
                 // Read tree1 first, then tree2: the tree2 sample is taken no
                 // earlier than the tree1 sample. Each cross-tree commit makes
@@ -181,18 +190,33 @@ public class CrossTreeAtomicWriteIntegrationTests
             }
         });
 
-        for (var i = 0; i < generations; i++)
+        try
         {
-            await _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
-                [
-                    new LatticeTreeBatch(t1, Entries(("k", $"{i}"))),
-                    new LatticeTreeBatch(t2, Entries(("k", $"{i}"))),
-                ],
-                operationId: $"xopv-{suffix}-{i}");
-        }
+            for (var i = 0; i < generations; i++)
+            {
+                var commit = _cluster.GrainFactory.SetManyAtomicAcrossTreesAsync(
+                    [
+                        new LatticeTreeBatch(t1, Entries(("k", $"{i}"))),
+                        new LatticeTreeBatch(t2, Entries(("k", $"{i}"))),
+                    ],
+                    operationId: $"xopv-{suffix}-{i}");
 
-        Volatile.Write(ref stop, true);
-        await reader;
+                if (await Task.WhenAny(commit, Task.Delay(perCommitBudget)) != commit)
+                {
+                    Assert.Fail(
+                        $"cross-tree commit for generation {i} did not complete within " +
+                        $"{perCommitBudget.TotalSeconds:0}s (stall/hang)");
+                }
+
+                await commit;
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref stop, true);
+            await readerCts.CancelAsync();
+            await reader;
+        }
 
         Assert.That(violations, Is.EqualTo(0),
             "a concurrent reader observed a partial cross-tree view (the later-read tree lagged the earlier-read tree)");

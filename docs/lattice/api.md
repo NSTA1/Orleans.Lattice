@@ -1081,6 +1081,45 @@ Supporting public types: `LatticePredicateTranslator`,
 `ILatticePredicateSerializer`, and the `AtomicWriteOutcome` enum
 (`Committed`, `PreconditionFailed`).
 
+## Cross-tree atomic writes
+
+`IGrainFactory` / cluster-client extension methods
+(`LatticeCrossTreeAtomicWriteExtensions`) that commit a batch spanning two or
+more distinct `ILattice` trees all-or-nothing, with the same atomic-visibility
+guarantee `SetManyAtomicAsync` gives within a single tree. A stable
+`operationId` is **required** (no auto-generated overload) because a cross-tree
+saga touches multiple registries and a stable idempotency key is mandatory for
+safe retry; it must be non-empty and must not contain `'/'`.
+
+| Method | Signature |
+|--------|-----------|
+| `SetManyAtomicAcrossTreesAsync` | `Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAcrossTreesAsync(this IGrainFactory factory, IReadOnlyList<LatticeTreeBatch> batches, string operationId, CancellationToken = default)` |
+| `BeginAtomicWrite` | `LatticeAtomicWriteBuilder BeginAtomicWrite(this IGrainFactory factory, string operationId)` |
+
+The fluent builder `LatticeAtomicWriteBuilder` accumulates per-tree slices and
+commits them as one cross-tree saga:
+
+| Method | Signature |
+|--------|-----------|
+| `ForTree` | `LatticeAtomicWriteBuilder ForTree(string treeId)` |
+| `Set` | `LatticeAtomicWriteBuilder Set(string key, byte[] value)` |
+| `Set<T>` | `LatticeAtomicWriteBuilder Set<T>(string key, T value, ILatticeSerializer<T> serializer)` |
+| `Set<T>` (default serializer) | `LatticeAtomicWriteBuilder Set<T>(string key, T value)` |
+| `SetWhere<T>` | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer)` |
+| `SetWhere<T>` (default serializer) | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate)` |
+| `CommitAsync` | `Task<CrossTreeAtomicWriteOutcome> CommitAsync(CancellationToken = default)` |
+
+`CommitAsync` (and `SetManyAtomicAcrossTreesAsync`) returns
+`CrossTreeAtomicWriteOutcome.Committed` when every tree''s optional guard passed
+and all writes committed, or `CrossTreeAtomicWriteOutcome.PreconditionFailed`
+when a guard failed and nothing committed on any tree. It throws
+`InvalidOperationException` if a write fails (after the saga compensates) or if
+the same `operationId` is re-submitted with a different tree-set or key-set.
+Supporting public types: `LatticeTreeBatch` (per-tree slice: `TreeId`,
+`Entries`, optional `Predicate`) and the `CrossTreeAtomicWriteOutcome` enum
+(`Committed`, `PreconditionFailed`). See
+[Atomic Writes - Cross-tree atomic writes](atomic-writes.md#cross-tree-multi-tree-atomic-writes).
+
 ## CRDT value-surface accessors
 
 `ILattice.OrSet(key)`, `ILattice.PnCounter(key)`,
@@ -1355,6 +1394,8 @@ they are implementation details not intended for direct use.
 | `WalMoveBatchReceipt` | `ol.wbr` | public | `readonly record struct` returned by the batch `ILatticeAdmin.ExecuteWalMoveAsync`. Wraps one `WalMoveReceipt` per partition plus the single placement-version transition the batch applied. |
 | `WalMoveOutcome` | `ol.wmc` | public | Enum: `Moved`, `AlreadyAtTarget`, `SourceReclaimed`, `NoOp`. The terminal disposition of a move / reclaim call. |
 | `LatticeSaturatedException` | `ol.lsa` | public | Typed `InvalidOperationException` subclass thrown by the WAL writer admission gate and the `AtomicWriteGrain` saga coordinator when an operation cannot complete because the per-tree saturation signal stayed `Saturated` past the caller's configured wait budget. Carries the originating `TreeId` for caller-side attribution. See [Saturation back-pressure](#saturation-back-pressure---latticesaturatedexception) and [WAL Saturation Signal](wal-saturation-signal.md). |
+| `LatticeTreeBatch` | `ol.ltb` | public | `readonly record struct` - one tree's slice of a cross-tree atomic write (`TreeId`, `Entries`, optional `Predicate`). Deliberately **not** `[Immutable]` (mutable members). See [Cross-tree atomic writes](#cross-tree-atomic-writes). |
+| `CrossTreeAtomicWriteOutcome` | `ol.cto` | public | Enum: `Committed`, `PreconditionFailed`. Terminal outcome of a cross-tree atomic write. |
 
 ## Public but not usable
 
