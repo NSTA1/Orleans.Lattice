@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -221,6 +223,20 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     private readonly Serializer<WalRecord> _serializer;
     private readonly IWalSaturationSignal? _saturationSignal;
 
+    // Per-row payload compression seam. The dictionary is keyed by the
+    // raw LatticeCompression byte tag so any algorithm found on a row's
+    // Compression column - including a host-defined tag in [0x80, 0xFF] -
+    // can be decompressed on read. _activeCompressor is the single
+    // compressor selected by AzureTableWalStorageOptions.Compression and
+    // is the only one consulted on the encode hot path; it is null when
+    // compression is disabled (the default). Mirrors the
+    // FrozenDictionary-at-construction pattern in
+    // OrleansBinaryReplicationBatchEncoder.
+    private readonly FrozenDictionary<byte, ILatticeCompressor> _compressors;
+    private readonly ILatticeCompressor? _activeCompressor;
+    private readonly byte _activeCompressionTag;
+    private readonly int _compressionMinPayloadBytes;
+
     /// <summary>
     /// Cached <see cref="LatticeMetrics.TagPipelinePhaseTwo"/> tag
     /// bound to this provider instance's effective
@@ -289,6 +305,23 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         IOptions<AzureTableWalStorageOptions> options,
         Serializer<WalRecord> serializer,
         IWalSaturationSignal? saturationSignal = null)
+        : this(options, serializer, saturationSignal, compressors: null)
+    {
+    }
+
+    /// <summary>
+    /// Compression-aware constructor overload. Resolves the registered
+    /// <see cref="ILatticeCompressor"/> sequence from DI and builds the
+    /// per-tag dispatch dictionary used by the per-row payload
+    /// compression path. The parameterless-compressors overload above
+    /// preserves the historical constructor shape for callers (and
+    /// tests) that never enable compression.
+    /// </summary>
+    public AzureTableWalStorageProvider(
+        IOptions<AzureTableWalStorageOptions> options,
+        Serializer<WalRecord> serializer,
+        IWalSaturationSignal? saturationSignal,
+        IEnumerable<ILatticeCompressor>? compressors)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -300,6 +333,30 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         _pipelinePhaseTwoTag = new KeyValuePair<string, object?>(
             LatticeMetrics.TagPipelinePhaseTwo,
             _options.PipelinePhaseTwoCommits);
+
+        if (_options.CompressionMinPayloadBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                $"{nameof(options)}.{nameof(AzureTableWalStorageOptions.CompressionMinPayloadBytes)}",
+                _options.CompressionMinPayloadBytes,
+                "Compression minimum payload size must be non-negative.");
+        }
+
+        _compressors = BuildCompressorDictionary(compressors);
+        _compressionMinPayloadBytes = _options.CompressionMinPayloadBytes;
+        if (_options.Compression != LatticeCompression.None)
+        {
+            _activeCompressionTag = (byte)_options.Compression;
+            if (!_compressors.TryGetValue(_activeCompressionTag, out var active))
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(AzureTableWalStorageOptions)}.{nameof(AzureTableWalStorageOptions.Compression)} is set to "
+                    + $"{_options.Compression} (tag 0x{_activeCompressionTag:X2}) but no {nameof(ILatticeCompressor)} is registered "
+                    + $"for that algorithm. Register one via AddLatticeCompressor (or rely on the AddAzureTableWalStorage default that "
+                    + $"registers {nameof(ZstdLatticeCompressor)}) before enabling compression.");
+            }
+            _activeCompressor = active;
+        }
     }
 
     /// <inheritdoc />
@@ -778,15 +835,20 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var actions = new List<TableTransactionAction>(segments.Length);
         payloadBytes = 0L;
 
-        // Hand each segment straight to the row's Payload column - no
-        // re-encode. ToArray() materialises the segment's bytes into a
-        // freshly-owned byte[] so the entity's Payload field carries a
-        // stable reference; the segment's underlying array is pooled
-        // upstream by the WAL grain and will be returned to the pool
-        // once the producer's batch completes.
+        // Each segment is the already-encoded WalRecord bytes from the
+        // shipper one-encode fast path - no re-encode. CompressPayload
+        // either copies the segment into a freshly-owned byte[]
+        // (uncompressed, tag None) or compresses it into a length-
+        // prefixed byte[] (tag Zstd); either way the entity's Payload
+        // field carries a stable reference, so the segment's underlying
+        // array can be returned to the upstream pool once the producer's
+        // batch completes. ReadEncodedAsync reverses any compression
+        // before handing the segment back, so the shipper still observes
+        // the verbatim encoded bytes.
         for (var i = 0; i < segments.Length; i++)
         {
-            payloadBytes += segments[i].Count;
+            var payload = CompressPayload(segments[i].AsSpan(), out var compressionTag);
+            payloadBytes += payload.Length;
             actions.Add(new TableTransactionAction(
                 TableTransactionActionType.Add,
                 new AzureTableWalEntity
@@ -794,7 +856,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                     PartitionKey = partitionKey,
                     RowKey = BuildEntryRowKey(offsetSpan[i]),
                     Offset = offsetSpan[i],
-                    Payload = segments[i].AsSpan().ToArray(),
+                    Payload = payload,
+                    Compression = compressionTag,
                 }));
         }
 
@@ -844,10 +907,13 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         for (var i = 0; i < entries.Count; i++)
         {
             writer.ResetWrittenCount();
-            actions.Add(new TableTransactionAction(
-                TableTransactionActionType.Add,
-                BuildEntryEntity(partitionKey, entries[i], writer)));
-            payloadBytes += writer.WrittenCount;
+            var entity = BuildEntryEntity(partitionKey, entries[i], writer);
+            actions.Add(new TableTransactionAction(TableTransactionActionType.Add, entity));
+            // Account the bytes actually written to the row's Payload
+            // column (the compressed length when compression applied) so
+            // the manifest M-row's PayloadBytes total reflects retained
+            // on-disk footprint rather than the pre-compression size.
+            payloadBytes += entity.Payload?.Length ?? 0L;
         }
     }
 
@@ -922,7 +988,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 yield return new WalEntry
                 {
                     Offset = entity.Offset,
-                    Mutation = DeserialiseMutation(entity.Payload),
+                    Mutation = DeserialiseMutation(DecompressPayload(entity.Payload, (byte)entity.Compression)),
                 };
                 yielded++;
             }
@@ -968,13 +1034,14 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var manifestFilter =
             $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
 
-        // Accumulate the byte segments and offsets in parallel. The
-        // segments wrap each row's Payload array directly - one fewer
-        // allocation per entry than the default fallback (which has
-        // to ToArray() the encoder's WrittenSpan). The Payload arrays
-        // are owned by the freshly-deserialised AzureTableWalEntity
-        // instances, so they outlive the synchronous return of this
-        // method.
+        // Accumulate the byte segments and offsets in parallel. For
+        // uncompressed rows (the default) the segment wraps the row's
+        // Payload array directly - one fewer allocation per entry than
+        // the default fallback (which has to ToArray() the encoder's
+        // WrittenSpan). For compressed rows DecompressPayload inflates
+        // the row into a freshly-owned byte[] of the recovered encoded
+        // bytes, restoring the verbatim segment the shipper expects. The
+        // resulting arrays outlive the synchronous return of this method.
         var segments = new List<ArraySegment<byte>>(Math.Min(maxEntries, 256));
         var offsets = new List<long>(Math.Min(maxEntries, 256));
         await foreach (var manifestRow in table
@@ -1004,7 +1071,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 {
                     break;
                 }
-                var payload = entity.Payload ?? Array.Empty<byte>();
+                var payload = DecompressPayload(entity.Payload, (byte)entity.Compression) ?? Array.Empty<byte>();
                 segments.Add(new ArraySegment<byte>(payload));
                 offsets.Add(entity.Offset);
             }
@@ -1511,12 +1578,14 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             LatticeMergeMode.LwwRegister,
             string.Empty);
         _serializer.Serialize(record, buffer);
+        var payload = CompressPayload(buffer.WrittenSpan, out var compressionTag);
         return new AzureTableWalEntity
         {
             PartitionKey = partitionKey,
             RowKey = BuildEntryRowKey(entry.Offset),
             Offset = entry.Offset,
-            Payload = buffer.WrittenSpan.ToArray(),
+            Payload = payload,
+            Compression = compressionTag,
         };
     }
 

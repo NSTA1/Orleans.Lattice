@@ -586,6 +586,71 @@ public sealed class AzureTableWalStorageOptions
     public static readonly TimeSpan DefaultSaturationShortCircuitCooldown = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// Per-row WAL payload compression algorithm. Defaults to
+    /// <see cref="LatticeCompression.Zstd"/>: each entry's encoded
+    /// <c>WalRecord</c> payload at or above
+    /// <see cref="CompressionMinPayloadBytes"/> is Zstandard-compressed
+    /// before it is written to the row's <c>Payload</c> column, shrinking
+    /// the retained on-disk footprint - and the per-append managed
+    /// allocations - of larger mutations. The default is on because the
+    /// Zstd CPU cost (single-digit microseconds per row) is negligible
+    /// beside the Azure Table round-trip it rides on, the
+    /// <see cref="CompressionMinPayloadBytes"/> threshold skips payloads
+    /// too small to benefit, and an incompressible payload is detected and
+    /// stored verbatim, so there is no footprint downside even for binary
+    /// values. Set to <see cref="LatticeCompression.None"/> to write every
+    /// payload verbatim, or to a host-defined tag in the <c>[0x80, 0xFF]</c>
+    /// range to use a custom algorithm.
+    /// <para>
+    /// The provider resolves a matching <see cref="ILatticeCompressor"/>
+    /// from DI at construction; <c>AddAzureTableWalStorage</c> registers the
+    /// built-in <see cref="ZstdLatticeCompressor"/> fallback automatically,
+    /// so the default works with no extra wiring. A
+    /// non-<see cref="LatticeCompression.None"/> value with no registered
+    /// compressor throws at construction time.
+    /// </para>
+    /// <para>
+    /// The setting is backwards-compatible in both directions and requires
+    /// no migration: rows written by an older silo carry no compression tag
+    /// and decode as <see cref="LatticeCompression.None"/>, and compressed
+    /// rows are self-describing (the row's compression-tag column selects
+    /// the decompressor on read), so enabling, disabling, or changing the
+    /// algorithm or Zstd level only affects newly written rows while older
+    /// rows continue to decode unchanged and coexist. Granularity is per-row
+    /// because the read path supports offset-addressable reads; see
+    /// <c>docs/lattice/compression.md</c>.
+    /// </para>
+    /// </summary>
+    public LatticeCompression Compression { get; set; } = DefaultCompression;
+
+    /// <summary>Default value for <see cref="Compression"/> (<see cref="LatticeCompression.Zstd"/>).</summary>
+    public const LatticeCompression DefaultCompression = LatticeCompression.Zstd;
+
+    /// <summary>
+    /// Minimum encoded payload size, in bytes, at or above which an
+    /// entry's payload is compressed when <see cref="Compression"/> is
+    /// enabled. Encoded payloads strictly smaller than this threshold
+    /// are written verbatim (tagged <see cref="LatticeCompression.None"/>)
+    /// to skip the fixed per-row compression CPU cost on payloads too
+    /// small for the byte saving to repay it. Defaults to
+    /// <see cref="DefaultCompressionMinPayloadBytes"/> (256 bytes): an
+    /// in-process sweep of realistic JSON values through the real encode
+    /// + Zstd-3 path showed compressed payloads never inflate at any
+    /// size (so there is no break-even floor to clear) and that the
+    /// reduction crosses ~25% at roughly this encoded size and climbs
+    /// steeply above it, while below it the fixed per-call cost dominates
+    /// a sub-15% saving. Ignored when <see cref="Compression"/> is
+    /// <see cref="LatticeCompression.None"/>. Must be non-negative; a
+    /// value of <c>0</c> compresses every payload (best for a
+    /// footprint-bound workload where CPU is cheap relative to the
+    /// storage round-trip).
+    /// </summary>
+    public int CompressionMinPayloadBytes { get; set; } = DefaultCompressionMinPayloadBytes;
+
+    /// <summary>Default value for <see cref="CompressionMinPayloadBytes"/> (256 bytes).</summary>
+    public const int DefaultCompressionMinPayloadBytes = 256;
+
+    /// <summary>
     /// Validates that exactly one authentication mode is configured and
     /// that <see cref="TableName"/> is non-empty. Called by the provider
     /// at first use.
@@ -685,6 +750,12 @@ public sealed class AzureTableWalStorageOptions
         {
             throw new InvalidOperationException(
                 $"{nameof(AzureTableWalStorageOptions)}.{nameof(SaturationShortCircuitCooldown)} must be non-negative.");
+        }
+
+        if (CompressionMinPayloadBytes < 0)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(CompressionMinPayloadBytes)} must be non-negative.");
         }
     }
 

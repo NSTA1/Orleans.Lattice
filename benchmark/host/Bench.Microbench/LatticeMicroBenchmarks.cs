@@ -1740,6 +1740,7 @@ public class LatticeMicroBenchmarks
     // partition transaction at 100 actions and the provider reserves one
     // for the HEAD sentinel, so 99 is the maximum legal entry batch.
     private AzureTableWalStorageProvider _walProvider = null!;
+    private AzureTableWalStorageProvider _walCompressingProvider = null!;
     private WalEntry[] _walEncodeEntries = null!;
     private string _walEncodePartitionKey = null!;
 
@@ -1779,6 +1780,28 @@ public class LatticeMicroBenchmarks
             TableName = "BenchEncodeProbe",
         });
         _walProvider = new AzureTableWalStorageProvider(options, serializer);
+
+        // Sibling provider with per-row Zstd payload compression enabled
+        // and a zero threshold, so every encoded row exercises the
+        // CompressPayload hot path. The EncodeWalBatch_AzureTable_Zstd
+        // benchmark below pairs against EncodeWalBatch_AzureTable so the
+        // added per-row compression CPU and allocation cost is the
+        // measured delta. Raise BENCH_MICROBENCH_VALUE_BYTES well above
+        // the 512-byte default threshold to surface the large-blob regime
+        // where compression dominates; the small-value default regime
+        // surfaces the fixed per-row overhead.
+        var compressingOptions = Microsoft.Extensions.Options.Options.Create(new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            TableName = "BenchEncodeProbe",
+            Compression = LatticeCompression.Zstd,
+            CompressionMinPayloadBytes = 0,
+        });
+        _walCompressingProvider = new AzureTableWalStorageProvider(
+            compressingOptions,
+            serializer,
+            saturationSignal: null,
+            compressors: new ILatticeCompressor[] { new ZstdLatticeCompressor(LatticeAzureTableServiceCollectionExtensions.DefaultCompressionLevel) });
 
         const int MaxEntries = 99;
         var valueBytes = ReadIntEnv("BENCH_MICROBENCH_VALUE_BYTES", 128);
@@ -1862,6 +1885,40 @@ public class LatticeMicroBenchmarks
         }
         var actions = new List<global::Azure.Data.Tables.TableTransactionAction>(entryCount + 1);
         _walProvider.EncodeEntriesForBatch(_walEncodePartitionKey, slice, actions);
+        return actions;
+    }
+
+    /// <summary>
+    /// Compression-enabled counterpart to
+    /// <see cref="EncodeWalBatch_AzureTable"/>. Drives the same
+    /// <see cref="AzureTableWalStorageProvider.EncodeEntriesForBatch"/>
+    /// helper over the identical pre-built entries, but through a provider
+    /// configured with per-row Zstd payload compression and a zero
+    /// threshold so every row takes the <c>CompressPayload</c> path. The
+    /// alloc-bytes/op and time/op delta against
+    /// <see cref="EncodeWalBatch_AzureTable"/> at the same
+    /// <paramref name="entryCount"/> is exactly the per-row compression
+    /// cost the feature adds on the encode hot path. The
+    /// <c>BENCH_MICROBENCH_VALUE_BYTES</c> environment variable sizes the
+    /// payload: the default (128 bytes) measures the fixed per-row
+    /// compression overhead on incompressible-sized rows, while a value
+    /// well above the 512-byte default threshold (e.g. 4096) surfaces the
+    /// large-blob regime where the Zstd ratio dominates.
+    /// </summary>
+    [Benchmark(Description = "WAL encode batch (Azure Table, Zstd)")]
+    [Arguments(1)]
+    [Arguments(10)]
+    [Arguments(50)]
+    [Arguments(99)]
+    public List<global::Azure.Data.Tables.TableTransactionAction> EncodeWalBatch_AzureTable_Zstd(int entryCount)
+    {
+        var slice = new List<WalEntry>(entryCount);
+        for (var i = 0; i < entryCount; i++)
+        {
+            slice.Add(_walEncodeEntries[i]);
+        }
+        var actions = new List<global::Azure.Data.Tables.TableTransactionAction>(entryCount + 1);
+        _walCompressingProvider.EncodeEntriesForBatch(_walEncodePartitionKey, slice, actions);
         return actions;
     }
 

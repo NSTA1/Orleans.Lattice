@@ -57,4 +57,27 @@ internal sealed class AzureTableWalEntity : ITableEntity
     /// advisory uses of the figure.
     /// </summary>
     public long PayloadBytes { get; set; }
+
+    /// <summary>
+    /// The <see cref="LatticeCompression"/> algorithm tag applied to
+    /// <see cref="Payload"/>, stored as an <see cref="int"/> because
+    /// Azure Table Storage has no single-byte EDM property type (the
+    /// underlying value is always a <see cref="LatticeCompression"/>
+    /// byte cast to <see cref="int"/>). <c>0</c>
+    /// (<see cref="LatticeCompression.None"/>) means the payload is the
+    /// verbatim Orleans-binary-serialised <see cref="WalRecord"/>; a
+    /// non-zero tag means <see cref="Payload"/> is <c>[4-byte
+    /// little-endian uncompressed length][compressed bytes]</c> and the
+    /// provider decompresses it on read via the registered
+    /// <see cref="ILatticeCompressor"/> whose
+    /// <see cref="ILatticeCompressor.Algorithm"/> matches the tag.
+    /// <para>
+    /// Backwards-compatible by construction: a row written before this
+    /// column existed decodes the absent property to <c>0</c>, so legacy
+    /// rows read back as uncompressed with no migration. Carried on
+    /// entry rows only; the head sentinel, TAIL pointer, candidate rows,
+    /// and manifest M-rows leave it at the default <c>0</c>.
+    /// </para>
+    /// </summary>
+    public int Compression { get; set; }
 }
