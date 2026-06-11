@@ -43,6 +43,15 @@ internal sealed class LatticeQueueGrain(
         _initialized = true;
     }
 
+    /// <inheritdoc />
+    public async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    {
+        if (_initialized)
+        {
+            await _core.FlushHeadCursorAsync(cancellationToken).ConfigureAwait(true);
+        }
+    }
+
     /// <summary>
     /// Test-only initialisation seam. Bypasses Orleans activation by
     /// supplying the queue name and a pre-bound <see cref="ISystemLattice"/>

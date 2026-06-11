@@ -140,6 +140,19 @@ public class LatticeQueueGrainTests
     }
 
     [Test]
+    public async Task OnDeactivateAsync_flushes_pending_head_cursor()
+    {
+        var (grain, data, _) = await CreateGrainAsync();
+        await grain.EnqueueAsync(Payload("a"));
+        await grain.TryDequeueAsync(); // advances head once, below the flush interval
+        Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.False);
+
+        await grain.OnDeactivateAsync(default, CancellationToken.None);
+
+        Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.True);
+    }
+
+    [Test]
     public void BackingTreeId_lives_under_the_queue_system_prefix()
     {
         Assert.That(LatticeQueueGrain.BackingTreeId("orders"), Is.EqualTo("_lattice_queue_orders"));

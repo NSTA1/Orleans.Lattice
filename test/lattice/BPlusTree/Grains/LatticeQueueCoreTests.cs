@@ -178,12 +178,61 @@ public class LatticeQueueCoreTests
     }
 
     [Test]
-    public async Task EnqueueAsync_persists_head_cursor_row_when_enabled()
+    public async Task FlushHeadCursorAsync_persists_head_cursor_row_when_enabled()
+    {
+        var (core, data) = await CreateAsync(persistHeadCursor: true);
+        await EnqueueAsync(core, "a");
+        await EnqueueAsync(core, "b");
+        await core.TryDequeueAsync(CancellationToken.None);
+
+        await core.FlushHeadCursorAsync(CancellationToken.None);
+
+        Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.True);
+    }
+
+    [Test]
+    public async Task Head_cursor_is_not_written_on_every_dequeue()
+    {
+        var (core, data) = await CreateAsync(persistHeadCursor: true);
+        for (var i = 0; i < LatticeQueueCore.HeadCursorFlushInterval; i++)
+        {
+            await EnqueueAsync(core, "v");
+        }
+
+        // A handful of dequeues below the flush interval must not touch the
+        // cursor row - it stays off the per-dequeue hot path.
+        await core.TryDequeueAsync(CancellationToken.None);
+        await core.TryDequeueAsync(CancellationToken.None);
+
+        Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.False);
+    }
+
+    [Test]
+    public async Task Head_cursor_is_flushed_automatically_once_the_interval_is_reached()
+    {
+        var (core, data) = await CreateAsync(persistHeadCursor: true);
+        for (var i = 0; i <= LatticeQueueCore.HeadCursorFlushInterval; i++)
+        {
+            await EnqueueAsync(core, "v");
+        }
+
+        for (var i = 0; i < LatticeQueueCore.HeadCursorFlushInterval; i++)
+        {
+            await core.TryDequeueAsync(CancellationToken.None);
+        }
+
+        Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.True);
+    }
+
+    [Test]
+    public async Task FlushHeadCursorAsync_is_noop_when_no_writes_are_pending()
     {
         var (core, data) = await CreateAsync(persistHeadCursor: true);
         await EnqueueAsync(core, "a");
 
-        Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.True);
+        await core.FlushHeadCursorAsync(CancellationToken.None);
+
+        Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.False);
     }
 
     [Test]
@@ -207,12 +256,139 @@ public class LatticeQueueCoreTests
         await EnqueueAsync(first, "a");
         await EnqueueAsync(first, "b");
         await first.TryDequeueAsync(CancellationToken.None); // removes id 1
+        await first.FlushHeadCursorAsync(CancellationToken.None);
 
         var (second, _) = await CreateAsync(persistHeadCursor: true, backing: backing);
 
         Assert.That(second.Snapshot().Select(e => e.Id), Is.EqualTo(new[] { 2L }));
     }
 
+    [Test]
+    public async Task Cold_start_with_stale_cursor_does_not_skip_or_double_serve()
+    {
+        var backing = FakeSystemLattice.Create();
+        var (first, data) = await CreateAsync(persistHeadCursor: true, backing: backing);
+        for (var i = 0; i < 5; i++)
+        {
+            await EnqueueAsync(first, $"v{i}");
+        }
+        await first.TryDequeueAsync(CancellationToken.None); // removes id 1
+        await first.TryDequeueAsync(CancellationToken.None); // removes id 2
+
+        // Simulate a cursor that lagged the true head (3) - it was last
+        // flushed while the head was still 1. A stale, lower cursor must only
+        // cost a re-walk of the already-deleted rows, never skip live ids.
+        data[LatticeQueueCore.HeadCursorKey] = BitConverter.GetBytes(1L);
+
+        var (second, _) = await CreateAsync(persistHeadCursor: true, backing: backing);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Snapshot().Select(e => e.Id), Is.EqualTo(new[] { 3L, 4L, 5L }));
+            Assert.That(second.Count, Is.EqualTo(3));
+        });
+        var next = await EnqueueAsync(second, "v5");
+        Assert.That(next, Is.EqualTo(6L));
+    }
+
+    [Test]
+    public async Task Cold_start_after_drain_to_empty_does_not_regress_id_or_skip_entries()
+    {
+        var backing = FakeSystemLattice.Create();
+        var (first, _) = await CreateAsync(persistHeadCursor: true, backing: backing);
+
+        // Enqueue and fully drain enough entries to trigger the auto-flush of
+        // the head cursor while the cache is empty (cursor records the next
+        // id to assign, which sits above every key the entry scan will find).
+        var drained = LatticeQueueCore.HeadCursorFlushInterval;
+        for (var i = 0; i < drained; i++)
+        {
+            await EnqueueAsync(first, $"v{i}");
+        }
+        for (var i = 0; i < drained; i++)
+        {
+            await first.TryDequeueAsync(CancellationToken.None);
+        }
+
+        // Cold start with an empty store but a forward cursor: the id sequence
+        // must not regress below the persisted floor, or a new entry would be
+        // written below the scan start and be silently skipped next time.
+        var (second, _) = await CreateAsync(persistHeadCursor: true, backing: backing);
+        var reused = await EnqueueAsync(second, "after-drain");
+        Assert.That(reused, Is.GreaterThan((long)drained));
+
+        // The new entry must survive a further cold start.
+        var (third, _) = await CreateAsync(persistHeadCursor: true, backing: backing);
+        Assert.Multiple(() =>
+        {
+            Assert.That(third.Count, Is.EqualTo(1));
+            Assert.That(third.Peek()!.Value.Id, Is.EqualTo(reused));
+        });
+    }
+
+    [Test]
+    public async Task Draining_a_large_unbounded_queue_preserves_fifo_order()
+    {
+        var (core, _) = await CreateAsync(persistHeadCursor: true);
+        const int n = 200;
+        for (var i = 0; i < n; i++)
+        {
+            await EnqueueAsync(core, i.ToString());
+        }
+
+        var dequeued = new List<long>(n);
+        while (await core.TryDequeueAsync(CancellationToken.None) is { } head)
+        {
+            dequeued.Add(head.Id);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dequeued, Is.EqualTo(Enumerable.Range(1, n).Select(i => (long)i)));
+            Assert.That(core.Count, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task Head_cursor_row_is_excluded_from_count_and_snapshot_on_cold_start()
+    {
+        var backing = FakeSystemLattice.Create();
+        var (first, data) = await CreateAsync(persistHeadCursor: true, backing: backing);
+        await EnqueueAsync(first, "a");
+        await EnqueueAsync(first, "b");
+        await first.TryDequeueAsync(CancellationToken.None);
+        await first.FlushHeadCursorAsync(CancellationToken.None);
+
+        var (second, _) = await CreateAsync(persistHeadCursor: true, backing: backing);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.True);
+            Assert.That(second.Count, Is.EqualTo(1));
+            Assert.That(second.Snapshot().Select(e => e.Id), Is.EqualTo(new[] { 2L }));
+        });
+    }
+
+    [Test]
+    public void Constructor_throws_when_prefix_collides_with_head_cursor_key()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+
+        // Prefix "_" yields the scan range ["_", "`") which contains "__head".
+        Assert.That(
+            () => new LatticeQueueCore(store, "_", persistHeadCursor: true),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void Constructor_allows_cursor_colliding_prefix_when_cursor_disabled()
+    {
+        var (store, _) = FakeSystemLattice.Create();
+
+        Assert.That(
+            () => new LatticeQueueCore(store, "_", persistHeadCursor: false),
+            Throws.Nothing);
+    }
     [Test]
     public void FormatEntryKey_pads_to_nineteen_digits()
     {

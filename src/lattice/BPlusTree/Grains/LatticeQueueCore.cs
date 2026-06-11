@@ -49,18 +49,38 @@ internal sealed class LatticeQueueCore(
     /// </summary>
     internal const string HeadCursorKey = "__head";
 
-    private readonly string _prefix = string.IsNullOrEmpty(keyPrefix)
-        ? throw new ArgumentException("Queue key prefix must be non-empty.", nameof(keyPrefix))
-        : keyPrefix;
+    /// <summary>
+    /// Number of head-advancing operations coalesced before the
+    /// <see cref="HeadCursorKey"/> row is rewritten. The cursor is a pure
+    /// cold-start optimisation hint, never the source of truth, so it is
+    /// safe to let it lag the true head by up to this many dequeues - a
+    /// stale (lower) cursor only costs a re-walk of already-deleted rows on
+    /// the next activation, never a skipped or double-served entry. Keeping
+    /// it off the per-dequeue hot path avoids a write to one shard per op.
+    /// </summary>
+    internal const int HeadCursorFlushInterval = 32;
+
+    private readonly string _prefix = ValidatePrefix(keyPrefix, persistHeadCursor);
     private readonly string _prefixEnd = PrefixEnd(keyPrefix);
+
+    // FIFO is backed by a List plus a logical-head index rather than
+    // RemoveAt(0): the live window is [_head, _cache.Count). Dequeue and
+    // FIFO eviction advance _head (O(1)) instead of shifting the whole
+    // backing array (O(n)), so draining N entries is O(N) not O(N^2). The
+    // consumed prefix is dropped once it dominates (see AdvanceHead).
     private readonly List<Node> _cache = [];
+    private int _head;
     private long _nextEntryId = 1;
+    private int _pendingCursorWrites;
 
     /// <summary>A single parked row: its monotonic id and opaque payload bytes.</summary>
     private readonly record struct Node(long Id, byte[] Value);
 
     /// <summary>Number of entries currently parked.</summary>
-    public int Count => _cache.Count;
+    public int Count => _cache.Count - _head;
+
+    /// <summary>Minimum consumed-prefix length before <see cref="AdvanceHead"/> compacts the backing list.</summary>
+    private const int CompactionFloor = 16;
 
     /// <summary>
     /// Bulk-loads existing parked rows into the in-memory cache. When a
@@ -70,6 +90,7 @@ internal sealed class LatticeQueueCore(
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         _cache.Clear();
+        _head = 0;
         _nextEntryId = 1;
 
         var start = _prefix;
@@ -80,6 +101,16 @@ internal sealed class LatticeQueueCore(
             {
                 var floor = BitConverter.ToInt64(cursor);
                 start = FormatEntryKey(_prefix, floor);
+
+                // Seed the id sequence from the persisted floor so a queue
+                // that drained to empty (its cursor records the next id to
+                // assign) never regresses below it on cold start. The entry
+                // scan below still wins via max(stored id) + 1 whenever live
+                // rows exist; this only matters when the scan finds nothing.
+                if (floor > _nextEntryId)
+                {
+                    _nextEntryId = floor;
+                }
             }
         }
 
@@ -119,12 +150,13 @@ internal sealed class LatticeQueueCore(
 
         if (capacity is { } cap)
         {
-            while (_cache.Count >= cap)
+            while (Count >= cap)
             {
-                var oldest = _cache[0];
+                var oldest = _cache[_head];
                 await store.DeleteAsync(FormatEntryKey(_prefix, oldest.Id), cancellationToken).ConfigureAwait(true);
-                _cache.RemoveAt(0);
+                AdvanceHead();
                 onEvicted?.Invoke(oldest.Id);
+                await NoteHeadAdvancedAsync(cancellationToken).ConfigureAwait(true);
             }
         }
 
@@ -134,7 +166,6 @@ internal sealed class LatticeQueueCore(
 
         _cache.Add(new Node(assigned, encoded));
         _nextEntryId = checked(assigned + 1);
-        await PersistHeadCursorAsync(cancellationToken).ConfigureAwait(true);
         return assigned;
     }
 
@@ -145,36 +176,38 @@ internal sealed class LatticeQueueCore(
     public async Task<(long Id, byte[] Value)?> TryDequeueAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_cache.Count == 0)
+        if (Count == 0)
         {
             return null;
         }
 
-        var head = _cache[0];
+        var head = _cache[_head];
         await store.DeleteAsync(FormatEntryKey(_prefix, head.Id), cancellationToken).ConfigureAwait(true);
-        _cache.RemoveAt(0);
-        await PersistHeadCursorAsync(cancellationToken).ConfigureAwait(true);
+        AdvanceHead();
+        await NoteHeadAdvancedAsync(cancellationToken).ConfigureAwait(true);
         return (head.Id, head.Value);
     }
 
     /// <summary>Returns the head entry without removing it, or <see langword="null"/> when empty.</summary>
     public (long Id, byte[] Value)? Peek()
     {
-        if (_cache.Count == 0)
+        if (Count == 0)
         {
             return null;
         }
-        var head = _cache[0];
+        var head = _cache[_head];
         return (head.Id, head.Value);
     }
 
     /// <summary>Returns every parked entry in ascending-id order.</summary>
     public IReadOnlyList<(long Id, byte[] Value)> Snapshot()
     {
-        var result = new (long, byte[])[_cache.Count];
-        for (var i = 0; i < _cache.Count; i++)
+        var count = Count;
+        var result = new (long, byte[])[count];
+        for (var i = 0; i < count; i++)
         {
-            result[i] = (_cache[i].Id, _cache[i].Value);
+            var node = _cache[_head + i];
+            result[i] = (node.Id, node.Value);
         }
         return result;
     }
@@ -194,11 +227,16 @@ internal sealed class LatticeQueueCore(
         }
 
         await store.DeleteAsync(FormatEntryKey(_prefix, entryId), cancellationToken).ConfigureAwait(true);
-        var wasHead = index == 0;
-        _cache.RemoveAt(index);
-        if (wasHead)
+        if (index == _head)
         {
-            await PersistHeadCursorAsync(cancellationToken).ConfigureAwait(true);
+            AdvanceHead();
+            await NoteHeadAdvancedAsync(cancellationToken).ConfigureAwait(true);
+        }
+        else
+        {
+            // Mid-queue removal (diagnostic / dead-letter control plane) shifts
+            // only the tail past the removed slot; the head window is untouched.
+            _cache.RemoveAt(index);
         }
         return true;
     }
@@ -213,20 +251,90 @@ internal sealed class LatticeQueueCore(
         return index < 0 ? null : _cache[index].Value;
     }
 
-    private async Task PersistHeadCursorAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Advances the logical head past the consumed slot, releasing its
+    /// payload reference for collection, and compacts the backing list once
+    /// the consumed prefix both clears a small floor and dominates the live
+    /// window - keeping dequeue amortized O(1) without unbounded growth.
+    /// </summary>
+    private void AdvanceHead()
+    {
+        _cache[_head] = default;
+        _head++;
+        if (_head >= CompactionFloor && _head >= _cache.Count - _head)
+        {
+            _cache.RemoveRange(0, _head);
+            _head = 0;
+        }
+    }
+
+    private Task NoteHeadAdvancedAsync(CancellationToken cancellationToken)
     {
         if (!persistHeadCursor)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (++_pendingCursorWrites < HeadCursorFlushInterval)
+        {
+            return Task.CompletedTask;
+        }
+
+        return FlushHeadCursorAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Force-writes the head-cursor row when writes are pending. Intended to
+    /// be called on grain deactivation so coalesced cursor advances are not
+    /// lost. A no-op when the head cursor is disabled or no advance has been
+    /// coalesced since the last flush. Losing this flush is still safe: a
+    /// missing or stale cursor only makes the next cold start re-walk
+    /// already-deleted rows, never skip or double-serve a live entry.
+    /// </summary>
+    public async Task FlushHeadCursorAsync(CancellationToken cancellationToken)
+    {
+        if (!persistHeadCursor || _pendingCursorWrites == 0)
         {
             return;
         }
 
-        var floor = _cache.Count == 0 ? _nextEntryId : _cache[0].Id;
+        var floor = Count == 0 ? _nextEntryId : _cache[_head].Id;
         await store.SetAsync(HeadCursorKey, BitConverter.GetBytes(floor), cancellationToken).ConfigureAwait(true);
+        _pendingCursorWrites = 0;
+    }
+
+    private static string ValidatePrefix(string keyPrefix, bool persistHeadCursor)
+    {
+        if (string.IsNullOrEmpty(keyPrefix))
+        {
+            throw new ArgumentException("Queue key prefix must be non-empty.", nameof(keyPrefix));
+        }
+
+        if (persistHeadCursor)
+        {
+            // The head-cursor row must sort strictly outside the entry range
+            // scan [prefix, PrefixEnd(prefix)) so it is never bulk-loaded as
+            // an entry, counted, listed, or swept. Assert the invariant here
+            // rather than relying on the chosen prefix happening to satisfy it.
+            var end = PrefixEnd(keyPrefix);
+            var withinEntryRange =
+                string.CompareOrdinal(HeadCursorKey, keyPrefix) >= 0 &&
+                string.CompareOrdinal(HeadCursorKey, end) < 0;
+            if (withinEntryRange)
+            {
+                throw new ArgumentException(
+                    $"Queue key prefix '{keyPrefix}' collides with the head-cursor row key '{HeadCursorKey}'; " +
+                    "choose a prefix that sorts after the cursor key.",
+                    nameof(keyPrefix));
+            }
+        }
+
+        return keyPrefix;
     }
 
     private int IndexOf(long entryId)
     {
-        for (var i = 0; i < _cache.Count; i++)
+        for (var i = _head; i < _cache.Count; i++)
         {
             if (_cache[i].Id == entryId)
             {
