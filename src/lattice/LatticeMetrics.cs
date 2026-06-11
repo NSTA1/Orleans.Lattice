@@ -1020,6 +1020,30 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.provider.retry.short_circuited", unit: "{attempt}",
             description: "SDK retry attempts short-circuited by SaturationAwareRetryPolicy because the WAL saturation signal reports Saturated, tagged by the synthetic HTTP status used to abort the retry chain.");
 
+    /// <summary>
+    /// Counter incremented once per provider commit call that surfaced a
+    /// <c>409 EntityAlreadyExists</c> conflict which was proven to be an
+    /// idempotent replay of an already-durable write and therefore
+    /// resolved as a success rather than a failure. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagShard"/> and
+    /// <see cref="TagPhase"/>. Fires when the storage SDK's retry
+    /// pipeline resends a batch whose first attempt committed
+    /// server-side but whose response was lost; the provider reads the
+    /// resident rows back, confirms they are byte-identical to the
+    /// batch it tried to write, and treats the conflict as a no-op
+    /// success. A non-zero rate is the operator-visible signal that
+    /// lost-response retries are occurring (typically under CPU /
+    /// network pressure); crucially these replays are NOT counted on
+    /// <see cref="ProviderRetryExhausted"/>, so they never escalate the
+    /// WAL saturation classifier. A 409 that is NOT a clean replay (a
+    /// genuine offset collision) still surfaces as a hard failure on
+    /// <see cref="ProviderRetryExhausted"/> and never increments this
+    /// counter.
+    /// </summary>
+    public static readonly Counter<long> ProviderIdempotentReplays =
+        Meter.CreateCounter<long>("orleans.lattice.provider.idempotent_replays", unit: "{call}",
+            description: "Provider commit calls whose 409 EntityAlreadyExists conflict was proven to be an idempotent replay of an already-durable write and resolved as a success.");
+
     // --- Saga fan-out diagnostic instruments (AtomicWriteGrain) -------------
 
     /// <summary>

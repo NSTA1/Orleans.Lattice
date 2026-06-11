@@ -531,12 +531,27 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// a retry exhaustion failure also emits
     /// <see cref="LatticeMetrics.ProviderRetryExhausted"/> with the
     /// HTTP status string so dashboards can attribute throttling /
-    /// 429 / 5xx storms to the affected shard. Internal so the
-    /// callers in <see cref="AppendBatchAsync"/> and
+    /// 429 / 5xx storms to the affected shard.
+    /// <para>
+    /// A <c>409 EntityAlreadyExists</c> is treated specially: the SDK
+    /// retry pipeline can resend a batch whose first attempt already
+    /// committed server-side but whose response was lost, so the resend
+    /// collides with the durable rows. When the resident rows are proven
+    /// byte-identical to this batch (see
+    /// <see cref="IsIdempotentPhaseOneReplayAsync"/>) the call is resolved
+    /// as a success and counted on
+    /// <see cref="LatticeMetrics.ProviderIdempotentReplays"/> instead of
+    /// <see cref="LatticeMetrics.ProviderRetryExhausted"/>, so an
+    /// already-durable write neither fails the caller nor escalates the
+    /// WAL saturation classifier. A 409 that is not a clean replay still
+    /// surfaces as a hard failure.
+    /// </para>
+    /// Internal (callers in <see cref="AppendBatchAsync"/> and
     /// <see cref="AppendEncodedBatchAsync"/> share a single timed
-    /// path; not exposed beyond the provider.
+    /// path; also driven directly by the idempotent-replay regression
+    /// test against a substituted <see cref="TableClient"/>).
     /// </summary>
-    private async Task SubmitPhaseOneAsync(
+    internal async Task SubmitPhaseOneAsync(
         TableClient table,
         IReadOnlyList<TableTransactionAction> actions,
         string treeId,
@@ -549,6 +564,66 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         try
         {
             await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailedException rfe) when (rfe.Status == EntityAlreadyExistsStatusCode)
+        {
+            // Idempotent-replay resolution. The Azure Tables SDK retry
+            // pipeline can resend a phase-1 batch whose first attempt
+            // already committed server-side but whose response was lost
+            // (a socket / read timeout under CPU or network pressure).
+            // The resend then collides with the rows the first attempt
+            // durably wrote and the service returns 409
+            // EntityAlreadyExists. Because a WAL batch partition is keyed
+            // by (treeId, shardIndex, firstOffset) and offsets are
+            // allocated by a single writer, the only legitimate cause of
+            // a 409 on this path is such a replay: the prior write is
+            // already durable, so the batch is a no-op success. We prove
+            // that by reading the resident rows back and confirming they
+            // are byte-identical to what this call tried to write. A
+            // mismatch - or a row that is absent - is NOT a clean replay;
+            // it indicates a genuine offset collision / upstream
+            // corruption, so we surface the original failure loudly
+            // rather than masking it. This mirrors the candidate row's
+            // long-standing Upsert(Replace) idempotency (see
+            // WriteCandidateRowAsync) which the phase-1 entry rows
+            // previously lacked.
+            bool isReplay;
+            try
+            {
+                isReplay = await IsIdempotentPhaseOneReplayAsync(table, actions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (RequestFailedException)
+            {
+                // The verification read-back itself failed transiently, so
+                // we cannot prove the 409 was an idempotent replay. Fall
+                // through as "not a replay" and surface the original
+                // conflict as a hard failure (with the correct status
+                // attribution below) rather than letting the incidental
+                // read error escape unattributed and mask the 409.
+                isReplay = false;
+            }
+
+            if (!isReplay)
+            {
+                LatticeMetrics.ProviderRetryExhausted.Add(1,
+                    treeTag,
+                    shardTag,
+                    LatticeMetrics.PhasePhase1Tag,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(rfe)));
+                throw;
+            }
+
+            // Proven idempotent replay: the write is already durable.
+            // Record it on its own counter so dashboards can see
+            // lost-response retries without conflating them with genuine
+            // provider failures, and - critically - so the WAL
+            // saturation classifier (which escalates on
+            // ProviderRetryExhausted) is not driven to Saturated by a
+            // write that actually succeeded.
+            LatticeMetrics.ProviderIdempotentReplays.Add(1,
+                treeTag,
+                shardTag,
+                LatticeMetrics.PhasePhase1Tag);
         }
         catch (Exception ex)
         {
@@ -574,6 +649,98 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 LatticeMetrics.PhasePhase1Tag,
                 _pipelinePhaseTwoTag);
         }
+    }
+
+    /// <summary>
+    /// HTTP status code Azure Table Storage returns for a transactional
+    /// batch (or single-entity insert) whose target row already exists.
+    /// </summary>
+    internal const int EntityAlreadyExistsStatusCode = 409;
+
+    /// <summary>
+    /// HTTP status code Azure Table Storage returns when a point-read
+    /// targets a row that does not exist.
+    /// </summary>
+    private const int EntityNotFoundStatusCode = 404;
+
+    /// <summary>
+    /// Decides whether a <c>409 EntityAlreadyExists</c> surfaced by a
+    /// phase-1 <see cref="TableClient.SubmitTransactionAsync"/> is an
+    /// idempotent replay of an already-durable batch (the SDK resent a
+    /// batch whose first attempt committed but whose response was lost)
+    /// rather than a genuine offset collision. Reads each row the batch
+    /// tried to add back from the table and returns <see langword="true"/>
+    /// only when every one is present and byte-identical (same
+    /// <see cref="AzureTableWalEntity.Offset"/>,
+    /// <see cref="AzureTableWalEntity.Compression"/>, and
+    /// <see cref="AzureTableWalEntity.Payload"/>) to what this call tried
+    /// to write. Any absent row, any payload mismatch, or any action of an
+    /// unexpected shape yields <see langword="false"/> so the caller
+    /// surfaces the conflict as a hard failure. Internal so the regression
+    /// test can drive it against a substituted <see cref="TableClient"/>
+    /// without standing up Azurite.
+    /// </summary>
+    internal static async Task<bool> IsIdempotentPhaseOneReplayAsync(
+        TableClient table,
+        IReadOnlyList<TableTransactionAction> actions,
+        CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < actions.Count; i++)
+        {
+            if (actions[i].Entity is not AzureTableWalEntity expected)
+            {
+                // An action whose entity is not the WAL entity shape
+                // cannot be proven a replay; fail safe.
+                return false;
+            }
+
+            AzureTableWalEntity resident;
+            try
+            {
+                var response = await table.GetEntityAsync<AzureTableWalEntity>(
+                    expected.PartitionKey,
+                    expected.RowKey,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                resident = response.Value;
+            }
+            catch (RequestFailedException rfe) when (rfe.Status == EntityNotFoundStatusCode)
+            {
+                // A row this batch tried to add is absent, so the 409 was
+                // not a clean replay of this exact batch.
+                return false;
+            }
+
+            if (!PhaseOneEntityPayloadMatches(expected, resident))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when a resident phase-1 entry row is
+    /// byte-identical to the row a replayed batch tried to write - same
+    /// offset, same compression tag, and same payload bytes (including the
+    /// null-payload case). The comparison is what distinguishes an
+    /// idempotent replay of an already-durable write from a genuine
+    /// offset collision. Internal so the regression test can pin the
+    /// comparison directly.
+    /// </summary>
+    internal static bool PhaseOneEntityPayloadMatches(AzureTableWalEntity expected, AzureTableWalEntity resident)
+    {
+        if (resident.Offset != expected.Offset || resident.Compression != expected.Compression)
+        {
+            return false;
+        }
+
+        return (expected.Payload, resident.Payload) switch
+        {
+            (null, null) => true,
+            (not null, not null) => expected.Payload.AsSpan().SequenceEqual(resident.Payload),
+            _ => false,
+        };
     }
 
     /// <summary>
