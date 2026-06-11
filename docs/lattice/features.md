@@ -17,7 +17,16 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-025](https://github.com/NSTA1/Orleans.Lattice/issues/345) - Incremental, ongoing merge from one or more source trees using `VersionVector` to track a per-source high-water mark, so each cycle transfers only entries newer than the last
 - [F-042](https://github.com/NSTA1/Orleans.Lattice/issues/362) - Cluster-internal queue abstraction (`ILatticeQueue<T>`)
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
-- [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
+- [F-088](https://github.com/NSTA1/Orleans.Lattice/issues/657) - Orleans.Lattice.GrainIndex: typed grain indexing package (epic)
+- [F-089](https://github.com/NSTA1/Orleans.Lattice/issues/658) - Orleans.Lattice.GrainIndex: project & package scaffolding
+- [F-090](https://github.com/NSTA1/Orleans.Lattice/issues/659) - Orleans.Lattice.GrainIndex: index definition model & silo-setup registration API
+- [F-091](https://github.com/NSTA1/Orleans.Lattice/issues/660) - Orleans.Lattice.GrainIndex: internal configuration system tree & drift detection
+- [F-092](https://github.com/NSTA1/Orleans.Lattice/issues/661) - Orleans.Lattice.GrainIndex: state projection & index entry encoding
+- [F-093](https://github.com/NSTA1/Orleans.Lattice/issues/662) - Orleans.Lattice.GrainIndex: typed predicate query API
+- [F-094](https://github.com/NSTA1/Orleans.Lattice/issues/663) - Orleans.Lattice.GrainIndex: activation/mutation enrollment path
+- [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
+- [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
+- [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
 
 ### Shipped
 
@@ -96,6 +105,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-084](https://github.com/NSTA1/Orleans.Lattice/issues/602) - Per-tree pinned WAL placement with `ILatticeAdmin` move surface for multi-account fan-out beyond the single-account ~22-24 ke/s ceiling
 - [F-085](https://github.com/NSTA1/Orleans.Lattice/issues/609) - Transport-agnostic WAL saturation back-pressure surface on the core library so callers throttle offered load before silent queueing on the writer-side admission gate
 - [F-086](https://github.com/NSTA1/Orleans.Lattice/issues/610) - Adopt the F-085 saturation back-pressure surface in the Azure-throughput bench silo so the open-loop producer throttles via the kernel TCP window when the storage account saturates
+- [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
 - [F-098](https://github.com/NSTA1/Orleans.Lattice/issues/671) - Cross-tree atomic writes: an all-or-nothing batch spanning two or more `ILattice` trees, committed through a coordinator-delegated linearization point with the same local and cross-cluster visibility guarantee as the single-tree saga
 - [F-099](https://github.com/NSTA1/Orleans.Lattice/issues/674) - Add single-tree vs multi-tree atomic-write rows to the performance-report Layer 1 and Layer 2 tables (2-key and 64-key batches) so single- and multi-tree atomic-write throughput are directly comparable
 - [F-100](https://github.com/NSTA1/Orleans.Lattice/issues/676) - Expose Azure Table WAL compression savings (uncompressed vs stored bytes per tree) as counters on the `orleans.lattice` meter so compression effectiveness is observable without an external baseline
@@ -171,7 +181,6 @@ _None._
 - [G-015](https://github.com/NSTA1/Orleans.Lattice/issues/432) - Structural ops as WAL-replayable deterministic log entries
 - [G-017](https://github.com/NSTA1/Orleans.Lattice/issues/434) - Snapshot blob size cap and oversized-row policy (investigative)
 - [G-018](https://github.com/NSTA1/Orleans.Lattice/issues/435) - Periodic recheck classifier-input cache (investigative)
-- [G-022](https://github.com/NSTA1/Orleans.Lattice/issues/567) - Bound internal-node digest publish held under the split gate to prevent a recursive publish-chain wedge
 
 ### Shipped
 
@@ -183,6 +192,7 @@ _None._
 - [G-019](https://github.com/NSTA1/Orleans.Lattice/issues/546) - Bimodal phase-1/activation wedge on the Azure-Tables WAL hot path (investigative)
 - [G-020](https://github.com/NSTA1/Orleans.Lattice/issues/551) - Non-atomic `GetManyAsync` snapshot across mid-saga reshard (migration Swap-phase ordering)
 - [G-021](https://github.com/NSTA1/Orleans.Lattice/issues/552) - Reshard swap-phase write-path wedge: bounded outbound shard-forward deadline
+- [G-022](https://github.com/NSTA1/Orleans.Lattice/issues/567) - Bound internal-node digest publish held under the split gate to prevent a recursive publish-chain wedge
 - [G-023](https://github.com/NSTA1/Orleans.Lattice/issues/572) - Bound and attribute the residual phase-1/activation WAL wedge (post-#568 diagnostic pack)
 - [G-024](https://github.com/NSTA1/Orleans.Lattice/issues/574) - Per-shard FlushAsync lifecycle / StartFlush / reshard diagnostics to attribute the residual phase-1/activation WAL wedge
 - [G-025](https://github.com/NSTA1/Orleans.Lattice/issues/575) - Writer-layer pending-append dispatch lifecycle diagnostics to attribute the Mode B WAL wedge upstream of the shard grain
