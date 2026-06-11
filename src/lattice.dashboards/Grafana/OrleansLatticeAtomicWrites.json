@@ -137,7 +137,7 @@
     {
       "id": 1,
       "title": "Atomic write outcomes (rate)",
-      "description": "Terminal SetManyAtomicAsync saga transitions per second by outcome. 'committed' = all writes applied; 'compensated' = rolled back via LWW; 'failed' = post-compensation surrogate failure.",
+      "description": "Terminal SetManyAtomicAsync saga transitions per second by outcome. 'committed' = all writes applied; 'compensated' = rolled back via LWW; 'failed' = post-compensation surrogate failure. Counts every single-tree saga AND each participating tree's sub-saga of a cross-tree write (one increment per tree), so a cross-tree write across N trees adds N here; see the Cross-tree panels below for the coordinator-level (one-per-saga) view.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
@@ -312,7 +312,7 @@
     {
       "id": 7,
       "title": "Per-tree saga throughput (committed)",
-      "description": "Committed sagas per second per tree. Use as the denominator when correlating per-tree latency tails with per-tree load.",
+      "description": "Committed sagas per second per tree. Use as the denominator when correlating per-tree latency tails with per-tree load. Includes a per-tree increment for each participating tree of a committed cross-tree write.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
@@ -425,6 +425,60 @@
         { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_saga_fanout_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
         { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_saga_fanout_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
         { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_saga_fanout_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Cross-tree atomic write outcomes (rate)",
+      "description": "Terminal cross-tree SetManyAtomicAsync coordinator transitions per second by outcome, emitted once per saga by the cross-tree coordinator grain (orleans.lattice.atomic_write.cross_tree.completed). This is the coordinator-level view: a single cross-tree saga is one increment here, whereas the single-tree panels above count one terminal per participating tree. Not filtered by $tree - the cross-tree instruments carry an outcome and tree_count tag but no tree label.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "OUT", "expr": "sum by (outcome) (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Cross-tree failure rate (%)",
+      "description": "Fraction of cross-tree coordinator sagas that did not commit, split into failed, compensated, and combined non-committed. A non-zero compensated rate is expected under contention (a participant vetoed the global commit); a sustained failed rate points at coordinator-side or transport faults. Not filtered by $tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "FAIL", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome=\"failed\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "failed" },
+        { "refId": "COMP", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome=\"compensated\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "compensated" },
+        { "refId": "TOTAL", "expr": "sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{outcome=~\"failed|compensated\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum (rate(orleans_lattice_atomic_write_cross_tree_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "non-committed" }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Cross-tree coordinator duration (p50/p95/p99 ms)",
+      "description": "End-to-end cross-tree coordinator latency (orleans.lattice.atomic_write.cross_tree.duration): the wall-clock span from the coordinator's first Prepare fan-out to its terminal transition, covering the two-phase prepare/decide/finalize round-trips across every participant. Interpret relative to the participant fan-out panel to the right. Not filtered by $tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 64 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Cross-tree participant fan-out (trees per saga)",
+      "description": "Distribution of how many trees each cross-tree saga spans (orleans.lattice.atomic_write.cross_tree.participants). Pair with the coordinator-duration panel to the left to see whether latency scales with fan-out width; a rising p99 here that tracks the duration p99 indicates wider sagas are the cost driver. Not filtered by $tree.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 64 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_participants_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_participants_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_atomic_write_cross_tree_participants_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
       ]
     }
   ]
