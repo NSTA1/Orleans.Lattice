@@ -2056,6 +2056,12 @@ public class LatticeMicroBenchmarks
             // value here keeps the option validator from complaining.
             ConnectionString = "UseDevelopmentStorage=true",
             TableName = "BenchEncodeProbe",
+            // Pin the baseline to the uncompressed encode path. The option
+            // default is now LatticeCompression.Zstd, so leaving this unset
+            // makes the no-compressor constructor below throw at GlobalSetup.
+            // The compressing sibling (_walCompressingProvider) is the only
+            // row that should exercise Zstd.
+            Compression = LatticeCompression.None,
         });
         _walProvider = new AzureTableWalStorageProvider(options, serializer);
 
