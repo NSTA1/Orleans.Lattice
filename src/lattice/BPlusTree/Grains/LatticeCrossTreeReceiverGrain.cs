@@ -34,7 +34,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     private const string RetentionReminderName = "cross-tree-receiver-retention";
 
     /// <summary>ASCII Unit Separator delimiting the compound key's two halves.</summary>
-    private const char KeyDelimiter = '\u001f';
+    private const string KeyDelimiter = "\u001f";
 
     /// <summary>
     /// In-memory marker, <c>true</c> only while a freshly-computed decision is
@@ -78,7 +78,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     {
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         ArgumentException.ThrowIfNullOrEmpty(operationId);
-        return string.Concat(originClusterId, KeyDelimiter.ToString(), operationId);
+        return string.Concat(originClusterId, KeyDelimiter, operationId);
     }
 
     /// <inheritdoc />
@@ -139,8 +139,18 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         state.State.Arrived[terminal.TreeId] = terminal;
 
         // The barrier completes when every wait-set tree has arrived. The
-        // global verdict is commit iff every arrived terminal voted commit.
-        var complete = state.State.WaitSet.All(state.State.Arrived.ContainsKey);
+        // global verdict is commit iff every arrived terminal voted commit. A
+        // plain loop avoids the method-group delegate the LINQ All overload
+        // would allocate on every terminal.
+        var complete = true;
+        foreach (var waitTree in state.State.WaitSet)
+        {
+            if (!state.State.Arrived.ContainsKey(waitTree))
+            {
+                complete = false;
+                break;
+            }
+        }
         if (complete)
         {
             state.State.Decided = true;
@@ -212,12 +222,33 @@ internal sealed class LatticeCrossTreeReceiverGrain(
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="incoming"/> is the same set
-    /// (ignoring order and duplicates) as the frozen wait set.
+    /// (ignoring order and duplicates) as the frozen wait set. The frozen wait
+    /// set is already de-duplicated, so equality holds iff every frozen tree is
+    /// present in <paramref name="incoming"/> and every incoming tree is present
+    /// in the frozen set. Both wait sets are tiny (one entry per replicated
+    /// participant), so the linear membership scans are cheaper than allocating
+    /// a <see cref="HashSet{T}"/> and a method-group delegate per later terminal.
     /// </summary>
     private bool WaitSetMatches(IReadOnlyList<string> incoming)
     {
-        var incomingSet = new HashSet<string>(incoming, StringComparer.Ordinal);
-        return incomingSet.Count == state.State.WaitSet.Count
-            && state.State.WaitSet.All(incomingSet.Contains);
+        var frozen = state.State.WaitSet;
+        foreach (var tree in frozen)
+        {
+            if (!Contains(incoming, tree)) return false;
+        }
+        foreach (var tree in incoming)
+        {
+            if (!frozen.Contains(tree)) return false;
+        }
+        return true;
+    }
+
+    private static bool Contains(IReadOnlyList<string> list, string value)
+    {
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (string.Equals(list[i], value, StringComparison.Ordinal)) return true;
+        }
+        return false;
     }
 }
