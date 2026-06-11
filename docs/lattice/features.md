@@ -17,7 +17,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-025](https://github.com/NSTA1/Orleans.Lattice/issues/345) - Incremental, ongoing merge from one or more source trees using `VersionVector` to track a per-source high-water mark, so each cycle transfers only entries newer than the last
 - [F-042](https://github.com/NSTA1/Orleans.Lattice/issues/362) - Cluster-internal queue abstraction (`ILatticeQueue<T>`)
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
-- [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
 - [F-087](https://github.com/NSTA1/Orleans.Lattice/issues/644) - Core-library lifetime-aware shutdown refusal across all public write grains plus in-library Orleans transport-warning suppression (residual clean-shutdown gaps)
 - [F-099](https://github.com/NSTA1/Orleans.Lattice/issues/674) - Add single-tree vs multi-tree atomic-write rows to the performance-report Layer 1 and Layer 2 tables (2-key and 64-key batches) so single- and multi-tree atomic-write throughput are directly comparable
 - [F-100](https://github.com/NSTA1/Orleans.Lattice/issues/676) - Expose Azure Table WAL compression savings (uncompressed vs stored bytes per tree) as counters on the `orleans.lattice` meter so compression effectiveness is observable without an external baseline
@@ -88,6 +87,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-072](https://github.com/NSTA1/Orleans.Lattice/issues/392) - Configurable compaction tick cadence
 - [F-073](https://github.com/NSTA1/Orleans.Lattice/issues/393) - Intra-shard leaf-walk batching for tombstone compaction
 - [F-074](https://github.com/NSTA1/Orleans.Lattice/issues/394) - Shard-root dirty-leaf tracking to skip idle leaves on compaction
+- [F-075](https://github.com/NSTA1/Orleans.Lattice/issues/395) - Per-row WAL payload compression on the Azure Table provider
 - [F-077](https://github.com/NSTA1/Orleans.Lattice/issues/397) - Multi-partition WAL replay on leaf activation
 - [F-078](https://github.com/NSTA1/Orleans.Lattice/issues/398) - Promote public Primitives types into `Orleans.Lattice` per the namespace convention
 - [F-079](https://github.com/NSTA1/Orleans.Lattice/issues/399) - Multi-silo restart chaos test

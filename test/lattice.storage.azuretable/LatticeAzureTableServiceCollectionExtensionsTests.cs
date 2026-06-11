@@ -124,6 +124,53 @@ public class LatticeAzureTableServiceCollectionExtensionsTests
         });
     }
 
+    [Test]
+    public void AddAzureTableWalStorage_registers_a_single_Zstd_compressor_fallback()
+    {
+        var services = new ServiceCollection();
+        var siloBuilder = new StubSiloBuilder(services);
+
+        siloBuilder.AddAzureTableWalStorage(o => o.ConnectionString = "UseDevelopmentStorage=true");
+
+        var compressorDescriptors = services
+            .Where(d => d.ServiceType == typeof(ILatticeCompressor))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(compressorDescriptors, Has.Count.EqualTo(1),
+                "AddAzureTableWalStorage must register exactly one ILatticeCompressor fallback.");
+            Assert.That(compressorDescriptors[0].Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+        });
+    }
+
+    [Test]
+    public void AddAzureTableWalStorage_does_not_duplicate_a_preregistered_compressor()
+    {
+        // TryAddEnumerable deduplicates by (ServiceType, ImplementationType),
+        // so a host that pre-registers its own ZstdLatticeCompressor at a
+        // custom level keeps exactly that instance - the extension's
+        // fallback is a no-op.
+        var services = new ServiceCollection();
+        var siloBuilder = new StubSiloBuilder(services);
+
+        services.AddLatticeCompressor(new ZstdLatticeCompressor(9));
+        siloBuilder.AddAzureTableWalStorage(o => o.ConnectionString = "UseDevelopmentStorage=true");
+
+        var compressorDescriptors = services
+            .Where(d => d.ServiceType == typeof(ILatticeCompressor))
+            .ToList();
+
+        Assert.That(compressorDescriptors, Has.Count.EqualTo(1),
+            "A pre-registered ZstdLatticeCompressor must not be duplicated by the extension fallback.");
+    }
+
+    [Test]
+    public void DefaultCompressionLevel_is_three()
+    {
+        Assert.That(LatticeAzureTableServiceCollectionExtensions.DefaultCompressionLevel, Is.EqualTo(3));
+    }
+
     /// <summary>
     /// Minimal <see cref="ISiloBuilder"/> stub that exposes a
     /// <see cref="IServiceCollection"/> for assertions. The Orleans

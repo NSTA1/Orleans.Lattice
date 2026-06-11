@@ -45,6 +45,7 @@ public class AzureTableWalStorageProviderPhaseTwoPipeliningTests
             ConnectionString = "UseDevelopmentStorage=true",
             TableName = "Tpipe" + Guid.NewGuid().ToString("N"),
             PipelinePhaseTwoCommits = pipeline,
+            Compression = LatticeCompression.None,
         };
         return new AzureTableWalStorageProvider(Options.Create(options), _serializer);
     }
@@ -58,6 +59,7 @@ public class AzureTableWalStorageProviderPhaseTwoPipeliningTests
             TableName = "Tpipe" + Guid.NewGuid().ToString("N"),
             PipelinePhaseTwoCommits = true,
             PipelinedPhaseTwoFaultHandler = handler,
+            Compression = LatticeCompression.None,
         };
         return new AzureTableWalStorageProvider(Options.Create(options), _serializer);
     }

@@ -92,6 +92,7 @@ public class AzureTableWalStorageProviderEliminateCandidateRowIntegrationTests
                 ConnectionString = AzuriteConnectionString,
                 TableName = tableName,
                 EliminateCandidateRowOnHotPath = eliminateCandidateRow,
+                Compression = LatticeCompression.None,
                 // Pin synchronous phase-2 commits so TAIL and the
                 // manifest are durable the instant AppendBatchAsync
                 // returns; these tests assert read-your-writes

@@ -48,6 +48,7 @@ public partial class AzureTableWalStorageProviderTests
         {
             ConnectionString = "UseDevelopmentStorage=true",
             TableName = "TEncodePin",
+            Compression = LatticeCompression.None,
         });
         return new AzureTableWalStorageProvider(options, serializer);
     }
@@ -139,6 +140,7 @@ public partial class AzureTableWalStorageProviderTests
         {
             ConnectionString = "UseDevelopmentStorage=true",
             TableName = "TEncodePin",
+            Compression = LatticeCompression.None,
         });
         var provider = new AzureTableWalStorageProvider(options, serializer);
 
@@ -265,6 +267,7 @@ public partial class AzureTableWalStorageProviderTests
         {
             ConnectionString = "UseDevelopmentStorage=true",
             TableName = "TEncodePin",
+            Compression = LatticeCompression.None,
         });
         var provider = new AzureTableWalStorageProvider(options, serializer);
 

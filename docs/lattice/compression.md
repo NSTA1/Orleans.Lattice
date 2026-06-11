@@ -137,11 +137,91 @@ Compression is invisible to the apply pipeline - `ReceiverFlowControlContext`, m
 
 The wire-format layout of the compressed tail (length prefixes, alignment with the fixed plaintext header, no-wire-version-bump guarantee) is documented in [`docs/lattice.replication/wire-format.md`](../lattice.replication/wire-format.md).
 
+## Azure Table WAL row-payload compression
+
+The Azure Table WAL provider is the second in-tree consumer of the compression seam. Each WAL entry row has its `Payload` column compressed before it is persisted, shrinking the retained on-disk footprint - and the per-append managed allocations - of larger mutations. **Compression is enabled by default** (`Compression = LatticeCompression.Zstd`): `AddAzureTableWalStorage` registers the Zstd compressor automatically, so the default needs no extra wiring. Configure or opt out per tree via `AzureTableWalStorageOptions`:
+
+```text
+siloBuilder.AddAzureTableWalStorage(o =>
+{
+    o.ConnectionString = "UseDevelopmentStorage=true";
+
+    // Compression is ON by default (Zstd, level 3). To turn it off:
+    //   o.Compression = LatticeCompression.None;
+    // To change the encoded size below which a row is left uncompressed:
+    //   o.CompressionMinPayloadBytes = 256;
+});
+```
+
+| Option | Type | Default | Safe to change after data exists? | Meaning |
+|---|---|---|---|---|
+| `Compression` | `LatticeCompression` | `Zstd` (on) | Yes - existing rows decode by their own stored tag, so old and new rows coexist. | Algorithm tag applied to each entry row's `Payload`. Defaults to `Zstd`. Set `None` to write the verbatim Orleans-binary-serialised `WalRecord`; a host tag in `[0x80, 0xFF]` selects a custom algorithm. |
+| `CompressionMinPayloadBytes` | `int` | `256` | Yes - only governs whether *new* rows are compressed; never affects how stored rows read back. | Encoded-payload threshold below which a row is stored uncompressed (tag `None`) even when `Compression` is enabled. `0` compresses every row. Validated to be non-negative. See [Choosing the threshold](#choosing-the-compressionminpayloadbytes-threshold). |
+
+The Zstd **compression level** (set on the registered `ZstdLatticeCompressor` - see [Registration and the level-coupling note](#registration-and-the-level-coupling-note)) is likewise safe to change after rows exist: the level steers only how *new* rows are compressed and is never needed to read a stored row back. Each compressed payload is a self-describing Zstd frame carrying its own length prefix, so a row written at one level decompresses unchanged regardless of the level configured later. Rows written at different levels (or with different algorithms) freely coexist in the same table.
+
+When a row is compressed, its `Payload` column holds `[4-byte little-endian uncompressed length][compressed bytes]` and the row's `Compression` column carries the algorithm tag (stored as an `int` because Azure Table Storage has no single-byte EDM property type). On read the provider keys on the row's stored tag - **not** the reader's `Compression` option or level - so a reader configured with `Compression = None` still inflates compressed rows as long as the matching `ILatticeCompressor` is registered. Rows written before this column existed decode the absent property to `0` (`None`) and read back verbatim, so the change is backwards-compatible with no migration.
+
+Both encode paths compress (`AppendBatchAsync` and the shipper's pre-encoded `AppendEncodedBatchAsync` fast path) and both read paths inflate (`ReadAsync` and `ReadEncodedAsync`), so the shipper still observes verbatim encoded `WalRecord` bytes regardless of the on-disk tag.
+
+**Inflation guard.** If compressing a payload does not actually shrink it - i.e. the compressed bytes plus the 4-byte length prefix are not smaller than the input, as happens for incompressible data such as already-compressed blobs or random bytes - the provider stores that row verbatim with tag `None` instead. Enabling compression therefore never grows a row beyond its uncompressed size, even for binary values; the only cost in that case is the compression attempt's CPU, which the `CompressionMinPayloadBytes` threshold already keeps off the smallest rows.
+
+### Choosing the `CompressionMinPayloadBytes` threshold
+
+The default (`256`) was chosen empirically for JSON values, the dominant payload shape, by driving realistic JSON records through the real encode + Zstd-3 path and measuring stored-byte savings and per-row CPU across a payload-size sweep:
+
+| Encoded payload (bytes) | Stored after Zstd-3 | Reduction |
+|---:|---:|---:|
+| 112 (empty value, metadata only) | 100 | 11% |
+| 152 | ~140 | ~8% |
+| 190 | ~162 | ~15% |
+| 229 | 175 | 24% |
+| 269 | 192 | 29% |
+| 347 | 225 | 35% |
+| 547 | 283 | 48% |
+| 630 | 308 | 51% |
+| 1177 | 436 | 63% |
+| 2185 | 620 | 72% |
+| 4226 | 1008 | 76% |
+
+Two findings drive the default:
+
+1. **JSON never inflates.** Compressed-plus-prefix output was smaller than the input at *every* size measured, down to a metadata-only 112-byte payload. So unlike incompressible binary, JSON has no break-even floor the threshold must protect against - the threshold's only job here is to avoid spending CPU for a saving too small to matter.
+2. **The reduction crosses ~25% near 256 encoded bytes and climbs steeply above it**, while below ~190 bytes it falls under ~15% (tens of bytes) for the same roughly-fixed ~5 µs per-row compression cost. `256` sits at that knee: it captures the high-value range and skips only the smallest payloads where the fixed cost isn't repaid.
+
+The previous `512` default (inherited from the replication framing-tail threshold, which guards *batched* tails, not per-row JSON) left a large band of 256-511-byte rows - which compress 25-48% - stored verbatim. Tune from the default as follows:
+
+- **Footprint-bound workload** (Azure Table request size / account throughput is the bottleneck and CPU is cheap): set `CompressionMinPayloadBytes = 0` to compress every row, since JSON savings stay net-positive all the way down.
+- **CPU-bound silo / incompressible binary values**: raise it so the per-row cost is only paid on rows large enough to yield a worthwhile absolute saving.
+
+### Compression level: empirically level-independent for the threshold
+
+A natural question is whether the optimal `CompressionMinPayloadBytes` should change with the Zstd level. An in-process sweep of eight levels - {1, 3, 6, 9, 12, 15, 19, 22} - against the same JSON payload-size range says **no**. For the sub-512-byte payloads a threshold can actually affect, the achievable compression ratio (and therefore the savings-based optimal threshold) is essentially level-independent: the smallest encoded size reaching a 20% reduction is ~229 bytes at *every* level from 1 to 22, and for a 25% target it moves by at most one sampling step (269 -> 229 bytes) only at level 15 and above. Levels diverge meaningfully only on large payloads (> 1 KB), which sit well above any sensible threshold and are always compressed regardless.
+
+What *does* change dramatically with level is CPU: the same ~250-byte row costs ~6 µs to compress at level 3 but ~30-40 µs at levels 15-22 - a 5-6x increase for no extra small-payload saving. The provider therefore defaults to **Zstd level 3** (`LatticeAzureTableServiceCollectionExtensions.DefaultCompressionLevel`) - the cheapest level that already captures the full small-payload ratio - and keeps a single `CompressionMinPayloadBytes` default that is correct whatever level a host pins.
+
+### Memory-allocation impact
+
+The headline benefit is not only on-disk bytes; it is a large drop in per-append managed allocations for big payloads, measured by the `EncodeWalBatch_AzureTable_Zstd` microbenchmark:
+
+- At **large values (~4 KB)**, encoding a full 99-entry batch allocates **~81% fewer bytes** with Zstd than without (~456 KB -> ~85 KB), and Gen0/Gen1 collections fall to ~0 - the compressed rows are small enough to avoid the gen-promotion and large-buffer paths the uncompressed arrays hit.
+- At **small values (~128 B)**, allocations are roughly equal: the 256-byte threshold leaves these rows uncompressed, so there is no allocation (or CPU) penalty for enabling compression on small-mutation workloads.
+
+Compression never *increased* allocations at any measured size. Together with the inflation guard and the size threshold, this is why the feature is safe to enable by default: large payloads get a substantial footprint-and-allocation win, while small or incompressible payloads fall through to the verbatim path at negligible cost.
+
+### Registration and the level-coupling note
+
+`AddAzureTableWalStorage` registers a Zstd fallback compressor (`ZstdLatticeCompressor` at `LatticeAzureTableServiceCollectionExtensions.DefaultCompressionLevel`, currently `3`) via `TryAddEnumerable`, so enabling `Compression = LatticeCompression.Zstd` works without any extra wiring. Because registration is additive and idempotent, **the first fallback factory to run wins the compression level**: if a host has already registered its own `ZstdLatticeCompressor` instance (e.g. for replication at a different level), `TryAddEnumerable` will not add the WAL default, and the WAL path reuses the host's instance and its level. To pin a specific WAL level, register the compressor instance explicitly before calling `AddAzureTableWalStorage`. Changing that level later is safe even after rows have been written - because the on-disk frame is self-describing and reads key on the per-row algorithm tag, the new level applies only to subsequently written rows while older rows continue to decode unchanged.
+
+### Why a shared byte-tag registry, not a WAL-specific compressor contract
+
+The WAL path deliberately reuses the same `IEnumerable<ILatticeCompressor>` DI registry and `LatticeCompression` byte tags as replication rather than introducing a parallel registry. Should a layer ever need WAL-specific compressor selection that must not be shared with replication, the intended evolution is to introduce a dedicated `IWalPayloadCompressor` marker contract over the same byte-tag space, rather than splitting or namespacing the existing tag registry.
+
 ## Reusing the seam in other layers
 
 `ILatticeCompressor` lives in the core `Orleans.Lattice` package precisely so non-replication layers can reuse it. Planned consumers:
 
-- **Azure Table WAL row payloads.** A future per-row compression path on the Azure Table WAL provider (tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice)) will dispatch through the same DI registration, using the same `LatticeCompression` tag stored as Azure Table metadata on each row. Hosts that have already registered a compressor for replication get WAL compression for free.
+- **Azure Table WAL row payloads.** Shipped - see [Azure Table WAL row-payload compression](#azure-table-wal-row-payload-compression) above. Hosts that have already registered a compressor for replication get WAL compression for free.
 - **Snapshots / cold-storage tiers.** Reserved for future work; the seam shape is byte-in / byte-out specifically so these layers do not need a fresh contract.
 
 ## Testing
@@ -152,6 +232,8 @@ The public registration surface is pinned by:
 - `PublicApiContractTests.Compression` partial (core integration suite) - the supported public DI shape hosts depend on.
 - `CompressedFramingRoundtripTests` (replication tests) - byte-keyed dispatch round-trip including a host-reserved tag in the `[0x80, 0xFF]` range.
 - `LatticeReplicationOptionsValidatorTests` (replication tests) - host-reserved tags pass validation; core-range typos still fail.
+- `AzureTableWalStorageProviderTests.Compression` and `AzureTableWalStorageOptionsTests` (Azure Table tests) - white-box encode tagging, threshold behaviour, constructor guards, and option defaults/validation.
+- `CompressedAzureTableWalIntegrationTests` (Azure Table tests, emulator-gated) - end-to-end compress/decompress round-trip against Azurite, including raw-row tag verification and backwards-compatible reads of uncompressed rows.
 
 Run the relevant suites with:
 

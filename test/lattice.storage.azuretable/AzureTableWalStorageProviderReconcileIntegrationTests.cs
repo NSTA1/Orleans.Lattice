@@ -93,6 +93,7 @@ public class AzureTableWalStorageProviderReconcileIntegrationTests
             {
                 ConnectionString = AzuriteConnectionString,
                 TableName = tableName,
+                Compression = LatticeCompression.None,
                 // Pin synchronous phase-2 commits so a committed batch's
                 // TAIL and manifest rows are durable the instant
                 // AppendBatchAsync returns. The reconciliation tests
