@@ -215,6 +215,80 @@ public class CompressedAzureTableWalIntegrationTests
     }
 
     [Test]
+    public async Task AppendBatchAsync_emits_compression_savings_counters_tagged_by_tree()
+    {
+        using var collector = new WalCompressionCounterCollector();
+
+        // Compressible rows so the stored total lands strictly below the
+        // uncompressed total, proving the savings the dashboard derives.
+        await _sut.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+
+        var uncompressed = collector.Sum(LatticeMetrics.StorageWalUncompressedBytesName, TreeId);
+        var stored = collector.Sum(LatticeMetrics.StorageWalStoredBytesName, TreeId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(uncompressed, Is.GreaterThan(0), "the batch encoded payload bytes");
+            Assert.That(stored, Is.GreaterThan(0), "the batch stored payload bytes");
+            Assert.That(stored, Is.LessThan(uncompressed), "compressible rows must store fewer bytes than encoded");
+        });
+    }
+
+    /// <summary>
+    /// Captures long-valued measurements on the core
+    /// <see cref="LatticeMetrics.Meter"/>, filtering at read time by
+    /// instrument name and <c>tree</c> tag so parallel fixtures writing the
+    /// same shared counters do not cross-pollute.
+    /// </summary>
+    private sealed class WalCompressionCounterCollector : IDisposable
+    {
+        private readonly System.Diagnostics.Metrics.MeterListener _listener;
+        private readonly List<(string Name, long Value, KeyValuePair<string, object?>[] Tags)> _records = new();
+        private readonly object _lock = new();
+
+        public WalCompressionCounterCollector()
+        {
+            _listener = new System.Diagnostics.Metrics.MeterListener
+            {
+                InstrumentPublished = (inst, l) =>
+                {
+                    if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter))
+                    {
+                        l.EnableMeasurementEvents(inst);
+                    }
+                },
+            };
+            _listener.SetMeasurementEventCallback<long>(OnLong);
+            _listener.Start();
+        }
+
+        private void OnLong(
+            System.Diagnostics.Metrics.Instrument instrument,
+            long value,
+            ReadOnlySpan<KeyValuePair<string, object?>> tags,
+            object? state)
+        {
+            lock (_lock)
+            {
+                _records.Add((instrument.Name, value, tags.ToArray()));
+            }
+        }
+
+        public long Sum(string name, string tree)
+        {
+            lock (_lock)
+            {
+                return _records
+                    .Where(r => r.Name == name
+                        && r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (string?)t.Value == tree))
+                    .Sum(r => r.Value);
+            }
+        }
+
+        public void Dispose() => _listener.Dispose();
+    }
+
+    [Test]
     public async Task AppendEncodedBatchAsync_then_ReadEncodedAsync_round_trips_through_compression()
     {
         var encoder = new OrleansBinaryWalRecordEncoder(_serializer);

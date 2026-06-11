@@ -166,6 +166,25 @@ Both encode paths compress (`AppendBatchAsync` and the shipper's pre-encoded `Ap
 
 **Inflation guard.** If compressing a payload does not actually shrink it - i.e. the compressed bytes plus the 4-byte length prefix are not smaller than the input, as happens for incompressible data such as already-compressed blobs or random bytes - the provider stores that row verbatim with tag `None` instead. Enabling compression therefore never grows a row beyond its uncompressed size, even for binary values; the only cost in that case is the compression attempt's CPU, which the `CompressionMinPayloadBytes` threshold already keeps off the smallest rows.
 
+### Observability: compression-savings metrics
+
+Each append batch a compressing WAL provider commits emits two monotonic counters on the `orleans.lattice` meter, both in bytes and tagged by `tree`, so a dashboard can chart the realised savings per tree:
+
+| Metric | Unit | Tags | Meaning |
+|---|---|---|---|
+| `orleans.lattice.storage.wal.uncompressed_bytes` | `By` | `tree` | Pre-compression encoded payload bytes the batch attempted to store. |
+| `orleans.lattice.storage.wal.stored_bytes` | `By` | `tree` | Post-compression payload bytes the batch actually stored. |
+| `orleans.lattice.storage.wal.compression_skipped` | `{row}` | `tree`, `reason` | Rows stored verbatim instead of compressed, attributed by `reason`. |
+
+The **savings ratio** for a tree is `1 - stored_bytes / uncompressed_bytes` (a PromQL `rate()` ratio of the two counters). They are plain counters rather than an observable savings gauge so the totals need no staleness-horizon handling and survive activation churn; a row that skips compression counts its verbatim length into *both* byte totals, so a tree with no realised savings reports an equal pair rather than a gap.
+
+The `reason` tag on `compression_skipped` is one of:
+
+- `below_threshold` - the encoded payload was shorter than `CompressionMinPayloadBytes`, so the row was left uncompressed by design.
+- `inflation_guard` - compressing did not shrink the payload (incompressible data), so the verbatim bytes were stored instead.
+- `disabled` - compression is not enabled on the provider (`Compression = None`).
+
+A persistently low savings ratio whose `compression_skipped` is dominated by `below_threshold` is the signal to lower `CompressionMinPayloadBytes`; one dominated by `inflation_guard` means the payloads are genuinely incompressible and lowering the threshold would only burn CPU.
 ### Choosing the `CompressionMinPayloadBytes` threshold
 
 The default (`256`) was chosen empirically for JSON values, the dominant payload shape, by driving realistic JSON records through the real encode + Zstd-3 path and measuring stored-byte savings and per-row CPU across a payload-size sweep:

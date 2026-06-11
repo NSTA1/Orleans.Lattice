@@ -704,6 +704,73 @@ public static class LatticeMetrics
     /// <summary><see cref="TagReason"/> = <c>byte_pressure</c> (advisory storage-policy trim attribution).</summary>
     public static readonly KeyValuePair<string, object?> ReasonBytePressure = new(TagReason, "byte_pressure");
 
+    // --- WAL compression-savings instruments (per-row payload compression) --
+    //
+    // Three ordinary counters constructed on the meter, emitted once per
+    // append batch by a WAL provider that compresses entry payloads (e.g.
+    // the Azure Table provider's default-on Zstd path). The savings ratio is
+    // derived in the dashboard as 1 - stored/uncompressed; exposing two
+    // monotonic byte totals (rather than an observable savings gauge) means
+    // no staleness-horizon handling and the totals survive activation churn.
+
+    /// <summary>
+    /// Counter of pre-compression encoded WAL payload bytes a provider
+    /// attempted to store, summed per append batch and tagged with
+    /// <see cref="TagTree"/>. Paired with <see cref="StorageWalStoredBytes"/>:
+    /// the compression savings ratio for a tree is
+    /// <c>1 - stored_bytes / uncompressed_bytes</c>. Counts the encoded
+    /// length regardless of whether compression was applied, so a tree whose
+    /// payloads all skip compression reports equal uncompressed and stored
+    /// totals.
+    /// </summary>
+    public static readonly Counter<long> StorageWalUncompressedBytes =
+        Meter.CreateCounter<long>(StorageWalUncompressedBytesName, unit: "By",
+            description: "Pre-compression encoded WAL payload bytes, summed per append batch and tagged by tree.");
+
+    /// <summary>Canonical name of <see cref="StorageWalUncompressedBytes"/>.</summary>
+    public const string StorageWalUncompressedBytesName = "orleans.lattice.storage.wal.uncompressed_bytes";
+
+    /// <summary>
+    /// Counter of post-compression WAL payload bytes a provider actually
+    /// stored, summed per append batch and tagged with <see cref="TagTree"/>.
+    /// When a row skips compression (disabled, below the size threshold, or
+    /// caught by the inflation guard) the verbatim length is counted, so this
+    /// total never exceeds <see cref="StorageWalUncompressedBytes"/> for the
+    /// same tree.
+    /// </summary>
+    public static readonly Counter<long> StorageWalStoredBytes =
+        Meter.CreateCounter<long>(StorageWalStoredBytesName, unit: "By",
+            description: "Post-compression stored WAL payload bytes, summed per append batch and tagged by tree.");
+
+    /// <summary>Canonical name of <see cref="StorageWalStoredBytes"/>.</summary>
+    public const string StorageWalStoredBytesName = "orleans.lattice.storage.wal.stored_bytes";
+
+    /// <summary>
+    /// Counter of WAL rows stored verbatim instead of compressed, tagged with
+    /// <see cref="TagTree"/> and <see cref="TagReason"/>
+    /// (<c>below_threshold</c>, <c>inflation_guard</c>, or <c>disabled</c>).
+    /// Lets a dashboard attribute a low savings ratio to the dominant skip
+    /// cause so an operator can tune
+    /// <see cref="LatticeOptions"/>-adjacent provider thresholds rather than
+    /// guess. Rows that were actually compressed do not increment this
+    /// counter.
+    /// </summary>
+    public static readonly Counter<long> StorageWalCompressionSkipped =
+        Meter.CreateCounter<long>(StorageWalCompressionSkippedName, unit: "{row}",
+            description: "WAL rows stored verbatim instead of compressed, tagged by tree and skip reason.");
+
+    /// <summary>Canonical name of <see cref="StorageWalCompressionSkipped"/>.</summary>
+    public const string StorageWalCompressionSkippedName = "orleans.lattice.storage.wal.compression_skipped";
+
+    /// <summary><see cref="TagReason"/> = <c>below_threshold</c> (payload shorter than the provider's compression size threshold).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonBelowThreshold = new(TagReason, "below_threshold");
+
+    /// <summary><see cref="TagReason"/> = <c>inflation_guard</c> (compressing did not shrink the payload, so it was stored verbatim).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonInflationGuard = new(TagReason, "inflation_guard");
+
+    /// <summary><see cref="TagReason"/> = <c>disabled</c> (compression is not enabled on the provider).</summary>
+    public static readonly KeyValuePair<string, object?> ReasonCompressionDisabled = new(TagReason, "disabled");
+
     // --- WAL append diagnostic instruments (WalShardGrain) ------------------
     //
     // Phase A horizontal-scaling diagnostics. These instruments are *only*
