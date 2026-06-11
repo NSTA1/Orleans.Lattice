@@ -39,7 +39,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 
 ### Planned / open
 
-- [R-036](https://github.com/NSTA1/Orleans.Lattice/issues/456) - RGA sequence delta + dispatch
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
 - [R-045](https://github.com/NSTA1/Orleans.Lattice/issues/462) - Coalesced per-peer cursor checkpointing
 - [R-105](https://github.com/NSTA1/Orleans.Lattice/issues/513) - Peer digest probe RPC + scheduler
@@ -70,6 +69,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-033](https://github.com/NSTA1/Orleans.Lattice/issues/453) - Active-active convergence test matrix
 - [R-034](https://github.com/NSTA1/Orleans.Lattice/issues/454) - MV-Register delta + dispatch
 - [R-035](https://github.com/NSTA1/Orleans.Lattice/issues/455) - OR-Map delta + dispatch
+- [R-036](https://github.com/NSTA1/Orleans.Lattice/issues/456) - RGA sequence delta + dispatch
 - [R-040](https://github.com/NSTA1/Orleans.Lattice/issues/457) - `IReplicationTransport` abstraction
 - [R-041](https://github.com/NSTA1/Orleans.Lattice/issues/458) - Orleans-serializer binary framing
 - [R-042](https://github.com/NSTA1/Orleans.Lattice/issues/459) - gRPC streaming push transport

@@ -123,6 +123,27 @@ public sealed class CrdtShape
     }
 
     /// <summary>
+    /// Factory for the <see cref="LatticeMergeMode.Sequence"/> shape. Uses
+    /// the reflection serialiser (matching the receiver-side typed-delta
+    /// path and the <see cref="RgaAccessor{T}"/> state read/write seam)
+    /// rather than the source-generated context, so the persisted byte[]
+    /// row and the wire delta stay on a single (de)serialisation lane.
+    /// </summary>
+    public static CrdtShape ForRga()
+    {
+        var s = JsonLatticeSerializer<Rga>.Default;
+        var d = JsonLatticeSerializer<RgaDelta>.Default;
+        return new CrdtShape(
+            LatticeMergeMode.Sequence,
+            bytes => s.Deserialize(bytes),
+            bytes => d.Deserialize(bytes),
+            (state, delta) => ((Rga)state).MergeDelta((RgaDelta)delta),
+            (state, other) => ((Rga)state).MergeFrom((Rga)other),
+            () => new Rga(),
+            state => s.Serialize((Rga)state));
+    }
+
+    /// <summary>
     /// Factory for the generic <see cref="LatticeMergeMode.OrMap"/> shape
     /// over a concrete <c>(TKey, TValue)</c> pair. Hosts that configure a
     /// tree for <see cref="LatticeMergeMode.OrMap"/> register the matching
@@ -150,7 +171,8 @@ public sealed class CrdtShape
 /// Registry of typed CRDT shapes keyed by <c>(treeId, mode)</c>, with
 /// a per-mode global fallback for the closed-shape modes
 /// (<see cref="LatticeMergeMode.OrSet"/>, <see cref="LatticeMergeMode.PnCounter"/>,
-/// <see cref="LatticeMergeMode.VersionVector"/>, <see cref="LatticeMergeMode.MvRegister"/>)
+/// <see cref="LatticeMergeMode.VersionVector"/>, <see cref="LatticeMergeMode.MvRegister"/>,
+/// <see cref="LatticeMergeMode.Sequence"/>)
 /// whose descriptor is unambiguous and does not depend on host generics.
 /// Only <see cref="LatticeMergeMode.OrMap"/> requires per-tree
 /// registration because it is generic over <c>(TKey, TValue)</c>.
@@ -169,7 +191,8 @@ public sealed class CrdtShapeRegistry
     /// descriptors (<see cref="LatticeMergeMode.OrSet"/>,
     /// <see cref="LatticeMergeMode.PnCounter"/>,
     /// <see cref="LatticeMergeMode.VersionVector"/>,
-    /// <see cref="LatticeMergeMode.MvRegister"/>). Hosts add their
+    /// <see cref="LatticeMergeMode.MvRegister"/>,
+    /// <see cref="LatticeMergeMode.Sequence"/>). Hosts add their
     /// <see cref="LatticeMergeMode.OrMap"/> descriptors per tree.
     /// </summary>
     public CrdtShapeRegistry()
@@ -178,6 +201,7 @@ public sealed class CrdtShapeRegistry
         _global[LatticeMergeMode.PnCounter] = CrdtShape.ForPnCounter();
         _global[LatticeMergeMode.VersionVector] = CrdtShape.ForVersionVector();
         _global[LatticeMergeMode.MvRegister] = CrdtShape.ForMvRegister();
+        _global[LatticeMergeMode.Sequence] = CrdtShape.ForRga();
     }
 
     /// <summary>

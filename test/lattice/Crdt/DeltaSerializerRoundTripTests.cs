@@ -203,4 +203,80 @@ public class DeltaSerializerRoundTripTests
             Assert.That(copy.Entries, Is.Empty);
         });
     }
+
+    [Test]
+    public void RgaDeltaNode_round_trips()
+    {
+        var original = new RgaDeltaNode
+        {
+            ReplicaId = "r-1",
+            Counter = 7L,
+            ParentDot = new OrSetDot { ReplicaId = "r-0", Counter = 3L },
+            Value = new byte[] { 0xDE, 0xAD },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.ReplicaId, Is.EqualTo(original.ReplicaId));
+            Assert.That(copy.Counter, Is.EqualTo(original.Counter));
+            Assert.That(copy.ParentDot, Is.EqualTo(original.ParentDot));
+            Assert.That(copy.Value, Is.EqualTo(original.Value));
+            Assert.That(copy.Dot, Is.EqualTo(new OrSetDot { ReplicaId = "r-1", Counter = 7L }));
+        });
+    }
+
+    [Test]
+    public void RgaDelta_round_trips()
+    {
+        var insertOne = new RgaDeltaNode
+        {
+            ReplicaId = "r1",
+            Counter = 1,
+            ParentDot = Rga.Root,
+            Value = new byte[] { 1 },
+        };
+        var insertTwo = new RgaDeltaNode
+        {
+            ReplicaId = "r1",
+            Counter = 2,
+            ParentDot = new OrSetDot { ReplicaId = "r1", Counter = 1 },
+            Value = new byte[] { 2 },
+        };
+        var tombstone = new OrSetDot { ReplicaId = "r2", Counter = 9 };
+        var original = new RgaDelta
+        {
+            Inserts = new[] { insertOne, insertTwo },
+            Tombstones = new[] { tombstone },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Inserts, Has.Count.EqualTo(2));
+            Assert.That(copy.Inserts[0].ReplicaId, Is.EqualTo(insertOne.ReplicaId));
+            Assert.That(copy.Inserts[0].Counter, Is.EqualTo(insertOne.Counter));
+            Assert.That(copy.Inserts[0].ParentDot, Is.EqualTo(insertOne.ParentDot));
+            Assert.That(copy.Inserts[1].ParentDot, Is.EqualTo(insertTwo.ParentDot));
+            Assert.That(copy.Inserts[1].Value, Is.EqualTo(insertTwo.Value));
+            Assert.That(copy.Tombstones, Has.Count.EqualTo(1));
+            Assert.That(copy.Tombstones[0], Is.EqualTo(tombstone));
+        });
+    }
+
+    [Test]
+    public void RgaDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(RgaDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Inserts, Is.Not.Null);
+            Assert.That(copy.Inserts, Is.Empty);
+            Assert.That(copy.Tombstones, Is.Not.Null);
+            Assert.That(copy.Tombstones, Is.Empty);
+        });
+    }
 }
