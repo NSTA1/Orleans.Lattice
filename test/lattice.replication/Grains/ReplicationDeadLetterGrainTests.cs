@@ -71,6 +71,22 @@ public class ReplicationDeadLetterGrainTests
     }
 
     [Test]
+    public async Task No_head_cursor_row_is_ever_written_preserving_on_disk_format()
+    {
+        var (grain, data, _) = await CreateGrainAsync();
+
+        await grain.EnqueueAsync(MakeEntry("a"), "boom", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        var id2 = await grain.EnqueueAsync(MakeEntry("b"), "boom", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        await grain.DiscardAsync(id2, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.False);
+            Assert.That(data.Keys, Has.All.StartWith("e/"));
+        });
+    }
+
+    [Test]
     public async Task EnqueueAsync_throws_on_null_failure_reason()
     {
         var (grain, _, _) = await CreateGrainAsync();

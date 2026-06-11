@@ -20,6 +20,30 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Succeeded, Is.True);
     }
 
+    [Test]
+    public void QueueCapacity_null_succeeds()
+    {
+        var result = Validate(o => o.QueueCapacity = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1)]
+    [TestCase(1000)]
+    public void QueueCapacity_positive_succeeds(int value)
+    {
+        var result = Validate(o => o.QueueCapacity = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void QueueCapacity_below_one_fails(int value)
+    {
+        var result = Validate(o => o.QueueCapacity = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("QueueCapacity"));
+    }
+
     [TestCase(0)]
     [TestCase(-1)]
     public void KeysPageSize_must_be_positive(int value)

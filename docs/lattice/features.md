@@ -15,7 +15,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-022](https://github.com/NSTA1/Orleans.Lattice/issues/342) - Troubleshooting guide (`docs/troubleshooting.md`)
 - [F-023](https://github.com/NSTA1/Orleans.Lattice/issues/343) - Sample applications (`samples/`)
 - [F-025](https://github.com/NSTA1/Orleans.Lattice/issues/345) - Incremental, ongoing merge from one or more source trees using `VersionVector` to track a per-source high-water mark, so each cycle transfers only entries newer than the last
-- [F-042](https://github.com/NSTA1/Orleans.Lattice/issues/362) - Cluster-internal queue abstraction (`ILatticeQueue<T>`)
 - [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-088](https://github.com/NSTA1/Orleans.Lattice/issues/657) - Orleans.Lattice.GrainIndex: typed grain indexing package (epic)
 - [F-089](https://github.com/NSTA1/Orleans.Lattice/issues/658) - Orleans.Lattice.GrainIndex: project & package scaffolding
@@ -64,6 +63,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-039](https://github.com/NSTA1/Orleans.Lattice/issues/359) - MV-Register primitive + accessor
 - [F-040](https://github.com/NSTA1/Orleans.Lattice/issues/360) - OR-Map primitive + accessor
 - [F-041](https://github.com/NSTA1/Orleans.Lattice/issues/361) - RGA sequence primitive + accessor
+- [F-042](https://github.com/NSTA1/Orleans.Lattice/issues/362) - Cluster-internal queue abstraction (`ILatticeQueue<T>`)
 - [F-043](https://github.com/NSTA1/Orleans.Lattice/issues/363) - `VectorClock` slot on `LwwValue` / `LwwEntry`
 - [F-044](https://github.com/NSTA1/Orleans.Lattice/issues/364) - Atomic-transaction boundary on the mutation observer
 - [F-045](https://github.com/NSTA1/Orleans.Lattice/issues/365) - `MutationCategory` classification on `LatticeMutation`

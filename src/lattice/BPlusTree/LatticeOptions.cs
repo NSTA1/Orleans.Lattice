@@ -33,6 +33,17 @@ public class LatticeOptions
     public int KeysPageSize { get; set; } = DefaultKeysPageSize;
 
     /// <summary>
+    /// Optional bound on the number of entries a cluster-internal
+    /// <see cref="ILatticeQueue{T}"/> backed by this tree's options may
+    /// hold. When set, enqueueing past the bound evicts the oldest entry
+    /// (FIFO eviction) before appending the new one; <see langword="null"/>
+    /// (the default) leaves the queue unbounded. When set it must be at
+    /// least <c>1</c>, enforced by the options validator. Resolved per
+    /// queue via <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(queueName)</c>.
+    /// </summary>
+    public int? QueueCapacity { get; set; }
+
+    /// <summary>
     /// How long a tombstone must exist before it is eligible for compaction.
     /// A grain reminder fires at this interval; tombstones older than this
     /// grace period are permanently removed. Set to <see cref="Timeout.InfiniteTimeSpan"/>
