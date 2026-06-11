@@ -1,6 +1,6 @@
 # Configuration
 
-> **Compression options** (replication framing tail, future WAL/storage payloads) are documented separately - see [`compression.md`](compression.md) for the seam, the registration helpers, the tag-space partitioning, and the relevant option keys.
+> **Compression options** (replication framing tail, future WAL/storage payloads) are documented separately - see [`compression.md`](compression.md) for the seam, the registration helpers, the tag-space partitioning, and the relevant option keys. The compression **algorithm and Zstd level are safe to change after data already exists**: stored payloads are self-describing and read back by their own per-row tag, so a level/algorithm change applies only to newly written data while existing rows decode unchanged.
 
 ## Registering Lattice
 

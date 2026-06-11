@@ -101,6 +101,7 @@ public class AzureTableWalChaosTests
             {
                 ConnectionString = AzuriteConnectionString,
                 TableName = _tableName,
+                Compression = LatticeCompression.None,
             }),
             _serializer);
     }

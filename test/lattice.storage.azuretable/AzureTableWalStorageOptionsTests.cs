@@ -701,6 +701,90 @@ public class AzureTableWalStorageOptionsTests
         });
     }
 
+    [Test]
+    public void Compression_defaults_to_Zstd()
+    {
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.That(options.Compression, Is.EqualTo(LatticeCompression.Zstd));
+    }
+
+    [Test]
+    public void Compression_default_constant_is_Zstd()
+    {
+        Assert.That(AzureTableWalStorageOptions.DefaultCompression, Is.EqualTo(LatticeCompression.Zstd));
+    }
+
+    [Test]
+    public void Compression_round_trips_when_set_to_None()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            Compression = LatticeCompression.None,
+        };
+
+        Assert.That(options.Compression, Is.EqualTo(LatticeCompression.None));
+    }
+
+    [Test]
+    public void Compression_round_trips_when_set_to_Zstd()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            Compression = LatticeCompression.Zstd,
+        };
+
+        Assert.That(options.Compression, Is.EqualTo(LatticeCompression.Zstd));
+    }
+
+    [Test]
+    public void CompressionMinPayloadBytes_defaults_to_256()
+    {
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.That(options.CompressionMinPayloadBytes, Is.EqualTo(256));
+    }
+
+    [Test]
+    public void CompressionMinPayloadBytes_default_constant_is_256()
+    {
+        Assert.That(AzureTableWalStorageOptions.DefaultCompressionMinPayloadBytes, Is.EqualTo(256));
+    }
+
+    [Test]
+    public void Validate_throws_when_CompressionMinPayloadBytes_is_negative()
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            CompressionMinPayloadBytes = -1,
+        };
+
+        Assert.That(options.Validate, Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_CompressionMinPayloadBytes_is_zero_or_positive()
+    {
+        var zero = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            CompressionMinPayloadBytes = 0,
+        };
+
+        var positive = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            CompressionMinPayloadBytes = 4096,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(zero.Validate, Throws.Nothing);
+            Assert.That(positive.Validate, Throws.Nothing);
+        });
+    }
+
     /// <summary>
     /// Minimal Azure.Core <see cref="Azure.Core.TokenCredential"/>
     /// stand-in for tests that need a non-null credential reference

@@ -98,6 +98,7 @@ public class AzureTableWalStorageProviderIntegrationTests
             {
                 ConnectionString = AzuriteConnectionString,
                 TableName = tableName,
+                Compression = LatticeCompression.None,
                 // These end-to-end tests assert read-your-writes
                 // durability: TAIL has advanced and the entries are
                 // readable the instant AppendBatchAsync returns. That

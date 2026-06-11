@@ -52,6 +52,7 @@ public class AzureTableWalStorageProviderParallelismTests
                 // connection-string shape.
                 ConnectionString = "UseDevelopmentStorage=true",
                 TableName = "Tparallelism" + Guid.NewGuid().ToString("N"),
+                Compression = LatticeCompression.None,
             }),
             _serializer);
 
