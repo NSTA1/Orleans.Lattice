@@ -1,4 +1,3 @@
-using System.Globalization;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -10,21 +9,16 @@ namespace Orleans.Lattice.Replication.Grains;
 /// Per-tree dead-letter queue grain. See
 /// <see cref="IReplicationDeadLetterGrain"/> for the contract.
 /// <para>
-/// Storage is delegated to a reserved system tree named
-/// <c>_lattice_replog_dlq_{treeId}</c> resolved through the internal
-/// <see cref="ISystemLattice"/> surface, so the queue inherits the
-/// scaling, sharding, and persistence of the core B+ tree rather than
-/// living inside a single grain's persistent-state row. This avoids
-/// the storage-row size limit a List-in-state design would hit under
-/// sustained apply failure.
-/// </para>
-/// <para>
-/// On activation the grain bulk-loads every parked entry into an
-/// in-memory cache; subsequent reads (List / Count / TryGet) are
-/// served from memory and writes (Enqueue / Discard) are applied to
-/// the cache and written through to the system tree. The bound on
-/// cache size is <see cref="LatticeReplicationOptions.DeadLetterQueueCapacity"/>,
-/// which the validator pins to a positive value.
+/// Storage, caching, monotonic-id assignment, and FIFO eviction are
+/// delegated to the shared <see cref="LatticeQueueCore"/> engine bound to a
+/// reserved system tree named <c>_lattice_replog_dlq_{treeId}</c>
+/// (<see cref="LatticeConstants.WalTreePrefix"/> + <c>dlq_</c>). The grain
+/// is a thin specialisation: it parks <see cref="DeadLetterEntry"/> payloads
+/// serialized through the Orleans binary <see cref="Serializer{T}"/>, tags
+/// the <c>dead_letter.removed</c> counter with the appropriate reason, and
+/// pins the engine to its historical <c>e/</c> row-key scheme with the
+/// head-cursor row disabled so the on-disk format is preserved byte-for-byte
+/// across upgrades.
 /// </para>
 /// </summary>
 internal sealed class ReplicationDeadLetterGrain(
@@ -33,19 +27,11 @@ internal sealed class ReplicationDeadLetterGrain(
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
     Serializer<DeadLetterEntry> serializer) : IReplicationDeadLetterGrain, IGrainBase
 {
-    /// <summary>Width of the zero-padded entry-id segment in stored keys (matches the WAL row-key style).</summary>
-    private const int EntryIdWidth = 19;
-
     /// <summary>Inclusive prefix every parked-entry key carries inside the system tree.</summary>
     private const string EntryKeyPrefix = "e/";
 
-    /// <summary>Exclusive end key for a prefix range scan over <see cref="EntryKeyPrefix"/>.</summary>
-    private const string EntryKeyPrefixEnd = "e0"; // "e/" < "e0" lexicographically; ASCII '/' (0x2F) < '0' (0x30).
-
     private string _treeId = "";
-    private ISystemLattice _store = null!;
-    private readonly List<DeadLetterEntry> _cache = new();
-    private long _nextEntryId = 1;
+    private LatticeQueueCore _core = null!;
     private bool _initialized;
 
     /// <inheritdoc />
@@ -62,42 +48,17 @@ internal sealed class ReplicationDeadLetterGrain(
         }
 
         _treeId = key;
-        _store = grainFactory.GetGrain<ISystemLattice>(BackingTreeId(_treeId));
-
-        // Bulk-load existing parked entries into the in-memory cache.
-        // The DLQ is bounded by DeadLetterQueueCapacity (default 1000),
-        // so the load is bounded and a one-shot pass is acceptable.
-        await foreach (var kvp in _store.EntriesAsync(
-            startInclusive: EntryKeyPrefix,
-            endExclusive: EntryKeyPrefixEnd,
-            cancellationToken: cancellationToken).ConfigureAwait(true))
-        {
-            if (!TryParseEntryId(kvp.Key, out var entryId))
-            {
-                // Defensive: an unrecognised key under our prefix is
-                // skipped rather than crashing activation.
-                continue;
-            }
-
-            var parked = serializer.Deserialize(kvp.Value);
-            _cache.Add(parked);
-            if (entryId >= _nextEntryId)
-            {
-                _nextEntryId = entryId + 1;
-            }
-        }
-
-        _cache.Sort(static (a, b) => a.EntryId.CompareTo(b.EntryId));
+        var store = grainFactory.GetGrain<ISystemLattice>(BackingTreeId(_treeId));
+        _core = CreateCore(store);
+        await _core.InitializeAsync(cancellationToken).ConfigureAwait(true);
         _initialized = true;
     }
 
     /// <summary>
     /// Test-only initialisation seam. Bypasses Orleans activation by
-    /// supplying the tree id and pre-bound <see cref="ISystemLattice"/>
-    /// store directly, then running the same bulk-load logic
-    /// <see cref="OnActivateAsync(CancellationToken)"/> uses. Tests
-    /// that exercise the grain in isolation use this in lieu of the
-    /// activation lifecycle.
+    /// supplying the tree id and a pre-bound <see cref="ISystemLattice"/>
+    /// store, then runs the same bulk-load
+    /// <see cref="OnActivateAsync(CancellationToken)"/> uses.
     /// </summary>
     internal async Task InitializeForTestingAsync(
         string treeId,
@@ -108,31 +69,13 @@ internal sealed class ReplicationDeadLetterGrain(
         ArgumentNullException.ThrowIfNull(store);
 
         _treeId = treeId;
-        _store = store;
-        _cache.Clear();
-        _nextEntryId = 1;
-
-        await foreach (var kvp in store.EntriesAsync(
-            startInclusive: EntryKeyPrefix,
-            endExclusive: EntryKeyPrefixEnd,
-            cancellationToken: cancellationToken).ConfigureAwait(true))
-        {
-            if (!TryParseEntryId(kvp.Key, out var entryId))
-            {
-                continue;
-            }
-
-            var parked = serializer.Deserialize(kvp.Value);
-            _cache.Add(parked);
-            if (entryId >= _nextEntryId)
-            {
-                _nextEntryId = entryId + 1;
-            }
-        }
-
-        _cache.Sort(static (a, b) => a.EntryId.CompareTo(b.EntryId));
+        _core = CreateCore(store);
+        await _core.InitializeAsync(cancellationToken).ConfigureAwait(true);
         _initialized = true;
     }
+
+    private LatticeQueueCore CreateCore(ISystemLattice store) =>
+        new(store, EntryKeyPrefix, persistHeadCursor: false, onEvicted: OnEvicted);
 
     /// <inheritdoc />
     public async Task<long> EnqueueAsync(
@@ -148,35 +91,19 @@ internal sealed class ReplicationDeadLetterGrain(
         EnsureInitialized();
 
         var capacity = optionsMonitor.Get(_treeId).DeadLetterQueueCapacity;
+        var enqueuedAtTicks = DateTime.UtcNow.Ticks;
 
-        // FIFO eviction: trim from the head until strictly below capacity,
-        // then append. Capacity >= 1 is enforced by the options validator.
-        while (_cache.Count >= capacity)
-        {
-            var oldest = _cache[0];
-            await _store.DeleteAsync(EntryKey(oldest.EntryId), cancellationToken).ConfigureAwait(true);
-            _cache.RemoveAt(0);
-            LatticeReplicationMetrics.DeadLetterRemoved.Add(
-                1,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonEvicted));
-        }
-
-        var assigned = _nextEntryId;
-        var parked = new DeadLetterEntry
-        {
-            EntryId = assigned,
-            Entry = entry,
-            FailureReason = failureReason,
-            RetryCount = retryCount,
-            EnqueuedAtTicks = DateTime.UtcNow.Ticks,
-        };
-
-        var encoded = serializer.SerializeToArray(parked);
-        await _store.SetAsync(EntryKey(assigned), encoded, cancellationToken).ConfigureAwait(true);
-
-        _cache.Add(parked);
-        _nextEntryId = checked(assigned + 1);
+        var assigned = await _core.EnqueueAsync(
+            id => serializer.SerializeToArray(new DeadLetterEntry
+            {
+                EntryId = id,
+                Entry = entry,
+                FailureReason = failureReason,
+                RetryCount = retryCount,
+                EnqueuedAtTicks = enqueuedAtTicks,
+            }),
+            capacity,
+            cancellationToken).ConfigureAwait(true);
 
         LatticeReplicationMetrics.DeadLetterEnqueued.Add(
             1,
@@ -192,8 +119,13 @@ internal sealed class ReplicationDeadLetterGrain(
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
 
-        IReadOnlyList<DeadLetterEntry> snapshot = _cache.ToArray();
-        return Task.FromResult(snapshot);
+        var snapshot = _core.Snapshot();
+        var result = new DeadLetterEntry[snapshot.Count];
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            result[i] = serializer.Deserialize(snapshot[i].Value);
+        }
+        return Task.FromResult<IReadOnlyList<DeadLetterEntry>>(result);
     }
 
     /// <inheritdoc />
@@ -201,7 +133,7 @@ internal sealed class ReplicationDeadLetterGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
-        return Task.FromResult(_cache.Count);
+        return Task.FromResult(_core.Count);
     }
 
     /// <inheritdoc />
@@ -218,31 +150,27 @@ internal sealed class ReplicationDeadLetterGrain(
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
 
-        var index = IndexOf(entryId);
-        DeadLetterEntry? result = index < 0 ? null : _cache[index];
+        var bytes = _core.TryGet(entryId);
+        DeadLetterEntry? result = bytes is null ? null : serializer.Deserialize(bytes);
         return Task.FromResult(result);
     }
 
     /// <summary>
     /// Internal removal helper used by both <see cref="DiscardAsync"/>
-    /// and the post-replay cleanup path on
-    /// <see cref="ILatticeReplicationDeadLetters.ReplayAsync(string, long, CancellationToken)"/>.
-    /// The reason tag distinguishes the two callers in the
-    /// <c>dead_letter.removed</c> counter.
+    /// and the post-replay cleanup path. The reason tag distinguishes the
+    /// two callers in the <c>dead_letter.removed</c> counter; the counter is
+    /// only emitted when an entry was actually removed.
     /// </summary>
     internal async Task<bool> RemoveAsync(long entryId, string reason, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
 
-        var index = IndexOf(entryId);
-        if (index < 0)
+        var removed = await _core.RemoveAsync(entryId, cancellationToken).ConfigureAwait(true);
+        if (!removed)
         {
             return false;
         }
-
-        await _store.DeleteAsync(EntryKey(entryId), cancellationToken).ConfigureAwait(true);
-        _cache.RemoveAt(index);
 
         LatticeReplicationMetrics.DeadLetterRemoved.Add(
             1,
@@ -252,17 +180,11 @@ internal sealed class ReplicationDeadLetterGrain(
         return true;
     }
 
-    private int IndexOf(long entryId)
-    {
-        for (var i = 0; i < _cache.Count; i++)
-        {
-            if (_cache[i].EntryId == entryId)
-            {
-                return i;
-            }
-        }
-        return -1;
-    }
+    private void OnEvicted(long entryId) =>
+        LatticeReplicationMetrics.DeadLetterRemoved.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonEvicted));
 
     private void EnsureInitialized()
     {
@@ -282,46 +204,9 @@ internal sealed class ReplicationDeadLetterGrain(
     internal static string BackingTreeId(string treeId) => $"{LatticeConstants.WalTreePrefix}dlq_{treeId}";
 
     /// <summary>
-    /// Builds the system-tree key for the parked entry with the supplied
-    /// id. Uses <see cref="string.Create{TState}(int, TState, System.Buffers.SpanAction{char, TState})"/>
-    /// to produce the <c>"e/" + 19-digit-id</c> row key in a single
-    /// allocation, avoiding the intermediate <see cref="long.ToString(string, IFormatProvider)"/>
-    /// + concat that an interpolated <c>$"e/{id:D19}"</c> would emit.
-    /// Called per <see cref="EnqueueAsync(WalRecord, string, int, CancellationToken)"/>
-    /// (terminal failure path) and per FIFO eviction, so the saving is
-    /// modest but non-zero.
+    /// Builds the system-tree key for the parked entry with the supplied id
+    /// (<c>"e/" + 19-digit-id</c>). Delegates to the shared queue engine so
+    /// the row-key scheme stays identical to the generic queue primitive.
     /// </summary>
-    internal static string EntryKey(long entryId) =>
-        string.Create(
-            EntryKeyPrefix.Length + EntryIdWidth,
-            entryId,
-            static (span, id) =>
-            {
-                span[0] = 'e';
-                span[1] = '/';
-                var ok = id.TryFormat(span[EntryKeyPrefix.Length..], out var written, "D" + EntryIdWidth, CultureInfo.InvariantCulture);
-                // The buffer is sized to EntryKeyPrefix.Length + EntryIdWidth
-                // and the "D19" format produces exactly 19 characters for any
-                // non-negative long, so TryFormat must succeed and fill the tail.
-                if (!ok || written != EntryIdWidth)
-                {
-                    throw new InvalidOperationException(
-                        "EntryKey formatting produced an unexpected width; entry-id width contract violated.");
-                }
-            });
-
-    private static bool TryParseEntryId(string storedKey, out long entryId)
-    {
-        if (storedKey is null || !storedKey.StartsWith(EntryKeyPrefix, StringComparison.Ordinal))
-        {
-            entryId = 0;
-            return false;
-        }
-        return long.TryParse(
-            storedKey.AsSpan(EntryKeyPrefix.Length),
-            NumberStyles.None,
-            CultureInfo.InvariantCulture,
-            out entryId);
-    }
+    internal static string EntryKey(long entryId) => LatticeQueueCore.FormatEntryKey(EntryKeyPrefix, entryId);
 }
-

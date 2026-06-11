@@ -31,6 +31,19 @@ internal static class LatticeConstants
     public const string WalTreePrefix = "_lattice_replog_";
 
     /// <summary>
+    /// Reserved tree-name prefix used to back cluster-internal
+    /// <see cref="ILatticeQueue{T}"/> instances, named
+    /// <c>_lattice_queue_{queueName}</c>. Subsumed by
+    /// <see cref="SystemTreePrefix"/> (any <c>_lattice_queue_</c> name also
+    /// starts with <c>_lattice_</c>), so it introduces no new user-facing
+    /// tree-name restriction and inherits the same registry / monitor /
+    /// routing bypasses as other system trees. Exposed as a named constant
+    /// so the queue grain can compose backing-tree ids by name rather than
+    /// hardcoding the literal.
+    /// </summary>
+    public const string QueueTreePrefix = "_lattice_queue_";
+
+    /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized

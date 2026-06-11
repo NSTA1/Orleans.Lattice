@@ -8,6 +8,12 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
     {
         if (options.KeysPageSize <= 0)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.KeysPageSize)} must be greater than 0.");
+        if (options.QueueCapacity is { } queueCapacity && queueCapacity < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.QueueCapacity)} must be greater than or equal to 1 when set "
+                + "(null leaves the cluster-internal queue unbounded; a positive value caps it with FIFO eviction).");
+        }
         if (options.MaxLeafReplayEntries < 1)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
         if (options.MaterialiserCheckpointEntries < 1)

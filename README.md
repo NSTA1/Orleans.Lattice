@@ -53,6 +53,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Performance** | Approximate single-silo throughput and per-call latency for point reads, point writes, multi-key batches, and atomic sagas, measured against real Azure Tables. | [Performance: single-silo guide](docs/lattice/performance-single-silo.md) |
 | **Predicate operations** | Filter typed reads, conditional writes, atomic batches, scans, cursors, and range deletes with an ordinary `Expression<Func<T, bool>>` evaluated server-side; only matching keys or values cross the wire. | [Predicate Operations](docs/lattice/predicated-operations.md) |
 | **Projection rebuild** | Cross-silo divergence detection with policy-driven recovery. | [Projection Rebuild](docs/lattice/projection-rebuild.md) |
+| **Queues** | Typed, cluster-internal FIFO queues backed by a reserved system tree, with optional bounded FIFO eviction. | [Queues](docs/lattice/queues.md) |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) |
 | **Retry policy** | Opt-in retry surface for transient storage faults with caller-supplied idempotency keys. Library default is zero ambient cost. | [Retry Policy](docs/lattice/retry-policy.md) |
 | **Scalable writes** | Keys are sharded across many independent sub-trees. No single-root bottleneck. | [Architecture](docs/lattice/architecture.md) |
@@ -102,6 +103,7 @@ Use these documents for day-to-day use and operations:
 - [API Reference](docs/lattice/api.md) - the public `ILattice` interface, batch operations, options, and serializable types.
 - [Configuration](docs/lattice/configuration.md) - options reference, per-tree overrides, immutability constraints, storage provider.
 - [Predicate Operations](docs/lattice/predicated-operations.md) - server-side predicate push-down for typed reads, conditional and atomic writes, scans, cursors, and range deletes.
+- [Queues](docs/lattice/queues.md) - the public `ILatticeQueue<T>` cluster-internal FIFO primitive, bounded-queue eviction, and throughput guidance.
 - [Compression](docs/lattice/compression.md) - the public `ILatticeCompressor` seam, `AddLatticeCompressor` registration, tag-space partitioning, and how to plug in a custom algorithm.
 - [Samples](docs/lattice/samples.md) - runnable sample projects exercising `ILattice`.
 - [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.

@@ -245,6 +245,11 @@ internal static class TypeAliases
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
     internal const string ITxRegistryGrain = "ol.gxr";
     internal const string ILeafSnapshotStorageGrain = "ol.gsx";
+    internal const string ILatticeQueueGrain = "ol.glq";
+
+    // Cluster-internal FIFO queue (ILatticeQueue<T>) grain wire-return shape:
+    // a single parked entry's monotonic id plus its opaque serialized payload.
+    internal const string LatticeQueueByteEntry = "ol.qbe";
 
     // Replication apply DTO (batch path)
     internal const string ApplyMergeItem = "ol.ami";

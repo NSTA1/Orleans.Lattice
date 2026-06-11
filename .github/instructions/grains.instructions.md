@@ -32,6 +32,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `LeafCacheGrain` | `{leafGrainId}` | `"leaf/abc"` |
 | `LeafSnapshotStorageGrain` | Guid key matching the source leaf's grain id | - |
 | `LatticeRegistryGrain` | Singleton (`_lattice_trees`) | `"_lattice_trees"` |
+| `LatticeQueueGrain` | `{queueName}` | `"work-items"` |
 | `TombstoneCompactionGrain` | `{treeId}` | `"my-tree"` |
 | `TreeDeletionGrain` | `{treeId}` | `"my-tree"` |
 | `TreeResizeGrain` | `{treeId}` | `"my-tree"` |
