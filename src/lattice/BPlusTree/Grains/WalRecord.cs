@@ -383,5 +383,59 @@ public readonly record struct WalRecord
     /// </para>
     /// </summary>
     [Id(23)] public IReadOnlyList<string>? MatchedKeys { get; init; }
+
+    /// <summary>
+    /// The cross-tree coordinator key (the caller-supplied
+    /// <c>operationId</c>) when this terminal belongs to a sub-saga of a
+    /// multi-tree atomic write, or <see langword="null"/> for a
+    /// single-tree saga terminal and every non-terminal entry. Stamped
+    /// only on terminal records (<see cref="MutationKind.TxCommit"/> /
+    /// <see cref="MutationKind.TxAbort"/>) of a cross-tree sub-saga, from
+    /// the ambient set by <c>AtomicWriteGrain.BroadcastTerminalsAsync</c>.
+    /// <para>
+    /// Used together with <see cref="CrossTreeParticipants"/> by the
+    /// receiver's replication-apply path to drive the <b>receiver-side
+    /// cross-tree visibility barrier</b>: instead of flipping this tree's
+    /// per-tree registry the moment this tree's per-shard terminal tally
+    /// completes (which would expose tree A committed while tree B is
+    /// still pre-saga on the receiver), the receiver delegates this tree's
+    /// decision to a per-operation <c>ILatticeCrossTreeReceiverGrain</c>
+    /// keyed by <c>(originClusterId, operationId)</c> and only releases
+    /// every participating tree together once every participant tree the
+    /// receiver replicates has had its terminal arrive.
+    /// </para>
+    /// <para>
+    /// Strictly additive on the wire: legacy peers and entries authored
+    /// before this slot existed (and every single-tree saga terminal)
+    /// decode as <see langword="null"/>, which the receiver treats as
+    /// "not a cross-tree terminal" and routes through the existing
+    /// single-tree per-shard gate unchanged.
+    /// </para>
+    /// </summary>
+    [Id(24)] public string? CrossTreeOperationId { get; init; }
+
+    /// <summary>
+    /// The full, canonical (ordinal-sorted, de-duplicated) set of logical
+    /// tree ids that participate in the enclosing cross-tree atomic write,
+    /// or <see langword="null"/> for a single-tree saga terminal and every
+    /// non-terminal entry. Stamped only on the terminal records of a
+    /// cross-tree sub-saga alongside <see cref="CrossTreeOperationId"/>.
+    /// <para>
+    /// The receiver intersects this set with the trees it actually
+    /// replicates (from <c>LatticeReplicationOptions.ReplicatedTrees</c>)
+    /// to compute the <i>wait set</i> the receiver-side barrier blocks on.
+    /// A receiver that replicates only a subset of the participating trees
+    /// waits only for that subset's terminals - a cross-tree batch
+    /// spanning a mix of replicated and non-replicated trees is a valid,
+    /// supported configuration. Every terminal of one operation carries
+    /// the identical participant set; the receiver freezes it on the first
+    /// terminal and rejects a mismatching later terminal.
+    /// </para>
+    /// <para>
+    /// Strictly additive on the wire: legacy / single-tree terminals
+    /// decode as <see langword="null"/>.
+    /// </para>
+    /// </summary>
+    [Id(25)] public IReadOnlyList<string>? CrossTreeParticipants { get; init; }
 }
 

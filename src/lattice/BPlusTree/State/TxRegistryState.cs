@@ -186,4 +186,62 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(6)] public long DecisionsRevision { get; set; }
+
+    /// <summary>
+    /// Per-saga delegation records for cross-tree atomic writes: maps a
+    /// sub-saga's txid to the key of the
+    /// <see cref="Grains.LatticeCrossTreeTxGrain"/> that owns the single global
+    /// commit/abort decision for the cross-tree batch. Populated when a
+    /// participating tree's saga parks in
+    /// <see cref="AtomicWritePhase.Prepared"/> (via
+    /// <c>RegisterExternalDecisionAuthorityAsync</c>). While a txid is present
+    /// here and has no terminal entry in <see cref="Decisions"/>, every status
+    /// query resolves it by dialling the coordinator's
+    /// <c>GetDecisionAsync</c> rather than reading the local map - so the
+    /// cross-tree batch becomes visible on this tree at the exact moment the
+    /// coordinator records its decision, never before. Once the coordinator's
+    /// verdict is terminal the registry caches it into <see cref="Decisions"/>
+    /// (bumping <see cref="DecisionsRevision"/>) and drops the delegation entry,
+    /// so subsequent reads resolve locally. Also dropped by
+    /// <c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c> (the sub-saga's
+    /// finalize records the authoritative local decision) and by
+    /// <c>ForgetAsync</c>.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-7 slot decodes to
+    /// an empty dictionary, which is the correct semantic default (no cross-tree
+    /// delegations - every saga resolves purely from <see cref="Decisions"/>).
+    /// </para>
+    /// </summary>
+    [Id(7)] public Dictionary<Guid, string> ExternalAuthorities { get; set; } = [];
+
+    /// <summary>
+    /// Per-saga delegation records for the <b>receiver side</b> of a cross-tree
+    /// atomic write: maps a replicated sub-saga's txid to the compound key
+    /// (<c>originClusterId</c> + <c>operationId</c>) of the
+    /// <see cref="Grains.LatticeCrossTreeReceiverGrain"/> that owns the single
+    /// global commit/abort decision for the cross-tree batch <i>on this
+    /// receiver cluster</i>. Distinct from <see cref="ExternalAuthorities"/>
+    /// (which resolves to the authoring-cluster
+    /// <see cref="Grains.LatticeCrossTreeTxGrain"/>): the receiver never hosts
+    /// the authoring coordinator, so it delegates to a local receiver
+    /// coordinator instead. Populated when a cross-tree terminal's per-shard
+    /// gate completes on the receiver (via
+    /// <c>RegisterReceiverDecisionAuthorityAsync</c>), strictly <i>before</i>
+    /// the receiver notifies that coordinator, so no reader can resolve one
+    /// participating tree committed while the last tree is still legacy-local.
+    /// While a txid is present here with no terminal entry in
+    /// <see cref="Decisions"/>, status queries resolve it by dialling the
+    /// receiver coordinator's <c>GetDecisionAsync</c> - so every participating
+    /// tree on the receiver flips visible at the single instant the receiver
+    /// coordinator's wait set completes, never partially. The receiver
+    /// coordinator's deferred materialization (<c>FinalizeCrossTreeTerminalAsync</c>)
+    /// later records the authoritative local decision via
+    /// <c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c>, which drops this
+    /// entry. Also dropped by <c>ForgetAsync</c>.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-8 slot decodes to
+    /// an empty dictionary (no receiver delegations).
+    /// </para>
+    /// </summary>
+    [Id(8)] public Dictionary<Guid, string> ReceiverDecisionAuthorities { get; set; } = [];
 }

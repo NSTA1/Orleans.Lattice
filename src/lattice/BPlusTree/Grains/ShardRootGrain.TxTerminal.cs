@@ -280,6 +280,13 @@ internal sealed partial class ShardRootGrain
                 // first terminal" semantics on the receiver, matching
                 // pre-gate behaviour.
                 AtomicShardCount = LatticeAtomicShardCountContext.Current ?? 0,
+                // Cross-tree visibility-barrier metadata, stamped from the
+                // ambient set by the cross-tree sub-saga's
+                // BroadcastTerminalsAsync. Null on single-tree saga
+                // terminals and every non-saga write, which the receiver
+                // routes through the legacy single-tree per-shard gate.
+                CrossTreeOperationId = LatticeCrossTreeTerminalContext.Current?.OperationId,
+                CrossTreeParticipants = LatticeCrossTreeTerminalContext.Current?.Participants,
             };
 
                 if (inlineWalAppend)

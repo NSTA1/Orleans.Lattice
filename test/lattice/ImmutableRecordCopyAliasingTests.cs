@@ -203,6 +203,25 @@ public sealed class ImmutableRecordCopyAliasingTests
     }
 
     [Test]
+    public void LatticeTreeBatch_deep_copy_does_not_alias_the_entries_list_or_inner_byte_arrays()
+    {
+        var bytes = new byte[] { 1, 2, 3 };
+        var entries = new List<KeyValuePair<string, byte[]>> { new("k", bytes) };
+        var original = new LatticeTreeBatch("orders", entries);
+
+        var copy = Copier<LatticeTreeBatch>().Copy(original);
+
+        Assert.That(ReferenceEquals(copy.Entries, original.Entries), Is.False, "Entries list");
+        Assert.That(
+            ReferenceEquals(copy.Entries[0].Value, original.Entries[0].Value),
+            Is.False,
+            "LatticeTreeBatch is passed to SetManyAtomicAsync and persisted by the " +
+            "cross-tree coordinator grain; if it were marked [Immutable] Orleans would alias the " +
+            "caller's Entries list and inner byte[] straight into the grain's persisted state, " +
+            "letting a caller-side mutation corrupt an in-flight cross-tree saga.");
+    }
+
+    [Test]
     public void LwwValue_deep_copy_does_not_alias_inner_VectorClock_instance()
     {
         var clock = new VersionVector();

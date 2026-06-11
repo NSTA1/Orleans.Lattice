@@ -220,6 +220,8 @@ public partial class ReplicationApplierTests
             ts,
             RemoteCluster,
             Arg.Any<int>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyList<string>?>(),
             Arg.Any<CancellationToken>());
         // Terminals bypass the per-origin HWM check entirely - neither
         // a HWM read nor a HWM advance must be issued.
@@ -250,6 +252,8 @@ public partial class ReplicationApplierTests
             ts,
             RemoteCluster,
             Arg.Any<int>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyList<string>?>(),
             Arg.Any<CancellationToken>());
         await hwm.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await hwm.DidNotReceive().TryAdvanceAsync(
@@ -286,6 +290,8 @@ public partial class ReplicationApplierTests
             ts,
             RemoteCluster,
             Arg.Any<int>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyList<string>?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -318,6 +324,8 @@ public partial class ReplicationApplierTests
             ts,
             RemoteCluster,
             Arg.Any<int>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyList<string>?>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -384,6 +392,8 @@ public partial class ReplicationApplierTests
             Arg.Any<HybridLogicalClock>(),
             Arg.Any<string>(),
             Arg.Any<int>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyList<string>?>(),
             Arg.Any<CancellationToken>());
         await hwm.DidNotReceive().TryAdvanceAsync(
             Arg.Any<string>(),

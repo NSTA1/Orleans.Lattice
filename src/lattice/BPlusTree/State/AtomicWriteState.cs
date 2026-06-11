@@ -248,4 +248,33 @@ internal sealed class AtomicWriteState
     /// <see langword="null"/> (an unguarded saga).
     /// </summary>
     [Id(18)] public LatticePredicateNode? Guard { get; set; }
+
+    /// <summary>
+    /// Coordinator key of the <see cref="Grains.LatticeCrossTreeTxGrain"/>
+    /// driving this sub-saga when it participates in a cross-tree atomic write,
+    /// or <see langword="null"/> for a standalone single-tree saga. When set,
+    /// the saga runs in prepare-and-pause mode: after staging every write it
+    /// registers the per-tree registry to delegate this saga's txid to the
+    /// coordinator and parks in <see cref="AtomicWritePhase.Prepared"/> instead
+    /// of recording the per-tree terminal decision, waiting for the
+    /// coordinator's <c>FinalizeAsync</c> call. Persisted so a reminder-driven
+    /// resume keeps the saga paused (the coordinator, not the keepalive
+    /// reminder, drives the resume). Wire-compatible: missing field on legacy
+    /// persisted state decodes to <see langword="null"/> (a standalone saga).
+    /// </summary>
+    [Id(19)] public string? ExternalAuthorityKey { get; set; }
+
+    /// <summary>
+    /// The full, canonical (ordinal-sorted) set of logical tree ids
+    /// participating in the enclosing cross-tree atomic write, or
+    /// <see langword="null"/> for a standalone single-tree saga. Captured
+    /// from the coordinator at prepare time and persisted so the terminal
+    /// broadcast - whether driven by <c>FinalizeAsync</c> or by a
+    /// reminder-driven crash-recovery resume - can stamp
+    /// <see cref="WalRecord.CrossTreeParticipants"/> onto every per-shard
+    /// terminal record, feeding the receiver-side cross-tree visibility
+    /// barrier. Wire-compatible: a missing field on legacy persisted state
+    /// decodes to <see langword="null"/> (a standalone saga, no barrier).
+    /// </summary>
+    [Id(20)] public IReadOnlyList<string>? CrossTreeParticipants { get; set; }
 }

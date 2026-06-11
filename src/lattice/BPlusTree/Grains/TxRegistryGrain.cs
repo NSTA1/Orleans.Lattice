@@ -39,6 +39,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed class TxRegistryGrain(
     IGrainContext context,
+    IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     [PersistentState("tx-registry", LatticeOptions.StorageProviderName)]
     IPersistentState<TxRegistryState> state) : ITxRegistryGrain, IGrainBase
@@ -80,6 +81,11 @@ internal sealed class TxRegistryGrain(
             state.State.Decisions.Remove(txid);
         }
 
+        // A locally-recorded decision supersedes any cross-tree delegation:
+        // this sub-saga's finalize is the authoritative outcome for this tree.
+        state.State.ExternalAuthorities.Remove(txid);
+        state.State.ReceiverDecisionAuthorities.Remove(txid);
+
         if (state.State.Decisions.TryGetValue(txid, out var existing))
         {
             if (existing == TxStatus.Committed) return;
@@ -120,6 +126,10 @@ internal sealed class TxRegistryGrain(
             state.State.Decisions.Remove(txid);
         }
 
+        // A locally-recorded decision supersedes any cross-tree delegation.
+        state.State.ExternalAuthorities.Remove(txid);
+        state.State.ReceiverDecisionAuthorities.Remove(txid);
+
         if (state.State.Decisions.TryGetValue(txid, out var existing))
         {
             if (existing == TxStatus.Aborted) return;
@@ -150,7 +160,228 @@ internal sealed class TxRegistryGrain(
     }
 
     /// <inheritdoc />
-    public Task<TxStatus> GetStatusAsync(Guid txid)
+    public async Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(coordinatorKey);
+
+        // A locally-recorded terminal decision already supersedes any
+        // delegation - the sub-saga finalized before (or concurrently with)
+        // this registration. Leave the local decision authoritative.
+        if (state.State.Decisions.ContainsKey(txid))
+        {
+            return;
+        }
+
+        // Idempotent: re-registering the same coordinator is a no-op.
+        if (state.State.ExternalAuthorities.TryGetValue(txid, out var existing)
+            && string.Equals(existing, coordinatorKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.State.ExternalAuthorities[txid] = coordinatorKey;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            if (existing is not null) state.State.ExternalAuthorities[txid] = existing;
+            else state.State.ExternalAuthorities.Remove(txid);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task RegisterReceiverDecisionAuthorityAsync(Guid txid, string receiverCoordinatorKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(receiverCoordinatorKey);
+
+        // A locally-recorded terminal decision already supersedes any
+        // delegation - the receiver coordinator's deferred materialization
+        // finalized before (or concurrently with) this registration.
+        if (state.State.Decisions.ContainsKey(txid))
+        {
+            return;
+        }
+
+        // Idempotent: re-registering the same receiver coordinator is a no-op.
+        if (state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var existing)
+            && string.Equals(existing, receiverCoordinatorKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.State.ReceiverDecisionAuthorities[txid] = receiverCoordinatorKey;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            if (existing is not null) state.State.ReceiverDecisionAuthorities[txid] = existing;
+            else state.State.ReceiverDecisionAuthorities.Remove(txid);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Resolves a single receiver-delegated <paramref name="txid"/> against its
+    /// receiver coordinator (<see cref="ILatticeCrossTreeReceiverGrain"/>),
+    /// mirroring <see cref="ResolveDelegatedAsync"/> but for the receiver-side
+    /// barrier. Returns <see cref="TxStatus.InFlight"/> while the receiver
+    /// coordinator's wait set is incomplete; caches a terminal verdict into
+    /// <see cref="TxRegistryState.Decisions"/> and drops the delegation entry
+    /// once resolved. Dial failures surface as <c>InFlight</c> (conservative).
+    /// </summary>
+    private async Task<TxStatus> ResolveReceiverDelegatedAsync(Guid txid, string receiverCoordinatorKey)
+    {
+        TxStatus verdict;
+        try
+        {
+            var coordinator = grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(receiverCoordinatorKey);
+            verdict = await coordinator.GetDecisionAsync();
+        }
+        catch
+        {
+            return TxStatus.InFlight;
+        }
+
+        if (verdict == TxStatus.InFlight)
+        {
+            return TxStatus.InFlight;
+        }
+
+        if (!state.State.Decisions.ContainsKey(txid))
+        {
+            state.State.Decisions[txid] = verdict;
+            state.State.ReceiverDecisionAuthorities.Remove(txid);
+            var prevRevision = state.State.DecisionsRevision;
+            state.State.DecisionsRevision = prevRevision + 1;
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.Decisions.Remove(txid);
+                state.State.ReceiverDecisionAuthorities[txid] = receiverCoordinatorKey;
+                state.State.DecisionsRevision = prevRevision;
+            }
+        }
+        return verdict;
+    }
+
+    /// <summary>
+    /// Resolves a txid that has no local decision against whichever cross-tree
+    /// delegation map (authoring-side <see cref="TxRegistryState.ExternalAuthorities"/>
+    /// or receiver-side <see cref="TxRegistryState.ReceiverDecisionAuthorities"/>)
+    /// carries it, else returns <see cref="TxStatus.InFlight"/>. A txid is never
+    /// present in both maps.
+    /// </summary>
+    private async Task<TxStatus> ResolveAnyDelegatedAsync(Guid txid)
+    {
+        if (state.State.ExternalAuthorities.TryGetValue(txid, out var coordinatorKey))
+        {
+            return await ResolveDelegatedAsync(txid, coordinatorKey);
+        }
+        if (state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var receiverKey))
+        {
+            return await ResolveReceiverDelegatedAsync(txid, receiverKey);
+        }
+        return TxStatus.InFlight;
+    }
+
+    /// <summary>
+    /// Resolves a single delegated <paramref name="txid"/> against its
+    /// coordinator. While the coordinator is still preparing this returns
+    /// <see cref="TxStatus.InFlight"/> without touching state. Once the
+    /// coordinator's verdict is terminal it is cached into
+    /// <see cref="TxRegistryState.Decisions"/> (bumping the revision) and the
+    /// delegation entry is dropped, so later reads resolve locally. Coordinator
+    /// dial failures are swallowed and surface as <c>InFlight</c> (conservative:
+    /// the cross-tree batch stays invisible on this tree until it can be
+    /// resolved).
+    /// </summary>
+    private async Task<TxStatus> ResolveDelegatedAsync(Guid txid, string coordinatorKey)
+    {
+        TxStatus verdict;
+        try
+        {
+            var coordinator = grainFactory.GetGrain<ILatticeCrossTreeTxGrain>(coordinatorKey);
+            verdict = await coordinator.GetDecisionAsync();
+        }
+        catch
+        {
+            return TxStatus.InFlight;
+        }
+
+        if (verdict == TxStatus.InFlight)
+        {
+            return TxStatus.InFlight;
+        }
+
+        // Terminal: cache locally so the global flip is durable on this tree
+        // and future reads need no further coordinator round-trips.
+        if (!state.State.Decisions.ContainsKey(txid))
+        {
+            state.State.Decisions[txid] = verdict;
+            state.State.ExternalAuthorities.Remove(txid);
+            var prevRevision = state.State.DecisionsRevision;
+            state.State.DecisionsRevision = prevRevision + 1;
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.Decisions.Remove(txid);
+                state.State.ExternalAuthorities[txid] = coordinatorKey;
+                state.State.DecisionsRevision = prevRevision;
+                // Surface the resolved verdict for this read even though the
+                // cache write failed; the next read re-dials and re-attempts.
+            }
+        }
+        return verdict;
+    }
+
+    /// <summary>
+    /// Resolves every active cross-tree delegation against its coordinator,
+    /// caching terminal verdicts. Invoked before the snapshot read paths build
+    /// their dictionaries so a coordinator-decided sub-saga is never omitted
+    /// from a tree-wide snapshot (which would read as a partial cross-tree
+    /// view). In-flight delegations are left in place to be retried on the next
+    /// snapshot.
+    /// </summary>
+    private async Task ResolveAllDelegatedAsync()
+    {
+        if (state.State.ExternalAuthorities.Count > 0)
+        {
+            // Snapshot the pending delegations: ResolveDelegatedAsync mutates the
+            // ExternalAuthorities map when a verdict turns terminal.
+            var pending = new List<KeyValuePair<Guid, string>>(state.State.ExternalAuthorities);
+            foreach (var (txid, coordinatorKey) in pending)
+            {
+                if (state.State.Decisions.ContainsKey(txid)) continue;
+                await ResolveDelegatedAsync(txid, coordinatorKey);
+            }
+        }
+        if (state.State.ReceiverDecisionAuthorities.Count > 0)
+        {
+            // Mirror the receiver-side delegation map (see above): a
+            // coordinator-decided-but-not-yet-materialized receiver sub-saga
+            // must not be omitted from a tree-wide snapshot.
+            var pendingReceiver = new List<KeyValuePair<Guid, string>>(state.State.ReceiverDecisionAuthorities);
+            foreach (var (txid, receiverKey) in pendingReceiver)
+            {
+                if (state.State.Decisions.ContainsKey(txid)) continue;
+                await ResolveReceiverDelegatedAsync(txid, receiverKey);
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<TxStatus> GetStatusAsync(Guid txid)
     {
         if (IsTombstoneExpired(txid))
         {
@@ -158,16 +389,20 @@ internal sealed class TxRegistryGrain(
             // not physically purged here (purging happens lazily inside
             // ForgetAsync via PruneExpired) so GetStatusAsync stays a
             // pure read with no state-write side effects.
-            return Task.FromResult(TxStatus.InFlight);
+            return TxStatus.InFlight;
         }
-        return Task.FromResult(
-            state.State.Decisions.TryGetValue(txid, out var status)
-                ? status
-                : TxStatus.InFlight);
+        if (state.State.Decisions.TryGetValue(txid, out var status))
+        {
+            return status;
+        }
+        // No local decision: if the txid is a cross-tree sub-saga (authoring
+        // or receiver side), resolve its visibility against the coordinator's
+        // single global decision.
+        return await ResolveAnyDelegatedAsync(txid);
     }
 
     /// <inheritdoc />
-    public Task<Dictionary<Guid, TxStatus>> GetStatusManyAsync(IReadOnlyList<Guid> txids)
+    public async Task<Dictionary<Guid, TxStatus>> GetStatusManyAsync(IReadOnlyList<Guid> txids)
     {
         ArgumentNullException.ThrowIfNull(txids);
         var result = new Dictionary<Guid, TxStatus>(txids.Count);
@@ -184,16 +419,31 @@ internal sealed class TxRegistryGrain(
                 result[txid] = TxStatus.InFlight;
                 continue;
             }
-            result[txid] = state.State.Decisions.TryGetValue(txid, out var status)
-                ? status
-                : TxStatus.InFlight;
+            if (state.State.Decisions.TryGetValue(txid, out var status))
+            {
+                result[txid] = status;
+                continue;
+            }
+            // No local decision: resolve any cross-tree delegation (authoring
+            // or receiver side) against the coordinator so a bulk leaf read
+            // honours the same global visibility flip as the per-txid path.
+            result[txid] = await ResolveAnyDelegatedAsync(txid);
         }
-        return Task.FromResult(result);
+        return result;
     }
 
     /// <inheritdoc />
-    public Task<Dictionary<Guid, TxStatus>> SnapshotAsync()
+    public async Task<Dictionary<Guid, TxStatus>> SnapshotAsync()
     {
+        // Resolve any active cross-tree delegations against their coordinator
+        // BEFORE the synchronous dict-build below. A coordinator-decided but
+        // not-yet-finalized sub-saga would otherwise be omitted from the
+        // snapshot (no local decision) and read as InFlight - invisible on
+        // this tree while a sibling tree that already finalized shows the
+        // value, a partial cross-tree view. Resolving here caches terminal
+        // verdicts into Decisions so the snapshot reflects the global flip.
+        await ResolveAllDelegatedAsync();
+
         // Return a defensive copy so callers cannot mutate the
         // registry's persisted state through the returned reference.
         // Expired tombstones are filtered out so the snapshot reflects
@@ -209,20 +459,24 @@ internal sealed class TxRegistryGrain(
             if (IsTombstoneExpiredAt(txid, now, retention)) continue;
             result[txid] = status;
         }
-        return Task.FromResult(result);
+        return result;
     }
 
     /// <inheritdoc />
-    public Task<TxRegistrySnapshot> SnapshotWithRevisionAsync()
+    public async Task<TxRegistrySnapshot> SnapshotWithRevisionAsync()
     {
-        // Same body as SnapshotAsync, with the revision captured
-        // inside the same synchronous block. Both fields therefore
-        // reflect the exact same persisted state - no inter-call skew
-        // is possible because the method runs on the registry's
-        // single-turn token (the body has no await) and reads the
-        // revision after the dict copy, so any concurrent in-memory
-        // mutation (which would need its own turn token to reach the
-        // synchronous mutation path in MarkCommittedAsync /
+        // Resolve cross-tree delegations first (see SnapshotAsync). The
+        // dict + revision are then captured in one synchronous block with no
+        // intervening await, so both reflect the exact same persisted state
+        // (including any verdicts just cached by the resolution pass).
+        await ResolveAllDelegatedAsync();
+
+        // The revision captured inside the same synchronous block. Both
+        // fields therefore reflect the exact same persisted state - no
+        // inter-call skew is possible because the body below has no await
+        // and reads the revision after the dict copy, so any concurrent
+        // in-memory mutation (which would need its own turn token to reach
+        // the synchronous mutation path in MarkCommittedAsync /
         // MarkAbortedAsync / ForgetAsync) is necessarily fully visible
         // in BOTH fields or neither.
         var now = TimeProvider.GetUtcNow();
@@ -233,11 +487,11 @@ internal sealed class TxRegistryGrain(
             if (IsTombstoneExpiredAt(txid, now, retention)) continue;
             dict[txid] = status;
         }
-        return Task.FromResult(new TxRegistrySnapshot
+        return new TxRegistrySnapshot
         {
             Decisions = dict,
             Revision = state.State.DecisionsRevision,
-        });
+        };
     }
 
     /// <inheritdoc />
@@ -306,6 +560,14 @@ internal sealed class TxRegistryGrain(
         // that depends on the tombstone uses Decisions only.
         var droppedParticipants = state.State.Participants.Remove(txid);
 
+        // Drop any lingering cross-tree delegation. Normally cleared already
+        // by the sub-saga's finalize (MarkCommitted/MarkAborted); this is a
+        // belt-and-braces cleanup so the delegation map stays bounded.
+        var hadAuthority = state.State.ExternalAuthorities.TryGetValue(txid, out var prevAuthority);
+        var droppedAuthority = state.State.ExternalAuthorities.Remove(txid);
+        var hadReceiverAuthority = state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var prevReceiverAuthority);
+        var droppedReceiverAuthority = state.State.ReceiverDecisionAuthorities.Remove(txid);
+
         // Receiver-side cross-cluster terminal-tally state is also
         // bounded by the saga lifetime, so drop it alongside the
         // participants. The tally is only consulted while the gate is
@@ -328,7 +590,8 @@ internal sealed class TxRegistryGrain(
         var pruned = PruneExpired(now, retention);
 
         var changed = droppedDecision || addedForgottenAt || droppedParticipants
-            || droppedArrivals || droppedExpected
+            || droppedArrivals || droppedExpected || droppedAuthority
+            || droppedReceiverAuthority
             || pruned.Any;
 
         if (changed)
@@ -367,6 +630,14 @@ internal sealed class TxRegistryGrain(
                 if (droppedExpected && hadExpectedTotal)
                 {
                     state.State.ExpectedTerminals[txid] = prevExpectedTotal;
+                }
+                if (droppedAuthority && hadAuthority)
+                {
+                    state.State.ExternalAuthorities[txid] = prevAuthority!;
+                }
+                if (droppedReceiverAuthority && hadReceiverAuthority)
+                {
+                    state.State.ReceiverDecisionAuthorities[txid] = prevReceiverAuthority!;
                 }
                 if (pruned.Tombstones is { } tombstones)
                 {

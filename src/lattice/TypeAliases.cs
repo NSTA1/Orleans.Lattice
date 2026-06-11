@@ -136,6 +136,23 @@ internal static class TypeAliases
     internal const string SnapshotPin = "ol.sp";
     internal const string TxRegistrySnapshot = "ol.tsn";
 
+    // Cross-tree (multi-tree) atomic writes
+    internal const string LatticeTreeBatch = "ol.ltb";
+    internal const string CrossTreeAtomicWriteOutcome = "ol.cto";
+    internal const string CrossTreeTxState = "ol.cts";
+    internal const string CrossTreeTxPhase = "ol.ctp";
+    internal const string CrossTreeParticipant = "ol.ctc";
+    internal const string CrossTreePrepareVote = "ol.ctv";
+    internal const string ILatticeCrossTreeTxGrain = "ol.gct";
+    // Receiver-side cross-tree visibility barrier.
+    internal const string ILatticeCrossTreeReceiverGrain = "ol.gcr";
+    internal const string CrossTreeReceiverState = "ol.crs";
+    internal const string CrossTreeReceiverTerminal = "ol.crt";
+    internal const string CrossTreeReceiverDecision = "ol.crd";
+    internal const string CrossTreeReceiverTreeFinalize = "ol.crf";
+    // Ambient producer-side cross-tree terminal metadata (RequestContext value).
+    internal const string CrossTreeTerminalInfo = "ol.cti";
+
     // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";
     internal const string LatticeCursorSpec = "ol.lcu";

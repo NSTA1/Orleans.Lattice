@@ -148,6 +148,57 @@ See [Atomic Writes](atomic-writes.md) for the saga primitive and
 [Durable Cursors](durable-cursors.md#point-in-time-cursors) for the
 point-in-time cursor mode.
 
+### Cross-tree (multi-tree) atomic visibility
+
+`IGrainFactory.SetManyAtomicAsync` (and the `BeginAtomicWrite`
+builder) extend the single-tree atomic-visibility contract to a batch
+spanning two or more distinct `ILattice` trees: either every targeted
+key across every participating tree becomes visible, or none of them do.
+A two-level saga drives this - a coordinator grain keyed by the
+`operationId` writes a **single** global commit/abort decision, and each
+participating tree's `ITxRegistryGrain` *delegates* the status of its
+prepared txid to that coordinator until the decision lands. Before the
+decision, every tree returns `InFlight` for the saga (prepared keys are
+invisible, indistinguishable from pre-saga); after it, every tree
+returns the same global verdict. The coordinator's single decision write
+is the cross-tree linearization point.
+
+This is **atomicity**, not cross-tree read isolation, and the two are easy
+to conflate. The atomic guarantee is anchored to the coordinator's single
+decision write as one global linearization point: at any single instant the
+saga is either undecided (every participating tree returns `InFlight`, every
+prepared key invisible and indistinguishable from pre-saga) or decided (every
+tree returns the same global verdict). There is no instant at which the commit
+is durably half-applied, so an observer that could sample every participating
+tree *at one instant* always sees all-pre or all-post. What the design does
+**not** add is a cross-tree read snapshot (serializable isolation across
+trees): Lattice has no single read operation spanning multiple trees, so a
+reader that issues *separate* per-tree reads at *different* instants which
+straddle the linearization point can compose a mixed view - tree A's pre-saga
+value read before the flip alongside tree B's post-saga value read after it -
+exactly as two independent `SELECT`s under read-committed isolation can in a
+relational store. That is a property of the reader taking several
+point-in-time samples, not a hole in the write's atomicity: within any
+*single* read, every saga key on that tree resolves against one global
+verdict, so a tree is never seen showing a partial slice of one cross-tree
+saga. See
+[Atomic Writes: Cross-tree atomic writes](atomic-writes.md#cross-tree-multi-tree-atomic-writes).
+
+The same all-or-nothing visibility holds **across clusters**. Each
+participating tree's terminals replicate on their own per-tree WAL feed,
+so a receiver can apply one tree's terminal before a sibling tree's. A
+receiver-side coordinator grain (`ILatticeCrossTreeReceiverGrain`), keyed
+by `(originClusterId, operationId)`, holds every participating tree
+invisible until a terminal has arrived for each tree it expects, then
+flips them together - mirroring the authoring cluster's single-write
+flip. The set of trees it waits for is scoped to the trees actually
+replicated on that receiver (the batch's participant set intersected with
+`LatticeReplicationOptions.ReplicatedTrees`), so a cross-tree batch
+spanning a mix of replicated and non-replicated trees remains valid: the
+receiver preserves cross-tree atomic visibility across exactly the subset
+of trees it hosts. See
+[Atomic Writes: Cross-cluster cross-tree visibility](atomic-writes.md#cross-cluster-cross-tree-visibility-receiver-barrier).
+
 ---
 
 ## Topology and durability notes
@@ -208,11 +259,16 @@ own, and the matching `Is*CompleteAsync` eventually returns `true`.
   stage it via `SetManyAtomicAsync` or gate visibility with an
   application-level marker key. (`SetManyAtomicAsync` itself does
   guarantee reader isolation tree-wide.)
-- **Cross-tree atomicity.** Atomic visibility is scoped to a single
-  `ILattice` tree. Operations that touch more than one tree (e.g.
-  `MergeAsync`, `SnapshotAsync`) are LWW-convergent on the destination
-  but readers of both trees may observe the in-flight state. There is
-  no cross-tree saga primitive.
+- **Cross-tree atomicity of incidental multi-tree operations.** A single
+  `ILattice` tree's per-operation atomic visibility does not automatically
+  extend to operations that touch more than one tree as a side effect (e.g.
+  `MergeAsync`, `SnapshotAsync`): those are LWW-convergent on the
+  destination but not atomic-visible, so readers of both trees may observe the
+  in-flight state. For an explicit all-or-nothing write spanning multiple
+  trees, use the cross-tree saga primitive (`SetManyAtomicAsync` /
+  the `BeginAtomicWrite` builder), which extends atomic visibility across
+  every participating tree - see
+  [Cross-tree (multi-tree) atomic visibility](#cross-tree-multi-tree-atomic-visibility) above.
 - **Cross-tree causality.** The causal+ guarantees shipped in the
   replication package are scoped to single-tree writes; a multi-tree
   operation does not establish a causal edge between those trees on

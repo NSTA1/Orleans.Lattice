@@ -257,6 +257,12 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             // observer - but the passthrough is defensive in case a
             // future emit path routes terminals through the observer.
             AtomicShardCount = mutation.AtomicShardCount,
+            // Cross-tree terminal metadata passthrough (defensive, same
+            // rationale as AtomicShardCount above): stamped only on
+            // cross-tree sub-saga terminals, which today flow through the
+            // WAL writer path, not the observer.
+            CrossTreeOperationId = mutation.CrossTreeOperationId,
+            CrossTreeParticipants = mutation.CrossTreeParticipants,
         };
 
         await _sink.WriteAsync(entry, cancellationToken).ConfigureAwait(false);

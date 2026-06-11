@@ -185,6 +185,13 @@ internal sealed class AtomicWriteGrain(
                         OperationKey);
                 }
                 break;
+            case AtomicWritePhase.Prepared:
+                // Cross-tree prepare-and-pause: the saga is parked waiting for
+                // the coordinator's FinalizeAsync call. The coordinator's own
+                // durable reminder drives the resume, so the sub-saga's
+                // keepalive tick is a deliberate no-op here - re-running
+                // RunSagaAsync would simply re-park.
+                break;
             case AtomicWritePhase.Completed:
             case AtomicWritePhase.PreconditionFailed:
             case AtomicWritePhase.NotStarted:
@@ -336,6 +343,181 @@ internal sealed class AtomicWriteGrain(
             ? AtomicWriteOutcome.PreconditionFailed
             : AtomicWriteOutcome.Committed;
     }
+
+    /// <inheritdoc />
+    public async Task<CrossTreePrepareVote> PrepareForCoordinatorAsync(
+        string treeId,
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode? predicate,
+        string coordinatorKey,
+        IReadOnlyList<string> participants)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentException.ThrowIfNullOrEmpty(coordinatorKey);
+        ArgumentNullException.ThrowIfNull(participants);
+
+        // Empty batch: vacuously prepared, nothing to stage.
+        if (entries.Count == 0) return CrossTreePrepareVote.Prepared;
+
+        // Key-set stability across re-submits (mirrors ExecuteAsync): a
+        // re-attaching coordinator must present the identical key set.
+        if (state.State.Phase != AtomicWritePhase.NotStarted
+            && state.State.KeyFingerprint is { } persistedFingerprint)
+        {
+            var incomingFingerprint = ComputeKeyFingerprint(entries);
+            if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
+            {
+                throw new InvalidOperationException(
+                    $"Atomic-write operation '{OperationKey}' was previously submitted with a different key set; " +
+                    "reuse of a caller-supplied operationId requires the exact same set of keys.");
+            }
+        }
+
+        // Idempotent re-entry on a sub-saga that already reached a vote-bearing
+        // state - a coordinator retry (its own crash-recovery) re-dispatches
+        // prepare to every participant and must observe the original vote.
+        switch (state.State.Phase)
+        {
+            case AtomicWritePhase.Prepared:
+                return CrossTreePrepareVote.Prepared;
+            case AtomicWritePhase.PreconditionFailed:
+                return CrossTreePrepareVote.PreconditionFailed;
+            case AtomicWritePhase.Completed:
+                // Already finalized under coordinator drive; report the
+                // terminal shape so a re-attaching coordinator can re-finalize
+                // idempotently (a committed/aborted finalize is a no-op).
+                return state.State.FailureMessage is not null
+                    ? CrossTreePrepareVote.Failed
+                    : CrossTreePrepareVote.Prepared;
+        }
+
+        if (state.State.Phase == AtomicWritePhase.NotStarted)
+        {
+            ValidateInputs(entries);
+            // Capture the guard and the coordinator key before Prepare so a
+            // reminder-driven Prepare replay re-applies the identical guard and
+            // re-parks against the same coordinator.
+            state.State.Guard = predicate;
+            state.State.ExternalAuthorityKey = coordinatorKey;
+            state.State.CrossTreeParticipants = participants.Count > 0 ? participants : null;
+            await RegisterKeepaliveAsync();
+            await PrepareAsync(treeId, entries);
+        }
+
+        try
+        {
+            await RunSagaAsync();
+        }
+        catch (CrossTreeParkRetryException)
+        {
+            // Parking (registry delegation + paused-phase persist) is a
+            // RETRYABLE step, not a saga failure: every prepared write is still
+            // staged and the phase was reverted to Execute on a persist failure.
+            // Propagate so the coordinator keeps the transaction Preparing and
+            // retries the whole prepare phase on its next tick; this still-staged
+            // sub-saga then re-parks cleanly and votes Prepared. Voting Failed
+            // here would spuriously abort the entire cross-tree saga over a
+            // transient blip AND strand this sub-saga parked forever.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A genuine staging failure self-compensated through RunSagaAsync's
+            // Compensate path (which records the per-tree abort, drops the
+            // staged buckets, and rethrows). The sub-saga is terminal-failed
+            // with nothing visible; vote Failed so the coordinator aborts the
+            // remaining participants.
+            Logger.LogWarning(ex,
+                "Cross-tree sub-saga {OperationKey} failed during prepare; voting Failed.",
+                OperationKey);
+            return CrossTreePrepareVote.Failed;
+        }
+
+        return state.State.Phase switch
+        {
+            AtomicWritePhase.Prepared => CrossTreePrepareVote.Prepared,
+            AtomicWritePhase.PreconditionFailed => CrossTreePrepareVote.PreconditionFailed,
+            _ => CrossTreePrepareVote.Failed,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task FinalizeAsync(bool commit)
+    {
+        // Only a parked (Prepared) sub-saga can be finalized. Any other phase is
+        // a no-op: NotStarted / PreconditionFailed / Completed are already
+        // terminal or never staged; Prepare / Execute / Compensate mean the
+        // park has not happened yet (the coordinator retries finalize on its
+        // next reminder tick once the participant has voted).
+        if (state.State.Phase != AtomicWritePhase.Prepared)
+        {
+            return;
+        }
+
+        // Mirror the single-tree terminal tail: record the per-tree decision
+        // first (which also clears the registry's delegation entry so readers
+        // resolve locally from here on), then fan out the per-leaf terminals,
+        // then complete. Each step is idempotent so a coordinator crash between
+        // any two of them is recovered by a re-issued FinalizeAsync.
+        await RecordTerminalDecisionAsync(committed: commit);
+        await BroadcastTerminalsAsync(committed: commit);
+        await CompleteSagaAsync(success: commit);
+    }
+
+    /// <summary>
+    /// Parks a fully-staged cross-tree sub-saga in
+    /// <see cref="AtomicWritePhase.Prepared"/>: registers the per-tree registry
+    /// to delegate this saga's txid to the coordinator
+    /// (<paramref name="coordinatorKey"/>) so leaf readers resolve the staged
+    /// writes against the coordinator's single global decision, then persists
+    /// the paused phase. Idempotent under reminder-driven re-entry; a persist
+    /// failure reverts the in-memory phase so the saga re-parks on retry.
+    /// </summary>
+    private async Task ParkPreparedAsync(string coordinatorKey)
+    {
+        try
+        {
+            var txid = state.State.TransactionId;
+            if (txid != Guid.Empty)
+            {
+                var registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
+                await registry.RegisterExternalDecisionAuthorityAsync(txid, coordinatorKey);
+            }
+
+            var prevPhase = state.State.Phase;
+            state.State.Phase = AtomicWritePhase.Prepared;
+            try
+            {
+                await WriteSagaStateAsync("prepared");
+            }
+            catch
+            {
+                state.State.Phase = prevPhase;
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Both the registry delegation and the paused-phase persist are
+            // retryable: the prepared writes remain staged and the phase is
+            // reverted to Execute on failure. Surface a distinct retryable
+            // signal so PrepareForCoordinatorAsync propagates it (coordinator
+            // stays Preparing and retries) rather than misreporting a transient
+            // park blip as a Failed vote.
+            throw new CrossTreeParkRetryException(ex);
+        }
+    }
+
+    /// <summary>
+    /// Internal control-flow signal that the cross-tree prepare-and-pause
+    /// <see cref="ParkPreparedAsync"/> step failed on a <b>retryable</b> fault
+    /// (registry delegation RPC or paused-phase persist). Distinguished from a
+    /// genuine staging failure so the coordinator retries prepare instead of
+    /// aborting the whole cross-tree transaction.
+    /// </summary>
+    private sealed class CrossTreeParkRetryException(Exception inner)
+        : Exception("Cross-tree sub-saga park step failed on a retryable fault.", inner);
 
     /// <summary>
     /// Validates the batch: non-null values and no duplicate keys.
@@ -1769,6 +1951,19 @@ internal sealed class AtomicWriteGrain(
         // late-pass shards observe the post-union count.
         using var shardCountScope = LatticeAtomicShardCountContext.With(state.State.TouchedShards.Count);
 
+        // Stamp the cross-tree operation id + participant set on the
+        // ambient so ShardRootGrain.AppendTxTerminalAsync stamps
+        // WalRecord.CrossTreeOperationId / CrossTreeParticipants on this
+        // tree's terminal records. Only set when this sub-saga belongs to a
+        // cross-tree atomic write (ExternalAuthorityKey + persisted
+        // participant set present); single-tree saga terminals leave the
+        // ambient unset, so the receiver routes them through the legacy
+        // single-tree per-shard gate. This is the producer half of the
+        // receiver-side cross-tree visibility barrier.
+        using var crossTreeScope = LatticeCrossTreeTerminalContext.With(
+            state.State.ExternalAuthorityKey,
+            state.State.CrossTreeParticipants);
+
         // The catch blocks unconditionally fire so the original
         // stale-routing throw surfaces to the caller once the wall-clock
         // budget elapses; a when-filter on the catch could race against
@@ -1928,6 +2123,21 @@ internal sealed class AtomicWriteGrain(
         {
             // Every prepare-phase write succeeded.
             //
+            // Cross-tree prepare-and-pause: when this saga participates in a
+            // cross-tree atomic write (ExternalAuthorityKey set), the per-tree
+            // terminal decision is NOT this saga's to make. Register the
+            // per-tree registry to delegate this saga's txid to the coordinator
+            // and park in Prepared, awaiting FinalizeAsync. Until the
+            // coordinator records its single global decision, every leaf
+            // reader that dials the registry for this txid resolves to the
+            // coordinator's InFlight verdict (invisible = pre-saga), so no
+            // partial cross-tree view is ever observable.
+            if (state.State.ExternalAuthorityKey is { } authorityKey)
+            {
+                await ParkPreparedAsync(authorityKey);
+                return;
+            }
+
             // Strict per-tree atomic-visibility: record the commit
             // decision in the per-tree TxRegistry BEFORE fanning out
             // the per-leaf commit terminals. This is the single

@@ -28,6 +28,7 @@ public class LwwRegisterConvergenceChaosTests
     private const int SiteCount = 3;
     private const int WritesPerSite = 40;
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(30);
 
     [Test]
     public async Task Concurrent_writes_across_three_sites_under_partition_pick_lexicographic_max()
@@ -65,14 +66,17 @@ public class LwwRegisterConvergenceChaosTests
         await Task.WhenAll(workloadTasks);
         await pump.HealAllAndDrainAsync(DrainTimeout);
 
-        // Pull every site's final state and assert pointwise equality.
-        // LWW convergence is deterministic on (HLC, origin), so all sites
-        // - having seen the same union of authored writes - must agree.
-        var states = new VersionedValue[SiteCount];
-        for (var i = 0; i < SiteCount; i++)
-        {
-            states[i] = await fixture.ClientOf(i).GetGrain<ILattice>(TreeName).GetWithVersionAsync(Key);
-        }
+        // The drain reports every edge cursor has reached its sender's WAL
+        // tail, but under CI load a just-applied foreign write can still be
+        // re-emitting onward: applying a remote write appends a new local WAL
+        // entry (carrying the foreign origin) that a sibling edge may not have
+        // shipped yet when the drain returns. The background pumps keep
+        // delivering after the drain, so poll until every site agrees rather
+        // than sampling once. LWW convergence is deterministic on (HLC,
+        // origin), so a genuine non-convergence still fails the assertion
+        // below once the budget elapses - the poll only removes the race, it
+        // does not mask a real divergence.
+        var states = await SampleUntilConvergedAsync(fixture, ConvergenceTimeout);
 
         for (var i = 1; i < SiteCount; i++)
         {
@@ -84,6 +88,64 @@ public class LwwRegisterConvergenceChaosTests
                     $"Site {i} HLC diverges from site 0.");
             });
         }
+    }
+
+    /// <summary>
+    /// Polls every site's <see cref="VersionedValue"/> for <see cref="Key"/>
+    /// until all sites agree with site 0 (value bytes and
+    /// <see cref="HybridLogicalClock"/>) or <paramref name="timeout"/> elapses,
+    /// returning the last sampled snapshot either way. The chaos pumps keep
+    /// delivering in the background after
+    /// <see cref="ChaosDeliveryPump.HealAllAndDrainAsync"/> returns, so this
+    /// lets in-flight re-emission settle before the caller asserts. On timeout
+    /// it returns the final (still-divergent) snapshot so the caller's
+    /// assertion surfaces the pointwise divergence detail.
+    /// </summary>
+    private static async Task<VersionedValue[]> SampleUntilConvergedAsync(
+        MultiSiteClusterFixture fixture, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        VersionedValue[] states;
+        do
+        {
+            states = new VersionedValue[SiteCount];
+            for (var i = 0; i < SiteCount; i++)
+            {
+                states[i] = await fixture.ClientOf(i).GetGrain<ILattice>(TreeName).GetWithVersionAsync(Key);
+            }
+
+            var converged = true;
+            for (var i = 1; i < SiteCount && converged; i++)
+            {
+                converged = BytesEqual(states[i].Value, states[0].Value)
+                    && states[i].Version.Equals(states[0].Version);
+            }
+
+            if (converged)
+            {
+                return states;
+            }
+
+            await Task.Delay(50);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        return states;
+    }
+
+    private static bool BytesEqual(byte[]? a, byte[]? b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a is null || b is null)
+        {
+            return false;
+        }
+
+        return a.AsSpan().SequenceEqual(b);
     }
 
     private sealed class TestRunner : IAsyncDisposable

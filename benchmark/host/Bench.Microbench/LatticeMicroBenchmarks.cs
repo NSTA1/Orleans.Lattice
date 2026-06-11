@@ -728,7 +728,7 @@ public class LatticeMicroBenchmarks
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("tx-registry", treeId));
         var registryState = new FakePersistentState<TxRegistryState>();
-        var registry = new TxRegistryGrain(ctx, _optionsMonitor, registryState);
+        var registry = new TxRegistryGrain(ctx, _grainFactory, _optionsMonitor, registryState);
         _txRegistries[treeId] = registry;
         return registry;
     }

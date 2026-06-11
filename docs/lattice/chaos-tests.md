@@ -12,7 +12,10 @@ reshards; that point-mutation public-API calls (`DeleteRangeAsync`,
 `SetIfVersionAsync` (the public compare-and-swap entry point), `ScanKeysAsync` / `ScanEntriesAsync` cancellation) hold their stated
 invariants under concurrent contention; that `SetManyAtomicAsync`
 remains atomically visible (zero-or-all keys per poll) on the
-authoring site and on every receiver site; and that the per-merge-mode
+authoring site and on every receiver site; that
+`SetManyAtomicAsync` keeps a multi-tree saga's keys
+all-or-nothing across every participating tree under concurrent shard
+splits; and that the per-merge-mode
 CRDT dispatch paths (`LwwRegister`, `OrSet`, `PnCounter`, `MvRegister`,
 and `OrMap`) converge across
 partitioned sites. The single-cluster suite also exercises the
@@ -43,6 +46,7 @@ Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to 
 | Compare-and-swap under contention | `CompareAndSwapChaosTests.cs` | Many concurrent `SetIfVersionAsync` (CAS) callers racing on a small key universe produce exactly one observed `success=true` per logical CAS round; lost-update rounds report `success=false` with the actual current envelope so the call-site retry loop can make progress. |
 | Scan cancellation under load | `ScanCancellationChaosTests.cs` | An in-flight `ScanKeysAsync` / `ScanEntriesAsync` enumerator that observes a cancellation token transition surfaces `OperationCanceledException` within a bounded delay and leaks no grain-side resources; subsequent scans against the same range succeed normally. |
 | Multi-silo restart under load | `MultiSiloRestartChaosTests.cs` | Two-silo `TestCluster`, sustained write/read load on an `ILattice` tree, secondary silo restarted every ~2.5 s via `TestCluster.RestartSiloAsync`. Post-window invariants: pinned `CountAsync`, envelope-valid value on every key, no caller-visible exception outside the documented transient class. Uses `ProcessScopeMemoryGrainStorage` (a static-dictionary-backed `IGrainStorage` shared across every silo in the test process) so secondary-silo restart does not wipe the shard-root / registry topology - per-silo Orleans memory storage would otherwise let a re-placed `ShardRootGrain` activation read empty state and overwrite the live topology with a fresh leaf root (the underlying split-brain that previously surfaced as `InvalidCastException`). |
+| Cross-tree atomic write under shard churn | `ChaosCrossTreeAtomicWriteIntegrationTests.cs` | A commit worker drives one all-or-nothing `SetManyAtomicAsync` saga per generation into the same logical slot of three distinct trees, while per-tree split coordinators churn shards and reader workers probe every settled committed generation. Asserts cross-tree all-or-nothing: a settled committed key is present in **all three trees or none**, and every committed generation is durably present in all trees post-window, even as splits move keys between shards mid-saga on every tree. |
 
 ### Cross-cluster chaos suite (`test/lattice.replication/Chaos/`)
 
@@ -579,6 +583,96 @@ atomic-visibility fixtures by isolating which seam broke.
 ### Tolerated transients
 
 None - these tests run on a quiescent 2-site fixture with no partition / concurrency. Any exception is fatal.
+
+## Test 11 - Cross-tree atomic write under shard churn (`ChaosCrossTreeAtomicWriteIntegrationTests`)
+
+This test asserts the **cross-tree all-or-nothing visibility invariant**
+for `SetManyAtomicAsync`: a key committed by a cross-tree saga
+is present in **every** participating tree or in **none** of them - a
+reader must never observe a partial cross-tree commit (some trees
+flipped, others not), even while shard splits move keys between shards
+mid-saga on every tree.
+
+A single commit worker writes a fresh per-generation key into the same
+logical slot of three distinct trees as one all-or-nothing cross-tree
+saga; three reader workers continuously probe committed generations
+across all three trees; and one split coordinator per tree churns shards
+continuously throughout the ~15 s window.
+
+### What it proves
+
+| Invariant | Mechanism under test |
+|---|---|
+| A settled committed generation key is present in all three trees | Coordinator's single global decision flips visibility uniformly across every participating tree's `ITxRegistryGrain` via delegation |
+| A settled committed key never vanishes under concurrent split churn | Per-tree finalize promotes prepared entries into the main store before settlement; splits are read-transparent for promoted committed keys |
+| Every committed generation is durably present in all trees post-window | Cross-tree all-or-nothing completeness across the whole run |
+
+### Workload
+
+* **Seed phase** - 200 `SetAsync` keys per tree across three trees (`xct-{run}-0..2`), each on a four-shard fixture (`FourShardClusterFixture`) so splits are enabled.
+* **Commit worker** - one cross-tree saga per generation at a 50 ms cadence: a `LatticeTreeBatch` per tree writing `x-{gen}` into all three trees under operation id `xctop-{run}-{gen}`. Asserts each saga returns `Committed`.
+* **Reader workers** - three readers probe every **settled** generation (commit frontier minus a `SettleMargin` of 5) in all three trees; a settled generation that reads absent in any tree is a failure.
+* **Split coordinators** - one per tree at a 250 ms cadence, picking a random non-empty shard and driving `SplitAsync` + `RunSplitPassAsync`.
+
+### Pass criteria
+
+* Zero invariant violations (no settled committed key absent from any tree).
+* Post-window: every committed generation `0..lastCommitted` present in all three trees.
+* The commit worker committed at least one saga, readers performed at least one probe, and split coordinators attempted at least one split (proves real concurrency).
+
+### Why the invariant is checked only on settled generations
+
+The cross-tree feature guarantees all-or-nothing *commit*, not a
+simultaneous cross-tree read snapshot. Each per-tree `GetAsync` is an
+independent point-in-time read, so the global decision flip landing
+*between* a reader's three samples yields a benign transient skew that is
+not a partial-commit violation. The reader therefore checks monotonicity
+only on generations the commit frontier has advanced a safety margin
+past, by which point every participant's finalize has promoted the entry
+into its main store. Post-window completeness then closes the gap for the
+in-flight tail.
+
+### Tolerated transients
+
+`StaleShardRoutingException`, `EnumerationAbortedException`, cursor
+snapshot/pin exhaustion, `TimeoutException`, and the saga's own
+rollback / topology-churn / fan-out-saturation / "fewer than 2 virtual
+slots" `InvalidOperationException` messages are bucketed as transient and
+retried; any other exception fails the test.
+
+## Test 12 - Cross-cluster cross-tree atomic visibility (`CrossClusterCrossTreeAtomicVisibilityChaosTests`)
+
+This test (in the replication suite) asserts the **receiver-side
+cross-tree all-or-nothing invariant**: when a cross-tree
+`SetManyAtomicAsync` batch spanning two replicated trees ships to a remote
+cluster, a reader on the receiver must never observe one tree committed
+while a sibling tree is still pre-saga. Because each tree's terminals
+replicate on their own WAL feed, the receiver routinely applies one tree's
+terminal before the other's; the receiver coordinator grain
+(`ILatticeCrossTreeReceiverGrain`) must hold every participating tree
+invisible until all of the batch's replicated terminals have arrived, then
+flip them together.
+
+### Workload
+
+* Two sites, each authoring `SetManyAtomicAsync` batches spanning two
+  replicated trees (`chaos-xt-a`, `chaos-xt-b`) under deterministic
+  per-batch key namespaces and a stable `operationId`.
+* Two independent `ChaosDeliveryPump` instances - one per tree - ship the
+  two trees' change feeds with **independent** partition cycles, so the
+  receiver routinely sees one tree's terminal before the other's.
+* A mid-workload partition isolates each tree's edges at staggered points
+  and heals them later, forcing terminal skew across the two trees.
+
+### Pass criteria
+
+* On every receiver site, for every authored batch, tree A's keys and
+  tree B's keys have **identical** presence - both fully visible or both
+  fully absent. Tree A visible while tree B is absent (or vice versa) is a
+  cross-tree atomicity violation.
+* No single-tree partial view (every batch's per-tree key set is wholly
+  present or wholly absent).
+* Post-drain: every batch's keys are present on both trees on every site.
 
 ## Observed recovery surfaces
 
