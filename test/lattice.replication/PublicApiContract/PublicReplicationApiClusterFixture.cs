@@ -316,6 +316,11 @@ internal sealed class PublicReplicationApiClusterFixture
                 return LatticeMergeMode.VersionVector;
             }
 
+            if (treeId.Contains("crdt-sequence", StringComparison.Ordinal))
+            {
+                return LatticeMergeMode.Sequence;
+            }
+
             return LatticeMergeMode.LwwRegister;
         }
     }

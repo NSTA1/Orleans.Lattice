@@ -11,22 +11,32 @@ namespace Orleans.Lattice;
 /// <see cref="CrdtLatticeExtensions.Sequence{T}(ILattice, string, ILatticeSerializer{T}?)"/>
 /// and reuse it for any number of operations on the same key.
 /// <para>
-/// Mutating methods read-modify-write under optimistic concurrency,
-/// retrying on CAS failure up to a configurable budget. The
-/// high-level <see cref="InsertAtAsync(int, string, T, CancellationToken, int)"/>
-/// and <see cref="RemoveAtAsync(int, CancellationToken, int)"/>
-/// methods resolve the index on the freshly-read state inside the
-/// CAS loop so the materialised position is always interpreted
-/// against the same snapshot the write commits against. Tooling that
-/// needs stable cursor identity across reads can use the lower-level
-/// dot-explicit
+/// Each mutating method performs a single local read to resolve the
+/// dot-explicit operation (the index-resolving overloads
+/// <see cref="InsertAtAsync(int, string, T, CancellationToken, int)"/> and
+/// <see cref="RemoveAtAsync(int, CancellationToken, int)"/> resolve the
+/// visible position to a dot / parent-dot against that snapshot), then
+/// authors a typed <see cref="RgaDelta"/> and commits it through the
+/// <see cref="LatticeMergeMode.Sequence"/> typed-delta WAL seam via
+/// <c>ILattice.ApplyCrdtDeltaAsync</c>. The delta captures the
+/// structural intent (the dots and parent dots), not the post-merge
+/// materialised order, so a remote replica converges on an identical
+/// ordered traversal. Tooling that needs stable cursor identity across
+/// reads can use the lower-level dot-explicit
 /// <see cref="InsertAfterAsync(OrSetDot, string, T, CancellationToken, int)"/>.
+/// </para>
+/// <para>
+/// The delta apply is CAS-free on the producer side, mirroring
+/// <see cref="MvRegisterAccessor{T}"/> and
+/// <see cref="OrMapAccessor{TKey, TValue}"/>; the <c>maxAttempts</c>
+/// parameter is validated (a value below <c>1</c> throws) and otherwise
+/// retained for source compatibility.
 /// </para>
 /// </summary>
 /// <typeparam name="T">The user-facing value type. Serialised to and from <see cref="byte"/>[] through <see cref="ILatticeSerializer{T}"/>.</typeparam>
 public readonly record struct RgaAccessor<T>
 {
-    /// <summary>Default CAS retry budget for mutating operations.</summary>
+    /// <summary>Default mutation retry budget (validated; the producer-side delta apply is CAS-free).</summary>
     public const int DefaultMaxAttempts = 16;
 
     private readonly ILattice _lattice;
@@ -86,14 +96,14 @@ public readonly record struct RgaAccessor<T>
     /// projection. Index <c>0</c> inserts at the head of the
     /// sequence; an index equal to the current count appends to the
     /// tail. Mints a fresh causal dot under the resolved parent and
-    /// retries the read-modify-write under CAS up to
-    /// <paramref name="maxAttempts"/>.
+    /// commits the dot-explicit insert through the
+    /// <see cref="LatticeMergeMode.Sequence"/> typed-delta seam.
     /// </summary>
     /// <param name="index">The visible position to insert at. Must be in <c>[0, count]</c>.</param>
     /// <param name="replicaId">The replica authoring the insert. Must be non-empty.</param>
     /// <param name="value">The value to attach.</param>
     /// <param name="cancellationToken">Cancels the read and write hops.</param>
-    /// <param name="maxAttempts">Maximum number of CAS retries before giving up.</param>
+    /// <param name="maxAttempts">Validated retry budget (the producer-side delta apply is CAS-free).</param>
     public Task<OrSetDot> InsertAtAsync(int index, string replicaId, T value, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
@@ -101,7 +111,7 @@ public readonly record struct RgaAccessor<T>
         EnsureInitialised();
         var serializer = _serializer;
         var encoded = serializer.Serialize(value);
-        return MutateAsync(rga =>
+        return ApplyInsertDeltaAsync(rga =>
         {
             var snapshot = rga.ToList();
             if (index > snapshot.Count)
@@ -112,9 +122,12 @@ public readonly record struct RgaAccessor<T>
             }
             // Index N inserts after the live element at position N-1
             // (or at the root when N == 0). Inserting at the count
-            // attaches under the last visible element.
+            // attaches under the last visible element. The parent dot is
+            // resolved here, at the call site, so the emitted delta
+            // captures the dot-explicit structural intent.
             var parent = index == 0 ? Rga.Root : snapshot[index - 1].Dot;
-            return rga.InsertAfter(parent, replicaId, encoded);
+            var dot = rga.InsertAfter(parent, replicaId, encoded);
+            return (dot, SingleInsertDelta(dot, parent, encoded));
         }, cancellationToken, maxAttempts);
     }
 
@@ -125,7 +138,9 @@ public readonly record struct RgaAccessor<T>
     /// Useful for tooling that has captured a stable cursor identity
     /// from a previous <see cref="ToListAsync(CancellationToken)"/> call
     /// and wants the insert to land at that exact causal position
-    /// regardless of intervening edits.
+    /// regardless of intervening edits. The dot and parent dot are
+    /// captured into the emitted <see cref="RgaDelta"/> so a remote
+    /// replica replays the same structural insert.
     /// </summary>
     public Task<OrSetDot> InsertAfterAsync(OrSetDot parentDot, string replicaId, T value, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
@@ -133,9 +148,10 @@ public readonly record struct RgaAccessor<T>
         EnsureInitialised();
         var serializer = _serializer;
         var encoded = serializer.Serialize(value);
-        return MutateAsync(rga =>
+        return ApplyInsertDeltaAsync(rga =>
         {
-            return rga.InsertAfter(parentDot, replicaId, encoded);
+            var dot = rga.InsertAfter(parentDot, replicaId, encoded);
+            return (dot, SingleInsertDelta(dot, parentDot, encoded));
         }, cancellationToken, maxAttempts);
     }
 
@@ -143,13 +159,15 @@ public readonly record struct RgaAccessor<T>
     /// Tombstones the live node at the visible
     /// <paramref name="index"/> in the materialised in-order
     /// projection. Index <c>0</c> removes the head; an index of
-    /// <c>count - 1</c> removes the tail.
+    /// <c>count - 1</c> removes the tail. The index is resolved here, at
+    /// the call site, to the dot-explicit tombstone the emitted
+    /// <see cref="RgaDelta"/> ships.
     /// </summary>
     public Task RemoveAtAsync(int index, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         EnsureInitialised();
-        return MutateVoidAsync(rga =>
+        return ApplyDeltaAsync(rga =>
         {
             var snapshot = rga.ToList();
             if (index >= snapshot.Count)
@@ -158,7 +176,13 @@ public readonly record struct RgaAccessor<T>
                     nameof(index),
                     $"Remove index {index} is at or beyond the resolved sequence length {snapshot.Count}.");
             }
-            rga.Remove(snapshot[index].Dot);
+            var dot = snapshot[index].Dot;
+            rga.Remove(dot);
+            return new RgaDelta
+            {
+                Inserts = Array.Empty<RgaDeltaNode>(),
+                Tombstones = new[] { dot },
+            };
         }, cancellationToken, maxAttempts);
     }
 
@@ -169,62 +193,97 @@ public readonly record struct RgaAccessor<T>
     public Task RemoveAsync(OrSetDot dot, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         EnsureInitialised();
-        return MutateVoidAsync(rga =>
-        {
-            rga.Remove(dot);
-        }, cancellationToken, maxAttempts);
+        return ApplyDeltaAsync(_ =>
+            new RgaDelta
+            {
+                Inserts = Array.Empty<RgaDeltaNode>(),
+                Tombstones = new[] { dot },
+            }, cancellationToken, maxAttempts);
     }
 
     /// <summary>
-    /// Merges <paramref name="other"/> into the stored state under
-    /// CAS. Useful for replication consumers that have computed a
-    /// delta out-of-band and want to apply it without reading the
-    /// full sequence twice.
+    /// Merges <paramref name="other"/> into the stored state. Useful for
+    /// replication consumers that have computed a delta out-of-band and
+    /// want to apply it without reading the full sequence twice. Every
+    /// node in <paramref name="other"/> ships its structural info as an
+    /// insert (so the receiver has the correct parent and value), and
+    /// tombstoned nodes additionally ship their dot in the delta's
+    /// tombstone list.
     /// </summary>
     public Task MergeAsync(Rga other, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentNullException.ThrowIfNull(other);
         EnsureInitialised();
-        return MutateVoidAsync(rga =>
+        return ApplyDeltaAsync(rga =>
         {
             rga.MergeFrom(other);
+            var inserts = new RgaDeltaNode[other.Nodes.Count];
+            var tombstones = new List<OrSetDot>();
+            for (var i = 0; i < other.Nodes.Count; i++)
+            {
+                var n = other.Nodes[i];
+                inserts[i] = new RgaDeltaNode
+                {
+                    ReplicaId = n.ReplicaId,
+                    Counter = n.Counter,
+                    ParentDot = n.ParentDot,
+                    Value = n.Value,
+                };
+                if (n.IsTombstone) tombstones.Add(n.Dot);
+            }
+            return new RgaDelta
+            {
+                Inserts = inserts,
+                Tombstones = tombstones.Count == 0 ? Array.Empty<OrSetDot>() : tombstones,
+            };
         }, cancellationToken, maxAttempts);
     }
 
-    private async Task<OrSetDot> MutateAsync(Func<Rga, OrSetDot> mutate, CancellationToken cancellationToken, int maxAttempts)
+    private static RgaDelta SingleInsertDelta(OrSetDot dot, OrSetDot parent, byte[] encoded) =>
+        new()
+        {
+            Inserts = new[]
+            {
+                new RgaDeltaNode
+                {
+                    ReplicaId = dot.ReplicaId,
+                    Counter = dot.Counter,
+                    ParentDot = parent,
+                    Value = encoded,
+                },
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+
+    private async Task<OrSetDot> ApplyInsertDeltaAsync(Func<Rga, (OrSetDot Dot, RgaDelta Delta)> mutate, CancellationToken cancellationToken, int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
-            var current = Decode(versioned.Value);
-            var dot = mutate(current);
-            var bytes = JsonLatticeSerializer<Rga>.Default.Serialize(current);
-            var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-            if (ok) return dot;
-        }
-        throw new InvalidOperationException(
-            $"Rga CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
-            "Increase maxAttempts or reduce contention.");
+        // CAS-free producer-side delta apply, matching MvRegisterAccessor
+        // and OrMapAccessor: a single local read computes the dot-explicit
+        // delta (the read mints the next per-replica counter from the
+        // local snapshot's view), then ApplyCrdtDeltaAsync folds the delta
+        // into the persisted state through the typed-delta WAL seam.
+        // Concurrent local writers minting the same dot is the caller's
+        // responsibility, identical to the OR-Set per-replica monotonicity
+        // contract.
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var (dot, delta) = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<RgaDelta>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.Sequence, deltaBytes, cancellationToken).ConfigureAwait(false);
+        return dot;
     }
 
-    private async Task MutateVoidAsync(Action<Rga> mutate, CancellationToken cancellationToken, int maxAttempts)
+    private async Task ApplyDeltaAsync(Func<Rga, RgaDelta> mutate, CancellationToken cancellationToken, int maxAttempts)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var versioned = await _lattice.GetWithVersionAsync(_key, cancellationToken).ConfigureAwait(false);
-            var current = Decode(versioned.Value);
-            mutate(current);
-            var bytes = JsonLatticeSerializer<Rga>.Default.Serialize(current);
-            var ok = await _lattice.SetIfVersionAsync(_key, bytes, versioned.Version, cancellationToken).ConfigureAwait(false);
-            if (ok) return;
-        }
-        throw new InvalidOperationException(
-            $"Rga CAS budget exhausted after {maxAttempts} attempts for key '{_key}'. " +
-            "Increase maxAttempts or reduce contention.");
+        _ = maxAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mutate(current);
+        var deltaBytes = JsonLatticeSerializer<RgaDelta>.Default.Serialize(delta);
+        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.Sequence, deltaBytes, cancellationToken).ConfigureAwait(false);
     }
 
     private static Rga Decode(byte[]? bytes) =>

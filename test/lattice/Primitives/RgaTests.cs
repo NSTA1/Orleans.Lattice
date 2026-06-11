@@ -291,4 +291,177 @@ public class RgaTests
         Assert.That(Strings(a), Is.EqualTo(Strings(b)));
         Assert.That(Strings(a), Is.EqualTo(new[] { "a", "b", "c" }));
     }
+
+    // ── RgaDelta / RgaDeltaNode ────────────────────────────────
+
+    private static RgaDeltaNode Insert(string replicaId, long counter, OrSetDot parent, byte[] value) =>
+        new() { ReplicaId = replicaId, Counter = counter, ParentDot = parent, Value = value };
+
+    [Test]
+    public void RgaDelta_default_has_null_collections()
+    {
+        var delta = default(RgaDelta);
+        Assert.Multiple(() =>
+        {
+            Assert.That(delta.Inserts, Is.Null);
+            Assert.That(delta.Tombstones, Is.Null);
+        });
+    }
+
+    [Test]
+    public void RgaDelta_Empty_has_non_null_empty_collections_and_does_not_allocate()
+    {
+        var first = RgaDelta.Empty;
+        var second = RgaDelta.Empty;
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Inserts, Is.Not.Null.And.Empty);
+            Assert.That(first.Tombstones, Is.Not.Null.And.Empty);
+            Assert.That(first.Inserts, Is.SameAs(second.Inserts));
+            Assert.That(first.Tombstones, Is.SameAs(second.Tombstones));
+        });
+    }
+
+    [Test]
+    public void RgaDeltaNode_Dot_is_composed_from_replica_and_counter()
+    {
+        var node = Insert("r1", 5, Rga.Root, B("x"));
+        Assert.That(node.Dot, Is.EqualTo(new OrSetDot { ReplicaId = "r1", Counter = 5 }));
+    }
+
+    [Test]
+    public void MergeDelta_applies_inserts_in_resolved_order()
+    {
+        var r = new Rga();
+        var head = new OrSetDot { ReplicaId = "r1", Counter = 1 };
+        var delta = new RgaDelta
+        {
+            Inserts = new[]
+            {
+                Insert("r1", 1, Rga.Root, B("H")),
+                Insert("r1", 2, head, B("i")),
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+        r.MergeDelta(delta);
+        Assert.That(Strings(r), Is.EqualTo(new[] { "H", "i" }));
+    }
+
+    [Test]
+    public void MergeDelta_applies_tombstone_to_existing_node()
+    {
+        var r = new Rga();
+        var dot = r.InsertAfter(Rga.Root, "r1", B("x"));
+        r.MergeDelta(new RgaDelta
+        {
+            Inserts = Array.Empty<RgaDeltaNode>(),
+            Tombstones = new[] { dot },
+        });
+        Assert.That(r.IsEmpty, Is.True);
+        Assert.That(r.ContainsDot(dot), Is.True);
+    }
+
+    [Test]
+    public void MergeDelta_is_idempotent_on_repeated_delivery()
+    {
+        var delta = new RgaDelta
+        {
+            Inserts = new[] { Insert("r1", 1, Rga.Root, B("a")) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+        var r = new Rga();
+        r.MergeDelta(delta);
+        r.MergeDelta(delta);
+        Assert.That(Strings(r), Is.EqualTo(new[] { "a" }));
+        Assert.That(r.Nodes, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void MergeDelta_tombstone_before_insert_converges_with_correct_parent()
+    {
+        // Out-of-order delivery: the tombstone for a child's dot arrives
+        // before the insert that defines its parent link. The merge must
+        // stay total and, once the insert arrives, reattach the parent so
+        // a sibling resolves in the same order as in-order delivery.
+        var head = new OrSetDot { ReplicaId = "r1", Counter = 1 };
+        var childDot = new OrSetDot { ReplicaId = "r1", Counter = 2 };
+
+        var outOfOrder = new Rga();
+        outOfOrder.MergeDelta(new RgaDelta
+        {
+            Inserts = Array.Empty<RgaDeltaNode>(),
+            Tombstones = new[] { childDot },
+        });
+        outOfOrder.MergeDelta(new RgaDelta
+        {
+            Inserts = new[]
+            {
+                Insert("r1", 1, Rga.Root, B("H")),
+                Insert("r1", 2, head, B("i")),
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        });
+
+        var inOrder = new Rga();
+        inOrder.MergeDelta(new RgaDelta
+        {
+            Inserts = new[]
+            {
+                Insert("r1", 1, Rga.Root, B("H")),
+                Insert("r1", 2, head, B("i")),
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        });
+        inOrder.MergeDelta(new RgaDelta
+        {
+            Inserts = Array.Empty<RgaDeltaNode>(),
+            Tombstones = new[] { childDot },
+        });
+
+        // Both converge to identical ordered traversal ("i" tombstoned).
+        Assert.That(Strings(outOfOrder), Is.EqualTo(new[] { "H" }));
+        Assert.That(Strings(outOfOrder), Is.EqualTo(Strings(inOrder)));
+        Assert.That(outOfOrder.ContainsDot(childDot), Is.True);
+    }
+
+    [Test]
+    public void MergeDelta_null_collections_are_treated_as_empty()
+    {
+        var r = new Rga();
+        r.InsertAfter(Rga.Root, "r1", B("x"));
+        Assert.That(() => r.MergeDelta(default), Throws.Nothing);
+        Assert.That(Strings(r), Is.EqualTo(new[] { "x" }));
+    }
+
+    [Test]
+    public void MergeDelta_concurrent_inserts_from_two_replicas_converge_to_identical_order()
+    {
+        // Two replicas insert a child under the same parent concurrently.
+        // Applying the two single-insert deltas in either order must yield
+        // the same ordered traversal via the descending tie-break.
+        var seed = new Rga();
+        var prefix = seed.InsertAfter(Rga.Root, "r0", B("H"));
+
+        var deltaA = new RgaDelta
+        {
+            Inserts = new[] { Insert("r1", 1, prefix, B("a")) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+        var deltaB = new RgaDelta
+        {
+            Inserts = new[] { Insert("r2", 1, prefix, B("b")) },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+
+        var ab = seed.Clone();
+        ab.MergeDelta(deltaA);
+        ab.MergeDelta(deltaB);
+
+        var ba = seed.Clone();
+        ba.MergeDelta(deltaB);
+        ba.MergeDelta(deltaA);
+
+        Assert.That(Strings(ab), Is.EqualTo(Strings(ba)));
+        Assert.That(Strings(ab), Is.EqualTo(new[] { "H", "b", "a" }));
+    }
 }

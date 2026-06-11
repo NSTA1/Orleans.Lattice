@@ -24,6 +24,8 @@ internal static class TypeAliases
     internal const string OrMapEntry = "ol.ome";
     internal const string Rga = "ol.rga";
     internal const string RgaNode = "ol.rgn";
+    internal const string RgaDelta = "ol.rgd";
+    internal const string RgaDeltaNode = "ol.rgi";
     internal const string LeafDeliveryCursor = "ol.ldc";
 
     // Opt-in idempotency-key surface (carried on the ambient

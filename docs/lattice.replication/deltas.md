@@ -2,7 +2,7 @@
 
 The replication package ships a small set of typed delta records - one per replicable primitive - that form the wire contract between a producer cluster's commit-time change feed and a receiver cluster's apply pipeline. Each delta is the minimum information needed to merge the originating mutation into a remote replica without re-reading the primary.
 
-Today the records are the **single wire contract** between the producer's commit-time accessor surface and the receiver's typed-delta apply pipeline. Every typed CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMap`) authors a public delta DTO into the single `WalRecord.Delta` byte slot at commit time, and the receiver-side `ReplicationApplier` dispatches on `WalRecord.Mode` to the matching primitive's instance `MergeDelta` operation. `WalRecord.Value` is retained alongside `Delta` for change-feed back-compat (full-state snapshot view), but the typed-delta path is the only thing the receiver reads on CRDT modes. `LwwRegister` continues to use the opaque `Value` path and is unaffected.
+Today the records are the **single wire contract** between the producer's commit-time accessor surface and the receiver's typed-delta apply pipeline. Every typed CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMap`, `Sequence`) authors a public delta DTO into the single `WalRecord.Delta` byte slot at commit time, and the receiver-side `ReplicationApplier` dispatches on `WalRecord.Mode` to the matching primitive's instance `MergeDelta` operation. `WalRecord.Value` is retained alongside `Delta` for change-feed back-compat (full-state snapshot view), but the typed-delta path is the only thing the receiver reads on CRDT modes. `LwwRegister` continues to use the opaque `Value` path and is unaffected.
 
 ## Why typed deltas
 
@@ -23,8 +23,10 @@ Every record is a `readonly record struct`, marked `[GenerateSerializer]` and `[
 | `VersionVectorDelta` | `ol.vvd` | Version-vector advance: per-replica HLC entries that have advanced. |
 | `MvRegisterDelta` | `ol.mvg` | Multi-value register: dot-tagged `(replicaId, counter, value)` entries plus the producer's observed-dot context. |
 | `OrMapDelta<TKey, TValue>` | `ol.omd` | Observed-remove map: typed adds (`OrMapDeltaEntry<TKey, TValue>`, alias `ol.omx`) plus removed-dot tombstones (`OrMapDeltaTombstone<TKey>`, alias `ol.omt`). Recurses through `ICrdt<TValue>.MergeFrom` to merge per-key values. |
+| `RgaDelta` | `ol.rgd` | Replicated Growable Array (RGA) sequence: dot-explicit inserted nodes (`RgaDeltaNode`, alias `ol.rgi`) plus tombstoned dots. Carries the structural intent `(dot, parentDot, value)` per insert so the receiver converges on an identical ordered traversal, not a post-merge snapshot. |
+| `RgaDeltaNode` | `ol.rgi` | A single inserted node inside an `RgaDelta`: the `(replicaId, counter)` dot, the parent dot it was linked under, and the value bytes. |
 
-`OrSetDelta`, `PnCounterDelta`, `VersionVectorDelta`, and `MvRegisterDelta` each expose a static `Empty` property that returns a reusable, allocation-free no-op delta with non-null but empty backing collections - emit it instead of constructing fresh empty arrays / dictionaries. `LwwRegisterDelta.Tombstone(timestamp, originClusterId)` is the canonical factory for tombstone deltas.
+`OrSetDelta`, `PnCounterDelta`, `VersionVectorDelta`, `MvRegisterDelta`, and `RgaDelta` each expose a static `Empty` property that returns a reusable, allocation-free no-op delta with non-null but empty backing collections - emit it instead of constructing fresh empty arrays / dictionaries. `LwwRegisterDelta.Tombstone(timestamp, originClusterId)` is the canonical factory for tombstone deltas.
 
 ## Apply rules
 
@@ -36,13 +38,14 @@ Every record is a `readonly record struct`, marked `[GenerateSerializer]` and `[
 | `VersionVectorDelta` | Pointwise-max each `(replica, clock)` against the local vector. Late or duplicate delivery is a no-op. |
 | `MvRegisterDelta` | Union the incoming `Entries` into the local register, dropping any entry whose `(replicaId, counter)` dot is dominated by the **other** side's context, then pointwise-max the two contexts. The merge is order-independent and idempotent. |
 | `OrMapDelta<TKey, TValue>` | For each entry in `Adds`, fold the inner `Value` into the local per-key value via `ICrdt<TValue>.MergeFrom`; for each `Tombstones` dot, drop the matching local dot. Order-independent and idempotent. Receivers must register the concrete `(TKey, TValue)` pair once at startup via `siloBuilder.AddOrMapShape<TKey, TValue>(treeName)`. |
+| `RgaDelta` | Add each `Inserts` node as a live node keyed by its `(replicaId, counter)` dot (idempotent; a present node has its parent / value refreshed and its tombstone flag preserved), then mark each `Tombstones` dot tombstoned. Sibling order under a shared parent is the descending `(Counter, ReplicaId)` tie-break resolved at materialise time, so every replica that applies the same deltas yields an identical ordered traversal. Order-independent and idempotent; a tombstone observed before its insert records a tombstoned placeholder so the merge stays total. |
 
 ## Equality caveats
 
 The deltas are `readonly record struct`s, so the synthesized `Equals` operator delegates to `EqualityComparer<T>.Default` for each field. That means:
 
-- `byte[]` fields (`LwwRegisterDelta.Value`, `OrSetDeltaDot.Element`, `MvRegisterEntry.Value`, `OrMapDeltaEntry<TKey, TValue>.Value`) compare by **reference**, not content.
-- Collection-typed fields (`OrSetDelta.Adds`/`Removes`, `PnCounterDelta.Increments`/`Decrements`, `VersionVectorDelta.Entries`, `MvRegisterDelta.Entries`/`Context`, `OrMapDelta<TKey, TValue>.Adds`/`Tombstones`) compare by **reference** as well.
+- `byte[]` fields (`LwwRegisterDelta.Value`, `OrSetDeltaDot.Element`, `MvRegisterEntry.Value`, `OrMapDeltaEntry<TKey, TValue>.Value`, `RgaDeltaNode.Value`) compare by **reference**, not content.
+- Collection-typed fields (`OrSetDelta.Adds`/`Removes`, `PnCounterDelta.Increments`/`Decrements`, `VersionVectorDelta.Entries`, `MvRegisterDelta.Entries`/`Context`, `OrMapDelta<TKey, TValue>.Adds`/`Tombstones`, `RgaDelta.Inserts`/`Tombstones`) compare by **reference** as well.
 
 Two structurally-identical deltas built from independently-allocated arrays / dictionaries are therefore not `Equals`-equal. Consumers that need content-equality (e.g. matching an inbound dot against the local set) must compare element bytes and collection contents explicitly.
 

@@ -645,6 +645,10 @@ internal sealed partial class ReplicationApplier(
                     static (state, delta) => state.MergeDelta(delta),
                     static () => new MvRegister()),
                 LatticeMergeMode.OrMap => ApplyOrMapDeltaAsync(entry),
+                LatticeMergeMode.Sequence => ApplyTypedDeltaAsync<Rga, RgaDelta>(
+                    entry,
+                    static (state, delta) => state.MergeDelta(delta),
+                    static () => new Rga()),
                 _ => throw new InvalidOperationException(
                     $"WalRecord on tree '{entry.TreeId}' carries unrecognised replication mode '{entry.Mode}' "
                     + "(value="
