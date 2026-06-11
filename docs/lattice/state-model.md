@@ -102,7 +102,7 @@ The activation path therefore tolerates any combination of:
 ## CRDT producer-side mutation cost
 
 For CRDT keys (modes `OrSet`, `OrMap`, `PnCounter`, `MvRegister`,
-`VersionVector`), the WAL record carries the producer's **typed
+`VersionVector`, `Sequence`), the WAL record carries the producer's **typed
 delta bytes** in `WalRecord.Delta` and omits the full-state `Value`
 slot. The receiver-side `ReplicationApplier` decodes the delta and
 folds it into the receiver's prior observed state via the
@@ -110,7 +110,8 @@ registered `CrdtShape`'s `MergeDelta`.
 
 `ILattice.ApplyCrdtDeltaAsync(key, mode, deltaBytes)` is the
 public surface. Typed accessors (`OrSetAccessor`,
-`PnCounterAccessor`, `MvRegisterAccessor`, `OrMapAccessor`) wrap
+`PnCounterAccessor`, `MvRegisterAccessor`, `OrMapAccessor`,
+`RgaAccessor`) wrap
 this surface and are the recommended caller-facing seam; they own
 the typed delta DTO construction and the producer-side state cache.
 
@@ -121,7 +122,7 @@ converge by HLC last-write-wins; no delta-folding is involved.
 ## Registration: per-tree CRDT shape
 
 The closed-shape CRDT modes (`OrSet`, `PnCounter`,
-`VersionVector`, `MvRegister`) resolve through the
+`VersionVector`, `MvRegister`, `Sequence`) resolve through the
 `CrdtShapeRegistry`'s global fallback - no per-tree registration
 is required. `OrMap<TKey, TValue>` is open-shape (the host picks
 `TKey` and `TValue`) and **must** be registered per tree:

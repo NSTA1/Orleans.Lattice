@@ -8,9 +8,15 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v6.4.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v7.0.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+---
+
+## [7.0.0] - 2026-06-11
+
+Major release across the package family. Two source-affecting changes set the major digit, both wire-compatible and source-breaking only: Azure Table WAL row-payload compression is now **on by default** (`AzureTableWalStorageOptions.Compression` defaults to `Zstd`), and the twelve public CRDT primitive types moved from the `Orleans.Lattice.Primitives` namespace into the root `Orleans.Lattice` namespace (with `TxStatus` / `TerminalTallyResult` demoted to `internal`). Headline additions: cross-tree (multi-tree) all-or-nothing atomic writes with cross-cluster atomic visibility (F-098); RGA sequence replication for collaborative ordered lists / text via the new `LatticeMergeMode.Sequence` (R-036); WAL compression-savings metrics on the Azure Table provider (F-100); a cluster-internal typed FIFO queue primitive `ILatticeQueue<T>` (F-042); and a WAL phase-one idempotency fix that resolves lost-response Azure Table SDK retries as durable successes instead of failing the batch. See the per-section entries below.
 
 ### Added
 
@@ -422,7 +428,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.4.0...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.0.0...HEAD
+[7.0.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.4.0...v7.0.0
 [6.4.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.1...v6.4.0
 [6.3.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.0...v6.3.1
 [6.3.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.2.2...v6.3.0

@@ -14,7 +14,7 @@ cases where partial application on failure is acceptable.
 This section describes the **atomicity** contract of the saga. For the
 reader-visibility model - the per-tree `ITxRegistryGrain` linearization
 point and how each read path consults it - see
-[Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
+[Consistency: Atomic visibility](consistency.md#atomic-visibility).
 The atomicity guarantee is **universal**: it holds within a single
 tree on the local cluster *and* across every cluster the tree
 replicates to. Receiver-side replication routes prepared writes and
@@ -146,7 +146,7 @@ steps run synchronously inside `RunSagaAsync` between the
 Execute / Compensate phase exit and the final `Phase = Completed`
 write. **The registry write is the single tree-wide visibility flip**
 (see [Consistency: Atomic
-visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster));
+visibility](consistency.md#atomic-visibility));
 the terminal fan-out is best-effort lazy GC of each touched leaf's
 pending-tx bucket.
 
@@ -466,7 +466,7 @@ delivered by the per-tree `ITxRegistryGrain` + per-leaf pending-tx
 mechanism described above. The `AtomicBatchSize` and
 `AtomicBatchIndex` slots remain reserved for future receiver-side
 batch optimisations but are not consumed by the current apply path.
-See [Consistency: Atomic visibility](consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster).
+See [Consistency: Atomic visibility](consistency.md#atomic-visibility).
 
 ## Cross-cluster atomic visibility
 

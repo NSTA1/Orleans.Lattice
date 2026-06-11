@@ -244,7 +244,7 @@ What ships today:
   shipped end-to-end via the per-tree `ITxRegistryGrain`
   linearization point; see
   [Atomic Writes](../lattice/atomic-writes.md) for the protocol
-  and [Consistency](../lattice/consistency.md#atomic-visibility-single-tree-foreground-and-cross-cluster)
+  and [Consistency](../lattice/consistency.md#atomic-visibility)
   for the read-path dial-back. The cross-cluster receiver seam
   reuses the same registry grain.
 - The producer-side per-key WAL filter shipped earlier. Hosts that
