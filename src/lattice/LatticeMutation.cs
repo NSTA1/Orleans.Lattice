@@ -308,4 +308,27 @@ public readonly record struct LatticeMutation
     /// before this field existed.
     /// </summary>
     [Id(21)] public IReadOnlyList<string>? MatchedKeys { get; init; }
+
+    /// <summary>
+    /// The cross-tree coordinator key (caller-supplied <c>operationId</c>)
+    /// when this mutation is a terminal of a multi-tree atomic write's
+    /// sub-saga, else <see langword="null"/>. Mirrored verbatim onto
+    /// <see cref="WalRecord.CrossTreeOperationId"/> by the converter and
+    /// the replication observer so the receiver-side cross-tree visibility
+    /// barrier can resolve the per-operation coordinator. Defaults to
+    /// <see langword="null"/> for wire compatibility with mutations
+    /// persisted before this field existed (and every single-tree saga
+    /// terminal / non-terminal entry).
+    /// </summary>
+    [Id(22)] public string? CrossTreeOperationId { get; init; }
+
+    /// <summary>
+    /// The full, canonical (ordinal-sorted) participant tree-id set of the
+    /// enclosing cross-tree atomic write when this mutation is a cross-tree
+    /// sub-saga terminal, else <see langword="null"/>. Mirrored verbatim
+    /// onto <see cref="WalRecord.CrossTreeParticipants"/>. Defaults to
+    /// <see langword="null"/> for wire compatibility with mutations
+    /// persisted before this field existed.
+    /// </summary>
+    [Id(23)] public IReadOnlyList<string>? CrossTreeParticipants { get; init; }
 }

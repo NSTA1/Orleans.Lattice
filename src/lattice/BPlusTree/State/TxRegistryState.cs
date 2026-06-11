@@ -213,4 +213,35 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(7)] public Dictionary<Guid, string> ExternalAuthorities { get; set; } = [];
+
+    /// <summary>
+    /// Per-saga delegation records for the <b>receiver side</b> of a cross-tree
+    /// atomic write: maps a replicated sub-saga's txid to the compound key
+    /// (<c>originClusterId</c> + <c>operationId</c>) of the
+    /// <see cref="Grains.LatticeCrossTreeReceiverGrain"/> that owns the single
+    /// global commit/abort decision for the cross-tree batch <i>on this
+    /// receiver cluster</i>. Distinct from <see cref="ExternalAuthorities"/>
+    /// (which resolves to the authoring-cluster
+    /// <see cref="Grains.LatticeCrossTreeTxGrain"/>): the receiver never hosts
+    /// the authoring coordinator, so it delegates to a local receiver
+    /// coordinator instead. Populated when a cross-tree terminal's per-shard
+    /// gate completes on the receiver (via
+    /// <c>RegisterReceiverDecisionAuthorityAsync</c>), strictly <i>before</i>
+    /// the receiver notifies that coordinator, so no reader can resolve one
+    /// participating tree committed while the last tree is still legacy-local.
+    /// While a txid is present here with no terminal entry in
+    /// <see cref="Decisions"/>, status queries resolve it by dialling the
+    /// receiver coordinator's <c>GetDecisionAsync</c> - so every participating
+    /// tree on the receiver flips visible at the single instant the receiver
+    /// coordinator's wait set completes, never partially. The receiver
+    /// coordinator's deferred materialization (<c>FinalizeCrossTreeTerminalAsync</c>)
+    /// later records the authoritative local decision via
+    /// <c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c>, which drops this
+    /// entry. Also dropped by <c>ForgetAsync</c>.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-8 slot decodes to
+    /// an empty dictionary (no receiver delegations).
+    /// </para>
+    /// </summary>
+    [Id(8)] public Dictionary<Guid, string> ReceiverDecisionAuthorities { get; set; } = [];
 }

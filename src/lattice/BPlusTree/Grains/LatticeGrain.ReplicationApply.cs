@@ -420,6 +420,8 @@ internal sealed partial class LatticeGrain
         HybridLogicalClock terminalHlc,
         string originClusterId,
         int atomicShardCount = 0,
+        string? crossTreeOperationId = null,
+        IReadOnlyList<string>? crossTreeWaitSet = null,
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
@@ -483,6 +485,126 @@ internal sealed partial class LatticeGrain
             return;
         }
 
+        if (string.IsNullOrEmpty(crossTreeOperationId))
+        {
+            // Legacy single-tree path: the per-shard gate is the only
+            // barrier, so mark the per-tree linearization point and fan
+            // the terminal out as soon as the gate completes.
+            if (committed)
+            {
+                await registry.MarkCommittedAsync(transactionId);
+            }
+            else
+            {
+                await registry.MarkAbortedAsync(transactionId);
+            }
+
+            await ApplyTerminalPostGateAsync(
+                transactionId, committed, tally.ObservedSourceShards,
+                terminalHlc, originClusterId, cancellationToken);
+            return;
+        }
+
+        // Cross-tree receiver barrier. Each participating tree's terminals
+        // replicate independently, so a per-tree mark + fan-out here would let a
+        // remote reader observe one tree committed while a sibling tree is still
+        // pre-saga - a partial cross-tree view the authoring cluster never
+        // exposes. Defer the mark and fan-out to a receiver coordinator that
+        // flips every replicated participating tree visible together.
+        //
+        // Strict ordering (never reversed): (a) durably register this tree's
+        // registry to delegate the sub-saga's status to the receiver
+        // coordinator, THEN (b) durably notify the coordinator of this tree's
+        // terminal. (a)-before-(b) guarantees no reader can resolve this tree
+        // committed (local mark) while a sibling is still legacy-local: until
+        // the coordinator decides, the delegated read returns InFlight.
+        var receiverKey = LatticeCrossTreeReceiverGrain.ComputeKey(originClusterId, crossTreeOperationId);
+        await registry.RegisterReceiverDecisionAuthorityAsync(transactionId, receiverKey);
+
+        var waitSet = crossTreeWaitSet is { Count: > 0 } ? crossTreeWaitSet : new[] { TreeId };
+        var coordinator = grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(receiverKey);
+        var decision = await coordinator.NotifyTerminalAsync(new CrossTreeReceiverTerminal
+        {
+            OriginClusterId = originClusterId,
+            OperationId = crossTreeOperationId,
+            TreeId = TreeId,
+            TransactionId = transactionId,
+            Committed = committed,
+            WaitSet = waitSet,
+            ObservedSourceShards = tally.ObservedSourceShards,
+            TerminalHlc = terminalHlc,
+        });
+
+        if (!decision.Decided)
+        {
+            // Barrier still pending other replicated participants. Leave every
+            // tree's mark unset; delegated reads return InFlight everywhere.
+            return;
+        }
+
+        // Barrier complete: materialize every tree's slice. The coordinator only
+        // RETURNS data (never calls back), so finalizing here is deadlock-free.
+        // Self-tree finalize is inline (no reentrancy); sibling trees are
+        // finalized via their own apply grains. The full set is returned on
+        // every decided notify, so a redelivered terminal re-heals
+        // materialization idempotently.
+        foreach (var finalize in decision.TreesToFinalize)
+        {
+            if (string.Equals(finalize.TreeId, TreeId, StringComparison.Ordinal))
+            {
+                await FinalizeCrossTreeTerminalCoreAsync(
+                    finalize.TransactionId, decision.Committed, finalize.ObservedSourceShards,
+                    finalize.TerminalHlc, finalize.OriginClusterId, cancellationToken);
+            }
+            else
+            {
+                var sibling = grainFactory.GetGrain<IReplicationApplyGrain>(finalize.TreeId);
+                await sibling.FinalizeCrossTreeTerminalAsync(
+                    finalize.TransactionId, decision.Committed, finalize.ObservedSourceShards,
+                    finalize.TerminalHlc, finalize.OriginClusterId, cancellationToken);
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public Task FinalizeCrossTreeTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyList<int> observedSourceShards,
+        HybridLogicalClock terminalHlc,
+        string originClusterId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        ArgumentNullException.ThrowIfNull(observedSourceShards);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "FinalizeCrossTreeTerminalAsync requires a non-empty transactionId.",
+                nameof(transactionId));
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return FinalizeCrossTreeTerminalCoreAsync(
+            transactionId, committed, observedSourceShards, terminalHlc, originClusterId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Marks this tree's per-tree registry with the (global) verdict and fans
+    /// the terminal out to the tree's leaves. Shared by the legacy single-tree
+    /// path's sibling-less finalize and the cross-tree barrier's per-tree
+    /// materialization.
+    /// </summary>
+    private async Task FinalizeCrossTreeTerminalCoreAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyList<int> observedSourceShards,
+        HybridLogicalClock terminalHlc,
+        string originClusterId,
+        CancellationToken cancellationToken)
+    {
+        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
         if (committed)
         {
             await registry.MarkCommittedAsync(transactionId);
@@ -492,38 +614,41 @@ internal sealed partial class LatticeGrain
             await registry.MarkAbortedAsync(transactionId);
         }
 
-        // Step 2 (foreground visibility + WAL re-stamp) - drive the
-        // per-shard terminal-mark primitive under the source's HLC and
-        // origin so the receiver's local WAL append re-stamps the
-        // source cluster's terminal HLC and origin verbatim. The shard
-        // root's ComputeTerminalHlcAsync honours
-        // LatticeHlcOverrideContext.Current and returns the override
-        // unchanged - preserving the cross-cluster ordering invariant
-        // on receiver replays.
-        //
-        // Pre-resolve the transitive split-forward closure of every
-        // observed source-shard index via TerminalFanOutResolver: under
-        // cascading mid-saga splits on the receiver cluster, the
-        // inbound records' authoring-cluster shardIndices may have
-        // further split locally. The resolver BFS-expands the seeds
-        // against each shard's GetSplitForwardTargetsAsync so the
-        // terminal mark reaches every destination of every chain, in a
-        // single parallel hop - replacing the previous recursive
-        // forward that compounded RPC depth into Orleans' response
-        // timeout. Seeding with the full ObservedSourceShards set
-        // (not just the current arrival's shardIndex) means a saga
-        // touching N source shards fans the terminal out across the
-        // union of all N transitive closures in a single pass on the
-        // final arrival.
+        await ApplyTerminalPostGateAsync(
+            transactionId, committed, observedSourceShards,
+            terminalHlc, originClusterId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Drives the per-shard terminal-mark fan-out for a saga whose
+    /// linearization mark has already been recorded. Pre-resolves the
+    /// transitive split-forward closure of every observed source-shard index
+    /// via <see cref="TerminalFanOutResolver"/> (under cascading mid-saga
+    /// splits on the receiver cluster, the inbound records' authoring-cluster
+    /// shard indices may have further split locally), then drives the per-shard
+    /// terminal-mark primitive under the source's HLC + origin so the receiver's
+    /// local WAL append re-stamps the source cluster's terminal HLC and origin
+    /// verbatim. The shard root's <c>ComputeTerminalHlcAsync</c> honours
+    /// <see cref="LatticeHlcOverrideContext.Current"/> and returns the override
+    /// unchanged - preserving the cross-cluster ordering invariant on receiver
+    /// replays.
+    /// </summary>
+    private async Task ApplyTerminalPostGateAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyList<int> observedSourceShards,
+        HybridLogicalClock terminalHlc,
+        string originClusterId,
+        CancellationToken cancellationToken)
+    {
         using (LatticeOriginContext.With(originClusterId))
         using (LatticeHlcOverrideContext.With(terminalHlc))
         {
             var (physicalTreeId, _) = await GetRoutingAsync();
-            var seeds = tally.ObservedSourceShards;
             var targets = await TerminalFanOutResolver.ResolveTransitiveAsync(
                 grainFactory,
                 physicalTreeId,
-                seeds,
+                observedSourceShards,
                 cancellationToken);
 
             var tasks = new List<Task>(targets.Count);

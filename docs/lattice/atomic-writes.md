@@ -699,6 +699,54 @@ delegated read returns `InFlight`, so the prepared keys are invisible
 the **same** global verdict. The global visibility flip is therefore the
 coordinator's single decision write, applied uniformly across all trees.
 
+### Cross-cluster cross-tree visibility (receiver barrier)
+
+The authoring-cluster flip above is a *single* write, but each
+participating tree's terminals replicate to remote clusters on their
+**own** per-tree WAL feed. A receiver can therefore apply tree A's
+terminal long before tree B's terminal arrives. Without a receiver-side
+barrier a remote reader could observe tree A committed while tree B is
+still pre-saga - a partial cross-tree view the authoring cluster never
+exposes.
+
+The receiver closes this gap with an internal **receiver coordinator
+grain** (`ILatticeCrossTreeReceiverGrain`), distinct from the
+authoring-side coordinator and keyed by the compound
+`(originClusterId, operationId)`. Each tree's cross-tree terminal carries
+the operation id and the participant tree-set (`WalRecord`'s
+`CrossTreeOperationId` / `CrossTreeParticipants`). When a tree's per-shard
+gate completes on the receiver, instead of flipping that tree's registry
+immediately the receiver:
+
+1. durably registers the tree's local txid as **delegated to the receiver
+   coordinator** in the per-tree registry, then
+2. notifies the receiver coordinator that this tree's terminal has
+   arrived (with its commit/abort vote).
+
+The receiver coordinator holds a frozen **wait set** of the trees it must
+hear from and decides only once a terminal has arrived for every tree in
+the set; the global verdict is `Committed` iff every arrived terminal
+voted commit. Before the coordinator decides, a delegated read on any
+participating tree's registry dials the receiver coordinator and resolves
+`InFlight` - so every tree stays invisible. After it decides, every tree
+resolves the same verdict and the receiver flips them **together**,
+mirroring the authoring cluster's single-write flip. The coordinator only
+ever *returns* the decision (it never calls back into a tree grain), so
+the calling `LatticeGrain` performs the per-tree finalizes - itself inline
+and siblings via their apply grains - without any circular wait.
+
+**Partial replication is valid.** The wait set is scoped to the trees
+actually replicated on the receiver: it is the intersection of the
+batch's participant set with the receiver's configured replicated trees
+(`LatticeReplicationOptions.ReplicatedTrees`). The tree that received the
+terminal is always in the set. A participating tree that is **not**
+replicated on this receiver is simply excluded, so a cross-tree batch
+spanning a mix of replicated and non-replicated trees completes its
+barrier on the present subset rather than blocking forever on a tree that
+will never arrive. The receiver thus preserves cross-tree atomic
+visibility across exactly the trees it hosts, whatever subset of the
+batch that is.
+
 ### Guarantees and non-guarantees
 
 - **All-or-nothing commit across trees.** On a `Committed` outcome every

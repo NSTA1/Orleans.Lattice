@@ -80,11 +80,18 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     /// <param name="entries">Key-value pairs to commit atomically. Must not contain duplicate keys.</param>
     /// <param name="predicate">Optional server-side guard IR evaluated against each key's pre-saga value.</param>
     /// <param name="coordinatorKey">Key of the <see cref="ILatticeCrossTreeTxGrain"/> that owns the global decision.</param>
+    /// <param name="participants">
+    /// The full, canonical (ordinal-sorted) participant tree-id set of the
+    /// enclosing cross-tree atomic write. Persisted on the sub-saga and stamped
+    /// onto every per-shard terminal record (<see cref="WalRecord.CrossTreeParticipants"/>)
+    /// so the receiver-side cross-tree visibility barrier can scope its wait set.
+    /// </param>
     Task<CrossTreePrepareVote> PrepareForCoordinatorAsync(
         string treeId,
         List<KeyValuePair<string, byte[]>> entries,
         LatticePredicateNode? predicate,
-        string coordinatorKey);
+        string coordinatorKey,
+        IReadOnlyList<string> participants);
 
     /// <summary>
     /// Finalizes a sub-saga previously paused by

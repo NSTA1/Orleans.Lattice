@@ -758,6 +758,30 @@ internal sealed partial class ReplicationApplier(
                 nameof(entry));
         }
 
+        // Cross-tree atomic write: scope the receiver barrier's wait set to the
+        // participant trees that are actually replicated on THIS receiver. A
+        // participant tree not replicated here is excluded, so the barrier
+        // completes on the present subset (partial-replication batches are
+        // valid). The current tree always received this terminal, so it is
+        // replicated here and is always in the wait set.
+        var crossTreeOperationId = string.IsNullOrEmpty(entry.CrossTreeOperationId)
+            ? null
+            : entry.CrossTreeOperationId;
+        IReadOnlyList<string>? crossTreeWaitSet = null;
+        if (crossTreeOperationId is not null)
+        {
+            var waitSet = new List<string> { entry.TreeId };
+            if (entry.CrossTreeParticipants is { Count: > 0 } participants)
+            {
+                foreach (var participant in participants)
+                {
+                    if (string.Equals(participant, entry.TreeId, StringComparison.Ordinal)) continue;
+                    if (IsTreeReplicatedHere(participant)) waitSet.Add(participant);
+                }
+            }
+            crossTreeWaitSet = waitSet;
+        }
+
         return apply.ApplyTxTerminalAsync(
             entry.TransactionId,
             committed,
@@ -765,8 +789,20 @@ internal sealed partial class ReplicationApplier(
             entry.Timestamp,
             entry.OriginClusterId!,
             entry.AtomicShardCount,
+            crossTreeOperationId,
+            crossTreeWaitSet,
             cancellationToken);
     }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="treeId"/> is opted into
+    /// replication on this receiver (its per-tree
+    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map contains
+    /// itself). Used to scope a cross-tree atomic write's receiver barrier to
+    /// the participant trees present on this cluster.
+    /// </summary>
+    private bool IsTreeReplicatedHere(string treeId) =>
+        options.Get(treeId).ReplicatedTrees?.ContainsKey(treeId) == true;
 
     /// <summary>
     /// CAS retry budget for the read-merge-write loop used by typed CRDT

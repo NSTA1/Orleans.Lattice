@@ -277,4 +277,20 @@ public static class LatticeEventConstants
     /// <see cref="LatticePredicateContext"/>.
     /// </summary>
     internal const string PredicateRequestContextKey = "ol.pred";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the cross-tree
+    /// atomic write's <c>(operationId, participants)</c> pair from the
+    /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> sub-saga down into
+    /// the per-shard terminal-mutation publish helpers, so each emitted
+    /// cross-tree terminal <see cref="LatticeMutation"/> /
+    /// <c>WalRecord</c> carries
+    /// <see cref="LatticeMutation.CrossTreeOperationId"/> and
+    /// <see cref="LatticeMutation.CrossTreeParticipants"/> for the
+    /// receiver-side cross-tree visibility barrier. Stamped only on the
+    /// terminal broadcast of a cross-tree sub-saga; single-tree saga
+    /// terminals and non-saga writes leave the entry absent. Internal -
+    /// set through <see cref="LatticeCrossTreeTerminalContext"/>.
+    /// </summary>
+    internal const string CrossTreeTerminalRequestContextKey = "ol.xt";
 }

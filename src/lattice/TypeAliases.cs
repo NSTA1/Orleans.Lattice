@@ -144,6 +144,14 @@ internal static class TypeAliases
     internal const string CrossTreeParticipant = "ol.ctc";
     internal const string CrossTreePrepareVote = "ol.ctv";
     internal const string ILatticeCrossTreeTxGrain = "ol.gct";
+    // Receiver-side cross-tree visibility barrier.
+    internal const string ILatticeCrossTreeReceiverGrain = "ol.gcr";
+    internal const string CrossTreeReceiverState = "ol.crs";
+    internal const string CrossTreeReceiverTerminal = "ol.crt";
+    internal const string CrossTreeReceiverDecision = "ol.crd";
+    internal const string CrossTreeReceiverTreeFinalize = "ol.crf";
+    // Ambient producer-side cross-tree terminal metadata (RequestContext value).
+    internal const string CrossTreeTerminalInfo = "ol.cti";
 
     // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";

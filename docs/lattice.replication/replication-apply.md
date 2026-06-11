@@ -183,6 +183,37 @@ terminal delivered or the receiver-side pending bucket leaks. The
 empty-origin guard and the cycle-break filter still run before the
 bypass, so a malformed or self-loopback terminal is still rejected.
 
+### Cross-tree terminals (receiver barrier)
+
+A terminal that belongs to a **cross-tree** atomic write
+(`IGrainFactory.SetManyAtomicAsync`) carries two additional slots -
+`WalRecord.CrossTreeOperationId` and `WalRecord.CrossTreeParticipants`
+(the canonical participant tree-id set). The applier threads these into
+`ApplyTxTerminalAsync` as a `crossTreeOperationId` plus a receiver-scoped
+**wait set**. The wait set is the participant set intersected with the
+trees this receiver actually replicates
+(`LatticeReplicationOptions.ReplicatedTrees`); the tree that received the
+terminal is always included. A participant tree not replicated here is
+excluded, so a cross-tree batch spanning a mix of replicated and
+non-replicated trees stays valid - the barrier completes on the present
+subset rather than waiting forever on a tree that never ships here.
+
+Once a tree's per-source-shard gate is final, a cross-tree terminal does
+**not** flip that tree's registry directly. Instead the receiver durably
+registers the tree's local txid as delegated to a **receiver coordinator
+grain** (`ILatticeCrossTreeReceiverGrain`, keyed by
+`(originClusterId, operationId)`) and notifies it of this tree's arrival
+and commit/abort vote. The coordinator decides only once a terminal has
+arrived for every tree in the wait set, committing iff every arrived tree
+voted commit. Before the decision, a delegated read on any participating
+tree's registry resolves `InFlight` against the coordinator, so every
+tree stays invisible; after it, the receiver flips every participating
+tree together. The coordinator only ever returns the decision (it never
+calls back into a tree grain); the calling `LatticeGrain` performs the
+per-tree finalizes - itself inline, siblings via their apply grains - so
+there is no circular wait. A null/empty `crossTreeOperationId` routes the
+terminal through the legacy single-tree gate unchanged.
+
 Public readers therefore observe the receiver-side same-cluster
 atomic-visibility property end-to-end: at every point in time,
 either every key the saga prepared on the receiver is at its

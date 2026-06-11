@@ -69,6 +69,27 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey);
 
     /// <summary>
+    /// Receiver-side analogue of
+    /// <see cref="RegisterExternalDecisionAuthorityAsync"/>: registers that the
+    /// replicated cross-tree sub-saga identified by <paramref name="txid"/>
+    /// delegates its commit/abort visibility on <i>this receiver cluster</i> to
+    /// the receiver coordinator grain keyed by
+    /// <paramref name="receiverCoordinatorKey"/> (a compound origin-cluster +
+    /// operation-id key). Called when a cross-tree terminal's per-shard arrival
+    /// gate completes on the receiver, strictly <i>before</i> the receiver
+    /// notifies that coordinator, so no reader observes one participating tree
+    /// committed while a sibling tree is still pre-barrier. While the delegation
+    /// is active and no local terminal decision has been recorded, status
+    /// queries for <paramref name="txid"/> resolve against the receiver
+    /// coordinator's single global decision (caching the verdict locally once
+    /// terminal), so every replicated participating tree flips visible at the
+    /// instant the receiver coordinator's wait set completes. Idempotent: a
+    /// repeat with the same <paramref name="receiverCoordinatorKey"/> is a
+    /// no-op; a repeat after the local decision was already recorded is ignored.
+    /// </summary>
+    Task RegisterReceiverDecisionAuthorityAsync(Guid txid, string receiverCoordinatorKey);
+
+    /// <summary>
     /// Returns the recorded outcome for <paramref name="txid"/>. Returns
     /// <see cref="TxStatus.InFlight"/> when no decision has been recorded
     /// (the saga is still preparing or has been forgotten via

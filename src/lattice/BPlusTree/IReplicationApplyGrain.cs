@@ -268,6 +268,27 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// that exercise the apply seam directly without going through the
     /// replication wire.
     /// </param>
+    /// <param name="crossTreeOperationId">
+    /// The cross-tree operation id when this terminal belongs to a
+    /// multi-tree atomic write, else <c>null</c>. When set, the receiver
+    /// defers the per-tree linearization mark and fan-out to a
+    /// <see cref="ILatticeCrossTreeReceiverGrain"/> barrier so every
+    /// replicated participating tree on this receiver flips visible
+    /// together - preserving the authoring cluster's all-or-nothing
+    /// cross-tree visibility guarantee on the receiver side. A
+    /// <c>null</c> value selects the legacy single-tree path (mark +
+    /// fan out as soon as the per-shard gate completes).
+    /// </param>
+    /// <param name="crossTreeWaitSet">
+    /// The participant tree-ids of the cross-tree batch that are
+    /// replicated on <i>this</i> receiver
+    /// (<c>participants ∩ trees-replicated-here</c>). Computed by the
+    /// applier and passed to the receiver barrier as its wait set, so a
+    /// cross-tree batch that spans trees not replicated here still flips
+    /// atomically on the subset that is present (partial-replication
+    /// batches are valid). Ignored when <paramref name="crossTreeOperationId"/>
+    /// is <c>null</c>.
+    /// </param>
     /// <param name="cancellationToken">Token to cancel the call.</param>
     Task ApplyTxTerminalAsync(
         Guid transactionId,
@@ -276,5 +297,32 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
         HybridLogicalClock terminalHlc,
         string originClusterId,
         int atomicShardCount = 0,
+        string? crossTreeOperationId = null,
+        IReadOnlyList<string>? crossTreeWaitSet = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Materializes one tree's slice of a decided cross-tree atomic write on
+    /// this receiver: marks this tree's <see cref="ITxRegistryGrain"/> with the
+    /// global verdict and fans the terminal out to the tree's leaves. Called by
+    /// the <see cref="ILatticeCrossTreeReceiverGrain"/> barrier's coordinating
+    /// <c>LatticeGrain</c> (after <c>NotifyTerminalAsync</c> returns a decision)
+    /// for every <i>sibling</i> participating tree; the coordinating tree
+    /// materializes its own slice inline. Idempotent on redelivery (the registry
+    /// repeat-same-outcome no-op and per-leaf terminal dedup), so re-invoking it
+    /// for an already-finalized tree is safe.
+    /// </summary>
+    /// <param name="transactionId">The replicated sub-saga's transaction id on this tree.</param>
+    /// <param name="committed">The global cross-tree verdict to record on this tree.</param>
+    /// <param name="observedSourceShards">The source-shard indices seeding the terminal fan-out.</param>
+    /// <param name="terminalHlc">The source cluster's terminal HLC, re-stamped verbatim on fan-out.</param>
+    /// <param name="originClusterId">The id of the source cluster that authored the terminal.</param>
+    /// <param name="cancellationToken">Token to cancel the call.</param>
+    Task FinalizeCrossTreeTerminalAsync(
+        Guid transactionId,
+        bool committed,
+        IReadOnlyList<int> observedSourceShards,
+        HybridLogicalClock terminalHlc,
+        string originClusterId,
         CancellationToken cancellationToken = default);
 }

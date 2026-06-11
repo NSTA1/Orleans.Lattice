@@ -349,11 +349,13 @@ internal sealed class AtomicWriteGrain(
         string treeId,
         List<KeyValuePair<string, byte[]>> entries,
         LatticePredicateNode? predicate,
-        string coordinatorKey)
+        string coordinatorKey,
+        IReadOnlyList<string> participants)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentException.ThrowIfNullOrEmpty(coordinatorKey);
+        ArgumentNullException.ThrowIfNull(participants);
 
         // Empty batch: vacuously prepared, nothing to stage.
         if (entries.Count == 0) return CrossTreePrepareVote.Prepared;
@@ -398,6 +400,7 @@ internal sealed class AtomicWriteGrain(
             // re-parks against the same coordinator.
             state.State.Guard = predicate;
             state.State.ExternalAuthorityKey = coordinatorKey;
+            state.State.CrossTreeParticipants = participants.Count > 0 ? participants : null;
             await RegisterKeepaliveAsync();
             await PrepareAsync(treeId, entries);
         }
@@ -1947,6 +1950,19 @@ internal sealed class AtomicWriteGrain(
         // fresh from state.State.TouchedShards.Count each call so
         // late-pass shards observe the post-union count.
         using var shardCountScope = LatticeAtomicShardCountContext.With(state.State.TouchedShards.Count);
+
+        // Stamp the cross-tree operation id + participant set on the
+        // ambient so ShardRootGrain.AppendTxTerminalAsync stamps
+        // WalRecord.CrossTreeOperationId / CrossTreeParticipants on this
+        // tree's terminal records. Only set when this sub-saga belongs to a
+        // cross-tree atomic write (ExternalAuthorityKey + persisted
+        // participant set present); single-tree saga terminals leave the
+        // ambient unset, so the receiver routes them through the legacy
+        // single-tree per-shard gate. This is the producer half of the
+        // receiver-side cross-tree visibility barrier.
+        using var crossTreeScope = LatticeCrossTreeTerminalContext.With(
+            state.State.ExternalAuthorityKey,
+            state.State.CrossTreeParticipants);
 
         // The catch blocks unconditionally fire so the original
         // stale-routing throw surfaces to the caller once the wall-clock

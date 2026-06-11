@@ -22,7 +22,8 @@ public partial class AtomicWriteGrainTests
             configureFactory: f => f.GetGrain<ITxRegistryGrain>(TreeId).Returns(registry));
 
         var vote = await grain.PrepareForCoordinatorAsync(
-            TreeId, MakeEntries(("k1", [1]), ("k2", [2])), predicate: null, coordinatorKey: "xcoord-1");
+            TreeId, MakeEntries(("k1", [1]), ("k2", [2])), predicate: null, coordinatorKey: "xcoord-1",
+            participants: new[] { TreeId });
 
         Assert.That(vote, Is.EqualTo(CrossTreePrepareVote.Prepared));
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Prepared),
@@ -46,7 +47,8 @@ public partial class AtomicWriteGrainTests
             configureFactory: f => f.GetGrain<ITxRegistryGrain>(TreeId).Returns(registry));
 
         Assert.CatchAsync(() => grain.PrepareForCoordinatorAsync(
-            TreeId, MakeEntries(("k1", [1])), predicate: null, coordinatorKey: "xcoord-1"));
+            TreeId, MakeEntries(("k1", [1])), predicate: null, coordinatorKey: "xcoord-1",
+            participants: new[] { TreeId }));
 
         Assert.That(state.State.Phase, Is.Not.EqualTo(AtomicWritePhase.Prepared),
             "a failed park must leave the sub-saga in a retryable (non-parked) state");
@@ -68,10 +70,12 @@ public partial class AtomicWriteGrainTests
         var entries = MakeEntries(("k1", [1]));
 
         Assert.CatchAsync(() => grain.PrepareForCoordinatorAsync(
-            TreeId, entries, predicate: null, coordinatorKey: "xcoord-1"));
+            TreeId, entries, predicate: null, coordinatorKey: "xcoord-1",
+            participants: new[] { TreeId }));
 
         var vote = await grain.PrepareForCoordinatorAsync(
-            TreeId, entries, predicate: null, coordinatorKey: "xcoord-1");
+            TreeId, entries, predicate: null, coordinatorKey: "xcoord-1",
+            participants: new[] { TreeId });
 
         Assert.That(vote, Is.EqualTo(CrossTreePrepareVote.Prepared));
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Prepared));

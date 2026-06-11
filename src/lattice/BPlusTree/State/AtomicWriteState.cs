@@ -263,4 +263,18 @@ internal sealed class AtomicWriteState
     /// persisted state decodes to <see langword="null"/> (a standalone saga).
     /// </summary>
     [Id(19)] public string? ExternalAuthorityKey { get; set; }
+
+    /// <summary>
+    /// The full, canonical (ordinal-sorted) set of logical tree ids
+    /// participating in the enclosing cross-tree atomic write, or
+    /// <see langword="null"/> for a standalone single-tree saga. Captured
+    /// from the coordinator at prepare time and persisted so the terminal
+    /// broadcast - whether driven by <c>FinalizeAsync</c> or by a
+    /// reminder-driven crash-recovery resume - can stamp
+    /// <see cref="WalRecord.CrossTreeParticipants"/> onto every per-shard
+    /// terminal record, feeding the receiver-side cross-tree visibility
+    /// barrier. Wire-compatible: a missing field on legacy persisted state
+    /// decodes to <see langword="null"/> (a standalone saga, no barrier).
+    /// </summary>
+    [Id(20)] public IReadOnlyList<string>? CrossTreeParticipants { get; set; }
 }

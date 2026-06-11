@@ -213,13 +213,22 @@ internal sealed class LatticeCrossTreeTxGrain(
     private async Task PreparePhaseAsync()
     {
         var participants = state.State.Participants;
+        // Canonical (ordinal-sorted, de-duplicated) participant tree-id set
+        // stamped onto every sub-saga's terminal records so the
+        // receiver-side cross-tree visibility barrier sees an identical
+        // participant set on every terminal of this operation.
+        var participantTreeIds = participants
+            .Select(p => p.TreeId)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(t => t, StringComparer.Ordinal)
+            .ToArray();
         var voteTasks = new Task<CrossTreePrepareVote>[participants.Count];
         for (var i = 0; i < participants.Count; i++)
         {
             var p = participants[i];
             var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{p.TreeId}/{OperationId}");
             voteTasks[i] = saga.PrepareForCoordinatorAsync(
-                p.TreeId, p.Entries, p.Predicate, OperationId);
+                p.TreeId, p.Entries, p.Predicate, OperationId, participantTreeIds);
         }
 
         CrossTreePrepareVote[] votes;

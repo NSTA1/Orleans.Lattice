@@ -70,6 +70,8 @@ internal static class WalRecordConverter
             IsBackstop = mutation.IsBackstop,
             Category = mutation.Category,
             MatchedKeys = mutation.MatchedKeys,
+            CrossTreeOperationId = mutation.CrossTreeOperationId,
+            CrossTreeParticipants = mutation.CrossTreeParticipants,
         };
     }
 
@@ -118,6 +120,8 @@ internal static class WalRecordConverter
             IsMerge = entry.IsMerge,
             IsBackstop = entry.IsBackstop,
             MatchedKeys = entry.MatchedKeys,
+            CrossTreeOperationId = entry.CrossTreeOperationId,
+            CrossTreeParticipants = entry.CrossTreeParticipants,
         };
     }
 }

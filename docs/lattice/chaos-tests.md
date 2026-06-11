@@ -640,6 +640,40 @@ rollback / topology-churn / fan-out-saturation / "fewer than 2 virtual
 slots" `InvalidOperationException` messages are bucketed as transient and
 retried; any other exception fails the test.
 
+## Test 12 - Cross-cluster cross-tree atomic visibility (`CrossClusterCrossTreeAtomicVisibilityChaosTests`)
+
+This test (in the replication suite) asserts the **receiver-side
+cross-tree all-or-nothing invariant**: when a cross-tree
+`SetManyAtomicAsync` batch spanning two replicated trees ships to a remote
+cluster, a reader on the receiver must never observe one tree committed
+while a sibling tree is still pre-saga. Because each tree's terminals
+replicate on their own WAL feed, the receiver routinely applies one tree's
+terminal before the other's; the receiver coordinator grain
+(`ILatticeCrossTreeReceiverGrain`) must hold every participating tree
+invisible until all of the batch's replicated terminals have arrived, then
+flip them together.
+
+### Workload
+
+* Two sites, each authoring `SetManyAtomicAsync` batches spanning two
+  replicated trees (`chaos-xt-a`, `chaos-xt-b`) under deterministic
+  per-batch key namespaces and a stable `operationId`.
+* Two independent `ChaosDeliveryPump` instances - one per tree - ship the
+  two trees' change feeds with **independent** partition cycles, so the
+  receiver routinely sees one tree's terminal before the other's.
+* A mid-workload partition isolates each tree's edges at staggered points
+  and heals them later, forcing terminal skew across the two trees.
+
+### Pass criteria
+
+* On every receiver site, for every authored batch, tree A's keys and
+  tree B's keys have **identical** presence - both fully visible or both
+  fully absent. Tree A visible while tree B is absent (or vice versa) is a
+  cross-tree atomicity violation.
+* No single-tree partial view (every batch's per-tree key set is wholly
+  present or wholly absent).
+* Post-drain: every batch's keys are present on both trees on every site.
+
 ## Observed recovery surfaces
 
 Between them, the chaos tests exercise every recovery path documented

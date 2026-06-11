@@ -39,7 +39,7 @@ public class LatticeCrossTreeTxGrainTests
             // Default happy-path stubs; individual tests override.
             sub.PrepareForCoordinatorAsync(
                     Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
-                    Arg.Any<LatticePredicateNode?>(), Arg.Any<string>())
+                    Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
                 .Returns(CrossTreePrepareVote.Prepared);
             sub.FinalizeAsync(Arg.Any<bool>()).Returns(Task.CompletedTask);
             participants[treeId] = sub;
@@ -99,7 +99,7 @@ public class LatticeCrossTreeTxGrainTests
         var (grain, state, _, participants) = CreateGrain(["orders", "inventory"]);
         participants["inventory"].PrepareForCoordinatorAsync(
                 Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
-                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>())
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
             .Returns(CrossTreePrepareVote.PreconditionFailed);
 
         var outcome = await grain.CommitAsync(Batches(
@@ -119,7 +119,7 @@ public class LatticeCrossTreeTxGrainTests
         var (grain, _, _, participants) = CreateGrain(["orders", "inventory"]);
         participants["inventory"].PrepareForCoordinatorAsync(
                 Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
-                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>())
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
             .Returns(CrossTreePrepareVote.Failed);
 
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.CommitAsync(Batches(
@@ -224,7 +224,7 @@ public class LatticeCrossTreeTxGrainTests
         // No re-prepare on the memoized re-attach.
         await participants["orders"].Received(1).PrepareForCoordinatorAsync(
             Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
-            Arg.Any<LatticePredicateNode?>(), Arg.Any<string>());
+            Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>());
     }
 
     [Test]
@@ -289,7 +289,7 @@ public class LatticeCrossTreeTxGrainTests
         await grain.CommitAsync(Batches(("orders", "order:1", "A")));
 
         await participants["orders"].Received(1).PrepareForCoordinatorAsync(
-            "orders", Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<LatticePredicateNode?>(), OperationId);
+            "orders", Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<LatticePredicateNode?>(), OperationId, Arg.Any<IReadOnlyList<string>>());
     }
 
     [Test]
@@ -324,7 +324,7 @@ public class LatticeCrossTreeTxGrainTests
         // the coordinator parked at Preparing with no decision yet written.
         participants["inventory"].PrepareForCoordinatorAsync(
                 Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
-                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>())
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
             .Returns(Task.FromException<CrossTreePrepareVote>(new TimeoutException("crash")));
 
         Assert.ThrowsAsync<TimeoutException>(() => grain.CommitAsync(Batches(
@@ -335,7 +335,7 @@ public class LatticeCrossTreeTxGrainTests
         // Recovery: the faulted participant now votes Prepared on retry.
         participants["inventory"].PrepareForCoordinatorAsync(
                 Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
-                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>())
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
             .Returns(CrossTreePrepareVote.Prepared);
         await grain.ReceiveReminder("cross-tree-tx-keepalive", default);
 

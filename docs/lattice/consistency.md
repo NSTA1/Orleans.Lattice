@@ -169,6 +169,21 @@ different instants may observe the global flip between samples, but never
 a partial slice of one cross-tree saga on any single tree. See
 [Atomic Writes: Cross-tree atomic writes](atomic-writes.md#cross-tree-multi-tree-atomic-writes).
 
+The same all-or-nothing visibility holds **across clusters**. Each
+participating tree's terminals replicate on their own per-tree WAL feed,
+so a receiver can apply one tree's terminal before a sibling tree's. A
+receiver-side coordinator grain (`ILatticeCrossTreeReceiverGrain`), keyed
+by `(originClusterId, operationId)`, holds every participating tree
+invisible until a terminal has arrived for each tree it expects, then
+flips them together - mirroring the authoring cluster's single-write
+flip. The set of trees it waits for is scoped to the trees actually
+replicated on that receiver (the batch's participant set intersected with
+`LatticeReplicationOptions.ReplicatedTrees`), so a cross-tree batch
+spanning a mix of replicated and non-replicated trees remains valid: the
+receiver preserves cross-tree atomic visibility across exactly the subset
+of trees it hosts. See
+[Atomic Writes: Cross-cluster cross-tree visibility](atomic-writes.md#cross-cluster-cross-tree-visibility-receiver-barrier).
+
 ---
 
 ## Topology and durability notes
