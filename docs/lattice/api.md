@@ -728,7 +728,7 @@ using (LatticeDeltaContext.With(new byte[] { 1, 2, 3 }))
 ```
 
 The CRDT value-surface accessors (`OrSet`, `PnCounter`,
-`VersionVector`, `MvRegister`, `OrMap<TKey, TValue>`) and the
+`VersionVector`, `MvRegister`, `OrMap<TKey, TValue>`, `Sequence<T>`) and the
 atomic-write saga set the context on the caller's behalf - the
 replication package's typed-delta receiver dispatch reads the
 stamped slot and applies via `MergeDelta` automatically.

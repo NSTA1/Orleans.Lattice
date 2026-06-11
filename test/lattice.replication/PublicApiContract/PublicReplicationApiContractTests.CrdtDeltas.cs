@@ -143,4 +143,57 @@ public partial class PublicReplicationApiContractTests
             },
             $"VersionVector ticks on Site A must converge to Site B for '{treeId}/vclock'.");
     }
+
+    [Test]
+    public async Task SequenceAccessor_replicates_ordered_inserts_across_clusters()
+    {
+        var treeId = NextTreeId("crdt-sequence");
+        var treeOnA = await CreateReplicatedTreeAsync(treeId);
+        var treeOnB = _fixture.TreeOnB(treeId);
+
+        var aSeq = treeOnA.Sequence<string>("doc");
+        var bSeq = treeOnB.Sequence<string>("doc");
+
+        // Author a three-element sequence on Site A. The producer ships
+        // dot-explicit RgaDelta inserts; Site B must converge on the same
+        // ordered traversal, not merely the same node set.
+        await aSeq.InsertAtAsync(0, "site-a", "Hello");
+        await aSeq.InsertAtAsync(1, "site-a", " ");
+        await aSeq.InsertAtAsync(2, "site-a", "World");
+
+        await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
+            async () =>
+            {
+                var observed = await bSeq.ToListAsync();
+                return observed.SequenceEqual(new[] { "Hello", " ", "World" });
+            },
+            $"Sequence inserts on Site A must converge to identical order on Site B for '{treeId}/doc'.");
+    }
+
+    [Test]
+    public async Task SequenceAccessor_replicates_remove_across_clusters()
+    {
+        var treeId = NextTreeId("crdt-sequence");
+        var treeOnA = await CreateReplicatedTreeAsync(treeId);
+        var treeOnB = _fixture.TreeOnB(treeId);
+
+        var aSeq = treeOnA.Sequence<string>("doc");
+        var bSeq = treeOnB.Sequence<string>("doc");
+
+        await aSeq.InsertAtAsync(0, "site-a", "a");
+        await aSeq.InsertAtAsync(1, "site-a", "b");
+        await aSeq.InsertAtAsync(2, "site-a", "c");
+
+        await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
+            async () => (await bSeq.ToListAsync()).SequenceEqual(new[] { "a", "b", "c" }),
+            $"Initial sequence on Site A must converge to Site B for '{treeId}/doc'.");
+
+        // Remove the middle element on Site A; the tombstone dot must
+        // ship and Site B must drop exactly that visible element.
+        await aSeq.RemoveAtAsync(1);
+
+        await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
+            async () => (await bSeq.ToListAsync()).SequenceEqual(new[] { "a", "c" }),
+            $"Sequence remove on Site A must converge to Site B for '{treeId}/doc'.");
+    }
 }

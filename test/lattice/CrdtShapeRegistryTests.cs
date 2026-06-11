@@ -18,6 +18,7 @@ public class CrdtShapeRegistryTests
         Assert.That(r.TryGet("any", LatticeMergeMode.PnCounter), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.VersionVector), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.MvRegister), Is.Not.Null);
+        Assert.That(r.TryGet("any", LatticeMergeMode.Sequence), Is.Not.Null);
     }
 
     [Test]
@@ -165,5 +166,50 @@ public class CrdtShapeRegistryTests
         // After merging two concurrent writes from distinct replicas the
         // MV register must hold both values.
         Assert.That(a.Values().Count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ForRga_descriptor_roundtrips_delta_through_state()
+    {
+        var shape = CrdtShape.ForRga();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.Sequence));
+
+        var state = (Rga)shape.CreateEmpty();
+        Assert.That(state.IsBottom, Is.True);
+
+        var head = new OrSetDot { ReplicaId = "A", Counter = 1 };
+        var delta = new RgaDelta
+        {
+            Inserts = new[]
+            {
+                new RgaDeltaNode { ReplicaId = "A", Counter = 1, ParentDot = Rga.Root, Value = new byte[] { 1 } },
+                new RgaDeltaNode { ReplicaId = "A", Counter = 2, ParentDot = head, Value = new byte[] { 2 } },
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+        var deltaBytes = JsonLatticeSerializer<RgaDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+
+        var rendered = state.ToList().Select(t => t.Value[0]).ToArray();
+        Assert.That(rendered, Is.EqualTo(new byte[] { 1, 2 }));
+
+        // Re-serialise / re-hydrate the post-merge state and confirm the
+        // ordered traversal survives the round trip.
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (Rga)shape.DeserializeState(stateBytes);
+        var rendered2 = roundtripped.ToList().Select(t => t.Value[0]).ToArray();
+        Assert.That(rendered2, Is.EqualTo(new byte[] { 1, 2 }));
+    }
+
+    [Test]
+    public void ForRga_descriptor_merges_other_state()
+    {
+        var shape = CrdtShape.ForRga();
+        var a = (Rga)shape.CreateEmpty();
+        a.InsertAfter(Rga.Root, "A", new byte[] { 1 });
+        var b = (Rga)shape.CreateEmpty();
+        b.InsertAfter(Rga.Root, "B", new byte[] { 2 });
+        shape.MergeStates(a, b);
+        Assert.That(a.Count, Is.EqualTo(2));
     }
 }

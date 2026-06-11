@@ -217,9 +217,14 @@ public class ReplicationPeerStats
                 lastContact = kv.Value.LastContactTimestamp;
             }
 
+            // GetTimestamp() reads DateTimeOffset.UtcNow, which is not
+            // guaranteed monotonic, so a contact stamped on another
+            // thread can land microseconds ahead of this snapshot's now;
+            // floor the elapsed at zero - negative "seconds since last
+            // contact" is never meaningful.
             var elapsed = lastContact is null
                 ? double.NaN
-                : (now - lastContact.Value).TotalSeconds;
+                : Math.Max(0d, (now - lastContact.Value).TotalSeconds);
 
             list.Add(new ReplicationPeerSnapshot(
                 kv.Key.Tree,
@@ -287,9 +292,11 @@ public class ReplicationPeerStats
         {
             DateTimeOffset? lastContact;
             lock (kv.Value) { lastContact = kv.Value.LastContactTimestamp; }
+            // Floor at zero - see Snapshot() for the non-monotonic
+            // wall-clock rationale.
             var elapsed = lastContact is null
                 ? double.NaN
-                : (now - lastContact.Value).TotalSeconds;
+                : Math.Max(0d, (now - lastContact.Value).TotalSeconds);
             yield return new Measurement<double>(elapsed,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, kv.Key.Tree),
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, kv.Key.Peer),

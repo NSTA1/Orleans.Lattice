@@ -96,4 +96,22 @@ public enum LatticeMergeMode
     /// silently dropping the entry.
     /// </summary>
     OrMap = 5,
+
+    /// <summary>
+    /// Replicated Growable Array (RGA) sequence. Receivers fold the typed
+    /// <see cref="RgaDelta"/> carried in <see cref="WalRecord.Delta"/> into
+    /// the loaded <see cref="Orleans.Lattice.Rga"/> via its instance
+    /// <c>MergeDelta</c> method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.Sequence{T}(ILattice, string, ILatticeSerializer{T}?)"/>).
+    /// Each insert ships the dot-explicit triple <c>(dot, parentDot,
+    /// value)</c> and each remove ships the tombstoned dot, so concurrent
+    /// active-active inserts and deletes from multiple clusters converge
+    /// on an identical ordered traversal via the standard descending
+    /// <c>(Counter, ReplicaId)</c> sibling tie-break - replaying the
+    /// post-merge materialised order instead would lose the
+    /// concurrent-insert information the sequence needs to converge. The
+    /// descriptor is a global closed shape, so no per-tree registration is
+    /// required.
+    /// </summary>
+    Sequence = 6,
 }

@@ -264,6 +264,96 @@ public sealed class Rga : ICrdt<Rga>
         }
     }
 
+    /// <summary>
+    /// Folds an <see cref="RgaDelta"/> into this sequence. Inserts are
+    /// added as live nodes keyed by their dot identity (idempotent on
+    /// duplicate delivery); a node already present has its structural
+    /// info (<see cref="RgaNode.ParentDot"/> and a non-empty
+    /// <see cref="RgaNode.Value"/>) refreshed from the insert while its
+    /// tombstone flag is preserved (tombstone is monotonic). Tombstones
+    /// mark the matching node tombstoned, creating a tombstoned
+    /// placeholder when the node has not yet been observed so a
+    /// later-arriving insert for the same dot reattaches its parent.
+    /// <para>
+    /// The merge is commutative, associative, and idempotent: replaying
+    /// the same delta, or applying inserts and tombstones in any order,
+    /// converges to the same node set. Steady-state replication delivers
+    /// an insert before the matching tombstone (the producer-side commit
+    /// of the insert carries a strictly-earlier HLC than the remove, and
+    /// the causal-plus dependency gate preserves that order), so the
+    /// placeholder branch is a robustness backstop rather than the
+    /// common path.
+    /// </para>
+    /// </summary>
+    /// <param name="delta">
+    /// The typed CRDT delta authored by the producing call site. Null
+    /// inner collections are treated as empty.
+    /// </param>
+    public void MergeDelta(RgaDelta delta)
+    {
+        var byDot = new Dictionary<OrSetDot, RgaNode>(Nodes.Count);
+        foreach (var n in Nodes) byDot[n.Dot] = n;
+
+        var inserts = delta.Inserts;
+        if (inserts is { Count: > 0 })
+        {
+            foreach (var ins in inserts)
+            {
+                var dot = ins.Dot;
+                if (byDot.TryGetValue(dot, out var existing))
+                {
+                    // Idempotent refresh: the insert is authoritative for
+                    // the structural parent link and value; the tombstone
+                    // flag is monotonic and never cleared here.
+                    existing.ParentDot = ins.ParentDot;
+                    if (ins.Value is { Length: > 0 }) existing.Value = ins.Value;
+                }
+                else
+                {
+                    var node = new RgaNode
+                    {
+                        ReplicaId = ins.ReplicaId,
+                        Counter = ins.Counter,
+                        ParentDot = ins.ParentDot,
+                        Value = ins.Value ?? Array.Empty<byte>(),
+                        IsTombstone = false,
+                    };
+                    Nodes.Add(node);
+                    byDot[dot] = node;
+                }
+            }
+        }
+
+        var tombstones = delta.Tombstones;
+        if (tombstones is { Count: > 0 })
+        {
+            foreach (var dot in tombstones)
+            {
+                if (byDot.TryGetValue(dot, out var node))
+                {
+                    node.IsTombstone = true;
+                }
+                else
+                {
+                    // Tombstone observed before its insert (out-of-order or
+                    // partial delivery). Record a tombstoned placeholder so
+                    // the merge stays total and a later insert for the same
+                    // dot reattaches the correct parent and value.
+                    var placeholder = new RgaNode
+                    {
+                        ReplicaId = dot.ReplicaId,
+                        Counter = dot.Counter,
+                        ParentDot = Root,
+                        Value = Array.Empty<byte>(),
+                        IsTombstone = true,
+                    };
+                    Nodes.Add(placeholder);
+                    byDot[dot] = placeholder;
+                }
+            }
+        }
+    }
+
     /// <summary>Creates a deep copy of this sequence (every node is duplicated; value byte arrays are referenced as-is).</summary>
     public Rga Clone()
     {
