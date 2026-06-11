@@ -42,9 +42,12 @@
 	Comma-separated workload subset for the chosen layer. Defaults to all
 	workloads.
 		Layer 1 values: point-read, point-write, point-get-many,
-						bulk-load, set-many-atomic
-		Layer 2 values: set-many, set-many-atomic, set-point, get-point,
-						get-many
+						bulk-load, set-many-atomic, set-many-atomic-2,
+						set-many-atomic-64, cross-tree-atomic-2,
+						cross-tree-atomic-64
+		Layer 2 values: set-many, set-many-atomic, set-many-atomic-2,
+						cross-tree-atomic-2, cross-tree-atomic-64, set-point,
+						get-point, get-many
 	Pass 'all' (or omit) to run every workload for the layer.
 
 .PARAMETER N
@@ -261,6 +264,38 @@ $Layer1Rows = @(
 		MetricSlug = 'set_many_atomic';
 		ExpectedBatchSize = 16;
 		CeilingUnit = 'keys/s';
+	},
+	@{
+		Label = '`SetManyAtomicAsync` (2 keys/saga, single-tree)';
+		WorkloadId = 'set-many-atomic-2';
+		BdnMethod = 'SetManyAtomic_2Keys';
+		MetricSlug = 'set_many_atomic_2_keys';
+		ExpectedBatchSize = 2;
+		CeilingUnit = 'keys/s';
+	},
+	@{
+		Label = '`SetManyAtomicAsync` (64 keys/saga, single-tree)';
+		WorkloadId = 'set-many-atomic-64';
+		BdnMethod = 'SetManyAtomic_64Keys';
+		MetricSlug = 'set_many_atomic_64_keys';
+		ExpectedBatchSize = 64;
+		CeilingUnit = 'keys/s';
+	},
+	@{
+		Label = '`BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees)';
+		WorkloadId = 'cross-tree-atomic-2';
+		BdnMethod = 'CrossTreeAtomic_2Keys';
+		MetricSlug = 'cross_tree_atomic_2_keys';
+		ExpectedBatchSize = 2;
+		CeilingUnit = 'keys/s';
+	},
+	@{
+		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees)';
+		WorkloadId = 'cross-tree-atomic-64';
+		BdnMethod = 'CrossTreeAtomic_64Keys';
+		MetricSlug = 'cross_tree_atomic_64_keys';
+		ExpectedBatchSize = 64;
+		CeilingUnit = 'keys/s';
 	}
 )
 
@@ -299,6 +334,24 @@ $Layer2Rows = @(
 		Label = '`SetManyAtomicAsync` (64 keys/saga)';
 		WorkloadId = 'set-many-atomic';
 		WorkloadMode = 'set-many-atomic';
+		ThroughputUnit = 'keys/s';
+	},
+	@{
+		Label = '`SetManyAtomicAsync` (2 keys/saga, single-tree)';
+		WorkloadId = 'set-many-atomic-2';
+		WorkloadMode = 'set-many-atomic-2';
+		ThroughputUnit = 'keys/s';
+	},
+	@{
+		Label = '`BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees)';
+		WorkloadId = 'cross-tree-atomic-2';
+		WorkloadMode = 'cross-tree-atomic-2';
+		ThroughputUnit = 'keys/s';
+	},
+	@{
+		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees)';
+		WorkloadId = 'cross-tree-atomic-64';
+		WorkloadMode = 'cross-tree-atomic-64';
 		ThroughputUnit = 'keys/s';
 	}
 )
@@ -867,6 +920,15 @@ function Read-SiloLogStats {
 	$preferred = switch ($WorkloadMode) {
 		'set-many'        { @('set_many.duration') }
 		'set-many-atomic' { @('saga.broadcast.duration', 'set_many.duration') }
+		'set-many-atomic-2' { @('saga.broadcast.duration', 'set_many.duration') }
+		# Cross-tree commits drive the same per-tree sub-saga terminal-broadcast
+		# path as a single-tree atomic write (one saga.broadcast.duration per
+		# participating tree); the cross-tree coordinator's own
+		# orleans.lattice.cross_tree.* counters are not in the PhaseA reporter's
+		# instrument allowlist, so the per-call duration falls back to the
+		# atomic family and then to lattice.op.duration_ms.
+		'cross-tree-atomic-2'  { @('saga.broadcast.duration', 'set_many.duration') }
+		'cross-tree-atomic-64' { @('saga.broadcast.duration', 'set_many.duration') }
 		'set-point'       { @('set.duration') }
 		'get-point'       { @('get.duration') }
 		'get-many'        { @('get_many.duration') }

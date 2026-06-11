@@ -292,6 +292,44 @@ public class LatticeMicroBenchmarks
     private int _atomicReadCursor;
     private Guid _atomicPendingTxId;
 
+    // ===== Fixed-shape atomic-write instruments (single-tree vs cross-tree) =====
+    // The SetManyAtomic bench above sizes its saga batch from
+    // BENCH_MICROBENCH_ATOMIC_BATCH (default 16), which is the right knob for
+    // the sustained-throughput headline. The published single-silo perf doc,
+    // however, wants two FIXED batch shapes (2 keys and 64 keys) so an operator
+    // can compare single-tree against cross-tree (multi-tree) atomic-write
+    // throughput at MATCHED batch sizes. These rows are therefore pinned to
+    // their shapes and do not move with the env knob.
+    //
+    // Single-tree fixed batches run against the same single-shard atomic tree
+    // (_atomicLattice) the env-sized SetManyAtomic bench uses; the keys are
+    // drawn from disjoint "atomic2-"/"atomic64-" prefixes so they never collide
+    // with the env-sized "atomic-" keyspace.
+    private const int FixedAtomicBatch2 = 2;
+    private const int FixedAtomicBatch64 = 64;
+    private List<KeyValuePair<string, byte[]>> _atomicBatch2 = null!;
+    private List<KeyValuePair<string, byte[]>> _atomicBatch64 = null!;
+
+    // Cross-tree atomic write: two distinct single-shard trees commit
+    // all-or-nothing through the LatticeCrossTreeTxGrain coordinator
+    // (grainFactory.BeginAtomicWrite(op).ForTree(a)...ForTree(b)...CommitAsync()).
+    // Each iteration mints a fresh operationId so a brand-new coordinator and a
+    // pair of per-tree sub-sagas are driven end-to-end. The 2-key shape places
+    // one key on each tree; the 64-key shape splits 32 keys per tree across the
+    // two trees. Both trees are pre-seeded so the saga overwrites existing leaf
+    // entries (LWW) rather than triggering a split mid-iteration.
+    private const string CrossTreeNameA = "microbench-xtree-a";
+    private const string CrossTreeNameB = "microbench-xtree-b";
+    private const int CrossTreeKeysPerTree64 = 32;
+    private ILattice _crossTreeLatticeA = null!;
+    private ILattice _crossTreeLatticeB = null!;
+    private IReminderRegistry _crossTreeReminderRegistry = null!;
+    private readonly Dictionary<string, ILatticeCrossTreeTxGrain> _crossTreeCoordinators = [];
+    private string[] _crossTreeKeysA2 = null!;
+    private string[] _crossTreeKeysB2 = null!;
+    private string[] _crossTreeKeysA64 = null!;
+    private string[] _crossTreeKeysB64 = null!;
+
     // ===== EventPipe-driven per-method profiler =====
     // Lifecycle:
     //   * GlobalSetupCore() instantiates the profiler at the END of seeding so
@@ -403,6 +441,17 @@ public class LatticeMicroBenchmarks
             .Returns(c => GetOrCreateAtomicSaga(c.ArgAt<string>(0)));
         _grainFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>())
             .Returns(c => GetOrCreateTxRegistry(c.ArgAt<string>(0)));
+
+        // Cross-tree atomic-write coordinator route: a real
+        // LatticeCrossTreeTxGrain per operationId. Shares the same mocked
+        // IReminderRegistry as the per-tree sub-sagas (keepalive +
+        // retention reminders are no-ops under the synchronous bench
+        // harness). The coordinator fans prepare/finalize out to the
+        // per-tree IAtomicWriteGrain sub-sagas (keyed {treeId}/{operationId})
+        // which are already served by the GetOrCreateAtomicSaga route above.
+        _crossTreeReminderRegistry = _atomicReminderRegistry;
+        _grainFactory.GetGrain<ILatticeCrossTreeTxGrain>(Arg.Any<string>())
+            .Returns(c => GetOrCreateCrossTreeTx(c.ArgAt<string>(0)));
 
         // Registry: an in-memory NSubstitute stub returning a fixed structural
         // pin so LatticeOptionsResolver resolves the same shape for every
@@ -563,6 +612,8 @@ public class LatticeMicroBenchmarks
         BuildAtomicFanoutTree();
         BuildAtomicConcurrentBatches();
         BuildAtomicReadFixture();
+        BuildFixedAtomicBatches();
+        BuildCrossTreeTrees();
         BuildWalEncodeFixture();
         BuildShipFramingFixture();
         BuildVersionVectorFixture();
@@ -731,6 +782,33 @@ public class LatticeMicroBenchmarks
         var registry = new TxRegistryGrain(ctx, _grainFactory, _optionsMonitor, registryState);
         _txRegistries[treeId] = registry;
         return registry;
+    }
+
+    /// <summary>
+    /// Lazily constructs and caches a real <see cref="LatticeCrossTreeTxGrain"/>
+    /// for the given cross-tree operationId. Each
+    /// <see cref="LatticeCrossTreeAtomicWriteExtensions.BeginAtomicWrite(IGrainFactory, string)"/>
+    /// commit mints a fresh operationId, so a new coordinator grain is
+    /// constructed per benchmark iteration. The coordinator drives the
+    /// per-tree <see cref="AtomicWriteGrain"/> sub-sagas (keyed
+    /// <c>{treeId}/{operationId}</c>) through prepare-and-pause then a single
+    /// global commit decision. Mirrors <see cref="GetOrCreateAtomicSaga"/>.
+    /// </summary>
+    private ILatticeCrossTreeTxGrain GetOrCreateCrossTreeTx(string operationId)
+    {
+        if (_crossTreeCoordinators.TryGetValue(operationId, out var existing)) return existing;
+        var ctx = Substitute.For<IGrainContext>();
+        ctx.GrainId.Returns(GrainId.Create("cross-tree-tx", operationId));
+        var coordinatorState = new FakePersistentState<CrossTreeTxState>();
+        var coordinator = new LatticeCrossTreeTxGrain(
+            ctx,
+            _grainFactory,
+            _crossTreeReminderRegistry,
+            _optionsMonitor,
+            NullLogger<LatticeCrossTreeTxGrain>.Instance,
+            coordinatorState);
+        _crossTreeCoordinators[operationId] = coordinator;
+        return coordinator;
     }
 
     /// <summary>
@@ -1265,6 +1343,91 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// Fixed-shape single-tree
+    /// <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// over a pinned 2-key batch. Unlike <see cref="SetManyAtomic"/> (whose
+    /// batch size follows <c>BENCH_MICROBENCH_ATOMIC_BATCH</c>), this row is
+    /// pinned to two keys so the published single-silo perf doc can compare
+    /// single-tree against cross-tree (<see cref="CrossTreeAtomic_2Keys"/>)
+    /// atomic-write throughput at a matched batch size. Surfaced as
+    /// <c>microbench_set_many_atomic_2_keys_per_second</c>.
+    /// </summary>
+    [Benchmark(Description = "SetMany atomic (2 keys)")]
+    public Task SetManyAtomic_2Keys()
+    {
+        return _atomicLattice.SetManyAtomicAsync(_atomicBatch2);
+    }
+
+    /// <summary>
+    /// Fixed-shape single-tree
+    /// <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// over a pinned 64-key batch - the single-tree counterpart to
+    /// <see cref="CrossTreeAtomic_64Keys"/> at a matched batch size. Surfaced
+    /// as <c>microbench_set_many_atomic_64_keys_per_second</c>.
+    /// </summary>
+    [Benchmark(Description = "SetMany atomic (64 keys)")]
+    public Task SetManyAtomic_64Keys()
+    {
+        return _atomicLattice.SetManyAtomicAsync(_atomicBatch64);
+    }
+
+    /// <summary>
+    /// Cross-tree (multi-tree) atomic write over a pinned 2-key batch: one key
+    /// on each of two distinct single-shard trees, committed all-or-nothing
+    /// through <see cref="LatticeCrossTreeAtomicWriteExtensions.BeginAtomicWrite(IGrainFactory, string)"/>
+    /// and the <see cref="LatticeCrossTreeTxGrain"/> coordinator. Each iteration
+    /// mints a fresh operationId so a brand-new coordinator + per-tree sub-saga
+    /// pair runs end-to-end (prepare-and-pause on every tree, then a single
+    /// global commit decision). Pairs with <see cref="SetManyAtomic_2Keys"/>
+    /// so an operator can read the single-tree vs multi-tree overhead at a
+    /// matched 2-key shape. Surfaced as
+    /// <c>microbench_cross_tree_atomic_2_keys_per_second</c>.
+    /// </summary>
+    [Benchmark(Description = "Cross-tree atomic (2 keys, 2 trees)")]
+    public Task<CrossTreeAtomicWriteOutcome> CrossTreeAtomic_2Keys()
+    {
+        return CommitCrossTreeAsync(_crossTreeKeysA2, _crossTreeKeysB2);
+    }
+
+    /// <summary>
+    /// Cross-tree (multi-tree) atomic write over a pinned 64-key batch split
+    /// 32 keys per tree across two distinct single-shard trees, committed
+    /// all-or-nothing through the cross-tree coordinator. Pairs with
+    /// <see cref="SetManyAtomic_64Keys"/> at a matched 64-key shape. Surfaced
+    /// as <c>microbench_cross_tree_atomic_64_keys_per_second</c>.
+    /// </summary>
+    [Benchmark(Description = "Cross-tree atomic (64 keys, 2 trees)")]
+    public Task<CrossTreeAtomicWriteOutcome> CrossTreeAtomic_64Keys()
+    {
+        return CommitCrossTreeAsync(_crossTreeKeysA64, _crossTreeKeysB64);
+    }
+
+    /// <summary>
+    /// Stages and commits one cross-tree atomic write: every key in
+    /// <paramref name="keysA"/> targets <see cref="CrossTreeNameA"/> and every
+    /// key in <paramref name="keysB"/> targets <see cref="CrossTreeNameB"/>,
+    /// all under a single freshly-minted operationId. The fluent builder +
+    /// per-call <see cref="Guid"/> allocation is inherent to the cross-tree API
+    /// surface under measurement (a stable idempotency key is mandatory for a
+    /// multi-registry saga), so it is part of the cost this row reports.
+    /// </summary>
+    private Task<CrossTreeAtomicWriteOutcome> CommitCrossTreeAsync(string[] keysA, string[] keysB)
+    {
+        var operationId = Guid.NewGuid().ToString("N");
+        var builder = _grainFactory.BeginAtomicWrite(operationId).ForTree(CrossTreeNameA);
+        foreach (var key in keysA)
+        {
+            builder.Set(key, _value);
+        }
+        builder.ForTree(CrossTreeNameB);
+        foreach (var key in keysB)
+        {
+            builder.Set(key, _value);
+        }
+        return builder.CommitAsync();
+    }
+
+    /// <summary>
     /// One <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
     /// invocation against a four-shard atomic-write tree. Exercises the
     /// multi-shard terminal-broadcast fan-out path that the single-shard
@@ -1704,6 +1867,121 @@ public class LatticeMicroBenchmarks
                 atomicBatchSize: PendingKeyCount,
                 atomicBatchIndex: i).GetAwaiter().GetResult();
         }
+    }
+
+    /// <summary>
+    /// Builds the two fixed-shape single-tree atomic batches (2 keys and
+    /// 64 keys) used by <see cref="SetManyAtomic_2Keys"/> /
+    /// <see cref="SetManyAtomic_64Keys"/>. Both run against the same
+    /// single-shard atomic tree (<see cref="_atomicLattice"/>) the env-sized
+    /// <see cref="SetManyAtomic"/> bench uses, under disjoint
+    /// "atomic2-"/"atomic64-" key prefixes so they never collide with the
+    /// env-sized "atomic-" keyspace. Keys are pre-seeded so the first
+    /// benchmarked saga overwrites existing leaf entries (LWW) rather than
+    /// triggering a leaf split.
+    /// </summary>
+    private void BuildFixedAtomicBatches()
+    {
+        _atomicBatch2 = BuildSeededAtomicBatch(_atomicLattice, "atomic2-", FixedAtomicBatch2);
+        _atomicBatch64 = BuildSeededAtomicBatch(_atomicLattice, "atomic64-", FixedAtomicBatch64);
+    }
+
+    /// <summary>
+    /// Builds and pre-seeds a fixed-size atomic-write batch of
+    /// <paramref name="count"/> shard-spreading keys (prefixed with
+    /// <paramref name="keyPrefix"/>) against <paramref name="lattice"/>.
+    /// The multiplicative-prefix entropy distributes keys across shards so a
+    /// multi-shard tree exercises its terminal-broadcast fan-out.
+    /// </summary>
+    private List<KeyValuePair<string, byte[]>> BuildSeededAtomicBatch(ILattice lattice, string keyPrefix, int count)
+    {
+        var batch = new List<KeyValuePair<string, byte[]>>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var k = keyPrefix + ((i * 257) & 0xFFFF).ToString("X4", CultureInfo.InvariantCulture)
+                + "-" + i.ToString("D8", CultureInfo.InvariantCulture);
+            batch.Add(new(k, _value));
+        }
+        for (var i = 0; i < count; i++)
+        {
+            lattice.SetAsync(batch[i].Key, _value).GetAwaiter().GetResult();
+        }
+        return batch;
+    }
+
+    /// <summary>
+    /// Builds the two participating single-shard trees for the cross-tree
+    /// (multi-tree) atomic-write benchmarks and pre-seeds their key sets.
+    /// Each tree is a sibling <see cref="ILattice"/> activation (mirroring
+    /// <see cref="BuildAtomicTree"/>) routed through the same NSubstitute
+    /// <see cref="IGrainFactory"/>; the cross-tree coordinator
+    /// (<see cref="GetOrCreateCrossTreeTx"/>) and the per-tree sub-sagas
+    /// (<see cref="GetOrCreateAtomicSaga"/>) drive the all-or-nothing commit.
+    /// The 2-key shape places one key on each tree; the 64-key shape splits
+    /// 32 keys per tree.
+    /// </summary>
+    private void BuildCrossTreeTrees()
+    {
+        _crossTreeLatticeA = BuildCrossTreeParticipant(CrossTreeNameA);
+        _crossTreeLatticeB = BuildCrossTreeParticipant(CrossTreeNameB);
+
+        // 2-key shape: one key per tree.
+        _crossTreeKeysA2 = SeedCrossTreeKeys(_crossTreeLatticeA, "xa2-", 1);
+        _crossTreeKeysB2 = SeedCrossTreeKeys(_crossTreeLatticeB, "xb2-", 1);
+
+        // 64-key shape: 32 keys per tree.
+        _crossTreeKeysA64 = SeedCrossTreeKeys(_crossTreeLatticeA, "xa64-", CrossTreeKeysPerTree64);
+        _crossTreeKeysB64 = SeedCrossTreeKeys(_crossTreeLatticeB, "xb64-", CrossTreeKeysPerTree64);
+    }
+
+    /// <summary>
+    /// Builds a single-shard, root-is-leaf <see cref="ILattice"/> activation
+    /// rooted at <paramref name="treeId"/> and registers its registry +
+    /// factory routes, mirroring <see cref="BuildAtomicTree"/>. Used as a
+    /// participant in the cross-tree atomic-write benchmarks; the per-tree
+    /// sub-saga resolves routing via <c>GetGrain&lt;ILattice&gt;(treeId)</c>,
+    /// so each participant needs its own registered activation.
+    /// </summary>
+    private ILattice BuildCrossTreeParticipant(string treeId)
+    {
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(treeId);
+        registry.GetEntryAsync(treeId).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = _maxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = 1,
+            }));
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("lattice", treeId));
+        var serviceProvider = Substitute.For<IServiceProvider>();
+        var lattice = new LatticeGrain(
+            context,
+            _grainFactory,
+            _optionsMonitor,
+            _optionsResolver,
+            serviceProvider,
+            NullLogger<LatticeGrain>.Instance);
+        _grainFactory.GetGrain<ILattice>(treeId).Returns(lattice);
+        return lattice;
+    }
+
+    /// <summary>
+    /// Builds and pre-seeds <paramref name="count"/> cross-tree keys (prefixed
+    /// with <paramref name="keyPrefix"/>) against <paramref name="lattice"/> so
+    /// the cross-tree saga overwrites existing leaf entries (LWW) instead of
+    /// triggering a split mid-iteration. Returns the key array for the builder.
+    /// </summary>
+    private string[] SeedCrossTreeKeys(ILattice lattice, string keyPrefix, int count)
+    {
+        var keys = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            keys[i] = keyPrefix + i.ToString("D8", CultureInfo.InvariantCulture);
+            lattice.SetAsync(keys[i], _value).GetAwaiter().GetResult();
+        }
+        return keys;
     }
 
     private static int ReadIntEnv(string name, int fallback)
