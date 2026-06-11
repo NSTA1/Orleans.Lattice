@@ -304,12 +304,17 @@ var leafStorageNumGrains = ReadIntAllowZero("BENCH_LEAF_STORAGE_NUM_GRAINS", 0);
 // Throughput-capture (throughput-capture-plan.md step 2): selects which
 // ILattice operation the silo dispatches per producer batch. Default is
 // `set-many` which preserves the existing harness behaviour. The other
-// four modes drive `ILattice.SetManyAtomicAsync`, `ILattice.SetAsync`
+// modes drive `ILattice.SetManyAtomicAsync`, `ILattice.SetAsync`
 // (fan-out point write), `ILattice.GetAsync` (fan-out point read), and
 // `ILattice.GetManyAsync` so a single rung can produce headline numbers
 // for every public ILattice op against the c2-iii operating point. The
 // `get-*` modes pre-seed the keyspace via `ILattice.BulkLoadAsync` at
 // silo startup before the TCP listener opens (step 5 wires this).
+// The fixed-shape atomic modes (`set-many-atomic-2`, `cross-tree-atomic-2`,
+// `cross-tree-atomic-64`) let one rung compare single-tree against
+// multi-tree (cross-tree) atomic-write throughput at matched batch sizes;
+// the cross-tree modes commit across a sibling `{treeId}-b` tree via
+// `IGrainFactory.BeginAtomicWrite(...).CommitAsync()`.
 var workloadMode = ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
 // Per-saga batch size used only when `workloadMode == SetManyAtomic`.
 // A 4096-key atomic saga is not a realistic shape; 64 reflects audience-
@@ -735,6 +740,9 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
     {
         "set-many" or "setmany" => BenchWorkloadMode.SetMany,
         "set-many-atomic" or "setmanyatomic" => BenchWorkloadMode.SetManyAtomic,
+        "set-many-atomic-2" or "setmanyatomic2" => BenchWorkloadMode.SetManyAtomic2,
+        "cross-tree-atomic-2" or "crosstreeatomic2" => BenchWorkloadMode.CrossTreeAtomic2,
+        "cross-tree-atomic-64" or "crosstreeatomic64" => BenchWorkloadMode.CrossTreeAtomic64,
         "set-point" or "setpoint" or "set" => BenchWorkloadMode.SetPoint,
         "get-point" or "getpoint" or "get" => BenchWorkloadMode.GetPoint,
         "get-many" or "getmany" => BenchWorkloadMode.GetMany,
@@ -766,6 +774,19 @@ public enum BenchWorkloadMode
     SetPoint,
     GetPoint,
     GetMany,
+
+    // Fixed-shape atomic-write modes added so a single rung can produce the
+    // single-tree vs multi-tree (cross-tree) atomic-write comparison the
+    // published single-silo perf doc wants at matched batch sizes. Unlike
+    // SetManyAtomic (whose saga slice follows BENCH_ATOMIC_BATCH_SIZE), these
+    // pin their batch shapes: SetManyAtomic2 slices the producer batch into
+    // 2-key single-tree sagas; CrossTreeAtomic2 / CrossTreeAtomic64 commit
+    // all-or-nothing across two trees ({treeId} and {treeId}-b) with 2 keys
+    // (1 per tree) and 64 keys (32 per tree) per saga respectively, via
+    // IGrainFactory.BeginAtomicWrite(...).CommitAsync().
+    SetManyAtomic2,
+    CrossTreeAtomic2,
+    CrossTreeAtomic64,
 }
 
 internal sealed class TcpIngestService(
@@ -1014,6 +1035,30 @@ internal sealed class TcpIngestService(
             var msg = $"[silo] ERROR warmup treeId={settings.TreeId} ABORTED after {warmUpAttempt} attempt(s) elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}: {detail}.";
             Console.WriteLine(msg);
             throw new InvalidOperationException(msg, lastWarmUpException);
+        }
+
+        // Cross-tree warm-up: the cross-tree atomic-write modes commit across
+        // a sibling "{treeId}-b" tree as well as the primary tree. Warm that
+        // second tree's shard roots before the listener opens so the first
+        // cross-tree saga does not pay the second tree's placement-directory +
+        // grain-storage first-touch storm against the measurement window
+        // (same rationale as the primary-tree warm-up above). Best-effort: a
+        // warm-up blip on the sibling tree logs but does not abort the run, so
+        // a transient directory race cannot wedge the bench at startup.
+        if (settings.WorkloadMode is BenchWorkloadMode.CrossTreeAtomic2 or BenchWorkloadMode.CrossTreeAtomic64)
+        {
+            var secondTreeId = settings.TreeId + "-b";
+            try
+            {
+                var secondTree = grainFactory.GetGrain<ILattice>(secondTreeId);
+                await secondTree.WarmUpAsync(stoppingToken).ConfigureAwait(false);
+                Console.WriteLine($"[silo] warmup treeId={secondTreeId} (cross-tree sibling) complete");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[silo] warmup treeId={secondTreeId} (cross-tree sibling) degraded: {ex.GetType().Name}: {Truncate(ex.Message, 160)} (continuing; first cross-tree saga may stall on cold-shard activation)");
+            }
         }
 
         // Throughput-capture (step 5): read-mode pre-seed. When the silo
@@ -1748,7 +1793,9 @@ internal sealed class TcpIngestService(
                     batch,
                     settings.AtomicBatchSize,
                     settings.FlushConcurrency,
-                    ct).ConfigureAwait(false);
+                    ct,
+                    grainFactory,
+                    settings.TreeId).ConfigureAwait(false);
                 var elapsedMs = Stopwatch.GetElapsedTime(startTs).TotalMilliseconds;
                 BenchMetrics.LatticeOpDurationMs.Record(elapsedMs, treeTag, modeTag);
                 BenchMetrics.LatticeOpRetryAttempts.Record(attempt - 1, treeTag, modeTag);
@@ -1901,6 +1948,9 @@ public static class BenchWorkloadMetadata
     {
         BenchWorkloadMode.SetMany => "set-many",
         BenchWorkloadMode.SetManyAtomic => "set-many-atomic",
+        BenchWorkloadMode.SetManyAtomic2 => "set-many-atomic-2",
+        BenchWorkloadMode.CrossTreeAtomic2 => "cross-tree-atomic-2",
+        BenchWorkloadMode.CrossTreeAtomic64 => "cross-tree-atomic-64",
         BenchWorkloadMode.SetPoint => "set-point",
         BenchWorkloadMode.GetPoint => "get-point",
         BenchWorkloadMode.GetMany => "get-many",
@@ -1943,13 +1993,23 @@ public static class BenchWorkloadDispatcher
     /// <see cref="BenchWorkloadMode.GetPoint"/>); ignored
     /// otherwise.</param>
     /// <param name="ct">Propagates shutdown / producer-disconnect.</param>
+    /// <param name="grainFactory">Grain factory used by the cross-tree
+    /// modes (<see cref="BenchWorkloadMode.CrossTreeAtomic2"/>,
+    /// <see cref="BenchWorkloadMode.CrossTreeAtomic64"/>) to open the
+    /// cross-tree atomic-write builder; ignored by the single-tree
+    /// modes.</param>
+    /// <param name="treeId">Primary tree id; the cross-tree modes derive the
+    /// sibling tree id (<c>{treeId}-b</c>) from it and split each saga's keys
+    /// across the two trees. Ignored by the single-tree modes.</param>
     public static async Task<int> DispatchAsync(
         BenchWorkloadMode mode,
         ILattice lattice,
         List<KeyValuePair<string, byte[]>> batch,
         int atomicBatchSize,
         int parallelism,
-        CancellationToken ct)
+        CancellationToken ct,
+        IGrainFactory? grainFactory = null,
+        string? treeId = null)
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentNullException.ThrowIfNull(batch);
@@ -1982,6 +2042,30 @@ public static class BenchWorkloadDispatcher
                     }
                     return batch.Count;
                 }
+
+            case BenchWorkloadMode.SetManyAtomic2:
+                {
+                    // Fixed 2-key single-tree sagas (the single-tree
+                    // counterpart to CrossTreeAtomic2 at a matched batch
+                    // size). Pinned to 2 keys regardless of atomicBatchSize.
+                    var i = 0;
+                    while (i < batch.Count)
+                    {
+                        var len = Math.Min(2, batch.Count - i);
+                        var slice = batch.GetRange(i, len);
+                        await lattice.SetManyAtomicAsync(slice, ct).ConfigureAwait(false);
+                        i += len;
+                    }
+                    return batch.Count;
+                }
+
+            case BenchWorkloadMode.CrossTreeAtomic2:
+                await DispatchCrossTreeAsync(grainFactory, treeId, batch, keysPerSaga: 2, ct).ConfigureAwait(false);
+                return batch.Count;
+
+            case BenchWorkloadMode.CrossTreeAtomic64:
+                await DispatchCrossTreeAsync(grainFactory, treeId, batch, keysPerSaga: 64, ct).ConfigureAwait(false);
+                return batch.Count;
 
             case BenchWorkloadMode.SetPoint:
                 await FanOutAsync(
@@ -2057,5 +2141,60 @@ public static class BenchWorkloadDispatcher
             }, ct));
         }
         await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Commits the producer <paramref name="batch"/> as a sequence of
+    /// cross-tree atomic writes, each spanning two trees
+    /// (<paramref name="treeId"/> and <c>{treeId}-b</c>) and committed
+    /// all-or-nothing through
+    /// <see cref="LatticeCrossTreeAtomicWriteExtensions.BeginAtomicWrite(IGrainFactory, string)"/>.
+    /// The batch is sliced into <paramref name="keysPerSaga"/>-key sagas; within
+    /// each saga the first half of the keys target the primary tree and the
+    /// second half target the sibling <c>-b</c> tree, so a 2-key saga writes
+    /// 1 key per tree and a 64-key saga writes 32 keys per tree. Each saga mints
+    /// a fresh operationId (a stable idempotency key is mandatory for a
+    /// multi-registry cross-tree saga). Bounded by the outer FlushConcurrency
+    /// gate the caller already holds.
+    /// </summary>
+    private static async Task DispatchCrossTreeAsync(
+        IGrainFactory? grainFactory,
+        string? treeId,
+        List<KeyValuePair<string, byte[]>> batch,
+        int keysPerSaga,
+        CancellationToken ct)
+    {
+        if (grainFactory is null || string.IsNullOrEmpty(treeId))
+        {
+            throw new InvalidOperationException(
+                "Cross-tree workload modes require an IGrainFactory and a tree id; "
+                + "wire them through BenchWorkloadDispatcher.DispatchAsync.");
+        }
+
+        var secondTreeId = treeId + "-b";
+        var i = 0;
+        while (i < batch.Count)
+        {
+            var len = Math.Min(keysPerSaga, batch.Count - i);
+            // Split the saga's keys evenly across the two trees: the first
+            // ceil(len/2) keys go to the primary tree, the rest to the
+            // sibling -b tree. A trailing odd-length tail saga puts its lone
+            // last key on the primary tree (a single-tree cross-tree commit
+            // is valid); steady-state batches divide evenly.
+            var half = (len + 1) / 2;
+            var operationId = Guid.NewGuid().ToString("N");
+            var builder = grainFactory.BeginAtomicWrite(operationId).ForTree(treeId);
+            for (var j = 0; j < len; j++)
+            {
+                if (j == half)
+                {
+                    builder.ForTree(secondTreeId);
+                }
+                var entry = batch[i + j];
+                builder.Set(entry.Key, entry.Value);
+            }
+            await builder.CommitAsync(ct).ConfigureAwait(false);
+            i += len;
+        }
     }
 }

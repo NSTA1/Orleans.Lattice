@@ -31,10 +31,13 @@ provider's per-account budget.
 
 You should **measure your own workload**. The shapes here cover point reads,
 point writes, batched multi-key reads and writes, and atomic multi-key
-sagas against a single Azure Tables Standard account; the per-cell
-provenance (host SKU, region, .NET version, WAL options, BDN fidelity,
-rung, cohort N, measurement date) is recorded in the meta-header of each
-table's marker block and is mechanically refreshed on every regeneration.
+sagas - both single-tree (`SetManyAtomicAsync`) and cross-tree
+(`BeginAtomicWrite(...).CommitAsync()`, an all-or-nothing batch spanning two
+trees) at matched batch sizes so the multi-tree coordination overhead is
+directly readable - against a single Azure Tables Standard account; the
+per-cell provenance (host SKU, region, .NET version, WAL options, BDN
+fidelity, rung, cohort N, measurement date) is recorded in the meta-header of
+each table's marker block and is mechanically refreshed on every regeneration.
 If your keys are larger, your fan-out is different, your hot-key
 distribution is skewed, or your durability requirements differ, your
 numbers will differ too. The benchmark harness ships with the repository
@@ -84,6 +87,10 @@ mechanical and the prose around the marker is hand-editable.
 | `GetManyAsync` (16 keys/call) | **9.45 us** | 13.56 us | 18.7 us | 72.72 us | 6 KB | **~1.69 M keys/s** |
 | `SetManyAsync` (1,000 keys/call) | **940.18 us** | 960.68 us | 1.24 ms | 2.6 ms | 100 KB | **~1.06 M keys/s** |
 | `SetManyAtomicAsync` (16 keys/saga) | **279.34 us** | 346.02 us | 425.87 us | 1.79 ms | 65 KB | **~57.3 k keys/s** |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | _pending_    | _pending_    | _pending_    | _pending_    | _pending_   | _pending_             |
+| `SetManyAtomicAsync` (64 keys/saga, single-tree) | _pending_    | _pending_    | _pending_    | _pending_    | _pending_   | _pending_             |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | _pending_    | _pending_    | _pending_    | _pending_    | _pending_   | _pending_             |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | _pending_    | _pending_    | _pending_    | _pending_    | _pending_   | _pending_             |
 
 <!-- perf-table:layer1:end -->
 
@@ -157,6 +164,9 @@ realistic latency the storage provider contributes.
 | `GetManyAsync` (4,096 keys/call) | **~19.9 k keys/s** | ~2.11 ms | ~2.28 ms | ~3.71 ms | ~7.18 ms |
 | `SetManyAsync` (4,096 keys/call) | **~14.8 k keys/s** | ~414.63 ms | ~597.8 ms | ~672.67 ms | ~705.05 ms |
 | `SetManyAtomicAsync` (64 keys/saga) | **~3 k keys/s** | ~845.42 ms | ~978.94 ms | ~998.56 ms | ~1061.06 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | _pending_            | _pending_     | _pending_     | _pending_     | _pending_     |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | _pending_            | _pending_     | _pending_     | _pending_     | _pending_     |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | _pending_            | _pending_     | _pending_     | _pending_     | _pending_     |
 
 <!-- perf-table:layer2:end -->
 
