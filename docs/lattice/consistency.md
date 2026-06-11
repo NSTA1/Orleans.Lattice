@@ -163,10 +163,25 @@ invisible, indistinguishable from pre-saga); after it, every tree
 returns the same global verdict. The coordinator's single decision write
 is the cross-tree linearization point.
 
-This guarantees all-or-nothing *commit visibility*, not a simultaneous
-multi-tree read transaction: a reader sampling several trees at
-different instants may observe the global flip between samples, but never
-a partial slice of one cross-tree saga on any single tree. See
+This is **atomicity**, not cross-tree read isolation, and the two are easy
+to conflate. The atomic guarantee is anchored to the coordinator's single
+decision write as one global linearization point: at any single instant the
+saga is either undecided (every participating tree returns `InFlight`, every
+prepared key invisible and indistinguishable from pre-saga) or decided (every
+tree returns the same global verdict). There is no instant at which the commit
+is durably half-applied, so an observer that could sample every participating
+tree *at one instant* always sees all-pre or all-post. What the design does
+**not** add is a cross-tree read snapshot (serializable isolation across
+trees): Lattice has no single read operation spanning multiple trees, so a
+reader that issues *separate* per-tree reads at *different* instants which
+straddle the linearization point can compose a mixed view - tree A's pre-saga
+value read before the flip alongside tree B's post-saga value read after it -
+exactly as two independent `SELECT`s under read-committed isolation can in a
+relational store. That is a property of the reader taking several
+point-in-time samples, not a hole in the write's atomicity: within any
+*single* read, every saga key on that tree resolves against one global
+verdict, so a tree is never seen showing a partial slice of one cross-tree
+saga. See
 [Atomic Writes: Cross-tree atomic writes](atomic-writes.md#cross-tree-multi-tree-atomic-writes).
 
 The same all-or-nothing visibility holds **across clusters**. Each

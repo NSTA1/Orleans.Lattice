@@ -761,11 +761,19 @@ batch that is.
   same tree-set and key-set re-attaches to the in-flight (or completed)
   saga and returns its memoized outcome. Re-submitting the same
   `operationId` with a *different* tree-set or key-set throws.
-- **Not a cross-tree read snapshot.** The guarantee is all-or-nothing
-  *commit visibility*, not a simultaneous multi-tree read transaction. A
-  reader that samples N trees at N different instants may legitimately
-  observe a flip between samples; what it can never observe is a tree
-  showing a *partial* slice of one cross-tree saga.
+- **Atomicity, not cross-tree read isolation.** The guarantee is
+  all-or-nothing *commit* of the write, anchored to the coordinator's single
+  decision write as one global linearization point: at any single instant the
+  saga is either undecided (every tree returns `InFlight`) or decided (every
+  tree returns the same verdict), never durably half-applied. It is **not** a
+  cross-tree read snapshot: Lattice has no read operation spanning trees, so a
+  reader issuing *separate* per-tree reads at *different* instants that
+  straddle the linearization point may legitimately compose a mixed view (one
+  tree's pre-saga value, another tree's post-saga value), exactly as two
+  independent `SELECT`s under read-committed isolation can. What it can never
+  observe is a single tree showing a *partial* slice of one cross-tree saga:
+  within any one read, every saga key on that tree resolves against one global
+  verdict.
 
 The cross-tree workload is exercised under concurrent shard splits in
 the chaos suite - see
