@@ -936,6 +936,38 @@
       ]
     },
     {
+      "id": 36,
+      "title": "WAL compression savings ratio by tree",
+      "description": "Fraction of encoded WAL payload bytes saved by the Azure Table provider's per-row compression, per tree: 1 - rate(stored_bytes) / rate(uncompressed_bytes). 0 means no saving (every row stored verbatim); higher is better. Reads as no data for a tree with no WAL append traffic in the window, since the ratio is undefined with no bytes. Pair with the skips-by-reason panel to the right to explain a low ratio.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 75 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "RATIO",
+          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} savings"
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "title": "WAL compression skips by reason",
+      "description": "Rate of WAL rows the Azure Table provider stored verbatim instead of compressed, by reason: below_threshold (payload shorter than CompressionMinPayloadBytes), inflation_guard (compressing did not shrink it), or disabled (compression off). A low savings ratio dominated by below_threshold is the cue to lower CompressionMinPayloadBytes; one dominated by inflation_guard means the payloads are incompressible and lowering it would only burn CPU.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 75 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "SKIP",
+          "expr": "sum by (tree, reason) (rate(orleans_lattice_storage_wal_compression_skipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{tree}} {{reason}}"
+        }
+      ]
+    },
+    {
       "id": 27,
       "title": "GetAsync / GetManyAsync envelope p50 (ms)",
       "description": "Top-of-stack public-API read-call duration: get.duration is single-key GetAsync, get_many.duration is batched GetManyAsync. Pair with the cache hit-ratio panel above (cache.hits / cache.misses) to interpret in context - on a hot keyspace the LeafCacheGrain serves most reads in the tens-of-microseconds range; on a cache-miss-heavy workload the envelope grows by one cross-grain RPC into the primary leaf.",

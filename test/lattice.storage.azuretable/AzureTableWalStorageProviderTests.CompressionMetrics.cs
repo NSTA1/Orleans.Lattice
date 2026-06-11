@@ -97,6 +97,111 @@ public partial class AzureTableWalStorageProviderTests
         });
     }
 
+    // The encoded fast path (BuildEncodedBatchActions, reached via
+    // AppendEncodedBatchAsync) derives its uncompressed length from the raw
+    // segment rather than a serialisation writer, so it is exercised
+    // independently of the EncodeEntriesForBatch tests above.
+
+    private static byte[] CompressibleSegment(int bytes)
+    {
+        var value = new byte[bytes];
+        Array.Fill(value, (byte)0xAB);
+        return value;
+    }
+
+    private static byte[] IncompressibleSegment(int bytes)
+    {
+        var value = new byte[bytes];
+        new Random(20260612).NextBytes(value);
+        return value;
+    }
+
+    [Test]
+    public void EncodedBatch_stats_report_savings_for_a_compressible_batch()
+    {
+        var provider = CreateCompressingProvider(minPayloadBytes: 0);
+        var partitionKey = AzureTableWalStorageProvider.BuildPartitionKey("compress-pin", 0);
+
+        provider.BuildEncodedBatchActions(
+            partitionKey,
+            new[] { new ArraySegment<byte>(CompressibleSegment(4096)), new ArraySegment<byte>(CompressibleSegment(4096)) },
+            new[] { 0L, 1L },
+            out var stats);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stats.UncompressedBytes, Is.EqualTo(8192), "two 4 KB segments");
+            Assert.That(stats.StoredBytes, Is.LessThan(stats.UncompressedBytes));
+            Assert.That(stats.SkippedDisabled, Is.Zero);
+            Assert.That(stats.SkippedBelowThreshold, Is.Zero);
+            Assert.That(stats.SkippedInflationGuard, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void EncodedBatch_stats_attribute_an_incompressible_segment_to_the_inflation_guard()
+    {
+        var provider = CreateCompressingProvider(minPayloadBytes: 0);
+        var partitionKey = AzureTableWalStorageProvider.BuildPartitionKey("compress-pin", 0);
+
+        provider.BuildEncodedBatchActions(
+            partitionKey,
+            new[] { new ArraySegment<byte>(IncompressibleSegment(2048)) },
+            new[] { 0L },
+            out var stats);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stats.SkippedInflationGuard, Is.EqualTo(1));
+            Assert.That(stats.SkippedBelowThreshold, Is.Zero);
+            Assert.That(stats.SkippedDisabled, Is.Zero);
+            Assert.That(stats.UncompressedBytes, Is.EqualTo(2048));
+            Assert.That(stats.StoredBytes, Is.EqualTo(stats.UncompressedBytes));
+        });
+    }
+
+    [Test]
+    public void EncodedBatch_stats_attribute_a_below_threshold_segment_to_the_threshold()
+    {
+        var provider = CreateCompressingProvider(minPayloadBytes: 100_000);
+        var partitionKey = AzureTableWalStorageProvider.BuildPartitionKey("compress-pin", 0);
+
+        provider.BuildEncodedBatchActions(
+            partitionKey,
+            new[] { new ArraySegment<byte>(CompressibleSegment(256)) },
+            new[] { 0L },
+            out var stats);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stats.SkippedBelowThreshold, Is.EqualTo(1));
+            Assert.That(stats.SkippedInflationGuard, Is.Zero);
+            Assert.That(stats.SkippedDisabled, Is.Zero);
+            Assert.That(stats.StoredBytes, Is.EqualTo(stats.UncompressedBytes));
+        });
+    }
+
+    [Test]
+    public void EncodedBatch_stats_attribute_segments_to_disabled_when_compression_is_off()
+    {
+        var provider = CreateCompressingProvider(compression: LatticeCompression.None);
+        var partitionKey = AzureTableWalStorageProvider.BuildPartitionKey("compress-pin", 0);
+
+        provider.BuildEncodedBatchActions(
+            partitionKey,
+            new[] { new ArraySegment<byte>(CompressibleSegment(4096)) },
+            new[] { 0L },
+            out var stats);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stats.SkippedDisabled, Is.EqualTo(1));
+            Assert.That(stats.SkippedBelowThreshold, Is.Zero);
+            Assert.That(stats.SkippedInflationGuard, Is.Zero);
+            Assert.That(stats.StoredBytes, Is.EqualTo(stats.UncompressedBytes));
+        });
+    }
+
     [Test]
     public void RecordWalCompressionMetrics_emits_both_byte_totals_tagged_by_tree()
     {

@@ -832,7 +832,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         }
     }
 
-    private List<TableTransactionAction> BuildEncodedBatchActions(
+    internal List<TableTransactionAction> BuildEncodedBatchActions(
         string partitionKey,
         ReadOnlySpan<ArraySegment<byte>> segments,
         ReadOnlySpan<long> offsetSpan,
