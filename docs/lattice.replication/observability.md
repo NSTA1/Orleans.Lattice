@@ -3,7 +3,7 @@
 `Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
 
 - **Per-peer gauges** - `entries_behind`, `bytes_behind`, `ship_in_flight`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind`, `bytes_behind`, and `ship_in_flight` remain outbound-only (the receiver does not track a per-peer backlog into itself, nor does it pipeline into itself).
-- **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`. Reported in milliseconds.
+- **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`, `apply.parallel_runs`. Reported in milliseconds except `apply.parallel_runs` (unit `{run}`).
 - **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
@@ -50,6 +50,20 @@ The `outcome` tag partitions the histogram into four mutually-exclusive buckets:
 | `parked-causal-buffer` | `LatticeReplicationMetrics.OutcomeParkedCausalBuffer` | The entry parked on the causal-apply buffer because its declared `VectorClock` was not yet dominated by the local vector clock. The original delivery did not advance the high-water-mark; the entry re-enters the apply pipeline through the buffer drain when its dependencies arrive. |
 
 A receiver with a single overwhelmed subscriber surfaces as a rising `failure` bucket; a receiver with persistent causal skew surfaces as a rising `parked-causal-buffer` bucket. Both are independent of `apply.lag`, which only samples successful merges.
+
+## Parallel-apply degree (`apply.parallel_runs`)
+
+`orleans.lattice.replication.apply.parallel_runs` records the effective degree of parallelism the receiver-side batch-apply path used for a single inbound batch - the number of independent `(treeId, originClusterId)` run-groups applied concurrently. One sample is recorded per multi-entry batch.
+
+| Property | Value |
+|---|---|
+| Name | `orleans.lattice.replication.apply.parallel_runs` |
+| Unit | `{run}` |
+| Tags | _(none)_ |
+
+The histogram is untagged: the measurement describes the batch as a whole, which may span multiple trees. A value of `1` denotes fully-sequential apply - either the default posture (`ApplyMaxParallelRuns = 1`) or a single-tree batch where cross-tree parallelism is moot. A value greater than `1` reports the achieved concurrency, which is the host-configured `LatticeReplicationOptions.ApplyMaxParallelRuns` clamped to the number of distinct trees present in the batch.
+
+Operators use the distribution to confirm parallel apply is actually engaging under multi-tree load (the `p50` rising above `1` after raising `ApplyMaxParallelRuns`) and to correlate the achieved parallelism against `apply.lag` and `apply.duration`. Independence is enforced at the tree granularity: distinct trees apply concurrently, while runs that share a tree stay sequential so the per-tree causal-apply buffer, shadow-forward dedupe cache, per-origin FIFO, and per-origin high-water-mark monotonicity hold exactly as in the sequential path. See [the batch-apply section of replication-apply.md](replication-apply.md) for the full independence model.
 
 ## Growth-rate vs. ship-rate (`wal.entries_appended` / `wal.entries_shipped`)
 

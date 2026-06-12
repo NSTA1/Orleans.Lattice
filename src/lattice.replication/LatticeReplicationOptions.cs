@@ -206,6 +206,46 @@ public class LatticeReplicationOptions
     public int ShadowForwardDedupeCacheSize { get; set; } = DefaultShadowForwardDedupeCacheSize;
 
     /// <summary>
+    /// Maximum number of independent <c>(treeId, originClusterId)</c>
+    /// runs the receiver-side batch-apply path may apply concurrently
+    /// within a single inbound batch. Independence is defined at the
+    /// <em>tree</em> granularity: runs that target distinct trees may
+    /// apply in parallel, while runs that share a tree are applied
+    /// strictly sequentially in write-ahead-log order. This bounds the
+    /// receiver-side apply latency (and the resulting
+    /// <c>apply.lag</c>, which now also drives receiver back-pressure)
+    /// under multi-tree load without ever reordering work inside a
+    /// tree.
+    /// <para>
+    /// <strong>Ordering invariants are preserved unconditionally.</strong>
+    /// Parallelism is only ever introduced <em>across</em> independent
+    /// runs, never within one: per-origin FIFO, the causal dependency
+    /// gate and its bounded per-tree buffer, the per-origin
+    /// high-water-mark monotonicity, and atomic-batch (saga) apply
+    /// boundaries all hold exactly as in the fully-sequential path.
+    /// Because the per-tree causal-apply buffer and shadow-forward
+    /// dedupe cache are shared across a tree's origins, same-tree runs
+    /// stay serialized so those structures see the identical access
+    /// order they would under sequential apply.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultApplyMaxParallelRuns"/>
+    /// (<c>1</c>), which is exactly the historical fully-sequential
+    /// behaviour: the batch-apply path walks every run in order and
+    /// awaits each before starting the next. Raise this value
+    /// (conservatively) to allow distinct trees to apply concurrently
+    /// once the parallel path has been validated for a workload. The
+    /// effective degree of parallelism per batch is the configured
+    /// value clamped to the number of distinct trees present in that
+    /// batch, surfaced on the
+    /// <see cref="LatticeReplicationMetrics.ApplyParallelRuns"/>
+    /// histogram. Must be at least <c>1</c>; the registered options
+    /// validator rejects non-positive values at first-resolve time.
+    /// </para>
+    /// </summary>
+    public int ApplyMaxParallelRuns { get; set; } = DefaultApplyMaxParallelRuns;
+
+    /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set,
     /// the WAL garbage collector
     /// (<see cref="ILatticeWalGc"/>) trims entries whose
@@ -725,6 +765,16 @@ public class LatticeReplicationOptions
     /// footprint bounded (~256 KB per tree at typical key sizes).
     /// </summary>
     public const int DefaultShadowForwardDedupeCacheSize = 4096;
+
+    /// <summary>
+    /// Default value for <see cref="ApplyMaxParallelRuns"/>: <c>1</c>,
+    /// i.e. fully-sequential receiver apply identical to the behaviour
+    /// before cross-tree parallel apply landed. The conservative
+    /// default is deliberate: enabling parallel apply is an opt-in
+    /// per-workload decision, so a host that never touches the option
+    /// gets the exact historical apply ordering and concurrency.
+    /// </summary>
+    public const int DefaultApplyMaxParallelRuns = 1;
 
     /// <summary>
     /// Default value for <see cref="AutoBootstrapOnFallOffLog"/>:

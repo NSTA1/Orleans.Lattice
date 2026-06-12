@@ -221,6 +221,35 @@ public class LatticeReplicationOptionsTests
     }
 
     // ------------------------------------------------------------------
+    // Parallel receiver apply
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultApplyMaxParallelRuns_is_one() =>
+        Assert.That(LatticeReplicationOptions.DefaultApplyMaxParallelRuns, Is.EqualTo(1));
+
+    [Test]
+    public void New_instance_has_default_apply_max_parallel_runs()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ApplyMaxParallelRuns, Is.EqualTo(LatticeReplicationOptions.DefaultApplyMaxParallelRuns));
+    }
+
+    [Test]
+    public void New_instance_defaults_apply_max_parallel_runs_to_fully_sequential()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ApplyMaxParallelRuns, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ApplyMaxParallelRuns_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ApplyMaxParallelRuns = 4 };
+        Assert.That(opts.ApplyMaxParallelRuns, Is.EqualTo(4));
+    }
+
+    // ------------------------------------------------------------------
     // Auto-bootstrap on fall-off-the-log and operator re-seed
     // rate limit
     // ------------------------------------------------------------------

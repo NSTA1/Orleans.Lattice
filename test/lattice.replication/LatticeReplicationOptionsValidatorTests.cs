@@ -272,6 +272,50 @@ public class LatticeReplicationOptionsValidatorTests
     }
 
     // ------------------------------------------------------------------
+    // Parallel receiver apply
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_apply_max_parallel_runs_is_non_positive(int max)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ApplyMaxParallelRuns = max,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ApplyMaxParallelRuns)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_apply_max_parallel_runs_at_default_sequential()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(opts.ApplyMaxParallelRuns, Is.EqualTo(1));
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_apply_max_parallel_runs_greater_than_one()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ApplyMaxParallelRuns = 8,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    // ------------------------------------------------------------------
     // Turn-safe batching options
     // ------------------------------------------------------------------
 

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.Grains;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -493,5 +494,269 @@ public partial class ReplicationApplierTests
         await apply.DidNotReceive().ApplyMergeManyAsync(
             Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
                 items.Any(i => i.Key == "prep-b")));
+    }
+
+    // ------------------------------------------------------------------
+    // Parallel receiver apply across independent (tree) runs
+    // ------------------------------------------------------------------
+
+    private const string TreeX = "tree-x";
+    private const string TreeY = "tree-y";
+
+    private static WalRecord SetEntryFor(
+        string treeId,
+        string key,
+        HybridLogicalClock ts,
+        string origin = RemoteCluster) => new()
+    {
+        TreeId = treeId,
+        Op = MutationKind.Set,
+        Key = key,
+        Value = new byte[] { 1 },
+        Timestamp = ts,
+        OriginClusterId = origin,
+    };
+
+    private static (
+        ReplicationApplier Applier,
+        IGrainFactory Factory,
+        Dictionary<string, IReplicationApplyGrain> Applies,
+        Dictionary<string, IReplicationHighWaterMarkGrain> Hwms)
+        CreateMultiTreeApplier(IReadOnlyList<string> treeIds, int applyMaxParallelRuns = 1)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var applies = new Dictionary<string, IReplicationApplyGrain>(StringComparer.Ordinal);
+        var hwms = new Dictionary<string, IReplicationHighWaterMarkGrain>(StringComparer.Ordinal);
+        foreach (var treeId in treeIds)
+        {
+            var apply = Substitute.For<IReplicationApplyGrain>();
+            var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+            factory.GetGrain<IReplicationApplyGrain>(treeId).Returns(apply);
+            factory.GetGrain<IReplicationHighWaterMarkGrain>(treeId).Returns(hwm);
+            hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
+            hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+                .Returns(true);
+            hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
+            applies[treeId] = apply;
+            hwms[treeId] = hwm;
+        }
+
+        var cache = new LocalVectorClockCache(factory);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ApplyMaxParallelRuns = applyMaxParallelRuns,
+        };
+        monitor.CurrentValue.Returns(options);
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var applier = new ReplicationApplier(factory, monitor, cache);
+        return (applier, factory, applies, hwms);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_multi_tree_with_dop_one_applies_sequentially_and_records_one_run()
+    {
+        // Default posture: ApplyMaxParallelRuns=1 keeps apply fully
+        // sequential even across distinct trees. The effective DOP gauge
+        // records 1 and every tree's run still applies correctly.
+        using var collector = new MeterCollector<int>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyParallelRunsName);
+        var (applier, _, applies, hwms) = CreateMultiTreeApplier(
+            new[] { TreeX, TreeY }, applyMaxParallelRuns: 1);
+
+        var entries = new[]
+        {
+            SetEntryFor(TreeX, "a", Hlc(10)),
+            SetEntryFor(TreeX, "b", Hlc(20)),
+            SetEntryFor(TreeY, "c", Hlc(30)),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.True);
+            Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(30)));
+        });
+
+        await applies[TreeX].Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items => items.Count == 2));
+        await applies[TreeY].Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items => items.Count == 1));
+        await hwms[TreeX].Received(1).TryAdvanceAsync(RemoteCluster, Hlc(20), Arg.Any<CancellationToken>());
+        await hwms[TreeY].Received(1).TryAdvanceAsync(RemoteCluster, Hlc(30), Arg.Any<CancellationToken>());
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_single_tree_with_dop_greater_than_one_stays_sequential_and_records_one_run()
+    {
+        // A single-tree batch can never engage cross-tree parallelism,
+        // regardless of the configured DOP: independence is at the tree
+        // granularity, so the effective DOP is clamped to 1 and the
+        // sequential walk is taken.
+        using var collector = new MeterCollector<int>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyParallelRunsName);
+        var (applier, _, applies, hwms) = CreateMultiTreeApplier(
+            new[] { Tree }, applyMaxParallelRuns: 4);
+
+        var entries = new[]
+        {
+            // Two origins, one tree - both runs share the per-tree causal
+            // buffer / dedupe cache and so stay in one ordered group.
+            SetEntry("a", Hlc(10), RemoteCluster),
+            SetEntry("b", Hlc(20), "site-c"),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+        // Both origins applied within the single tree group.
+        await hwms[Tree].Received(1).TryAdvanceAsync(RemoteCluster, Hlc(10), Arg.Any<CancellationToken>());
+        await hwms[Tree].Received(1).TryAdvanceAsync("site-c", Hlc(20), Arg.Any<CancellationToken>());
+        await applies[Tree].Received(2).ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>());
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_independent_trees_apply_in_parallel_when_dop_greater_than_one()
+    {
+        // Proves the runs overlap: TreeX's flush blocks until TreeY's
+        // flush has started. Under the sequential path TreeX would be
+        // awaited to completion before TreeY ever began, so the gate
+        // would never open and the test would time out. Under parallel
+        // apply TreeY runs concurrently, opens the gate, and both
+        // complete.
+        using var collector = new MeterCollector<int>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyParallelRunsName);
+        var (applier, _, applies, _) = CreateMultiTreeApplier(
+            new[] { TreeX, TreeY }, applyMaxParallelRuns: 2);
+
+        var treeYStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        applies[TreeY].ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>())
+            .Returns(_ =>
+            {
+                treeYStarted.TrySetResult();
+                return Task.CompletedTask;
+            });
+        applies[TreeX].ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>())
+            .Returns(_ => treeYStarted.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        var entries = new[]
+        {
+            SetEntryFor(TreeX, "a", Hlc(10)),
+            SetEntryFor(TreeY, "b", Hlc(20)),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries).WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.That(result.Applied, Is.True);
+        Assert.That(treeYStarted.Task.IsCompletedSuccessfully, Is.True,
+            "TreeY's run must have started while TreeX's run was still in flight");
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(2),
+            "two distinct trees with DOP>=2 yield an effective parallelism of 2");
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_parallel_apply_advances_each_tree_hwm_to_its_own_max_independently()
+    {
+        // Per-origin high-water-mark monotonicity is preserved across the
+        // parallel groups: each tree advances its own origin frontier to
+        // that tree's highest applied HLC, independent of the other tree.
+        var (applier, _, applies, hwms) = CreateMultiTreeApplier(
+            new[] { TreeX, TreeY }, applyMaxParallelRuns: 2);
+
+        var entries = new[]
+        {
+            SetEntryFor(TreeX, "a", Hlc(10)),
+            SetEntryFor(TreeX, "b", Hlc(40)),
+            SetEntryFor(TreeY, "c", Hlc(20)),
+            SetEntryFor(TreeY, "d", Hlc(30)),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.True);
+            Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(40)));
+        });
+
+        await hwms[TreeX].Received(1).TryAdvanceAsync(RemoteCluster, Hlc(40), Arg.Any<CancellationToken>());
+        await hwms[TreeY].Received(1).TryAdvanceAsync(RemoteCluster, Hlc(30), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_parallel_apply_keeps_each_run_atomic_collapsing_multi_entry_run_to_one_merge()
+    {
+        // Atomic-batch / run-boundary respect: parallelism is introduced
+        // only across runs, never within one. A multi-entry run still
+        // collapses to a single batched merge even when another tree's
+        // run applies concurrently.
+        var (applier, _, applies, _) = CreateMultiTreeApplier(
+            new[] { TreeX, TreeY }, applyMaxParallelRuns: 2);
+
+        var entries = new[]
+        {
+            SetEntryFor(TreeX, "a", Hlc(10)),
+            SetEntryFor(TreeX, "b", Hlc(20)),
+            SetEntryFor(TreeX, "c", Hlc(30)),
+            SetEntryFor(TreeY, "d", Hlc(40)),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+        // TreeX's three-entry run is applied as a single unit.
+        await applies[TreeX].Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
+                items.Count == 3
+                && items[0].Key == "a"
+                && items[1].Key == "b"
+                && items[2].Key == "c"));
+        await applies[TreeY].Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items => items.Count == 1));
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_parallel_apply_keeps_same_tree_origins_sequential_within_the_group()
+    {
+        // Same-tree origins share the per-tree causal buffer / dedupe
+        // cache, so they remain in one ordered group and apply
+        // sequentially even under DOP>1: each origin's HWM advances to
+        // its own max while the distinct second tree applies in parallel.
+        var (applier, _, applies, hwms) = CreateMultiTreeApplier(
+            new[] { TreeX, TreeY }, applyMaxParallelRuns: 3);
+
+        var entries = new[]
+        {
+            // TreeX, origin RemoteCluster
+            SetEntryFor(TreeX, "a", Hlc(10), RemoteCluster),
+            // TreeX, origin site-c (distinct origin, same tree -> same group)
+            SetEntryFor(TreeX, "b", Hlc(20), "site-c"),
+            // TreeY, origin RemoteCluster
+            SetEntryFor(TreeY, "c", Hlc(30), RemoteCluster),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+        await hwms[TreeX].Received(1).TryAdvanceAsync(RemoteCluster, Hlc(10), Arg.Any<CancellationToken>());
+        await hwms[TreeX].Received(1).TryAdvanceAsync("site-c", Hlc(20), Arg.Any<CancellationToken>());
+        await hwms[TreeY].Received(1).TryAdvanceAsync(RemoteCluster, Hlc(30), Arg.Any<CancellationToken>());
+        await applies[TreeX].Received(2).ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>());
+        await applies[TreeY].Received(1).ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>());
     }
 }

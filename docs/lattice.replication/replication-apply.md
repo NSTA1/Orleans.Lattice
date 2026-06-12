@@ -134,6 +134,21 @@ Every classification the per-entry path produces survives the batch path:
 
 Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The `LatticeReplicationGrpcService.Push` receiver wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. A `DeadLetterTrackingReplicationApplier` decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
 
+### Parallel apply across independent runs
+
+Under multi-tree load the per-run walk can serialise otherwise-independent work: a batch that interleaves runs from several trees applies them one after another even though they share no per-tree state, inflating apply latency and `apply.lag` (which now also drives receiver back-pressure, so slow applies translate directly into sender throttling).
+
+`LatticeReplicationOptions.ApplyMaxParallelRuns` bounds how many **independent** runs the batch path may apply concurrently. Independence is defined at the **tree** granularity:
+
+- Runs targeting **distinct trees** may apply in parallel. Distinct trees share no per-tree state - separate causal-apply buffers, shadow-forward dedupe caches, high-water-mark grains, and apply grains - so concurrent apply cannot reorder or interleave their work.
+- Runs that **share a tree** (different origins of the same tree) stay in one ordered group and apply strictly sequentially in write-ahead-log order. The per-tree causal-apply buffer and shadow-forward dedupe cache are shared across a tree's origins, so keeping same-tree runs serialised guarantees those structures observe the exact access order the fully-sequential path produces.
+
+Parallelism is therefore only ever introduced **across** independent runs, never **within** one. Every within-run ordering invariant holds unchanged regardless of the configured degree of parallelism: per-origin FIFO, the causal dependency gate and its bounded buffer, per-origin high-water-mark monotonicity, and atomic-batch (saga) apply boundaries. A multi-entry run still collapses to a single batched merge; an atomic batch still applies as a unit on its owning run.
+
+The effective degree of parallelism for a given batch is the host-configured `ApplyMaxParallelRuns` clamped to the number of distinct trees present in that batch, and is bounded by a per-batch semaphore so concurrency can never amplify local WAL saturation beyond the configured cap. It is surfaced on the `apply.parallel_runs` histogram (see [observability](observability.md)).
+
+**Default posture: fully sequential.** `ApplyMaxParallelRuns` defaults to `1`, which is exactly the historical behaviour - the batch path walks every run in order and awaits each before the next. The single-tree batch (the overwhelmingly common inbound shape, since the transport ships per-`(tree, peer)`) always takes the allocation-free sequential walk regardless of the configured value, because cross-tree parallelism is moot when there is only one tree. Raise the value conservatively, per workload, only after validating parallel apply for that topology.
+
 ## Cross-cluster atomic visibility - receiver seam
 
 `SetManyAtomicAsync` sagas authored on the source cluster ride the
