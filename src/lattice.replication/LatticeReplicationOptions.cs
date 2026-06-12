@@ -290,6 +290,50 @@ public class LatticeReplicationOptions
     /// </summary>
     public int ContentHashDedupCacheSize { get; set; } = DefaultContentHashDedupCacheSize;
 
+    /// <summary>
+    /// Whether the per-<c>(tree, peer)</c> shipper collapses redundant
+    /// per-key versions out of an outbound batch before they reach the
+    /// cross-cluster wire (pre-ship coalescing). Defaults to
+    /// <see langword="false"/>; when off the drain / ship path is
+    /// byte-identical to a build without this option - no coalescing
+    /// pass runs, no entry is elided, and the framed bytes match today's
+    /// output exactly.
+    /// <para>
+    /// When enabled, coalescing applies only to trees declared
+    /// <see cref="LatticeMergeMode.LwwRegister"/> (the receiver applies
+    /// those entries last-writer-wins on the value bytes, so an
+    /// intermediate version a later same-key write supersedes is invisible
+    /// after convergence). Within a single drained batch the shipper keeps
+    /// only the highest-<see cref="HybridLogicalClock"/> entry per key and
+    /// drops the earlier same-key point writes - exactly the version the
+    /// receiver's last-writer-wins apply would have converged to. Because
+    /// the shipper only ever drains its own cluster's authored writes, the
+    /// ordering tie-break collapses to a pure HLC comparison (single
+    /// origin), so the kept entry is unambiguous.
+    /// </para>
+    /// <para>
+    /// Coalescing never elides a range delete, a saga terminal mark
+    /// (<see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>),
+    /// an atomic-batch prepare-phase entry, or any entry carrying
+    /// <see cref="HybridLogicalClock.Zero"/>: those are left verbatim so
+    /// atomic-batch boundaries, causal dependencies, and per-origin FIFO
+    /// ordering are preserved. CRDT-mode trees (every
+    /// <see cref="LatticeMergeMode"/> other than
+    /// <see cref="LatticeMergeMode.LwwRegister"/>) are never coalesced:
+    /// the receiver applies those entries by folding each one's typed
+    /// delta into the loaded state, so dropping an intermediate version
+    /// would lose its contribution rather than merely hide it. The
+    /// per-elided-entry win is surfaced on the
+    /// <see cref="LatticeReplicationMetrics.CoalesceEntriesElided"/> and
+    /// <see cref="LatticeReplicationMetrics.CoalesceBytesElided"/> counters.
+    /// The coalesced output is a valid subset of the verbatim batch, so an
+    /// unmodified receiver decodes and applies it to the identical
+    /// converged state - the cursor still advances past every elided
+    /// entry's sequence because the per-partition resume bookkeeping is
+    /// updated at drain time, before the coalescing pass runs.
+    /// </para>
+    /// </summary>
+    public bool PreShipCoalescingEnabled { get; set; } = DefaultPreShipCoalescingEnabled;
 
     /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set,
@@ -1087,6 +1131,16 @@ public class LatticeReplicationOptions
     /// </summary>
     public const int DefaultContentHashDedupCacheSize = 4096;
 
+    /// <summary>
+    /// Default value for <see cref="PreShipCoalescingEnabled"/>: pre-ship
+    /// coalescing is off so the shipper's drain / ship path and its
+    /// on-the-wire output are byte-identical to a build without the
+    /// option. Operators opt in per tree once they have a hot
+    /// last-writer-wins key that is rewritten several times within a
+    /// single ship window and want to collapse the redundant versions
+    /// off the cross-cluster link.
+    /// </summary>
+    public const bool DefaultPreShipCoalescingEnabled = false;
 
     /// <summary>
     /// Default value for <see cref="AutoBootstrapOnFallOffLog"/>:

@@ -923,6 +923,49 @@
           "legendFormat": "{{reason}}"
         }
       ]
+    },
+    {
+      "id": 40,
+      "title": "Pre-ship coalescing elided rate",
+      "description": "Rate of redundant per-key versions the shipper dropped from outbound batches by pre-ship coalescing (PreShipCoalescingEnabled, last-writer-wins trees only). 'entries/s' counts elided WAL entries; 'bytes/s' is the pre-encoded wire-segment bytes they carried. Flat-zero unless a hot key is rewritten several times within one ship window. The coalesced output is a strict subset an unmodified receiver converges to identically.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "BYTES" },
+            "properties": [
+              { "id": "unit", "value": "binBps" },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.axisLabel", "value": "elided bytes/s" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "ENTRIES",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_coalesce_entries_elided_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "entries/s {{tree}}/{{peer}}"
+        },
+        {
+          "refId": "BYTES",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_coalesce_bytes_elided_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "bytes/s {{tree}}/{{peer}}"
+        }
+      ]
     }
   ]
 }

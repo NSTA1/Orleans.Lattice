@@ -192,6 +192,19 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private ShippedContentHashCache? _contentHashCache;
 
+    /// <summary>
+    /// Activation-scoped scratch map reused by the pre-ship coalescing
+    /// pass (<see cref="CoalesceDrainBuffer"/>) to record, per coalescable
+    /// key, the index of its last (highest-HLC) occurrence in the current
+    /// drained batch. Cleared at the start of every coalescing pass and
+    /// only allocated the first time coalescing runs, so a host that never
+    /// opts into
+    /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
+    /// pays no map memory and the steady-state ship path is byte-identical
+    /// to today's.
+    /// </summary>
+    private Dictionary<string, int>? _coalesceLastIndex;
+
     // ── Activation-scoped scratch arrays for the k-way HLC merge ──
     //
     // Sized lazily on first pump tick (and resized on partition-count
@@ -1792,7 +1805,161 @@ internal sealed class ReplicationShipperGrain(
             // re-set signal upstream retry logic generates.
             MeasureContentHashRedundancy(in winningRecord, options);
         }
+
+        // Pre-ship coalescing (opt-in, default off). Collapse redundant
+        // per-key versions out of the freshly-drained batch before they
+        // reach the wire. A no-op when the option is off (the drained
+        // buffers are shipped verbatim), so the default path is
+        // byte-identical to today's.
+        CoalesceDrainBuffer(options);
     }
+
+    /// <summary>
+    /// Pre-ship coalescing pass over the freshly-drained batch buffers
+    /// (<see cref="_drainBuffer"/> / <see cref="_drainEncodedSegments"/>).
+    /// No-op unless <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
+    /// is set and the tree's declared <see cref="LatticeMergeMode"/> is
+    /// <see cref="LatticeMergeMode.LwwRegister"/>.
+    /// <para>
+    /// For a last-writer-wins tree the receiver applies each entry LWW on
+    /// the value bytes ordered by <c>(HybridLogicalClock, OriginClusterId)</c>,
+    /// so when a key is rewritten several times within a single drained
+    /// batch only the highest-HLC version survives convergence; the earlier
+    /// versions are invisible after apply. This pass keeps only the last
+    /// (highest-HLC) coalescable point write per key and drops the earlier
+    /// same-key ones. The shipper drains only its own cluster's authored
+    /// writes (<see cref="ShouldShip"/> filters to <c>options.ClusterId</c>),
+    /// so every coalescable entry shares one origin and the ordering
+    /// tie-break collapses to a pure HLC comparison - the drain buffer is
+    /// already HLC-ascending, so the last occurrence of a key is the
+    /// highest-HLC one.
+    /// </para>
+    /// <para>
+    /// Only plain point <see cref="MutationKind.Set"/> /
+    /// <see cref="MutationKind.Delete"/> entries that are not atomic-batch
+    /// prepare-phase writes and do not carry
+    /// <see cref="HybridLogicalClock.Zero"/> are eligible (see
+    /// <see cref="IsCoalescable"/>). Range deletes, saga terminal marks,
+    /// prepared atomic-batch entries, and zero-HLC entries are never
+    /// elided and never participate, so atomic-batch boundaries, causal
+    /// dependencies, and per-origin FIFO ordering are preserved verbatim.
+    /// </para>
+    /// <para>
+    /// Coalescing is purely a transform over what gets shipped: every
+    /// drained entry's per-partition sequence was already folded into the
+    /// resume bookkeeping (<see cref="_partitionMaxReadSeq"/> /
+    /// <see cref="_partitionAdvanced"/>) inside the merge loop before this
+    /// pass runs, so the cursor still advances past every elided entry and
+    /// nothing is re-shipped or stranded. The coalesced output is a strict
+    /// subset of the verbatim batch, so an unmodified receiver decodes and
+    /// applies it to the identical converged state.
+    /// </para>
+    /// </summary>
+    private void CoalesceDrainBuffer(LatticeReplicationOptions options)
+    {
+        if (!options.PreShipCoalescingEnabled || _drainBuffer.Count <= 1)
+        {
+            return;
+        }
+
+        // Coalescing is correctness-safe only for last-writer-wins trees.
+        // Every CRDT mode applies by folding each entry's typed delta into
+        // the loaded state, so dropping an intermediate version would lose
+        // its contribution rather than merely hide it. Resolve the tree's
+        // declared mode once (a cached dictionary read) and bail for
+        // anything other than LWW. A tree not declared replicated resolves
+        // to null, which collapses to the LWW default - but such a tree
+        // never activates a shipper, so the null case is unreachable here.
+        var mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister;
+        if (mode != LatticeMergeMode.LwwRegister)
+        {
+            return;
+        }
+
+        var lastIndex = _coalesceLastIndex ??= new Dictionary<string, int>(StringComparer.Ordinal);
+        lastIndex.Clear();
+
+        var count = _drainBuffer.Count;
+
+        // Pass 1: record, per coalescable key, the index of its last
+        // occurrence. The drain buffer is HLC-ascending and single-origin,
+        // so the last index is the highest-HLC version - the one the
+        // receiver's LWW apply converges to.
+        for (var i = 0; i < count; i++)
+        {
+            var entry = _drainBuffer[i];
+            if (IsCoalescable(in entry))
+            {
+                lastIndex[entry.Key ?? string.Empty] = i;
+            }
+        }
+
+        // Pass 2: compact in place. Keep every non-coalescable entry
+        // verbatim and, among coalescable entries, keep only the last
+        // occurrence of each key. Elide the rest.
+        var write = 0;
+        var elidedCount = 0;
+        var elidedBytes = 0L;
+        for (var i = 0; i < count; i++)
+        {
+            var entry = _drainBuffer[i];
+            var keep = true;
+            if (IsCoalescable(in entry) && lastIndex[entry.Key ?? string.Empty] != i)
+            {
+                keep = false;
+            }
+
+            if (keep)
+            {
+                if (write != i)
+                {
+                    _drainBuffer[write] = entry;
+                    _drainEncodedSegments[write] = _drainEncodedSegments[i];
+                }
+                write++;
+            }
+            else
+            {
+                elidedCount++;
+                elidedBytes += _drainEncodedSegments[i].Count;
+            }
+        }
+
+        if (elidedCount == 0)
+        {
+            return;
+        }
+
+        _drainBuffer.RemoveRange(write, count - write);
+        _drainEncodedSegments.RemoveRange(write, count - write);
+        _drainEncodedByteCount -= elidedBytes;
+
+        LatticeReplicationMetrics.CoalesceEntriesElided.Add(
+            elidedCount,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+        LatticeReplicationMetrics.CoalesceBytesElided.Add(
+            elidedBytes,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="entry"/> is a candidate for pre-ship
+    /// coalescing: a plain point <see cref="MutationKind.Set"/> /
+    /// <see cref="MutationKind.Delete"/> write that is not part of an
+    /// atomic batch (saga) prepare phase and carries a real (non-zero)
+    /// <see cref="HybridLogicalClock"/>. Range deletes, saga terminal
+    /// marks, prepared atomic-batch entries, tombstone-reap envelopes,
+    /// and zero-HLC entries return <see langword="false"/> so they are
+    /// always shipped verbatim and never elided, preserving atomic-batch
+    /// boundaries, causal ordering, and per-origin FIFO.
+    /// </summary>
+    private static bool IsCoalescable(in WalRecord entry) =>
+        entry.Op is MutationKind.Set or MutationKind.Delete
+        && !entry.IsPrepared
+        && entry.AtomicBatchSize == 0
+        && entry.Timestamp != HybridLogicalClock.Zero;
 
     /// <summary>
     /// Records the content-hash payload-re-send measurement for a single

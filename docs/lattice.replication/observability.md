@@ -4,7 +4,7 @@
 
 - **Per-peer gauges** - `entries_behind`, `bytes_behind`, `ship_in_flight`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind`, `bytes_behind`, and `ship_in_flight` remain outbound-only (the receiver does not track a per-peer backlog into itself, nor does it pipeline into itself).
 - **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`, `apply.parallel_runs`, `ship.effective_batch_size`, `ship.ack_latency`. Reported in milliseconds except `apply.parallel_runs` (unit `{run}`) and `ship.effective_batch_size` (unit `{entry}`).
-- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The opt-in `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter when content-hash dedup measurement is enabled.
+- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The opt-in `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter when content-hash dedup measurement is enabled; the opt-in `coalesce.entries_elided` / `coalesce.bytes_elided` counters ride on it when pre-ship coalescing is enabled.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
 ## Replication-lag histogram (`apply.lag`)
@@ -132,6 +132,17 @@ These two histograms instrument the sender-side AIMD batch-size controller behin
 `ship.ack_latency` records the wall-clock interval between the sender launching a batch's `IReplicationTransport.SendAsync` and that batch's ack returning, measured with `Stopwatch.GetElapsedTime(long)` (allocation-free, monotonic). On the bounded-pipelining path the interval includes the time the batch spent queued behind lower-HLC batches in the FIFO window, so it reflects the effective per-batch round-trip the sender observes - which is exactly the signal the controller's sliding window averages against `AdaptiveBatchLatencyThreshold`. Neither histogram samples liveness probes.
 
 Operators correlate the two: a rising `ship.ack_latency` p50 followed by a falling `ship.effective_batch_size` is the controller backing off ahead of the receiver's WAL-saturation hint; a flat `ship.effective_batch_size` pinned at `ShipBatchSize` with low `ship.ack_latency` is a healthy link running at the configured ceiling.
+
+## Pre-ship coalescing (`coalesce.entries_elided` / `coalesce.bytes_elided`)
+
+These two counters are **opt-in** and fire only when `LatticeReplicationOptions.PreShipCoalescingEnabled` is set (the default is `false`, in which case the shipper does no extra work and never records them). They measure how many redundant per-key versions the sender dropped from a drained batch before it crossed the wire - the win pre-ship coalescing reclaims on a hot key rewritten several times within one ship window (see [Pre-ship coalescing](replication-drivers.md#pre-ship-coalescing)). Distinct from the content-hash counters above, which only measure and never alter the bytes shipped: these record entries that were actually elided.
+
+| Counter | Constant | Unit | Tags | Recorded |
+|---|---|---|---|---|
+| `orleans.lattice.replication.coalesce.entries_elided` | `LatticeReplicationMetrics.CoalesceEntriesElidedName` | `{entry}` | `tree`, `peer` | Once per WAL entry dropped from an outbound batch by the coalescing pass. |
+| `orleans.lattice.replication.coalesce.bytes_elided` | `LatticeReplicationMetrics.CoalesceBytesElidedName` | `By` | `tree`, `peer` | The summed pre-encoded wire-segment length of the entries counted above. |
+
+Coalescing runs only on trees whose declared `LatticeMergeMode` is `LwwRegister` - every CRDT mode is left verbatim because the receiver applies it by folding each entry's typed delta, so a dropped version would lose its contribution. Only plain point `Set` / `Delete` writes with a real (non-`Zero`) HLC that are not prepared atomic-batch entries are eligible; range deletes, saga terminal marks, and zero-HLC entries are never elided. Read the elided fraction as `rate(coalesce_entries_elided) / rate(wal_entries_shipped)` per `(tree, peer)`: a high ratio signals a hot rewrite pattern that coalescing is collapsing, and `coalesce.bytes_elided` quantifies the cross-cluster bandwidth reclaimed. The coalesced output is a strict subset of the verbatim batch, so an unmodified receiver converges identically.
 
 ## Subscribing
 

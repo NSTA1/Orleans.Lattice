@@ -478,6 +478,63 @@ the wire, a batch re-shipped after a transient transport failure counts
 its entries again - correct, since a re-ship is itself a redundant wire
 payload.
 
+### Pre-ship coalescing
+
+Set `LatticeReplicationOptions.PreShipCoalescingEnabled` (default
+`false`) to collapse redundant per-key versions out of a freshly-drained
+batch **before** they cross the cross-cluster link. A hot key rewritten
+several times within a single ship window otherwise ships every
+intermediate version a last-writer-wins receiver would overwrite anyway;
+coalescing drops those intermediate versions from the wire. This is
+distinct from the content-hash dedup measurement above, which never
+alters the bytes shipped - coalescing actually elides entries.
+
+The pass is scoped, conservatively, to trees whose declared
+`LatticeMergeMode` is `LwwRegister`. For a last-writer-wins tree the
+receiver applies each entry by last-writer-wins on the value bytes
+ordered by `(HybridLogicalClock, OriginClusterId)`, so within one drained
+batch only the highest-HLC version per key survives convergence and the
+earlier ones are invisible after apply. Because the shipper only ever
+drains its own cluster's authored writes (the cycle-break filters to
+`options.ClusterId`), every coalescing candidate shares one origin and
+the drain buffer is already HLC-ascending, so the last occurrence of a
+key is the highest-HLC one - the version the receiver converges to.
+
+Every CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`,
+`OrMap`, `Sequence`) is left **verbatim and never coalesced**. The
+receiver applies each of those by folding the per-entry typed delta into
+the loaded state, so dropping an intermediate version would lose its
+contribution rather than merely hide it - latest-wins elision is only
+correct for opaque last-writer-wins values. Merging the per-key deltas
+into a single combined delta would require a delta-into-delta merge seam
+on the CRDT shape registry that does not exist today, so a correctness-
+first first cut leaves all CRDT-mode trees untouched.
+
+Only plain point `Set` / `Delete` writes are eligible. Range deletes,
+saga terminal marks, prepared atomic-batch (saga) entries, tombstone-reap
+envelopes, and entries carrying `HybridLogicalClock.Zero` are never
+elided and never participate, so atomic-batch boundaries, causal
+dependencies, per-origin FIFO, and the no-cross-origin-reorder invariant
+all hold unchanged. The coalescing pass runs after the merge loop has
+already folded every drained entry's per-partition sequence into the
+resume bookkeeping, so the durable cursor still advances past every
+elided entry and nothing is re-shipped or stranded.
+
+As the shipper compacts a batch it increments two counters - tagged
+`tree` + `peer`; see
+[Observability](observability.md#pre-ship-coalescing-coalesceentries_elided--coalescebytes_elided):
+
+- `orleans.lattice.replication.coalesce.entries_elided` - one per dropped
+  entry.
+- `orleans.lattice.replication.coalesce.bytes_elided` - the sum of the
+  pre-encoded wire-segment lengths of the dropped entries.
+
+The coalesced output is a strict **subset** of the verbatim batch, so an
+unmodified receiver decodes and applies it to the identical converged
+state. The change is purely additive: no new frame type, no wire-format,
+serialization, `[Id]`, or `[Alias]` change. When the flag is off the
+drain/ship path is byte-identical to before and neither counter fires.
+
 ### `ShipMaxInFlight` is v1-inert
 
 The validator accepts any value `>= 1`, but the shipper grain hard-codes
@@ -534,6 +591,7 @@ condition clears.
 | `MaintenanceGcInterval` | 5 s | `> TimeSpan.Zero` | Cadence between WAL GC passes. |
 | `MaintenanceFallOffCheckInterval` | 30 s | `> TimeSpan.Zero` | Cadence between per-peer fall-off-the-log probes. |
 | `ShipDoorbellEnabled` | `true` | - | Master switch for the writer-side doorbell. |
+| `PreShipCoalescingEnabled` | `false` | - | Opt-in per tree. Collapse redundant per-key versions out of a drained batch (last-writer-wins trees only) before they ship. |
 
 All options resolve via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`,
 so per-tree overrides are honoured.

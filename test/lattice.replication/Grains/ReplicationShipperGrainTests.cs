@@ -328,7 +328,8 @@ public partial class ReplicationShipperGrainTests
             ReplicationShipperState? seedState = null,
             string treeName = Tree,
             string peerClusterId = Peer,
-            IGrainFactory? grainFactory = null)
+            IGrainFactory? grainFactory = null,
+            ILatticeMergeModeResolver? modeResolver = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{treeName}/{peerClusterId}"));
@@ -351,7 +352,7 @@ public partial class ReplicationShipperGrainTests
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, encoder, walRecordEncoder, registry, factory, fakeState,
             new ReplicationPeerStats(),
-            Substitute.For<ILatticeMergeModeResolver>(),
+            modeResolver ?? Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState());
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
