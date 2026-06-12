@@ -40,7 +40,8 @@ internal sealed class ReplicationShipperGrain(
     [PersistentState("replication-shipper", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationShipperState> state,
     ReplicationPeerStats peerStats,
-    ILatticeMergeModeResolver modeResolver)
+    ILatticeMergeModeResolver modeResolver,
+    WireVersionNegotiationState negotiationState)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -60,10 +61,26 @@ internal sealed class ReplicationShipperGrain(
         peerStats ?? throw new ArgumentNullException(nameof(peerStats));
     private readonly ILatticeMergeModeResolver _modeResolver =
         modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
+    private readonly WireVersionNegotiationState _negotiationState =
+        negotiationState ?? throw new ArgumentNullException(nameof(negotiationState));
 
     private string _treeName = "";
     private string _peerClusterId = "";
     private bool _keyParsed;
+
+    /// <summary>
+    /// The peer's most recently advertised
+    /// <see cref="ReplicationAck.SupportedWireVersion"/>, or
+    /// <see langword="null"/> until the peer has acknowledged a batch
+    /// (or the peer is a build that predates wire-version negotiation
+    /// and never stamps the slot). Feeds
+    /// <see cref="WireVersionNegotiation.Negotiate(int, int, int, int?)"/>
+    /// on the next pump tick when
+    /// <see cref="LatticeReplicationOptions.WireVersionNegotiationEnabled"/>
+    /// is set. Activation-scoped: lost on grain deactivation, at which
+    /// point the next ack re-advertises the peer's capability.
+    /// </summary>
+    private int? _peerWireVersion;
 
     /// <summary>
     /// Wall-clock instant at or after which the next phase tick is
@@ -475,6 +492,19 @@ internal sealed class ReplicationShipperGrain(
 
         var sourceHlc = _drainBuffer[^1].Timestamp;
 
+        // Wire-version capability negotiation (opt-in). Compute the
+        // version to encode at against the peer's most recently
+        // advertised capability, publish the negotiated / downgrade
+        // telemetry, and fail fast when the peer is older than the
+        // sender's minimum-supported floor (the genuinely-unsupported
+        // case). When the option is off this is skipped entirely and
+        // the batch ships at the current wire version exactly as
+        // before.
+        if (options.WireVersionNegotiationEnabled && !TryNegotiateWireVersion(options))
+        {
+            return;
+        }
+
         // Build the framing-only EncodedEnvelope. The drain has
         // already populated _drainEncodedSegments with the
         // pre-encoded WAL entry payloads (the bytes the canonical
@@ -628,6 +658,10 @@ internal sealed class ReplicationShipperGrain(
         // state success path, and to "max(...)" only when a late
         // pause races a still-in-flight backoff.
         _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
+        // Capture the peer's advertised wire-version capability for the
+        // next tick's negotiation. Harmless when negotiation is off
+        // (the value is simply never read).
+        _peerWireVersion = ack.SupportedWireVersion;
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -1704,6 +1738,15 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
+        // Honour wire-version negotiation on the probe path too: a
+        // probe still rides the framing header, and a peer below the
+        // minimum-supported floor must fail fast rather than ship an
+        // un-decodable probe. Skipped entirely when negotiation is off.
+        if (options.WireVersionNegotiationEnabled && !TryNegotiateWireVersion(options))
+        {
+            return;
+        }
+
         ReplicationBatchEncodedEnvelope encodedEnvelope;
         try
         {
@@ -1767,6 +1810,7 @@ internal sealed class ReplicationShipperGrain(
         state.State.ConsecutiveFailures = 0;
         _nextRetryAtUtc = DateTime.MinValue;
         _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
+        _peerWireVersion = ack.SupportedWireVersion;
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -1778,6 +1822,44 @@ internal sealed class ReplicationShipperGrain(
         _peerStats.RecordSuccess(_treeName, _peerClusterId);
         _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind: 0, bytesBehind: 0);
         _lastSuccessfulContactUtc = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Computes the wire-version negotiation for the peer against its
+    /// most recently advertised <see cref="ReplicationAck.SupportedWireVersion"/>,
+    /// publishes the negotiated version and downgrade signal to the
+    /// <c>wire_version.negotiated</c> / <c>wire_version.downgrade_active</c>
+    /// gauges, and returns <see langword="true"/> when the batch may
+    /// ship. Returns <see langword="false"/> - after logging an error
+    /// and applying backoff - for the genuinely-unsupported case where
+    /// the peer advertised a version older than the configured
+    /// <see cref="LatticeReplicationOptions.MinimumSupportedWireVersion"/>
+    /// floor, preserving the canonical fail-fast posture for a peer
+    /// that cannot be down-encoded for.
+    /// </summary>
+    private bool TryNegotiateWireVersion(LatticeReplicationOptions options)
+    {
+        WireVersionNegotiationResult negotiation;
+        try
+        {
+            negotiation = WireVersionNegotiation.Negotiate(
+                EncodedBatchHeader.CurrentWireVersion,
+                options.MinimumSupportedWireVersion,
+                options.UnknownPeerWireVersionFloor,
+                _peerWireVersion);
+        }
+        catch (NotSupportedException ex)
+        {
+            Logger.LogError(ex,
+                "Peer {Peer} on tree {Tree} advertised a wire version below the sender's "
+                + "minimum supported floor {Floor}; cannot ship until the peer upgrades.",
+                _peerClusterId, _treeName, options.MinimumSupportedWireVersion);
+            ApplyBackoff(options, exception: null, reason: "wire-version-unsupported");
+            return false;
+        }
+
+        _negotiationState.Record(_treeName, _peerClusterId, negotiation);
+        return true;
     }
 
     private void ApplyBackoff(LatticeReplicationOptions options, Exception? exception, string reason)

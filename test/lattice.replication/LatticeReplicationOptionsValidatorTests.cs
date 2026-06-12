@@ -990,5 +990,101 @@ public class LatticeReplicationOptionsValidatorTests
             Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.LivenessProbeInterval)));
         });
     }
+
+    // ------------------------------------------------------------------
+    // Wire-version capability negotiation
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_minimum_supported_wire_version_is_below_one(int version)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", MinimumSupportedWireVersion = version };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MinimumSupportedWireVersion)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_minimum_supported_wire_version_exceeds_current()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MinimumSupportedWireVersion = EncodedBatchHeader.CurrentWireVersion + 1,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MinimumSupportedWireVersion)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_unknown_peer_floor_is_below_minimum_supported()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MinimumSupportedWireVersion = 3,
+            UnknownPeerWireVersionFloor = 2,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.UnknownPeerWireVersionFloor)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_unknown_peer_floor_exceeds_current()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            UnknownPeerWireVersionFloor = EncodedBatchHeader.CurrentWireVersion + 1,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.UnknownPeerWireVersionFloor)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_wire_version_negotiation_options()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_conservative_wire_version_floor_below_current()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            WireVersionNegotiationEnabled = true,
+            MinimumSupportedWireVersion = 1,
+            UnknownPeerWireVersionFloor = 1,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

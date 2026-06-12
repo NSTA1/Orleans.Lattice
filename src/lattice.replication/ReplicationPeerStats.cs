@@ -417,3 +417,175 @@ public readonly record struct ReplicationPeerSnapshot(
     /// </summary>
     public long InFlight { get; init; }
 }
+
+/// <summary>
+/// Per-peer wire-version negotiation telemetry state. Backs the two
+/// observable gauges declared on <see cref="LatticeReplicationMetrics"/>:
+/// <c>wire_version.negotiated</c> (the framing wire version the local
+/// sender encodes at for each peer) and <c>wire_version.downgrade_active</c>
+/// (<c>1</c> when the sender is down-encoding to an older peer, else
+/// <c>0</c>). Instances are designed to be registered as a singleton by
+/// <c>AddLatticeReplication</c> - the constructor wires the observable
+/// gauges, so a single instance is sufficient per silo.
+/// </summary>
+/// <remarks>
+/// The class is thread-safe: concurrent updates to different
+/// <c>(tree, peer)</c> pairs do not contend, and updates to the same
+/// pair take a per-entry lock. Gauge registration is process-wide and
+/// idempotent (the same pattern as <see cref="ReplicationPeerStats"/>),
+/// so re-registering the singleton during integration-test setup or
+/// constructing throw-away instances in unit tests does not leak gauge
+/// registrations into the static meter.
+/// </remarks>
+public class WireVersionNegotiationState
+{
+    private static readonly object RegistrationLock = new();
+    private static volatile WireVersionNegotiationState? _current;
+    private static bool _gaugesRegistered;
+
+    private readonly ConcurrentDictionary<PeerKey, NegotiationEntry> _state = new();
+
+    /// <summary>
+    /// Initialises a new instance and ensures the two observable gauges
+    /// declared on <see cref="LatticeReplicationMetrics"/> are
+    /// registered on the shared meter. Gauge registration is
+    /// process-wide and idempotent; observation always reflects the
+    /// most recently constructed instance, matching the DI singleton
+    /// model used by <c>AddLatticeReplication</c>.
+    /// </summary>
+    public WireVersionNegotiationState()
+    {
+        lock (RegistrationLock)
+        {
+            _current = this;
+            if (!_gaugesRegistered)
+            {
+                RegisterGauges();
+                _gaugesRegistered = true;
+            }
+        }
+    }
+
+    private static void RegisterGauges()
+    {
+        var meter = LatticeReplicationMetrics.Meter;
+
+        meter.CreateObservableGauge<long>(
+            LatticeReplicationMetrics.WireVersionNegotiatedName,
+            static () => _current?.ObserveNegotiated() ?? Array.Empty<Measurement<long>>(),
+            unit: "{version}",
+            description: "Framing wire version the local sender has negotiated to encode at for the named peer.");
+
+        meter.CreateObservableGauge<long>(
+            LatticeReplicationMetrics.WireVersionDowngradeActiveName,
+            static () => _current?.ObserveDowngradeActive() ?? Array.Empty<Measurement<long>>(),
+            unit: "{bool}",
+            description: "1 when the local sender is down-encoding to an older peer (mixed-version fleet), else 0.");
+    }
+
+    /// <summary>
+    /// Records the negotiated wire version and downgrade state for a
+    /// <c>(tree, peer)</c> pair. Called by the sender each pump tick
+    /// once it has computed the negotiation against the peer's most
+    /// recently advertised <see cref="ReplicationAck.SupportedWireVersion"/>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="tree"/> or <paramref name="peer"/>
+    /// is <see langword="null"/>.
+    /// </exception>
+    public void Record(string tree, string peer, WireVersionNegotiationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        var entry = _state.GetOrAdd(new PeerKey(tree, peer), static _ => new NegotiationEntry());
+        lock (entry)
+        {
+            entry.NegotiatedVersion = result.EffectiveWireVersion;
+            entry.DowngradeActive = result.DowngradeActive;
+            entry.PeerCapabilityKnown = result.PeerCapabilityKnown;
+        }
+    }
+
+    /// <summary>
+    /// Returns a point-in-time snapshot of every recorded
+    /// <c>(tree, peer)</c> pair's negotiation state. Useful for
+    /// diagnostics and for asserting on metric inputs in tests.
+    /// </summary>
+    public IReadOnlyCollection<WireVersionNegotiationSnapshot> Snapshot()
+    {
+        var list = new List<WireVersionNegotiationSnapshot>(_state.Count);
+        foreach (var kv in _state)
+        {
+            int version;
+            bool downgrade, known;
+            lock (kv.Value)
+            {
+                version = kv.Value.NegotiatedVersion;
+                downgrade = kv.Value.DowngradeActive;
+                known = kv.Value.PeerCapabilityKnown;
+            }
+            list.Add(new WireVersionNegotiationSnapshot(kv.Key.Tree, kv.Key.Peer, version, downgrade, known));
+        }
+        return list;
+    }
+
+    private IEnumerable<Measurement<long>> ObserveNegotiated()
+    {
+        foreach (var kv in _state)
+        {
+            long value;
+            lock (kv.Value) { value = kv.Value.NegotiatedVersion; }
+            yield return Measure(value, kv.Key);
+        }
+    }
+
+    private IEnumerable<Measurement<long>> ObserveDowngradeActive()
+    {
+        foreach (var kv in _state)
+        {
+            long value;
+            lock (kv.Value) { value = kv.Value.DowngradeActive ? 1L : 0L; }
+            yield return Measure(value, kv.Key);
+        }
+    }
+
+    private static Measurement<long> Measure(long value, PeerKey key) =>
+        new(value,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, key.Tree),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer));
+
+    private readonly record struct PeerKey(string Tree, string Peer);
+
+    private sealed class NegotiationEntry
+    {
+        public int NegotiatedVersion;
+        public bool DowngradeActive;
+        public bool PeerCapabilityKnown;
+    }
+}
+
+/// <summary>
+/// Point-in-time snapshot of a single peer's wire-version negotiation
+/// state.
+/// </summary>
+/// <param name="Tree">The replicated tree id.</param>
+/// <param name="Peer">The remote peer cluster id.</param>
+/// <param name="NegotiatedVersion">
+/// The framing wire version the sender encodes at for this peer.
+/// </param>
+/// <param name="DowngradeActive">
+/// <see langword="true"/> when the negotiated version is below the
+/// sender's current wire version (the sender is down-encoding).
+/// </param>
+/// <param name="PeerCapabilityKnown">
+/// <see langword="true"/> when the peer advertised a supported wire
+/// version; <see langword="false"/> when the conservative unknown-peer
+/// floor was used.
+/// </param>
+public readonly record struct WireVersionNegotiationSnapshot(
+    string Tree,
+    string Peer,
+    int NegotiatedVersion,
+    bool DowngradeActive,
+    bool PeerCapabilityKnown);

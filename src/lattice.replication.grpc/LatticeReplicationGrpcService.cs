@@ -262,6 +262,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 BlockedAtHlc = blockedAtHlc,
                 SuggestedBatchSize = hint.SuggestedBatchSize,
                 PauseForMs = hint.PauseForMs,
+                // Advertise the maximum framing wire version this
+                // receiver can decode so a newer sender can negotiate
+                // down to it during a rolling upgrade rather than
+                // shipping a frame this build would reject.
+                SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
             },
         };
     }

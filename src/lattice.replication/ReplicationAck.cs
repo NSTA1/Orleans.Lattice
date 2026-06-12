@@ -124,4 +124,195 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(4)] public int? PauseForMs { get; init; }
+
+    /// <summary>
+    /// The maximum framing wire-format version this receiver can decode
+    /// (its build's <see cref="EncodedBatchHeader.CurrentWireVersion"/>).
+    /// Advertised on every ack so the sender can negotiate the encode
+    /// version for the next batch to
+    /// <c>min(localCurrent, peerAdvertised)</c> - transparently
+    /// down-encoding for an older receiver during a rolling upgrade
+    /// rather than shipping a newer frame the receiver would reject.
+    /// A value of <see langword="null"/> means the receiver did not
+    /// advertise a capability (a build predating wire-version
+    /// negotiation); the sender treats that peer's capability as
+    /// unknown and falls back to the conservative
+    /// <c>UnknownPeerWireVersionFloor</c> until a later ack carries the
+    /// slot.
+    /// <para>
+    /// Strictly additive on the wire (same compat profile as
+    /// <see cref="SuggestedBatchSize"/> and <see cref="PauseForMs"/>):
+    /// receivers built before wire-version negotiation omit the slot
+    /// entirely (decodes as <see langword="null"/>); senders built
+    /// before negotiation ignore the field. The slot is therefore safe
+    /// to roll out independently on either side of a peering.
+    /// </para>
+    /// </summary>
+    [Id(5)] public int? SupportedWireVersion { get; init; }
+}
+
+/// <summary>
+/// Pure, allocation-free helper that computes the wire-format version a
+/// sender should encode an outbound batch at for a given peer, applying
+/// the capability advertised on <see cref="ReplicationAck.SupportedWireVersion"/>.
+/// This is the reusable negotiation surface that later wire-touching
+/// work builds on: a newer sender transparently down-encodes for an
+/// older receiver until that receiver upgrades, while a peer that falls
+/// below the sender's minimum-supported floor still surfaces the
+/// canonical fail-fast hard error.
+/// </summary>
+public static class WireVersionNegotiation
+{
+    /// <summary>
+    /// Negotiates the effective wire-format version for the next batch
+    /// to a peer.
+    /// </summary>
+    /// <param name="localCurrentVersion">
+    /// The sender's current wire version
+    /// (<see cref="EncodedBatchHeader.CurrentWireVersion"/>). Must be at
+    /// least <c>1</c>.
+    /// </param>
+    /// <param name="minimumSupportedVersion">
+    /// The oldest wire version the sender is willing to interoperate
+    /// with. A peer advertising a version strictly below this throws
+    /// <see cref="NotSupportedException"/> - the genuinely-unsupported
+    /// case that must still fail fast. Must lie in the closed interval
+    /// <c>[1, localCurrentVersion]</c>.
+    /// </param>
+    /// <param name="unknownPeerFloorVersion">
+    /// The conservative version the sender encodes at until the peer's
+    /// capability is known (no ack has advertised a version yet). Must
+    /// lie in the closed interval
+    /// <c>[minimumSupportedVersion, localCurrentVersion]</c>.
+    /// </param>
+    /// <param name="peerAdvertisedVersion">
+    /// The peer's most recently advertised
+    /// <see cref="ReplicationAck.SupportedWireVersion"/>, or
+    /// <see langword="null"/> when the peer has not advertised a
+    /// capability yet.
+    /// </param>
+    /// <returns>
+    /// The negotiated <see cref="WireVersionNegotiationResult"/>: the
+    /// effective version to encode at, whether a downgrade is in
+    /// effect, and whether the peer's capability was known.
+    /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="localCurrentVersion"/>,
+    /// <paramref name="minimumSupportedVersion"/>, or
+    /// <paramref name="unknownPeerFloorVersion"/> violate the documented
+    /// ordering constraints.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// Thrown when <paramref name="peerAdvertisedVersion"/> is strictly
+    /// less than <paramref name="minimumSupportedVersion"/> - the peer
+    /// is older than the sender's minimum-supported floor and cannot be
+    /// down-encoded for.
+    /// </exception>
+    public static WireVersionNegotiationResult Negotiate(
+        int localCurrentVersion,
+        int minimumSupportedVersion,
+        int unknownPeerFloorVersion,
+        int? peerAdvertisedVersion)
+    {
+        if (localCurrentVersion < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(localCurrentVersion), localCurrentVersion,
+                "The local current wire version must be at least 1.");
+        }
+
+        if (minimumSupportedVersion < 1 || minimumSupportedVersion > localCurrentVersion)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(minimumSupportedVersion), minimumSupportedVersion,
+                $"The minimum supported wire version must lie in the closed interval "
+                + $"[1, {localCurrentVersion}].");
+        }
+
+        if (unknownPeerFloorVersion < minimumSupportedVersion
+            || unknownPeerFloorVersion > localCurrentVersion)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(unknownPeerFloorVersion), unknownPeerFloorVersion,
+                $"The unknown-peer floor version must lie in the closed interval "
+                + $"[{minimumSupportedVersion}, {localCurrentVersion}].");
+        }
+
+        if (peerAdvertisedVersion is not { } peer)
+        {
+            // Capability not yet known: encode at the conservative
+            // floor. The floor is bounded above by localCurrentVersion,
+            // so a downgrade is active iff the host configured a floor
+            // below its current version.
+            return new WireVersionNegotiationResult
+            {
+                EffectiveWireVersion = unknownPeerFloorVersion,
+                DowngradeActive = unknownPeerFloorVersion < localCurrentVersion,
+                PeerCapabilityKnown = false,
+            };
+        }
+
+        if (peer < minimumSupportedVersion)
+        {
+            throw new NotSupportedException(
+                $"Peer advertised wire version {peer}, which is older than the sender's "
+                + $"minimum supported version {minimumSupportedVersion}; the sender cannot "
+                + "down-encode that far. Upgrade the peer before it can resume receiving "
+                + "from this sender.");
+        }
+
+        var effective = Math.Min(localCurrentVersion, peer);
+        return new WireVersionNegotiationResult
+        {
+            EffectiveWireVersion = effective,
+            DowngradeActive = effective < localCurrentVersion,
+            PeerCapabilityKnown = true,
+        };
+    }
+}
+
+/// <summary>
+/// Outcome of a single wire-version capability negotiation between the
+/// local sender and a remote peer, computed by
+/// <see cref="WireVersionNegotiation.Negotiate(int, int, int, int?)"/>.
+/// <para>
+/// The result is a pure in-process value type - it is not Orleans
+/// serialised and never travels on the wire. The advertised peer
+/// capability that feeds the negotiation travels additively on
+/// <see cref="ReplicationAck.SupportedWireVersion"/>; this type is the
+/// sender-side projection the shipper acts on (which version to encode
+/// at, and whether a down-encode is in effect for a mixed-version
+/// fleet).
+/// </para>
+/// </summary>
+public readonly record struct WireVersionNegotiationResult
+{
+    /// <summary>
+    /// The wire-format version the sender should encode the next batch
+    /// at for this peer: <c>min(localCurrent, peerAdvertised)</c> once
+    /// the peer's capability is known, or the conservative
+    /// unknown-peer floor until the first acknowledgement advertises a
+    /// version. Always lies in the closed interval
+    /// <c>[minimumSupported, localCurrent]</c>.
+    /// </summary>
+    public int EffectiveWireVersion { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when <see cref="EffectiveWireVersion"/>
+    /// is strictly less than the sender's current wire version - i.e.
+    /// the sender is (or would be) down-encoding to interoperate with
+    /// an older peer. Surfaced to operators through the
+    /// <c>replication.wire_version.downgrade_active</c> gauge so a
+    /// mixed-version fleet is observable during a rolling upgrade.
+    /// </summary>
+    public bool DowngradeActive { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the peer has advertised a supported
+    /// wire version (via <see cref="ReplicationAck.SupportedWireVersion"/>)
+    /// and the negotiation used that value;
+    /// <see langword="false"/> when the peer's capability is not yet
+    /// known and the conservative unknown-peer floor was used instead.
+    /// </summary>
+    public bool PeerCapabilityKnown { get; init; }
 }
