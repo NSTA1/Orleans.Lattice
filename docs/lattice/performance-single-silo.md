@@ -145,7 +145,7 @@ realistic latency the storage provider contributes.
   batchSize=4096
   cohortN=3
   dotnet=10.0.109
-  gitSha=8b0cefa
+  gitSha=17eaf5b
   host=Standard_D8as_v5
   region=westus3
   responseTimeoutSec=180
@@ -159,18 +159,18 @@ realistic latency the storage provider contributes.
 
 | Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |
 |------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|
-| `GetAsync` (point read) | **~19.8 k keys/s** | ~60 us | ~100 us | ~140 us | ~290 us |
-| `SetAsync` (point write, 100 veh/5 Hz) | **494 keys/s** | ~7.63 ms | ~11.54 ms | ~15.35 ms | ~25.23 ms |
-| `GetManyAsync` (4,096 keys/call) | **~19.8 k keys/s** | ~2.02 ms | ~2.1 ms | ~2.27 ms | ~6.32 ms |
-| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **~6.6 k keys/s** | ~292.15 ms | ~371.13 ms | ~481.46 ms | ~1280.14 ms |
-| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **514 keys/s** | ~42.24 ms | ~52.72 ms | ~58.91 ms | ~74.76 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **157 keys/s** | ~6.75 ms | ~6.9 ms | ~7.53 ms | ~13.55 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **46 keys/s** | ~6.8 ms | ~14.39 ms | ~18.44 ms | ~25.3 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 100 veh/5 Hz) | **494 keys/s** | ~44.27 ms | ~65.81 ms | ~75.14 ms | ~98.6 ms |
+| `GetAsync` (point read) | **~19.7 k keys/s** | ~70 us | ~70 us | ~100 us | ~100 us |
+| `SetAsync` (point write, 100 veh/5 Hz) | **500 keys/s** | ~6.66 ms | ~10.34 ms | ~13.58 ms | ~21.62 ms |
+| `GetManyAsync` (4,096 keys/call) | **~19.7 k keys/s** | ~2 ms | ~2.06 ms | ~5.2 ms | ~6.06 ms |
+| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **~6.5 k keys/s** | ~198.58 ms | ~225.45 ms | ~243.97 ms | ~268.46 ms |
+| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **507 keys/s** | ~9.92 ms | ~10.67 ms | ~12.99 ms | ~50.96 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **121 keys/s** | ~15.17 ms | ~23.72 ms | ~24.66 ms | ~47.84 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **44 keys/s** | ~4.06 ms | ~4.5 ms | ~10.5 ms | ~11.67 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz) | **737 keys/s** | ~33.37 ms | ~38.56 ms | ~48.4 ms | ~78.94 ms |
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-06-12 on Standard_D8as_v5 in westus3 (.NET 10.0.109) at git sha 8b0cefa, n=3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
+> Measured 2026-06-12 on Standard_D8as_v5 in westus3 (.NET 10.0.109) at git sha 17eaf5b, n=3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
@@ -198,8 +198,10 @@ in-flight flush and fails the cohort - so each is offered a load below
 its own saturation point. Every write-row throughput cell is therefore a
 *sustained, reproducible* key-write rate at the stated offered load,
 **not** that API's ceiling, and the write rows must not be read against
-one another as if they shared an offered load; the per-call latency
-columns are the meaningful cross-shape comparison. The absolute ceiling
+one another as if they shared an offered load - even the single-tree and
+cross-tree 64-key atomic rows are driven at different rungs, because
+their sustainable key-write rates differ by call shape; the per-call
+latency columns are the meaningful cross-shape comparison. The absolute ceiling
 for a single storage account lives in
 `benchmark/azure-throughput/throughput.md` section 31 (pinned
 empirically at **~22-24 ke/s aggregate key-write throughput**, with

@@ -429,7 +429,7 @@ $Layer2Rows = @(
 		Rung = '8:5:45';
 	},
 	@{
-		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 100 veh/5 Hz)';
+		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz)';
 		WorkloadId = 'cross-tree-atomic-64';
 		WorkloadMode = 'cross-tree-atomic-64';
 		ThroughputUnit = 'keys/s';
@@ -437,17 +437,20 @@ $Layer2Rows = @(
 		# coordination cost (coordinator grain + one sub-saga AtomicWriteGrain
 		# per tree) on top of the WAL-flush ceiling, and commit WAL writes to
 		# two trees per saga, so they push the single Tables account hardest
-		# of all the write modes - the eight flush slots peg (inFlight 8/8) and
-		# the sustained ceiling is only ~800-850 key-writes/s, the same shape
-		# as point writes. Driving near that ceiling is not reproducible: an
-		# Azure tail-latency burst times out cross-tree flushes (validated:
-		# 350 veh -> 2/3, one cohort FINAL failed=28672). Holding the offered
-		# rate well below the ceiling keeps the flush slots unsaturated so no
-		# flush times out and the in-flight sub-sagas quiesce to zero before
-		# stop; all cohorts then report HEALTHY at a conservative *sustained*
-		# rate (not the ceiling - see docs/lattice/throughput.md).
-		# 100 veh x 5 Hz = 500 keys/s offered.
-		Rung = '100:5:45';
+		# of all the write modes - the eight flush slots peg (inFlight 8/8) at
+		# a saturated ceiling of ~900-930 key-writes/s. Driving near that
+		# ceiling is not reproducible: an Azure tail-latency burst times out a
+		# pinned cross-tree flush (validated: 200 veh -> intermittent DEGRADED
+		# with exception lines as the slots brush 8/8; 250-450 veh pin 8/8).
+		# After the saga-commit-path optimisation that dropped the redundant
+		# pre-fan-out participant union, a sub-saturation re-probe on the
+		# D8as_v5 host showed 150 veh is the highest rung that keeps the flush
+		# slots unsaturated (inFlight median ~3, max <8) so no flush times out,
+		# the in-flight sub-sagas quiesce to zero before stop, and all cohorts
+		# report HEALTHY at a conservative *sustained* rate (not the ceiling -
+		# see docs/lattice/throughput.md): N=3 at 150 veh -> 3/3 HEALTHY,
+		# inFlight med 2-3, failed=0. 150 veh x 5 Hz = 750 keys/s offered.
+		Rung = '150:5:45';
 	}
 )
 
