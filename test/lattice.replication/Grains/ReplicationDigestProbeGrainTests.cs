@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Tests.Fakes;
@@ -36,7 +37,8 @@ public class ReplicationDigestProbeGrainTests
             bool maintainProjectionDigest = true,
             int shardCount = 1,
             IEnumerable<string>? peers = null,
-            ReplicationDigestProbeState? seed = null)
+            ReplicationDigestProbeState? seed = null,
+            bool merkleWalkEnabled = false)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("digest-probe-grain", Tree));
@@ -49,6 +51,7 @@ public class ReplicationDigestProbeGrainTests
             DigestProbeEnabled = enabled,
             DigestProbeInterval = TimeSpan.FromMinutes(5),
             DigestProbeJitter = 0.0,
+            MerkleWalkEnabled = merkleWalkEnabled,
         };
         replicationMonitor.CurrentValue.Returns(replicationOptions);
         replicationMonitor.Get(Arg.Any<string>()).Returns(replicationOptions);
@@ -67,6 +70,15 @@ public class ReplicationDigestProbeGrainTests
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(Tree).Returns(lattice);
+
+        // Wire the routing snapshot and an empty-shard root so the
+        // localise-stage walk (when enabled) resolves a physical tree id
+        // and terminates cleanly without emitting localise/abort metrics.
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        shardRoot.GetRootNodeRefAsync().Returns(Task.FromResult<ShardRootNodeRef?>(null));
+        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shardRoot);
 
         var state = new FakePersistentState<ReplicationDigestProbeState>();
         if (seed is not null)
@@ -191,6 +203,48 @@ public class ReplicationDigestProbeGrainTests
             Assert.That(OutcomeOf(compared), Is.EqualTo(LatticeReplicationMetrics.DigestProbeOutcomeMismatch));
             Assert.That(mismatch.Measurements, Has.Count.EqualTo(1));
         });
+    }
+
+    [Test]
+    public async Task ProcessNextPhaseAsync_does_not_walk_on_mismatch_when_merkle_walk_disabled()
+    {
+        var (grain, _, lattice, transport, _) = CreateProbeGrain(merkleWalkEnabled: false);
+        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
+        transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DigestProbeResponse
+            {
+                DigestAvailable = true,
+                Digest = Digest(new byte[] { 9, 9, 9 }),
+            }));
+
+        await grain.ProcessNextPhaseAsync();
+
+        // The localise stage is dark by default: a mismatch must not resolve
+        // routing or issue a key-range probe when MerkleWalkEnabled is off.
+        await lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
+        await transport.DidNotReceive().ProbeMerkleWalkAsync(
+            Arg.Any<string>(), Arg.Any<MerkleWalkProbeRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhaseAsync_walks_on_mismatch_when_merkle_walk_enabled()
+    {
+        var (grain, _, lattice, transport, _) = CreateProbeGrain(merkleWalkEnabled: true);
+        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
+        transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DigestProbeResponse
+            {
+                DigestAvailable = true,
+                Digest = Digest(new byte[] { 9, 9, 9 }),
+            }));
+
+        await grain.ProcessNextPhaseAsync();
+
+        // With the flag on, a mismatch triggers the read-only localise stage,
+        // which resolves the physical tree id before descending the tree.
+        await lattice.Received().GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]

@@ -612,4 +612,88 @@ public class LatticeReplicationMetricsTests
                 t.Key == "peer" && (string?)t.Value == "site-p"));
         });
     }
+
+    // ------------------------------------------------------------------
+    // Anti-entropy Merkle-walk drift localisation (localise stage)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Merkle_walk_counters_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.MerkleWalkLocalised.Name,
+                Is.EqualTo("orleans.lattice.replication.merkle_walk.localised"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkLocalised.Unit, Is.EqualTo("{leaf}"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkLocalisedName,
+                Is.EqualTo("orleans.lattice.replication.merkle_walk.localised"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkAborted.Name,
+                Is.EqualTo("orleans.lattice.replication.merkle_walk.aborted"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkAborted.Unit, Is.EqualTo("{walk}"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkAbortedName,
+                Is.EqualTo("orleans.lattice.replication.merkle_walk.aborted"));
+        });
+    }
+
+    [Test]
+    public void Merkle_walk_tag_and_reason_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.TagDepth, Is.EqualTo("depth"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkAbortDepthCap, Is.EqualTo("depth_cap"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkAbortByteBudget, Is.EqualTo("byte_budget"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkAbortRemoteUnavailable, Is.EqualTo("remote_unavailable"));
+            Assert.That(LatticeReplicationMetrics.MerkleWalkAbortVersionSkew, Is.EqualTo("version_skew"));
+        });
+    }
+
+    [TestCase(MerkleWalkAbortReason.DepthCapExceeded, "depth_cap")]
+    [TestCase(MerkleWalkAbortReason.ByteBudgetExceeded, "byte_budget")]
+    [TestCase(MerkleWalkAbortReason.RemoteUnavailable, "remote_unavailable")]
+    [TestCase(MerkleWalkAbortReason.VersionSkew, "version_skew")]
+    public void Merkle_walk_abort_reason_tag_maps_each_reason(MerkleWalkAbortReason reason, string expected)
+    {
+        Assert.That(LatticeReplicationMetrics.MerkleWalkAbortReasonTag(reason), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Merkle_walk_localised_counter_records_with_tree_and_depth_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.MerkleWalkLocalisedName);
+
+        LatticeReplicationMetrics.MerkleWalkLocalised.Add(2,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDepth, "3"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(2L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "t"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "depth" && (string?)t.Value == "3"));
+        });
+    }
+
+    [Test]
+    public void Merkle_walk_aborted_counter_records_with_reason_tag()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.MerkleWalkAbortedName);
+
+        LatticeReplicationMetrics.MerkleWalkAborted.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason,
+                LatticeReplicationMetrics.MerkleWalkAbortRemoteUnavailable));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Tags,
+            Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "reason" && (string?)t.Value == "remote_unavailable"));
+    }
 }

@@ -125,4 +125,12 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-tree digest-probe scheduler grain persistent state class.</summary>
     internal const string ReplicationDigestProbeState = "olr.ps";
 
+    // Anti-entropy Merkle-walk drift localisation (localise stage)
+
+    /// <summary>Alias for <see cref="Replication.MerkleWalkProbeRequest"/>.</summary>
+    internal const string MerkleWalkProbeRequest = "olr.mq";
+
+    /// <summary>Alias for <see cref="Replication.MerkleWalkProbeResponse"/>.</summary>
+    internal const string MerkleWalkProbeResponse = "olr.mp";
+
 }

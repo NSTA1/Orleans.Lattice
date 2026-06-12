@@ -69,6 +69,8 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.wire_version.downgrade_active` | observable gauge (`{bool}`) | `tree`, `peer` | Per-peer wire-version downgrade active (1 = mixed-version fleet) |
 | `orleans.lattice.replication.digest_probe.compared` | counter | `tree`, `shard`, `peer`, `outcome` | Anti-entropy digest-probe comparisons (rate, by outcome) |
 | `orleans.lattice.replication.digest_probe.mismatch` | counter | `tree`, `shard`, `peer` | Anti-entropy digest divergence (mismatch rate) |
+| `orleans.lattice.replication.merkle_walk.localised` | counter | `tree`, `depth` | Merkle-walk leaves localised |
+| `orleans.lattice.replication.merkle_walk.aborted` | counter | `reason` | Merkle-walk aborted |
 | `orleans.lattice.replication.ship.redundant_payloads` | counter | `tree`, `peer` | Redundant payload re-send rate |
 | `orleans.lattice.replication.ship.redundant_payload_bytes` | counter | `tree`, `peer` | Redundant payload re-send rate |
 | `orleans.lattice.replication.ship.effective_batch_size` | histogram | `tree`, `peer` | Effective ship batch size (adaptive) |

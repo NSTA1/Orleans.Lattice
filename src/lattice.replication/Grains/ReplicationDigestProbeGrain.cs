@@ -83,6 +83,14 @@ internal sealed class ReplicationDigestProbeGrain(
     private string _treeName = "";
     private bool _treeNameResolved;
 
+    /// <summary>
+    /// Cached resolved physical tree id (after registry alias resolution),
+    /// used to address shard-root and internal-node grains directly during the
+    /// read-only Merkle-walk drift-localisation pass. Resolved lazily on the
+    /// first localisation and reused for the lifetime of the activation.
+    /// </summary>
+    private string? _physicalTreeId;
+
     private string TreeName
     {
         get
@@ -227,6 +235,18 @@ internal sealed class ReplicationDigestProbeGrain(
                     if (outcome == DigestProbeOutcome.Mismatch)
                     {
                         RecordMismatch(TreeName, shard, peer);
+
+                        // Localise stage: when the host has opted into the
+                        // read-only Merkle-walk drift localisation, narrow the
+                        // shard-level mismatch to a leaf (or small leaf set) by
+                        // walking the local internal-node tree by separator-key
+                        // range. Strictly read-only and best-effort - a failure
+                        // never disturbs the detect-stage cadence.
+                        if (options.MerkleWalkEnabled)
+                        {
+                            await TryLocaliseDriftAsync(lattice, options, shard, peer)
+                                .ConfigureAwait(true);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -301,6 +321,55 @@ internal sealed class ReplicationDigestProbeGrain(
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, shard.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer));
+    }
+
+    /// <summary>
+    /// Runs the read-only Merkle-walk drift-localisation pass for a single
+    /// shard-level mismatch against a single peer. Resolves the physical tree
+    /// id once, builds a local-tree adapter over the shard's internal-node
+    /// grains, and delegates the descent and metric emission to
+    /// <see cref="MerkleWalkLocaliser.WalkAsync"/>. Strictly read-only and
+    /// best-effort: any failure is logged and swallowed so the detect-stage
+    /// cadence is never disturbed.
+    /// </summary>
+    private async Task TryLocaliseDriftAsync(ILattice lattice, LatticeReplicationOptions options, int shard, string peer)
+    {
+        try
+        {
+            var physicalTreeId = await EnsurePhysicalTreeIdAsync(lattice).ConfigureAwait(true);
+            var localTree = new GrainMerkleWalkLocalTree(_grainFactory, physicalTreeId, shard);
+            await MerkleWalkLocaliser.WalkAsync(
+                TreeName,
+                shard,
+                peer,
+                localTree,
+                _probeTransport,
+                options.MerkleWalkMaxDepth,
+                options.MerkleWalkMaxBytes,
+                CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Merkle-walk drift localisation failed for shard {Shard} peer {Peer} on {Context}; the read-only walk is best-effort and will retry on the next cadence",
+                shard, peer, LogContext);
+        }
+    }
+
+    /// <summary>
+    /// Resolves and caches the physical tree id for this tree (after registry
+    /// alias resolution) so the localisation pass can address shard-root and
+    /// internal-node grains directly. The read is read-only and is cached for
+    /// the lifetime of the activation.
+    /// </summary>
+    private async Task<string> EnsurePhysicalTreeIdAsync(ILattice lattice)
+    {
+        if (_physicalTreeId is null)
+        {
+            var routing = await lattice.GetRoutingAsync(CancellationToken.None).ConfigureAwait(true);
+            _physicalTreeId = routing.PhysicalTreeId;
+        }
+        return _physicalTreeId;
     }
 
     private static bool ShouldRunCadence(long nowTicks, long lastTicks, TimeSpan interval)

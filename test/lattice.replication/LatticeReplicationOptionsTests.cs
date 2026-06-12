@@ -688,4 +688,62 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { AdaptiveBatchWindowLength = 32 };
         Assert.That(opts.AdaptiveBatchWindowLength, Is.EqualTo(32));
     }
+
+    // ------------------------------------------------------------------
+    // Anti-entropy Merkle-walk drift-localisation options
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultMerkleWalkEnabled_is_false() =>
+        Assert.That(LatticeReplicationOptions.DefaultMerkleWalkEnabled, Is.False);
+
+    [Test]
+    public void DefaultMerkleWalkMaxDepth_is_sixteen() =>
+        Assert.That(LatticeReplicationOptions.DefaultMerkleWalkMaxDepth, Is.EqualTo(16));
+
+    [Test]
+    public void DefaultMerkleWalkMaxBytes_is_one_megabyte() =>
+        Assert.That(LatticeReplicationOptions.DefaultMerkleWalkMaxBytes, Is.EqualTo(1024L * 1024L));
+
+    [Test]
+    public void New_instance_has_merkle_walk_disabled_by_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.MerkleWalkEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultMerkleWalkEnabled));
+    }
+
+    [Test]
+    public void New_instance_has_default_merkle_walk_max_depth()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.MerkleWalkMaxDepth, Is.EqualTo(LatticeReplicationOptions.DefaultMerkleWalkMaxDepth));
+    }
+
+    [Test]
+    public void New_instance_has_default_merkle_walk_max_bytes()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.MerkleWalkMaxBytes, Is.EqualTo(LatticeReplicationOptions.DefaultMerkleWalkMaxBytes));
+    }
+
+    [Test]
+    public void MerkleWalkEnabled_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { MerkleWalkEnabled = true };
+        Assert.That(opts.MerkleWalkEnabled, Is.True);
+    }
+
+    [Test]
+    public void MerkleWalkMaxDepth_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { MerkleWalkMaxDepth = 4 };
+        Assert.That(opts.MerkleWalkMaxDepth, Is.EqualTo(4));
+    }
+
+    [Test]
+    public void MerkleWalkMaxBytes_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { MerkleWalkMaxBytes = 8192 };
+        Assert.That(opts.MerkleWalkMaxBytes, Is.EqualTo(8192L));
+    }
 }

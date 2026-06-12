@@ -265,6 +265,11 @@ internal static class TypeAliases
     // by IBPlusInternalGrain.OnChildDigestPublishedAsync).
     internal const string ChildDigestSnapshot = "ol.cds";
 
+    // Read-only shard-root node reference (root grain id + leaf flag)
+    // surfaced by IShardRootGrain.GetRootNodeRefAsync for anti-entropy
+    // drift-localisation traversal that descends the internal-node tree.
+    internal const string ShardRootNodeRef = "ol.snr";
+
     // Batched leaf-split sibling-initialization payload. Collapses the
     // five separate gated metadata-setter RPCs the donor used to issue
     // against a freshly-created sibling (tree id, shard index, key

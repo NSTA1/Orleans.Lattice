@@ -69,4 +69,24 @@ internal sealed partial class ShardRootGrain
         var root = grainFactory.GetGrain<IBPlusInternalGrain>(state.State.RootNodeId!.Value);
         return await root.GetSubtreeProjectionDigestAsync();
     }
+
+    /// <inheritdoc />
+    public Task<ShardRootNodeRef?> GetRootNodeRefAsync()
+    {
+        // Synchronous best-effort read of the in-memory routing slots. No
+        // PrepareForOperationAsync / re-read: this is a read-only diagnostic
+        // accessor for the anti-entropy drift-localisation walk, which only
+        // probes shards the digest-probe scheduler has already activated and
+        // read. An empty shard (no root yet) returns null.
+        if (state.State.RootNodeId is null)
+        {
+            return Task.FromResult<ShardRootNodeRef?>(null);
+        }
+
+        return Task.FromResult<ShardRootNodeRef?>(new ShardRootNodeRef
+        {
+            NodeId = state.State.RootNodeId.Value,
+            IsLeaf = state.State.RootIsLeaf,
+        });
+    }
 }
