@@ -40,7 +40,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 ### Planned / open
 
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
-- [R-045](https://github.com/NSTA1/Orleans.Lattice/issues/462) - Coalesced per-peer cursor checkpointing
 - [R-105](https://github.com/NSTA1/Orleans.Lattice/issues/513) - Peer digest probe RPC + scheduler
 - [R-106](https://github.com/NSTA1/Orleans.Lattice/issues/514) - Merkle-walk drift localisation
 - [R-107](https://github.com/NSTA1/Orleans.Lattice/issues/515) - Targeted leaf re-replay from WAL
@@ -79,6 +78,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-041](https://github.com/NSTA1/Orleans.Lattice/issues/458) - Orleans-serializer binary framing
 - [R-042](https://github.com/NSTA1/Orleans.Lattice/issues/459) - gRPC streaming push transport
 - [R-043](https://github.com/NSTA1/Orleans.Lattice/issues/460) - Batch-boundary compression
+- [R-045](https://github.com/NSTA1/Orleans.Lattice/issues/462) - Coalesced per-peer cursor checkpointing
 - [R-046](https://github.com/NSTA1/Orleans.Lattice/issues/463) - Standard transport security
 - [R-047](https://github.com/NSTA1/Orleans.Lattice/issues/464) - Typed-envelope `IReplicationTransport` shape
 - [R-050](https://github.com/NSTA1/Orleans.Lattice/issues/465) - `ISnapshotProvider` abstraction

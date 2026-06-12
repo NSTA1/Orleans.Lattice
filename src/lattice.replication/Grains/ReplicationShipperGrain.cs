@@ -209,6 +209,30 @@ internal sealed class ReplicationShipperGrain(
     private int _pendingCursorWrites;
 
     /// <summary>
+    /// Wall-clock instant at which the first un-flushed cursor advance
+    /// since the last durable flush was booked. Anchors the time
+    /// dimension of the coalescing rule
+    /// (<see cref="LatticeReplicationOptions.ShipCursorWriteMaxDelay"/>):
+    /// a flush is forced once <c>now - this</c> reaches the configured
+    /// max delay, even if fewer than
+    /// <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>
+    /// acks have accumulated. Set when <see cref="_pendingCursorWrites"/>
+    /// transitions <c>0 -&gt; 1</c> and reset to
+    /// <see cref="DateTime.MinValue"/> on every flush.
+    /// </summary>
+    private DateTime _oldestPendingCursorWriteUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Clock used to evaluate the time dimension of the cursor-write
+    /// coalescing rule. Aliased to <see cref="TimeProvider.System"/> in
+    /// production; unit tests substitute a controllable provider via
+    /// <see cref="SetCursorFlushClockForTesting(TimeProvider)"/> so the
+    /// elapsed-since-first-pending check is deterministic without a real
+    /// wall-clock wait.
+    /// </summary>
+    private TimeProvider _cursorFlushClock = TimeProvider.System;
+
+    /// <summary>
     /// Highest HLC reported to the registry (i.e. successfully
     /// persisted in a previous flush). Used to suppress redundant
     /// <see cref="IWalCursorRegistry.ReportCursorAsync"/>
@@ -426,13 +450,25 @@ internal sealed class ReplicationShipperGrain(
 
         if (_drainBuffer.Count == 0)
         {
-            // No work this tick. Consider firing an empty liveness
-            // probe so the outbound peer.last_contact_seconds gauge
-            // does not climb unbounded on a healthy idle link. The
-            // probe rides the same transport ack contract as a
-            // normal batch; the receiver sees a zero-entry envelope
-            // and acks immediately. Preserves any accumulated backoff
-            // by short-circuiting when one is in flight.
+            // No work this tick. Two idle-path responsibilities:
+            //
+            //   1. Force a deferred cursor flush if the time dimension
+            //      (ShipCursorWriteMaxDelay) has elapsed. A stream that
+            //      shipped a partial batch and then quiesced would
+            //      otherwise leave its last advances un-flushed until the
+            //      next advance - which may never come on an idle link -
+            //      keeping the crash-replay window open and pinning the
+            //      WAL GC trim frontier. The empty-drain tick is the only
+            //      place the time dimension can fire when no new acks are
+            //      arriving.
+            //   2. Consider firing an empty liveness probe so the
+            //      outbound peer.last_contact_seconds gauge does not climb
+            //      unbounded on a healthy idle link. The probe rides the
+            //      same transport ack contract as a normal batch; the
+            //      receiver sees a zero-entry envelope and acks
+            //      immediately. Preserves any accumulated backoff by
+            //      short-circuiting when one is in flight.
+            await TryFlushPendingCursorOnIdleAsync(options, cancellationToken);
             await TryEmitLivenessProbeAsync(options, cancellationToken);
             return;
         }
@@ -764,8 +800,17 @@ internal sealed class ReplicationShipperGrain(
         }
 
         _pendingCursorWrites++;
+        if (_pendingCursorWrites == 1)
+        {
+            // First un-flushed advance since the last flush - anchor the
+            // time-dimension countdown. Subsequent advances inside the
+            // same window leave this anchor in place so the elapsed check
+            // measures from the oldest pending write, not the newest.
+            _oldestPendingCursorWriteUtc = _cursorFlushClock.GetUtcNow().UtcDateTime;
+        }
+
         var interval = Math.Max(1, options.ShipCursorWriteInterval);
-        if (_pendingCursorWrites < interval)
+        if (_pendingCursorWrites < interval && !CursorWriteMaxDelayElapsed(options))
         {
             // Defer the durable write. Receiver-side apply is
             // HLC-monotonic and dedupes on (originClusterId, originHlc),
@@ -774,12 +819,62 @@ internal sealed class ReplicationShipperGrain(
             // the duplicates. The WAL GC's view of this peer is
             // pinned at the last reported cursor (_lastReportedCursor)
             // until the flush completes, so the trim frontier never
-            // exceeds the durably-recoverable point.
+            // exceeds the durably-recoverable point. The time dimension
+            // (ShipCursorWriteMaxDelay) forces a flush before the count
+            // threshold on a low-throughput stream so the window cannot
+            // stay open indefinitely while the stream is quiet.
             return;
         }
 
         await FlushCursorAsync(cancellationToken);
         _ = options; // Reserved for future per-tree report flavours.
+    }
+
+    /// <summary>
+    /// Whether the wall-clock time dimension of the cursor-write
+    /// coalescing rule has elapsed - i.e. at least one cursor advance is
+    /// pending and more than
+    /// <see cref="LatticeReplicationOptions.ShipCursorWriteMaxDelay"/> has
+    /// passed since the oldest un-flushed advance was booked. Returns
+    /// <see langword="false"/> when the max delay is
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> (time
+    /// dimension disabled) or when no write is pending.
+    /// </summary>
+    private bool CursorWriteMaxDelayElapsed(LatticeReplicationOptions options)
+    {
+        if (_pendingCursorWrites == 0)
+        {
+            return false;
+        }
+        var maxDelay = options.ShipCursorWriteMaxDelay;
+        if (maxDelay == System.Threading.Timeout.InfiniteTimeSpan)
+        {
+            return false;
+        }
+        var elapsed = _cursorFlushClock.GetUtcNow().UtcDateTime - _oldestPendingCursorWriteUtc;
+        return elapsed >= maxDelay;
+    }
+
+    /// <summary>
+    /// Flushes a pending deferred cursor write on an idle pump tick when
+    /// the wall-clock time dimension of the coalescing rule
+    /// (<see cref="LatticeReplicationOptions.ShipCursorWriteMaxDelay"/>)
+    /// has elapsed. No-op when nothing is pending, when the time
+    /// dimension is disabled, or when the max delay has not yet elapsed.
+    /// This is the seam that lets a stream which quiesces below the
+    /// <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>
+    /// batch-count threshold still checkpoint within the configured
+    /// time bound.
+    /// </summary>
+    private async Task TryFlushPendingCursorOnIdleAsync(
+        LatticeReplicationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!CursorWriteMaxDelayElapsed(options))
+        {
+            return;
+        }
+        await FlushCursorAsync(cancellationToken);
     }
 
     /// <summary>
@@ -801,6 +896,7 @@ internal sealed class ReplicationShipperGrain(
 
         await state.WriteStateAsync();
         _pendingCursorWrites = 0;
+        _oldestPendingCursorWriteUtc = DateTime.MinValue;
 
         var durableCursor = state.State.Cursor;
         if (durableCursor.CompareTo(_lastReportedCursor) <= 0)
@@ -1825,6 +1921,17 @@ internal sealed class ReplicationShipperGrain(
         _treeName = treeName;
         _peerClusterId = peerClusterId;
         _keyParsed = true;
+    }
+
+    /// <summary>
+    /// Test seam: substitutes the clock used to evaluate the wall-clock
+    /// time dimension of the cursor-write coalescing rule so unit tests
+    /// can advance time deterministically without a real wall-clock wait.
+    /// </summary>
+    internal void SetCursorFlushClockForTesting(TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _cursorFlushClock = timeProvider;
     }
 
     /// <summary>

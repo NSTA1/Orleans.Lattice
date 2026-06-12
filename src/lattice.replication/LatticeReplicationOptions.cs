@@ -393,6 +393,46 @@ public class LatticeReplicationOptions
     public int ShipCursorWriteInterval { get; set; } = DefaultShipCursorWriteInterval;
 
     /// <summary>
+    /// Maximum wall-clock time the per-<c>(tree, peer)</c> shipper grain
+    /// defers a pending durable cursor write before forcing a flush,
+    /// independent of how many successful acks have accumulated. Together
+    /// with <see cref="ShipCursorWriteInterval"/> this forms an
+    /// "either/or" coalescing rule: the cursor is persisted whenever
+    /// <em>either</em> <see cref="ShipCursorWriteInterval"/> acks have
+    /// accumulated <em>or</em> this much wall-clock time has elapsed since
+    /// the first un-flushed advance - whichever comes first.
+    /// <para>
+    /// The time dimension bounds how stale a durable cursor can become on
+    /// a low-throughput or bursty stream that ships fewer than
+    /// <see cref="ShipCursorWriteInterval"/> batches before quiescing: a
+    /// pure batch-count rule would leave the last few advances un-flushed
+    /// indefinitely while the stream is idle, widening the crash-replay
+    /// window and pinning the WAL GC trim frontier at the last reported
+    /// cursor. The elapsed check is evaluated both when a new advance is
+    /// booked and on idle pump ticks (the empty-drain path), so a stream
+    /// that goes completely silent still checkpoints within this bound.
+    /// </para>
+    /// <para>
+    /// <strong>Crash safety.</strong> Lowering this value only ever makes
+    /// the durable cursor <em>fresher</em> - it can never widen the
+    /// crash-replay window beyond the
+    /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
+    /// bound the batch-count rule already guarantees. Receiver-side apply
+    /// is HLC-monotonic and dedupes on <c>(originClusterId, originHlc)</c>,
+    /// so any entries re-shipped inside the window are no-op'd at the
+    /// receiver and no data is lost.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultShipCursorWriteMaxDelay"/>. Set to
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to disable
+    /// the time dimension entirely and coalesce purely by
+    /// <see cref="ShipCursorWriteInterval"/>; any other value must be
+    /// strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// </para>
+    /// </summary>
+    public TimeSpan ShipCursorWriteMaxDelay { get; set; } = DefaultShipCursorWriteMaxDelay;
+
+    /// <summary>
     /// Maximum number of in-flight <see cref="IReplicationTransport.SendAsync"/>
     /// calls the per-<c>(tree, peer)</c> shipper keeps open at once -
     /// the depth of the sender-side pipelining window. With the default
@@ -775,6 +815,25 @@ public class LatticeReplicationOptions
     /// recovery window, so 16 sits at the knee of the curve.
     /// </summary>
     public const int DefaultShipCursorWriteInterval = 16;
+
+    /// <summary>
+    /// Default value for <see cref="ShipCursorWriteMaxDelay"/>: 2 seconds.
+    /// On a high-throughput stream the batch-count rule
+    /// (<see cref="DefaultShipCursorWriteInterval"/>=16) fires long before
+    /// this elapses, so the default is inert on the hot path; it engages
+    /// only when a stream ships fewer than
+    /// <see cref="ShipCursorWriteInterval"/> batches and then quiesces,
+    /// bounding how stale the durable cursor (and therefore the WAL GC
+    /// trim frontier) can become to a couple of seconds. The value sits
+    /// well above the canonical per-batch ack RTT (~10 ms) so a steady
+    /// stream never trips the time dimension, yet low enough that an idle
+    /// stream's last few advances are durable within an interactive
+    /// window. Set to
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to disable
+    /// the time dimension and coalesce purely by
+    /// <see cref="ShipCursorWriteInterval"/>.
+    /// </summary>
+    public static readonly TimeSpan DefaultShipCursorWriteMaxDelay = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Default value for <see cref="ShipMaxInFlight"/>: strict serial

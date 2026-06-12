@@ -374,16 +374,36 @@ partition the commit-log writer fanned across).
 Cursor advances are amortised across `ShipCursorWriteInterval`
 (default 16) successful acks rather than persisted per-ack. The
 `_pendingCursorWrites` counter increments on every advance and the
-durable `WriteStateAsync` only fires when the counter reaches the
-configured interval (or on graceful deactivation). Receiver-side apply
-is HLC-monotonic and dedupes on `(originClusterId, originHlc)`, so a
-silo crash inside the deferred-persist window costs at most
-`ShipCursorWriteInterval × ShipBatchSize` entries of wasteful
-re-shipping - the receiver no-ops the duplicates and no data is lost.
+durable `WriteStateAsync` fires whenever **either** of two thresholds
+is reached - whichever comes first:
+
+- **Batch count** - the counter reaches `ShipCursorWriteInterval`.
+- **Elapsed time** - more than `ShipCursorWriteMaxDelay` (default 2 s)
+  of wall-clock time has passed since the first un-flushed advance.
+
+The time dimension bounds how stale the durable cursor can become on a
+low-throughput or bursty stream that ships fewer than
+`ShipCursorWriteInterval` batches and then quiesces: a pure batch-count
+rule would leave those last few advances un-flushed indefinitely while
+the stream is idle, widening the crash-replay window and pinning the
+WAL GC trim frontier at the last reported cursor. The elapsed check is
+evaluated both when a new advance is booked and on idle pump ticks (the
+empty-drain path), so a stream that goes completely silent still
+checkpoints within the time bound. (A graceful deactivation also
+flushes - see below.)
+
+Receiver-side apply is HLC-monotonic and dedupes on
+`(originClusterId, originHlc)`, so a silo crash inside the
+deferred-persist window costs at most `ShipCursorWriteInterval × ShipBatchSize`
+entries of wasteful re-shipping - the receiver no-ops the duplicates
+and no data is lost. Lowering `ShipCursorWriteMaxDelay` only ever makes
+the durable cursor fresher; it can never widen that bound.
 
 Setting `ShipCursorWriteInterval=1` recovers the persist-every-ack
 behaviour for hosts that prefer the smaller replay window over the
-amortised storage cost.
+amortised storage cost. Setting `ShipCursorWriteMaxDelay` to
+`Timeout.InfiniteTimeSpan` disables the time dimension and coalesces
+purely by batch count.
 
 ### Persist-then-report ordering (load-bearing)
 

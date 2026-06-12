@@ -741,12 +741,166 @@ public partial class ReplicationShipperGrainTests
             Throws.Nothing);
     }
 
+    // Time-dimension coalescing (ShipCursorWriteMaxDelay) ------------
+
+    /// <summary>
+    /// Controllable <see cref="TimeProvider"/> for deterministic
+    /// exercise of the wall-clock time dimension of the cursor-write
+    /// coalescing rule without a real wall-clock wait.
+    /// </summary>
+    private sealed class MutableTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow;
+
+        public MutableTimeProvider(DateTimeOffset start) => _utcNow = start;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan delta) => _utcNow = _utcNow.Add(delta);
+    }
+
+    [Test]
+    public async Task DeferredPersist_flushes_when_max_delay_elapses_before_interval()
+    {
+        // Batch-count interval is far higher than the number of acks in
+        // this test, so only the time dimension can trigger a flush.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 100,
+            ShipCursorWriteMaxDelay = TimeSpan.FromSeconds(5),
+            ShipBatchSize = 1,
+        };
+        var (grain, state, feed, transport, _, _, _) = Create(opts);
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        grain.SetCursorFlushClockForTesting(clock);
+        feed.Append(MakeEntry("k0", ticks: 1));
+        feed.Append(MakeEntry("k1", ticks: 2));
+        // Ack frontier Zero forces advancedTo = sourceHlc so each batch advances the cursor.
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+
+        // First ack: pending=1, count(1) < 100, no time elapsed - deferred.
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        Assert.That(state.WriteCount, Is.EqualTo(0), "First advance must defer - neither threshold reached.");
+
+        // Advance past the max delay, then book a second advance.
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(state.WriteCount, Is.EqualTo(1),
+            "An advance booked after ShipCursorWriteMaxDelay has elapsed must force a durable flush even below the batch-count interval.");
+    }
+
+    [Test]
+    public async Task DeferredPersist_flushes_on_idle_tick_when_max_delay_elapses()
+    {
+        // After shipping a single partial batch the stream goes idle
+        // (no further entries). The empty-drain pump tick must flush the
+        // pending cursor once the time dimension elapses, even though no
+        // new ack arrives to re-trigger the count/time check.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 100,
+            ShipCursorWriteMaxDelay = TimeSpan.FromSeconds(5),
+            ShipBatchSize = 1,
+            // Disable the liveness probe so the idle tick's only side
+            // effect is the cursor flush under test.
+            LivenessProbeInterval = System.Threading.Timeout.InfiniteTimeSpan,
+        };
+        var (grain, state, feed, transport, _, _, _) = Create(opts);
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        grain.SetCursorFlushClockForTesting(clock);
+        feed.Append(MakeEntry("k0", ticks: 1));
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+
+        // Ship the one entry: pending=1, deferred.
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        Assert.That(state.WriteCount, Is.EqualTo(0), "Partial batch must defer below the batch-count interval.");
+
+        // Stream is now drained. Advance past the max delay and pump an
+        // idle tick - the empty-drain path must flush the pending cursor.
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(state.WriteCount, Is.EqualTo(1),
+            "An idle pump tick after ShipCursorWriteMaxDelay has elapsed must flush the pending cursor write.");
+    }
+
+    [Test]
+    public async Task DeferredPersist_does_not_flush_on_idle_tick_before_max_delay()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 100,
+            ShipCursorWriteMaxDelay = TimeSpan.FromSeconds(5),
+            ShipBatchSize = 1,
+            LivenessProbeInterval = System.Threading.Timeout.InfiniteTimeSpan,
+        };
+        var (grain, state, feed, transport, _, _, _) = Create(opts);
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        grain.SetCursorFlushClockForTesting(clock);
+        feed.Append(MakeEntry("k0", ticks: 1));
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        // Advance only part-way to the max delay.
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(state.WriteCount, Is.EqualTo(0),
+            "Below both the batch-count interval and the max delay, the pending cursor write must stay deferred.");
+    }
+
+    [Test]
+    public async Task DeferredPersist_infinite_max_delay_disables_time_dimension()
+    {
+        // With the time dimension disabled, only the batch-count interval
+        // can flush - an arbitrarily large elapsed time must not trigger one.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 100,
+            ShipCursorWriteMaxDelay = System.Threading.Timeout.InfiniteTimeSpan,
+            ShipBatchSize = 1,
+            LivenessProbeInterval = System.Threading.Timeout.InfiniteTimeSpan,
+        };
+        var (grain, state, feed, transport, _, _, _) = Create(opts);
+        var clock = new MutableTimeProvider(DateTimeOffset.UnixEpoch);
+        grain.SetCursorFlushClockForTesting(clock);
+        feed.Append(MakeEntry("k0", ticks: 1));
+        feed.Append(MakeEntry("k1", ticks: 2));
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        // A full hour of wall-clock time passes - irrelevant when the
+        // time dimension is disabled.
+        clock.Advance(TimeSpan.FromHours(1));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        // And an idle tick at the same elapsed time must also not flush.
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(state.WriteCount, Is.EqualTo(0),
+            "Timeout.InfiniteTimeSpan must disable the time dimension so only the batch-count interval can flush.");
+    }
+
     // Default-value sanity --------------------------------------------
 
     [Test]
     public void DefaultShipCursorWriteInterval_is_16()
     {
         Assert.That(LatticeReplicationOptions.DefaultShipCursorWriteInterval, Is.EqualTo(16));
+    }
+
+    [Test]
+    public void DefaultShipCursorWriteMaxDelay_is_two_seconds()
+    {
+        Assert.That(LatticeReplicationOptions.DefaultShipCursorWriteMaxDelay, Is.EqualTo(TimeSpan.FromSeconds(2)));
     }
 
     [Test]

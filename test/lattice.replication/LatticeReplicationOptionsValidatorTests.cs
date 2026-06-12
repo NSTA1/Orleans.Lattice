@@ -737,6 +737,81 @@ public class LatticeReplicationOptionsValidatorTests
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
 
+    // ------------------------------------------------------------------
+    // ShipCursorWriteMaxDelay (time dimension of cursor-write coalescing)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Validate_fails_when_ship_cursor_write_max_delay_is_zero()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipCursorWriteMaxDelay = TimeSpan.Zero,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipCursorWriteMaxDelay)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_ship_cursor_write_max_delay_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipCursorWriteMaxDelay = TimeSpan.FromSeconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipCursorWriteMaxDelay)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_ship_cursor_write_max_delay_is_positive()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipCursorWriteMaxDelay = TimeSpan.FromMilliseconds(500),
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_ship_cursor_write_max_delay_is_infinite()
+    {
+        // Timeout.InfiniteTimeSpan is the canonical "disable the time
+        // dimension and coalesce purely by ShipCursorWriteInterval" value.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipCursorWriteMaxDelay = System.Threading.Timeout.InfiniteTimeSpan,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_ship_cursor_write_max_delay()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(opts.ShipCursorWriteMaxDelay, Is.EqualTo(LatticeReplicationOptions.DefaultShipCursorWriteMaxDelay));
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
     [Test]
     public void Validate_fails_on_undefined_LatticeCompression_value()
     {

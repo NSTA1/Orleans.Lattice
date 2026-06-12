@@ -421,6 +421,31 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
+    public void DefaultShipCursorWriteMaxDelay_is_two_seconds() =>
+        Assert.That(LatticeReplicationOptions.DefaultShipCursorWriteMaxDelay, Is.EqualTo(TimeSpan.FromSeconds(2)));
+
+    [Test]
+    public void New_instance_has_default_ship_cursor_write_max_delay()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ShipCursorWriteMaxDelay, Is.EqualTo(LatticeReplicationOptions.DefaultShipCursorWriteMaxDelay));
+    }
+
+    [Test]
+    public void ShipCursorWriteMaxDelay_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ShipCursorWriteMaxDelay = TimeSpan.FromSeconds(10) };
+        Assert.That(opts.ShipCursorWriteMaxDelay, Is.EqualTo(TimeSpan.FromSeconds(10)));
+    }
+
+    [Test]
+    public void ShipCursorWriteMaxDelay_accepts_infinite_to_disable_time_dimension()
+    {
+        var opts = new LatticeReplicationOptions { ShipCursorWriteMaxDelay = System.Threading.Timeout.InfiniteTimeSpan };
+        Assert.That(opts.ShipCursorWriteMaxDelay, Is.EqualTo(System.Threading.Timeout.InfiniteTimeSpan));
+    }
+
+    [Test]
     public void DefaultShadowForwardDedupeCacheSize_is_4096() =>
         Assert.That(LatticeReplicationOptions.DefaultShadowForwardDedupeCacheSize, Is.EqualTo(4096));
 
