@@ -286,6 +286,22 @@ When the opt-out is in effect:
 - Persisted state is **not** rewritten. Any `ProjectionHash` already on
   disk from a previous-enabled period remains untouched.
 
+#### Cross-cluster impact: anti-entropy drift detection
+
+In a deployment running `Orleans.Lattice.Replication`, the anti-entropy
+peer digest probe reads this same leaf-projection digest to detect
+silent divergence between clusters. A tree with
+`MaintainProjectionDigest = false` (or one whose registry latch has
+disabled it permanently) has no digest to compare, so the probe skips
+that tree and classifies a peer in the same state as `RemoteUnavailable`
+rather than a mismatch. The whole automatic drift-detection-and-
+remediation stack - the probe, the Merkle-walk localisation, targeted
+leaf re-replay, and the bootstrap-snapshot fallback - is therefore inert
+for any tree that opts out of digest maintenance. Disable the digest
+only for trees you do not need cross-cluster drift telemetry on; see the
+[automatic drift-remediation playbook](../lattice.replication/automatic-drift-remediation.md)
+for what the stack provides and how to opt in.
+
 #### Disabling is a one-way operation per tree
 
 The first mutation that lands while maintenance is disabled stamps an
