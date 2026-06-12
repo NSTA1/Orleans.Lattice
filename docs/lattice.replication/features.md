@@ -46,6 +46,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
 - [R-134](https://github.com/NSTA1/Orleans.Lattice/issues/703) - Re-encode WAL batches at the negotiated wire version (true down-encode)
 - [R-135](https://github.com/NSTA1/Orleans.Lattice/issues/705) - Content-hash dedup round trip (sender manifest / receiver pull-missing)
+- [R-138](https://github.com/NSTA1/Orleans.Lattice/issues/712) - Metrics observability: surface every Lattice metric on a dashboard (umbrella)
 
 ### Shipped
 
