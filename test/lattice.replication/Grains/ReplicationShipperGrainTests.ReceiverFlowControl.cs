@@ -289,5 +289,181 @@ public partial class ReplicationShipperGrainTests
 
         await transport.Received(2).SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
     }
+
+    // --- Bounded multi-batch pipelining (ShipMaxInFlight > 1) ---------
+
+    private static int SendCallCount(IReplicationTransport transport) =>
+        transport.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync));
+
+    private static int TotalShippedEntries(IReplicationTransport transport) =>
+        transport.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync))
+            .Select(c => (ReplicationBatch)c.GetArguments()[0]!)
+            .Sum(b => b.EncodedEnvelope!.Value.EncodedEntries.Length);
+
+    /// <summary>
+    /// With a window above one the shipper drains and ships several
+    /// batches inside a single pump tick rather than one batch per
+    /// ack round-trip. Six entries at a per-batch cap of two yield
+    /// three batches, all launched within the bounded window.
+    /// </summary>
+    [Test]
+    public async Task PumpOnceAsync_pipelines_multiple_batches_when_window_above_one()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipBatchSize = 2,
+            ShipMaxInFlight = 3,
+        };
+        var (grain, _, feed, transport, _, _, _) = Create(opts);
+        for (var i = 1; i <= 6; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", ticks: i));
+        }
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SendCallCount(transport), Is.EqualTo(3),
+                "the pipeline must carve six entries into three batches of two");
+            Assert.That(TotalShippedEntries(transport), Is.EqualTo(6),
+                "every drained entry must be shipped exactly once");
+        });
+    }
+
+    /// <summary>
+    /// FIFO ack accounting advances the durable cursor strictly to the
+    /// highest shipped HLC once every in-flight batch has acked, with
+    /// no hole left behind a lower-HLC batch.
+    /// </summary>
+    [Test]
+    public async Task PumpOnceAsync_advances_cursor_to_highest_hlc_after_pipelined_tick()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipBatchSize = 2,
+            ShipMaxInFlight = 3,
+        };
+        var (grain, state, feed, _, _, _, _) = Create(opts);
+        for (var i = 1; i <= 6; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", ticks: i));
+        }
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(state.State.Cursor,
+            Is.EqualTo(new HybridLogicalClock { WallClockTicks = 6, Counter = 0 }));
+    }
+
+    /// <summary>
+    /// A receiver-supplied <see cref="ReplicationAck.SuggestedBatchSize"/>
+    /// hint collapses the pipeline window back to one: the next tick
+    /// ships a single batch even though a wider window is configured,
+    /// composing the depth throttle with the batch-size throttle.
+    /// </summary>
+    [Test]
+    public async Task PumpOnceAsync_collapses_window_to_one_when_receiver_suggests_batch_size()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipBatchSize = 2,
+            ShipMaxInFlight = 3,
+        };
+        var (grain, _, feed, transport, _, _, _) = Create(opts);
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck
+            {
+                Accepted = true,
+                HighestAppliedHlc = HybridLogicalClock.Zero,
+                SuggestedBatchSize = 1,
+            });
+
+        // Tick 1: two entries -> one full batch; receiver asks to slow down.
+        feed.Append(MakeEntry("k1", ticks: 1));
+        feed.Append(MakeEntry("k2", ticks: 2));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        var afterTick1 = SendCallCount(transport);
+
+        // Tick 2: six new entries. With the hint active the window
+        // collapses to one and the cap clamps to one, so the tick ships
+        // exactly one batch of one entry.
+        for (var i = 3; i <= 8; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", ticks: i));
+        }
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SendCallCount(transport) - afterTick1, Is.EqualTo(1),
+                "the collapsed window must ship exactly one batch in tick 2");
+            Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
+                "the suggested-batch-size hint clamps the batch to one entry");
+        });
+    }
+
+    /// <summary>
+    /// When a batch in the middle of the window is rejected, the
+    /// advance-strictly-on-ack rule keeps the durable cursor at the
+    /// last positively-acked lower-HLC batch and never folds the
+    /// cursor of the failed batch or any batch behind it.
+    /// </summary>
+    [Test]
+    public async Task PumpOnceAsync_does_not_advance_cursor_past_unacked_batch_on_ack_rejection()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipBatchSize = 1,
+            ShipMaxInFlight = 3,
+        };
+        var (grain, state, feed, transport, _, _, _) = Create(opts);
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(
+                new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero },
+                new ReplicationAck { Accepted = false },
+                new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+        feed.Append(MakeEntry("k1", ticks: 1));
+        feed.Append(MakeEntry("k2", ticks: 2));
+        feed.Append(MakeEntry("k3", ticks: 3));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(state.State.Cursor,
+            Is.EqualTo(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }),
+            "only the first batch acked positively, so the cursor stops at its HLC");
+    }
+
+    /// <summary>
+    /// An idle pipelined tick mirrors the serial empty-drain contract:
+    /// it anchors the liveness-probe timer and ships nothing on the
+    /// first activation rather than emitting a spurious empty batch.
+    /// </summary>
+    [Test]
+    public async Task PumpOnceAsync_ships_nothing_on_idle_pipelined_tick()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipMaxInFlight = 3,
+        };
+        var (grain, _, _, transport, _, _, _) = Create(opts);
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+    }
 }
 

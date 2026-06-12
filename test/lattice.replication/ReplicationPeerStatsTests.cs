@@ -50,6 +50,63 @@ public class ReplicationPeerStatsTests
     }
 
     [Test]
+    public void RecordInFlight_throws_on_null_arguments()
+    {
+        var stats = new ReplicationPeerStats();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => stats.RecordInFlight(null!, "p", 1), Throws.ArgumentNullException);
+            Assert.That(() => stats.RecordInFlight("t", null!, 1), Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
+    public void RecordInFlight_persists_per_peer_depth()
+    {
+        var stats = new ReplicationPeerStats();
+
+        stats.RecordInFlight("tree-1", "peer-a", depth: 3);
+
+        var snap = stats.Snapshot().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(snap.Tree, Is.EqualTo("tree-1"));
+            Assert.That(snap.Peer, Is.EqualTo("peer-a"));
+            Assert.That(snap.InFlight, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void RecordInFlight_overwrites_prior_depth()
+    {
+        var stats = new ReplicationPeerStats();
+
+        stats.RecordInFlight("t", "p", depth: 4);
+        stats.RecordInFlight("t", "p", depth: 0);
+
+        Assert.That(stats.Snapshot().Single().InFlight, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Ship_in_flight_gauge_emits_recorded_depth_with_tree_and_peer_tags()
+    {
+        var stats = new ReplicationPeerStats();
+        stats.RecordInFlight("tree-1", "peer-a", depth: 6);
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipInFlightName);
+
+        collector.RecordObservableInstruments();
+
+        Assert.That(collector.Measurements, Has.Some.Matches<RecordedMeasurement<long>>(m =>
+            m.Value == 6 &&
+            m.Tags.Any(t => t.Key == "tree" && (string?)t.Value == "tree-1") &&
+            m.Tags.Any(t => t.Key == "peer" && (string?)t.Value == "peer-a")));
+    }
+
+    [Test]
     public void RecordBacklog_persists_per_peer_values()
     {
         var stats = new ReplicationPeerStats();

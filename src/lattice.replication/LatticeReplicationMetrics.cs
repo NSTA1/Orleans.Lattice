@@ -384,6 +384,25 @@ public static class LatticeReplicationMetrics
     public const string LastContactSecondsName = "orleans.lattice.replication.peer.last_contact_seconds";
 
     /// <summary>
+    /// Canonical name of the <c>ship_in_flight</c> observable gauge.
+    /// Reports the number of outbound replication batches the local
+    /// sender currently has shipped-but-unacknowledged to the named
+    /// peer - the live depth of the sender-side pipelining window
+    /// bounded by <see cref="LatticeReplicationOptions.ShipMaxInFlight"/>.
+    /// <para>
+    /// Outbound-only (the receiver does not pipeline into itself) and
+    /// emitted as a single series per <c>(tree, peer)</c> pair without
+    /// the direction tag, matching <see cref="EntriesBehindName"/> and
+    /// <see cref="BytesBehindName"/>. A value at or near
+    /// <see cref="LatticeReplicationOptions.ShipMaxInFlight"/> signals
+    /// the sender is keeping the pipeline saturated; a value pinned at
+    /// <c>0</c> on a backlogged peer signals the window collapsed under
+    /// receiver flow-control back-pressure.
+    /// </para>
+    /// </summary>
+    public const string ShipInFlightName = "orleans.lattice.replication.peer.ship_in_flight";
+
+    /// <summary>
     /// Canonical name of the <see cref="ApplyLag"/> histogram. Subscribers
     /// match against this constant rather than hard-coding the string.
     /// </summary>

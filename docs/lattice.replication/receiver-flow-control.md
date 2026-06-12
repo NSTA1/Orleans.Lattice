@@ -72,6 +72,29 @@ The mapping is tuned per tree through `WalSaturationReceiverFlowControlOptions`:
 
 Hint state is per-shipper-activation memory only. A grain re-activation resets the cap to the configured `ShipBatchSize`; the receiver re-stamps its preference on the next ack.
 
+## Sender-side pipelining
+
+By default the shipper is strictly serial per `(tree, peer)`: ship one batch, await its ack, advance the cursor, ship the next. On a high-latency link that leaves the transport round-trip time idle between batches. Raising `LatticeReplicationOptions.ShipMaxInFlight` above its default of `1` lets the shipper keep up to that many shipped-but-unacknowledged batches in flight, overlapping the round-trip latency with draining the next batch.
+
+```csharp verify
+var options = new LatticeReplicationOptions
+{
+    ClusterId = "site-a",
+    // Keep up to four batches in flight per (tree, peer). Default is 1
+    // (strictly serial); raising it trades a small per-batch allocation
+    // for overlapped transport latency on high-RTT links.
+    ShipMaxInFlight = 4,
+};
+```
+
+The window preserves the same ordering and durability guarantees the serial path gives:
+
+- **Per-origin FIFO + advance-strictly-on-ack.** Acks are consumed in strict FIFO order, and the durable per-peer cursor advances past a batch only once that batch *and* every lower-HLC batch before it have been acknowledged. The cursor never skips a hole.
+- **Failure containment.** A transport failure or ack rejection anywhere in the window stops the cursor advancing; remaining in-flight sends are observed (so no task faults go unobserved) but their cursors are left un-advanced. The next tick re-ships from the durable cursor and the receiver dedupes the overlap.
+- **Flow-control composition.** A non-null `SuggestedBatchSize` hint collapses the window back to `1` until the receiver clears it, so a struggling receiver throttles batch size and pipeline depth together. A `PauseForMs` hint gates the whole next tick via the retry deadline exactly as on the serial path.
+
+A window greater than `1` issues concurrent `IReplicationTransport.SendAsync` calls for the same `(tree, peer)` pair, so a transport used with pipelining must tolerate concurrent invocation against one pair. The default window of `1` preserves strictly-serial-per-pair behaviour for transports that do not. The live window depth is surfaced on the outbound-only `orleans.lattice.replication.peer.ship_in_flight` gauge (`LatticeReplicationMetrics.ShipInFlightName`); see [Observability](observability.md).
+
 ## Failure mode
 
 `EvaluateAsync` failure is swallowed and logged at `Warning`. The receiver already applied the batch and persisted the high-water-mark; surfacing a policy outage out of a successful apply would convert a diagnostic concern into a transport failure and unwind work the receiver already did. The next push re-evaluates the policy, so a transient outage self-heals.

@@ -334,6 +334,51 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
+    /// Entry point for a single pump tick. Resolves the per-tree
+    /// options, sizes the sender-side pipelining window from
+    /// <see cref="LatticeReplicationOptions.ShipMaxInFlight"/>, and
+    /// dispatches to either the strict-serial path (window of one -
+    /// the default, behaviour-identical to the pre-pipelining shipper)
+    /// or the bounded-pipelining path (window &gt; 1).
+    /// <para>
+    /// Receiver flow-control collapses the window back to one whenever
+    /// the receiver's most recent ack stamped a
+    /// <see cref="ReplicationAck.SuggestedBatchSize"/> hint: a struggling
+    /// receiver that is asking the sender to ship smaller batches is
+    /// also asking it to stop pipelining, so the two throttles compose.
+    /// A <see cref="ReplicationAck.PauseForMs"/> hint is honoured
+    /// independently by the retry-deadline gate in
+    /// <see cref="ProcessNextPhaseAsync"/>, which short-circuits the
+    /// whole tick before this method runs.
+    /// </para>
+    /// </summary>
+    private async Task PumpOnceAsync(CancellationToken cancellationToken)
+    {
+        var options = _optionsMonitor.Get(_treeName);
+
+        var window = Math.Max(1, options.ShipMaxInFlight);
+        // Receiver flow-control: a non-null SuggestedBatchSize hint
+        // collapses the pipeline back toward serial. The receiver only
+        // stamps a hint when it wants the sender to slow down; honouring
+        // it by dropping to a window of one keeps the in-flight depth
+        // gauge truthful and stops the sender saturating a struggling
+        // receiver. A null hint (the default / re-acceleration signal)
+        // restores the configured window on the next tick.
+        if (window > 1 && _receiverSuggestedBatchSize is not null)
+        {
+            window = 1;
+        }
+
+        if (window == 1)
+        {
+            await PumpSerialOnceAsync(options, cancellationToken);
+            return;
+        }
+
+        await PumpPipelinedOnceAsync(options, window, cancellationToken);
+    }
+
+    /// <summary>
     /// Drains one batch from the change feed, applies producer-side
     /// filters, calls the transport, advances the cursor on positive
     /// ack, and applies backoff on transient failure. Schema-shaped
@@ -343,20 +388,17 @@ internal sealed class ReplicationShipperGrain(
     /// advance the cursor past the batch so a single poison entry
     /// never stalls the stream forever; operators inspect / replay /
     /// discard via <see cref="ILatticeReplicationDeadLetters"/>.
+    /// <para>
+    /// This is the strict-serial path: ship one batch, await its ack,
+    /// advance the cursor, ship the next. It runs whenever the
+    /// effective pipelining window is one (the default
+    /// <see cref="LatticeReplicationOptions.ShipMaxInFlight"/> of
+    /// <c>1</c>, or a higher configured window collapsed by receiver
+    /// flow-control).
+    /// </para>
     /// </summary>
-    private async Task PumpOnceAsync(CancellationToken cancellationToken)
+    private async Task PumpSerialOnceAsync(LatticeReplicationOptions options, CancellationToken cancellationToken)
     {
-        var options = _optionsMonitor.Get(_treeName);
-
-        // Drain a batch up to ShipBatchSize entries past each
-        // partition's resume cursor, k-way merging by HLC and applying
-        // KeyFilter / KeyPrefixes / cycle-break inline. The drain
-        // buffer is activation-scoped and reused across pump ticks;
-        // Orleans serialises grain turns and the _pumpInFlight guard
-        // prevents re-entry, so clearing in place is safe.
-        _drainBuffer.Clear();
-        _drainEncodedSegments.Clear();
-        _drainEncodedByteCount = 0L;
         // Clamp the per-tick batch cap to the receiver's last
         // stamped SuggestedBatchSize when present (receiver-side
         // flow-control hint). The receiver may stamp values outside
@@ -836,30 +878,436 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
-    /// Drains up to <paramref name="maxPerBatch"/> entries past each
-    /// partition's saved resume cursor, k-way merging by HLC ascending
-    /// via a heap-free linear scan-for-min over partition heads. Each
-    /// partition's page is pulled via
-    /// <see cref="IWalShardGrain.ReadShippingAsync"/> (pre-encoded
-    /// entry payloads); the shipper decodes each candidate head entry
-    /// once via <see cref="IWalRecordEncoder.Decode"/> to apply the
-    /// HLC filter and <see cref="ShouldShip"/> predicates, then
-    /// records both the typed <see cref="WalRecord"/> in
-    /// <see cref="_drainBuffer"/> and the pre-encoded byte segment in
-    /// <see cref="_drainEncodedSegments"/> in lockstep so the
-    /// producer-side encoder is not invoked at ship time - the bytes
-    /// the WAL already wrote at append time are reused verbatim on
-    /// the wire.
+    /// Folds an explicit per-partition consumed-sequence snapshot into
+    /// the durable <see cref="ReplicationShipperState.PartitionCursors"/>
+    /// dictionary. Used by the bounded-pipelining path, which snapshots
+    /// <see cref="_partitionMaxReadSeq"/> / <see cref="_partitionAdvanced"/>
+    /// per batch (the shared scratch arrays accumulate across the whole
+    /// tick) and folds the matching snapshot when that batch's ack
+    /// lands in FIFO order. Idempotent: a partition cursor only moves
+    /// forward, never back. Returns <see langword="true"/> when at
+    /// least one partition cursor advanced.
+    /// </summary>
+    private bool FoldPartitionCursors(long[] maxReadSeq, bool[] advanced)
+    {
+        var changed = false;
+        for (var p = 0; p < _partitionCount; p++)
+        {
+            if (!advanced[p])
+            {
+                continue;
+            }
+            var nextSeq = maxReadSeq[p] + 1;
+            if (state.State.PartitionCursors.TryGetValue(p, out var existing) && existing >= nextSeq)
+            {
+                continue;
+            }
+            state.State.PartitionCursors[p] = nextSeq;
+            changed = true;
+        }
+        return changed;
+    }
+
+    /// <summary>
+    /// Per-batch handle held in the bounded-pipelining in-flight window.
+    /// Captures the in-flight <see cref="IReplicationTransport.SendAsync"/>
+    /// task plus everything needed to advance the durable cursor when
+    /// the batch's ack lands in FIFO order: the batch's source HLC
+    /// frontier, the per-partition consumed-sequence snapshot, and the
+    /// entry / byte counts for the backlog gauges.
+    /// </summary>
+    private readonly record struct InFlightShipBatch(
+        Task<ReplicationAck> SendTask,
+        HybridLogicalClock SourceHlc,
+        long[] MaxReadSeqSnapshot,
+        bool[] AdvancedSnapshot,
+        int EntryCount,
+        long ByteCount,
+        bool HitBatchCap);
+
+    /// <summary>
+    /// Bounded sender-side pipelining path. Maintains a window of up to
+    /// <paramref name="window"/> in-flight unacked batches per
+    /// <c>(tree, peer)</c>, draining the WAL into successive
+    /// strictly-ascending-HLC batches and launching each
+    /// <see cref="IReplicationTransport.SendAsync"/> without awaiting it
+    /// inline. Acks are consumed in strict FIFO order, and the durable
+    /// cursor advances past a batch only once that batch <b>and</b>
+    /// every lower-HLC batch before it have acked (advance-strictly-on-ack,
+    /// no cursor hole), preserving the per-origin FIFO invariant.
     /// <para>
-    /// O(P) per emitted entry - collapses to O(1) for the canonical
-    /// single-partition case. Allocates nothing on the hot path beyond
-    /// the per-page DTOs the shard grain returns; the scratch arrays
-    /// and the drain buffer are activation-scoped.
+    /// On the first transport throw or ack rejection the window stops
+    /// advancing cursors; remaining in-flight sends are observed (to
+    /// avoid unobserved-task faults) but their cursors are intentionally
+    /// left un-advanced. The next tick re-drains from the durable cursor
+    /// and the receiver dedupes the overlap. Receiver flow-control
+    /// (a <see cref="ReplicationAck.SuggestedBatchSize"/> hint) collapses
+    /// the window back to one in <see cref="PumpOnceAsync"/> before this
+    /// method is ever entered.
     /// </para>
+    /// </summary>
+    private async Task PumpPipelinedOnceAsync(
+        LatticeReplicationOptions options,
+        int window,
+        CancellationToken cancellationToken)
+    {
+        var configuredMax = Math.Max(1, options.ShipBatchSize);
+        // When this path runs, no receiver SuggestedBatchSize hint is
+        // active (a non-null hint collapses the window to 1 in the
+        // dispatcher), so the per-batch cap is simply the configured
+        // ShipBatchSize. The clamp is retained defensively.
+        var maxPerBatch = configuredMax;
+        if (_receiverSuggestedBatchSize is { } suggested && suggested > 0)
+        {
+            maxPerBatch = Math.Min(configuredMax, Math.Max(1, suggested));
+        }
+
+        try
+        {
+            await InitializeDrainTickAsync(options, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            ApplyBackoff(options, ex, "drain");
+            return;
+        }
+
+        var inFlight = new Queue<InFlightShipBatch>(window);
+        var failed = false;
+        var shippedAny = false;
+        Exception? encodeFailure = null;
+        long[] failedMaxReadSeq = Array.Empty<long>();
+        bool[] failedAdvanced = Array.Empty<bool>();
+        var failedSourceHlc = HybridLogicalClock.Zero;
+
+        try
+        {
+            while (true)
+            {
+                try
+                {
+                    await MergeOneBatchAsync(options, maxPerBatch, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    ApplyBackoff(options, ex, "drain");
+                    failed = true;
+                    break;
+                }
+
+                if (_drainBuffer.Count == 0)
+                {
+                    break; // WAL drained for this tick
+                }
+
+                var entryCount = _drainBuffer.Count;
+                var hitBatchCap = entryCount >= maxPerBatch;
+                var sourceHlc = _drainBuffer[^1].Timestamp;
+                var maxReadSnapshot = SnapshotPartitionMaxReadSeq();
+                var advancedSnapshot = SnapshotPartitionAdvanced();
+
+                ReplicationBatchEncodedEnvelope encodedEnvelope;
+                long byteCount;
+                try
+                {
+                    encodedEnvelope = BuildEncodedEnvelope(options, out byteCount);
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                {
+                    // Schema-shaped framing-header failure for this
+                    // batch. Defer DLQ + cursor advance until the
+                    // already-in-flight (lower-HLC) batches have acked
+                    // in order, so the cursor never skips a hole. The
+                    // failed batch's drain buffers are left intact for
+                    // RouteBatchToDeadLetterAsync below (no further
+                    // MergeOneBatchAsync runs after this break).
+                    encodeFailure = ex;
+                    failedMaxReadSeq = maxReadSnapshot;
+                    failedAdvanced = advancedSnapshot;
+                    failedSourceHlc = sourceHlc;
+                    break;
+                }
+
+                Task<ReplicationAck> sendTask;
+                try
+                {
+                    var batch = new ReplicationBatch
+                    {
+                        TargetClusterId = _peerClusterId,
+                        TreeName = _treeName,
+                        OriginClusterId = options.ClusterId,
+                        Payload = ReadOnlyMemory<byte>.Empty,
+                        Envelope = null,
+                        EncodedEnvelope = encodedEnvelope,
+                    };
+                    sendTask = _transport.SendAsync(batch, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Synchronous throw from SendAsync (before returning
+                    // a task): treat as a transport failure for this
+                    // batch and stop the window.
+                    ApplyBackoff(options, ex, "transport");
+                    failed = true;
+                    break;
+                }
+
+                inFlight.Enqueue(new InFlightShipBatch(
+                    sendTask, sourceHlc, maxReadSnapshot, advancedSnapshot, entryCount, byteCount, hitBatchCap));
+                shippedAny = true;
+                _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
+
+                if (inFlight.Count >= window)
+                {
+                    if (!await DrainOneInFlightAsync(inFlight, options, cancellationToken))
+                    {
+                        failed = true;
+                        break;
+                    }
+                }
+
+                // A short batch means the WAL is exhausted for this
+                // tick; stop drawing new batches.
+                if (entryCount < maxPerBatch)
+                {
+                    break;
+                }
+            }
+
+            // Drain the remaining window in FIFO order while the round
+            // trip is still healthy.
+            while (!failed && inFlight.Count > 0)
+            {
+                if (!await DrainOneInFlightAsync(inFlight, options, cancellationToken))
+                {
+                    failed = true;
+                    break;
+                }
+            }
+
+            // Handle a deferred schema-shaped encode failure now that
+            // every lower-HLC batch has acked: DLQ the offending batch
+            // and advance the cursor strictly past it so a poison batch
+            // never stalls the stream.
+            if (!failed && encodeFailure is not null)
+            {
+                Logger.LogWarning(encodeFailure,
+                    "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
+                    _drainBuffer.Count, LogContext, failedSourceHlc);
+                await RouteBatchToDeadLetterAsync(encodeFailure, cancellationToken);
+                await AdvanceCursorPipelinedAsync(
+                    failedSourceHlc, failedMaxReadSeq, failedAdvanced, options, cancellationToken);
+            }
+        }
+        finally
+        {
+            // Observe any still-pending sends to avoid unobserved-task
+            // faults. Their cursors are intentionally NOT advanced (a
+            // failure earlier in the FIFO window means we cannot know
+            // whether these applied); the next tick re-ships from the
+            // durable cursor and the receiver dedupes the overlap.
+            while (inFlight.Count > 0)
+            {
+                var pending = inFlight.Dequeue();
+                try
+                {
+                    await pending.SendTask;
+                }
+                catch (Exception)
+                {
+                    // Swallowed: cursor is not advanced for this batch.
+                }
+            }
+            _peerStats.RecordInFlight(_treeName, _peerClusterId, 0);
+        }
+
+        // No batch ever shipped this tick (and no encode failure to
+        // account for): fall back to the same idle-link liveness probe
+        // the serial path emits.
+        if (!failed && !shippedAny && encodeFailure is null)
+        {
+            await TryEmitLivenessProbeAsync(options, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Awaits the oldest in-flight batch (FIFO), and on a positive ack
+    /// advances the durable cursor strictly past it via that batch's
+    /// captured partition snapshot. Returns <see langword="false"/> on
+    /// transport throw or ack rejection (the caller stops advancing the
+    /// window); <see langword="true"/> on success.
+    /// </summary>
+    private async Task<bool> DrainOneInFlightAsync(
+        Queue<InFlightShipBatch> inFlight,
+        LatticeReplicationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var batch = inFlight.Dequeue();
+        _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
+
+        ReplicationAck ack;
+        try
+        {
+            ack = await batch.SendTask;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            ApplyBackoff(options, ex, "transport");
+            return false;
+        }
+
+        if (!ack.Accepted)
+        {
+            ApplyBackoff(options, exception: null, reason: "ack-rejected");
+            return false;
+        }
+
+        var advancedTo = ack.HighestAppliedHlc;
+        if (advancedTo <= state.State.Cursor)
+        {
+            advancedTo = batch.SourceHlc;
+        }
+
+        await AdvanceCursorPipelinedAsync(
+            advancedTo, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
+
+        state.State.ConsecutiveFailures = 0;
+        _nextRetryAtUtc = DateTime.MinValue;
+        _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
+        if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
+        {
+            var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
+            if (requested > _nextRetryAtUtc)
+            {
+                _nextRetryAtUtc = requested;
+            }
+        }
+
+        _peerStats.RecordSuccess(_treeName, _peerClusterId);
+        _lastSuccessfulContactUtc = DateTime.UtcNow;
+        var entriesBehind = batch.HitBatchCap ? (long)batch.EntryCount : 0L;
+        var bytesBehind = batch.HitBatchCap ? batch.ByteCount : 0L;
+        _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind, bytesBehind);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a fresh framing-only <see cref="ReplicationBatchEncodedEnvelope"/>
+    /// from the current drain buffers, copying the borrowed entry
+    /// segments into a batch-owned array. Unlike the serial path's
+    /// reused <see cref="_encodedEnvelopeScratch"/>, the pipelining path
+    /// allocates a per-batch array because multiple envelopes are
+    /// concurrently in flight - the cost of concurrency, paid only when
+    /// an operator opts into a window &gt; 1. The borrowed entry bytes
+    /// themselves are immutable per WAL entry, so retaining them across
+    /// concurrent sends is safe.
+    /// </summary>
+    private ReplicationBatchEncodedEnvelope BuildEncodedEnvelope(LatticeReplicationOptions options, out long byteCount)
+    {
+        var count = _drainEncodedSegments.Count;
+        var entries = new ArraySegment<byte>[count];
+        System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_drainEncodedSegments).CopyTo(entries);
+        byteCount = _drainEncodedByteCount;
+        var header = new EncodedBatchHeader
+        {
+            Magic = EncodedBatchHeader.MagicValue,
+            WireVersion = EncodedBatchHeader.CurrentWireVersion,
+            OriginClusterIdHash = EncodedBatchHeader.HashClusterId(options.ClusterId),
+            EntryCount = count,
+            BatchSequence = 0,
+            Mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister,
+            Compression = options.FramingCompression != LatticeCompression.None
+                          && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
+                ? options.FramingCompression
+                : LatticeCompression.None,
+        };
+        return new ReplicationBatchEncodedEnvelope
+        {
+            Header = header,
+            EncodedEntries = entries,
+        };
+    }
+
+    /// <summary>
+    /// Cursor-advance variant for the bounded-pipelining path. Identical
+    /// persistence semantics to <see cref="AdvanceCursorAsync"/> but
+    /// folds an explicit per-batch partition snapshot rather than the
+    /// shared scratch arrays (which by ack time reflect the last batch
+    /// drained, not the batch being acked).
+    /// </summary>
+    private async Task AdvanceCursorPipelinedAsync(
+        HybridLogicalClock newCursor,
+        long[] maxReadSeq,
+        bool[] advanced,
+        LatticeReplicationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var hlcAdvanced = newCursor.CompareTo(state.State.Cursor) > 0;
+        var partitionsAdvanced = FoldPartitionCursors(maxReadSeq, advanced);
+
+        if (!hlcAdvanced && !partitionsAdvanced)
+        {
+            return;
+        }
+
+        if (hlcAdvanced)
+        {
+            state.State.Cursor = newCursor;
+        }
+
+        _pendingCursorWrites++;
+        var interval = Math.Max(1, options.ShipCursorWriteInterval);
+        if (_pendingCursorWrites < interval)
+        {
+            return;
+        }
+
+        await FlushCursorAsync(cancellationToken);
+    }
+
+    private long[] SnapshotPartitionMaxReadSeq()
+    {
+        var copy = new long[_partitionCount];
+        Array.Copy(_partitionMaxReadSeq, copy, _partitionCount);
+        return copy;
+    }
+
+    private bool[] SnapshotPartitionAdvanced()
+    {
+        var copy = new bool[_partitionCount];
+        Array.Copy(_partitionAdvanced, copy, _partitionCount);
+        return copy;
+    }
+
+    /// <summary>
+    /// Serial-path drain: initialises the per-tick partition resume
+    /// state and carves a single batch of up to
+    /// <paramref name="maxPerBatch"/> entries out of it. Convenience
+    /// composition of <see cref="InitializeDrainTickAsync"/> followed
+    /// by one <see cref="MergeOneBatchAsync"/>; the bounded-pipelining
+    /// path calls those two helpers directly so it can carve several
+    /// batches from a single primed merge state.
     /// </summary>
     private async Task DrainBatchAsync(
         LatticeReplicationOptions options,
         int maxPerBatch,
+        CancellationToken cancellationToken)
+    {
+        await InitializeDrainTickAsync(options, cancellationToken);
+        await MergeOneBatchAsync(options, maxPerBatch, cancellationToken);
+    }
+
+    /// <summary>
+    /// Initialises the per-tick partition scratch arrays from the
+    /// durable per-partition resume cursors and primes one shipping
+    /// page per partition. Runs exactly once per pump tick - before
+    /// the first <see cref="MergeOneBatchAsync"/> call - so the
+    /// bounded-pipelining path can carve multiple ordered batches out
+    /// of a single primed merge state without re-seeding from the
+    /// (not-yet-advanced) durable cursor between batches.
+    /// </summary>
+    private async Task InitializeDrainTickAsync(
+        LatticeReplicationOptions options,
         CancellationToken cancellationToken)
     {
         var partitions = Math.Max(1, options.ReplogPartitions);
@@ -893,6 +1341,42 @@ internal sealed class ReplicationShipperGrain(
             cancellationToken.ThrowIfCancellationRequested();
             await TryRefillPartitionAsync(p, pageSize, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Drains up to <paramref name="maxPerBatch"/> entries past the
+    /// current (in-memory, possibly mid-page) partition resume state
+    /// into <see cref="_drainBuffer"/> / <see cref="_drainEncodedSegments"/>,
+    /// k-way merging by HLC ascending. Clears the drain buffers at the
+    /// start so it is safe to call repeatedly within a tick: each call
+    /// produces the next strictly-ascending-HLC batch, resuming exactly
+    /// where the prior call left off (the partition page cursors carry
+    /// over). Requires <see cref="InitializeDrainTickAsync"/> to have
+    /// run first.
+    /// <para>
+    /// Crucially, this method does <b>not</b> reset
+    /// <see cref="_partitionMaxReadSeq"/> / <see cref="_partitionAdvanced"/>:
+    /// those accumulate the highest consumed sequence per partition
+    /// across every batch in the tick, so the bounded-pipelining path
+    /// can snapshot them per batch and fold the right cursor frontier
+    /// into durable state when each batch's ack lands in order.
+    /// </para>
+    /// </summary>
+    private async Task MergeOneBatchAsync(
+        LatticeReplicationOptions options,
+        int maxPerBatch,
+        CancellationToken cancellationToken)
+    {
+        // The drain buffers are activation-scoped and reused across
+        // pump ticks and (on the pipelining path) across batches within
+        // a tick; Orleans serialises grain turns and the _pumpInFlight
+        // guard prevents re-entry, so clearing in place is safe.
+        _drainBuffer.Clear();
+        _drainEncodedSegments.Clear();
+        _drainEncodedByteCount = 0L;
+
+        var partitions = _partitionCount;
+        var pageSize = Math.Max(1, options.ShipPartitionPageSize);
 
         // K-way merge: at every step pick the partition whose head
         // entry has the smallest HLC, consume one entry from it, and

@@ -394,21 +394,45 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Maximum number of in-flight <see cref="IReplicationTransport.SendAsync"/>
-    /// calls per <c>(tree, peer)</c> shipper. The v1 implementation
-    /// hard-codes a strict serial-send protocol so per-peer cursor
-    /// advance stays simple; this option is reserved for a future
-    /// relaxation that can pipeline multiple batches once the typed
-    /// envelope shape lands. Defaults to
-    /// <see cref="DefaultShipMaxInFlight"/>. Must be at least <c>1</c>.
+    /// calls the per-<c>(tree, peer)</c> shipper keeps open at once -
+    /// the depth of the sender-side pipelining window. With the default
+    /// of <c>1</c> the shipper is strictly serial: ship one batch, await
+    /// its ack, advance the cursor, ship the next. Raising it lets the
+    /// shipper keep up to this many shipped-but-unacknowledged batches
+    /// outstanding so transport round-trip latency is overlapped with
+    /// draining the next batch, improving throughput on high-latency
+    /// links. Defaults to <see cref="DefaultShipMaxInFlight"/>. Must be
+    /// at least <c>1</c>.
     /// </summary>
     /// <remarks>
-    /// <strong>v1-inert.</strong> The validator accepts any value
-    /// <c>&gt;= 1</c>, but the shipper grain ignores values
-    /// <c>&gt; 1</c> in this release; sends remain strictly serial
-    /// per <c>(tree, peer)</c>. The relaxation is gated on the
-    /// typed-envelope transport seam (eliminating the sender-side
-    /// decode round-trip) and on multi-batch in-flight WAL flush
-    /// landing first.
+    /// <para>
+    /// <strong>Ordering and cursor safety.</strong> Acks are consumed
+    /// in strict FIFO order and the durable per-peer cursor advances
+    /// past a batch only once that batch <em>and</em> every lower-HLC
+    /// batch before it have been acknowledged - advance-strictly-on-ack
+    /// with no cursor hole - so the per-origin FIFO invariant holds
+    /// regardless of window size. A transport failure or ack rejection
+    /// anywhere in the window stops the cursor advancing; the next tick
+    /// re-ships from the durable cursor and the receiver dedupes the
+    /// overlap.
+    /// </para>
+    /// <para>
+    /// <strong>Receiver flow-control.</strong> When the receiver stamps
+    /// a <see cref="ReplicationAck.SuggestedBatchSize"/> hint (asking the
+    /// sender to slow down) the window collapses back to <c>1</c> until
+    /// the receiver clears the hint, so a saturated receiver throttles
+    /// both batch size and pipeline depth together. The live window
+    /// depth is surfaced on the
+    /// <see cref="LatticeReplicationMetrics.ShipInFlightName"/> gauge.
+    /// </para>
+    /// <para>
+    /// <strong>Transport contract.</strong> A window &gt; 1 issues
+    /// concurrent <see cref="IReplicationTransport.SendAsync"/> calls for
+    /// the same <c>(tree, peer)</c> pair, so a transport used with
+    /// pipelining must tolerate concurrent invocation against one pair.
+    /// The default of <c>1</c> preserves the strictly-serial-per-pair
+    /// behaviour for transports that do not.
+    /// </para>
     /// </remarks>
     public int ShipMaxInFlight { get; set; } = DefaultShipMaxInFlight;
 
