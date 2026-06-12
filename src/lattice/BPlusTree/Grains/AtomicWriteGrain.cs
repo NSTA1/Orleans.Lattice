@@ -1237,67 +1237,36 @@ internal sealed class AtomicWriteGrain(
             }
         }
 
-        // Authoritative participant union from the per-tree TxRegistry.
-        // Every ShardRootGrain that routed a prepare-phase write under
-        // this saga registered itself as a participant inside
-        // RecordAffectedLeafIfPreparedAsync (gated by a per-activation
-        // dedup so the RPC fires once per saga per shard). Unioning the
-        // registry's participant set into TouchedShards before the
-        // broadcast closes the orphaning window left by the snapshot-
-        // based drift correction above: if a key's prepare landed on a
-        // shard that is no longer the routing target at broadcast time
-        // (e.g. a shard-split swap completed mid-saga), the snapshot-
-        // based correction cannot rediscover the old owner, but the
-        // registry remembers it. The registry RPC is a single
-        // cross-grain call regardless of saga fan-out width, so the
-        // amortised cost is negligible compared to the per-shard
-        // terminal fan-out below. The registry returns a sorted set
-        // so the union iteration is order-deterministic.
+        // Resolve the per-tree TxRegistry handle for the post-fan-out
+        // late-participant fetch-loop below. It is non-null here only
+        // when transactionId != Guid.Empty (the early-return at the top
+        // of this method guarantees that precondition).
         //
-        // The registry handle is hoisted to function scope so the
-        // post-fan-out late-participant fetch-loop below can reuse it
-        // without re-resolving the grain reference. It is non-null
-        // here only when transactionId != Guid.Empty (the early-return
-        // at the top of this method guarantees that precondition).
+        // The pre-fan-out registry participant *union* that used to live
+        // here was removed: it is subsumed by the post-fan-out late-pass
+        // loop. That loop re-fetches the registry participant set AFTER
+        // the main fan-out and terminalises every shard not already
+        // covered (using the identical per-shard subset / full-backstop
+        // logic), so it discovers the same authoritative participants the
+        // pre-fan-out union caught - PLUS any that registered during the
+        // fan-out - in a single fetch. Correctness does not depend on
+        // when a shard's terminal lands: RecordTerminalDecisionAsync wrote
+        // the saga's commit/abort verdict to the registry BEFORE this
+        // broadcast began, and that registry decision is the single
+        // tree-wide read linearization point. A reader that hits a
+        // not-yet-terminalled pending bucket on a registry-only old-owner
+        // shard resolves through the registry to the already-recorded
+        // verdict, so deferring that shard's cleanup terminal from the
+        // main pass to the late pass is invisible to readers. In the
+        // common no-split case the registry participant set is a subset of
+        // the routing-derived (and drift-corrected) TouchedShards, so the
+        // late-pass round-0 fetch finds nothing new and breaks - net one
+        // fewer GetParticipantsAsync round-trip per saga (single-tree and,
+        // composed, every cross-tree sub-saga).
         ITxRegistryGrain? registry = null;
         if (transactionId != Guid.Empty)
         {
             registry = grainFactory.GetGrain<ITxRegistryGrain>(state.State.TreeId);
-            var participants = await registry.GetParticipantsAsync(transactionId);
-#if LATTICE_DIAG
-            DiagSink.Write($"[DIAG broadcast-registry-fetch] op={OperationKey} tx={transactionId} participants=[{string.Join(",", participants)}]");
-#endif
-            if (participants.Count > 0)
-            {
-                HashSet<int>? regUnion = null;
-                foreach (var shardIndex in participants)
-                {
-                    if (state.State.TouchedShards.Contains(shardIndex)) continue;
-                    (regUnion ??= new HashSet<int>(state.State.TouchedShards)).Add(shardIndex);
-                }
-                if (regUnion is not null)
-                {
-                    var sorted = new List<int>(regUnion);
-                    sorted.Sort();
-                    // Class B snapshot/restore: same shape as the drift-correction
-                    // branch above. Reverts TouchedShards on persist failure so the
-                    // remaining broadcast pass does not iterate a dirty union.
-                    var prevTouchedShards = state.State.TouchedShards;
-                    state.State.TouchedShards = sorted;
-                    try
-                    {
-                        await WriteSagaStateAsync("broadcast-touched-registry");
-                    }
-                    catch
-                    {
-                        state.State.TouchedShards = prevTouchedShards;
-                        throw;
-                    }
-#if LATTICE_DIAG
-                    DiagSink.Write($"[DIAG broadcast-registry-unioned] op={OperationKey} tx={transactionId} touched=[{string.Join(",", state.State.TouchedShards)}]");
-#endif
-                }
-            }
         }
 
         if (state.State.TouchedShards.Count == 0)

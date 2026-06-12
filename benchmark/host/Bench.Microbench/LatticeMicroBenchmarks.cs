@@ -385,6 +385,11 @@ public class LatticeMicroBenchmarks
 
         _optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         _optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        // LatticeCrossTreeTxGrain.ResolveTtl() reads optionsMonitor.CurrentValue
+        // directly (not via .Get(name)); without this stub it returns null and
+        // the cross-tree finalize TTL slide NREs, so the cross-tree benches never
+        // produced numbers.
+        _optionsMonitor.CurrentValue.Returns(new LatticeOptions());
 
         _observers = new MutationObserverDispatcher([], NullLogger<MutationObserverDispatcher>.Instance);
 
