@@ -40,7 +40,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 ### Planned / open
 
 - [R-138](https://github.com/NSTA1/Orleans.Lattice/issues/712) - Metrics observability: surface every Lattice metric on a dashboard (umbrella)
-- [R-139](https://github.com/NSTA1/Orleans.Lattice/issues/717) - Pre-ship CRDT delta-merge coalescing
 - [R-142](https://github.com/NSTA1/Orleans.Lattice/issues/727) - End-to-end content-hash dedup round trip over the real transport
 - [R-143](https://github.com/NSTA1/Orleans.Lattice/issues/728) - Content-hash dedup elision on the pipelined ship path
 
@@ -149,6 +148,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
 - [R-133](https://github.com/NSTA1/Orleans.Lattice/issues/697) - Adaptive sender-side batch sizing from ack-latency / throughput
+- [R-139](https://github.com/NSTA1/Orleans.Lattice/issues/717) - Pre-ship CRDT delta-merge coalescing
 - [R-136](https://github.com/NSTA1/Orleans.Lattice/issues/708) - Grafana panel catch-up for previously unpaneled replication and core metrics
 - [R-137](https://github.com/NSTA1/Orleans.Lattice/issues/710) - Forward dashboard-coverage drift guard asserting every live instrument is referenced by at least one panel
 - [R-134](https://github.com/NSTA1/Orleans.Lattice/issues/703) - Re-encode WAL batches at the negotiated wire version (version-adaptive down-stamping; dark by default)

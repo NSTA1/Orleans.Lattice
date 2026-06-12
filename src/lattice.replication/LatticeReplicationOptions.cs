@@ -299,17 +299,36 @@ public class LatticeReplicationOptions
     /// pass runs, no entry is elided, and the framed bytes match today's
     /// output exactly.
     /// <para>
-    /// When enabled, coalescing applies only to trees declared
-    /// <see cref="LatticeMergeMode.LwwRegister"/> (the receiver applies
-    /// those entries last-writer-wins on the value bytes, so an
-    /// intermediate version a later same-key write supersedes is invisible
-    /// after convergence). Within a single drained batch the shipper keeps
-    /// only the highest-<see cref="HybridLogicalClock"/> entry per key and
-    /// drops the earlier same-key point writes - exactly the version the
-    /// receiver's last-writer-wins apply would have converged to. Because
-    /// the shipper only ever drains its own cluster's authored writes, the
-    /// ordering tie-break collapses to a pure HLC comparison (single
-    /// origin), so the kept entry is unambiguous.
+    /// When enabled, coalescing applies to trees declared
+    /// <see cref="LatticeMergeMode.LwwRegister"/> and to recognised CRDT
+    /// trees, with a mode-specific strategy. For a last-writer-wins tree
+    /// the receiver applies entries last-writer-wins on the value bytes,
+    /// so an intermediate version a later same-key write supersedes is
+    /// invisible after convergence: within a single drained batch the
+    /// shipper keeps only the highest-<see cref="HybridLogicalClock"/>
+    /// entry per key and drops the earlier same-key point writes - exactly
+    /// the version the receiver's last-writer-wins apply would have
+    /// converged to. Because the shipper only ever drains its own cluster's
+    /// authored writes, the ordering tie-break collapses to a pure HLC
+    /// comparison (single origin), so the kept entry is unambiguous.
+    /// </para>
+    /// <para>
+    /// For a recognised CRDT tree the receiver applies entries by folding
+    /// each one's typed delta into the loaded state, so a naive drop would
+    /// lose an intermediate delta's contribution. The shipper instead
+    /// merges the same-key deltas into a single combined delta - a join
+    /// over the primitive's semilattice (union for OR-Set adds / removes,
+    /// pointwise-max for PN-Counter and version-vector components,
+    /// dot-dominance merge for the multi-value register, grow-only union
+    /// for the sequence CRDT) - re-encodes that one delta onto the kept
+    /// (highest-HLC) entry, and elides the earlier same-key ones. Because
+    /// each combine and the receiver-side apply are both commutative,
+    /// associative, and idempotent, the merged entry converges to the
+    /// identical state as shipping the run individually. The generic
+    /// OR-Map mode is not combined (its value CRDT is type-erased on the
+    /// shipper); its entries ship individually, which is loss-free but
+    /// forgoes the bandwidth saving. A CRDT entry carrying no typed delta
+    /// (an opaque or legacy payload) also ships verbatim.
     /// </para>
     /// <para>
     /// Coalescing never elides a range delete, a saga terminal mark
@@ -317,20 +336,20 @@ public class LatticeReplicationOptions
     /// an atomic-batch prepare-phase entry, or any entry carrying
     /// <see cref="HybridLogicalClock.Zero"/>: those are left verbatim so
     /// atomic-batch boundaries, causal dependencies, and per-origin FIFO
-    /// ordering are preserved. CRDT-mode trees (every
-    /// <see cref="LatticeMergeMode"/> other than
-    /// <see cref="LatticeMergeMode.LwwRegister"/>) are never coalesced:
-    /// the receiver applies those entries by folding each one's typed
-    /// delta into the loaded state, so dropping an intermediate version
-    /// would lose its contribution rather than merely hide it. The
-    /// per-elided-entry win is surfaced on the
+    /// ordering are preserved. The per-elided-entry win is surfaced on the
     /// <see cref="LatticeReplicationMetrics.CoalesceEntriesElided"/> and
-    /// <see cref="LatticeReplicationMetrics.CoalesceBytesElided"/> counters.
-    /// The coalesced output is a valid subset of the verbatim batch, so an
-    /// unmodified receiver decodes and applies it to the identical
-    /// converged state - the cursor still advances past every elided
-    /// entry's sequence because the per-partition resume bookkeeping is
-    /// updated at drain time, before the coalescing pass runs.
+    /// <see cref="LatticeReplicationMetrics.CoalesceBytesElided"/> counters
+    /// for both modes; the CRDT-specific count of source deltas folded into
+    /// a combined delta is surfaced on
+    /// <see cref="LatticeReplicationMetrics.CoalesceDeltasMerged"/>.
+    /// The coalesced output is a valid subset (LWW) or delta-merge
+    /// (CRDT) of the verbatim batch, so an unmodified receiver decodes and
+    /// applies it to the identical converged state - the cursor still
+    /// advances past every elided entry's sequence because the
+    /// per-partition resume bookkeeping is updated at drain time, before
+    /// the coalescing pass runs. The on-wire entry shape is unchanged
+    /// (fewer / merged entries of the existing format); there is no wire
+    /// version bump.
     /// </para>
     /// </summary>
     public bool PreShipCoalescingEnabled { get; set; } = DefaultPreShipCoalescingEnabled;

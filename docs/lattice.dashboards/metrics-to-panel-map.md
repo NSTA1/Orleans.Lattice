@@ -105,6 +105,7 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.ship.ack_latency` | histogram (ms) | `tree`, `peer` | Ship ack latency p50/p95/p99 |
 | `orleans.lattice.replication.coalesce.entries_elided` | counter | `tree`, `peer` | Pre-ship coalescing elided entries |
 | `orleans.lattice.replication.coalesce.bytes_elided` | counter (`By`) | `tree`, `peer` | Pre-ship coalescing elided entries |
+| `orleans.lattice.replication.coalesce.deltas_merged` | counter (`{delta}`) | `tree`, `peer` | Pre-ship CRDT deltas merged (rate) |
 | `orleans.lattice.replication.leaf_rereplay.entries` | counter | `tree`, `peer` | Leaf re-replay entries re-shipped (rate) |
 | `orleans.lattice.replication.leaf_rereplay.skipped` | counter | `tree`, `peer`, `reason` | Leaf re-replay skipped (rate by reason) |
 | `orleans.lattice.replication.apply.parallel_runs` | histogram (`{run}`) | - | Apply parallelism - runs per batch |

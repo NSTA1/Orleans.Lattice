@@ -489,51 +489,70 @@ coalescing drops those intermediate versions from the wire. This is
 distinct from the content-hash dedup measurement above, which never
 alters the bytes shipped - coalescing actually elides entries.
 
-The pass is scoped, conservatively, to trees whose declared
-`LatticeMergeMode` is `LwwRegister`. For a last-writer-wins tree the
-receiver applies each entry by last-writer-wins on the value bytes
-ordered by `(HybridLogicalClock, OriginClusterId)`, so within one drained
-batch only the highest-HLC version per key survives convergence and the
-earlier ones are invisible after apply. Because the shipper only ever
-drains its own cluster's authored writes (the cycle-break filters to
-`options.ClusterId`), every coalescing candidate shares one origin and
-the drain buffer is already HLC-ascending, so the last occurrence of a
-key is the highest-HLC one - the version the receiver converges to.
+The pass handles both last-writer-wins and recognised CRDT trees, by
+different mechanics. For a tree whose declared `LatticeMergeMode` is
+`LwwRegister` the receiver applies each entry by last-writer-wins on the
+value bytes ordered by `(HybridLogicalClock, OriginClusterId)`, so within
+one drained batch only the highest-HLC version per key survives
+convergence and the earlier ones are invisible after apply. Because the
+shipper only ever drains its own cluster's authored writes (the
+cycle-break filters to `options.ClusterId`), every coalescing candidate
+shares one origin and the drain buffer is already HLC-ascending, so the
+last occurrence of a key is the highest-HLC one - the version the receiver
+converges to. The LWW path therefore keeps only that last version and
+drops the earlier ones outright.
 
-Every CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`,
-`OrMap`, `Sequence`) is left **verbatim and never coalesced**. The
-receiver applies each of those by folding the per-entry typed delta into
-the loaded state, so dropping an intermediate version would lose its
-contribution rather than merely hide it - latest-wins elision is only
-correct for opaque last-writer-wins values. Merging the per-key deltas
-into a single combined delta would require a delta-into-delta merge seam
-on the CRDT shape registry that does not exist today, so a correctness-
-first first cut leaves all CRDT-mode trees untouched.
+For a recognised CRDT tree (`OrSet`, `PnCounter`, `VersionVector`,
+`MvRegister`, `Sequence`) the receiver applies each entry by folding its
+per-entry typed delta into the loaded state, so dropping an intermediate
+version would lose its contribution rather than merely hide it. The CRDT
+path instead **folds** a same-key run's typed deltas into a single
+combined delta - a join over the primitive's own semilattice (union for
+OR-Set adds / removes, pointwise-max for PN-Counter and version-vector
+components, dot-dominance merge for the multi-value register, grow-only
+union for the sequence CRDT) - re-encodes it onto the kept (highest-HLC)
+entry, and elides the earlier same-key entries. Each combine is
+commutative, associative, and idempotent, so the combined delta's
+receiver-side apply effect is identical to applying the source deltas in
+sequence: a coalesced CRDT run converges to the **identical** state as
+shipping every delta individually. The kept entry inherits the last
+contributing entry's HLC and causal metadata.
+
+The generic `OrMap` mode (whose value CRDT is type-erased on the shipper)
+and any CRDT entry carrying no typed delta (`WalRecord.Delta == null`, an
+opaque or legacy payload) fall back to shipping individually - loss-free;
+only the bandwidth saving is forgone. OR-Map per-key delta folding is a
+recommended follow-up that would need the shipper to route through the
+registered value-shape descriptor.
 
 Only plain point `Set` / `Delete` writes are eligible. Range deletes,
 saga terminal marks, prepared atomic-batch (saga) entries, tombstone-reap
 envelopes, and entries carrying `HybridLogicalClock.Zero` are never
-elided and never participate, so atomic-batch boundaries, causal
+coalesced and never participate, so atomic-batch boundaries, causal
 dependencies, per-origin FIFO, and the no-cross-origin-reorder invariant
 all hold unchanged. The coalescing pass runs after the merge loop has
 already folded every drained entry's per-partition sequence into the
 resume bookkeeping, so the durable cursor still advances past every
 elided entry and nothing is re-shipped or stranded.
 
-As the shipper compacts a batch it increments two counters - tagged
+As the shipper compacts a batch it increments these counters - tagged
 `tree` + `peer`; see
-[Observability](observability.md#pre-ship-coalescing-coalesceentries_elided--coalescebytes_elided):
+[Observability](observability.md#pre-ship-coalescing-coalesceentries_elided--coalescebytes_elided--coalescedeltas_merged):
 
 - `orleans.lattice.replication.coalesce.entries_elided` - one per dropped
-  entry.
+  entry (both paths).
 - `orleans.lattice.replication.coalesce.bytes_elided` - the sum of the
-  pre-encoded wire-segment lengths of the dropped entries.
+  pre-encoded wire-segment lengths of the dropped entries (both paths).
+- `orleans.lattice.replication.coalesce.deltas_merged` - on the CRDT path
+  only, one per source delta folded into a combined delta.
 
-The coalesced output is a strict **subset** of the verbatim batch, so an
-unmodified receiver decodes and applies it to the identical converged
-state. The change is purely additive: no new frame type, no wire-format,
-serialization, `[Id]`, or `[Alias]` change. When the flag is off the
-drain/ship path is byte-identical to before and neither counter fires.
+The coalesced output converges identically on an unmodified receiver - a
+strict **subset** of the verbatim batch on LWW trees, an
+**effect-equivalent merge** on CRDT trees. The change is purely additive:
+no new frame type, no wire-format, serialization, `[Id]`, or `[Alias]`
+change, and no wire-version bump (fewer / merged entries of the existing
+shape). When the flag is off the drain/ship path is byte-identical to
+before and none of the counters fire.
 
 ### `ShipMaxInFlight` is v1-inert
 
@@ -591,7 +610,7 @@ condition clears.
 | `MaintenanceGcInterval` | 5 s | `> TimeSpan.Zero` | Cadence between WAL GC passes. |
 | `MaintenanceFallOffCheckInterval` | 30 s | `> TimeSpan.Zero` | Cadence between per-peer fall-off-the-log probes. |
 | `ShipDoorbellEnabled` | `true` | - | Master switch for the writer-side doorbell. |
-| `PreShipCoalescingEnabled` | `false` | - | Opt-in per tree. Collapse redundant per-key versions out of a drained batch (last-writer-wins trees only) before they ship. |
+| `PreShipCoalescingEnabled` | `false` | - | Opt-in per tree. Collapse a drained batch's redundant per-key versions before they ship: latest-wins elision on LWW trees, delta-merge folding on recognised CRDT trees (OR-Map / opaque deltas ship individually). |
 
 All options resolve via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`,
 so per-tree overrides are honoured.
