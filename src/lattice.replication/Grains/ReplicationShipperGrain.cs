@@ -672,6 +672,16 @@ internal sealed class ReplicationShipperGrain(
                               && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
                     ? options.FramingCompression
                     : LatticeCompression.None,
+                // Shared-dictionary id, only meaningful for the
+                // ZstdDictionary tag. Carried in the framed tail (not
+                // the fixed header) so the receiver can select the
+                // matching dictionary; the encoder degrades to plain
+                // Zstd when the requested dictionary cannot be
+                // resolved locally. Every other tag carries id 0.
+                DictionaryId = options.FramingCompression == LatticeCompression.ZstdDictionary
+                               && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
+                    ? options.FramingCompressionDictionaryId
+                    : 0u,
             };
             // CollectionsMarshal.AsSpan(...) of List<T> exposes the
             // List's backing array as a contiguous Memory<T>; we copy
@@ -1502,6 +1512,10 @@ internal sealed class ReplicationShipperGrain(
                           && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
                 ? options.FramingCompression
                 : LatticeCompression.None,
+            DictionaryId = options.FramingCompression == LatticeCompression.ZstdDictionary
+                           && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
+                ? options.FramingCompressionDictionaryId
+                : 0u,
         };
         return new ReplicationBatchEncodedEnvelope
         {

@@ -41,7 +41,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 
 - [R-110](https://github.com/NSTA1/Orleans.Lattice/issues/518) - End-to-end remediation chaos test
 - [R-111](https://github.com/NSTA1/Orleans.Lattice/issues/519) - Documentation + operator playbook
-- [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
 - [R-134](https://github.com/NSTA1/Orleans.Lattice/issues/703) - Re-encode WAL batches at the negotiated wire version (true down-encode)
 - [R-135](https://github.com/NSTA1/Orleans.Lattice/issues/705) - Content-hash dedup round trip (sender manifest / receiver pull-missing)
 - [R-138](https://github.com/NSTA1/Orleans.Lattice/issues/712) - Metrics observability: surface every Lattice metric on a dashboard (umbrella)
@@ -146,6 +145,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-128](https://github.com/NSTA1/Orleans.Lattice/issues/692) - Sender-side multi-batch pipelining (activate `ShipMaxInFlight`)
 - [R-129](https://github.com/NSTA1/Orleans.Lattice/issues/693) - Wire-version capability negotiation for safe rolling upgrades
 - [R-131](https://github.com/NSTA1/Orleans.Lattice/issues/695) - Parallel receiver apply across independent (tree, origin) runs
+- [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
 - [R-133](https://github.com/NSTA1/Orleans.Lattice/issues/697) - Adaptive sender-side batch sizing from ack-latency / throughput
 - [R-139](https://github.com/NSTA1/Orleans.Lattice/issues/717) - Pre-ship CRDT delta-merge coalescing

@@ -7,6 +7,24 @@ namespace Orleans.Lattice.Replication.Tests;
 public class LatticeReplicationOptionsTests
 {
     [Test]
+    public void DefaultFramingCompressionDictionaryId_is_zero() =>
+        Assert.That(LatticeReplicationOptions.DefaultFramingCompressionDictionaryId, Is.EqualTo(0u));
+
+    [Test]
+    public void New_instance_has_default_framing_compression_dictionary_id()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.FramingCompressionDictionaryId, Is.EqualTo(LatticeReplicationOptions.DefaultFramingCompressionDictionaryId));
+    }
+
+    [Test]
+    public void FramingCompressionDictionaryId_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { FramingCompressionDictionaryId = 42u };
+        Assert.That(opts.FramingCompressionDictionaryId, Is.EqualTo(42u));
+    }
+
+    [Test]
     public void DefaultClusterId_is_empty_string() =>
         Assert.That(LatticeReplicationOptions.DefaultClusterId, Is.EqualTo(""));
 

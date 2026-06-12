@@ -7,6 +7,24 @@ namespace Orleans.Lattice.Replication.Tests;
 public class LatticeReplicationMetricsTests
 {
     [Test]
+    public void Dictionary_compression_counters_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.CompressDictionaryBytesIn.Name,
+                Is.EqualTo("orleans.lattice.replication.compress.dictionary.bytes_in"));
+            Assert.That(LatticeReplicationMetrics.CompressDictionaryBytesIn.Unit, Is.EqualTo("By"));
+            Assert.That(LatticeReplicationMetrics.CompressDictionaryBytesOut.Name,
+                Is.EqualTo("orleans.lattice.replication.compress.dictionary.bytes_out"));
+            Assert.That(LatticeReplicationMetrics.CompressDictionaryBytesOut.Unit, Is.EqualTo("By"));
+            Assert.That(LatticeReplicationMetrics.CompressDictionaryBytesInName,
+                Is.EqualTo("orleans.lattice.replication.compress.dictionary.bytes_in"));
+            Assert.That(LatticeReplicationMetrics.CompressDictionaryBytesOutName,
+                Is.EqualTo("orleans.lattice.replication.compress.dictionary.bytes_out"));
+        });
+    }
+
+    [Test]
     public void Meter_name_is_orleans_lattice_replication()
     {
         Assert.That(LatticeReplicationMetrics.MeterName, Is.EqualTo("orleans.lattice.replication"));

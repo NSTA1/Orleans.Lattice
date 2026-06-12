@@ -970,6 +970,34 @@ public class LatticeReplicationOptions
     public int FramingCompressionMinBatchBytes { get; set; } = DefaultFramingCompressionMinBatchBytes;
 
     /// <summary>
+    /// Stable id of the shared compression dictionary the shipper
+    /// requests when <see cref="FramingCompression"/> is
+    /// <see cref="LatticeCompression.ZstdDictionary"/>. The id is
+    /// resolved to dictionary bytes by the registered
+    /// <see cref="ILatticeCompressionDictionaryProvider"/> and carried
+    /// in the framed tail so the receiver selects the matching
+    /// dictionary. The reserved value <c>0</c> (the default) means "no
+    /// dictionary": a shipper configured for
+    /// <see cref="LatticeCompression.ZstdDictionary"/> with id <c>0</c>
+    /// gracefully degrades to plain dictionary-less
+    /// <see cref="LatticeCompression.Zstd"/>, so a default build is
+    /// byte-identical on the wire. Defaults to
+    /// <see cref="DefaultFramingCompressionDictionaryId"/>.
+    /// <para>
+    /// Like every other compression knob this requires a coordinated
+    /// rollout: the dictionary bytes behind this id must be registered
+    /// (via the same operator-supplied provider configuration) on every
+    /// receiver before any sender flips to a non-zero id. A receiver
+    /// that cannot resolve the id surfaces
+    /// <see cref="NotSupportedException"/> from the framing decoder and
+    /// routes through the existing transient-backoff path; an encoder
+    /// that cannot resolve the id locally degrades to plain Zstd rather
+    /// than emitting an unreadable frame.
+    /// </para>
+    /// </summary>
+    public uint FramingCompressionDictionaryId { get; set; } = DefaultFramingCompressionDictionaryId;
+
+    /// <summary>
     /// Opts in to wire-version capability negotiation on the outbound
     /// ship path. When <see langword="true"/>, the per-<c>(tree, peer)</c>
     /// shipper reads each peer's advertised
@@ -1644,6 +1672,14 @@ public class LatticeReplicationOptions
     /// dominates the bandwidth saving on tiny batches.
     /// </summary>
     public const int DefaultFramingCompressionMinBatchBytes = 512;
+
+    /// <summary>
+    /// Default value for <see cref="FramingCompressionDictionaryId"/>:
+    /// <c>0</c>, the reserved "no dictionary" id. A default build never
+    /// requests a shared dictionary, so its framed bytes are identical
+    /// to a dictionary-less build.
+    /// </summary>
+    public const uint DefaultFramingCompressionDictionaryId = 0u;
 
     /// <summary>
     /// Default value for <see cref="WireVersionNegotiationEnabled"/>:
