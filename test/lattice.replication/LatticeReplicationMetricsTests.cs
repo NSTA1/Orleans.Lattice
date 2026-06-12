@@ -92,6 +92,32 @@ public class LatticeReplicationMetricsTests
     }
 
     [Test]
+    public void Apply_parallel_runs_histogram_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ApplyParallelRuns.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.parallel_runs"));
+            Assert.That(LatticeReplicationMetrics.ApplyParallelRuns.Unit, Is.EqualTo("{run}"));
+            Assert.That(LatticeReplicationMetrics.ApplyParallelRunsName,
+                Is.EqualTo("orleans.lattice.replication.apply.parallel_runs"));
+        });
+    }
+
+    [Test]
+    public void Apply_parallel_runs_histogram_records_measurements()
+    {
+        using var collector = new MeterCollector<int>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ApplyParallelRunsName);
+
+        LatticeReplicationMetrics.ApplyParallelRuns.Record(3);
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(3));
+    }
+
+    [Test]
     public void Reason_tag_constants_use_canonical_values()
     {
         Assert.Multiple(() =>

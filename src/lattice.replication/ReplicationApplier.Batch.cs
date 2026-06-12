@@ -59,10 +59,49 @@ internal sealed partial class ReplicationApplier
             }
         }
 
-        // Walk contiguous same-(treeId, origin) runs. The receiver
-        // protocol guarantees the inbound batch is shipped from a
-        // single producer in WAL order so a 256-entry inbound batch
-        // from one origin collapses to a single run.
+        // The inbound batch is walked as a sequence of contiguous
+        // same-(treeId, origin) runs. The receiver protocol guarantees
+        // the batch is shipped from a single producer in WAL order so a
+        // 256-entry inbound batch from one origin collapses to a single
+        // run.
+        //
+        // Independent runs - those targeting distinct trees - may apply
+        // concurrently up to the host-configured
+        // <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/>
+        // degree of parallelism, bounding apply latency (and the
+        // resulting apply.lag back-pressure) under multi-tree load.
+        // Parallelism is only ever introduced across independent runs:
+        // runs that share a tree stay strictly sequential in WAL order,
+        // so the per-tree causal-apply buffer, the shadow-forward
+        // dedupe cache, per-origin FIFO, and per-origin high-water-mark
+        // monotonicity all observe the identical access order they
+        // would under fully-sequential apply. The default DOP of 1
+        // takes the sequential walk, bit-identical to the historical
+        // behaviour.
+        var plan = BuildParallelApplyPlanOrNull(entries);
+        if (plan is null)
+        {
+            LatticeReplicationMetrics.ApplyParallelRuns.Record(1);
+            return await ApplyRunsSequentiallyAsync(entries, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await ApplyRunsInParallelAsync(entries, plan.Value, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Applies every contiguous <c>(treeId, originClusterId)</c> run in
+    /// the inbound batch strictly sequentially, in write-ahead-log
+    /// order, awaiting each before starting the next. This is the
+    /// fully-sequential apply path used whenever cross-tree parallelism
+    /// is disabled (the default
+    /// <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/> of
+    /// <c>1</c>) or impossible (a single-tree batch). It preserves the
+    /// historical apply ordering and allocation profile exactly.
+    /// </summary>
+    private async Task<ApplyResult> ApplyRunsSequentiallyAsync(
+        IReadOnlyList<WalRecord> entries,
+        CancellationToken cancellationToken)
+    {
         var anyApplied = false;
         var highest = HybridLogicalClock.Zero;
         var i = 0;
@@ -79,17 +118,7 @@ internal sealed partial class ReplicationApplier
                 j++;
             }
 
-            ApplyResult runResult;
-            try
-            {
-                runResult = await ApplyOriginRunAsync(entries, i, j, cancellationToken).ConfigureAwait(false);
-                RecordInboundContact(entries[i], success: true);
-            }
-            catch
-            {
-                RecordInboundContact(entries[i], success: false);
-                throw;
-            }
+            var runResult = await ApplyRunSegmentAsync(entries, i, j, cancellationToken).ConfigureAwait(false);
             if (runResult.Applied)
             {
                 anyApplied = true;
@@ -103,6 +132,228 @@ internal sealed partial class ReplicationApplier
 
         return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
     }
+
+    /// <summary>
+    /// Applies the inbound batch's tree-groups concurrently up to the
+    /// effective degree of parallelism recorded on
+    /// <paramref name="plan"/>. Each tree-group applies its own runs
+    /// strictly sequentially in write-ahead-log order on a single task,
+    /// so within-tree ordering (per-origin FIFO, causal gating, HWM
+    /// monotonicity, atomic-batch boundaries) is preserved exactly;
+    /// only runs across distinct trees - which share no per-tree state -
+    /// overlap. The per-group results are aggregated after every group
+    /// completes, so the returned <see cref="ApplyResult"/> is
+    /// order-independent (logical-OR of <see cref="ApplyResult.Applied"/>
+    /// and max of <see cref="ApplyResult.HighWaterMark"/>).
+    /// </summary>
+    private async Task<ApplyResult> ApplyRunsInParallelAsync(
+        IReadOnlyList<WalRecord> entries,
+        ParallelApplyPlan plan,
+        CancellationToken cancellationToken)
+    {
+        LatticeReplicationMetrics.ApplyParallelRuns.Record(plan.EffectiveDegreeOfParallelism);
+
+        using var throttle = new SemaphoreSlim(plan.EffectiveDegreeOfParallelism);
+        var tasks = new Task<ApplyResult>[plan.TreeOrder.Count];
+        for (var g = 0; g < plan.TreeOrder.Count; g++)
+        {
+            var segments = plan.Groups[plan.TreeOrder[g]];
+            tasks[g] = ApplyTreeGroupAsync(entries, segments, throttle, cancellationToken);
+        }
+
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        var anyApplied = false;
+        var highest = HybridLogicalClock.Zero;
+        foreach (var runResult in results)
+        {
+            if (runResult.Applied)
+            {
+                anyApplied = true;
+            }
+            if (runResult.HighWaterMark.CompareTo(highest) > 0)
+            {
+                highest = runResult.HighWaterMark;
+            }
+        }
+
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+    }
+
+    /// <summary>
+    /// Applies one tree's runs sequentially under a bounded-concurrency
+    /// gate. The run sequence preserves write-ahead-log order so the
+    /// per-tree causal-apply buffer and shadow-forward dedupe cache see
+    /// the identical access order the sequential path would produce.
+    /// The <paramref name="throttle"/> semaphore bounds how many
+    /// tree-groups apply at once across the whole batch.
+    /// </summary>
+    private async Task<ApplyResult> ApplyTreeGroupAsync(
+        IReadOnlyList<WalRecord> entries,
+        List<(int Start, int End)> segments,
+        SemaphoreSlim throttle,
+        CancellationToken cancellationToken)
+    {
+        await throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var anyApplied = false;
+            var highest = HybridLogicalClock.Zero;
+            foreach (var (start, end) in segments)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var runResult = await ApplyRunSegmentAsync(entries, start, end, cancellationToken)
+                    .ConfigureAwait(false);
+                if (runResult.Applied)
+                {
+                    anyApplied = true;
+                }
+                if (runResult.HighWaterMark.CompareTo(highest) > 0)
+                {
+                    highest = runResult.HighWaterMark;
+                }
+            }
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+        }
+        finally
+        {
+            throttle.Release();
+        }
+    }
+
+    /// <summary>
+    /// Applies a single contiguous <c>(treeId, originClusterId)</c> run
+    /// and records the bidirectional inbound per-peer contact, mirroring
+    /// the success / failure recording the sequential walk performed
+    /// inline. Shared by the sequential and parallel apply paths so the
+    /// observability and exception semantics are identical regardless of
+    /// the configured degree of parallelism.
+    /// </summary>
+    private async Task<ApplyResult> ApplyRunSegmentAsync(
+        IReadOnlyList<WalRecord> entries,
+        int startInclusive,
+        int endExclusive,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var runResult = await ApplyOriginRunAsync(entries, startInclusive, endExclusive, cancellationToken)
+                .ConfigureAwait(false);
+            RecordInboundContact(entries[startInclusive], success: true);
+            return runResult;
+        }
+        catch
+        {
+            RecordInboundContact(entries[startInclusive], success: false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Builds the cross-tree parallel-apply plan for the inbound batch,
+    /// or returns <see langword="null"/> when the batch must apply
+    /// fully-sequentially. Returns <see langword="null"/> - taking the
+    /// allocation-free sequential walk - whenever the batch targets a
+    /// single tree (the overwhelmingly common inbound shape, since the
+    /// transport ships per-(tree, peer)) or no participating tree
+    /// configures
+    /// <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/>
+    /// greater than <c>1</c>.
+    /// </summary>
+    /// <remarks>
+    /// Independence is defined at the tree granularity: the contiguous
+    /// <c>(treeId, originClusterId)</c> run segments are grouped by tree
+    /// (preserving write-ahead-log order within each tree), and the
+    /// effective degree of parallelism is the maximum configured
+    /// <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/>
+    /// across the participating trees, clamped to the number of tree
+    /// groups. Same-tree origins remain in one ordered group so the
+    /// per-tree causal-apply buffer, shadow-forward dedupe cache, and
+    /// per-origin FIFO / high-water-mark invariants are observed exactly
+    /// as in the sequential path.
+    /// </remarks>
+    private ParallelApplyPlan? BuildParallelApplyPlanOrNull(IReadOnlyList<WalRecord> entries)
+    {
+        // Cheap first pass: bail to the sequential walk the moment the
+        // batch is confirmed single-tree. This keeps the steady-state
+        // hot path (one tree, one origin) allocation-free.
+        var firstTree = entries[0].TreeId;
+        var multiTree = false;
+        for (var k = 1; k < entries.Count; k++)
+        {
+            if (!string.Equals(entries[k].TreeId, firstTree, StringComparison.Ordinal))
+            {
+                multiTree = true;
+                break;
+            }
+        }
+        if (!multiTree)
+        {
+            return null;
+        }
+
+        // Multi-tree batch: materialise the contiguous (tree, origin)
+        // run segments grouped by tree, preserving WAL order within each
+        // tree.
+        var groups = new Dictionary<string, List<(int Start, int End)>>(StringComparer.Ordinal);
+        var order = new List<string>();
+        var i = 0;
+        while (i < entries.Count)
+        {
+            var startTreeId = entries[i].TreeId ?? string.Empty;
+            var startOrigin = entries[i].OriginClusterId;
+            var j = i + 1;
+            while (j < entries.Count
+                && string.Equals(entries[j].TreeId ?? string.Empty, startTreeId, StringComparison.Ordinal)
+                && string.Equals(entries[j].OriginClusterId, startOrigin, StringComparison.Ordinal))
+            {
+                j++;
+            }
+
+            if (!groups.TryGetValue(startTreeId, out var list))
+            {
+                list = new List<(int Start, int End)>();
+                groups[startTreeId] = list;
+                order.Add(startTreeId);
+            }
+            list.Add((i, j));
+            i = j;
+        }
+
+        // Resolve the effective degree of parallelism: the max
+        // configured ApplyMaxParallelRuns across the participating
+        // trees, clamped to the number of tree groups. A single group
+        // (or no tree opting in) means parallel apply is moot.
+        var maxParallel = 1;
+        foreach (var treeId in order)
+        {
+            var configured = options.Get(treeId).ApplyMaxParallelRuns;
+            if (configured > maxParallel)
+            {
+                maxParallel = configured;
+            }
+        }
+        if (maxParallel <= 1 || order.Count <= 1)
+        {
+            return null;
+        }
+
+        return new ParallelApplyPlan(groups, order, Math.Min(maxParallel, order.Count));
+    }
+
+    /// <summary>
+    /// Immutable plan describing how the inbound batch's runs are
+    /// grouped by tree for cross-tree parallel apply. <see cref="Groups"/>
+    /// maps each tree id to its ordered run segments;
+    /// <see cref="TreeOrder"/> preserves first-seen tree order; and
+    /// <see cref="EffectiveDegreeOfParallelism"/> is the bounded
+    /// concurrency the parallel apply path uses (configured maximum
+    /// clamped to the tree-group count).
+    /// </summary>
+    private readonly record struct ParallelApplyPlan(
+        Dictionary<string, List<(int Start, int End)>> Groups,
+        List<string> TreeOrder,
+        int EffectiveDegreeOfParallelism);
 
     /// <summary>
     /// Records an inbound per-peer contact against the bidirectional

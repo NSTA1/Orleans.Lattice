@@ -534,6 +534,33 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string ApplyFifoViolationsName = "orleans.lattice.replication.apply.fifo_violations";
 
+    // --- Parallel receiver apply ------------------------------------------------
+
+    /// <summary>
+    /// Histogram of the effective degree of parallelism the receiver-side
+    /// batch-apply path used for a single inbound batch - the number of
+    /// independent <c>(treeId, originClusterId)</c> run-groups applied
+    /// concurrently. Recorded once per multi-entry batch. A value of
+    /// <c>1</c> denotes fully-sequential apply (the default posture, or a
+    /// single-tree batch where cross-tree parallelism does not apply); a
+    /// value greater than <c>1</c> reports the achieved concurrency, which
+    /// is the host's configured
+    /// <see cref="LatticeReplicationOptions.ApplyMaxParallelRuns"/> clamped
+    /// to the number of distinct trees in the batch. Operators use the
+    /// distribution to confirm parallel apply is actually engaging under
+    /// multi-tree load and to correlate it with <see cref="ApplyLag"/>.
+    /// Untagged - the measurement describes the batch as a whole, which
+    /// may span multiple trees.
+    /// </summary>
+    public static readonly Histogram<int> ApplyParallelRuns =
+        Meter.CreateHistogram<int>("orleans.lattice.replication.apply.parallel_runs", unit: "{run}",
+            description: "Effective number of independent run-groups applied concurrently per inbound batch.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ApplyParallelRuns"/> histogram.
+    /// </summary>
+    public const string ApplyParallelRunsName = "orleans.lattice.replication.apply.parallel_runs";
+
     // --- Auto-bootstrap detector ------------------------------------------------
 
     /// <summary>

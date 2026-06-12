@@ -107,6 +107,16 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "per-origin high-water-mark check.");
         }
 
+        if (options.ApplyMaxParallelRuns < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ApplyMaxParallelRuns)} "
+                + $"must be at least 1 ({scope}). The receiver-side batch-apply path must permit at "
+                + "least one run to apply for the inbound batch to make progress; a value of 1 keeps "
+                + "apply fully sequential, and higher values bound how many independent (distinct-tree) "
+                + "runs may apply concurrently.");
+        }
+
         if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
         {
             return ValidateOptionsResult.Fail(
