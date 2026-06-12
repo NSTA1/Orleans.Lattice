@@ -1111,6 +1111,83 @@
       "targets": [
         { "refId": "A", "expr": "max by (tree) (avg_over_time(orleans_lattice_wal_saturation_state{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1h])) / 2 * 100", "legendFormat": "{{tree}}" }
       ]
+    },
+    {
+      "id": 38,
+      "title": "Snapshot replay throughput (rate)",
+      "description": "Rate of entries replayed from snapshots (orleans.lattice.snapshot.replay.entries), by tree. Non-zero during activation/recovery when a leaf rebuilds state from a snapshot plus WAL tail.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 117 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_snapshot_replay_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 39,
+      "title": "Snapshot replay duration p50/p95/p99 (ms)",
+      "description": "Wall-clock duration of snapshot replay operations (orleans.lattice.snapshot.replay.duration). Long tails extend activation latency for cold leaves.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 117 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_snapshot_replay_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_snapshot_replay_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_snapshot_replay_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 40,
+      "title": "Snapshot pins (current)",
+      "description": "Current number of pinned snapshots (orleans.lattice.snapshot.pins up/down counter). Pins hold a snapshot alive against trimming; a monotonically climbing value can indicate a pin leak.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 124 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum (orleans_lattice_snapshot_pins{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "pins" }
+      ]
+    },
+    {
+      "id": 41,
+      "title": "Retroactive split-forward throughput (rate)",
+      "description": "Rate of entries retroactively forwarded to a sibling shard after an adaptive split (orleans.lattice.split.retroactive_forward.entries), by tree. Non-zero only while a split is reconciling writes that landed on the pre-split slot ownership.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 124 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_split_retroactive_forward_entries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 42,
+      "title": "Retroactive split-forward duration p50/p95/p99 (ms)",
+      "description": "Wall-clock duration of retroactive split-forward operations (orleans.lattice.split.retroactive_forward.duration). Bounded by the split coordinators leaf-chain drain.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 131 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_split_retroactive_forward_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_split_retroactive_forward_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_split_retroactive_forward_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 43,
+      "title": "Compaction dirty leaves per pass (p50/p95)",
+      "description": "Distribution of dirty leaves visited per compaction pass (orleans.lattice.compaction.shard.dirty_leaves). A rising distribution means compaction is falling behind the write rate.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 131 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" }
+      ]
     }
   ]
 }

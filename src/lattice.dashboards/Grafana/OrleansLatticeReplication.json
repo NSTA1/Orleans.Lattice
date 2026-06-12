@@ -1020,6 +1020,83 @@
           "legendFormat": "{{reason}}"
         }
       ]
+    },
+    {
+      "id": 30,
+      "title": "Apply parallelism - runs per batch",
+      "description": "Distribution of the receiver apply degree-of-parallelism chosen per batch (orleans.lattice.replication.apply.parallel_runs). 1 = serial apply (the default, or a batch with no independent (tree, origin) runs); higher values appear only when ApplyMaxParallelRuns > 1 and the batch fans out across independent runs.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 78 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_apply_parallel_runs_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_apply_parallel_runs_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_apply_parallel_runs_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "Outbound batches in flight per peer",
+      "description": "Current count of shipped-but-unacknowledged replication batches per peer (orleans.lattice.replication.peer.ship_in_flight observable gauge). Climbs toward ShipMaxInFlight when pipelining is enabled and the peer is the bottleneck; flat at 0 or 1 with default settings.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 78 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (peer) (orleans_lattice_replication_peer_ship_in_flight{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{peer}}" }
+      ]
+    },
+    {
+      "id": 32,
+      "title": "Bootstrap throughput (rate)",
+      "description": "Per-tree rate of entries and value bytes received by the receiver bootstrap/backfill path (orleans.lattice.replication.bootstrap.entries_received / bootstrap.bytes_received). Non-zero only while a peer is catching up a cold or fell-off-log receiver.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 85 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_bootstrap_entries_received_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "entries/s {{tree}}" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_replication_bootstrap_bytes_received_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "bytes/s {{tree}}" }
+      ]
+    },
+    {
+      "id": 33,
+      "title": "Bootstrap duration p50/p95/p99 (ms)",
+      "description": "Wall-clock duration of receiver bootstrap operations (orleans.lattice.replication.bootstrap.duration), tagged by origin and outcome. Long tails indicate large backfills or a slow source.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 85 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_bootstrap_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_bootstrap_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_bootstrap_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 34,
+      "title": "Bootstrap transient retries (rate)",
+      "description": "Rate of transient (retryable) failures during receiver bootstrap (orleans.lattice.replication.bootstrap.transient_retries), by tree. A sustained non-zero rate signals a flaky source link slowing convergence.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 92 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_bootstrap_transient_retries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 35,
+      "title": "Fall-off-log suppressed events (rate)",
+      "description": "Rate of fall-off-log detections suppressed as duplicates (orleans.lattice.replication.peer.fell_off_log_suppressed), by tree. Pairs with the peer.fell_off_log panel: a high suppressed-to-raised ratio means the detector is correctly de-duplicating repeated signals for the same gap.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 92 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_peer_fell_off_log_suppressed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+      ]
     }
   ]
 }
