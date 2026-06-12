@@ -35,6 +35,10 @@ public class LatticeReplicationGrpcServiceCollectionExtensionsTests
         services.TryAddSingleton<IReplicationBatchEncoder, StubEncoder>();
         services.TryAddSingleton<IReplicationApplier>(_ => Substitute.For<IReplicationApplier>());
         services.TryAddSingleton<ISnapshotProvider>(_ => Substitute.For<ISnapshotProvider>());
+        // The gRPC receiver service resolves the local ILattice grain to
+        // answer inbound digest probes, so it now takes an IGrainFactory.
+        // Substitute it here (no silo in these unit tests).
+        services.TryAddSingleton<IGrainFactory>(_ => Substitute.For<IGrainFactory>());
         return services;
     }
 

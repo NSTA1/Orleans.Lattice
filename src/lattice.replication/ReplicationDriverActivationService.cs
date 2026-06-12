@@ -198,6 +198,22 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
                     .GetGrain<IReplicationMaintenanceGrain>(capturedTree)
                     .EnsureActiveAsync(ct)));
 
+            // Anti-entropy digest-probe scheduler, one per replicated
+            // tree. Activated only when the host has opted into the
+            // detection feature; default-off so an un-opted host never
+            // pays the activation. The per-tree options resolution uses
+            // the default instance here for the activation gate; the
+            // grain itself re-resolves per-tree on each phase tick.
+            if (_optionsMonitor.Get(capturedTree).DigestProbeEnabled)
+            {
+                pending.Add(new ActivationWorkItem(
+                    Kind: "digest-probe",
+                    Label: $"tree '{capturedTree}'",
+                    Activate: ct => _grainFactory
+                        .GetGrain<IReplicationDigestProbeGrain>(capturedTree)
+                        .EnsureActiveAsync(ct)));
+            }
+
             foreach (var peer in initialPeers)
             {
                 if (string.IsNullOrEmpty(peer))

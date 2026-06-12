@@ -73,7 +73,12 @@ public class GrpcPushTransportBuildEnvelopeTests
         var encoder = new CountingDecoder();
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), ackSerializer);
+        var method = new LatticeReplicationGrpcMethod(
+            encoder,
+            new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()),
+            ackSerializer,
+            sp.GetRequiredService<Serializer<DigestProbeRequest>>(),
+            sp.GetRequiredService<Serializer<DigestProbeResponse>>());
         var transport = new GrpcPushTransport(
             method,
             encoder,

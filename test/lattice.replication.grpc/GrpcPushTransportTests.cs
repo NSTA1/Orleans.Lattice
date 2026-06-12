@@ -49,11 +49,18 @@ public class GrpcPushTransportTests
     private static GrpcPushTransport CreateTransport(GrpcPushTransportOptions? opts = null)
     {
         var encoder = new StubEncoder();
-        var ackSerializer = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+        var sp = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
             .AddSerializer()
-            .BuildServiceProvider()
-            .GetRequiredService<Orleans.Serialization.Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+            .BuildServiceProvider();
+        var ackSerializer = sp.GetRequiredService<Orleans.Serialization.Serializer<ReplicationAck>>();
+        var probeRequestSerializer = sp.GetRequiredService<Orleans.Serialization.Serializer<DigestProbeRequest>>();
+        var probeResponseSerializer = sp.GetRequiredService<Orleans.Serialization.Serializer<DigestProbeResponse>>();
+        var method = new LatticeReplicationGrpcMethod(
+            encoder,
+            GrpcTestFactories.CreateWalRecordEncoder(),
+            ackSerializer,
+            probeRequestSerializer,
+            probeResponseSerializer);
         return new GrpcPushTransport(
             method,
             encoder,
@@ -91,7 +98,7 @@ public class GrpcPushTransportTests
             .AddSerializer()
             .BuildServiceProvider()
             .GetRequiredService<Orleans.Serialization.Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(encoder, ackSerializer);
 
         Assert.That(
             () => new GrpcPushTransport(method, null!, OptionsFor(new GrpcPushTransportOptions()), SecretsStub(), ReplicationOptionsFor()),
@@ -106,7 +113,7 @@ public class GrpcPushTransportTests
             .AddSerializer()
             .BuildServiceProvider()
             .GetRequiredService<Orleans.Serialization.Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(encoder, ackSerializer);
 
         Assert.That(
             () => new GrpcPushTransport(method, encoder, null!, SecretsStub(), ReplicationOptionsFor()),
@@ -121,7 +128,7 @@ public class GrpcPushTransportTests
             .AddSerializer()
             .BuildServiceProvider()
             .GetRequiredService<Orleans.Serialization.Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(encoder, ackSerializer);
 
         Assert.That(
             () => new GrpcPushTransport(method, encoder, OptionsFor(new GrpcPushTransportOptions()), null!, ReplicationOptionsFor()),
@@ -136,7 +143,7 @@ public class GrpcPushTransportTests
             .AddSerializer()
             .BuildServiceProvider()
             .GetRequiredService<Orleans.Serialization.Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(encoder, ackSerializer);
 
         Assert.That(
             () => new GrpcPushTransport(method, encoder, OptionsFor(new GrpcPushTransportOptions()), SecretsStub(), null!),

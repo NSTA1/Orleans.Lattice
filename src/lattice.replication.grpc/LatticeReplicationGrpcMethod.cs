@@ -28,21 +28,29 @@ internal sealed class LatticeReplicationGrpcMethod
     /// <summary>The unary push RPC method name.</summary>
     public const string PushMethodName = "Push";
 
+    /// <summary>The unary anti-entropy digest-probe RPC method name.</summary>
+    public const string ProbeDigestMethodName = "ProbeDigest";
+
     private readonly Method<ReplicationBatchEnvelopeBox, ReplicationAckBox> _push;
+    private readonly Method<DigestProbeRequestBox, DigestProbeResponseBox> _probeDigest;
 
     /// <summary>
     /// Initialises the holder with the supplied
-    /// <paramref name="encoder"/> and <paramref name="ackSerializer"/>.
+    /// <paramref name="encoder"/> and serializers.
     /// Resolved from DI in the standard registration path.
     /// </summary>
     public LatticeReplicationGrpcMethod(
         IReplicationBatchEncoder encoder,
         IWalRecordEncoder walRecordEncoder,
-        Serializer<ReplicationAck> ackSerializer)
+        Serializer<ReplicationAck> ackSerializer,
+        Serializer<DigestProbeRequest> probeRequestSerializer,
+        Serializer<DigestProbeResponse> probeResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(encoder);
         ArgumentNullException.ThrowIfNull(walRecordEncoder);
         ArgumentNullException.ThrowIfNull(ackSerializer);
+        ArgumentNullException.ThrowIfNull(probeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(probeResponseSerializer);
 
         _push = new Method<ReplicationBatchEnvelopeBox, ReplicationAckBox>(
             type: MethodType.Unary,
@@ -50,6 +58,13 @@ internal sealed class LatticeReplicationGrpcMethod
             name: PushMethodName,
             requestMarshaller: LatticeReplicationGrpcMarshallers.CreateEnvelopeMarshaller(encoder, walRecordEncoder),
             responseMarshaller: LatticeReplicationGrpcMarshallers.CreateAckMarshaller(ackSerializer));
+
+        _probeDigest = new Method<DigestProbeRequestBox, DigestProbeResponseBox>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ProbeDigestMethodName,
+            requestMarshaller: LatticeReplicationGrpcMarshallers.CreateProbeRequestMarshaller(probeRequestSerializer),
+            responseMarshaller: LatticeReplicationGrpcMarshallers.CreateProbeResponseMarshaller(probeResponseSerializer));
     }
 
     /// <summary>
@@ -59,5 +74,13 @@ internal sealed class LatticeReplicationGrpcMethod
     /// both ends are guaranteed to wire up identical marshallers.
     /// </summary>
     public Method<ReplicationBatchEnvelopeBox, ReplicationAckBox> Push => _push;
+
+    /// <summary>
+    /// The unary anti-entropy <c>ProbeDigest</c> RPC method. Used by both
+    /// the client-side invoker (<see cref="GrpcPushTransport"/>) and the
+    /// server-side service binder so both ends wire up identical
+    /// marshallers.
+    /// </summary>
+    public Method<DigestProbeRequestBox, DigestProbeResponseBox> ProbeDigest => _probeDigest;
 }
 

@@ -111,4 +111,18 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
 
+    // Anti-entropy peer digest probe (detect stage)
+
+    /// <summary>Alias for <see cref="Replication.DigestProbeRequest"/>.</summary>
+    internal const string DigestProbeRequest = "olr.dq";
+
+    /// <summary>Alias for <see cref="Replication.DigestProbeResponse"/>.</summary>
+    internal const string DigestProbeResponse = "olr.dp";
+
+    /// <summary>Alias for the per-tree digest-probe scheduler grain interface.</summary>
+    internal const string IReplicationDigestProbeGrain = "olr.gp";
+
+    /// <summary>Alias for the per-tree digest-probe scheduler grain persistent state class.</summary>
+    internal const string ReplicationDigestProbeState = "olr.ps";
+
 }

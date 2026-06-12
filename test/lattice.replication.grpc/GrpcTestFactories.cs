@@ -26,4 +26,23 @@ internal static class GrpcTestFactories
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         return new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>());
     }
+
+    /// <summary>
+    /// Builds a <see cref="LatticeReplicationGrpcMethod"/> wired with the
+    /// canonical WAL-record encoder and the anti-entropy digest-probe
+    /// request/response serializers resolved from a freshly-built Orleans
+    /// serializer service provider.
+    /// </summary>
+    public static LatticeReplicationGrpcMethod CreateMethod(
+        IReplicationBatchEncoder encoder,
+        Serializer<ReplicationAck> ackSerializer)
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        return new LatticeReplicationGrpcMethod(
+            encoder,
+            CreateWalRecordEncoder(),
+            ackSerializer,
+            sp.GetRequiredService<Serializer<DigestProbeRequest>>(),
+            sp.GetRequiredService<Serializer<DigestProbeResponse>>());
+    }
 }

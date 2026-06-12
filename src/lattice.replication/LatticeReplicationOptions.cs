@@ -604,6 +604,48 @@ public class LatticeReplicationOptions
     public TimeSpan MaintenanceFallOffCheckInterval { get; set; } = DefaultMaintenanceFallOffCheckInterval;
 
     /// <summary>
+    /// Master switch for the anti-entropy peer digest-probe scheduler -
+    /// the first detection stage of the cross-cluster reconciliation
+    /// chain. When <see langword="true"/>, a low-frequency per-tree
+    /// scheduler reads each shard's local
+    /// <see cref="ILattice.GetLeafProjectionDigestAsync(int, CancellationToken)"/>
+    /// and compares it against every peer's digest fetched over the
+    /// replication push transport, emitting the
+    /// <see cref="LatticeReplicationMetrics.DigestProbeCompared"/> and
+    /// <see cref="LatticeReplicationMetrics.DigestProbeMismatch"/>
+    /// counters. The probe is strictly read-only: it never mutates data
+    /// or advances any cursor.
+    /// <para>
+    /// Defaults to <see cref="DefaultDigestProbeEnabled"/>
+    /// (<see langword="false"/>). The detection feature ships dark so it
+    /// does not change replication behaviour for a host that has not
+    /// opted in; enabling it adds only the periodic read-and-compare
+    /// telemetry pass.
+    /// </para>
+    /// </summary>
+    public bool DigestProbeEnabled { get; set; } = DefaultDigestProbeEnabled;
+
+    /// <summary>
+    /// Base cadence at which the anti-entropy digest-probe scheduler runs
+    /// a comparison pass for each replicated tree. Each pass is jittered
+    /// by <see cref="DigestProbeJitter"/> so a fleet of silos does not
+    /// probe in lock-step. Only consulted when
+    /// <see cref="DigestProbeEnabled"/> is <see langword="true"/>.
+    /// Defaults to <see cref="DefaultDigestProbeInterval"/> (5 minutes).
+    /// Must be strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// </summary>
+    public TimeSpan DigestProbeInterval { get; set; } = DefaultDigestProbeInterval;
+
+    /// <summary>
+    /// Multiplicative jitter applied to <see cref="DigestProbeInterval"/>
+    /// so peers do not probe in lock-step. Each effective interval is
+    /// scaled by a random factor in <c>[1.0 - jitter, 1.0 + jitter]</c>.
+    /// Defaults to <see cref="DefaultDigestProbeJitter"/> (20% spread).
+    /// Must be in <c>[0.0, 1.0]</c>; <c>0.0</c> disables jitter entirely.
+    /// </summary>
+    public double DigestProbeJitter { get; set; } = DefaultDigestProbeJitter;
+
+    /// <summary>
     /// Whether <see cref="ShardedReplogSink"/> rings the per-peer
     /// shipper grain after a successful WAL append, signalling that
     /// new entries are available. Disabling the doorbell falls back
@@ -993,6 +1035,27 @@ public class LatticeReplicationOptions
     /// 30 seconds.
     /// </summary>
     public static readonly TimeSpan DefaultMaintenanceFallOffCheckInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Default value for <see cref="DigestProbeEnabled"/>:
+    /// <see langword="false"/>. The anti-entropy detection feature ships
+    /// dark and opt-in so it does not change replication behaviour for a
+    /// host that has not enabled it.
+    /// </summary>
+    public const bool DefaultDigestProbeEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="DigestProbeInterval"/>: 5 minutes.
+    /// A deliberately low frequency - the probe is a background drift
+    /// detector, not a hot-path check.
+    /// </summary>
+    public static readonly TimeSpan DefaultDigestProbeInterval = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Default value for <see cref="DigestProbeJitter"/>: 20 % spread
+    /// each side of the nominal interval.
+    /// </summary>
+    public const double DefaultDigestProbeJitter = 0.2;
 
     /// <summary>
     /// Default value for <see cref="ShipDoorbellEnabled"/>: doorbell

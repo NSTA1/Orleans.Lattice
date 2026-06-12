@@ -101,6 +101,7 @@ public class GrpcReplicationHeaderCaptureTests
                     services.AddRouting();
                     services.AddSingleton<CapturedHeaders>(captured);
                     services.AddSingleton<CapturingInterceptor>();
+                    services.AddSingleton(Substitute.For<IGrainFactory>());
                     services.AddLatticeReplicationGrpc();
                     // Add the capturing interceptor after the auth interceptor so
                     // it only runs on calls that already passed auth.
@@ -156,7 +157,7 @@ public class GrpcReplicationHeaderCaptureTests
     public async Task Sender_call_credentials_send_both_secret_and_origin_headers_on_the_wire()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
 
         // Use the same call-credentials path the production sender uses.
         var secrets = Substitute.For<IReplicationSecretProvider>();

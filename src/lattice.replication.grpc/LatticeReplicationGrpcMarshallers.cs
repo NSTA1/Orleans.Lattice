@@ -66,6 +66,27 @@ internal sealed class ReplicationAckBox
 }
 
 /// <summary>
+/// Reference-typed wrapper around <see cref="DigestProbeRequest"/> for the
+/// anti-entropy digest-probe RPC. gRPC's
+/// <see cref="Method{TRequest, TResponse}"/> imposes a <c>class</c>
+/// constraint; the public request is a <c>readonly record struct</c>.
+/// Mirrors <see cref="ReplicationBatchEnvelopeBox"/>.
+/// </summary>
+internal sealed class DigestProbeRequestBox
+{
+    public DigestProbeRequest Value { get; init; }
+}
+
+/// <summary>
+/// Reference-typed wrapper around <see cref="DigestProbeResponse"/> for
+/// the anti-entropy digest-probe RPC. Mirrors <see cref="ReplicationAckBox"/>.
+/// </summary>
+internal sealed class DigestProbeResponseBox
+{
+    public DigestProbeResponse Value { get; init; }
+}
+
+/// <summary>
 /// Builds gRPC <see cref="Marshaller{T}"/> instances that delegate to
 /// <see cref="IReplicationBatchEncoder"/> for the request envelope and
 /// to the Orleans <see cref="Serializer{T}"/> for the response ack. The
@@ -154,6 +175,65 @@ internal static class LatticeReplicationGrpcMarshallers
                 context.Complete();
             },
             deserializer: context => new ReplicationAckBox { Value = DeserializeAck(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="DigestProbeRequestBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer
+    /// hand-off pattern as the ack marshaller.
+    /// </summary>
+    public static Marshaller<DigestProbeRequestBox> CreateProbeRequestMarshaller(Serializer<DigestProbeRequest> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<DigestProbeRequestBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new DigestProbeRequestBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="DigestProbeResponseBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer
+    /// hand-off pattern as the ack marshaller.
+    /// </summary>
+    public static Marshaller<DigestProbeResponseBox> CreateProbeResponseMarshaller(Serializer<DigestProbeResponse> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<DigestProbeResponseBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new DigestProbeResponseBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    private static T DeserializeValue<T>(Serializer<T> serializer, GrpcDeserializationContext context)
+    {
+        var sequence = context.PayloadAsReadOnlySequence();
+        if (sequence.IsSingleSegment)
+        {
+            return serializer.Deserialize(sequence.First.Span);
+        }
+
+        var length = checked((int)sequence.Length);
+        var rented = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            sequence.CopyTo(rented);
+            return serializer.Deserialize(new ReadOnlySpan<byte>(rented, 0, length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     private static ReplicationBatchEnvelope DecodeEnvelope(
