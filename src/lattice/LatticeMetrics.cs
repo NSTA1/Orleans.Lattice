@@ -2170,4 +2170,96 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagStage"/> = <c>merge</c> (LatticeGrain.GetManyAsync post-fan-out result merge plus snapshot- and topology-stability checks).</summary>
     public static readonly KeyValuePair<string, object?> StageMergeTag = new(TagStage, "merge");
+
+    // --- Auto-trained compression-dictionary instruments -------------------
+    //
+    // Emitted by AutoTrainingCompressionDictionaryProvider, the opt-in
+    // (default-off) provider that samples a bounded reservoir of payloads and
+    // periodically trains a Zstandard dictionary off the hot path. When
+    // auto-training is disabled the provider emits none of these. The two
+    // observable gauges (active_version, reservoir_fill) are registered lazily
+    // by the provider instance (so they cost nothing when no provider is
+    // constructed and nothing when no listener is attached); their canonical
+    // names are exposed as `...Name` constants so the dashboards drift-guard
+    // recognises the PromQL token forms even though the instruments are not
+    // statically constructed on this meter. The three counters are ordinary
+    // counters constructed on the meter below.
+
+    /// <summary>
+    /// Counter incremented once per auto-training pass attempt, tagged with
+    /// <see cref="TagOutcome"/> = <c>trained</c> (a dictionary was built),
+    /// <c>skipped_insufficient_samples</c> (the reservoir held fewer than the
+    /// configured minimum, or the underlying builder rejected the corpus), or
+    /// <c>skipped_cadence</c> (the minimum training interval had not yet
+    /// elapsed since the previous attempt).
+    /// </summary>
+    public static readonly Counter<long> CompressionDictionaryTrainingRuns =
+        Meter.CreateCounter<long>(CompressionDictionaryTrainingRunsName, unit: "{run}",
+            description: "Auto-training dictionary pass attempts, tagged by outcome (trained, skipped_insufficient_samples, skipped_cadence).");
+
+    /// <summary>Canonical name of <see cref="CompressionDictionaryTrainingRuns"/>.</summary>
+    public const string CompressionDictionaryTrainingRunsName = "orleans.lattice.compress.dictionary.training_runs";
+
+    /// <summary>
+    /// Counter of the no-dictionary (plain Zstandard) baseline compressed
+    /// bytes of the training probe, summed once per successful training pass.
+    /// Paired with <see cref="CompressionDictionaryTrainedBytesOut"/>: the
+    /// trained-dictionary compression-ratio delta versus the dictionary-less
+    /// baseline is <c>trained_bytes_out / trained_bytes_in</c> (a value below
+    /// <c>1</c> means the trained dictionary beats plain Zstandard on the
+    /// sampled corpus).
+    /// </summary>
+    public static readonly Counter<long> CompressionDictionaryTrainedBytesIn =
+        Meter.CreateCounter<long>(CompressionDictionaryTrainedBytesInName, unit: "By",
+            description: "No-dictionary (plain Zstd) baseline compressed bytes of the training probe, summed per successful auto-training pass.");
+
+    /// <summary>Canonical name of <see cref="CompressionDictionaryTrainedBytesIn"/>.</summary>
+    public const string CompressionDictionaryTrainedBytesInName = "orleans.lattice.compress.dictionary.trained_bytes_in";
+
+    /// <summary>
+    /// Counter of the trained-dictionary compressed bytes of the training
+    /// probe, summed once per successful training pass. See
+    /// <see cref="CompressionDictionaryTrainedBytesIn"/> for the ratio
+    /// interpretation.
+    /// </summary>
+    public static readonly Counter<long> CompressionDictionaryTrainedBytesOut =
+        Meter.CreateCounter<long>(CompressionDictionaryTrainedBytesOutName, unit: "By",
+            description: "Trained-dictionary compressed bytes of the training probe, summed per successful auto-training pass.");
+
+    /// <summary>Canonical name of <see cref="CompressionDictionaryTrainedBytesOut"/>.</summary>
+    public const string CompressionDictionaryTrainedBytesOutName = "orleans.lattice.compress.dictionary.trained_bytes_out";
+
+    /// <summary>
+    /// Canonical name of the observable gauge reporting the currently active
+    /// auto-trained dictionary id (the monotonic version the encoder should
+    /// request). <c>0</c> means no dictionary has been trained yet. Registered
+    /// lazily by <see cref="AutoTrainingCompressionDictionaryProvider"/>; not
+    /// statically constructed on the meter.
+    /// </summary>
+    public const string CompressionDictionaryActiveVersionName = "orleans.lattice.compress.dictionary.active_version";
+
+    /// <summary>
+    /// Canonical name of the observable gauge reporting auto-training reservoir
+    /// occupancy. Reports two series tagged with <see cref="TagKind"/>:
+    /// <c>samples</c> (retained sample count) and <c>bytes</c> (retained total
+    /// bytes). Registered lazily by
+    /// <see cref="AutoTrainingCompressionDictionaryProvider"/>; not statically
+    /// constructed on the meter.
+    /// </summary>
+    public const string CompressionDictionaryReservoirFillName = "orleans.lattice.compress.dictionary.reservoir_fill";
+
+    /// <summary><see cref="TagOutcome"/> = <c>trained</c> (an auto-training pass built a dictionary).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeTrained = new(TagOutcome, "trained");
+
+    /// <summary><see cref="TagOutcome"/> = <c>skipped_insufficient_samples</c> (the reservoir held too few samples to train).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeSkippedInsufficientSamples = new(TagOutcome, "skipped_insufficient_samples");
+
+    /// <summary><see cref="TagOutcome"/> = <c>skipped_cadence</c> (the minimum training interval had not elapsed).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeSkippedCadence = new(TagOutcome, "skipped_cadence");
+
+    /// <summary><see cref="TagKind"/> = <c>samples</c> (reservoir-fill sample-count series).</summary>
+    public static readonly KeyValuePair<string, object?> ReservoirFillSamplesTag = new(TagKind, "samples");
+
+    /// <summary><see cref="TagKind"/> = <c>bytes</c> (reservoir-fill total-bytes series).</summary>
+    public static readonly KeyValuePair<string, object?> ReservoirFillBytesTag = new(TagKind, "bytes");
 }

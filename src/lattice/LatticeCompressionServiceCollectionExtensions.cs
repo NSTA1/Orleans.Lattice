@@ -181,4 +181,54 @@ public static class LatticeCompressionServiceCollectionExtensions
                 sp.GetRequiredService<ILatticeCompressionDictionaryProvider>())));
         return services;
     }
+
+    /// <summary>
+    /// Registers the auto-trained shared compression-dictionary provider
+    /// (<see cref="AutoTrainingCompressionDictionaryProvider"/>) as the
+    /// singleton <see cref="ILatticeCompressionDictionaryProvider"/>. The
+    /// provider samples a bounded reservoir of observed payloads and
+    /// periodically trains a Zstandard dictionary off the hot path, publishing
+    /// it under a monotonically increasing dictionary id. It is opt-in and
+    /// off by default: pass a <paramref name="configure"/> delegate that sets
+    /// <see cref="CompressionDictionaryTrainingOptions.Enabled"/> to
+    /// <see langword="true"/> to activate it.
+    /// <para>
+    /// Composes with <see cref="AddLatticeZstdDictionaryCompressor"/>: register
+    /// both so the dictionary-aware Zstandard compressor resolves the
+    /// auto-trained dictionary bytes through this provider. The concrete
+    /// provider is also registered as itself so a host can resolve it to feed
+    /// observed payloads (<c>Observe</c>) and drive training passes
+    /// (<c>TryTrain</c>). Registration uses
+    /// <see cref="ServiceCollectionDescriptorExtensions.TryAddSingleton(IServiceCollection, ServiceDescriptor)"/>,
+    /// so a host-supplied provider registered earlier wins.
+    /// </para>
+    /// </summary>
+    /// <param name="services">The DI service collection.</param>
+    /// <param name="configure">
+    /// Optional delegate to configure the
+    /// <see cref="CompressionDictionaryTrainingOptions"/>. When
+    /// <see langword="null"/> the default (disabled) options are used.
+    /// </param>
+    /// <returns>
+    /// The same <paramref name="services"/> instance for fluent chaining.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="services"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The configured options are outside their documented valid ranges.
+    /// </exception>
+    public static IServiceCollection AddLatticeAutoTrainingCompressionDictionary(
+        this IServiceCollection services,
+        Action<CompressionDictionaryTrainingOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        var options = new CompressionDictionaryTrainingOptions();
+        configure?.Invoke(options);
+        options.Validate();
+        services.TryAddSingleton(_ => new AutoTrainingCompressionDictionaryProvider(options));
+        services.TryAddSingleton<ILatticeCompressionDictionaryProvider>(
+            sp => sp.GetRequiredService<AutoTrainingCompressionDictionaryProvider>());
+        return services;
+    }
 }

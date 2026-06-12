@@ -70,6 +70,11 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.split.retroactive_forward.entries` | counter | `tree` | Overview | Retroactive split-forward throughput |
 | `orleans.lattice.split.retroactive_forward.duration` | histogram (ms) | `tree` | Overview | Retroactive split-forward duration p50/p95/p99 |
 | `orleans.lattice.compaction.shard.dirty_leaves` | histogram (`{leaf}`) | `tree` | Overview | Compaction dirty leaves per pass |
+| `orleans.lattice.compress.dictionary.training_runs` | counter | `outcome` | Overview | Auto-trained dictionary - training runs by outcome |
+| `orleans.lattice.compress.dictionary.active_version` | observable gauge | - | Overview | Auto-trained dictionary - active version |
+| `orleans.lattice.compress.dictionary.reservoir_fill` | observable gauge | `kind` | Overview | Auto-trained dictionary - reservoir fill |
+| `orleans.lattice.compress.dictionary.trained_bytes_in` | counter (`By`) | - | Overview | Auto-trained dictionary - trained vs baseline compression ratio |
+| `orleans.lattice.compress.dictionary.trained_bytes_out` | counter (`By`) | - | Overview | Auto-trained dictionary - trained vs baseline compression ratio |
 
 ## `orleans.lattice.replication` meter
 
