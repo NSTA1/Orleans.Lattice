@@ -525,6 +525,144 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_shard_root_forward_timeouts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
       ]
+    },
+    {
+      "id": 114,
+      "title": "WAL writer admission & dispatch (rate)",
+      "description": "Outbound WAL writer admission outcomes and dispatch rate: admission_saturation_refusals (writer refused an append because the per-partition admission cap was saturated), admission_timeouts (waiter timed out before admission), dispatched (appends handed to the provider) and drain.releases (admission slots released on drain). A rising refusal/timeout rate is the writer-tier view of WAL back-pressure.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 107 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum (rate(orleans_lattice_wal_writer_append_admission_saturation_refusals_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "saturation refusals/s" },
+        { "refId": "B", "expr": "sum (rate(orleans_lattice_wal_writer_append_admission_timeouts_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "admission timeouts/s" },
+        { "refId": "C", "expr": "sum (rate(orleans_lattice_wal_writer_append_dispatched_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "dispatched/s" },
+        { "refId": "D", "expr": "sum (rate(orleans_lattice_wal_writer_append_drain_releases_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "drain releases/s" }
+      ]
+    },
+    {
+      "id": 115,
+      "title": "WAL writer admission wait p50/p95/p99 (ms)",
+      "description": "Time an append waits for an admission slot before being dispatched (orleans.lattice.wal.writer.append.admission_wait). The latency twin of the admission counters: a climbing p95 is the early warning that the writer is becoming the commit-path bottleneck.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 107 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_wal_writer_append_admission_wait_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_writer_append_admission_wait_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_wal_writer_append_admission_wait_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 116,
+      "title": "WAL writer partition pending appends (p50/p95/max)",
+      "description": "Distribution of queued appends per WAL writer partition (orleans.lattice.wal.writer.partition.pending_appends). A persistently high max with a low p50 indicates a single hot partition; a uniformly high distribution indicates a cluster-wide write cap.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 114 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_wal_writer_partition_pending_appends_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_writer_partition_pending_appends_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(1.0, sum by (le) (rate(orleans_lattice_wal_writer_partition_pending_appends_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "max" }
+      ]
+    },
+    {
+      "id": 117,
+      "title": "WAL shard backlog (p95)",
+      "description": "Per-shard WAL backlog gauges at p95: pending_segments (unflushed segments), deactivate.in_flight (slots awaiting deactivation), drain.budget.force_faulted_slots (slots force-faulted when the drain budget expired). Sustained growth precedes a saturation regime.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 114 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_shard_pending_segments_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "pending segments p95" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_shard_deactivate_in_flight_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "deactivate in-flight p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_wal_shard_drain_budget_force_faulted_slots_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "force-faulted slots p95" }
+      ]
+    },
+    {
+      "id": 118,
+      "title": "WAL shard drain budget & flush calls (rate)",
+      "description": "Rate of WAL shard drain-budget expirations (orleans.lattice.wal.shard.drain.budget.expirations) and start-flush calls (orleans.lattice.wal.shard.start_flush.calls). Budget expirations are the trigger for the force-faulted-slots backlog above; a non-zero rate means drains are not completing within WalDrainBudget.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 121 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum (rate(orleans_lattice_wal_shard_drain_budget_expirations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "drain-budget expirations/s" },
+        { "refId": "B", "expr": "sum (rate(orleans_lattice_wal_shard_start_flush_calls_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "start-flush calls/s" }
+      ]
+    },
+    {
+      "id": 119,
+      "title": "WAL flush / dispatch timeouts (rate)",
+      "description": "Rate of WAL timeout trips: append_dispatch.timeouts (an append-dispatch turn exceeded WalAppendDispatchTimeout) and flush.preflight.timeouts (a flush preflight exceeded WalFlushPreflightTimeout). Each non-zero series is a deadline guard firing and should be rare in a healthy silo.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 121 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_append_dispatch_timeouts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "append-dispatch {{tree}}" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_wal_flush_preflight_timeouts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "flush-preflight {{tree}}" }
+      ]
+    },
+    {
+      "id": 120,
+      "title": "Provider commit timeouts & retry short-circuits (rate)",
+      "description": "Rate of storage-provider commit timeouts (orleans.lattice.provider.phase2.commit.timeouts) and retry short-circuits (orleans.lattice.provider.retry.short_circuited, a retry abandoned early because the circuit was open). Both are provider-health signals on the commit path.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 128 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum (rate(orleans_lattice_provider_phase2_commit_timeouts_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "phase2 commit timeouts/s" },
+        { "refId": "B", "expr": "sum (rate(orleans_lattice_provider_retry_short_circuited_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "retry short-circuits/s" }
+      ]
+    },
+    {
+      "id": 121,
+      "title": "Digest reads & publish timeouts (rate)",
+      "description": "Rate of leaf-digest reads (orleans.lattice.shard.digest_reads) and internal digest-publish timeouts (orleans.lattice.internal.digest_publish.timeouts, a digest publish that exceeded DigestPublishTimeout). The timeout series should stay flat-zero in a healthy cluster.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 128 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum (rate(orleans_lattice_shard_digest_reads_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "digest reads/s" },
+        { "refId": "B", "expr": "sum (rate(orleans_lattice_internal_digest_publish_timeouts_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "publish timeouts/s" }
+      ]
+    },
+    {
+      "id": 122,
+      "title": "Reshard activity (rate)",
+      "description": "Rate of online-reshard lifecycle events: initiated, completed, rejected (orleans.lattice.shard_root.reshard.*) and activation_ready.timeouts (orleans.lattice.shard_root.activation_ready.timeouts, a shard activation that did not become ready within ActivationReadyTimeout). Rejections and activation-ready timeouts should be rare.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 135 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum (rate(orleans_lattice_shard_root_reshard_initiated_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "initiated/s" },
+        { "refId": "B", "expr": "sum (rate(orleans_lattice_shard_root_reshard_completed_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "completed/s" },
+        { "refId": "C", "expr": "sum (rate(orleans_lattice_shard_root_reshard_rejected_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "rejected/s" },
+        { "refId": "D", "expr": "sum (rate(orleans_lattice_shard_root_activation_ready_timeouts_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "activation-ready timeouts/s" }
+      ]
+    },
+    {
+      "id": 123,
+      "title": "Reshard runs in flight (p50/p95/max)",
+      "description": "Distribution of concurrent in-flight reshard runs (orleans.lattice.shard_root.reshard.in_flight). The companion gauge to the reshard activity counters; a non-zero max means a resize is actively migrating slots.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 135 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_shard_root_reshard_in_flight_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_reshard_in_flight_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(1.0, sum by (le) (rate(orleans_lattice_shard_root_reshard_in_flight_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "max" }
+      ]
     }
   ]
 }

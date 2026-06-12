@@ -42,6 +42,34 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.leaf.replay.duration` | histogram (ms) | `tree`, `outcome` | CommitPath | Activation replay duration by outcome |
 | `orleans.lattice.leaf.replay.entries` | counter | `tree`, `outcome` | CommitPath | Replay entries (applied vs skipped) |
 | `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-forward timeouts (reshard swap-phase wedge guard) |
+| `orleans.lattice.wal.writer.append.admission_saturation_refusals` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
+| `orleans.lattice.wal.writer.append.admission_timeouts` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
+| `orleans.lattice.wal.writer.append.dispatched` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
+| `orleans.lattice.wal.writer.append.drain.releases` | counter | `tree` | CommitPath | WAL writer admission & dispatch (rate) |
+| `orleans.lattice.wal.writer.append.admission_wait` | histogram (ms) | `tree` | CommitPath | WAL writer admission wait p50/p95/p99 |
+| `orleans.lattice.wal.writer.partition.pending_appends` | histogram (`{dispatch}`) | `tree`, `partition` | CommitPath | WAL writer partition pending appends |
+| `orleans.lattice.wal.shard.pending_segments` | histogram (`{segment}`) | `tree` | CommitPath | WAL shard backlog |
+| `orleans.lattice.wal.shard.deactivate.in_flight` | histogram (`{slot}`) | `tree` | CommitPath | WAL shard backlog |
+| `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` | histogram (`{slot}`) | `tree` | CommitPath | WAL shard backlog |
+| `orleans.lattice.wal.shard.drain.budget.expirations` | counter | `tree` | CommitPath | WAL shard drain budget & flush calls |
+| `orleans.lattice.wal.shard.start_flush.calls` | counter | `tree` | CommitPath | WAL shard drain budget & flush calls |
+| `orleans.lattice.wal.append_dispatch.timeouts` | counter | `tree` | CommitPath | WAL flush / dispatch timeouts |
+| `orleans.lattice.wal.flush.preflight.timeouts` | counter | `tree` | CommitPath | WAL flush / dispatch timeouts |
+| `orleans.lattice.provider.phase2.commit.timeouts` | counter | `tree` | CommitPath | Provider commit timeouts & retry short-circuits |
+| `orleans.lattice.provider.retry.short_circuited` | counter | `tree` | CommitPath | Provider commit timeouts & retry short-circuits |
+| `orleans.lattice.shard.digest_reads` | counter | `tree`, `shard` | CommitPath | Digest reads & publish timeouts |
+| `orleans.lattice.internal.digest_publish.timeouts` | counter | `tree` | CommitPath | Digest reads & publish timeouts |
+| `orleans.lattice.shard_root.reshard.initiated` | counter | `tree` | CommitPath | Reshard activity |
+| `orleans.lattice.shard_root.reshard.completed` | counter | `tree` | CommitPath | Reshard activity |
+| `orleans.lattice.shard_root.reshard.rejected` | counter | `tree`, `reason` | CommitPath | Reshard activity |
+| `orleans.lattice.shard_root.activation_ready.timeouts` | counter | `tree` | CommitPath | Reshard activity |
+| `orleans.lattice.shard_root.reshard.in_flight` | histogram (`{reshard}`) | `tree` | CommitPath | Reshard runs in flight |
+| `orleans.lattice.snapshot.replay.entries` | counter | `tree` | Overview | Snapshot replay throughput |
+| `orleans.lattice.snapshot.replay.duration` | histogram (ms) | `tree` | Overview | Snapshot replay duration p50/p95/p99 |
+| `orleans.lattice.snapshot.pins` | up/down counter | `tree` | Overview | Snapshot pins (current) |
+| `orleans.lattice.split.retroactive_forward.entries` | counter | `tree` | Overview | Retroactive split-forward throughput |
+| `orleans.lattice.split.retroactive_forward.duration` | histogram (ms) | `tree` | Overview | Retroactive split-forward duration p50/p95/p99 |
+| `orleans.lattice.compaction.shard.dirty_leaves` | histogram (`{leaf}`) | `tree` | Overview | Compaction dirty leaves per pass |
 
 ## `orleans.lattice.replication` meter
 
@@ -79,3 +107,10 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.coalesce.bytes_elided` | counter (`By`) | `tree`, `peer` | Pre-ship coalescing elided entries |
 | `orleans.lattice.replication.leaf_rereplay.entries` | counter | `tree`, `peer` | Leaf re-replay entries re-shipped (rate) |
 | `orleans.lattice.replication.leaf_rereplay.skipped` | counter | `tree`, `peer`, `reason` | Leaf re-replay skipped (rate by reason) |
+| `orleans.lattice.replication.apply.parallel_runs` | histogram (`{run}`) | - | Apply parallelism - runs per batch |
+| `orleans.lattice.replication.peer.ship_in_flight` | observable gauge | `peer` | Outbound batches in flight per peer |
+| `orleans.lattice.replication.bootstrap.entries_received` | counter | `tree`, `origin` | Bootstrap throughput (rate) |
+| `orleans.lattice.replication.bootstrap.bytes_received` | counter (`By`) | `tree`, `origin` | Bootstrap throughput (rate) |
+| `orleans.lattice.replication.bootstrap.duration` | histogram (ms) | `tree`, `origin`, `outcome` | Bootstrap duration p50/p95/p99 |
+| `orleans.lattice.replication.bootstrap.transient_retries` | counter | `tree`, `origin` | Bootstrap transient retries (rate) |
+| `orleans.lattice.replication.peer.fell_off_log_suppressed` | counter | `tree`, `origin` | Fall-off-log suppressed events (rate) |

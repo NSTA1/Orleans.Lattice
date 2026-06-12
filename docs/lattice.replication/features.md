@@ -148,6 +148,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
 - [R-133](https://github.com/NSTA1/Orleans.Lattice/issues/697) - Adaptive sender-side batch sizing from ack-latency / throughput
 - [R-130](https://github.com/NSTA1/Orleans.Lattice/issues/694) - Pre-ship WAL entry coalescing (LWW latest-wins + CRDT delta merge)
+- [R-136](https://github.com/NSTA1/Orleans.Lattice/issues/708) - Grafana panel catch-up for previously unpaneled replication and core metrics
 
 ## Follow-up fixes
 
