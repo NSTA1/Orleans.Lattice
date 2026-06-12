@@ -422,9 +422,11 @@ public readonly record struct ReplicationPeerSnapshot(
 /// Per-peer wire-version negotiation telemetry state. Backs the two
 /// observable gauges declared on <see cref="LatticeReplicationMetrics"/>:
 /// <c>wire_version.negotiated</c> (the framing wire version the local
-/// sender encodes at for each peer) and <c>wire_version.downgrade_active</c>
-/// (<c>1</c> when the sender is down-encoding to an older peer, else
-/// <c>0</c>). Instances are designed to be registered as a singleton by
+/// sender has negotiated as the target for each peer) and
+/// <c>wire_version.downgrade_active</c>
+/// (<c>1</c> when the negotiated target is below the sender's current
+/// version, else <c>0</c> - telemetry only, the sender does not yet
+/// re-encode at the negotiated version). Instances are designed to be registered as a singleton by
 /// <c>AddLatticeReplication</c> - the constructor wires the observable
 /// gauges, so a single instance is sufficient per silo.
 /// </summary>
