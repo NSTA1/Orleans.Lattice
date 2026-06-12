@@ -95,6 +95,48 @@ The window preserves the same ordering and durability guarantees the serial path
 
 A window greater than `1` issues concurrent `IReplicationTransport.SendAsync` calls for the same `(tree, peer)` pair, so a transport used with pipelining must tolerate concurrent invocation against one pair. The default window of `1` preserves strictly-serial-per-pair behaviour for transports that do not. The live window depth is surfaced on the outbound-only `orleans.lattice.replication.peer.ship_in_flight` gauge (`LatticeReplicationMetrics.ShipInFlightName`); see [Observability](observability.md).
 
+## Sender-side adaptive batch sizing
+
+The receiver hint described above only ever pushes the batch size *down*, and only once the receiver is already feeling pressure. With pipelining in place the sender has its own local signal - per-batch ack latency and error rate - so it can self-tune the batch size *before* the receiver has to raise a hint. That is the AIMD (additive-increase / multiplicative-decrease) controller behind `LatticeReplicationOptions.AdaptiveBatchSizingEnabled`.
+
+The flag **defaults to `false`**. With it off, the shipper chooses the per-tick batch size exactly as it always has - at `ShipBatchSize`, modulated only downward by an active receiver hint - so steady-state behaviour is byte-identical to the static path until an operator opts in.
+
+```csharp verify
+var options = new LatticeReplicationOptions
+{
+    ClusterId = "site-a",
+    AdaptiveBatchSizingEnabled = true,
+    // Optional tuning (defaults shown):
+    AdaptiveBatchIncrement = 8,                                  // additive step per healthy ack
+    AdaptiveBatchDecreaseFactor = 0.5,                           // multiplicative back-off
+    AdaptiveBatchLatencyThreshold = TimeSpan.FromMilliseconds(50),
+    AdaptiveBatchWindowLength = 16,                              // sliding-window length
+};
+```
+
+When enabled, a per-`(tree, peer)` controller tracks ack latency over a sliding window of the last `AdaptiveBatchWindowLength` acks and adapts an effective batch size within `[1, ShipBatchSize]`:
+
+- **Additive increase.** While the window-mean ack latency stays at or below `AdaptiveBatchLatencyThreshold`, the effective size grows by `AdaptiveBatchIncrement` entries per ack, capped at `ShipBatchSize`.
+- **Multiplicative decrease.** When the window-mean ack latency rises above the threshold, or a send fails (transport throw or ack rejection), the effective size is multiplied by `AdaptiveBatchDecreaseFactor`, floored at `1`.
+
+The controller starts at the `ShipBatchSize` ceiling (the optimistic posture: a healthy link stays at the configured ceiling and only backs off on observed degradation).
+
+### The receiver hint is the hard ceiling and always wins
+
+Sender adaptation only ever operates in the headroom *beneath* the receiver hint. The effective per-tick cap the shipper applies is:
+
+```
+effective = min(adaptive size, receiver-suggested size, ShipBatchSize), floored at 1
+```
+
+Because the composition is a minimum, the receiver's `SuggestedBatchSize` hint can never be exceeded by the adaptive controller: if the hint is below the adaptive size, the hint wins. The adaptive controller can only lower the cap further into the headroom the receiver hint (and the configured ceiling) already leaves. As with the static path, a non-null hint also collapses the pipelining window to `1`.
+
+The adaptation never reorders work, never crosses an atomic-batch boundary, and never affects per-origin FIFO or advance-strictly-on-ack cursor semantics - it only chooses how many already-ordered entries to draw into the next batch.
+
+Controller state is in-memory and activation-scoped (per `(tree, peer)` shipper activation). A grain re-activation resets the effective size to `ShipBatchSize` and the controller re-learns from the live link; nothing about the adaptive size is persisted.
+
+Two observability histograms emit once per acknowledged batch regardless of the flag (they are useful even with static sizing): `orleans.lattice.replication.ship.effective_batch_size` and `orleans.lattice.replication.ship.ack_latency`. See [Observability](observability.md#sender-side-adaptive-batch-sizing-ship-effective_batch_size--ship-ack_latency).
+
 ## Failure mode
 
 `EvaluateAsync` failure is swallowed and logged at `Warning`. The receiver already applied the batch and persisted the high-water-mark; surfacing a policy outage out of a successful apply would convert a diagnostic concern into a transport failure and unwind work the receiver already did. The next push re-evaluates the policy, so a transient outage self-heals.

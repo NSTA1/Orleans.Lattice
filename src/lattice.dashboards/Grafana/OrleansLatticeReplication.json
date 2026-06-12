@@ -841,6 +841,34 @@
           "legendFormat": "bytes/s {{tree}}/{{peer}}"
         }
       ]
+    },
+    {
+      "id": 26,
+      "title": "Effective ship batch size (adaptive)",
+      "description": "Per-tick outbound batch cap the shipper actually used, distribution p50/p95/p99. With adaptive sizing off (AdaptiveBatchSizingEnabled=false, the default) this sits flat at the configured ShipBatchSize; with it on, the AIMD controller raises it toward ShipBatchSize on a healthy link and backs it off on rising ack latency or send errors. The receiver flow-control hint is always the hard ceiling.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 56 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_ship_effective_batch_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_ship_effective_batch_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_ship_effective_batch_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 27,
+      "title": "Ship ack latency p50/p95/p99 (ms)",
+      "description": "Round-trip latency from sending a batch to receiving its ack, per (tree, peer). This is the primary signal the adaptive batch-size controller reacts to: a sustained rise above AdaptiveBatchLatencyThreshold shrinks the effective batch size. Emitted on every acknowledged batch regardless of whether adaptive sizing is enabled.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 56 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_ship_ack_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_ship_ack_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_ship_ack_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
+      ]
     }
   ]
 }

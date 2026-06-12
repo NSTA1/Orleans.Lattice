@@ -369,6 +369,43 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "minimum supported version nor above the sender's current version.");
         }
 
+        if (options.AdaptiveBatchIncrement < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AdaptiveBatchIncrement)} "
+                + $"must be at least 1 ({scope}). The adaptive batch-size controller's additive-increase "
+                + "step must move the effective batch size forward by at least one entry per healthy ack; "
+                + "a non-positive step would never let the controller re-grow after a back-off.");
+        }
+
+        if (options.AdaptiveBatchDecreaseFactor is <= 0.0 or >= 1.0 || double.IsNaN(options.AdaptiveBatchDecreaseFactor))
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AdaptiveBatchDecreaseFactor)} "
+                + $"must be in the open interval (0.0, 1.0) ({scope}); got {options.AdaptiveBatchDecreaseFactor}. "
+                + "The multiplicative-decrease factor scales the effective batch size down on a latency rise or "
+                + "send failure; a factor of 0 or below would collapse it instantly, and a factor of 1 or above "
+                + "would never shrink it.");
+        }
+
+        if (options.AdaptiveBatchLatencyThreshold <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AdaptiveBatchLatencyThreshold)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "The controller compares the sliding-window mean ack latency against this threshold to choose "
+                + "increase vs. decrease; a zero or negative threshold would force a multiplicative decrease on "
+                + "every ack and stall the stream at a single-entry batch.");
+        }
+
+        if (options.AdaptiveBatchWindowLength < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.AdaptiveBatchWindowLength)} "
+                + $"must be at least 1 ({scope}). The adaptive batch-size controller averages ack latency over a "
+                + "sliding window of this many recent acks; a non-positive window has no samples to average.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

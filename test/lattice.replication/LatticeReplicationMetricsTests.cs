@@ -480,6 +480,24 @@ public class LatticeReplicationMetricsTests
         });
     }
 
+    // ------------------------------------------------------------------
+    // Sender-side adaptive batch sizing (ship.effective_batch_size +
+    // ship.ack_latency)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Ship_effective_batch_size_histogram_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ShipEffectiveBatchSize.Name,
+                Is.EqualTo("orleans.lattice.replication.ship.effective_batch_size"));
+            Assert.That(LatticeReplicationMetrics.ShipEffectiveBatchSize.Unit, Is.EqualTo("{entry}"));
+            Assert.That(LatticeReplicationMetrics.ShipEffectiveBatchSizeName,
+                Is.EqualTo(LatticeReplicationMetrics.ShipEffectiveBatchSize.Name));
+        });
+    }
+
     [Test]
     public void Ship_redundant_payload_name_constants_match_canonical_names()
     {
@@ -493,6 +511,19 @@ public class LatticeReplicationMetricsTests
                 Is.EqualTo("orleans.lattice.replication.ship.redundant_payload_bytes"));
             Assert.That(LatticeReplicationMetrics.ShipRedundantPayloadBytesName,
                 Is.EqualTo(LatticeReplicationMetrics.ShipRedundantPayloadBytes.Name));
+        });
+    }
+
+    [Test]
+    public void Ship_ack_latency_histogram_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ShipAckLatency.Name,
+                Is.EqualTo("orleans.lattice.replication.ship.ack_latency"));
+            Assert.That(LatticeReplicationMetrics.ShipAckLatency.Unit, Is.EqualTo("ms"));
+            Assert.That(LatticeReplicationMetrics.ShipAckLatencyName,
+                Is.EqualTo(LatticeReplicationMetrics.ShipAckLatency.Name));
         });
     }
 
@@ -534,5 +565,51 @@ public class LatticeReplicationMetricsTests
             t.Key == "tree" && (string?)t.Value == "t"));
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "peer" && (string?)t.Value == "site-b"));
+    }
+
+    [Test]
+    public void Ship_effective_batch_size_histogram_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<int>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipEffectiveBatchSizeName);
+
+        LatticeReplicationMetrics.ShipEffectiveBatchSize.Record(128,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-q"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "site-p"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(128));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "tree-q"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "site-p"));
+        });
+    }
+
+    [Test]
+    public void Ship_ack_latency_histogram_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipAckLatencyName);
+
+        LatticeReplicationMetrics.ShipAckLatency.Record(9.5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "tree-q"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "site-p"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(9.5));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "tree-q"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "site-p"));
+        });
     }
 }

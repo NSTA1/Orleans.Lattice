@@ -47,7 +47,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-111](https://github.com/NSTA1/Orleans.Lattice/issues/519) - Documentation + operator playbook
 - [R-130](https://github.com/NSTA1/Orleans.Lattice/issues/694) - Pre-ship WAL entry coalescing (LWW latest-wins + CRDT delta merge)
 - [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
-- [R-133](https://github.com/NSTA1/Orleans.Lattice/issues/697) - Adaptive sender-side batch sizing from ack-latency / throughput
 - [R-134](https://github.com/NSTA1/Orleans.Lattice/issues/703) - Re-encode WAL batches at the negotiated wire version (true down-encode)
 - [R-135](https://github.com/NSTA1/Orleans.Lattice/issues/705) - Content-hash dedup round trip (sender manifest / receiver pull-missing)
 
@@ -148,6 +147,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-129](https://github.com/NSTA1/Orleans.Lattice/issues/693) - Wire-version capability negotiation for safe rolling upgrades
 - [R-131](https://github.com/NSTA1/Orleans.Lattice/issues/695) - Parallel receiver apply across independent (tree, origin) runs
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
+- [R-133](https://github.com/NSTA1/Orleans.Lattice/issues/697) - Adaptive sender-side batch sizing from ack-latency / throughput
 
 ## Follow-up fixes
 

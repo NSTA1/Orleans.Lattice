@@ -493,6 +493,7 @@ public class LatticeReplicationOptionsTests
     }
 
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
     // Wire-version capability negotiation
     // ------------------------------------------------------------------
 
@@ -591,5 +592,100 @@ public class LatticeReplicationOptionsTests
     {
         var opts = new LatticeReplicationOptions { ContentHashDedupCacheSize = 512 };
         Assert.That(opts.ContentHashDedupCacheSize, Is.EqualTo(512));
+    }
+
+    // ------------------------------------------------------------------
+    // Sender-side adaptive batch sizing (AIMD controller)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultAdaptiveBatchSizingEnabled_is_false() =>
+        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchSizingEnabled, Is.False);
+
+    [Test]
+    public void DefaultAdaptiveBatchIncrement_is_eight() =>
+        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchIncrement, Is.EqualTo(8));
+
+    [Test]
+    public void DefaultAdaptiveBatchDecreaseFactor_is_one_half() =>
+        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchDecreaseFactor, Is.EqualTo(0.5));
+
+    [Test]
+    public void DefaultAdaptiveBatchLatencyThreshold_is_fifty_milliseconds() =>
+        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchLatencyThreshold, Is.EqualTo(TimeSpan.FromMilliseconds(50)));
+
+    [Test]
+    public void DefaultAdaptiveBatchWindowLength_is_sixteen() =>
+        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchWindowLength, Is.EqualTo(16));
+
+    [Test]
+    public void New_instance_has_adaptive_batch_sizing_disabled_by_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AdaptiveBatchSizingEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultAdaptiveBatchSizingEnabled));
+        Assert.That(opts.AdaptiveBatchSizingEnabled, Is.False);
+    }
+
+    [Test]
+    public void New_instance_has_default_adaptive_batch_increment()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AdaptiveBatchIncrement, Is.EqualTo(LatticeReplicationOptions.DefaultAdaptiveBatchIncrement));
+    }
+
+    [Test]
+    public void New_instance_has_default_adaptive_batch_decrease_factor()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AdaptiveBatchDecreaseFactor, Is.EqualTo(LatticeReplicationOptions.DefaultAdaptiveBatchDecreaseFactor));
+    }
+
+    [Test]
+    public void New_instance_has_default_adaptive_batch_latency_threshold()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AdaptiveBatchLatencyThreshold, Is.EqualTo(LatticeReplicationOptions.DefaultAdaptiveBatchLatencyThreshold));
+    }
+
+    [Test]
+    public void New_instance_has_default_adaptive_batch_window_length()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.AdaptiveBatchWindowLength, Is.EqualTo(LatticeReplicationOptions.DefaultAdaptiveBatchWindowLength));
+    }
+
+    [Test]
+    public void AdaptiveBatchSizingEnabled_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AdaptiveBatchSizingEnabled = true };
+        Assert.That(opts.AdaptiveBatchSizingEnabled, Is.True);
+    }
+
+    [Test]
+    public void AdaptiveBatchIncrement_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AdaptiveBatchIncrement = 16 };
+        Assert.That(opts.AdaptiveBatchIncrement, Is.EqualTo(16));
+    }
+
+    [Test]
+    public void AdaptiveBatchDecreaseFactor_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AdaptiveBatchDecreaseFactor = 0.75 };
+        Assert.That(opts.AdaptiveBatchDecreaseFactor, Is.EqualTo(0.75));
+    }
+
+    [Test]
+    public void AdaptiveBatchLatencyThreshold_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AdaptiveBatchLatencyThreshold = TimeSpan.FromMilliseconds(120) };
+        Assert.That(opts.AdaptiveBatchLatencyThreshold, Is.EqualTo(TimeSpan.FromMilliseconds(120)));
+    }
+
+    [Test]
+    public void AdaptiveBatchWindowLength_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { AdaptiveBatchWindowLength = 32 };
+        Assert.That(opts.AdaptiveBatchWindowLength, Is.EqualTo(32));
     }
 }
