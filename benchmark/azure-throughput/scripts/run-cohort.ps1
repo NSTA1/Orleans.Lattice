@@ -14,6 +14,17 @@
 .PARAMETER ExtraSiloEnv
 	Hashtable of extra env vars for the silo (e.g. @{ BENCH_TREE_ID = 'foo' }).
 	Applied via a runtime drop-in; cleared between cohorts.
+.PARAMETER QuiesceTimeoutSec
+	Max seconds to wait, after the producer stops offering load, for the
+	silo's in-flight gauge to drain to zero before the silo is stopped.
+	Letting in-flight work (notably multi-step cross-tree atomic sagas
+	mid-prepare) complete while the silo is still accepting writes avoids
+	the shutdown-abort artefact where ApplicationStopping refuses an
+	in-flight saga's shard write and it surfaces as FINAL failed=N despite
+	zero steady-state failures. The wait loop exits the instant the gauge
+	reaches zero, so a generous cap costs nothing for a cohort that drains
+	quickly; it only matters as a ceiling for the rare straggler. Default
+	60. Set 0 to skip the wait.
 
 .EXAMPLE
 	./run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45
@@ -27,7 +38,8 @@ param(
 	[int] $DurationSec = 45,
 	[hashtable] $ExtraSiloEnv = @{},
 	[string] $ParametersFile,
-	[string] $NamePrefix
+	[string] $NamePrefix,
+	[int] $QuiesceTimeoutSec = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -253,6 +265,57 @@ while ((Get-Date) -lt $deadline) {
 $finalState = Invoke-SshQuery 'systemctl is-active lattice-producer 2>/dev/null'
 Write-Host "Producer final state: $finalState" -ForegroundColor Yellow
 
+# Quiesce in-flight work before stopping the silo. The producer has stopped
+# offering load, but the silo is still running and may have in-flight grain
+# calls draining - notably multi-step cross-tree atomic sagas mid-prepare,
+# whose per-saga latency leaves several in flight when the producer exits.
+# If we SIGTERM the silo now, IHostApplicationLifetime.ApplicationStopping is
+# signalled and ShardRootGrain.ThrowIfShuttingDown refuses those in-flight
+# sagas' shard writes; the sub-sagas vote Failed with LatticeShuttingDown-
+# Exception and surface as FINAL failed=N even though every steady-state
+# per-second sample was failed=0 (the saga is deferred for resume, but the
+# benchmark silo never reactivates to resume it). Observed directly: after
+# the producer stops, ops keeps climbing while inFlight falls (8->6->5->4),
+# i.e. the silo is successfully draining; stopping it mid-drain is what
+# aborts the stragglers. Waiting for the in-flight gauge to reach zero while
+# the silo still accepts writes lets those sagas commit, yielding a clean
+# FINAL failed=0. Bounded by -QuiesceTimeoutSec so a genuinely wedged silo
+# (a deep, un-drainable channel backlog at a high rung) still makes forward
+# progress to the stop below rather than blocking the cohort loop.
+#
+# $siloQuiesced records the outcome for the verdict logic below:
+#   $true  -> the in-flight gauge reached 0 before the stop (no undrained
+#             work pending), so any post-producer rate=0 sample tail is the
+#             silo's benign graceful-shutdown WAL-flush window, NOT a wedge.
+#   $false -> the quiesce window elapsed with work still in flight (a real
+#             un-drainable backlog), so the drain tail is the wedge phenotype.
+#   $null  -> quiesce was disabled (-QuiesceTimeoutSec 0); fall back to the
+#             unconditional drain-tail rule.
+$siloQuiesced = $null
+if ($QuiesceTimeoutSec -gt 0) {
+	Write-Host "Quiescing in-flight work before silo stop (cap ${QuiesceTimeoutSec}s)..." -ForegroundColor Cyan
+	$quiesceDeadline = (Get-Date).AddSeconds($QuiesceTimeoutSec)
+	$zeroStreak = 0
+	$quiesced = $false
+	$lastInFlight = $null
+	while ((Get-Date) -lt $quiesceDeadline) {
+		$tail = Invoke-SshQuery "sudo -n journalctl -u lattice-silo --since '$cursorStamp' --no-pager --output=cat | grep -E '^\[silo\] t=' | tail -1"
+		$inFlight = Get-SiloInFlight -Line $tail
+		if ($null -ne $inFlight) { $lastInFlight = $inFlight }
+		$q = Update-QuiesceState -InFlight $inFlight -ZeroStreak $zeroStreak
+		$zeroStreak = [int]$q.ZeroStreak
+		if ($q.Quiesced) { $quiesced = $true; break }
+		Start-Sleep -Seconds 1
+	}
+	$siloQuiesced = $quiesced
+	if ($quiesced) {
+		Write-Host "  in-flight drained to 0; proceeding to stop." -ForegroundColor Green
+	} else {
+		$lastSeen = if ($null -ne $lastInFlight) { $lastInFlight } else { 'unknown' }
+		Write-Host "  quiesce window elapsed (last inFlight=$lastSeen); proceeding to stop anyway." -ForegroundColor Yellow
+	}
+}
+
 # Stop the silo so its listener exits, channel completes, drain loop drains,
 # and the dispatcher emits its FINAL line. The silo does NOT complete the
 # ingest channel on producer disconnect (it's listener-driven for the
@@ -424,6 +487,27 @@ if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
 	}
 }
 
+# Subtract benign warmup-retry exceptions from the verdict-relevant tally.
+# Before offering load, the silo warms each cohort's tree with a retry loop
+# (`[silo] warmup treeId=... attempt=N ...`). While the grain is still
+# activating, Orleans can transiently reject the warmup call with an
+# OrleansMessageRejectionException ("Forwarding failed: ..."); the warmup
+# loop retries and the cohort then runs to a clean FINAL (failed=0). Those
+# REJECTED lines carry the cohort tree id so Get-CohortExceptionCount counts
+# them, but they are pre-load activation churn, not a back-pressure failure -
+# a genuinely failed warmup never reaches FINAL and still WEDGEs on the
+# no-FINAL rule. Excluding only the exact warmup-REJECTED line shape keeps the
+# filter conservative: any non-warmup exception during load still counts.
+$benignWarmupExceptions = 0
+if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
+	$benignWarmupExceptions = (
+		@(Select-String -Path $siloLog -Pattern 'warmup\b.*\bREJECTED\b')
+	).Count
+	if ($benignWarmupExceptions -gt 0) {
+		$exceptionCount = [Math]::Max(0, $exceptionCount - $benignWarmupExceptions)
+	}
+}
+
 # Whether this cohort exercises a read-only workload. Read-only modes
 # (get-point, get-many) do not enqueue WAL writes, so the silo has no
 # durable backlog to drain after the producer stops; a brief trailing
@@ -472,56 +556,28 @@ $memTotalGiB  = [math]::Round($memTotalKib / 1024 / 1024, 1)
 # misses three independent failure modes that all leave those counters at
 # zero (cohort 2026-06-05 d8-ceiling-discovery): missing FINAL, non-zero
 # `failed=N` from per-second samples or FINAL, and a long post-producer
-# zero-rate drain tail. Verdict now considers each independently and
-# returns the most-severe state.
-#
-# State precedence (worst-first):
-#   WEDGE     - drain-tail >= drainWedgeThreshold OR no FINAL emitted at all
-#   FAILED    - any per-second `failed=N>0` sample OR FINAL failed>0
-#   DEGRADED  - watchdog/wal-slot/wal-append OR exception lines OR
-#               brief drain-tail OR FINAL missing the activeAvg field
-#   HEALTHY   - none of the above; FINAL emitted, no failures, clean drain
+# zero-rate drain tail. The precedence + per-rule reasons live in the pure
+# Resolve-CohortVerdict helper so they are unit-testable without a VM; see
+# its doc comment for the full state precedence and the drain-tail nuance
+# (read-only and quiesced-before-stop tails are benign shutdown-flush
+# windows, not wedges).
 $drainWedgeThreshold = 10  # samples (~10 s of trailing rate=0 post-producer)
-$verdictReasons = @()
-$verdictState   = 'HEALTHY'
-function _DowngradeVerdict([string]$target) {
-	$order = @{ 'HEALTHY'=0; 'DEGRADED'=1; 'FAILED'=2; 'WEDGE'=3 }
-	if ($order[$target] -gt $order[$script:verdictState]) { $script:verdictState = $target }
-}
-if (-not $sawFinal -or -not $siloFinal) {
-	_DowngradeVerdict 'WEDGE'
-	$verdictReasons += 'no FINAL emitted'
-}
-if ($drainTailSamples -ge $drainWedgeThreshold) {
-	if ($isReadOnlyMode) {
-		# Read-only mode: drain tail is benign (no WAL backlog to
-		# drain). Surface as an info reason for diagnostic
-		# completeness without downgrading the verdict.
-		$verdictReasons += "$drainTailSamples-sample drain tail (read-only, ignored)"
-	} else {
-		_DowngradeVerdict 'WEDGE'
-		$verdictReasons += "$drainTailSamples-sample drain tail"
-	}
-}
-if ($failedFinal -gt 0 -or $failedSamples -gt 0) {
-	_DowngradeVerdict 'FAILED'
-	if ($failedFinal -gt 0) { $verdictReasons += "FINAL failed=$failedFinal" }
-	elseif ($failedSamples -gt 0) { $verdictReasons += "$failedSamples per-second sample(s) carried failed>0" }
-}
-if ($watchdog -gt 0 -or $walSlot -gt 0 -or $walAppend -gt 0) {
-	_DowngradeVerdict 'DEGRADED'
-	$verdictReasons += "watchdog=$watchdog wal-slot=$walSlot wal-append=$walAppend"
-}
-if ($exceptionCount -gt 0) {
-	_DowngradeVerdict 'DEGRADED'
-	$reason = "$exceptionCount exception line(s)"
-	if ($benignShutdownExceptions -gt 0) {
-		$reason += " ($benignShutdownExceptions benign shutdown-race line(s) excluded)"
-	}
-	$verdictReasons += $reason
-} elseif ($benignShutdownExceptions -gt 0) {
-	$verdictReasons += "$benignShutdownExceptions benign shutdown-race line(s) excluded"
-}
+$verdict = Resolve-CohortVerdict `
+	-SawFinal ([bool]$sawFinal -and [bool]$siloFinal) `
+	-DrainTailSamples $drainTailSamples `
+	-DrainWedgeThreshold $drainWedgeThreshold `
+	-IsReadOnlyMode $isReadOnlyMode `
+	-SiloQuiesced $siloQuiesced `
+	-FailedFinal $failedFinal `
+	-FailedSamples $failedSamples `
+	-Watchdog $watchdog `
+	-WalSlot $walSlot `
+	-WalAppend $walAppend `
+	-ExceptionCount $exceptionCount `
+	-BenignShutdownExceptions $benignShutdownExceptions `
+	-BenignWarmupExceptions $benignWarmupExceptions
+$verdictState   = [string]$verdict.State
+$verdictReasons = @($verdict.Reasons)
 
 Write-Host ''
 Write-Host '=== Cohort complete ===' -ForegroundColor Green
@@ -573,4 +629,20 @@ Write-Host ("Verdict      : {0}{1}" -f $verdictState, $verdictDetail) -Foregroun
 Write-Host "Logs         : $siloLog"
 Write-Host "             : $prodLog"
 Write-Host "             : $samplerLog"
+
+# Persist the computed verdict into the silo log so downstream consumers
+# (performance-report.ps1's Read-SiloLogStats, which parses '^Verdict\s*:'
+# from the extracted silo log) can recover the per-cohort verdict. The
+# verdict is computed here in the runner, not emitted by the silo, so
+# without this append the log carries the silo's [silo]/[phaseA] telemetry
+# but no verdict line - leaving the report's HEALTHY-only aggregation
+# unable to tell healthy cohorts from wedged ones. Anchored on its own
+# delimiter so it never collides with the silo's own log grammar.
+if ($siloLog -and (Test-Path -LiteralPath $siloLog)) {
+	$verdictBlock = Format-CohortVerdictLogBlock `
+		-VerdictState $verdictState `
+		-VerdictDetail $verdictDetail `
+		-DrainTailSamples $drainTailSamples
+	Add-Content -LiteralPath $siloLog -Value $verdictBlock
+}
 } finally { & $cleanup }

@@ -137,3 +137,239 @@ function Test-CohortLineAttributable {
 	}
 	return $false
 }
+
+<#
+.SYNOPSIS
+	Formats the verdict summary block that run-cohort.ps1 appends to the
+	silo log so downstream consumers can recover the per-cohort verdict.
+
+.DESCRIPTION
+	The verdict is computed by the runner, not emitted by the silo, so the
+	extracted silo log carries the silo's [silo]/[phaseA] telemetry but no
+	verdict line. performance-report.ps1's Read-SiloLogStats recovers the
+	per-cohort verdict by parsing the first line this block emits with the
+	pattern '^Verdict\s*:\s*([A-Z]+)'; without the appended block that parse
+	returns empty and the report's HEALTHY-only aggregation cannot tell
+	healthy cohorts from wedged ones (it then excludes every cohort).
+
+	Pure and side-effect-free (returns the lines; the caller does the
+	append) so Test-CohortVerdict.ps1 can assert the emitted Verdict line
+	round-trips through the consumer's regex without staging a VM run.
+
+	The leading '#' delimiter keeps the block from colliding with the
+	silo's own log grammar (anchored '^[silo]' / '^[phaseA]' lines).
+
+.PARAMETER VerdictState
+	The computed verdict state (HEALTHY / DEGRADED / FAILED / WEDGE).
+
+.PARAMETER VerdictDetail
+	The pre-formatted reason suffix (e.g. ' (15-sample drain tail)'), or
+	an empty string when there are no reasons.
+
+.PARAMETER DrainTailSamples
+	Count of trailing rate=0 per-second samples post-producer.
+
+.OUTPUTS
+	[string[]] the lines to append to the silo log, verbatim.
+#>
+function Format-CohortVerdictLogBlock {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [string] $VerdictState,
+		[Parameter(Mandatory)] [AllowEmptyString()] [string] $VerdictDetail,
+		[Parameter(Mandatory)] [int] $DrainTailSamples
+	)
+
+	return @(
+		'# === run-cohort verdict (appended post-drain; not silo-emitted) ==='
+		("Verdict      : {0}{1}" -f $VerdictState, $VerdictDetail)
+		("Drain tail   : {0} trailing rate=0 sample(s) post-producer" -f $DrainTailSamples)
+	)
+}
+
+<#
+.SYNOPSIS
+	Parses the in-flight gauge from a single '[silo] t=' per-second
+	progress line, or $null when the line has no parseable gauge.
+
+.DESCRIPTION
+	The silo's reporter emits one line per second of the shape
+	'[silo] t= 60.0s ops= 2,430 ops/sec= 143 inFlight= 4'. run-cohort.ps1
+	polls the journal tail for the latest such line to decide when the
+	silo has quiesced (drained its in-flight work) after the producer
+	stops, so it can stop the silo without aborting still-draining
+	in-flight sagas. Exposed as a pure parser so Test-CohortVerdict.ps1
+	can pin the gauge extraction without a live silo.
+
+.PARAMETER Line
+	A candidate '[silo] t=' progress line.
+
+.OUTPUTS
+	[int] the inFlight value, or $null when $Line is null/empty or has no
+	'inFlight=' token.
+#>
+function Get-SiloInFlight {
+	[CmdletBinding()]
+	param([AllowNull()] [AllowEmptyString()] [string] $Line)
+
+	if ([string]::IsNullOrWhiteSpace($Line)) { return $null }
+	if ($Line -match 'inFlight=\s*(\d+)') { return [int]$Matches[1] }
+	return $null
+}
+
+<#
+.SYNOPSIS
+	Decides whether the silo has quiesced enough to stop, given the
+	latest parsed in-flight value and a running count of consecutive
+	zero observations.
+
+.DESCRIPTION
+	Pure decision helper so the quiesce loop in run-cohort.ps1 stays
+	thin and the rule is unit-testable. The silo is considered quiesced
+	once the in-flight gauge has been observed at zero for
+	$RequiredZeroStreak consecutive samples - a single zero can be a
+	momentary lull between flush batches, so a short streak avoids
+	stopping mid-saga. A $null reading (no fresh progress line yet) does
+	not advance or reset the streak.
+
+.PARAMETER InFlight
+	The latest parsed in-flight value, or $null when none is available.
+
+.PARAMETER ZeroStreak
+	Consecutive prior zero observations.
+
+.PARAMETER RequiredZeroStreak
+	Number of consecutive zero observations required to declare quiesced.
+
+.OUTPUTS
+	Hashtable with keys:
+	  ZeroStreak = [int]  - updated streak
+	  Quiesced   = [bool] - whether the required streak has been reached
+#>
+function Update-QuiesceState {
+	[CmdletBinding()]
+	param(
+		[AllowNull()] [Nullable[int]] $InFlight,
+		[int] $ZeroStreak,
+		[int] $RequiredZeroStreak = 2
+	)
+
+	$streak = $ZeroStreak
+	if ($null -eq $InFlight) {
+		# No fresh reading; leave the streak unchanged.
+	} elseif ($InFlight -le 0) {
+		$streak++
+	} else {
+		$streak = 0
+	}
+	return @{ ZeroStreak = $streak; Quiesced = ($streak -ge $RequiredZeroStreak) }
+}
+
+<#
+.SYNOPSIS
+	Computes the cohort verdict (state + reasons) from the collected
+	signals, applying the worst-first precedence.
+
+.DESCRIPTION
+	Pure decision function extracted from run-cohort.ps1 so the verdict
+	precedence is unit-testable without a live VM. The runner gathers the
+	raw signals (FINAL line, drain tail, per-second/FINAL failures,
+	watchdog + WAL counters, filtered exception count, quiesce outcome)
+	and this function maps them to a single verdict.
+
+	State precedence (worst-first; the most severe applicable state wins):
+	  WEDGE     - no FINAL emitted at all, OR a long post-producer
+	              zero-rate drain tail that does NOT correspond to a clean
+	              pre-stop quiesce (i.e. real undrained backlog).
+	  FAILED    - any per-second failed>0 sample OR FINAL failed>0.
+	  DEGRADED  - watchdog / wal-slot / wal-append counters, OR
+	              cohort-attributable exception lines (net of benign
+	              shutdown-race and warmup-retry lines, which the runner
+	              subtracts before calling this function).
+	  HEALTHY   - none of the above; FINAL emitted, no failures, clean drain.
+
+	Drain-tail nuance: a trailing run of rate=0 per-second samples is the
+	drain-wedge phenotype ONLY when it represents work the silo could not
+	surface to the SIGTERM-driven drain. Two cases make such a tail benign
+	and are surfaced as info reasons without downgrading:
+	  - read-only modes (no WAL backlog can exist), and
+	  - cohorts whose pre-stop quiesce confirmed the in-flight gauge
+	    reached 0 before the stop ($SiloQuiesced -eq $true): the tail is
+	    then the silo's graceful-shutdown WAL-flush window, not a wedge.
+	A genuinely wedged silo never quiesces ($SiloQuiesced -eq $false), so
+	its drain tail still WEDGEs. When quiesce was disabled
+	($SiloQuiesced -eq $null) the rule falls back to the unconditional
+	tail check.
+
+.OUTPUTS
+	Hashtable with keys:
+	  State   = [string]   - HEALTHY / DEGRADED / FAILED / WEDGE
+	  Reasons = [string[]] - ordered diagnostic reasons (may be empty)
+#>
+function Resolve-CohortVerdict {
+	[CmdletBinding()]
+	param(
+		[bool] $SawFinal,
+		[int] $DrainTailSamples,
+		[int] $DrainWedgeThreshold,
+		[bool] $IsReadOnlyMode,
+		[AllowNull()] [Nullable[bool]] $SiloQuiesced,
+		[long] $FailedFinal,
+		[int] $FailedSamples,
+		[int] $Watchdog,
+		[int] $WalSlot,
+		[int] $WalAppend,
+		[int] $ExceptionCount,
+		[int] $BenignShutdownExceptions,
+		[int] $BenignWarmupExceptions = 0
+	)
+
+	$order = @{ 'HEALTHY' = 0; 'DEGRADED' = 1; 'FAILED' = 2; 'WEDGE' = 3 }
+	$byRank = @('HEALTHY', 'DEGRADED', 'FAILED', 'WEDGE')
+	$rank = 0
+	$reasons = @()
+
+	if (-not $SawFinal) {
+		if ($order['WEDGE'] -gt $rank) { $rank = $order['WEDGE'] }
+		$reasons += 'no FINAL emitted'
+	}
+	if ($DrainTailSamples -ge $DrainWedgeThreshold) {
+		if ($IsReadOnlyMode) {
+			$reasons += "$DrainTailSamples-sample drain tail (read-only, ignored)"
+		} elseif ($SiloQuiesced -eq $true) {
+			$reasons += "$DrainTailSamples-sample drain tail (quiesced before stop, benign shutdown flush)"
+		} else {
+			if ($order['WEDGE'] -gt $rank) { $rank = $order['WEDGE'] }
+			$reasons += "$DrainTailSamples-sample drain tail"
+		}
+	}
+	if ($FailedFinal -gt 0 -or $FailedSamples -gt 0) {
+		if ($order['FAILED'] -gt $rank) { $rank = $order['FAILED'] }
+		if ($FailedFinal -gt 0) { $reasons += "FINAL failed=$FailedFinal" }
+		elseif ($FailedSamples -gt 0) { $reasons += "$FailedSamples per-second sample(s) carried failed>0" }
+	}
+	if ($Watchdog -gt 0 -or $WalSlot -gt 0 -or $WalAppend -gt 0) {
+		if ($order['DEGRADED'] -gt $rank) { $rank = $order['DEGRADED'] }
+		$reasons += "watchdog=$Watchdog wal-slot=$WalSlot wal-append=$WalAppend"
+	}
+	if ($ExceptionCount -gt 0) {
+		if ($order['DEGRADED'] -gt $rank) { $rank = $order['DEGRADED'] }
+		$reason = "$ExceptionCount exception line(s)"
+		$excludedNotes = @()
+		if ($BenignShutdownExceptions -gt 0) { $excludedNotes += "$BenignShutdownExceptions benign shutdown-race line(s)" }
+		if ($BenignWarmupExceptions -gt 0)   { $excludedNotes += "$BenignWarmupExceptions benign warmup-retry line(s)" }
+		if ($excludedNotes.Count -gt 0) {
+			$reason += " ($($excludedNotes -join ', ') excluded)"
+		}
+		$reasons += $reason
+	} else {
+		$excludedNotes = @()
+		if ($BenignShutdownExceptions -gt 0) { $excludedNotes += "$BenignShutdownExceptions benign shutdown-race line(s)" }
+		if ($BenignWarmupExceptions -gt 0)   { $excludedNotes += "$BenignWarmupExceptions benign warmup-retry line(s)" }
+		if ($excludedNotes.Count -gt 0) {
+			$reasons += "$($excludedNotes -join ', ') excluded"
+		}
+	}
+
+	return @{ State = $byRank[$rank]; Reasons = $reasons }
+}
