@@ -183,6 +183,18 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "write, so the WAL GC would never advance and a silo crash would replay the entire log.");
         }
 
+        if (options.ShipCursorWriteMaxDelay != System.Threading.Timeout.InfiniteTimeSpan
+            && options.ShipCursorWriteMaxDelay <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipCursorWriteMaxDelay)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} or equal to "
+                + $"{nameof(System.Threading.Timeout)}.{nameof(System.Threading.Timeout.InfiniteTimeSpan)} ({scope}). "
+                + "A zero or negative delay would force a durable cursor write on every advance regardless of the "
+                + $"coalescing interval; set the value to {nameof(System.Threading.Timeout)}.{nameof(System.Threading.Timeout.InfiniteTimeSpan)} "
+                + "to disable the time dimension and coalesce purely by ShipCursorWriteInterval.");
+        }
+
         if (options.ShipMaxInFlight < 1)
         {
             return ValidateOptionsResult.Fail(
