@@ -126,6 +126,17 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "than it fills and starve the payload-re-send-rate measurement.");
         }
 
+        if (options.ContentHashDedupElisionEnabled && !options.ContentHashDedupEnabled)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ContentHashDedupElisionEnabled)} "
+                + $"requires {nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ContentHashDedupEnabled)} "
+                + $"to also be set ({scope}). The content-hash payload-elision round trip is built on the same "
+                + "per-(tree, peer) content hashing the re-send-rate measurement uses; enabling elision without the "
+                + "master content-hash dedup switch has no hashing source and is rejected. Enable both to opt into "
+                + "the sender-manifest / receiver-pull-missing exchange, or leave both off for the wire-identical default.");
+        }
+
         if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
         {
             return ValidateOptionsResult.Fail(

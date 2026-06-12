@@ -16,6 +16,9 @@ internal sealed class NoOpReplicationDigestProbeTransport : IReplicationDigestPr
     private static readonly Task<MerkleWalkProbeResponse> MerkleWalkUnavailable =
         Task.FromResult(MerkleWalkProbeResponse.Unavailable);
 
+    private static readonly Task<ContentManifestResponse> ManifestExchangeUnsupported =
+        Task.FromResult(ContentManifestResponse.NotSupported);
+
     /// <inheritdoc />
     public Task<DigestProbeResponse> ProbeDigestAsync(
         string targetClusterId,
@@ -60,5 +63,28 @@ internal sealed class NoOpReplicationDigestProbeTransport : IReplicationDigestPr
         }
 
         return MerkleWalkUnavailable;
+    }
+
+    /// <inheritdoc />
+    public Task<ContentManifestResponse> ExchangeContentManifestAsync(
+        string targetClusterId,
+        ContentManifestRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(targetClusterId))
+        {
+            throw new ArgumentException(
+                "targetClusterId must be non-empty.",
+                nameof(targetClusterId));
+        }
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new ArgumentException(
+                "ContentManifestRequest.TreeName must be non-empty.",
+                nameof(request));
+        }
+
+        return ManifestExchangeUnsupported;
     }
 }

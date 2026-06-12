@@ -81,6 +81,58 @@ public class LatticeReplicationOptionsValidatorTests
         Assert.That(result.Succeeded, Is.True);
     }
 
+    [Test]
+    public void Validate_fails_when_content_hash_dedup_elision_enabled_without_master_switch()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ContentHashDedupEnabled = false,
+            ContentHashDedupElisionEnabled = true,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.ContentHashDedupElisionEnabled)));
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.ContentHashDedupEnabled)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_content_hash_dedup_elision_enabled_with_master_switch()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ContentHashDedupEnabled = true,
+            ContentHashDedupElisionEnabled = true,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_content_hash_dedup_elision_disabled_and_master_switch_off()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ContentHashDedupEnabled = false,
+            ContentHashDedupElisionEnabled = false,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
     [TestCase(0)]
     [TestCase(-1)]
     public void Validate_fails_when_replog_partitions_is_non_positive(int partitions)

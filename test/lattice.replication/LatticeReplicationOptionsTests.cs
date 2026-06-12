@@ -43,6 +43,27 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
+    public void Content_hash_dedup_elision_default_is_off()
+    {
+        Assert.That(LatticeReplicationOptions.DefaultContentHashDedupElisionEnabled, Is.False);
+    }
+
+    [Test]
+    public void New_instance_has_content_hash_dedup_elision_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ContentHashDedupElisionEnabled,
+            Is.EqualTo(LatticeReplicationOptions.DefaultContentHashDedupElisionEnabled));
+    }
+
+    [Test]
+    public void Content_hash_dedup_elision_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ContentHashDedupElisionEnabled = true };
+        Assert.That(opts.ContentHashDedupElisionEnabled, Is.True);
+    }
+
+    [Test]
     public void Leaf_rereplay_defaults_are_off_and_capped()
     {
         Assert.Multiple(() =>

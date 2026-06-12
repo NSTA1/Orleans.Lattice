@@ -90,4 +90,48 @@ public interface IReplicationDigestProbeTransport
         string originClusterId,
         CancellationToken cancellationToken)
         => Task.FromResult(Orleans.Lattice.HybridLogicalClock.Zero);
+
+    /// <summary>
+    /// Advertises a per-batch content-hash manifest to the peer identified
+    /// by <paramref name="targetClusterId"/> and returns the subset of
+    /// manifest entries the peer is missing (does not already hold
+    /// byte-identical content for), so the sender can ship only the
+    /// genuinely-needed payloads and elide the redundant ones. This is the
+    /// sender-manifest / receiver-pull-missing half of the opt-in
+    /// content-hash payload-elision round trip; it composes with, and is
+    /// gated behind, the same content-hash dedup master switch that drives
+    /// the re-send-rate measurement.
+    /// <para>
+    /// The exchange is read-only with respect to the shipped value bytes -
+    /// it never ships a payload - but it is <b>not</b> side-effect free on
+    /// the receiver: for a manifest entry whose content the receiver
+    /// already holds but whose <see cref="ContentManifestEntry.Hlc"/> is
+    /// newer than the receiver's recorded clock for that key (the
+    /// idempotent re-set of an identical value), the receiver advances its
+    /// per-origin high-water-mark via a metadata-only apply and reports the
+    /// advanced clock in <see cref="ContentManifestResponse.AdvancedHlc"/>
+    /// without the payload ever travelling. This preserves the
+    /// advance-strictly-on-ack cursor contract and per-origin
+    /// high-water-mark monotonicity across the elision path.
+    /// </para>
+    /// <para>
+    /// A default implementation returns
+    /// <see cref="ContentManifestResponse.NotSupported"/> -
+    /// <see cref="ContentManifestResponse.ExchangeSupported"/> is
+    /// <see langword="false"/> - so a transport (or peer) that has not
+    /// implemented the exchange behaves exactly as today: the sender treats
+    /// every entry as missing and ships the full batch verbatim. Real
+    /// transports (the gRPC binding) override this to invoke the
+    /// pull-missing RPC over the same per-peer channel cache the push
+    /// transport uses.
+    /// </para>
+    /// </summary>
+    /// <param name="targetClusterId">The peer cluster id to exchange with. Must be non-empty.</param>
+    /// <param name="request">The tree id, origin cluster id, and per-entry content-hash manifest.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<ContentManifestResponse> ExchangeContentManifestAsync(
+        string targetClusterId,
+        ContentManifestRequest request,
+        CancellationToken cancellationToken)
+        => Task.FromResult(ContentManifestResponse.NotSupported);
 }

@@ -249,7 +249,7 @@ public class ShipperPersistenceIntegrationTests
             monitor, transport, encoder, walRecordEncoder, registry, factory, persistent,
             new ReplicationPeerStats(),
             Substitute.For<ILatticeMergeModeResolver>(),
-            new WireVersionNegotiationState());
+            new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         grain.InitializeForTesting(Tree, Peer);
         return grain;
     }

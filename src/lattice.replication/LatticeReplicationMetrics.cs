@@ -434,6 +434,75 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string CoalesceBytesElidedName = "orleans.lattice.replication.coalesce.bytes_elided";
 
+    // --- Content-hash payload-elision round-trip counters -----------------------
+
+    /// <summary>
+    /// Counter of <see cref="MutationKind.Set"/> entries whose value
+    /// payload was elided from an outbound batch by the sender-manifest /
+    /// receiver-pull-missing content-hash round trip - the receiver already
+    /// held byte-identical content for the key, so only metadata (the
+    /// high-water-mark advance) was needed and the payload never travelled.
+    /// Incremented once per elided entry, only when
+    /// <see cref="LatticeReplicationOptions.ContentHashDedupElisionEnabled"/>
+    /// is set and the peer advertised it can perform the exchange (the
+    /// counter never fires under the default-off behaviour). Tagged by
+    /// <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// <para>
+    /// Distinct from <see cref="ShipRedundantPayloads"/>, which is a
+    /// measurement-only signal that never changes the bytes shipped, and
+    /// from <see cref="CoalesceEntriesElided"/>, which drops intra-batch
+    /// duplicate versions without a cross-cluster round trip; this counter
+    /// records payloads dropped because the remote peer confirmed it
+    /// already holds the content.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShipElidedPayloads =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.elided_payloads", unit: "{entry}",
+            description: "Set-entry payloads elided from an outbound batch by the content-hash pull-missing round trip, tagged by tree and peer.");
+
+    /// <summary>
+    /// Counter of value-payload bytes elided from an outbound batch by the
+    /// content-hash pull-missing round trip - the sum of the wire-segment
+    /// lengths of the entries counted by <see cref="ShipElidedPayloads"/>.
+    /// Lets operators quantify the cross-cluster bandwidth the elision
+    /// reclaimed. Same firing conditions and tags (<see cref="TagTree"/>
+    /// and <see cref="TagPeer"/>) as <see cref="ShipElidedPayloads"/>.
+    /// </summary>
+    public static readonly Counter<long> ShipElidedPayloadBytes =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.elided_payload_bytes", unit: "By",
+            description: "Pre-encoded entry-payload bytes elided from an outbound batch by the content-hash pull-missing round trip, tagged by tree and peer.");
+
+    /// <summary>
+    /// Counter of content-hash manifest exchanges the sender performed with
+    /// a peer - one increment per outbound batch for which a manifest was
+    /// advertised and a pull-missing response was received. Incremented
+    /// only when
+    /// <see cref="LatticeReplicationOptions.ContentHashDedupElisionEnabled"/>
+    /// is set and the peer advertised the exchange capability. Pairs with
+    /// <see cref="ShipElidedPayloads"/> so an operator can read the average
+    /// payloads elided per exchange and judge whether the round trip is
+    /// paying for itself. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagPeer"/>.
+    /// </summary>
+    public static readonly Counter<long> ManifestExchanges =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.manifest_exchanges", unit: "{exchange}",
+            description: "Content-hash manifest exchanges performed with a peer on the outbound ship path, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipElidedPayloads"/> counter.
+    /// </summary>
+    public const string ShipElidedPayloadsName = "orleans.lattice.replication.ship.elided_payloads";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipElidedPayloadBytes"/> counter.
+    /// </summary>
+    public const string ShipElidedPayloadBytesName = "orleans.lattice.replication.ship.elided_payload_bytes";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ManifestExchanges"/> counter.
+    /// </summary>
+    public const string ManifestExchangesName = "orleans.lattice.replication.ship.manifest_exchanges";
+
     // --- Dead-letter queue counters ---------------------------------------------
 
     /// <summary>
