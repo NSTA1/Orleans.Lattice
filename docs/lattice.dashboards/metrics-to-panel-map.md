@@ -65,3 +65,5 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.peer.bytes_behind` | gauge | `peer` | Per-peer bytes behind |
 | `orleans.lattice.replication.peer.last_contact_seconds` | gauge | `peer` | Per-peer last contact |
 | `orleans.lattice.replication.peer.consecutive_errors` | gauge | `peer` | Per-peer consecutive errors |
+| `orleans.lattice.replication.wire_version.negotiated` | observable gauge (`{version}`) | `tree`, `peer` | Per-peer negotiated wire version |
+| `orleans.lattice.replication.wire_version.downgrade_active` | observable gauge (`{bool}`) | `tree`, `peer` | Per-peer wire-version downgrade active (1 = mixed-version fleet) |

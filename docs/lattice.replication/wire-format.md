@@ -148,3 +148,50 @@ This means **no wire-version bump**: a receiver that does not know how to decomp
 
 The replication options ``FramingCompression``, ``FramingCompressionLevel`` and ``FramingCompressionMinBatchBytes``, the public DI seam (``ILatticeCompressor`` and ``AddLatticeCompressor``), the tag-space partitioning, the worked example for plugging in a new algorithm, and the testing surface are all documented in **[`docs/lattice/compression.md`](../lattice/compression.md)** - that page is the source of truth for everything compression-related across Orleans.Lattice.
 
+## Wire-version capability negotiation
+
+The fail-fast posture described under [Why a versioned envelope](#why-a-versioned-envelope) is the right default for a deployment-ordering bug, but it is the wrong behaviour during a deliberate rolling upgrade: a newer sender shipping a newer frame to a not-yet-upgraded receiver throws `NotSupportedException` on every batch, the shipper retries forever, and replication to that peer stalls. Wire-version capability negotiation is the surface that makes that window **observable and floor-guarded**: the receiver advertises the version it can decode, the sender records the negotiated target for telemetry, and a peer below the configured minimum floor still fails fast. Actually re-encoding outbound batches at the negotiated older version - the capability that lets a newer sender ship a frame a not-yet-upgraded receiver can decode, and the prerequisite for closing the stall - is future wire-touching work that builds on this surface (see [Scope](#scope)).
+
+### How it works
+
+1. **The receiver advertises its capability.** Every `ReplicationAck` now carries an additive `[Id(5)] int? SupportedWireVersion` slot stamped with the receiver build's `EncodedBatchHeader.CurrentWireVersion`. The slot is strictly additive on the wire (same compatibility profile as `SuggestedBatchSize` / `PauseForMs`): a receiver built before negotiation omits the slot entirely (it decodes as `null`), and a sender built before negotiation ignores it.
+2. **The sender computes the negotiated target version.** On each pump tick the shipper feeds the peer's most recently advertised `SupportedWireVersion` into the pure `WireVersionNegotiation.Negotiate(...)` helper, which returns a `WireVersionNegotiationResult` (recorded for telemetry and the floor-guard - it does not itself re-encode the batch):
+   - `min(localCurrent, peerAdvertised)` once the peer's capability is known;
+   - a conservative `UnknownPeerWireVersionFloor` until the peer has advertised one (the floor defaults to the sender's current version, matching pre-negotiation behaviour);
+   - and the genuinely-unsupported hard error (`NotSupportedException`) when the peer advertises a version strictly below the configured `MinimumSupportedWireVersion` - the one case where fail-fast is preserved, because the sender cannot down-encode that far.
+3. **Operators can see a mixed-version fleet.** The shipper records the negotiated target version and a downgrade signal to two observable gauges - `orleans.lattice.replication.wire_version.negotiated{tree,peer}` and `orleans.lattice.replication.wire_version.downgrade_active{tree,peer}` (the latter reports `1` while the negotiated target is below the sender's current version, else `0`) - backed by the `WireVersionNegotiationState` singleton.
+
+```csharp verify
+var result = WireVersionNegotiation.Negotiate(
+    localCurrentVersion: EncodedBatchHeader.CurrentWireVersion,
+    minimumSupportedVersion: 1,
+    unknownPeerFloorVersion: EncodedBatchHeader.CurrentWireVersion,
+    peerAdvertisedVersion: 3);
+
+if (result.DowngradeActive)
+{
+    // The negotiated target (result.EffectiveWireVersion) is below the
+    // local current version; a future re-encode seam would target it.
+}
+```
+
+### Opting in
+
+Negotiation ships **dark**: `LatticeReplicationOptions.WireVersionNegotiationEnabled` defaults to `false`, so a host that does not opt in frames every batch at the current wire version exactly as before, and the receiver-advertised `SupportedWireVersion` slot is simply never consumed. Hosts performing a heterogeneous rolling upgrade opt in and (optionally) lower the floor so the negotiated target for un-acked first batches is conservative:
+
+```csharp verify
+siloBuilder.AddLatticeReplication(o =>
+{
+    o.ClusterId = "site-a";
+    o.WireVersionNegotiationEnabled = true;
+    o.MinimumSupportedWireVersion = 1;
+    o.UnknownPeerWireVersionFloor = 1;
+});
+```
+
+`LatticeReplicationOptionsValidator` rejects a `MinimumSupportedWireVersion` outside `[1, EncodedBatchHeader.CurrentWireVersion]` and an `UnknownPeerWireVersionFloor` outside `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]` at first-resolve time.
+
+### Scope
+
+This is the negotiation **surface**: the receiver advertises, the sender computes and records the negotiated target, and the floor-guard hard error is preserved. The negotiated `EffectiveWireVersion` is the seam later wire-touching work consumes to truly re-encode entry bytes at the older version; today the steady-state ship path reuses the bytes the WAL already wrote at append time, so enabling negotiation changes the observability and floor-guard behaviour without altering the on-wire entry payloads. Because the feature is dark by default, there is no behavioural change for a host that does not opt in. The actual re-encode (and the safe on-by-default posture it unlocks) is tracked as a follow-up issue ([#703](https://github.com/NSTA1/Orleans.Lattice/issues/703)).
+

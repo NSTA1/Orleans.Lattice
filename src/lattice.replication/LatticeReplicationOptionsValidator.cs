@@ -318,6 +318,30 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "non-empty batch is compressed when the algorithm is non-None.");
         }
 
+        if (options.MinimumSupportedWireVersion < 1
+            || options.MinimumSupportedWireVersion > EncodedBatchHeader.CurrentWireVersion)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MinimumSupportedWireVersion)} "
+                + $"must lie in the closed interval [1, {EncodedBatchHeader.CurrentWireVersion}] ({scope}); "
+                + $"got {options.MinimumSupportedWireVersion}. The minimum supported wire version is the "
+                + "oldest framing version the sender will down-encode for; a peer below it fails fast, and a "
+                + "value above the sender's own current version could never be satisfied by any peer.");
+        }
+
+        if (options.UnknownPeerWireVersionFloor < options.MinimumSupportedWireVersion
+            || options.UnknownPeerWireVersionFloor > EncodedBatchHeader.CurrentWireVersion)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.UnknownPeerWireVersionFloor)} "
+                + $"must lie in the closed interval "
+                + $"[{nameof(LatticeReplicationOptions.MinimumSupportedWireVersion)}, "
+                + $"{EncodedBatchHeader.CurrentWireVersion}] ({scope}); got {options.UnknownPeerWireVersionFloor} "
+                + $"with a minimum of {options.MinimumSupportedWireVersion}. The unknown-peer floor is the "
+                + "conservative version used until a peer advertises its capability; it cannot be below the "
+                + "minimum supported version nor above the sender's current version.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

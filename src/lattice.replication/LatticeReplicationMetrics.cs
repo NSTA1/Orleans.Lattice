@@ -403,6 +403,29 @@ public static class LatticeReplicationMetrics
     public const string ShipInFlightName = "orleans.lattice.replication.peer.ship_in_flight";
 
     /// <summary>
+    /// Canonical name of the <c>wire_version.negotiated</c> observable
+    /// gauge. Reports the framing wire-format version the local sender
+    /// has negotiated as the target for each peer
+    /// (<c>min(localCurrent, peerAdvertised)</c>, or the conservative
+    /// unknown-peer floor until the peer advertises a capability).
+    /// Backed by <see cref="WireVersionNegotiationState"/> and tagged
+    /// with <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// </summary>
+    public const string WireVersionNegotiatedName = "orleans.lattice.replication.wire_version.negotiated";
+
+    /// <summary>
+    /// Canonical name of the <c>wire_version.downgrade_active</c>
+    /// observable gauge. Reports <c>1</c> when the negotiated target
+    /// version is strictly below the sender's current wire version and
+    /// <c>0</c> otherwise, so operators can see at a glance when a fleet
+    /// is running mixed wire versions during a rolling upgrade (a future
+    /// re-encode seam would down-encode while this reads <c>1</c>).
+    /// Backed by <see cref="WireVersionNegotiationState"/> and tagged
+    /// with <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// </summary>
+    public const string WireVersionDowngradeActiveName = "orleans.lattice.replication.wire_version.downgrade_active";
+
+    /// <summary>
     /// Canonical name of the <see cref="ApplyLag"/> histogram. Subscribers
     /// match against this constant rather than hard-coding the string.
     /// </summary>

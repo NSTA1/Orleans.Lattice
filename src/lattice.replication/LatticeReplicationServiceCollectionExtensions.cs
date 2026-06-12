@@ -198,6 +198,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.AddWalCursorRegistry();
         builder.AddLatticeWalGc();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
+        // Per-peer wire-version negotiation telemetry singleton. Backs
+        // the wire_version.negotiated / wire_version.downgrade_active
+        // observable gauges and is injected into the shipper grain so
+        // it can record the negotiated version each pump tick. Wired
+        // unconditionally - the gauges report only for peers the
+        // shipper actually negotiates with, so an inactive replication
+        // host emits nothing.
+        builder.Services.TryAddSingleton<WireVersionNegotiationState>();
         // Default runtime-observable peer topology: projects
         // LatticeReplicationOptions.ReplicationPeers via
         // IOptionsMonitor.OnChange so hosts can add or remove peers at

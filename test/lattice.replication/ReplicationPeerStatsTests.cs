@@ -296,3 +296,103 @@ public class ReplicationPeerStatsTests
         protected override DateTimeOffset GetTimestamp() => clock.Now;
     }
 }
+
+[TestFixture]
+public class WireVersionNegotiationStateTests
+{
+    private static WireVersionNegotiationResult Result(int version, bool downgrade, bool known) =>
+        new() { EffectiveWireVersion = version, DowngradeActive = downgrade, PeerCapabilityKnown = known };
+
+    [Test]
+    public void Snapshot_is_empty_when_no_state_recorded()
+    {
+        var state = new WireVersionNegotiationState();
+
+        Assert.That(state.Snapshot(), Is.Empty);
+    }
+
+    [Test]
+    public void Record_throws_on_null_arguments()
+    {
+        var state = new WireVersionNegotiationState();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => state.Record(null!, "p", Result(5, false, true)), Throws.ArgumentNullException);
+            Assert.That(() => state.Record("t", null!, Result(5, false, true)), Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
+    public void Record_then_Snapshot_round_trips_negotiation_state()
+    {
+        var state = new WireVersionNegotiationState();
+        state.Record("tree-1", "peer-a", Result(3, downgrade: true, known: true));
+
+        var snap = state.Snapshot().Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snap.Tree, Is.EqualTo("tree-1"));
+            Assert.That(snap.Peer, Is.EqualTo("peer-a"));
+            Assert.That(snap.NegotiatedVersion, Is.EqualTo(3));
+            Assert.That(snap.DowngradeActive, Is.True);
+            Assert.That(snap.PeerCapabilityKnown, Is.True);
+        });
+    }
+
+    [Test]
+    public void Record_overwrites_prior_state_for_same_peer()
+    {
+        var state = new WireVersionNegotiationState();
+        state.Record("t", "p", Result(3, downgrade: true, known: true));
+        state.Record("t", "p", Result(5, downgrade: false, known: true));
+
+        var snap = state.Snapshot().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(snap.NegotiatedVersion, Is.EqualTo(5));
+            Assert.That(snap.DowngradeActive, Is.False);
+        });
+    }
+
+    [Test]
+    public void Negotiated_gauge_emits_per_peer_version_with_tree_and_peer_tags()
+    {
+        var state = new WireVersionNegotiationState();
+        state.Record("tree-1", "peer-a", Result(4, downgrade: true, known: true));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.WireVersionNegotiatedName);
+
+        collector.RecordObservableInstruments();
+
+        Assert.That(collector.Measurements, Has.Some.Matches<RecordedMeasurement<long>>(m =>
+            m.Value == 4 &&
+            m.Tags.Any(t => t.Key == "tree" && (string?)t.Value == "tree-1") &&
+            m.Tags.Any(t => t.Key == "peer" && (string?)t.Value == "peer-a")));
+    }
+
+    [Test]
+    public void Downgrade_gauge_emits_one_when_downgrade_active_else_zero()
+    {
+        var state = new WireVersionNegotiationState();
+        state.Record("t", "down", Result(3, downgrade: true, known: true));
+        state.Record("t", "up", Result(5, downgrade: false, known: true));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.WireVersionDowngradeActiveName);
+
+        collector.RecordObservableInstruments();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.Measurements, Has.Some.Matches<RecordedMeasurement<long>>(m =>
+                m.Value == 1 && m.Tags.Any(t => t.Key == "peer" && (string?)t.Value == "down")));
+            Assert.That(collector.Measurements, Has.Some.Matches<RecordedMeasurement<long>>(m =>
+                m.Value == 0 && m.Tags.Any(t => t.Key == "peer" && (string?)t.Value == "up")));
+        });
+    }
+}

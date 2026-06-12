@@ -491,4 +491,64 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { ShadowForwardDedupeCacheSize = 256 };
         Assert.That(opts.ShadowForwardDedupeCacheSize, Is.EqualTo(256));
     }
+
+    // ------------------------------------------------------------------
+    // Wire-version capability negotiation
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultWireVersionNegotiationEnabled_is_false() =>
+        Assert.That(LatticeReplicationOptions.DefaultWireVersionNegotiationEnabled, Is.False);
+
+    [Test]
+    public void DefaultMinimumSupportedWireVersion_is_one() =>
+        Assert.That(LatticeReplicationOptions.DefaultMinimumSupportedWireVersion, Is.EqualTo(1));
+
+    [Test]
+    public void DefaultUnknownPeerWireVersionFloor_is_current_wire_version() =>
+        Assert.That(
+            LatticeReplicationOptions.DefaultUnknownPeerWireVersionFloor,
+            Is.EqualTo(EncodedBatchHeader.CurrentWireVersion));
+
+    [Test]
+    public void New_instance_has_wire_version_negotiation_disabled_by_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.WireVersionNegotiationEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultWireVersionNegotiationEnabled));
+    }
+
+    [Test]
+    public void New_instance_has_default_minimum_supported_wire_version()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.MinimumSupportedWireVersion, Is.EqualTo(LatticeReplicationOptions.DefaultMinimumSupportedWireVersion));
+    }
+
+    [Test]
+    public void New_instance_has_default_unknown_peer_wire_version_floor()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.UnknownPeerWireVersionFloor, Is.EqualTo(LatticeReplicationOptions.DefaultUnknownPeerWireVersionFloor));
+    }
+
+    [Test]
+    public void WireVersionNegotiationEnabled_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { WireVersionNegotiationEnabled = true };
+        Assert.That(opts.WireVersionNegotiationEnabled, Is.True);
+    }
+
+    [Test]
+    public void MinimumSupportedWireVersion_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { MinimumSupportedWireVersion = 2 };
+        Assert.That(opts.MinimumSupportedWireVersion, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void UnknownPeerWireVersionFloor_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { UnknownPeerWireVersionFloor = 3 };
+        Assert.That(opts.UnknownPeerWireVersionFloor, Is.EqualTo(3));
+    }
 }

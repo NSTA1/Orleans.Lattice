@@ -686,6 +686,64 @@
           "legendFormat": "{{peer}}"
         }
       ]
+    },
+    {
+      "id": 21,
+      "title": "Per-peer negotiated wire version",
+      "description": "Framing wire version the local sender has negotiated as the target for the named peer (min(localCurrent, peerAdvertised), or the unknown-peer floor until the peer advertises). Capability/telemetry only - the sender does not yet re-encode at this version (see follow-up issue).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree, peer) (orleans_lattice_replication_wire_version_negotiated{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} / {{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "Per-peer wire-version downgrade active (1 = mixed-version fleet)",
+      "description": "1 when the negotiated target version is strictly below the sender's current wire version (a mixed-version fleet during a rolling upgrade), else 0. Telemetry only - reflects the negotiated target, not an actual re-encode.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree, peer) (orleans_lattice_replication_wire_version_downgrade_active{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} / {{peer}}"
+        }
+      ]
     }
   ]
 }

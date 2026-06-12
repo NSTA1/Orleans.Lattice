@@ -678,6 +678,65 @@ public class LatticeReplicationOptions
     /// </summary>
     public int FramingCompressionMinBatchBytes { get; set; } = DefaultFramingCompressionMinBatchBytes;
 
+    /// <summary>
+    /// Opts in to wire-version capability negotiation on the outbound
+    /// ship path. When <see langword="true"/>, the per-<c>(tree, peer)</c>
+    /// shipper reads each peer's advertised
+    /// <see cref="ReplicationAck.SupportedWireVersion"/> from its acks
+    /// and computes the negotiated target framing wire version
+    /// via <see cref="WireVersionNegotiation.Negotiate(int, int, int, int?)"/>:
+    /// <c>min(localCurrent, peerAdvertised)</c> once the peer's
+    /// capability is known, or <see cref="UnknownPeerWireVersionFloor"/>
+    /// until it advertises one. A peer that advertises a version below
+    /// <see cref="MinimumSupportedWireVersion"/> surfaces the canonical
+    /// fail-fast hard error (the genuinely-unsupported case). The
+    /// negotiated target and a downgrade-active signal are published
+    /// to the <c>wire_version.negotiated</c> and
+    /// <c>wire_version.downgrade_active</c> gauges so a mixed-version
+    /// fleet is observable during a rolling upgrade. Enabling this turns
+    /// on capability observation, the floor-guard, and the telemetry
+    /// only - it does not itself re-encode entry bytes at the negotiated
+    /// target (the batch is still framed at the current wire version);
+    /// applying the negotiated target to the encoded payload is future
+    /// wire-touching work.
+    /// <para>
+    /// Defaults to <see langword="false"/>: negotiation is off and the
+    /// shipper encodes every batch at
+    /// <see cref="EncodedBatchHeader.CurrentWireVersion"/> exactly as it
+    /// did before this option existed - no behavioural change for hosts
+    /// that do not opt in.
+    /// </para>
+    /// </summary>
+    public bool WireVersionNegotiationEnabled { get; set; } = DefaultWireVersionNegotiationEnabled;
+
+    /// <summary>
+    /// The oldest framing wire version the local sender is willing to
+    /// interoperate with when
+    /// <see cref="WireVersionNegotiationEnabled"/> is set. A peer that
+    /// advertises a <see cref="ReplicationAck.SupportedWireVersion"/>
+    /// strictly below this value cannot be down-encoded for and
+    /// surfaces a fail-fast error on the ship path. Must lie in the
+    /// closed interval <c>[1, EncodedBatchHeader.CurrentWireVersion]</c>.
+    /// Defaults to <see cref="DefaultMinimumSupportedWireVersion"/>.
+    /// </summary>
+    public int MinimumSupportedWireVersion { get; set; } = DefaultMinimumSupportedWireVersion;
+
+    /// <summary>
+    /// The conservative framing wire version the local sender targets
+    /// for a peer whose capability is not yet known (no ack has
+    /// advertised a <see cref="ReplicationAck.SupportedWireVersion"/>
+    /// yet) while <see cref="WireVersionNegotiationEnabled"/> is set.
+    /// Must lie in the closed interval
+    /// <c>[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]</c>.
+    /// Defaults to <see cref="EncodedBatchHeader.CurrentWireVersion"/>
+    /// (<see cref="DefaultUnknownPeerWireVersionFloor"/>) so the
+    /// negotiated target for the first batches before any ack is the
+    /// current version, as it is today; hosts performing a heterogeneous
+    /// rolling upgrade can lower this so the negotiated target for
+    /// un-acked first batches is conservative.
+    /// </summary>
+    public int UnknownPeerWireVersionFloor { get; set; } = DefaultUnknownPeerWireVersionFloor;
+
 
     /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
@@ -964,4 +1023,29 @@ public class LatticeReplicationOptions
     /// dominates the bandwidth saving on tiny batches.
     /// </summary>
     public const int DefaultFramingCompressionMinBatchBytes = 512;
+
+    /// <summary>
+    /// Default value for <see cref="WireVersionNegotiationEnabled"/>:
+    /// <see langword="false"/>. Negotiation ships dark; hosts opt in
+    /// explicitly once their fleet is ready to interoperate across wire
+    /// versions during a rolling upgrade.
+    /// </summary>
+    public const bool DefaultWireVersionNegotiationEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="MinimumSupportedWireVersion"/>:
+    /// <c>1</c>, the oldest framing wire version. A peer advertising
+    /// anything below this is genuinely unsupported and fails fast on
+    /// the ship path.
+    /// </summary>
+    public const int DefaultMinimumSupportedWireVersion = 1;
+
+    /// <summary>
+    /// Default value for <see cref="UnknownPeerWireVersionFloor"/>:
+    /// <see cref="EncodedBatchHeader.CurrentWireVersion"/>. Until a
+    /// peer advertises its capability the sender targets its current
+    /// version, matching the pre-negotiation behaviour; hosts running a
+    /// heterogeneous upgrade lower this to a conservative floor.
+    /// </summary>
+    public const int DefaultUnknownPeerWireVersionFloor = EncodedBatchHeader.CurrentWireVersion;
 }
