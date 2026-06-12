@@ -12,6 +12,8 @@ topic cross-references in each section.
 
 > **Compression** - `ILatticeCompressor`, `LatticeCompression`, `ZstdLatticeCompressor`, and `LatticeCompressionServiceCollectionExtensions.AddLatticeCompressor` are part of the public API surface. They are documented in [`compression.md`](compression.md), which is the source of truth for registration, the tag-space partitioning, and the worked example for plugging in a custom algorithm.
 
+> **Cluster-internal queues** - `ILatticeQueue<T>`, `LatticeQueueEntry<T>`, and the `IGrainFactory.GetLatticeQueue<T>` resolver (`LatticeQueueExtensions`) are part of the public API surface. They are documented in [`queues.md`](queues.md), which is the source of truth for resolving a named queue, the bounded-FIFO eviction knob (`LatticeOptions.QueueCapacity`), and the single-coordinator throughput model.
+
 ## Setup
 
 Install the NuGet package:

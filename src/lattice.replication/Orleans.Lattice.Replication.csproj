@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Replication</PackageId>
-    <Version>6.4.0</Version>
+    <Version>7.0.0</Version>
     <Description>Cross-cluster replication for Orleans.Lattice - sharded, CRDT-backed key-value replication between Orleans clusters.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
@@ -27,8 +27,8 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.1.0" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="10.0.9" />
   </ItemGroup>
 
 </Project>
