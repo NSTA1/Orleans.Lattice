@@ -84,6 +84,21 @@ internal sealed class ReplicationShipperGrain(
     private int? _peerWireVersion;
 
     /// <summary>
+    /// The framing wire version the shipper stamps on the next batch's
+    /// <see cref="EncodedBatchHeader"/>. Defaults to
+    /// <see cref="EncodedBatchHeader.CurrentWireVersion"/> and is only
+    /// ever lowered when
+    /// <see cref="LatticeReplicationOptions.WireVersionNegotiationEnabled"/>
+    /// is set and <see cref="TryNegotiateWireVersion"/> has negotiated a
+    /// down-stamp target for a peer running an older build. When
+    /// negotiation is off the field is never read (the header sites stamp
+    /// <see cref="EncodedBatchHeader.CurrentWireVersion"/> directly), so a
+    /// stale value left over from a runtime options flip cannot leak onto
+    /// the wire. Activation-scoped.
+    /// </summary>
+    private int _negotiatedWireVersion = EncodedBatchHeader.CurrentWireVersion;
+
+    /// <summary>
     /// Wall-clock instant at or after which the next phase tick is
     /// allowed to attempt a send. Set to a future value on transient
     /// transport failure to apply backoff. <see cref="DateTime.MinValue"/>
@@ -650,7 +665,9 @@ internal sealed class ReplicationShipperGrain(
             var header = new EncodedBatchHeader
             {
                 Magic = EncodedBatchHeader.MagicValue,
-                WireVersion = EncodedBatchHeader.CurrentWireVersion,
+                WireVersion = options.WireVersionNegotiationEnabled
+                    ? _negotiatedWireVersion
+                    : EncodedBatchHeader.CurrentWireVersion,
                 OriginClusterIdHash = EncodedBatchHeader.HashClusterId(options.ClusterId),
                 EntryCount = _drainEncodedSegments.Count,
                 BatchSequence = 0,
@@ -1251,6 +1268,19 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
+        // Wire-version capability negotiation (opt-in) for the pipelining
+        // path, mirroring the serial path. Computes the version to stamp
+        // against the peer's advertised capability, publishes the
+        // negotiated / downgrade telemetry, and fails fast when the peer
+        // is older than the sender's floor or the negotiated target is a
+        // down-stamp this build cannot produce for the tree. Skipped
+        // entirely when the option is off, so the batch ships at the
+        // current wire version exactly as before.
+        if (options.WireVersionNegotiationEnabled && !TryNegotiateWireVersion(options))
+        {
+            return;
+        }
+
         var inFlight = new Queue<InFlightShipBatch>(window);
         var failed = false;
         var shippedAny = false;
@@ -1503,7 +1533,9 @@ internal sealed class ReplicationShipperGrain(
         var header = new EncodedBatchHeader
         {
             Magic = EncodedBatchHeader.MagicValue,
-            WireVersion = EncodedBatchHeader.CurrentWireVersion,
+            WireVersion = options.WireVersionNegotiationEnabled
+                ? _negotiatedWireVersion
+                : EncodedBatchHeader.CurrentWireVersion,
             OriginClusterIdHash = EncodedBatchHeader.HashClusterId(options.ClusterId),
             EntryCount = count,
             BatchSequence = 0,
@@ -2122,7 +2154,9 @@ internal sealed class ReplicationShipperGrain(
             var header = new EncodedBatchHeader
             {
                 Magic = EncodedBatchHeader.MagicValue,
-                WireVersion = EncodedBatchHeader.CurrentWireVersion,
+                WireVersion = options.WireVersionNegotiationEnabled
+                    ? _negotiatedWireVersion
+                    : EncodedBatchHeader.CurrentWireVersion,
                 OriginClusterIdHash = EncodedBatchHeader.HashClusterId(options.ClusterId),
                 EntryCount = 0,
                 BatchSequence = 0,
@@ -2198,13 +2232,22 @@ internal sealed class ReplicationShipperGrain(
     /// most recently advertised <see cref="ReplicationAck.SupportedWireVersion"/>,
     /// publishes the negotiated version and downgrade signal to the
     /// <c>wire_version.negotiated</c> / <c>wire_version.downgrade_active</c>
-    /// gauges, and returns <see langword="true"/> when the batch may
-    /// ship. Returns <see langword="false"/> - after logging an error
-    /// and applying backoff - for the genuinely-unsupported case where
-    /// the peer advertised a version older than the configured
+    /// gauges, records the version the header sites will stamp into
+    /// <see cref="_negotiatedWireVersion"/>, and returns
+    /// <see langword="true"/> when the batch may ship. Returns
+    /// <see langword="false"/> - after logging an error and applying
+    /// backoff - for the two genuinely-unsupported cases that must fail
+    /// fast rather than ship an un-applyable frame: the peer advertised a
+    /// version older than the configured
     /// <see cref="LatticeReplicationOptions.MinimumSupportedWireVersion"/>
-    /// floor, preserving the canonical fail-fast posture for a peer
-    /// that cannot be down-encoded for.
+    /// floor, or the negotiated target is a down-stamp this build cannot
+    /// produce for the batch's shape (a CRDT-mode tree, a compressed
+    /// framing tail, or a target below
+    /// <see cref="WireVersionDownEncoder.MinimumDownEncodableWireVersion"/>).
+    /// When the negotiated target equals the current wire version this is
+    /// a true no-op: the shipper keeps its verbatim pre-encoded entry hot
+    /// path and the bytes on the wire are byte-identical to a build that
+    /// never negotiated.
     /// </summary>
     private bool TryNegotiateWireVersion(LatticeReplicationOptions options)
     {
@@ -2228,6 +2271,38 @@ internal sealed class ReplicationShipperGrain(
         }
 
         _negotiationState.Record(_treeName, _peerClusterId, negotiation);
+
+        // Validate that the negotiated target is a down-stamp this build
+        // can actually produce for the batch's shape before committing to
+        // it. The merge mode is per-tree-constant (resolved once from the
+        // activation-cached resolver) and the framing-tail compression
+        // intent is the tree-level option, so a CRDT-mode tree, a
+        // compression-configured tree, or a target below the down-encode
+        // floor surfaces a fail-fast error here rather than emitting a
+        // frame the older peer would mis-apply. Skipped entirely when no
+        // downgrade is in effect (same-version peers stay the verbatim
+        // no-op).
+        if (negotiation.DowngradeActive)
+        {
+            var mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister;
+            try
+            {
+                WireVersionDownEncoder.EnsureDownEncodable(
+                    negotiation.EffectiveWireVersion, mode, options.FramingCompression);
+            }
+            catch (NotSupportedException ex)
+            {
+                Logger.LogError(ex,
+                    "Negotiated wire version {Version} for peer {Peer} on tree {Tree} is not a "
+                    + "down-stamp this build can produce for the batch's shape; cannot ship until "
+                    + "the peer upgrades (or compression is disabled for this tree).",
+                    negotiation.EffectiveWireVersion, _peerClusterId, _treeName);
+                ApplyBackoff(options, exception: null, reason: "wire-version-unsupported");
+                return false;
+            }
+        }
+
+        _negotiatedWireVersion = negotiation.EffectiveWireVersion;
         return true;
     }
 

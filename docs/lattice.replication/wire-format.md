@@ -150,15 +150,17 @@ The replication options ``FramingCompression``, ``FramingCompressionLevel`` and 
 
 ## Wire-version capability negotiation
 
-The fail-fast posture described under [Why a versioned envelope](#why-a-versioned-envelope) is the right default for a deployment-ordering bug, but it is the wrong behaviour during a deliberate rolling upgrade: a newer sender shipping a newer frame to a not-yet-upgraded receiver throws `NotSupportedException` on every batch, the shipper retries forever, and replication to that peer stalls. Wire-version capability negotiation is the surface that makes that window **observable and floor-guarded**: the receiver advertises the version it can decode, the sender records the negotiated target for telemetry, and a peer below the configured minimum floor still fails fast. Actually re-encoding outbound batches at the negotiated older version - the capability that lets a newer sender ship a frame a not-yet-upgraded receiver can decode, and the prerequisite for closing the stall - is future wire-touching work that builds on this surface (see [Scope](#scope)).
+The fail-fast posture described under [Why a versioned envelope](#why-a-versioned-envelope) is the right default for a deployment-ordering bug, but it is the wrong behaviour during a deliberate rolling upgrade: a newer sender shipping a newer frame to a not-yet-upgraded receiver throws `NotSupportedException` on every batch, the shipper retries forever, and replication to that peer stalls. Wire-version capability negotiation is the surface that makes that window **observable, floor-guarded, and - for a last-writer-wins tree - actually decodable by the older peer**: the receiver advertises the version it can decode, the sender computes the negotiated target, down-stamps the outbound framing header to that target so the older receiver can decode and apply the frame, and a peer below the configured minimum floor still fails fast.
 
 ### How it works
 
 1. **The receiver advertises its capability.** Every `ReplicationAck` now carries an additive `[Id(5)] int? SupportedWireVersion` slot stamped with the receiver build's `EncodedBatchHeader.CurrentWireVersion`. The slot is strictly additive on the wire (same compatibility profile as `SuggestedBatchSize` / `PauseForMs`): a receiver built before negotiation omits the slot entirely (it decodes as `null`), and a sender built before negotiation ignores it.
-2. **The sender computes the negotiated target version.** On each pump tick the shipper feeds the peer's most recently advertised `SupportedWireVersion` into the pure `WireVersionNegotiation.Negotiate(...)` helper, which returns a `WireVersionNegotiationResult` (recorded for telemetry and the floor-guard - it does not itself re-encode the batch):
+2. **The sender computes the negotiated target version and down-stamps the header.** On each pump tick the shipper feeds the peer's most recently advertised `SupportedWireVersion` into the pure `WireVersionNegotiation.Negotiate(...)` helper, which returns a `WireVersionNegotiationResult`:
    - `min(localCurrent, peerAdvertised)` once the peer's capability is known;
    - a conservative `UnknownPeerWireVersionFloor` until the peer has advertised one (the floor defaults to the sender's current version, matching pre-negotiation behaviour);
    - and the genuinely-unsupported hard error (`NotSupportedException`) when the peer advertises a version strictly below the configured `MinimumSupportedWireVersion` - the one case where fail-fast is preserved, because the sender cannot down-encode that far.
+
+   When the negotiated target is below the sender's current version the shipper threads it through `WireVersionDownEncoder` onto the framing header it stamps; when the target equals the current version the verbatim pre-encoded entry hot path is preserved with zero re-encode cost (a true same-version no-op).
 3. **Operators can see a mixed-version fleet.** The shipper records the negotiated target version and a downgrade signal to two observable gauges - `orleans.lattice.replication.wire_version.negotiated{tree,peer}` and `orleans.lattice.replication.wire_version.downgrade_active{tree,peer}` (the latter reports `1` while the negotiated target is below the sender's current version, else `0`) - backed by the `WireVersionNegotiationState` singleton.
 
 ```csharp verify
@@ -166,14 +168,31 @@ var result = WireVersionNegotiation.Negotiate(
     localCurrentVersion: EncodedBatchHeader.CurrentWireVersion,
     minimumSupportedVersion: 1,
     unknownPeerFloorVersion: EncodedBatchHeader.CurrentWireVersion,
-    peerAdvertisedVersion: 3);
+    peerAdvertisedVersion: EncodedBatchHeader.CurrentWireVersion - 1);
 
 if (result.DowngradeActive)
 {
     // The negotiated target (result.EffectiveWireVersion) is below the
-    // local current version; a future re-encode seam would target it.
+    // local current version; the shipper down-stamps the framing header
+    // to it via WireVersionDownEncoder so the older peer can decode it.
 }
 ```
+
+### Version-adaptive down-stamping (`WireVersionDownEncoder`)
+
+`WireVersionDownEncoder` is the consumer of the negotiated target. It prepares the outbound batch's fixed `EncodedBatchHeader` for a target version older than the sender's current build so a current-build sender can ship a frame a not-yet-upgraded receiver decodes **and** applies. The mechanism is deliberately **header-only** - no entry segment is re-serialised - which is correct because every prior framing version *elided* a per-entry field rather than adding one, so the entry-segment bytes the current build produces are already a strict subset of what an older receiver expects:
+
+- **Wire version 4** elided the per-entry `WalRecord.TreeId` slot. The current build also elides it, and a version-4 receiver re-stamps the tree id from the framing tail's `TreeName`. The entry segments are therefore byte-identical between version 4 and version 5.
+- **Wire version 5** hoisted the per-entry merge mode into the header's packed slot. `WalRecord.Mode` carries no Orleans `[Id]` tag, so it is never serialised onto an entry segment in any version; a version-4 producer's per-entry mode was uniformly the `LwwRegister` enum default, so a version-4 receiver reads `LwwRegister` for every entry.
+
+Down-stamping to version 4 is consequently exact when - and only when - the batch's merge mode is `LwwRegister` and the framing tail is uncompressed. A version-4 receiver reading the version-5 header's trailing packed 32-bit slot interprets bits 16-23 as part of its 24-bit `AtomicBatchSpanCount`; those bits are zero precisely when `Mode` is the `LwwRegister` default, so the header bytes are then fully version-4-compatible.
+
+The helper refuses (with `NotSupportedException`, the same fail-fast posture as a below-floor peer) to down-stamp the two genuinely un-down-encodable shapes:
+
+- **A CRDT-mode tree** - its per-entry merge dispatch depends on the hoisted header mode a pre-version-5 receiver cannot read, so down-stamping would silently mis-apply the entries.
+- **A compressed framing tail** - compression rides the header without a wire-version bump, so a pre-version-5 receiver is not guaranteed to carry the matching `ILatticeCompressor`. Leave `FramingCompression` at `None` for trees replicated to a mixed-version fleet.
+
+The receiver-side apply path restores the elided per-entry fields from the framing context via `IWalRecordEncoder.Decode(span, treeId, mode)`: the tree id comes from the framing tail's `TreeName`, the merge mode from the header's `Mode` field.
 
 ### Opting in
 
@@ -191,7 +210,9 @@ siloBuilder.AddLatticeReplication(o =>
 
 `LatticeReplicationOptionsValidator` rejects a `MinimumSupportedWireVersion` outside `[1, EncodedBatchHeader.CurrentWireVersion]` and an `UnknownPeerWireVersionFloor` outside `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]` at first-resolve time.
 
-### Scope
+### Scope and current posture
 
-This is the negotiation **surface**: the receiver advertises, the sender computes and records the negotiated target, and the floor-guard hard error is preserved. The negotiated `EffectiveWireVersion` is the seam later wire-touching work consumes to truly re-encode entry bytes at the older version; today the steady-state ship path reuses the bytes the WAL already wrote at append time, so enabling negotiation changes the observability and floor-guard behaviour without altering the on-wire entry payloads. Because the feature is dark by default, there is no behavioural change for a host that does not opt in. The actual re-encode (and the safe on-by-default posture it unlocks) is tracked as a follow-up issue ([#703](https://github.com/NSTA1/Orleans.Lattice/issues/703)).
+The down-stamp mechanism is **implemented and tested** for last-writer-wins, uncompressed trees: a current-build sender negotiates the previous wire version for an older peer, down-stamps the framing header, and the previous-version receiver path decodes and applies the entries to field-complete `WalRecord` values. A same-version peer is a true verbatim no-op (the bytes on the wire are byte-identical to a build that never negotiated). CRDT-mode and compressed trees fail fast rather than emit a frame the older peer would mis-apply.
+
+Negotiation ships **dark** (`WireVersionNegotiationEnabled` defaults to `false`), and the default-on flip is **deferred**: the down-stamp is exact only for last-writer-wins, uncompressed trees, and flipping the default on safely for a heterogeneous fleet (including CRDT trees) requires the upgrade-direction stall analysis that a later issue will carry. Hosts performing a controlled rolling upgrade of last-writer-wins trees can opt in today. Because the feature is dark by default, there is no behavioural change for a host that does not opt in. The default-on posture is tracked as follow-up work on [#703](https://github.com/NSTA1/Orleans.Lattice/issues/703).
 

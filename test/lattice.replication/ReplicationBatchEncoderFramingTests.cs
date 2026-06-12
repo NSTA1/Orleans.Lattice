@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Serialization;
 
@@ -364,5 +365,168 @@ public class ReplicationBatchEncoderFramingTests
         {
             Assert.That(decoded.Span[i].ToArray(), Is.EqualTo(entries[i].ToArray()), $"entry {i}");
         }
+    }
+}
+
+/// <summary>
+/// End-to-end proof that a current-build sender can down-stamp a frame
+/// to the previous wire version and that the previous-version receiver
+/// path decodes <em>and</em> applies the entries to field-complete
+/// <see cref="WalRecord"/> values. Exercises the exact production code:
+/// <see cref="WireVersionDownEncoder.PrepareHeader(in EncodedBatchHeader, int)"/>
+/// for the down-stamp, the default
+/// <see cref="IReplicationBatchEncoder"/> framing for the wire bytes,
+/// and the canonical
+/// <see cref="IWalRecordEncoder.Decode(System.ReadOnlySpan{byte}, string, LatticeMergeMode)"/>
+/// receiver apply seam that restores the elided tree id and merge mode
+/// from the framing context. A true two-cluster mixed-version cluster
+/// test is not constructible because the gRPC receiver service
+/// advertises only its own build's current wire version (there is no
+/// seam to make a live receiver advertise an older capability), so this
+/// frame-level round trip through the production decode path is the
+/// honest proof of the down-encode contract.
+/// </summary>
+[TestFixture]
+public class WireVersionDownEncodeRoundTripTests
+{
+    private ServiceProvider _services = null!;
+    private IReplicationBatchEncoder _framing = null!;
+    private IWalRecordEncoder _walRecords = null!;
+
+    private const string TreeName = "orders";
+    private const string OriginClusterId = "site-a";
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp()
+    {
+        _services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        _framing = new OrleansBinaryReplicationBatchEncoder(
+            _services.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
+        _walRecords = new OrleansBinaryWalRecordEncoder(
+            _services.GetRequiredService<Serializer<WalRecord>>());
+    }
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown() => _services.Dispose();
+
+    private static WalRecord MakeSet(string key, string value, long ticks)
+        => new()
+        {
+            TreeId = TreeName,
+            Op = MutationKind.Set,
+            Key = key,
+            Value = System.Text.Encoding.UTF8.GetBytes(value),
+            Timestamp = new HybridLogicalClock { WallClockTicks = ticks, Counter = 0 },
+            OriginClusterId = OriginClusterId,
+            Mode = LatticeMergeMode.LwwRegister,
+        };
+
+    private ArraySegment<byte> Encode(in WalRecord record)
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        _walRecords.Encode(record, writer);
+        return new ArraySegment<byte>(writer.WrittenSpan.ToArray());
+    }
+
+    private static EncodedBatchHeader MakeHeader(int entryCount)
+        => new()
+        {
+            Magic = EncodedBatchHeader.MagicValue,
+            WireVersion = EncodedBatchHeader.CurrentWireVersion,
+            OriginClusterIdHash = EncodedBatchHeader.HashClusterId(OriginClusterId),
+            EntryCount = entryCount,
+            BatchSequence = 7L,
+            AtomicBatchSpanCount = 0,
+            Mode = LatticeMergeMode.LwwRegister,
+            Compression = LatticeCompression.None,
+        };
+
+    [Test]
+    public void Down_stamped_v_minus_1_frame_decodes_and_applies_to_field_complete_records()
+    {
+        var originals = new[]
+        {
+            MakeSet("k1", "v1", 100),
+            MakeSet("k2", "v2", 200),
+        };
+        var segments = new[] { Encode(originals[0]), Encode(originals[1]) };
+
+        // Sender builds the current-version header, then down-stamps it
+        // to the previous wire version for an older peer.
+        var currentHeader = MakeHeader(entryCount: 2);
+        var target = WireVersionDownEncoder.MinimumDownEncodableWireVersion;
+        var downStamped = WireVersionDownEncoder.PrepareHeader(currentHeader, target);
+        Assert.That(downStamped.WireVersion, Is.EqualTo(target));
+
+        var writer = new ArrayBufferWriter<byte>();
+        _framing.EncodeFraming(downStamped, TreeName, OriginClusterId, segments, writer);
+
+        // Receiver-side decode (the framing surface is version-agnostic
+        // shape framing; the previous-version receiver reads the same
+        // length-prefixed segments).
+        var ok = _framing.TryDecodeFraming(
+            writer.WrittenMemory,
+            out var header,
+            out var tree,
+            out var origin,
+            out var decodedSegments);
+
+        Assert.That(ok, Is.True);
+        Assert.That(header.WireVersion, Is.EqualTo(target));
+        Assert.That(tree, Is.EqualTo(TreeName));
+        Assert.That(origin, Is.EqualTo(OriginClusterId));
+        Assert.That(decodedSegments.Length, Is.EqualTo(2));
+
+        // The receiver restores the elided tree id and merge mode from
+        // the framing context (the tail TreeName and the header Mode).
+        for (var i = 0; i < originals.Length; i++)
+        {
+            var applied = _walRecords.Decode(decodedSegments.Span[i].AsSpan(), tree, header.Mode);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(applied.TreeId, Is.EqualTo(originals[i].TreeId));
+                Assert.That(applied.Op, Is.EqualTo(originals[i].Op));
+                Assert.That(applied.Key, Is.EqualTo(originals[i].Key));
+                Assert.That(applied.Value, Is.EqualTo(originals[i].Value));
+                Assert.That(applied.Timestamp, Is.EqualTo(originals[i].Timestamp));
+                Assert.That(applied.OriginClusterId, Is.EqualTo(originals[i].OriginClusterId));
+                Assert.That(applied.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
+            });
+        }
+    }
+
+    [Test]
+    public void Same_version_down_stamp_is_byte_identical_to_a_never_negotiated_frame()
+    {
+        var segments = new[] { Encode(MakeSet("k1", "v1", 100)) };
+        var header = MakeHeader(entryCount: 1);
+
+        // The verbatim hot path: frame at the current wire version.
+        var verbatim = new ArrayBufferWriter<byte>();
+        _framing.EncodeFraming(header, TreeName, OriginClusterId, segments, verbatim);
+
+        // PrepareHeader at the current version returns the header
+        // unchanged, so framing the "negotiated" header produces
+        // byte-identical bytes.
+        var negotiatedHeader = WireVersionDownEncoder.PrepareHeader(
+            header, EncodedBatchHeader.CurrentWireVersion);
+        var negotiated = new ArrayBufferWriter<byte>();
+        _framing.EncodeFraming(negotiatedHeader, TreeName, OriginClusterId, segments, negotiated);
+
+        Assert.That(
+            negotiated.WrittenSpan.ToArray(),
+            Is.EqualTo(verbatim.WrittenSpan.ToArray()));
+    }
+
+    [Test]
+    public void Crdt_frame_refuses_to_down_stamp()
+    {
+        var crdtHeader = MakeHeader(entryCount: 0) with { Mode = LatticeMergeMode.PnCounter };
+
+        Assert.That(
+            () => WireVersionDownEncoder.PrepareHeader(
+                crdtHeader, WireVersionDownEncoder.MinimumDownEncodableWireVersion),
+            Throws.InstanceOf<NotSupportedException>());
     }
 }

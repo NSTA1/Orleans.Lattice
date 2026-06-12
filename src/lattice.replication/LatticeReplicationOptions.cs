@@ -1012,12 +1012,20 @@ public class LatticeReplicationOptions
     /// negotiated target and a downgrade-active signal are published
     /// to the <c>wire_version.negotiated</c> and
     /// <c>wire_version.downgrade_active</c> gauges so a mixed-version
-    /// fleet is observable during a rolling upgrade. Enabling this turns
-    /// on capability observation, the floor-guard, and the telemetry
-    /// only - it does not itself re-encode entry bytes at the negotiated
-    /// target (the batch is still framed at the current wire version);
-    /// applying the negotiated target to the encoded payload is future
-    /// wire-touching work.
+    /// fleet is observable during a rolling upgrade. When the negotiated
+    /// target is below the current wire version the shipper down-stamps
+    /// the outbound framing header to that target via
+    /// <see cref="WireVersionDownEncoder"/> so a not-yet-upgraded
+    /// receiver decodes and applies the frame; when the target equals
+    /// the current version the verbatim pre-encoded entry hot path is
+    /// preserved with zero re-encode cost (a true same-version no-op).
+    /// A negotiated down-stamp this build cannot produce for the batch's
+    /// shape - a CRDT-mode tree (whose per-entry merge dispatch depends
+    /// on the wire-version-5 hoisted header mode an older receiver cannot
+    /// read) or a compression-configured tree (whose compressor an older
+    /// receiver is not guaranteed to carry) - surfaces the same fail-fast
+    /// hard error on the ship path rather than emitting a frame the older
+    /// peer would mis-apply.
     /// <para>
     /// Defaults to <see langword="false"/>: negotiation is off and the
     /// shipper encodes every batch at
@@ -1036,6 +1044,14 @@ public class LatticeReplicationOptions
     /// strictly below this value cannot be down-encoded for and
     /// surfaces a fail-fast error on the ship path. Must lie in the
     /// closed interval <c>[1, EncodedBatchHeader.CurrentWireVersion]</c>.
+    /// Note that the sender can only actually down-stamp a frame as far
+    /// back as <see cref="WireVersionDownEncoder.MinimumDownEncodableWireVersion"/>
+    /// (older receivers expect per-entry field shapes this build no
+    /// longer carries on the encoded entry segments); a peer that
+    /// advertises a version in the half-open interval
+    /// <c>[MinimumSupportedWireVersion, MinimumDownEncodableWireVersion)</c>
+    /// still surfaces a fail-fast error on the ship path rather than
+    /// receiving a frame it cannot decode.
     /// Defaults to <see cref="DefaultMinimumSupportedWireVersion"/>.
     /// </summary>
     public int MinimumSupportedWireVersion { get; set; } = DefaultMinimumSupportedWireVersion;
