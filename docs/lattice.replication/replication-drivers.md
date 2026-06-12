@@ -435,6 +435,49 @@ not block - and the next activation recovers by re-shipping at most
 `ShipCursorWriteInterval × ShipBatchSize` entries the receiver
 dedupes.
 
+### Content-hash dedup measurement
+
+Set `LatticeReplicationOptions.ContentHashDedupEnabled` (default
+`false`) to measure the **payload re-send rate**: how often the shipper
+ships a `Set` whose value bytes are byte-identical to the value most
+recently shipped for the same key. This is the idempotent-re-write rate
+that decides whether a sender-manifest / receiver-pull-missing dedup
+round trip would pay for its extra latency, exactly per the opt-in
+guidance ("opt in when measurement shows payload re-send rate justifies
+the round-trip").
+
+When enabled, the shipper keeps a per-activation, per-key bounded LRU
+of the last-shipped content hash - FNV-1a 64-bit over the op, key,
+range end-key, and value bytes - sized by
+`ContentHashDedupCacheSize` (default `4096`, validated `>= 64`). As
+each redundant entry drains onto the wire the shipper increments the
+two observability counters
+`orleans.lattice.replication.ship.redundant_payloads` and
+`orleans.lattice.replication.ship.redundant_payload_bytes` (tagged
+`tree` + `peer`; see [Observability](observability.md#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes)).
+When the flag is off the shipper does no extra work and never touches
+the cache or the counters.
+
+The measurement is **observability-only**: it never elides, reorders,
+or alters the bytes the sender ships, so the wire output is byte-for-byte
+identical whether or not the flag is set. Actually skipping a
+byte-identical re-set that carries a newer HLC would be unsafe without
+receiver consent: the receiver tracks a per-origin high-water mark by
+HLC and the sender advances its durable cursor to
+`ack.HighestAppliedHlc`, so dropping the newer-HLC entry would strand
+the receiver's stored timestamp behind the sender's cursor and change
+LWW/HLC convergence against concurrent foreign-origin writes. Eliding
+safely requires the receiver to advertise which content hashes it
+already holds (the manifest/pull exchange), which needs an
+additive-but-new request/response shape on `IReplicationTransport`.
+That shape is deliberately deferred until wire-version capability
+negotiation lands, so this release ships the measurement that justifies
+the round trip without any wire-format, serialization, `[Id]`, or
+`[Alias]` change. Because the counters fire as entries are framed onto
+the wire, a batch re-shipped after a transient transport failure counts
+its entries again - correct, since a re-ship is itself a redundant wire
+payload.
+
 ### `ShipMaxInFlight` is v1-inert
 
 The validator accepts any value `>= 1`, but the shipper grain hard-codes

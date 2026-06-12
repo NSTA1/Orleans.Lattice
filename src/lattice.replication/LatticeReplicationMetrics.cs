@@ -293,6 +293,56 @@ public static class LatticeReplicationMetrics
         Meter.CreateCounter<long>("orleans.lattice.replication.wal.entries_shipped", unit: "{entry}",
             description: "Replog entries acknowledged by a remote peer, tagged by tree and peer.");
 
+    /// <summary>
+    /// Counter of shipped <see cref="MutationKind.Set"/> entries whose
+    /// value bytes were byte-identical to the value most recently
+    /// shipped for the same key - the content-hash payload re-send rate.
+    /// Incremented once per redundant entry as the shipper drains it
+    /// onto the wire, only when
+    /// <see cref="LatticeReplicationOptions.ContentHashDedupEnabled"/>
+    /// is set (the counter never fires under the default-off behaviour).
+    /// Pairs with <see cref="WalEntriesShipped"/> so operators can read
+    /// the redundant fraction directly: a high ratio signals idempotent
+    /// upstream retry logic re-sending the same value, which is the
+    /// signal that justifies opting into a sender-manifest /
+    /// receiver-pull-missing round trip. Tagged by <see cref="TagTree"/>
+    /// and <see cref="TagPeer"/>.
+    /// <para>
+    /// The measurement counts entries as they are framed onto the wire,
+    /// so a batch re-shipped after a transient transport failure counts
+    /// its entries again - which is correct, because a re-ship is itself
+    /// a redundant wire payload. The counter is observability-only and
+    /// never elides or alters the bytes shipped.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShipRedundantPayloads =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.redundant_payloads", unit: "{entry}",
+            description: "Shipped Set entries whose value was byte-identical to the last value shipped for the same key, tagged by tree and peer.");
+
+    /// <summary>
+    /// Counter of value bytes shipped redundantly - the sum of the
+    /// shipped value lengths for the entries counted by
+    /// <see cref="ShipRedundantPayloads"/>. Lets operators quantify the
+    /// bandwidth a sender-manifest / receiver-pull-missing round trip
+    /// could reclaim, not just the entry count. Same firing conditions,
+    /// tags (<see cref="TagTree"/> and <see cref="TagPeer"/>), and
+    /// observability-only contract as
+    /// <see cref="ShipRedundantPayloads"/>.
+    /// </summary>
+    public static readonly Counter<long> ShipRedundantPayloadBytes =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.redundant_payload_bytes", unit: "By",
+            description: "Value bytes shipped redundantly (re-set of byte-identical content for a key), tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipRedundantPayloads"/> counter.
+    /// </summary>
+    public const string ShipRedundantPayloadsName = "orleans.lattice.replication.ship.redundant_payloads";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipRedundantPayloadBytes"/> counter.
+    /// </summary>
+    public const string ShipRedundantPayloadBytesName = "orleans.lattice.replication.ship.redundant_payload_bytes";
+
     // --- Dead-letter queue counters ---------------------------------------------
 
     /// <summary>

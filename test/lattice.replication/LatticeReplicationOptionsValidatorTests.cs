@@ -316,6 +316,63 @@ public class LatticeReplicationOptionsValidatorTests
     }
 
     // ------------------------------------------------------------------
+    // Content-hash dedup measurement cache size
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(63)]
+    public void Validate_fails_when_content_hash_dedup_cache_size_is_below_64(int size)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ContentHashDedupCacheSize = size,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ContentHashDedupCacheSize)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_content_hash_dedup_cache_size_at_floor()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ContentHashDedupCacheSize = 64,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_content_hash_dedup_cache_size_at_default()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(opts.ContentHashDedupCacheSize, Is.EqualTo(LatticeReplicationOptions.DefaultContentHashDedupCacheSize));
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_with_content_hash_dedup_enabled()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ContentHashDedupEnabled = true,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    // ------------------------------------------------------------------
     // Turn-safe batching options
     // ------------------------------------------------------------------
 

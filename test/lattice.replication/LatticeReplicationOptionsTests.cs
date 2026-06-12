@@ -551,4 +551,45 @@ public class LatticeReplicationOptionsTests
         var opts = new LatticeReplicationOptions { UnknownPeerWireVersionFloor = 3 };
         Assert.That(opts.UnknownPeerWireVersionFloor, Is.EqualTo(3));
     }
+
+    // ------------------------------------------------------------------
+    // Content-hash dedup measurement (opt-in, default off)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultContentHashDedupEnabled_is_false() =>
+        Assert.That(LatticeReplicationOptions.DefaultContentHashDedupEnabled, Is.False);
+
+    [Test]
+    public void DefaultContentHashDedupCacheSize_is_4096() =>
+        Assert.That(LatticeReplicationOptions.DefaultContentHashDedupCacheSize, Is.EqualTo(4096));
+
+    [Test]
+    public void New_instance_has_content_hash_dedup_disabled_by_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ContentHashDedupEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultContentHashDedupEnabled));
+        Assert.That(opts.ContentHashDedupEnabled, Is.False);
+    }
+
+    [Test]
+    public void New_instance_has_default_content_hash_dedup_cache_size()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.ContentHashDedupCacheSize, Is.EqualTo(LatticeReplicationOptions.DefaultContentHashDedupCacheSize));
+    }
+
+    [Test]
+    public void ContentHashDedupEnabled_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ContentHashDedupEnabled = true };
+        Assert.That(opts.ContentHashDedupEnabled, Is.True);
+    }
+
+    [Test]
+    public void ContentHashDedupCacheSize_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { ContentHashDedupCacheSize = 512 };
+        Assert.That(opts.ContentHashDedupCacheSize, Is.EqualTo(512));
+    }
 }

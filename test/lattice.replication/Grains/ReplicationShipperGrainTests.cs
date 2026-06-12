@@ -711,6 +711,113 @@ public partial class ReplicationShipperGrainTests
         Assert.That(captured!.Value.OriginClusterId, Is.EqualTo(LocalCluster));
     }
 
+    // --- Content-hash dedup measurement (opt-in, default off) ---
+
+    private static WalRecord MakeEntryWithValue(
+        string key,
+        byte[] value,
+        long ticks,
+        string origin = LocalCluster)
+        => new()
+        {
+            TreeId = Tree,
+            Op = MutationKind.Set,
+            Key = key,
+            Value = value,
+            Timestamp = new HybridLogicalClock { WallClockTicks = ticks, Counter = 0 },
+            OriginClusterId = origin,
+        };
+
+    private static LatticeReplicationOptions ContentHashDedupOptions(bool enabled) =>
+        new()
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ReplogPartitions = 1,
+            ContentHashDedupEnabled = enabled,
+        };
+
+    [Test]
+    public async Task PumpOnceAsync_does_not_record_redundant_payload_metric_when_dedup_disabled()
+    {
+        var (grain, _, feed, _, _, _, _) = Create(ContentHashDedupOptions(enabled: false));
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipRedundantPayloadsName);
+
+        // Two byte-identical re-sets of the same key. With the
+        // measurement off this must produce no redundant-payload
+        // measurements at all - the default-off path is observably inert.
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 7, 7 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 7, 7 }, ticks: 2));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(collector.Measurements, Is.Empty);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_records_redundant_payload_metric_for_byte_identical_re_set()
+    {
+        var (grain, _, feed, _, _, _, _) = Create(ContentHashDedupOptions(enabled: true));
+        using var entries = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipRedundantPayloadsName);
+        using var bytes = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipRedundantPayloadBytesName);
+
+        // First Set establishes the content; the second is a
+        // byte-identical re-set (idempotent upstream retry shape) and
+        // must be counted as one redundant payload of 2 value bytes.
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 9, 9 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 9, 9 }, ticks: 2));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(entries.Measurements.Sum(m => m.Value), Is.EqualTo(1));
+        Assert.That(bytes.Measurements.Sum(m => m.Value), Is.EqualTo(2));
+        var tags = entries.Measurements.Single().Tags;
+        Assert.That(
+            tags.Any(t => t.Key == LatticeReplicationMetrics.TagTree && (string?)t.Value == Tree),
+            Is.True);
+        Assert.That(
+            tags.Any(t => t.Key == LatticeReplicationMetrics.TagPeer && (string?)t.Value == Peer),
+            Is.True);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_does_not_count_distinct_content_for_same_key_as_redundant()
+    {
+        var (grain, _, feed, _, _, _, _) = Create(ContentHashDedupOptions(enabled: true));
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipRedundantPayloadsName);
+
+        // Same key, different content each time: no redundant re-send.
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 2 }, ticks: 2));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(collector.Measurements, Is.Empty);
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_ships_every_entry_even_when_content_is_redundant()
+    {
+        var (grain, _, feed, transport, _, _, _) = Create(ContentHashDedupOptions(enabled: true));
+
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 5 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 5 }, ticks: 2));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        // The measurement never elides: both byte-identical entries are
+        // still framed onto the wire so LWW / HLC convergence is intact.
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2));
+    }
+
     // --- Zero-HLC exemption: ship DeleteRange entries even when the
     //     cursor has advanced past Zero ---
     //

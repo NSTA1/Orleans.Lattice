@@ -461,4 +461,78 @@ public class LatticeReplicationMetricsTests
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "outcome" && (string?)t.Value == "live"));
     }
+
+    // ------------------------------------------------------------------
+    // Content-hash dedup measurement counters
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Ship_redundant_payload_counters_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloads.Name,
+                Is.EqualTo("orleans.lattice.replication.ship.redundant_payloads"));
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloads.Unit, Is.EqualTo("{entry}"));
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloadBytes.Name,
+                Is.EqualTo("orleans.lattice.replication.ship.redundant_payload_bytes"));
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloadBytes.Unit, Is.EqualTo("By"));
+        });
+    }
+
+    [Test]
+    public void Ship_redundant_payload_name_constants_match_canonical_names()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloadsName,
+                Is.EqualTo("orleans.lattice.replication.ship.redundant_payloads"));
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloadsName,
+                Is.EqualTo(LatticeReplicationMetrics.ShipRedundantPayloads.Name));
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloadBytesName,
+                Is.EqualTo("orleans.lattice.replication.ship.redundant_payload_bytes"));
+            Assert.That(LatticeReplicationMetrics.ShipRedundantPayloadBytesName,
+                Is.EqualTo(LatticeReplicationMetrics.ShipRedundantPayloadBytes.Name));
+        });
+    }
+
+    [Test]
+    public void Ship_redundant_payloads_counter_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipRedundantPayloadsName);
+
+        LatticeReplicationMetrics.ShipRedundantPayloads.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "site-b"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "peer" && (string?)t.Value == "site-b"));
+    }
+
+    [Test]
+    public void Ship_redundant_payload_bytes_counter_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipRedundantPayloadBytesName);
+
+        LatticeReplicationMetrics.ShipRedundantPayloadBytes.Add(64,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "site-b"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(64L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "peer" && (string?)t.Value == "site-b"));
+    }
 }

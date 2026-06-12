@@ -4,7 +4,7 @@
 
 - **Per-peer gauges** - `entries_behind`, `bytes_behind`, `ship_in_flight`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind`, `bytes_behind`, and `ship_in_flight` remain outbound-only (the receiver does not track a per-peer backlog into itself, nor does it pipeline into itself).
 - **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`, `apply.parallel_runs`. Reported in milliseconds except `apply.parallel_runs` (unit `{run}`).
-- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate.
+- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The opt-in `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter when content-hash dedup measurement is enabled.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
 ## Replication-lag histogram (`apply.lag`)
@@ -102,6 +102,19 @@ The mapping lives in `DeadLetterTrackingReplicationApplier.ClassifyFailure` and 
 Outbound-only (the receiver does not pipeline into itself), so the gauge emits a single series per `(tree, peer)` pair without the `direction` tag, matching `entries_behind` and `bytes_behind`. The shipper records the depth through `ReplicationPeerStats.RecordInFlight(tree, peer, depth)` each time the window grows (a batch is launched) or shrinks (a batch is acknowledged, or the window is drained / collapsed), and the depth is also visible on the `ReplicationPeerSnapshot.InFlight` snapshot field.
 
 Operators read the gauge against the configured window: a value at or near `ShipMaxInFlight` signals the sender is keeping the pipeline saturated (the link is the bottleneck, as intended); a value pinned at `0` on a peer that is also reporting nonzero `entries_behind` signals the window collapsed under receiver flow-control back-pressure (a `SuggestedBatchSize` hint forced it back to a single serial batch). On a serial (default `ShipMaxInFlight = 1`) sender at rest the gauge sits at `0` between ticks.
+
+## Content-hash payload re-send rate (`ship.redundant_payloads` / `ship.redundant_payload_bytes`)
+
+These two counters are **opt-in** and fire only when `LatticeReplicationOptions.ContentHashDedupEnabled` is set (the default is `false`, in which case the shipper does no extra work and never records them). They measure how often the sender ships a `Set` whose value bytes are byte-identical to the value most recently shipped for the same key - the idempotent-re-write rate that decides whether a sender-manifest / receiver-pull-missing dedup round trip would pay for its extra latency.
+
+| Counter | Constant | Unit | Tags | Recorded |
+|---|---|---|---|---|
+| `orleans.lattice.replication.ship.redundant_payloads` | `LatticeReplicationMetrics.ShipRedundantPayloadsName` | `{entry}` | `tree`, `peer` | Once per shipped `Set` whose value hashes equal to the last value shipped for that key. |
+| `orleans.lattice.replication.ship.redundant_payload_bytes` | `LatticeReplicationMetrics.ShipRedundantPayloadBytesName` | `By` | `tree`, `peer` | The summed value-byte length of the entries counted above. |
+
+The shipper keeps a per-activation, per-key bounded LRU of the last-shipped content hash (FNV-1a 64-bit over the op, key, range end-key, and value bytes), sized by `LatticeReplicationOptions.ContentHashDedupCacheSize` (default `4096`, validated `>= 64`). Read the redundant fraction as `rate(ship_redundant_payloads) / rate(wal_entries_shipped)` per `(tree, peer)`: a high ratio signals idempotent upstream retry logic re-sending the same value, which is exactly the signal that justifies opting into a dedup round trip. `ship.redundant_payload_bytes` quantifies the bandwidth that round trip could reclaim, not just the entry count.
+
+The measurement is **observability-only**: it never elides, reorders, or alters the bytes the sender ships, so the wire output is unchanged whether or not dedup measurement is enabled. (Actually skipping a byte-identical re-set carrying a newer HLC would strand the receiver's per-origin high-water mark and change LWW/HLC convergence; the receiver must consent through a manifest/pull exchange, which is deferred until wire-version capability negotiation lands.) Because the counters fire as entries are framed onto the wire, a batch re-shipped after a transient transport failure counts its entries again - which is correct, since a re-ship is itself a redundant wire payload.
 
 ## Subscribing
 

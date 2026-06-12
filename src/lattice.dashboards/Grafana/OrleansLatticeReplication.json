@@ -798,6 +798,49 @@
           "legendFormat": "{{peer}}"
         }
       ]
+    },
+    {
+      "id": 25,
+      "title": "Redundant payload re-send rate",
+      "description": "Rate of byte-identical content re-sets the shipper observed while content-hash dedup measurement is enabled (ContentHashDedupEnabled). 'entries/s' counts redundant Set entries; 'bytes/s' is the value bytes they carried. Flat-zero unless the workload re-sets identical values for a key. Observability-only - the shipper never elides or reorders bytes on the wire.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "BYTES" },
+            "properties": [
+              { "id": "unit", "value": "binBps" },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.axisLabel", "value": "redundant bytes/s" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "ENTRIES",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_redundant_payloads_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "entries/s {{tree}}/{{peer}}"
+        },
+        {
+          "refId": "BYTES",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_redundant_payload_bytes_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "bytes/s {{tree}}/{{peer}}"
+        }
+      ]
     }
   ]
 }
