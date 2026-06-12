@@ -696,4 +696,93 @@ public class LatticeReplicationMetricsTests
             Has.Some.Matches<KeyValuePair<string, object?>>(t =>
                 t.Key == "reason" && (string?)t.Value == "remote_unavailable"));
     }
+
+    // ------------------------------------------------------------------
+    // Anti-entropy targeted leaf re-replay (repair stage)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Leaf_rereplay_counters_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.LeafReReplayEntries.Name,
+                Is.EqualTo("orleans.lattice.replication.leaf_rereplay.entries"));
+            Assert.That(LatticeReplicationMetrics.LeafReReplayEntries.Unit, Is.EqualTo("{entry}"));
+            Assert.That(LatticeReplicationMetrics.LeafReReplayEntriesName,
+                Is.EqualTo("orleans.lattice.replication.leaf_rereplay.entries"));
+            Assert.That(LatticeReplicationMetrics.LeafReReplaySkipped.Name,
+                Is.EqualTo("orleans.lattice.replication.leaf_rereplay.skipped"));
+            Assert.That(LatticeReplicationMetrics.LeafReReplaySkipped.Unit, Is.EqualTo("{skip}"));
+            Assert.That(LatticeReplicationMetrics.LeafReReplaySkippedName,
+                Is.EqualTo("orleans.lattice.replication.leaf_rereplay.skipped"));
+        });
+    }
+
+    [Test]
+    public void Leaf_rereplay_skip_reason_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.LeafReReplaySkipDisabled, Is.EqualTo("disabled"));
+            Assert.That(LatticeReplicationMetrics.LeafReReplaySkipRangeEmpty, Is.EqualTo("range_empty"));
+            Assert.That(LatticeReplicationMetrics.LeafReReplaySkipWalTrimmed, Is.EqualTo("wal_trimmed"));
+        });
+    }
+
+    [TestCase(LeafReReplaySkipReason.Disabled, "disabled")]
+    [TestCase(LeafReReplaySkipReason.RangeEmpty, "range_empty")]
+    [TestCase(LeafReReplaySkipReason.WalTrimmed, "wal_trimmed")]
+    public void Leaf_rereplay_skip_reason_tag_maps_each_reason(LeafReReplaySkipReason reason, string expected)
+    {
+        Assert.That(LatticeReplicationMetrics.LeafReReplaySkipReasonTag(reason), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Leaf_rereplay_entries_counter_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.LeafReReplayEntriesName);
+
+        LatticeReplicationMetrics.LeafReReplayEntries.Add(5,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(5L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "t"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "p"));
+        });
+    }
+
+    [Test]
+    public void Leaf_rereplay_skipped_counter_records_with_tree_peer_and_reason_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.LeafReReplaySkippedName);
+
+        LatticeReplicationMetrics.LeafReReplaySkipped.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason,
+                LatticeReplicationMetrics.LeafReReplaySkipWalTrimmed));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(1L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "p"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "reason" && (string?)t.Value == "wal_trimmed"));
+        });
+    }
 }

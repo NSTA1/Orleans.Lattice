@@ -133,4 +133,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.MerkleWalkProbeResponse"/>.</summary>
     internal const string MerkleWalkProbeResponse = "olr.mp";
 
+    // Anti-entropy targeted leaf re-replay (repair stage)
+
+    /// <summary>Alias for <see cref="Replication.LeafReReplayRange"/>.</summary>
+    internal const string LeafReReplayRange = "olr.rr";
+
 }

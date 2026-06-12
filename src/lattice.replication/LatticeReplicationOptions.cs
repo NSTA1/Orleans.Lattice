@@ -785,6 +785,57 @@ public class LatticeReplicationOptions
     public long MerkleWalkMaxBytes { get; set; } = DefaultMerkleWalkMaxBytes;
 
     /// <summary>
+    /// Master switch for the targeted leaf re-replay repair stage - the repair
+    /// step that follows the read-only Merkle-walk localise stage. When
+    /// <see langword="true"/> (and the digest probe found a mismatch,
+    /// <see cref="MerkleWalkEnabled"/> is also <see langword="true"/>, and the
+    /// walk localised at least one diverging leaf), the localised leaf
+    /// <c>[StartKey, EndKey)</c> covering ranges are used to select retained
+    /// write-ahead-log entries above the diverged peer's high-water-mark cursor
+    /// and re-ship them to that peer through the ordinary causal-stable apply
+    /// pipeline, so the repair travels the same TX-aware path as ordinary
+    /// replication and respects atomic-batch boundaries. Re-shipped entries
+    /// carry their source clock verbatim and are deduplicated at the receiver,
+    /// so re-sending is idempotent.
+    /// <para>
+    /// Defaults to <see cref="DefaultLeafReReplayEnabled"/>
+    /// (<see langword="false"/>). The repair feature ships dark and opt-in - it
+    /// runs only when localisation is enabled and reports a localised leaf and
+    /// this flag is set - so an un-opted host pays nothing and observes no
+    /// behaviour change.
+    /// </para>
+    /// </summary>
+    public bool LeafReReplayEnabled { get; set; } = DefaultLeafReReplayEnabled;
+
+    /// <summary>
+    /// Maximum number of write-ahead-log entries a single targeted leaf
+    /// re-replay pass re-ships to the diverged peer. A soft cap: whole
+    /// atomic-batch units are added until the next unit would exceed this
+    /// ceiling, but at least one unit is always shipped and an atomic batch is
+    /// never split across the boundary. Bounds the repair amplification a
+    /// single localisation can produce. Only consulted when
+    /// <see cref="LeafReReplayEnabled"/> is <see langword="true"/>. Defaults to
+    /// <see cref="DefaultLeafReReplayMaxEntries"/>. Must be at least <c>1</c>;
+    /// the registered options validator rejects non-positive values at
+    /// first-resolve time.
+    /// </summary>
+    public int LeafReReplayMaxEntries { get; set; } = DefaultLeafReReplayMaxEntries;
+
+    /// <summary>
+    /// Maximum cumulative encoded-payload byte count a single targeted leaf
+    /// re-replay pass re-ships to the diverged peer. A soft cap applied with
+    /// the same whole-atomic-batch-unit semantics as
+    /// <see cref="LeafReReplayMaxEntries"/>. Bounds the repair bandwidth a
+    /// single localisation can produce independently of the entry-count cap.
+    /// Only consulted when <see cref="LeafReReplayEnabled"/> is
+    /// <see langword="true"/>. Defaults to
+    /// <see cref="DefaultLeafReReplayMaxBytes"/>. Must be at least <c>1</c>;
+    /// the registered options validator rejects non-positive values at
+    /// first-resolve time.
+    /// </summary>
+    public long LeafReReplayMaxBytes { get; set; } = DefaultLeafReReplayMaxBytes;
+
+    /// <summary>
     /// Whether <see cref="ShardedReplogSink"/> rings the per-peer
     /// shipper grain after a successful WAL append, signalling that
     /// new entries are available. Disabling the doorbell falls back
@@ -1346,6 +1397,29 @@ public class LatticeReplicationOptions
     /// high-fan-out descent.
     /// </summary>
     public const long DefaultMerkleWalkMaxBytes = 1024L * 1024L;
+
+    /// <summary>
+    /// Default value for <see cref="LeafReReplayEnabled"/>:
+    /// <see langword="false"/>. The targeted leaf re-replay repair feature
+    /// ships dark and opt-in so it does not change replication behaviour for a
+    /// host that has not enabled it.
+    /// </summary>
+    public const bool DefaultLeafReReplayEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="LeafReReplayMaxEntries"/>: 4096 entries.
+    /// Generous enough to repair a divergent leaf in a single pass under
+    /// realistic fan-out while still bounding repair amplification on a
+    /// pathologically large divergence.
+    /// </summary>
+    public const int DefaultLeafReReplayMaxEntries = 4096;
+
+    /// <summary>
+    /// Default value for <see cref="LeafReReplayMaxBytes"/>: 1 MB of cumulative
+    /// re-shipped encoded payload. Bounds the repair bandwidth a single
+    /// localisation can produce independently of the entry-count cap.
+    /// </summary>
+    public const long DefaultLeafReReplayMaxBytes = 1024L * 1024L;
 
     /// <summary>
     /// Default value for <see cref="ShipDoorbellEnabled"/>: doorbell

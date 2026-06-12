@@ -45,7 +45,15 @@ internal static class MerkleWalkLocaliser
         if (root is null)
         {
             // Empty shard - nothing to localise.
-            return MerkleWalkOutcome.NotLocalised;
+            return new MerkleWalkOutcome
+            {
+                Localised = false,
+                LeavesLocalised = 0,
+                LocalisedRanges = Array.Empty<LeafReReplayRange>(),
+                DepthReached = 0,
+                AbortReason = MerkleWalkAbortReason.None,
+                BytesInspected = 0,
+            };
         }
 
         var state = new WalkState();
@@ -58,6 +66,7 @@ internal static class MerkleWalkLocaliser
             {
                 Localised = false,
                 LeavesLocalised = 0,
+                LocalisedRanges = Array.Empty<LeafReReplayRange>(),
                 DepthReached = state.DepthReached,
                 AbortReason = state.Abort,
                 BytesInspected = state.BytesInspected,
@@ -71,6 +80,7 @@ internal static class MerkleWalkLocaliser
             {
                 Localised = true,
                 LeavesLocalised = state.LeavesLocalised,
+                LocalisedRanges = state.Ranges,
                 DepthReached = state.DepthReached,
                 AbortReason = MerkleWalkAbortReason.None,
                 BytesInspected = state.BytesInspected,
@@ -83,6 +93,7 @@ internal static class MerkleWalkLocaliser
         {
             Localised = false,
             LeavesLocalised = 0,
+            LocalisedRanges = Array.Empty<LeafReReplayRange>(),
             DepthReached = state.DepthReached,
             AbortReason = MerkleWalkAbortReason.None,
             BytesInspected = state.BytesInspected,
@@ -146,6 +157,15 @@ internal static class MerkleWalkLocaliser
             if (node.IsLeaf)
             {
                 state.LeavesLocalised++;
+                // Capture the leaf's cluster-stable [start, end) covering range
+                // so the targeted re-replay repair stage can bound which keys it
+                // re-ships to the diverged peer. Null bounds denote unbounded
+                // (the leftmost / rightmost leaf of the shard).
+                state.Ranges.Add(new LeafReReplayRange
+                {
+                    StartKey = rangeStart,
+                    EndKey = rangeEnd,
+                });
                 if (depth > state.DepthReached)
                 {
                     state.DepthReached = depth;
@@ -214,5 +234,6 @@ internal static class MerkleWalkLocaliser
         public int LeavesLocalised;
         public int DepthReached;
         public long BytesInspected;
+        public readonly List<LeafReReplayRange> Ranges = [];
     }
 }

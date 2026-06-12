@@ -18,6 +18,17 @@ public readonly record struct MerkleWalkOutcome
     public int LeavesLocalised { get; init; }
 
     /// <summary>
+    /// The cluster-stable <c>[StartKey, EndKey)</c> covering ranges of every
+    /// leaf the walk marked localised, captured as the walk descended. Empty
+    /// when the walk did not localise any leaf. This is the per-leaf targeting
+    /// surface the targeted leaf re-replay repair stage consumes to bound which
+    /// keys it re-ships to the diverged peer. Never <see langword="null"/> on a
+    /// value produced by <see cref="Grains.MerkleWalkLocaliser"/>; a
+    /// default-constructed outcome leaves it <see langword="null"/>.
+    /// </summary>
+    public IReadOnlyList<LeafReReplayRange> LocalisedRanges { get; init; }
+
+    /// <summary>
     /// The deepest level reached in the internal-node tree (<c>0</c> at the
     /// shard root).
     /// </summary>

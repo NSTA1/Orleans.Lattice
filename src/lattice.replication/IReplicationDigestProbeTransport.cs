@@ -60,4 +60,34 @@ public interface IReplicationDigestProbeTransport
         MerkleWalkProbeRequest request,
         CancellationToken cancellationToken)
         => Task.FromResult(MerkleWalkProbeResponse.Unavailable);
+
+    /// <summary>
+    /// Asks the peer identified by <paramref name="targetClusterId"/> for the
+    /// high-water-mark clock it has durably applied for the
+    /// <paramref name="treeName"/> stream originating from
+    /// <paramref name="originClusterId"/>. The targeted leaf re-replay repair
+    /// stage uses this cursor to bound which retained write-ahead-log entries it
+    /// re-ships: only entries whose clock is strictly greater than the returned
+    /// value can be missing remotely, so re-sending is bounded to the genuine
+    /// gap rather than the whole retained range.
+    /// <para>
+    /// The probe is strictly read-only. A default implementation returns
+    /// <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/> - the conservative
+    /// answer that re-ships every in-range retained entry and relies on the
+    /// receiver's per-origin idempotent dedup to discard duplicates. A transport
+    /// that can read the peer's applied watermark cheaply should override this to
+    /// tighten the re-replay bound; see the targeted leaf re-replay documentation
+    /// for the honest scope of this seam.
+    /// </para>
+    /// </summary>
+    /// <param name="targetClusterId">The peer cluster id to probe. Must be non-empty.</param>
+    /// <param name="treeName">The logical replicated-tree name.</param>
+    /// <param name="originClusterId">The origin cluster id whose applied watermark is requested.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<Orleans.Lattice.HybridLogicalClock> GetPeerHighWaterMarkAsync(
+        string targetClusterId,
+        string treeName,
+        string originClusterId,
+        CancellationToken cancellationToken)
+        => Task.FromResult(Orleans.Lattice.HybridLogicalClock.Zero);
 }

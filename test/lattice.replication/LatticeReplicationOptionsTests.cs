@@ -25,6 +25,29 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
+    public void Leaf_rereplay_defaults_are_off_and_capped()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationOptions.DefaultLeafReReplayEnabled, Is.False);
+            Assert.That(LatticeReplicationOptions.DefaultLeafReReplayMaxEntries, Is.EqualTo(4096));
+            Assert.That(LatticeReplicationOptions.DefaultLeafReReplayMaxBytes, Is.EqualTo(1024L * 1024L));
+        });
+    }
+
+    [Test]
+    public void New_instance_has_leaf_rereplay_defaults()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.LeafReReplayEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultLeafReReplayEnabled));
+            Assert.That(opts.LeafReReplayMaxEntries, Is.EqualTo(LatticeReplicationOptions.DefaultLeafReReplayMaxEntries));
+            Assert.That(opts.LeafReReplayMaxBytes, Is.EqualTo(LatticeReplicationOptions.DefaultLeafReReplayMaxBytes));
+        });
+    }
+
+    [Test]
     public void New_instance_has_null_key_filter()
     {
         var opts = new LatticeReplicationOptions();

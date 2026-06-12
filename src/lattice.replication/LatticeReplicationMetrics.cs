@@ -1091,4 +1091,89 @@ public static class LatticeReplicationMetrics
         MerkleWalkAbortReason.VersionSkew => MerkleWalkAbortVersionSkew,
         _ => MerkleWalkAbortRemoteUnavailable,
     };
+
+    // --- Anti-entropy targeted leaf re-replay (repair stage) --------------------
+
+    /// <summary>
+    /// Counter incremented by the number of write-ahead-log entries the
+    /// targeted leaf re-replay repair pass re-ships to a diverged peer. Tagged
+    /// by <see cref="TagTree"/> and <see cref="TagPeer"/>. The repair ships dark
+    /// behind <see cref="LatticeReplicationOptions.LeafReReplayEnabled"/>; it
+    /// runs only after the read-only Merkle walk localises at least one
+    /// diverging leaf. Re-shipped entries carry their source clock verbatim and
+    /// are deduplicated at the receiver, so the counter measures repair effort,
+    /// not net new visible writes.
+    /// </summary>
+    public static readonly Counter<long> LeafReReplayEntries =
+        Meter.CreateCounter<long>("orleans.lattice.replication.leaf_rereplay.entries", unit: "{entry}",
+            description: "WAL entries re-shipped to a diverged peer by the targeted leaf re-replay repair pass, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="LeafReReplayEntries"/> counter.
+    /// </summary>
+    public const string LeafReReplayEntriesName = "orleans.lattice.replication.leaf_rereplay.entries";
+
+    /// <summary>
+    /// Counter incremented once per targeted leaf re-replay pass that is
+    /// skipped without re-shipping - because the feature is disabled, the
+    /// localised range produced no candidate entries, or the local WAL has been
+    /// garbage-collected past the divergence point. Tagged by
+    /// <see cref="TagTree"/>, <see cref="TagPeer"/>, and <see cref="TagReason"/>;
+    /// the reason value is one of <see cref="LeafReReplaySkipDisabled"/>,
+    /// <see cref="LeafReReplaySkipRangeEmpty"/>, or
+    /// <see cref="LeafReReplaySkipWalTrimmed"/>. A
+    /// <see cref="LeafReReplaySkipWalTrimmed"/> skip is the operator-only alert
+    /// signal: the repair cannot proceed from the WAL and a bootstrap-snapshot
+    /// remediation (tracked as a separate follow-up) is required.
+    /// </summary>
+    public static readonly Counter<long> LeafReReplaySkipped =
+        Meter.CreateCounter<long>("orleans.lattice.replication.leaf_rereplay.skipped", unit: "{skip}",
+            description: "Targeted leaf re-replay repair passes skipped without re-shipping, tagged by tree, peer, and reason.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="LeafReReplaySkipped"/> counter.
+    /// </summary>
+    public const string LeafReReplaySkippedName = "orleans.lattice.replication.leaf_rereplay.skipped";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="LeafReReplaySkipped"/>: the
+    /// repair stage is disabled
+    /// (<see cref="LatticeReplicationOptions.LeafReReplayEnabled"/> is
+    /// <see langword="false"/>) even though localisation found a divergent leaf.
+    /// Corresponds to <see cref="LeafReReplaySkipReason.Disabled"/>.
+    /// </summary>
+    public const string LeafReReplaySkipDisabled = "disabled";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="LeafReReplaySkipped"/>: the
+    /// localised leaf range yielded no write-ahead-log entries to re-ship (the
+    /// localiser produced no ranges, or no retained entry sat in-range above the
+    /// peer's cursor). Corresponds to
+    /// <see cref="LeafReReplaySkipReason.RangeEmpty"/>.
+    /// </summary>
+    public const string LeafReReplaySkipRangeEmpty = "range_empty";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="LeafReReplaySkipped"/>: the
+    /// local write-ahead-log has been garbage-collected past the divergence
+    /// point, so the repair cannot source the missing entries. This is the
+    /// operator-only alert signal - the feature does not attempt repair and a
+    /// bootstrap-snapshot remediation is the follow-up. Corresponds to
+    /// <see cref="LeafReReplaySkipReason.WalTrimmed"/>.
+    /// </summary>
+    public const string LeafReReplaySkipWalTrimmed = "wal_trimmed";
+
+    /// <summary>
+    /// Maps a <see cref="LeafReReplaySkipReason"/> to its canonical
+    /// <see cref="TagReason"/> string value for <see cref="LeafReReplaySkipped"/>.
+    /// </summary>
+    /// <param name="reason">The skip reason.</param>
+    /// <returns>The matching reason-tag string constant.</returns>
+    public static string LeafReReplaySkipReasonTag(LeafReReplaySkipReason reason) => reason switch
+    {
+        LeafReReplaySkipReason.Disabled => LeafReReplaySkipDisabled,
+        LeafReReplaySkipReason.RangeEmpty => LeafReReplaySkipRangeEmpty,
+        LeafReReplaySkipReason.WalTrimmed => LeafReReplaySkipWalTrimmed,
+        _ => LeafReReplaySkipRangeEmpty,
+    };
 }

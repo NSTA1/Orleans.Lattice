@@ -63,6 +63,8 @@ public class ReplicationDigestProbeGrainTests
 
         var topology = new FakeReplicationTopology(peers ?? new[] { "site-b" });
         var transport = Substitute.For<IReplicationDigestProbeTransport>();
+        var replicationTransport = Substitute.For<IReplicationTransport>();
+        var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
         shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(shardCount));
@@ -88,7 +90,8 @@ public class ReplicationDigestProbeGrainTests
 
         var grain = new ReplicationDigestProbeGrain(
             context, reminders, NullLogger<ReplicationDigestProbeGrain>.Instance,
-            replicationMonitor, latticeMonitor, topology, transport, shardCounts, grainFactory, state);
+            replicationMonitor, latticeMonitor, topology, transport,
+            replicationTransport, batchEncoder, shardCounts, grainFactory, state);
 
         return (grain, state, lattice, transport, shardCounts);
     }
@@ -311,6 +314,8 @@ public class ReplicationDigestProbeGrainTests
             Substitute.For<IOptionsMonitor<LatticeOptions>>(),
             new FakeReplicationTopology(),
             Substitute.For<IReplicationDigestProbeTransport>(),
+            Substitute.For<IReplicationTransport>(),
+            Substitute.For<IReplicationBatchEncoder>(),
             Substitute.For<IShardCountProvider>(),
             Substitute.For<IGrainFactory>(),
             new FakePersistentState<ReplicationDigestProbeState>());
@@ -333,6 +338,8 @@ public class ReplicationDigestProbeGrainTests
                 Substitute.For<IOptionsMonitor<LatticeOptions>>(),
                 new FakeReplicationTopology(),
                 null!,
+                Substitute.For<IReplicationTransport>(),
+                Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<IShardCountProvider>(),
                 Substitute.For<IGrainFactory>(),
                 new FakePersistentState<ReplicationDigestProbeState>()),

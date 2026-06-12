@@ -324,6 +324,24 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "value; a non-positive budget would abort before inspecting any node.");
         }
 
+        if (options.LeafReReplayMaxEntries < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.LeafReReplayMaxEntries)} "
+                + $"must be at least 1 ({scope}); got {options.LeafReReplayMaxEntries}. "
+                + "The targeted leaf re-replay repair pass re-ships at most this many WAL entries per pass; "
+                + "a non-positive cap would re-ship nothing.");
+        }
+
+        if (options.LeafReReplayMaxBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.LeafReReplayMaxBytes)} "
+                + $"must be at least 1 ({scope}); got {options.LeafReReplayMaxBytes}. "
+                + "The targeted leaf re-replay repair pass caps the cumulative re-shipped payload bytes at this "
+                + "value; a non-positive budget would re-ship nothing.");
+        }
+
         // Reject the all-bits-zero "well-known None" sentinel range
         // only when the host has clearly typoed - i.e. the tag is
         // in the core-reserved range [0x02, 0x7F] but is not a
