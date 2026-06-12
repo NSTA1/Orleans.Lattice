@@ -102,6 +102,12 @@ public class ReplicationPeerStats
             description: "Cumulative payload bytes the local sender has yet to ship to the named peer.");
 
         meter.CreateObservableGauge<long>(
+            LatticeReplicationMetrics.ShipInFlightName,
+            static () => _current?.ObserveShipInFlight() ?? Array.Empty<Measurement<long>>(),
+            unit: "{batch}",
+            description: "Outbound replication batches the local sender currently has in flight (shipped but unacknowledged) to the named peer.");
+
+        meter.CreateObservableGauge<long>(
             LatticeReplicationMetrics.ConsecutiveErrorsName,
             static () => _current?.ObserveConsecutiveErrors() ?? Array.Empty<Measurement<long>>(),
             unit: "{error}",
@@ -132,6 +138,28 @@ public class ReplicationPeerStats
         {
             entry.EntriesBehind = entriesBehind;
             entry.BytesBehind = bytesBehind;
+        }
+    }
+
+    /// <summary>
+    /// Records the current per-peer outbound in-flight pipelining depth -
+    /// the number of shipped-but-unacknowledged batches the sender holds
+    /// open against the named peer. Called by the sender each time the
+    /// pipelining window grows (a batch is launched) or shrinks (a batch
+    /// is acknowledged or the window is drained / collapsed). Backs the
+    /// <see cref="LatticeReplicationMetrics.ShipInFlightName"/> gauge.
+    /// Outbound-only by design - the receiver does not pipeline into
+    /// itself - so this method has no inbound counterpart.
+    /// </summary>
+    public void RecordInFlight(string tree, string peer, long depth)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        var entry = state.GetOrAdd(new PeerKey(tree, peer, ReplicationContactDirection.Outbound), static _ => new PeerState());
+        lock (entry)
+        {
+            entry.InFlight = depth;
         }
     }
 
@@ -207,12 +235,13 @@ public class ReplicationPeerStats
         var list = new List<ReplicationPeerSnapshot>(state.Count);
         foreach (var kv in state)
         {
-            long entries, bytes, errors;
+            long entries, bytes, errors, inFlight;
             DateTimeOffset? lastContact;
             lock (kv.Value)
             {
                 entries = kv.Value.EntriesBehind;
                 bytes = kv.Value.BytesBehind;
+                inFlight = kv.Value.InFlight;
                 errors = kv.Value.ConsecutiveErrors;
                 lastContact = kv.Value.LastContactTimestamp;
             }
@@ -235,6 +264,7 @@ public class ReplicationPeerStats
                 elapsed)
             {
                 Direction = kv.Key.Direction,
+                InFlight = inFlight,
             });
         }
         return list;
@@ -271,6 +301,20 @@ public class ReplicationPeerStats
             }
             long value;
             lock (kv.Value) { value = kv.Value.BytesBehind; }
+            yield return MeasureOutbound(value, kv.Key);
+        }
+    }
+
+    private IEnumerable<Measurement<long>> ObserveShipInFlight()
+    {
+        foreach (var kv in state)
+        {
+            if (kv.Key.Direction != ReplicationContactDirection.Outbound)
+            {
+                continue;
+            }
+            long value;
+            lock (kv.Value) { value = kv.Value.InFlight; }
             yield return MeasureOutbound(value, kv.Key);
         }
     }
@@ -326,6 +370,7 @@ public class ReplicationPeerStats
     {
         public long EntriesBehind;
         public long BytesBehind;
+        public long InFlight;
         public long ConsecutiveErrors;
         public DateTimeOffset? LastContactTimestamp;
     }
@@ -360,4 +405,15 @@ public readonly record struct ReplicationPeerSnapshot(
     /// describe the historically outbound-only telemetry.
     /// </summary>
     public ReplicationContactDirection Direction { get; init; } = ReplicationContactDirection.Outbound;
+
+    /// <summary>
+    /// Outbound pipelining depth at snapshot time - the number of
+    /// shipped-but-unacknowledged batches the sender holds open against
+    /// the peer, bounded by
+    /// <see cref="LatticeReplicationOptions.ShipMaxInFlight"/>. Zero on
+    /// inbound rows and on a serial (window-of-one) sender at rest.
+    /// Backs the <see cref="LatticeReplicationMetrics.ShipInFlightName"/>
+    /// gauge.
+    /// </summary>
+    public long InFlight { get; init; }
 }

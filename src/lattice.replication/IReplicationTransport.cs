@@ -36,10 +36,16 @@ namespace Orleans.Lattice.Replication;
 ///   <item>
 ///     <description>
 ///       Be safe for concurrent invocation across distinct
-///       <c>(TargetClusterId, TreeName)</c> pairs. Concurrent invocation
-///       against the same pair is implementation-defined; the canonical
-///       outbound shipper serialises calls per pair and relies only on
-///       cross-pair concurrency.
+///       <c>(TargetClusterId, TreeName)</c> pairs, and - when used with
+///       sender-side pipelining
+///       (<see cref="LatticeReplicationOptions.ShipMaxInFlight"/> &gt; 1) -
+///       for concurrent invocation against the same pair. The shipper
+///       consumes acks in FIFO order and never relies on the transport
+///       preserving wire ordering, but it does keep up to
+///       <see cref="LatticeReplicationOptions.ShipMaxInFlight"/> calls
+///       outstanding per pair; a transport that cannot tolerate that
+///       must be paired with the default window of <c>1</c>, under which
+///       the shipper serialises calls per pair.
 ///     </description>
 ///   </item>
 /// </list>

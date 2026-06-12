@@ -2,7 +2,7 @@
 
 `Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
 
-- **Per-peer gauges** - `entries_behind`, `bytes_behind`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind` and `bytes_behind` remain outbound-only (the receiver does not track a per-peer backlog into itself).
+- **Per-peer gauges** - `entries_behind`, `bytes_behind`, `ship_in_flight`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind`, `bytes_behind`, and `ship_in_flight` remain outbound-only (the receiver does not track a per-peer backlog into itself, nor does it pipeline into itself).
 - **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`. Reported in milliseconds.
 - **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
@@ -74,6 +74,20 @@ Operators monitor `rate(wal_entries_appended) / rate(wal_entries_shipped)` per t
 | `unknown` | Catch-all for terminal failure shapes the canonical decorator could not classify (e.g. transport / IO / `TimeoutException`). |
 
 The mapping lives in `DeadLetterTrackingReplicationApplier.ClassifyFailure` and is intentionally conservative: only failure shapes whose source is under the package's control are matched explicitly, so the `reason` dimension stays stable across publishers and operators can alert on `unknown` rising without false positives from future schema-shape additions.
+
+## Sender-side pipelining depth (`peer.ship_in_flight`)
+
+`orleans.lattice.replication.peer.ship_in_flight` (`LatticeReplicationMetrics.ShipInFlightName`) reports the number of outbound replication batches the local sender currently has shipped-but-unacknowledged to the named peer - the live depth of the sender-side pipelining window bounded by `LatticeReplicationOptions.ShipMaxInFlight` (see [Sender-side pipelining](receiver-flow-control.md#sender-side-pipelining)).
+
+| Property | Value |
+|---|---|
+| Name | `orleans.lattice.replication.peer.ship_in_flight` |
+| Unit | `{batch}` |
+| Tags | `tree`, `peer` |
+
+Outbound-only (the receiver does not pipeline into itself), so the gauge emits a single series per `(tree, peer)` pair without the `direction` tag, matching `entries_behind` and `bytes_behind`. The shipper records the depth through `ReplicationPeerStats.RecordInFlight(tree, peer, depth)` each time the window grows (a batch is launched) or shrinks (a batch is acknowledged, or the window is drained / collapsed), and the depth is also visible on the `ReplicationPeerSnapshot.InFlight` snapshot field.
+
+Operators read the gauge against the configured window: a value at or near `ShipMaxInFlight` signals the sender is keeping the pipeline saturated (the link is the bottleneck, as intended); a value pinned at `0` on a peer that is also reporting nonzero `entries_behind` signals the window collapsed under receiver flow-control back-pressure (a `SuggestedBatchSize` hint forced it back to a single serial batch). On a serial (default `ShipMaxInFlight = 1`) sender at rest the gauge sits at `0` between ticks.
 
 ## Subscribing
 

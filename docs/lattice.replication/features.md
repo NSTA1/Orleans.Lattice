@@ -48,7 +48,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-109](https://github.com/NSTA1/Orleans.Lattice/issues/517) - Bootstrap-snapshot fallback for GC'd divergence
 - [R-110](https://github.com/NSTA1/Orleans.Lattice/issues/518) - End-to-end remediation chaos test
 - [R-111](https://github.com/NSTA1/Orleans.Lattice/issues/519) - Documentation + operator playbook
-- [R-128](https://github.com/NSTA1/Orleans.Lattice/issues/692) - Sender-side multi-batch pipelining (activate `ShipMaxInFlight`)
 - [R-129](https://github.com/NSTA1/Orleans.Lattice/issues/693) - Wire-version capability negotiation for safe rolling upgrades
 - [R-130](https://github.com/NSTA1/Orleans.Lattice/issues/694) - Pre-ship WAL entry coalescing (LWW latest-wins + CRDT delta merge)
 - [R-131](https://github.com/NSTA1/Orleans.Lattice/issues/695) - Parallel receiver apply across independent (tree, origin) runs
@@ -146,6 +145,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-125](https://github.com/NSTA1/Orleans.Lattice/issues/533) - gRPC transport chaos fixture with fault-injecting Channel
 - [R-126](https://github.com/NSTA1/Orleans.Lattice/issues/534) - Azure Table WAL chaos fixture under Azurite throttling
 - [R-127](https://github.com/NSTA1/Orleans.Lattice/issues/690) - Receiver WAL-saturation back-pressure feeds sender backoff
+- [R-128](https://github.com/NSTA1/Orleans.Lattice/issues/692) - Sender-side multi-batch pipelining (activate `ShipMaxInFlight`)
 
 ## Follow-up fixes
 
