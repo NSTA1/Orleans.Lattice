@@ -36,6 +36,8 @@ public sealed class MerkleWalkLocaliserTests
         Assert.That(outcome.Localised, Is.False);
         Assert.That(outcome.AbortReason, Is.EqualTo(MerkleWalkAbortReason.None));
         Assert.That(transport.Calls, Is.Zero);
+        Assert.That(outcome.LocalisedRanges, Is.Not.Null);
+        Assert.That(outcome.LocalisedRanges, Is.Empty);
     }
 
     [Test]
@@ -62,6 +64,11 @@ public sealed class MerkleWalkLocaliserTests
         Assert.That(outcome.DepthReached, Is.Zero);
         Assert.That(collector.Measurements, Has.Count.EqualTo(1));
         Assert.That(collector.Measurements.Single().Value, Is.EqualTo(1L));
+
+        // The whole-shard leaf root has an unbounded [null, null) range.
+        Assert.That(outcome.LocalisedRanges, Has.Count.EqualTo(1));
+        Assert.That(outcome.LocalisedRanges.Single().StartKey, Is.Null);
+        Assert.That(outcome.LocalisedRanges.Single().EndKey, Is.Null);
     }
 
     [Test]
@@ -140,6 +147,12 @@ public sealed class MerkleWalkLocaliserTests
         Assert.That(outcome.DepthReached, Is.EqualTo(1));
         Assert.That(localised.Measurements, Has.Count.EqualTo(1));
         Assert.That(localised.Measurements.Single().Value, Is.EqualTo(1L));
+
+        // The diverging right leaf's cluster-stable covering range [m, null)
+        // is captured for the targeted re-replay repair stage.
+        Assert.That(outcome.LocalisedRanges, Has.Count.EqualTo(1));
+        Assert.That(outcome.LocalisedRanges.Single().StartKey, Is.EqualTo("m"));
+        Assert.That(outcome.LocalisedRanges.Single().EndKey, Is.Null);
     }
 
     [Test]

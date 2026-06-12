@@ -966,6 +966,60 @@
           "legendFormat": "bytes/s {{tree}}/{{peer}}"
         }
       ]
+    },
+    {
+      "id": 41,
+      "title": "Leaf re-replay entries re-shipped (rate)",
+      "description": "Rate of retained write-ahead-log entries the targeted leaf re-replay repair stage re-shipped to a diverged peer. Opt-in via LeafReReplayEnabled; stays zero unless localisation finds a divergent leaf and a real push transport is wired up.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 85
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_leaf_rereplay_entries_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{tree}} -> {{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "title": "Leaf re-replay skipped (rate by reason)",
+      "description": "Rate of targeted leaf re-replay passes that skipped without re-shipping, split by reason (disabled, range_empty, wal_trimmed). A wal_trimmed series is the operator-only alert: the local WAL was garbage-collected past the divergence point and a bootstrap-snapshot remediation is required.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 85
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_leaf_rereplay_skipped_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
     }
   ]
 }

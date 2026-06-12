@@ -42,6 +42,8 @@ internal sealed class ReplicationDigestProbeGrain(
     IOptionsMonitor<LatticeOptions> latticeOptions,
     IReplicationTopology topology,
     IReplicationDigestProbeTransport probeTransport,
+    IReplicationTransport replicationTransport,
+    IReplicationBatchEncoder batchEncoder,
     IShardCountProvider shardCounts,
     IGrainFactory grainFactory,
     [PersistentState("replication-digest-probe", LatticeOptions.StorageProviderName)]
@@ -57,6 +59,10 @@ internal sealed class ReplicationDigestProbeGrain(
         topology ?? throw new ArgumentNullException(nameof(topology));
     private readonly IReplicationDigestProbeTransport _probeTransport =
         probeTransport ?? throw new ArgumentNullException(nameof(probeTransport));
+    private readonly IReplicationTransport _replicationTransport =
+        replicationTransport ?? throw new ArgumentNullException(nameof(replicationTransport));
+    private readonly IReplicationBatchEncoder _batchEncoder =
+        batchEncoder ?? throw new ArgumentNullException(nameof(batchEncoder));
     private readonly IShardCountProvider _shardCounts =
         shardCounts ?? throw new ArgumentNullException(nameof(shardCounts));
     private readonly IGrainFactory _grainFactory =
@@ -338,7 +344,7 @@ internal sealed class ReplicationDigestProbeGrain(
         {
             var physicalTreeId = await EnsurePhysicalTreeIdAsync(lattice).ConfigureAwait(true);
             var localTree = new GrainMerkleWalkLocalTree(_grainFactory, physicalTreeId, shard);
-            await MerkleWalkLocaliser.WalkAsync(
+            var outcome = await MerkleWalkLocaliser.WalkAsync(
                 TreeName,
                 shard,
                 peer,
@@ -347,12 +353,80 @@ internal sealed class ReplicationDigestProbeGrain(
                 options.MerkleWalkMaxDepth,
                 options.MerkleWalkMaxBytes,
                 CancellationToken.None).ConfigureAwait(true);
+
+            // Repair stage: when the walk localised at least one diverging
+            // leaf, optionally re-ship the relevant retained WAL key ranges to
+            // the diverged peer through the ordinary causal-stable apply
+            // pipeline. Strictly opt-in and best-effort.
+            if (outcome.Localised && outcome.LocalisedRanges is { Count: > 0 } ranges)
+            {
+                await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
+            }
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex,
                 "Merkle-walk drift localisation failed for shard {Shard} peer {Peer} on {Context}; the read-only walk is best-effort and will retry on the next cadence",
                 shard, peer, LogContext);
+        }
+    }
+
+    /// <summary>
+    /// Re-ships the retained write-ahead-log entries covering the localised
+    /// diverging leaf ranges to <paramref name="peer"/> through the ordinary
+    /// causal-stable apply pipeline. When the repair stage is disabled the pass
+    /// records a single skipped-with-reason-disabled signal and returns without
+    /// reading the WAL; otherwise it bounds the re-send by the peer's
+    /// high-water-mark cursor and the configured caps. Best-effort: a failure
+    /// is logged and swallowed so the detect/localise cadence is never
+    /// disturbed.
+    /// </summary>
+    private async Task TryReReplayLeavesAsync(
+        LatticeReplicationOptions options,
+        string peer,
+        IReadOnlyList<LeafReReplayRange> ranges)
+    {
+        if (!options.LeafReReplayEnabled)
+        {
+            LatticeReplicationMetrics.LeafReReplaySkipped.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                new KeyValuePair<string, object?>(
+                    LatticeReplicationMetrics.TagReason,
+                    LatticeReplicationMetrics.LeafReReplaySkipReasonTag(LeafReReplaySkipReason.Disabled)));
+            return;
+        }
+
+        try
+        {
+            var originClusterId = options.ClusterId;
+            var peerCursor = await _probeTransport
+                .GetPeerHighWaterMarkAsync(peer, TreeName, originClusterId, CancellationToken.None)
+                .ConfigureAwait(true);
+
+            var partitionCount = Math.Max(1, options.ReplogPartitions);
+            var pageSize = Math.Max(1, options.ShipPartitionPageSize);
+            var walSource = new WalGrainReReplaySource(_grainFactory, TreeName, partitionCount, pageSize);
+            var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, originClusterId);
+
+            await LeafReReplayer.ReplayAsync(
+                TreeName,
+                peer,
+                originClusterId,
+                ranges,
+                peerCursor,
+                walSource,
+                sink,
+                options.LeafReReplayMaxEntries,
+                options.LeafReReplayMaxBytes,
+                CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Targeted leaf re-replay failed for peer {Peer} on {Context}; the repair is best-effort and will retry on the next cadence",
+                peer, LogContext);
         }
     }
 
