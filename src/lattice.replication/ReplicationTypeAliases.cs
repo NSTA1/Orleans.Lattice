@@ -138,4 +138,15 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.LeafReReplayRange"/>.</summary>
     internal const string LeafReReplayRange = "olr.rr";
 
+    // Content-hash payload-elision round trip (sender manifest / receiver pull-missing)
+
+    /// <summary>Alias for <see cref="Replication.ContentManifestEntry"/>.</summary>
+    internal const string ContentManifestEntry = "olr.ce";
+
+    /// <summary>Alias for <see cref="Replication.ContentManifestRequest"/>.</summary>
+    internal const string ContentManifestRequest = "olr.cq";
+
+    /// <summary>Alias for <see cref="Replication.ContentManifestResponse"/>.</summary>
+    internal const string ContentManifestResponse = "olr.cp";
+
 }

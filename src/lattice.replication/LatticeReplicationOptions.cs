@@ -336,6 +336,60 @@ public class LatticeReplicationOptions
     public bool PreShipCoalescingEnabled { get; set; } = DefaultPreShipCoalescingEnabled;
 
     /// <summary>
+    /// Whether the per-<c>(tree, peer)</c> shipper attempts the
+    /// sender-manifest / receiver-pull-missing content-hash round trip to
+    /// elide redundant payloads from an outbound batch: the sender
+    /// advertises a per-entry content-hash manifest, the receiver replies
+    /// with the entries it is actually missing, and only those payloads are
+    /// shipped. Defaults to <see langword="false"/>; when off no manifest
+    /// exchange is ever attempted and the drain / ship path is
+    /// byte-identical to a build without this option.
+    /// <para>
+    /// This option is an <em>additional</em> opt-in on top of the
+    /// content-hash dedup master switch: it has no effect unless
+    /// <see cref="ContentHashDedupEnabled"/> is also <see langword="true"/>
+    /// (the registered options validator rejects enabling elision without
+    /// the master switch at first-resolve time). Keeping the two switches
+    /// independent lets an operator first turn on the measurement-only
+    /// re-send-rate counters
+    /// (<see cref="LatticeReplicationMetrics.ShipRedundantPayloads"/>),
+    /// observe whether the redundant-payload rate justifies the extra
+    /// round trip, and only then opt into the elision exchange.
+    /// </para>
+    /// <para>
+    /// Capability is negotiated lazily and per shipper activation: the
+    /// exchange seam
+    /// (<see cref="IReplicationDigestProbeTransport.ExchangeContentManifestAsync"/>)
+    /// defaults to a no-op that reports the peer cannot perform the
+    /// exchange, in which case the shipper permanently falls back to
+    /// shipping the full batch verbatim for the rest of the activation - so
+    /// a peer (or transport) that has not implemented the pull-missing RPC
+    /// is wire-identical to today and rolling-upgrade safe. The elision
+    /// runs on the strict-serial ship path only; a configured pipelining
+    /// window (<see cref="ShipMaxInFlight"/> &gt; 1) is collapsed to one
+    /// while elision is enabled so the per-batch exchange composes with
+    /// per-origin FIFO and atomic-batch boundaries without reordering.
+    /// </para>
+    /// <para>
+    /// Correctness is preserved across the elision path: a manifest entry
+    /// whose content the receiver already holds but whose
+    /// <see cref="HybridLogicalClock"/> is newer (the idempotent re-set of
+    /// an identical value) advances the receiver's per-origin
+    /// high-water-mark via a metadata-only apply during the exchange, so
+    /// the high-water-mark still advances even though the payload is never
+    /// re-shipped. Range deletes, saga terminal marks, prepared
+    /// atomic-batch entries, and zero-HLC entries are never placed in the
+    /// manifest and are always shipped verbatim. The per-elided-entry win
+    /// is surfaced on the
+    /// <see cref="LatticeReplicationMetrics.ShipElidedPayloads"/> /
+    /// <see cref="LatticeReplicationMetrics.ShipElidedPayloadBytes"/>
+    /// counters and the exchange volume on
+    /// <see cref="LatticeReplicationMetrics.ManifestExchanges"/>.
+    /// </para>
+    /// </summary>
+    public bool ContentHashDedupElisionEnabled { get; set; } = DefaultContentHashDedupElisionEnabled;
+
+    /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set,
     /// the WAL garbage collector
     /// (<see cref="ILatticeWalGc"/>) trims entries whose
@@ -1393,6 +1447,17 @@ public class LatticeReplicationOptions
     /// digest per slot).
     /// </summary>
     public const int DefaultContentHashDedupCacheSize = 4096;
+
+    /// <summary>
+    /// Default value for <see cref="ContentHashDedupElisionEnabled"/>: the
+    /// content-hash payload-elision round trip is off so the shipper never
+    /// attempts a manifest exchange and its on-the-wire output is
+    /// byte-identical to a build without the option. Operators opt in only
+    /// after the re-send-rate measurement
+    /// (<see cref="ContentHashDedupEnabled"/>) shows the redundant-payload
+    /// rate justifies the extra round trip.
+    /// </summary>
+    public const bool DefaultContentHashDedupElisionEnabled = false;
 
     /// <summary>
     /// Default value for <see cref="PreShipCoalescingEnabled"/>: pre-ship

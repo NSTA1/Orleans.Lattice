@@ -25,6 +25,29 @@ public class LatticeReplicationMetricsTests
     }
 
     [Test]
+    public void Content_hash_elision_counters_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.ShipElidedPayloads.Name,
+                Is.EqualTo("orleans.lattice.replication.ship.elided_payloads"));
+            Assert.That(LatticeReplicationMetrics.ShipElidedPayloads.Unit, Is.EqualTo("{entry}"));
+            Assert.That(LatticeReplicationMetrics.ShipElidedPayloadBytes.Name,
+                Is.EqualTo("orleans.lattice.replication.ship.elided_payload_bytes"));
+            Assert.That(LatticeReplicationMetrics.ShipElidedPayloadBytes.Unit, Is.EqualTo("By"));
+            Assert.That(LatticeReplicationMetrics.ManifestExchanges.Name,
+                Is.EqualTo("orleans.lattice.replication.ship.manifest_exchanges"));
+            Assert.That(LatticeReplicationMetrics.ManifestExchanges.Unit, Is.EqualTo("{exchange}"));
+            Assert.That(LatticeReplicationMetrics.ShipElidedPayloadsName,
+                Is.EqualTo("orleans.lattice.replication.ship.elided_payloads"));
+            Assert.That(LatticeReplicationMetrics.ShipElidedPayloadBytesName,
+                Is.EqualTo("orleans.lattice.replication.ship.elided_payload_bytes"));
+            Assert.That(LatticeReplicationMetrics.ManifestExchangesName,
+                Is.EqualTo("orleans.lattice.replication.ship.manifest_exchanges"));
+        });
+    }
+
+    [Test]
     public void Meter_name_is_orleans_lattice_replication()
     {
         Assert.That(LatticeReplicationMetrics.MeterName, Is.EqualTo("orleans.lattice.replication"));

@@ -131,3 +131,56 @@ The transport stays dumb about the entries it carries. Specifically, every `IRep
 The transport must not reorder entries, mutate either slot, synthesise an empty frontier when the producer left the slot `null` (legacy peers and pre-causal-plus entries decode `null` and the receiver treats that as the empty frontier), or merge the two slots together. Any normalisation, summary derivation, or merge belongs in the producer / receiver, never in the wire layer.
 
 The contract is pinned by `TransportMetadataPassthroughContractTests` in both `Orleans.Lattice.Replication.Tests` (LoopbackTransport) and `Orleans.Lattice.Replication.Grpc.Tests` (GrpcPushTransport). A new transport implementation should ship a mirror of that fixture parameterised over its own seam.
+
+## Content-hash payload-elision round trip (opt-in, default off)
+
+The push transport above is one-way: one batch in, one ack out. The opt-in content-hash payload-elision feature adds a *second*, bidirectional exchange in front of the push so the shipper can avoid re-sending payloads a peer already holds. It is built on the same per-(tree, peer) content hashing that drives the default-off re-send-rate measurement (`ship.redundant_payloads`), but instead of merely counting redundant re-sends it elides them.
+
+The exchange is a default-no-op method on the `IReplicationDigestProbeTransport` seam (the same bidirectional probe transport the anti-entropy digest probe uses), so existing transports compile and behave unchanged:
+
+```text
+public interface IReplicationDigestProbeTransport
+{
+    Task<ContentManifestResponse> ExchangeContentManifestAsync(
+        string targetClusterId,
+        ContentManifestRequest request,
+        CancellationToken cancellationToken)
+        => Task.FromResult(ContentManifestResponse.NotSupported);
+}
+
+public readonly record struct ContentManifestEntry
+{
+    public int EntryIndex { get; init; }
+    public string Key { get; init; }
+    public ulong ContentHash { get; init; }
+    public HybridLogicalClock Hlc { get; init; }
+}
+
+public readonly record struct ContentManifestRequest
+{
+    public string TreeName { get; init; }
+    public string OriginClusterId { get; init; }
+    public IReadOnlyList<ContentManifestEntry> Entries { get; init; }
+}
+
+public readonly record struct ContentManifestResponse
+{
+    public bool ExchangeSupported { get; init; }
+    public IReadOnlyList<int> MissingEntryIndices { get; init; }
+    public HybridLogicalClock AdvancedHlc { get; init; }
+}
+```
+
+### Flow
+
+1. **Sender builds a manifest.** When `LatticeReplicationOptions.ContentHashDedupEnabled` and `ContentHashDedupElisionEnabled` are both set, the shipper hashes the value-carrying point-`Set` entries in the drained batch (FNV-1a 64-bit over op + key + range + value, the same digest the measurement uses) and advertises a `ContentManifestRequest` to the peer. Only eligible entries are manifested - range deletes, saga terminal marks, prepared atomic-batch entries, and zero-HLC entries are never placed in the manifest and always ship verbatim, so atomic-batch boundaries, causal-dependency gating, and per-origin FIFO are preserved.
+2. **Receiver answers with the missing set.** For each manifest entry the receiver compares the advertised content hash against the content it has already applied for that key. An entry the receiver does not hold (or holds with a different hash) is reported in `MissingEntryIndices`. An entry the receiver already holds byte-identical is *not* missing - and if the manifest entry's `Hlc` is newer than the receiver's recorded clock for that key (the idempotent re-set of an identical value), the receiver advances its per-origin high-water-mark via a metadata-only apply and reports the advanced clock in `AdvancedHlc`, all without the payload travelling.
+3. **Sender ships only the missing payloads.** The shipper drops every elided entry from the outbound batch and ships the remainder through the ordinary `IReplicationTransport.SendAsync` push, then advances its per-peer cursor past the whole originally-drained range (the receiver advanced its high-water-mark for the elided entries during the exchange). When every entry is elided no batch is shipped at all.
+
+### Default-off and rolling-upgrade safety
+
+The default `ExchangeContentManifestAsync` returns `ContentManifestResponse.NotSupported` (`ExchangeSupported = false`), so a transport (or peer) that has not implemented the pull-missing RPC reports "not supported" and the shipper permanently falls back - for the rest of the activation - to shipping the full batch verbatim, byte-identical to today. Capability is learned lazily per shipper activation: the first eligible batch attempts the exchange, and a "not supported" reply latches elision off until the grain re-activates. With elision disabled (the default) the exchange is never attempted and the wire bytes are identical to a build without the feature.
+
+The elision runs on the strict-serial ship path only; a configured pipelining window (`ShipMaxInFlight > 1`) collapses to one while elision is enabled so each batch's exchange + ship + ack completes before the next batch is drained.
+
+> **Honest scope.** The manifest engine, the shipper-side elision wiring, the capability gating, and the options/metrics/dashboard surface ship in this package and are covered by unit and in-process loopback tests. Carrying the `ExchangeContentManifestAsync` RPC across clusters - and advancing the remote receiver's high-water-mark for elided entries - requires a transport binding that implements the method (for example the gRPC binding); until one is wired in, the default no-op keeps every peering wire-identical to today.

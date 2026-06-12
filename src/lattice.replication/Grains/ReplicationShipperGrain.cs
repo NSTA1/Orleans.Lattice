@@ -42,7 +42,8 @@ internal sealed class ReplicationShipperGrain(
     IPersistentState<ReplicationShipperState> state,
     ReplicationPeerStats peerStats,
     ILatticeMergeModeResolver modeResolver,
-    WireVersionNegotiationState negotiationState)
+    WireVersionNegotiationState negotiationState,
+    IReplicationDigestProbeTransport digestProbeTransport)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -64,6 +65,8 @@ internal sealed class ReplicationShipperGrain(
         modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
     private readonly WireVersionNegotiationState _negotiationState =
         negotiationState ?? throw new ArgumentNullException(nameof(negotiationState));
+    private readonly IReplicationDigestProbeTransport _digestProbeTransport =
+        digestProbeTransport ?? throw new ArgumentNullException(nameof(digestProbeTransport));
 
     private string _treeName = "";
     private string _peerClusterId = "";
@@ -206,6 +209,22 @@ internal sealed class ReplicationShipperGrain(
     /// shipped.
     /// </summary>
     private ShippedContentHashCache? _contentHashCache;
+
+    /// <summary>
+    /// Per-shipper-activation cache of whether the peer can perform the
+    /// content-hash manifest exchange (the sender-manifest /
+    /// receiver-pull-missing payload-elision round trip). <see langword="null"/>
+    /// until the first batch attempts the exchange while
+    /// <see cref="LatticeReplicationOptions.ContentHashDedupElisionEnabled"/>
+    /// is set; <see langword="true"/> once a peer has replied that it
+    /// supports the exchange; <see langword="false"/> once a peer (or the
+    /// default no-op transport) has reported it cannot, after which the
+    /// shipper permanently falls back to shipping the full batch verbatim
+    /// for the rest of the activation - the rolling-upgrade-safe behaviour
+    /// identical to today's wire. Reset on grain deactivation, at which
+    /// point capability is re-learned on the next elision-eligible batch.
+    /// </summary>
+    private bool? _peerSupportsManifestExchange;
 
     /// <summary>
     /// Activation-scoped scratch map reused by the pre-ship coalescing
@@ -468,6 +487,20 @@ internal sealed class ReplicationShipperGrain(
             window = 1;
         }
 
+        // Content-hash payload elision performs a per-batch manifest
+        // exchange on the strict-serial ship path only, so a configured
+        // pipelining window collapses to one while elision is enabled. This
+        // keeps the per-batch exchange composed with per-origin FIFO and
+        // atomic-batch boundaries (each batch's exchange + ship + ack
+        // completes before the next batch is drained) rather than racing
+        // several manifests concurrently. Elision is opt-in and gated on
+        // the content-hash dedup master switch, so the default path is
+        // unaffected.
+        if (window > 1 && options.ContentHashDedupElisionEnabled && options.ContentHashDedupEnabled)
+        {
+            window = 1;
+        }
+
         if (window == 1)
         {
             await PumpSerialOnceAsync(options, cancellationToken);
@@ -635,6 +668,32 @@ internal sealed class ReplicationShipperGrain(
         }
 
         var sourceHlc = _drainBuffer[^1].Timestamp;
+
+        // Content-hash payload elision (opt-in, default off). When enabled
+        // and the peer can perform the exchange, advertise a per-entry
+        // content-hash manifest, learn which entries the receiver is
+        // missing, and drop the payloads it already holds byte-identical
+        // (the receiver advances its high-water-mark for those via a
+        // metadata-only apply during the exchange, so HWM still advances
+        // without the payload travelling). A no-op when the option is off
+        // or the peer cannot perform the exchange: the full batch ships
+        // verbatim exactly as today. Runs after the drain captured
+        // sourceHlc above, so the cursor still advances past every
+        // originally-drained entry regardless of how many were elided.
+        await TryElideViaManifestExchangeAsync(options, cancellationToken);
+        if (_drainBuffer.Count == 0)
+        {
+            // Every drained entry was elided (the receiver already held all
+            // of them and advanced its HWM via the exchange). Advance the
+            // sender cursor past the drained range and finish the tick
+            // without shipping an empty batch.
+            await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
+            state.State.ConsecutiveFailures = 0;
+            _nextRetryAtUtc = DateTime.MinValue;
+            _peerStats.RecordSuccess(_treeName, _peerClusterId);
+            _lastSuccessfulContactUtc = DateTime.UtcNow;
+            return;
+        }
 
         // Wire-version capability negotiation (opt-in). Compute the
         // version to encode at against the peer's most recently
@@ -2042,6 +2101,142 @@ internal sealed class ReplicationShipperGrain(
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
         LatticeReplicationMetrics.ShipRedundantPayloadBytes.Add(
             valueBytes,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+    }
+
+    /// <summary>
+    /// Performs the opt-in sender-manifest / receiver-pull-missing
+    /// content-hash round trip over the freshly-drained batch and elides
+    /// the payloads the receiver already holds byte-identical. No-op unless
+    /// both <see cref="LatticeReplicationOptions.ContentHashDedupEnabled"/>
+    /// and <see cref="LatticeReplicationOptions.ContentHashDedupElisionEnabled"/>
+    /// are set and the peer has not already reported (this activation) that
+    /// it cannot perform the exchange.
+    /// <para>
+    /// Capability is learned lazily: the first eligible batch attempts the
+    /// exchange; a peer that reports
+    /// <see cref="ContentManifestResponse.ExchangeSupported"/> =
+    /// <see langword="false"/> (the default no-op transport, or an
+    /// un-upgraded peer) latches
+    /// <see cref="_peerSupportsManifestExchange"/> off for the rest of the
+    /// activation so subsequent batches ship the full payload verbatim -
+    /// wire-identical to today and rolling-upgrade safe. An exchange RPC
+    /// failure is swallowed (the full batch ships; the downstream
+    /// <see cref="IReplicationTransport.SendAsync"/> handles any genuine
+    /// transport fault and backoff).
+    /// </para>
+    /// <para>
+    /// The receiver advances its per-origin high-water-mark for every
+    /// elided entry via a metadata-only apply inside the exchange, so the
+    /// high-water-mark still advances for the identical-content-newer-HLC
+    /// case even though the payload is never re-shipped. Only eligible
+    /// point <see cref="MutationKind.Set"/> entries are ever placed in the
+    /// manifest (see <see cref="ContentManifestPlanner.BuildManifest"/>);
+    /// range deletes, saga terminal marks, prepared atomic-batch entries,
+    /// and zero-HLC entries are never manifested and always ship verbatim,
+    /// preserving atomic-batch boundaries, causal ordering, and per-origin
+    /// FIFO. Each drained entry's per-partition sequence was already folded
+    /// into the resume bookkeeping at drain time, so the cursor still
+    /// advances past every elided entry.
+    /// </para>
+    /// </summary>
+    private async Task TryElideViaManifestExchangeAsync(
+        LatticeReplicationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.ContentHashDedupEnabled
+            || !options.ContentHashDedupElisionEnabled
+            || _peerSupportsManifestExchange == false
+            || _drainBuffer.Count == 0)
+        {
+            return;
+        }
+
+        var manifest = ContentManifestPlanner.BuildManifest(_drainBuffer);
+        if (manifest.Count == 0)
+        {
+            // No value-carrying point-Set entries in this batch: nothing to
+            // elide, and no point paying for an exchange round trip.
+            return;
+        }
+
+        var request = new ContentManifestRequest
+        {
+            TreeName = _treeName,
+            OriginClusterId = options.ClusterId,
+            Entries = manifest,
+        };
+
+        ContentManifestResponse response;
+        try
+        {
+            response = await _digestProbeTransport
+                .ExchangeContentManifestAsync(_peerClusterId, request, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Exchange RPC failure: skip elision and ship the full batch
+            // verbatim. SendAsync below handles a genuine transport fault.
+            Logger.LogDebug(ex,
+                "Content-hash manifest exchange failed for {Context}; shipping the full batch",
+                LogContext);
+            return;
+        }
+
+        if (!response.ExchangeSupported)
+        {
+            _peerSupportsManifestExchange = false;
+            return;
+        }
+
+        _peerSupportsManifestExchange = true;
+        LatticeReplicationMetrics.ManifestExchanges.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+
+        var elided = ContentManifestPlanner.ComputeElidedIndices(manifest, response.MissingEntryIndices);
+        if (elided.Count == 0)
+        {
+            return;
+        }
+
+        var count = _drainBuffer.Count;
+        var write = 0;
+        var elidedBytes = 0L;
+        var elidedCount = 0;
+        for (var i = 0; i < count; i++)
+        {
+            if (elided.Contains(i))
+            {
+                elidedBytes += _drainEncodedSegments[i].Count;
+                elidedCount++;
+                continue;
+            }
+            if (write != i)
+            {
+                _drainBuffer[write] = _drainBuffer[i];
+                _drainEncodedSegments[write] = _drainEncodedSegments[i];
+            }
+            write++;
+        }
+
+        if (elidedCount == 0)
+        {
+            return;
+        }
+
+        _drainBuffer.RemoveRange(write, count - write);
+        _drainEncodedSegments.RemoveRange(write, count - write);
+        _drainEncodedByteCount -= elidedBytes;
+
+        LatticeReplicationMetrics.ShipElidedPayloads.Add(
+            elidedCount,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+        LatticeReplicationMetrics.ShipElidedPayloadBytes.Add(
+            elidedBytes,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
     }

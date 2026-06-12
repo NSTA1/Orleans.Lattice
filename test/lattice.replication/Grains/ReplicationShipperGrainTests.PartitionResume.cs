@@ -238,7 +238,7 @@ public partial class ReplicationShipperGrainTests
             monitor, transport, encoder, walEncoder, registry, factory, fakeState,
             new ReplicationPeerStats(),
             Substitute.For<ILatticeMergeModeResolver>(),
-            new WireVersionNegotiationState());
+            new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, fakeState, feeds, transport, encoder);
     }
@@ -311,7 +311,7 @@ public partial class ReplicationShipperGrainTests
             monitor, transport, encoder, walEncoder, registry, factory, fakeState,
             new ReplicationPeerStats(),
             Substitute.For<ILatticeMergeModeResolver>(),
-            new WireVersionNegotiationState());
+            new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         grain.InitializeForTesting(Tree, Peer);
 
         await grain.OnDoorbellAsync(CancellationToken.None);
@@ -439,7 +439,7 @@ public partial class ReplicationShipperGrainTests
             BuildGrainFactory(null, stubs, Tree), fakeState,
             new ReplicationPeerStats(),
             Substitute.For<ILatticeMergeModeResolver>(),
-            new WireVersionNegotiationState());
+            new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         freshGrain.InitializeForTesting(Tree, Peer);
         // Don't use the unused locals.
         _ = grain2;

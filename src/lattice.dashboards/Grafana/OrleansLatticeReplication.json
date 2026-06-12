@@ -1308,6 +1308,31 @@
           "legendFormat": "out bytes/s {{tree}}"
         }
       ]
+    },
+    {
+      "id": 50,
+      "title": "Content-hash payload elision (rate)",
+      "description": "Rate of Set-entry payloads and value bytes elided from outbound batches by the sender-manifest / receiver-pull-missing content-hash round trip (orleans.lattice.replication.ship.elided_payloads / ship.elided_payload_bytes). Opt-in via ContentHashDedupElisionEnabled (which also requires ContentHashDedupEnabled); flat-zero unless elision is enabled and a peer advertises the exchange capability for a duplicate-heavy workload.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 120 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "ENTRIES", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_elided_payloads_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "entries/s {{tree}} -> {{peer}}" },
+        { "refId": "BYTES", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_elided_payload_bytes_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "bytes/s {{tree}} -> {{peer}}" }
+      ]
+    },
+    {
+      "id": 51,
+      "title": "Content-hash manifest exchanges (rate)",
+      "description": "Rate of content-hash manifest exchanges performed with each peer on the outbound ship path (orleans.lattice.replication.ship.manifest_exchanges). One per shipped batch that advertised a manifest. Read alongside the elision panel to gauge average payloads elided per exchange and whether the pull-missing round trip is paying for itself.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 120 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_manifest_exchanges_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} -> {{peer}}" }
+      ]
     }
   ]
 }
