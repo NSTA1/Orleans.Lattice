@@ -262,19 +262,12 @@ internal static class LeafReReplayer
 
     private static bool InAnyRange(string? key, IReadOnlyList<LeafReReplayRange> ranges)
     {
-        key ??= string.Empty;
         for (var i = 0; i < ranges.Count; i++)
         {
-            var r = ranges[i];
-            if (r.StartKey is not null && string.CompareOrdinal(key, r.StartKey) < 0)
+            if (ranges[i].Contains(key))
             {
-                continue;
+                return true;
             }
-            if (r.EndKey is not null && string.CompareOrdinal(key, r.EndKey) >= 0)
-            {
-                continue;
-            }
-            return true;
         }
         return false;
     }

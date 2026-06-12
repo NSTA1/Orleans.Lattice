@@ -88,4 +88,88 @@ public sealed class LeafReReplayRangeTests
             Assert.That((int)LeafReReplaySkipReason.WalTrimmed, Is.EqualTo(3));
         });
     }
+
+    [Test]
+    public void Contains_unbounded_range_matches_every_key()
+    {
+        var range = default(LeafReReplayRange);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(range.Contains(""), Is.True);
+            Assert.That(range.Contains("a"), Is.True);
+            Assert.That(range.Contains("zzz"), Is.True);
+            Assert.That(range.Contains(null), Is.True);
+        });
+    }
+
+    [Test]
+    public void Contains_is_half_open_inclusive_start_exclusive_end()
+    {
+        var range = new LeafReReplayRange { StartKey = "b", EndKey = "m" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(range.Contains("a"), Is.False, "before start is excluded");
+            Assert.That(range.Contains("b"), Is.True, "start is inclusive");
+            Assert.That(range.Contains("f"), Is.True, "interior is included");
+            Assert.That(range.Contains("m"), Is.False, "end is exclusive");
+            Assert.That(range.Contains("z"), Is.False, "after end is excluded");
+        });
+    }
+
+    [Test]
+    public void Contains_null_start_is_unbounded_left()
+    {
+        var range = new LeafReReplayRange { StartKey = null, EndKey = "m" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(range.Contains(""), Is.True);
+            Assert.That(range.Contains("a"), Is.True);
+            Assert.That(range.Contains("m"), Is.False);
+        });
+    }
+
+    [Test]
+    public void Contains_null_end_is_unbounded_right()
+    {
+        var range = new LeafReReplayRange { StartKey = "m", EndKey = null };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(range.Contains("a"), Is.False);
+            Assert.That(range.Contains("m"), Is.True);
+            Assert.That(range.Contains("zzz"), Is.True);
+        });
+    }
+
+    [Test]
+    public void Contains_treats_null_key_as_empty_string()
+    {
+        var leftmost = new LeafReReplayRange { StartKey = null, EndKey = "b" };
+        var startsAtA = new LeafReReplayRange { StartKey = "a", EndKey = "b" };
+
+        Assert.Multiple(() =>
+        {
+            // Empty string sorts before "a" ordinally, so it falls inside a
+            // left-unbounded range but outside a range starting at "a".
+            Assert.That(leftmost.Contains(null), Is.True);
+            Assert.That(startsAtA.Contains(null), Is.False);
+        });
+    }
+
+    [Test]
+    public void Contains_uses_ordinal_comparison()
+    {
+        // Uppercase letters sort before lowercase ordinally (B = 0x42 < a = 0x61).
+        var range = new LeafReReplayRange { StartKey = "B", EndKey = "a" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(range.Contains("B"), Is.True);
+            Assert.That(range.Contains("Z"), Is.True);
+            Assert.That(range.Contains("a"), Is.False);
+        });
+    }
 }

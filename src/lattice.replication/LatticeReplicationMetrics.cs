@@ -1176,4 +1176,107 @@ public static class LatticeReplicationMetrics
         LeafReReplaySkipReason.WalTrimmed => LeafReReplaySkipWalTrimmed,
         _ => LeafReReplaySkipRangeEmpty,
     };
+
+    // --- Anti-entropy bootstrap-snapshot fallback (GC'd-divergence repair) ------
+
+    /// <summary>
+    /// Counter incremented once per scoped bootstrap-snapshot fallback pass
+    /// that begins re-deriving the divergent leaf range from the live tree
+    /// after a targeted leaf re-replay reported the local write-ahead-log had
+    /// been garbage-collected past the divergence point
+    /// (<see cref="LeafReReplaySkipReason.WalTrimmed"/>). Tagged by
+    /// <see cref="TagTree"/> and <see cref="TagPeer"/>. The fallback ships dark
+    /// behind <see cref="LatticeReplicationOptions.BootstrapFallbackEnabled"/>;
+    /// it runs only after the WAL-trimmed signal and only when at least one
+    /// leaf range was localised, so its scope is bounded to the drift rather
+    /// than the whole tree.
+    /// </summary>
+    public static readonly Counter<long> BootstrapFallbackTriggered =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap_fallback.triggered", unit: "{fallback}",
+            description: "Scoped bootstrap-snapshot fallback passes triggered after a WAL-trimmed leaf re-replay, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapFallbackTriggered"/> counter.
+    /// </summary>
+    public const string BootstrapFallbackTriggeredName = "orleans.lattice.replication.bootstrap_fallback.triggered";
+
+    /// <summary>
+    /// Counter incremented by the number of committed-projection snapshot
+    /// entries the scoped bootstrap-snapshot fallback re-ships to a diverged
+    /// peer (the live committed state of the divergent leaf range), tagged by
+    /// <see cref="TagTree"/> and <see cref="TagPeer"/>. Re-shipped entries
+    /// carry their source clock verbatim and are deduplicated at the receiver,
+    /// so the counter measures repair effort, not net new visible writes.
+    /// </summary>
+    public static readonly Counter<long> BootstrapFallbackEntries =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap_fallback.entries", unit: "{entry}",
+            description: "Committed-projection snapshot entries re-shipped to a diverged peer by the scoped bootstrap-snapshot fallback, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapFallbackEntries"/> counter.
+    /// </summary>
+    public const string BootstrapFallbackEntriesName = "orleans.lattice.replication.bootstrap_fallback.entries";
+
+    /// <summary>
+    /// Counter incremented once per scoped bootstrap-snapshot fallback that is
+    /// skipped without re-shipping - because the fallback is disabled even
+    /// though the WAL-trimmed signal fired, the localised range set was empty,
+    /// or the scoped export yielded no committed entries. Tagged by
+    /// <see cref="TagTree"/>, <see cref="TagPeer"/>, and <see cref="TagReason"/>;
+    /// the reason value is one of <see cref="BootstrapFallbackSkipDisabled"/>,
+    /// <see cref="BootstrapFallbackSkipRangeEmpty"/>, or
+    /// <see cref="BootstrapFallbackSkipEmpty"/>. A
+    /// <see cref="BootstrapFallbackSkipDisabled"/> skip is the operator-only
+    /// signal: a divergence that re-replay could not repair from the WAL is
+    /// available for the fallback, but the host has not opted in.
+    /// </summary>
+    public static readonly Counter<long> BootstrapFallbackSkipped =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap_fallback.skipped", unit: "{skip}",
+            description: "Scoped bootstrap-snapshot fallback passes skipped without re-shipping, tagged by tree, peer, and reason.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapFallbackSkipped"/> counter.
+    /// </summary>
+    public const string BootstrapFallbackSkippedName = "orleans.lattice.replication.bootstrap_fallback.skipped";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="BootstrapFallbackSkipped"/>:
+    /// the fallback is disabled
+    /// (<see cref="LatticeReplicationOptions.BootstrapFallbackEnabled"/> is
+    /// <see langword="false"/>) even though a leaf re-replay reported the WAL
+    /// was trimmed past the divergence point. Corresponds to
+    /// <see cref="BootstrapFallbackSkipReason.Disabled"/>.
+    /// </summary>
+    public const string BootstrapFallbackSkipDisabled = "disabled";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="BootstrapFallbackSkipped"/>:
+    /// the localiser produced no leaf ranges to scope the snapshot to, so the
+    /// fallback had no bounded scope to export. Corresponds to
+    /// <see cref="BootstrapFallbackSkipReason.RangeEmpty"/>.
+    /// </summary>
+    public const string BootstrapFallbackSkipRangeEmpty = "range_empty";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="BootstrapFallbackSkipped"/>:
+    /// the range-scoped snapshot export yielded no committed-projection entries
+    /// in the divergent leaf range (the range is empty on the local tree).
+    /// Corresponds to <see cref="BootstrapFallbackSkipReason.Empty"/>.
+    /// </summary>
+    public const string BootstrapFallbackSkipEmpty = "empty";
+
+    /// <summary>
+    /// Maps a <see cref="BootstrapFallbackSkipReason"/> to its canonical
+    /// <see cref="TagReason"/> string value for
+    /// <see cref="BootstrapFallbackSkipped"/>.
+    /// </summary>
+    /// <param name="reason">The skip reason.</param>
+    /// <returns>The matching reason-tag string constant.</returns>
+    public static string BootstrapFallbackSkipReasonTag(BootstrapFallbackSkipReason reason) => reason switch
+    {
+        BootstrapFallbackSkipReason.Disabled => BootstrapFallbackSkipDisabled,
+        BootstrapFallbackSkipReason.RangeEmpty => BootstrapFallbackSkipRangeEmpty,
+        BootstrapFallbackSkipReason.Empty => BootstrapFallbackSkipEmpty,
+        _ => BootstrapFallbackSkipEmpty,
+    };
 }

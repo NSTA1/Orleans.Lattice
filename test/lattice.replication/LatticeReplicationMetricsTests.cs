@@ -785,4 +785,122 @@ public class LatticeReplicationMetricsTests
                 t.Key == "reason" && (string?)t.Value == "wal_trimmed"));
         });
     }
+
+    // ------------------------------------------------------------------
+    // Anti-entropy bootstrap-snapshot fallback (GC'd-divergence repair)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Bootstrap_fallback_counters_have_expected_names_and_units()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackTriggered.Name,
+                Is.EqualTo("orleans.lattice.replication.bootstrap_fallback.triggered"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackTriggered.Unit, Is.EqualTo("{fallback}"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackTriggeredName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap_fallback.triggered"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackEntries.Name,
+                Is.EqualTo("orleans.lattice.replication.bootstrap_fallback.entries"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackEntries.Unit, Is.EqualTo("{entry}"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackEntriesName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap_fallback.entries"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackSkipped.Name,
+                Is.EqualTo("orleans.lattice.replication.bootstrap_fallback.skipped"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackSkipped.Unit, Is.EqualTo("{skip}"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackSkippedName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap_fallback.skipped"));
+        });
+    }
+
+    [Test]
+    public void Bootstrap_fallback_skip_reason_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackSkipDisabled, Is.EqualTo("disabled"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackSkipRangeEmpty, Is.EqualTo("range_empty"));
+            Assert.That(LatticeReplicationMetrics.BootstrapFallbackSkipEmpty, Is.EqualTo("empty"));
+        });
+    }
+
+    [TestCase(BootstrapFallbackSkipReason.Disabled, "disabled")]
+    [TestCase(BootstrapFallbackSkipReason.RangeEmpty, "range_empty")]
+    [TestCase(BootstrapFallbackSkipReason.Empty, "empty")]
+    public void Bootstrap_fallback_skip_reason_tag_maps_each_reason(
+        BootstrapFallbackSkipReason reason, string expected)
+    {
+        Assert.That(LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(reason), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Bootstrap_fallback_triggered_counter_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.BootstrapFallbackTriggeredName);
+
+        LatticeReplicationMetrics.BootstrapFallbackTriggered.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(1L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "t"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "p"));
+        });
+    }
+
+    [Test]
+    public void Bootstrap_fallback_entries_counter_records_with_tree_and_peer_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.BootstrapFallbackEntriesName);
+
+        LatticeReplicationMetrics.BootstrapFallbackEntries.Add(9,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(9L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "t"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "p"));
+        });
+    }
+
+    [Test]
+    public void Bootstrap_fallback_skipped_counter_records_with_tree_peer_and_reason_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.BootstrapFallbackSkippedName);
+
+        LatticeReplicationMetrics.BootstrapFallbackSkipped.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason,
+                LatticeReplicationMetrics.BootstrapFallbackSkipDisabled));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(1L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "p"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "reason" && (string?)t.Value == "disabled"));
+        });
+    }
 }

@@ -114,3 +114,6 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.bootstrap.duration` | histogram (ms) | `tree`, `origin`, `outcome` | Bootstrap duration p50/p95/p99 |
 | `orleans.lattice.replication.bootstrap.transient_retries` | counter | `tree`, `origin` | Bootstrap transient retries (rate) |
 | `orleans.lattice.replication.peer.fell_off_log_suppressed` | counter | `tree`, `origin` | Fall-off-log suppressed events (rate) |
+| `orleans.lattice.replication.bootstrap_fallback.triggered` | counter | `tree`, `peer` | Bootstrap fallback triggered (rate) |
+| `orleans.lattice.replication.bootstrap_fallback.entries` | counter | `tree`, `peer` | Bootstrap fallback entries re-shipped (rate) |
+| `orleans.lattice.replication.bootstrap_fallback.skipped` | counter | `tree`, `peer`, `reason` | Bootstrap fallback skipped (rate by reason) |

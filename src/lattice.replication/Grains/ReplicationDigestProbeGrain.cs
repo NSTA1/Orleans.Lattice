@@ -46,6 +46,7 @@ internal sealed class ReplicationDigestProbeGrain(
     IReplicationBatchEncoder batchEncoder,
     IShardCountProvider shardCounts,
     IGrainFactory grainFactory,
+    ISnapshotProvider snapshotProvider,
     [PersistentState("replication-digest-probe", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationDigestProbeState> state)
     : CoordinatorGrain<ReplicationDigestProbeGrain>(context, reminderRegistry, logger),
@@ -67,6 +68,8 @@ internal sealed class ReplicationDigestProbeGrain(
         shardCounts ?? throw new ArgumentNullException(nameof(shardCounts));
     private readonly IGrainFactory _grainFactory =
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
+    private readonly ISnapshotProvider _snapshotProvider =
+        snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
 
     private readonly Random _random = new();
 
@@ -360,7 +363,17 @@ internal sealed class ReplicationDigestProbeGrain(
             // pipeline. Strictly opt-in and best-effort.
             if (outcome.Localised && outcome.LocalisedRanges is { Count: > 0 } ranges)
             {
-                await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
+                var reReplay = await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
+
+                // GC'd-divergence fallback: when the targeted re-replay could
+                // not reach the divergence point because the local WAL was
+                // trimmed past it, optionally fall back to a scoped
+                // bootstrap-snapshot of just the divergent leaf range. Strictly
+                // opt-in and best-effort.
+                if (reReplay.SkipReason == LeafReReplaySkipReason.WalTrimmed)
+                {
+                    await TryBootstrapFallbackAsync(options, peer, ranges).ConfigureAwait(true);
+                }
             }
         }
         catch (Exception ex)
@@ -381,7 +394,16 @@ internal sealed class ReplicationDigestProbeGrain(
     /// is logged and swallowed so the detect/localise cadence is never
     /// disturbed.
     /// </summary>
-    private async Task TryReReplayLeavesAsync(
+    /// <param name="options">The resolved per-tree replication options.</param>
+    /// <param name="peer">The diverged peer cluster id.</param>
+    /// <param name="ranges">The localised diverging leaf covering ranges.</param>
+    /// <returns>
+    /// The re-replay outcome. A <see cref="LeafReReplaySkipReason.WalTrimmed"/>
+    /// skip reason signals the caller to consider the bootstrap-snapshot
+    /// fallback; a logged-and-swallowed failure returns
+    /// <see cref="LeafReReplayOutcome.NotAttempted"/>.
+    /// </returns>
+    private async Task<LeafReReplayOutcome> TryReReplayLeavesAsync(
         LatticeReplicationOptions options,
         string peer,
         IReadOnlyList<LeafReReplayRange> ranges)
@@ -395,7 +417,7 @@ internal sealed class ReplicationDigestProbeGrain(
                 new KeyValuePair<string, object?>(
                     LatticeReplicationMetrics.TagReason,
                     LatticeReplicationMetrics.LeafReReplaySkipReasonTag(LeafReReplaySkipReason.Disabled)));
-            return;
+            return new LeafReReplayOutcome { SkipReason = LeafReReplaySkipReason.Disabled };
         }
 
         try
@@ -410,7 +432,7 @@ internal sealed class ReplicationDigestProbeGrain(
             var walSource = new WalGrainReReplaySource(_grainFactory, TreeName, partitionCount, pageSize);
             var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, originClusterId);
 
-            await LeafReReplayer.ReplayAsync(
+            return await LeafReReplayer.ReplayAsync(
                 TreeName,
                 peer,
                 originClusterId,
@@ -426,6 +448,60 @@ internal sealed class ReplicationDigestProbeGrain(
         {
             Logger.LogWarning(ex,
                 "Targeted leaf re-replay failed for peer {Peer} on {Context}; the repair is best-effort and will retry on the next cadence",
+                peer, LogContext);
+            return LeafReReplayOutcome.NotAttempted;
+        }
+    }
+
+    /// <summary>
+    /// Falls back to a scoped bootstrap-snapshot repair of the localised
+    /// divergent leaf ranges when the targeted leaf re-replay could not reach
+    /// the divergence point because the local write-ahead-log was trimmed past
+    /// it. When the fallback stage is disabled the pass records a single
+    /// skipped-with-reason-disabled signal and returns without reading the
+    /// snapshot; otherwise it re-derives the committed projection of just the
+    /// divergent ranges from the live tree (immune to WAL trimming) and
+    /// re-ships those committed entries to the diverged peer through the
+    /// ordinary replication transport. Best-effort: a failure is logged and
+    /// swallowed so the detect/localise cadence is never disturbed.
+    /// </summary>
+    private async Task TryBootstrapFallbackAsync(
+        LatticeReplicationOptions options,
+        string peer,
+        IReadOnlyList<LeafReReplayRange> ranges)
+    {
+        if (!options.BootstrapFallbackEnabled)
+        {
+            LatticeReplicationMetrics.BootstrapFallbackSkipped.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                new KeyValuePair<string, object?>(
+                    LatticeReplicationMetrics.TagReason,
+                    LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(BootstrapFallbackSkipReason.Disabled)));
+            return;
+        }
+
+        try
+        {
+            var originClusterId = options.ClusterId;
+            var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, originClusterId);
+
+            await BootstrapFallbackPlanner.PlanAsync(
+                TreeName,
+                peer,
+                originClusterId,
+                ranges,
+                _snapshotProvider,
+                sink,
+                options.BootstrapFallbackMaxEntries,
+                options.BootstrapFallbackMaxBytes,
+                CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Bootstrap-snapshot fallback failed for peer {Peer} on {Context}; the repair is best-effort and will retry on the next cadence",
                 peer, LogContext);
         }
     }

@@ -170,6 +170,56 @@ public class LatticeReplicationOptionsValidatorTests
 
     [TestCase(0)]
     [TestCase(-1)]
+    public void Validate_fails_when_bootstrap_fallback_max_entries_is_non_positive(int max)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            BootstrapFallbackMaxEntries = max,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.BootstrapFallbackMaxEntries)));
+        });
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void Validate_fails_when_bootstrap_fallback_max_bytes_is_non_positive(long max)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            BootstrapFallbackMaxBytes = max,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.BootstrapFallbackMaxBytes)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_bootstrap_fallback_caps()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
     public void Validate_fails_when_max_apply_retries_is_non_positive(int max)
     {
         var opts = new LatticeReplicationOptions

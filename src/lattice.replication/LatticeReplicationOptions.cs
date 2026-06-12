@@ -836,6 +836,65 @@ public class LatticeReplicationOptions
     public long LeafReReplayMaxBytes { get; set; } = DefaultLeafReReplayMaxBytes;
 
     /// <summary>
+    /// Master switch for the bootstrap-snapshot fallback - the
+    /// garbage-collected-divergence repair step that follows a targeted leaf
+    /// re-replay which could not reach the divergence point because the local
+    /// write-ahead log had been trimmed past it (the
+    /// <see cref="LeafReReplaySkipReason.WalTrimmed"/> signal). When
+    /// <see langword="true"/> (and the re-replay reported
+    /// <see cref="LeafReReplaySkipReason.WalTrimmed"/> and at least one leaf
+    /// range was localised), the fallback re-derives the committed projection
+    /// of just the divergent leaf range from the live tree via the range-scoped
+    /// <see cref="ISnapshotProvider.ExportAsync(string, IReadOnlyList{LeafReReplayRange}, Orleans.Lattice.HybridLogicalClock, CancellationToken)"/>
+    /// overload (the live tree is immune to WAL trimming) and re-ships those
+    /// committed entries to the diverged peer through the ordinary replication
+    /// transport, so the repair travels the same causal-stable apply path as
+    /// ordinary replication and the receiver dedupes by the verbatim source
+    /// clock. Snapshot scope is bounded to the localised leaf ranges, so the
+    /// repair cost is proportional to the drift, not the whole tree.
+    /// <para>
+    /// Defaults to <see cref="DefaultBootstrapFallbackEnabled"/>
+    /// (<see langword="false"/>). The fallback ships dark and opt-in - it runs
+    /// only when targeted leaf re-replay is also enabled, the re-replay hits a
+    /// trimmed WAL, and this flag is set - so an un-opted host pays nothing and
+    /// observes no behaviour change. When the WAL-trimmed signal fires while
+    /// this flag is off, a single
+    /// <see cref="LatticeReplicationMetrics.BootstrapFallbackSkipped"/> count
+    /// with reason <see cref="LatticeReplicationMetrics.BootstrapFallbackSkipDisabled"/>
+    /// is emitted so operators can see the fallback was available but not taken.
+    /// </para>
+    /// </summary>
+    public bool BootstrapFallbackEnabled { get; set; } = DefaultBootstrapFallbackEnabled;
+
+    /// <summary>
+    /// Maximum number of committed-projection snapshot entries a single
+    /// bootstrap-snapshot fallback pass re-ships to the diverged peer. A soft
+    /// cap: the fallback re-ships entries until the next entry would exceed this
+    /// ceiling, but always ships at least one entry. Bounds the repair
+    /// amplification a single GC'd-divergence fallback can produce. Only
+    /// consulted when <see cref="BootstrapFallbackEnabled"/> is
+    /// <see langword="true"/>. Defaults to
+    /// <see cref="DefaultBootstrapFallbackMaxEntries"/>. Must be at least
+    /// <c>1</c>; the registered options validator rejects non-positive values
+    /// at first-resolve time.
+    /// </summary>
+    public int BootstrapFallbackMaxEntries { get; set; } = DefaultBootstrapFallbackMaxEntries;
+
+    /// <summary>
+    /// Maximum cumulative estimated payload byte count a single
+    /// bootstrap-snapshot fallback pass re-ships to the diverged peer. A soft
+    /// cap applied with the same always-ship-at-least-one semantics as
+    /// <see cref="BootstrapFallbackMaxEntries"/>. Bounds the repair bandwidth a
+    /// single GC'd-divergence fallback can produce independently of the
+    /// entry-count cap. Only consulted when
+    /// <see cref="BootstrapFallbackEnabled"/> is <see langword="true"/>.
+    /// Defaults to <see cref="DefaultBootstrapFallbackMaxBytes"/>. Must be at
+    /// least <c>1</c>; the registered options validator rejects non-positive
+    /// values at first-resolve time.
+    /// </summary>
+    public long BootstrapFallbackMaxBytes { get; set; } = DefaultBootstrapFallbackMaxBytes;
+
+    /// <summary>
     /// Whether <see cref="ShardedReplogSink"/> rings the per-peer
     /// shipper grain after a successful WAL append, signalling that
     /// new entries are available. Disabling the doorbell falls back
@@ -1420,6 +1479,32 @@ public class LatticeReplicationOptions
     /// localisation can produce independently of the entry-count cap.
     /// </summary>
     public const long DefaultLeafReReplayMaxBytes = 1024L * 1024L;
+
+    /// <summary>
+    /// Default value for <see cref="BootstrapFallbackEnabled"/>:
+    /// <see langword="false"/>. The GC'd-divergence bootstrap-snapshot fallback
+    /// ships dark and opt-in so it does not change replication behaviour for a
+    /// host that has not enabled it.
+    /// </summary>
+    public const bool DefaultBootstrapFallbackEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="BootstrapFallbackMaxEntries"/>: 4096
+    /// committed-projection entries. Generous enough to repair a divergent leaf
+    /// range in a single pass under realistic fan-out while still bounding
+    /// repair amplification on a pathologically large divergence. Mirrors the
+    /// targeted leaf re-replay entry cap so a host that tunes one rarely needs
+    /// to tune the other.
+    /// </summary>
+    public const int DefaultBootstrapFallbackMaxEntries = 4096;
+
+    /// <summary>
+    /// Default value for <see cref="BootstrapFallbackMaxBytes"/>: 1 MB of
+    /// cumulative re-shipped payload. Bounds the repair bandwidth a single
+    /// GC'd-divergence fallback can produce independently of the entry-count
+    /// cap.
+    /// </summary>
+    public const long DefaultBootstrapFallbackMaxBytes = 1024L * 1024L;
 
     /// <summary>
     /// Default value for <see cref="ShipDoorbellEnabled"/>: doorbell

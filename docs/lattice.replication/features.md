@@ -40,7 +40,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 ### Planned / open
 
 - [R-108](https://github.com/NSTA1/Orleans.Lattice/issues/516) - Rate-limit, circuit breaker, and operator override
-- [R-109](https://github.com/NSTA1/Orleans.Lattice/issues/517) - Bootstrap-snapshot fallback for GC'd divergence
 - [R-110](https://github.com/NSTA1/Orleans.Lattice/issues/518) - End-to-end remediation chaos test
 - [R-111](https://github.com/NSTA1/Orleans.Lattice/issues/519) - Documentation + operator playbook
 - [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
@@ -127,6 +126,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-105](https://github.com/NSTA1/Orleans.Lattice/issues/513) - Peer digest probe RPC + scheduler
 - [R-106](https://github.com/NSTA1/Orleans.Lattice/issues/514) - Merkle-walk drift localisation
 - [R-107](https://github.com/NSTA1/Orleans.Lattice/issues/515) - Targeted leaf re-replay from WAL
+- [R-109](https://github.com/NSTA1/Orleans.Lattice/issues/517) - Bootstrap-snapshot fallback for GC'd divergence
 - [R-112](https://github.com/NSTA1/Orleans.Lattice/issues/520) - Pre-built `TableServiceClient` slot on `AzureTableWalStorageOptions`
 - [R-113](https://github.com/NSTA1/Orleans.Lattice/issues/521) - Widen `IReplicationTopology` to govern doorbell + fall-off probes
 - [R-114](https://github.com/NSTA1/Orleans.Lattice/issues/522) - One-encode commit-to-wire via `WalRecord`-shaped WAL bytes and framing-only replication envelope

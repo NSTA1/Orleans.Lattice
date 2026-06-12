@@ -88,10 +88,12 @@ public class ReplicationDigestProbeGrainTests
             state.State = seed;
         }
 
+        var snapshotProvider = Substitute.For<ISnapshotProvider>();
+
         var grain = new ReplicationDigestProbeGrain(
             context, reminders, NullLogger<ReplicationDigestProbeGrain>.Instance,
             replicationMonitor, latticeMonitor, topology, transport,
-            replicationTransport, batchEncoder, shardCounts, grainFactory, state);
+            replicationTransport, batchEncoder, shardCounts, grainFactory, snapshotProvider, state);
 
         return (grain, state, lattice, transport, shardCounts);
     }
@@ -318,6 +320,7 @@ public class ReplicationDigestProbeGrainTests
             Substitute.For<IReplicationBatchEncoder>(),
             Substitute.For<IShardCountProvider>(),
             Substitute.For<IGrainFactory>(),
+            Substitute.For<ISnapshotProvider>(),
             new FakePersistentState<ReplicationDigestProbeState>());
 
         Assert.That(
@@ -342,6 +345,7 @@ public class ReplicationDigestProbeGrainTests
                 Substitute.For<IReplicationBatchEncoder>(),
                 Substitute.For<IShardCountProvider>(),
                 Substitute.For<IGrainFactory>(),
+                Substitute.For<ISnapshotProvider>(),
                 new FakePersistentState<ReplicationDigestProbeState>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
