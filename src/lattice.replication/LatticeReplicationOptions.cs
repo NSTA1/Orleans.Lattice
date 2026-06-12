@@ -1123,6 +1123,115 @@ public class LatticeReplicationOptions
     /// </summary>
     public int AdaptiveBatchWindowLength { get; set; } = DefaultAdaptiveBatchWindowLength;
 
+    /// <summary>
+    /// Master gate for <em>all</em> automatic anti-entropy remediation - both
+    /// the targeted leaf re-replay repair stage and the GC'd-divergence
+    /// bootstrap-snapshot fallback. When <see langword="false"/> (the default),
+    /// a localised drift is still detected and probed exactly as before (the
+    /// digest probe and the read-only Merkle walk are unaffected), but no
+    /// automatic re-replay or bootstrap-fallback re-ship is attempted - the
+    /// repair stage records a single skip-with-reason
+    /// <see cref="LatticeReplicationMetrics.DigestRemediationReasonOptOut"/>
+    /// signal and the <see cref="LatticeReplicationMetrics.DigestRemediationDisabledName"/>
+    /// gauge reports the disabled state for the affected <c>(tree, peer)</c>.
+    /// <para>
+    /// This flag is an additional AND-gate in front of the repair stage: the
+    /// existing per-feature flags (<see cref="MerkleWalkEnabled"/>,
+    /// <see cref="LeafReReplayEnabled"/>, <see cref="BootstrapFallbackEnabled"/>)
+    /// still apply on top of it. Detection (the digest probe and the Merkle
+    /// walk) is intentionally <em>not</em> gated by this flag so an operator can
+    /// observe drift telemetry without having opted into automatic repair.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultAutoRemediateOnDigestMismatch"/>
+    /// (<see langword="false"/>). The remediation guards ship dark and opt-in so
+    /// an un-opted host observes no behaviour change.
+    /// </para>
+    /// </summary>
+    public bool AutoRemediateOnDigestMismatch { get; set; } = DefaultAutoRemediateOnDigestMismatch;
+
+    /// <summary>
+    /// Fraction of the per-tick <see cref="ShipBatchSize"/> entry budget that a
+    /// single <c>(tree, peer)</c> may spend on automatic anti-entropy
+    /// remediation traffic within each
+    /// <see cref="RemediationTrafficWindow"/> accounting window. The effective
+    /// per-window entry budget is
+    /// <c>max(1, ceil(RemediationTrafficBudgetFraction * ShipBatchSize))</c>, so
+    /// remediation re-ship volume is rate-limited to a small fraction of the
+    /// ordinary ship-batch budget. Once a <c>(tree, peer)</c> has already
+    /// re-shipped at least its budget within the current window, further
+    /// remediation passes for that pair are skipped (recording a
+    /// <see cref="LatticeReplicationMetrics.DigestRemediationReasonBudgetExhausted"/>
+    /// signal and reporting the disabled gauge) until the window rolls over. The
+    /// first pass in a fresh window always runs, so a single large repair burst
+    /// is permitted and the cap bounds how often such bursts may recur.
+    /// <para>
+    /// Only consulted when <see cref="AutoRemediateOnDigestMismatch"/> is
+    /// <see langword="true"/>. Defaults to
+    /// <see cref="DefaultRemediationTrafficBudgetFraction"/> (1% of
+    /// <see cref="ShipBatchSize"/>). Must be in the half-open interval
+    /// <c>(0.0, 1.0]</c>; the registered options validator rejects values at or
+    /// below <c>0</c> or above <c>1</c> at first-resolve time.
+    /// </para>
+    /// </summary>
+    public double RemediationTrafficBudgetFraction { get; set; } = DefaultRemediationTrafficBudgetFraction;
+
+    /// <summary>
+    /// Length of the deterministic accounting window over which the per-tree,
+    /// per-peer remediation traffic budget
+    /// (<see cref="RemediationTrafficBudgetFraction"/>) is measured. The
+    /// consumed-entry counter for each <c>(tree, peer)</c> resets to zero the
+    /// first time a remediation pass is evaluated at or after this much
+    /// wall-clock time has elapsed since the window opened. A shorter window
+    /// lets remediation recur more often; a longer window throttles it harder.
+    /// Only consulted when <see cref="AutoRemediateOnDigestMismatch"/> is
+    /// <see langword="true"/>. Defaults to
+    /// <see cref="DefaultRemediationTrafficWindow"/> (1 minute). Must be strictly
+    /// greater than <see cref="TimeSpan.Zero"/>; the registered options
+    /// validator rejects non-positive values at first-resolve time.
+    /// </summary>
+    public TimeSpan RemediationTrafficWindow { get; set; } = DefaultRemediationTrafficWindow;
+
+    /// <summary>
+    /// Number of consecutive automatic-remediation failures for a single
+    /// <c>(tree, peer)</c> that trips the remediation circuit breaker open.
+    /// While the breaker is open, automatic remediation for that pair is skipped
+    /// (recording a
+    /// <see cref="LatticeReplicationMetrics.DigestRemediationReasonCircuitOpen"/>
+    /// signal and reporting the disabled gauge) until the
+    /// <see cref="RemediationCircuitResetInterval"/> cooldown elapses, after
+    /// which one half-open trial pass is allowed. A successful pass at any point
+    /// resets the consecutive-failure count and closes the breaker; a failed
+    /// half-open trial re-opens it for another cooldown. A "failure" is a
+    /// remediation pass that threw or whose re-ship sink reported zero entries
+    /// shipped despite candidate entries having been selected.
+    /// <para>
+    /// Only consulted when <see cref="AutoRemediateOnDigestMismatch"/> is
+    /// <see langword="true"/>. Defaults to
+    /// <see cref="DefaultRemediationFailureThreshold"/>. Must be at least
+    /// <c>1</c>; the registered options validator rejects non-positive values at
+    /// first-resolve time (a value of <c>1</c> opens the breaker on the first
+    /// failure).
+    /// </para>
+    /// </summary>
+    public int RemediationFailureThreshold { get; set; } = DefaultRemediationFailureThreshold;
+
+    /// <summary>
+    /// Cooldown the remediation circuit breaker stays open for after it trips on
+    /// <see cref="RemediationFailureThreshold"/> consecutive failures for a
+    /// <c>(tree, peer)</c>. Once this much wall-clock time has elapsed since the
+    /// breaker opened (or since the most recent failed half-open trial), the
+    /// breaker moves to half-open and the next remediation evaluation is allowed
+    /// to run one trial pass: success closes the breaker and clears the disabled
+    /// gauge, failure re-opens it for a fresh cooldown. Only consulted when
+    /// <see cref="AutoRemediateOnDigestMismatch"/> is <see langword="true"/>.
+    /// Defaults to <see cref="DefaultRemediationCircuitResetInterval"/>
+    /// (5 minutes). Must be strictly greater than <see cref="TimeSpan.Zero"/>;
+    /// the registered options validator rejects non-positive values at
+    /// first-resolve time.
+    /// </summary>
+    public TimeSpan RemediationCircuitResetInterval { get; set; } = DefaultRemediationCircuitResetInterval;
+
 
     /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
@@ -1603,4 +1712,45 @@ public class LatticeReplicationOptions
     /// couple of pump ticks to a sustained shift.
     /// </summary>
     public const int DefaultAdaptiveBatchWindowLength = 16;
+
+    /// <summary>
+    /// Default value for <see cref="AutoRemediateOnDigestMismatch"/>:
+    /// <see langword="false"/>. The automatic anti-entropy remediation guards
+    /// (master gate, rate cap, circuit breaker) ship dark and opt-in: with the
+    /// flag off, drift is still detected and probed but no automatic repair is
+    /// attempted, so an un-opted host observes no behaviour change.
+    /// </summary>
+    public const bool DefaultAutoRemediateOnDigestMismatch = false;
+
+    /// <summary>
+    /// Default value for <see cref="RemediationTrafficBudgetFraction"/>:
+    /// <c>0.01</c> (1% of <see cref="ShipBatchSize"/>). Caps automatic
+    /// remediation re-ship volume per <c>(tree, peer)</c> per window at a small
+    /// fraction of the ordinary ship-batch budget so repair traffic cannot
+    /// starve forward replication progress.
+    /// </summary>
+    public const double DefaultRemediationTrafficBudgetFraction = 0.01;
+
+    /// <summary>
+    /// Default value for <see cref="RemediationTrafficWindow"/>: 1 minute. The
+    /// deterministic accounting window over which the per-tree, per-peer
+    /// remediation traffic budget is measured before its consumed-entry counter
+    /// resets.
+    /// </summary>
+    public static readonly TimeSpan DefaultRemediationTrafficWindow = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Default value for <see cref="RemediationFailureThreshold"/>: <c>3</c>
+    /// consecutive failures. A small threshold so a peer or transport that is
+    /// persistently rejecting repair traffic is fenced off quickly rather than
+    /// re-attempted on every probe.
+    /// </summary>
+    public const int DefaultRemediationFailureThreshold = 3;
+
+    /// <summary>
+    /// Default value for <see cref="RemediationCircuitResetInterval"/>:
+    /// 5 minutes. The cooldown the remediation circuit breaker stays open for
+    /// before it half-opens and allows one trial repair pass.
+    /// </summary>
+    public static readonly TimeSpan DefaultRemediationCircuitResetInterval = TimeSpan.FromMinutes(5);
 }

@@ -1178,6 +1178,60 @@
           "legendFormat": "{{reason}}"
         }
       ]
+    },
+    {
+      "id": 46,
+      "title": "Remediation disabled (tree/peer by reason)",
+      "description": "Each (tree, peer) for which automatic anti-entropy remediation is currently disabled, valued 1 and split by reason (opt_out, budget_exhausted, circuit_open). opt_out is the steady-state signal that drift was localised but the host has not set AutoRemediateOnDigestMismatch; budget_exhausted means the per-window remediation traffic budget is spent; circuit_open means the per-tree/peer circuit breaker tripped on consecutive failures. No series means remediation is permitted.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 106
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, peer, reason) (orleans_lattice_replication_digest_remediation_disabled{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{tree}} -> {{peer}} ({{reason}})"
+        }
+      ]
+    },
+    {
+      "id": 47,
+      "title": "Remediation skipped (rate by reason)",
+      "description": "Rate of automatic anti-entropy remediation passes skipped before sending any repair traffic, split by reason (opt_out, budget_exhausted, circuit_open). The drift was still detected and probed; only the repair action was suppressed. Stays at the opt_out rate until AutoRemediateOnDigestMismatch is enabled.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 106
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_digest_remediation_skipped_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
     }
   ]
 }

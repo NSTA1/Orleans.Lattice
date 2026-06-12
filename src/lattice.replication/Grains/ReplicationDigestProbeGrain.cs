@@ -74,6 +74,16 @@ internal sealed class ReplicationDigestProbeGrain(
     private readonly Random _random = new();
 
     /// <summary>
+    /// Per-activation guard that enforces the per-(tree, peer) remediation
+    /// traffic budget and the per-(tree, peer) remediation circuit breaker, and
+    /// drives the process-wide
+    /// <see cref="LatticeReplicationMetrics.DigestRemediationDisabledName"/>
+    /// gauge. Accounting is in-process and scoped to this digest-probe
+    /// activation, which is per shard/tree.
+    /// </summary>
+    private readonly RemediationGuard _remediationGuard = new();
+
+    /// <summary>
     /// Set once the local digest read reports projection-digest
     /// maintenance is permanently disabled (latched) for the tree. While
     /// set, the phase pump short-circuits so no further probe passes run
@@ -360,20 +370,13 @@ internal sealed class ReplicationDigestProbeGrain(
             // Repair stage: when the walk localised at least one diverging
             // leaf, optionally re-ship the relevant retained WAL key ranges to
             // the diverged peer through the ordinary causal-stable apply
-            // pipeline. Strictly opt-in and best-effort.
+            // pipeline. The repair is gated behind the operator opt-in master
+            // flag, a per-(tree, peer) traffic budget, and a per-(tree, peer)
+            // circuit breaker; detection (the Merkle walk above) is never
+            // gated. Strictly opt-in and best-effort.
             if (outcome.Localised && outcome.LocalisedRanges is { Count: > 0 } ranges)
             {
-                var reReplay = await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
-
-                // GC'd-divergence fallback: when the targeted re-replay could
-                // not reach the divergence point because the local WAL was
-                // trimmed past it, optionally fall back to a scoped
-                // bootstrap-snapshot of just the divergent leaf range. Strictly
-                // opt-in and best-effort.
-                if (reReplay.SkipReason == LeafReReplaySkipReason.WalTrimmed)
-                {
-                    await TryBootstrapFallbackAsync(options, peer, ranges).ConfigureAwait(true);
-                }
+                await TryRemediateAsync(options, peer, ranges).ConfigureAwait(true);
             }
         }
         catch (Exception ex)
@@ -383,6 +386,135 @@ internal sealed class ReplicationDigestProbeGrain(
                 shard, peer, LogContext);
         }
     }
+
+    /// <summary>
+    /// Orchestrates the gated repair stage for a localised drift. Applies, in
+    /// order, the operator opt-in master gate
+    /// (<see cref="LatticeReplicationOptions.AutoRemediateOnDigestMismatch"/>),
+    /// the per-(tree, peer) circuit breaker, and the per-(tree, peer) traffic
+    /// budget; only when all three permit does it run the targeted leaf
+    /// re-replay (and, on a WAL-trimmed skip, the scoped bootstrap-snapshot
+    /// fallback). A pass that throws or whose re-ship sink reports zero entries
+    /// shipped despite candidates having been selected counts as a circuit
+    /// breaker failure; any other outcome resets the breaker. Each skip records
+    /// the <see cref="LatticeReplicationMetrics.DigestRemediationSkipped"/>
+    /// counter and reports the
+    /// <see cref="LatticeReplicationMetrics.DigestRemediationDisabledName"/>
+    /// gauge with the matching reason. Best-effort: nothing here escapes to
+    /// disturb the detect/localise cadence.
+    /// </summary>
+    /// <param name="options">The resolved per-tree replication options.</param>
+    /// <param name="peer">The diverged peer cluster id.</param>
+    /// <param name="ranges">The localised diverging leaf covering ranges.</param>
+    private async Task TryRemediateAsync(
+        LatticeReplicationOptions options,
+        string peer,
+        IReadOnlyList<LeafReReplayRange> ranges)
+    {
+        // Master gate: all automatic remediation is opt-in. Detection has
+        // already fired; this gate only suppresses the repair actions.
+        if (!options.AutoRemediateOnDigestMismatch)
+        {
+            SkipRemediation(peer, RemediationDisabledReason.OptOut);
+            return;
+        }
+
+        var nowTicks = DateTime.UtcNow.Ticks;
+
+        // Circuit breaker: a tree/peer whose breaker is open and still cooling
+        // down skips remediation entirely until the cooldown elapses.
+        if (_remediationGuard.IsCircuitBlocking(peer, options.RemediationCircuitResetInterval.Ticks, nowTicks))
+        {
+            SkipRemediation(peer, RemediationDisabledReason.CircuitOpen);
+            return;
+        }
+
+        // Rate cap: skip when this tree/peer has already spent its per-window
+        // remediation budget.
+        var windowBudget = RemediationTrafficBudget(options);
+        if (!_remediationGuard.TryBeginRemediation(peer, windowBudget, options.RemediationTrafficWindow.Ticks, nowTicks))
+        {
+            SkipRemediation(peer, RemediationDisabledReason.BudgetExhausted);
+            return;
+        }
+
+        var entriesShipped = 0;
+        var failed = false;
+        try
+        {
+            var reReplay = await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
+            entriesShipped += reReplay.EntriesReReplayed;
+
+            // A pass that selected candidates but re-shipped nothing is a
+            // failure (the sink rejected the repair traffic).
+            failed = reReplay.Attempted && reReplay.EntriesReReplayed == 0;
+
+            // GC'd-divergence fallback: when the targeted re-replay could not
+            // reach the divergence point because the local WAL was trimmed past
+            // it, fall back to a scoped bootstrap-snapshot of just the divergent
+            // leaf range.
+            if (reReplay.SkipReason == LeafReReplaySkipReason.WalTrimmed)
+            {
+                var fallback = await TryBootstrapFallbackAsync(options, peer, ranges).ConfigureAwait(true);
+                entriesShipped += fallback.EntriesShipped;
+                failed |= fallback.Attempted && fallback.EntriesShipped == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            // The inner repair helpers already swallow-and-log their own faults;
+            // this guard is defence-in-depth so a fault anywhere in the
+            // remediation orchestration counts as a circuit-breaker failure
+            // rather than escaping to disturb the cadence.
+            Logger.LogWarning(ex,
+                "Remediation orchestration failed for peer {Peer} on {Context}; counting as a circuit-breaker failure",
+                peer, LogContext);
+            failed = true;
+        }
+
+        _remediationGuard.RecordEntriesShipped(peer, entriesShipped);
+
+        if (failed)
+        {
+            if (_remediationGuard.RecordFailure(peer, options.RemediationFailureThreshold, nowTicks))
+            {
+                RemediationGuard.PublishDisabled(TreeName, peer, RemediationDisabledReason.CircuitOpen);
+            }
+        }
+        else
+        {
+            _remediationGuard.RecordSuccess(peer);
+            RemediationGuard.ClearDisabled(TreeName, peer);
+        }
+    }
+
+    /// <summary>
+    /// Records a remediation skip: increments the
+    /// <see cref="LatticeReplicationMetrics.DigestRemediationSkipped"/> counter
+    /// and reports the
+    /// <see cref="LatticeReplicationMetrics.DigestRemediationDisabledName"/>
+    /// gauge for this tree/peer with the supplied reason.
+    /// </summary>
+    private void SkipRemediation(string peer, RemediationDisabledReason reason)
+    {
+        RemediationGuard.PublishDisabled(TreeName, peer, reason);
+        LatticeReplicationMetrics.DigestRemediationSkipped.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+            new KeyValuePair<string, object?>(
+                LatticeReplicationMetrics.TagReason,
+                LatticeReplicationMetrics.DigestRemediationDisabledReasonTag(reason)));
+    }
+
+    /// <summary>
+    /// Derives the per-(tree, peer) per-window remediation entry budget from the
+    /// configured fraction of <see cref="LatticeReplicationOptions.ShipBatchSize"/>,
+    /// flooring at one entry so a configured fraction always permits at least
+    /// the first pass.
+    /// </summary>
+    private static int RemediationTrafficBudget(LatticeReplicationOptions options) =>
+        Math.Max(1, (int)Math.Ceiling(options.RemediationTrafficBudgetFraction * options.ShipBatchSize));
 
     /// <summary>
     /// Re-ships the retained write-ahead-log entries covering the localised
@@ -465,7 +597,16 @@ internal sealed class ReplicationDigestProbeGrain(
     /// ordinary replication transport. Best-effort: a failure is logged and
     /// swallowed so the detect/localise cadence is never disturbed.
     /// </summary>
-    private async Task TryBootstrapFallbackAsync(
+    /// <param name="options">The resolved per-tree replication options.</param>
+    /// <param name="peer">The diverged peer cluster id.</param>
+    /// <param name="ranges">The localised divergent leaf covering ranges.</param>
+    /// <returns>
+    /// The fallback outcome. A disabled fallback returns a
+    /// <see cref="BootstrapFallbackSkipReason.Disabled"/> outcome; a
+    /// logged-and-swallowed failure returns
+    /// <see cref="BootstrapFallbackOutcome.NotAttempted"/>.
+    /// </returns>
+    private async Task<BootstrapFallbackOutcome> TryBootstrapFallbackAsync(
         LatticeReplicationOptions options,
         string peer,
         IReadOnlyList<LeafReReplayRange> ranges)
@@ -479,7 +620,7 @@ internal sealed class ReplicationDigestProbeGrain(
                 new KeyValuePair<string, object?>(
                     LatticeReplicationMetrics.TagReason,
                     LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(BootstrapFallbackSkipReason.Disabled)));
-            return;
+            return new BootstrapFallbackOutcome { SkipReason = BootstrapFallbackSkipReason.Disabled };
         }
 
         try
@@ -487,7 +628,7 @@ internal sealed class ReplicationDigestProbeGrain(
             var originClusterId = options.ClusterId;
             var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, originClusterId);
 
-            await BootstrapFallbackPlanner.PlanAsync(
+            return await BootstrapFallbackPlanner.PlanAsync(
                 TreeName,
                 peer,
                 originClusterId,
@@ -503,6 +644,7 @@ internal sealed class ReplicationDigestProbeGrain(
             Logger.LogWarning(ex,
                 "Bootstrap-snapshot fallback failed for peer {Peer} on {Context}; the repair is best-effort and will retry on the next cadence",
                 peer, LogContext);
+            return BootstrapFallbackOutcome.NotAttempted;
         }
     }
 
