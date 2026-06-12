@@ -460,6 +460,44 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "sliding window of this many recent acks; a non-positive window has no samples to average.");
         }
 
+        if (options.RemediationTrafficBudgetFraction is <= 0.0 or > 1.0
+            || double.IsNaN(options.RemediationTrafficBudgetFraction))
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.RemediationTrafficBudgetFraction)} "
+                + $"must be in the half-open interval (0.0, 1.0] ({scope}); got {options.RemediationTrafficBudgetFraction}. "
+                + "The remediation traffic budget is this fraction of the ship-batch size; a fraction at or below 0 "
+                + "would forbid all remediation, and a fraction above 1 would let repair traffic exceed the ordinary "
+                + "ship-batch budget.");
+        }
+
+        if (options.RemediationTrafficWindow <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.RemediationTrafficWindow)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "The remediation traffic budget is measured over a window of this length before its consumed-entry "
+                + "counter resets; a zero or negative window has no defined accounting interval.");
+        }
+
+        if (options.RemediationFailureThreshold < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.RemediationFailureThreshold)} "
+                + $"must be at least 1 ({scope}); got {options.RemediationFailureThreshold}. "
+                + "The remediation circuit breaker opens after this many consecutive failures for a tree/peer; "
+                + "a non-positive threshold has no defined trip point.");
+        }
+
+        if (options.RemediationCircuitResetInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.RemediationCircuitResetInterval)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "The remediation circuit breaker stays open for this cooldown before it half-opens; a zero or "
+                + "negative cooldown would leave a tripped breaker permanently open or never cooling.");
+        }
+
         if (options.ReplicatedTrees is { } trees)
         {
             foreach (var kvp in trees)

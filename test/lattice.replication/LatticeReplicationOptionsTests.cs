@@ -74,6 +74,60 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
+    public void Remediation_guard_defaults_are_opt_in_and_bounded()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationOptions.DefaultAutoRemediateOnDigestMismatch, Is.False);
+            Assert.That(LatticeReplicationOptions.DefaultRemediationTrafficBudgetFraction, Is.EqualTo(0.01));
+            Assert.That(LatticeReplicationOptions.DefaultRemediationTrafficWindow, Is.EqualTo(TimeSpan.FromMinutes(1)));
+            Assert.That(LatticeReplicationOptions.DefaultRemediationFailureThreshold, Is.EqualTo(3));
+            Assert.That(LatticeReplicationOptions.DefaultRemediationCircuitResetInterval, Is.EqualTo(TimeSpan.FromMinutes(5)));
+        });
+    }
+
+    [Test]
+    public void New_instance_has_remediation_guard_defaults()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.AutoRemediateOnDigestMismatch,
+                Is.EqualTo(LatticeReplicationOptions.DefaultAutoRemediateOnDigestMismatch));
+            Assert.That(opts.RemediationTrafficBudgetFraction,
+                Is.EqualTo(LatticeReplicationOptions.DefaultRemediationTrafficBudgetFraction));
+            Assert.That(opts.RemediationTrafficWindow,
+                Is.EqualTo(LatticeReplicationOptions.DefaultRemediationTrafficWindow));
+            Assert.That(opts.RemediationFailureThreshold,
+                Is.EqualTo(LatticeReplicationOptions.DefaultRemediationFailureThreshold));
+            Assert.That(opts.RemediationCircuitResetInterval,
+                Is.EqualTo(LatticeReplicationOptions.DefaultRemediationCircuitResetInterval));
+        });
+    }
+
+    [Test]
+    public void Remediation_guard_properties_are_settable()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            AutoRemediateOnDigestMismatch = true,
+            RemediationTrafficBudgetFraction = 0.25,
+            RemediationTrafficWindow = TimeSpan.FromSeconds(30),
+            RemediationFailureThreshold = 5,
+            RemediationCircuitResetInterval = TimeSpan.FromMinutes(2),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.AutoRemediateOnDigestMismatch, Is.True);
+            Assert.That(opts.RemediationTrafficBudgetFraction, Is.EqualTo(0.25));
+            Assert.That(opts.RemediationTrafficWindow, Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(opts.RemediationFailureThreshold, Is.EqualTo(5));
+            Assert.That(opts.RemediationCircuitResetInterval, Is.EqualTo(TimeSpan.FromMinutes(2)));
+        });
+    }
+
+    [Test]
     public void New_instance_has_null_key_filter()
     {
         var opts = new LatticeReplicationOptions();

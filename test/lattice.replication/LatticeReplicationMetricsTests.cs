@@ -903,4 +903,75 @@ public class LatticeReplicationMetricsTests
                 t.Key == "reason" && (string?)t.Value == "disabled"));
         });
     }
+
+    // ------------------------------------------------------------------
+    // Anti-entropy remediation guards (opt-in, rate cap, circuit breaker)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Digest_remediation_skipped_counter_has_expected_name_and_unit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.DigestRemediationSkipped.Name,
+                Is.EqualTo("orleans.lattice.replication.digest_remediation.skipped"));
+            Assert.That(LatticeReplicationMetrics.DigestRemediationSkipped.Unit, Is.EqualTo("{skip}"));
+            Assert.That(LatticeReplicationMetrics.DigestRemediationSkippedName,
+                Is.EqualTo("orleans.lattice.replication.digest_remediation.skipped"));
+        });
+    }
+
+    [Test]
+    public void Digest_remediation_disabled_gauge_name_constant_matches_canonical_name()
+    {
+        Assert.That(LatticeReplicationMetrics.DigestRemediationDisabledName,
+            Is.EqualTo("orleans.lattice.replication.digest_remediation.disabled"));
+    }
+
+    [Test]
+    public void Digest_remediation_reason_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.DigestRemediationReasonOptOut, Is.EqualTo("opt_out"));
+            Assert.That(LatticeReplicationMetrics.DigestRemediationReasonBudgetExhausted, Is.EqualTo("budget_exhausted"));
+            Assert.That(LatticeReplicationMetrics.DigestRemediationReasonCircuitOpen, Is.EqualTo("circuit_open"));
+        });
+    }
+
+    [TestCase(RemediationDisabledReason.OptOut, "opt_out")]
+    [TestCase(RemediationDisabledReason.BudgetExhausted, "budget_exhausted")]
+    [TestCase(RemediationDisabledReason.CircuitOpen, "circuit_open")]
+    public void Digest_remediation_disabled_reason_tag_maps_each_reason(
+        RemediationDisabledReason reason, string expected)
+    {
+        Assert.That(LatticeReplicationMetrics.DigestRemediationDisabledReasonTag(reason), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Digest_remediation_skipped_counter_records_with_tree_peer_and_reason_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.DigestRemediationSkippedName);
+
+        LatticeReplicationMetrics.DigestRemediationSkipped.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, "p"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason,
+                LatticeReplicationMetrics.DigestRemediationReasonOptOut));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(1L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "t"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "peer" && (string?)t.Value == "p"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "reason" && (string?)t.Value == "opt_out"));
+        });
+    }
 }

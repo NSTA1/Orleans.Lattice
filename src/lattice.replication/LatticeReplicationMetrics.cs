@@ -1279,4 +1279,88 @@ public static class LatticeReplicationMetrics
         BootstrapFallbackSkipReason.Empty => BootstrapFallbackSkipEmpty,
         _ => BootstrapFallbackSkipEmpty,
     };
+
+    // --- Anti-entropy remediation guards (opt-in, rate cap, circuit breaker) ---
+
+    /// <summary>
+    /// Counter incremented once per automatic anti-entropy remediation pass that
+    /// is skipped before any repair traffic is sent, because the host has not
+    /// opted in, the per-tree/peer remediation traffic budget is exhausted for
+    /// the current window, or the remediation circuit breaker is open. Tagged by
+    /// <see cref="TagTree"/>, <see cref="TagPeer"/>, and <see cref="TagReason"/>;
+    /// the reason value is one of
+    /// <see cref="DigestRemediationReasonOptOut"/>,
+    /// <see cref="DigestRemediationReasonBudgetExhausted"/>, or
+    /// <see cref="DigestRemediationReasonCircuitOpen"/>. The drift was still
+    /// detected and probed; only the repair action was suppressed.
+    /// </summary>
+    public static readonly Counter<long> DigestRemediationSkipped =
+        Meter.CreateCounter<long>("orleans.lattice.replication.digest_remediation.skipped", unit: "{skip}",
+            description: "Automatic anti-entropy remediation passes skipped without sending repair traffic, tagged by tree, peer, and reason.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="DigestRemediationSkipped"/> counter.
+    /// </summary>
+    public const string DigestRemediationSkippedName = "orleans.lattice.replication.digest_remediation.skipped";
+
+    /// <summary>
+    /// Canonical name of the observable gauge that reports, with value <c>1</c>,
+    /// each <c>(tree, peer)</c> for which automatic anti-entropy remediation is
+    /// currently disabled. Tagged by <see cref="TagTree"/>,
+    /// <see cref="TagPeer"/>, and <see cref="TagReason"/> (one of
+    /// <see cref="DigestRemediationReasonOptOut"/>,
+    /// <see cref="DigestRemediationReasonBudgetExhausted"/>, or
+    /// <see cref="DigestRemediationReasonCircuitOpen"/>). The gauge emits no
+    /// series for a <c>(tree, peer)</c> that is not currently disabled, so the
+    /// absence of a series means remediation is permitted. The gauge is
+    /// registered process-wide and backed by <see cref="RemediationGuard"/>.
+    /// </summary>
+    public const string DigestRemediationDisabledName = "orleans.lattice.replication.digest_remediation.disabled";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the
+    /// <see cref="DigestRemediationSkippedName"/> counter and the
+    /// <see cref="DigestRemediationDisabledName"/> gauge: the host has not opted
+    /// into automatic remediation
+    /// (<see cref="LatticeReplicationOptions.AutoRemediateOnDigestMismatch"/> is
+    /// <see langword="false"/>). Corresponds to
+    /// <see cref="RemediationDisabledReason.OptOut"/>.
+    /// </summary>
+    public const string DigestRemediationReasonOptOut = "opt_out";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the
+    /// <see cref="DigestRemediationSkippedName"/> counter and the
+    /// <see cref="DigestRemediationDisabledName"/> gauge: the per-tree/peer
+    /// remediation traffic budget for the current window has been spent.
+    /// Corresponds to <see cref="RemediationDisabledReason.BudgetExhausted"/>.
+    /// </summary>
+    public const string DigestRemediationReasonBudgetExhausted = "budget_exhausted";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the
+    /// <see cref="DigestRemediationSkippedName"/> counter and the
+    /// <see cref="DigestRemediationDisabledName"/> gauge: the remediation
+    /// circuit breaker for the tree/peer is open after
+    /// <see cref="LatticeReplicationOptions.RemediationFailureThreshold"/>
+    /// consecutive failures. Corresponds to
+    /// <see cref="RemediationDisabledReason.CircuitOpen"/>.
+    /// </summary>
+    public const string DigestRemediationReasonCircuitOpen = "circuit_open";
+
+    /// <summary>
+    /// Maps a <see cref="RemediationDisabledReason"/> to its canonical
+    /// <see cref="TagReason"/> string value for the
+    /// <see cref="DigestRemediationSkippedName"/> counter and the
+    /// <see cref="DigestRemediationDisabledName"/> gauge.
+    /// </summary>
+    /// <param name="reason">The remediation-disabled reason.</param>
+    /// <returns>The matching reason-tag string constant.</returns>
+    public static string DigestRemediationDisabledReasonTag(RemediationDisabledReason reason) => reason switch
+    {
+        RemediationDisabledReason.OptOut => DigestRemediationReasonOptOut,
+        RemediationDisabledReason.BudgetExhausted => DigestRemediationReasonBudgetExhausted,
+        RemediationDisabledReason.CircuitOpen => DigestRemediationReasonCircuitOpen,
+        _ => DigestRemediationReasonOptOut,
+    };
 }

@@ -110,6 +110,112 @@ public class LatticeReplicationOptionsValidatorTests
         Assert.That(result.Succeeded, Is.True);
     }
 
+    [TestCase(0.0)]
+    [TestCase(-0.5)]
+    [TestCase(1.5)]
+    [TestCase(double.NaN)]
+    public void Validate_fails_when_remediation_traffic_budget_fraction_is_out_of_range(double fraction)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            RemediationTrafficBudgetFraction = fraction,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.RemediationTrafficBudgetFraction)));
+        });
+    }
+
+    [TestCase(0.0001)]
+    [TestCase(0.01)]
+    [TestCase(1.0)]
+    public void Validate_succeeds_for_in_range_remediation_traffic_budget_fraction(double fraction)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            RemediationTrafficBudgetFraction = fraction,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_fails_when_remediation_traffic_window_is_non_positive()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            RemediationTrafficWindow = TimeSpan.Zero,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.RemediationTrafficWindow)));
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_remediation_failure_threshold_is_non_positive(int threshold)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            RemediationFailureThreshold = threshold,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.RemediationFailureThreshold)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_remediation_circuit_reset_interval_is_non_positive()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            RemediationCircuitResetInterval = TimeSpan.FromSeconds(-1),
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage,
+                Does.Contain(nameof(LatticeReplicationOptions.RemediationCircuitResetInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_remediation_guard_options()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
     [Test]
     public void Validate_succeeds_for_high_replog_partitions()
     {
