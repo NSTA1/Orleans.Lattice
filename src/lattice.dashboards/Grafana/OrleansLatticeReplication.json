@@ -1333,6 +1333,35 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_manifest_exchanges_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} -> {{peer}}" }
       ]
+    },
+    {
+      "id": 52,
+      "title": "Pre-ship CRDT deltas merged (rate)",
+      "description": "Rate of source CRDT deltas the shipper folded into a combined delta by pre-ship coalescing (PreShipCoalescingEnabled, recognised CRDT trees). 'deltas/s' counts the same-key typed deltas merged into one combined-delta entry; pairs with the coalesce entries-elided panel which records the source entries dropped from the wire. Flat-zero unless a hot CRDT key is mutated several times within one ship window, or the tree is last-writer-wins (which elides entries without merging deltas).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 127
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "DELTAS",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_coalesce_deltas_merged_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "deltas/s {{tree}}/{{peer}}"
+        }
+      ]
     }
   ]
 }

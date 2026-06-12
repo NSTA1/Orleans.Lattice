@@ -434,6 +434,29 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string CoalesceBytesElidedName = "orleans.lattice.replication.coalesce.bytes_elided";
 
+    /// <summary>
+    /// Counter of source CRDT deltas folded into a combined delta by the
+    /// CRDT branch of pre-ship coalescing - the number of same-key typed
+    /// delta entries whose payloads were merged into the single combined
+    /// delta re-encoded onto the kept entry. Only fires when
+    /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/> is
+    /// set and the tree is a recognised CRDT mode (the last-writer-wins
+    /// branch only elides entries, it never merges deltas, so it leaves
+    /// this counter at zero). Pairs with <see cref="CoalesceEntriesElided"/>
+    /// - which still records the source entries dropped from the wire on
+    /// the CRDT path - to let operators distinguish CRDT delta-merge
+    /// coalescing from last-writer-wins elision. Tagged by
+    /// <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// </summary>
+    public static readonly Counter<long> CoalesceDeltasMerged =
+        Meter.CreateCounter<long>("orleans.lattice.replication.coalesce.deltas_merged", unit: "{delta}",
+            description: "Source CRDT deltas folded into a combined delta by pre-ship coalescing, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="CoalesceDeltasMerged"/> counter.
+    /// </summary>
+    public const string CoalesceDeltasMergedName = "orleans.lattice.replication.coalesce.deltas_merged";
+
     // --- Content-hash payload-elision round-trip counters -----------------------
 
     /// <summary>

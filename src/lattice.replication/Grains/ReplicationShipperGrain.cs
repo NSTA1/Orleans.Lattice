@@ -43,7 +43,8 @@ internal sealed class ReplicationShipperGrain(
     ReplicationPeerStats peerStats,
     ILatticeMergeModeResolver modeResolver,
     WireVersionNegotiationState negotiationState,
-    IReplicationDigestProbeTransport digestProbeTransport)
+    IReplicationDigestProbeTransport digestProbeTransport,
+    CrdtShapeRegistry? crdtShapeRegistry = null)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -67,6 +68,21 @@ internal sealed class ReplicationShipperGrain(
         negotiationState ?? throw new ArgumentNullException(nameof(negotiationState));
     private readonly IReplicationDigestProbeTransport _digestProbeTransport =
         digestProbeTransport ?? throw new ArgumentNullException(nameof(digestProbeTransport));
+
+    /// <summary>
+    /// The CRDT shape registry used by the pre-ship coalescing pass to
+    /// decode, combine, and re-encode the typed delta payloads of a
+    /// CRDT tree's same-key point writes. Injected from DI (registered
+    /// as a singleton by the core <c>AddLattice</c> call) when the
+    /// replication package runs inside a configured silo; <c>null</c>
+    /// only in unit-test constructions that exercise non-CRDT paths, in
+    /// which case the CRDT coalescing pass lazily instantiates a private
+    /// registry the first time a CRDT tree opts into coalescing. The
+    /// default-off coalescing posture means a host that never sets
+    /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
+    /// never touches this field.
+    /// </summary>
+    private CrdtShapeRegistry? _crdtShapeRegistry = crdtShapeRegistry;
 
     private string _treeName = "";
     private string _peerClusterId = "";
@@ -238,6 +254,57 @@ internal sealed class ReplicationShipperGrain(
     /// to today's.
     /// </summary>
     private Dictionary<string, int>? _coalesceLastIndex;
+
+    /// <summary>
+    /// Activation-scoped scratch map reused by the CRDT branch of the
+    /// pre-ship coalescing pass
+    /// (<see cref="CoalesceCrdtDrainBuffer"/>) to record, per coalescable
+    /// key, the running combined delta plus the index of its last
+    /// (highest-HLC) occurrence in the current drained batch. Cleared at
+    /// the start of every CRDT coalescing pass and only allocated the
+    /// first time the CRDT branch runs, so a host that never opts into
+    /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
+    /// on a CRDT tree pays no map memory and the steady-state ship path
+    /// is byte-identical to today's.
+    /// </summary>
+    private Dictionary<string, CrdtCoalesceState>? _coalesceCrdtState;
+
+    /// <summary>
+    /// Activation-scoped reusable buffer writer the CRDT coalescing pass
+    /// re-encodes a combined-delta entry into before swapping it into the
+    /// drain segment list. Lazily allocated on the first CRDT merge and
+    /// reset (not reallocated) on each reuse, so the steady-state ship
+    /// path allocates nothing extra once warm.
+    /// </summary>
+    private ArrayBufferWriter<byte>? _coalesceReencodeWriter;
+
+    /// <summary>
+    /// Per-key accumulator for the CRDT branch of the pre-ship coalescing
+    /// pass. Holds the running combined delta, the index of the last
+    /// contributing entry (whose HLC / causal metadata the merged result
+    /// inherits), the count of source deltas folded so far, and a flag
+    /// that goes false the moment a same-key entry is encountered that
+    /// cannot participate (a null typed delta on a CRDT mode), forcing the
+    /// whole key to ship verbatim.
+    /// </summary>
+    private struct CrdtCoalesceState
+    {
+        /// <summary>The running combined typed delta (deserialised DTO).</summary>
+        public object? Combined;
+
+        /// <summary>Index in the drain buffer of the last contributing entry.</summary>
+        public int LastIndex;
+
+        /// <summary>Number of source deltas folded into <see cref="Combined"/>.</summary>
+        public int FoldCount;
+
+        /// <summary>
+        /// Whether every same-key entry seen so far can participate in the
+        /// combine. False once an opaque (null-delta) entry is observed,
+        /// in which case the key ships verbatim.
+        /// </summary>
+        public bool CanCombine;
+    }
 
     // ── Activation-scoped scratch arrays for the k-way HLC merge ──
     //
@@ -1923,8 +1990,15 @@ internal sealed class ReplicationShipperGrain(
     /// Pre-ship coalescing pass over the freshly-drained batch buffers
     /// (<see cref="_drainBuffer"/> / <see cref="_drainEncodedSegments"/>).
     /// No-op unless <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
-    /// is set and the tree's declared <see cref="LatticeMergeMode"/> is
-    /// <see cref="LatticeMergeMode.LwwRegister"/>.
+    /// is set. The pass dispatches on the tree's declared
+    /// <see cref="LatticeMergeMode"/>: a
+    /// <see cref="LatticeMergeMode.LwwRegister"/> tree keeps only the
+    /// highest-HLC same-key write and elides the rest
+    /// (<see cref="CoalesceLwwDrainBuffer"/>); a recognised CRDT tree
+    /// folds the typed deltas of a same-key run into a single combined
+    /// delta whose apply effect equals applying the run in order
+    /// (<see cref="CoalesceCrdtDrainBuffer"/>); any other mode ships the
+    /// batch verbatim.
     /// <para>
     /// For a last-writer-wins tree the receiver applies each entry LWW on
     /// the value bytes ordered by <c>(HybridLogicalClock, OriginClusterId)</c>,
@@ -1938,6 +2012,20 @@ internal sealed class ReplicationShipperGrain(
     /// tie-break collapses to a pure HLC comparison - the drain buffer is
     /// already HLC-ascending, so the last occurrence of a key is the
     /// highest-HLC one.
+    /// </para>
+    /// <para>
+    /// For a CRDT tree the receiver applies each entry by folding its
+    /// typed delta into the loaded state, so dropping an intermediate
+    /// version would lose its contribution. The CRDT branch instead
+    /// merges the same-key deltas into one combined delta (a join over
+    /// each primitive's semilattice - union for OR-Set adds / removes,
+    /// pointwise-max for PN-Counter and version-vector components,
+    /// dot-dominance merge for the multi-value register, grow-only union
+    /// for RGA), re-encodes that one delta onto the kept (highest-HLC)
+    /// entry, and elides the earlier same-key ones. Because each combine
+    /// is commutative, associative, and idempotent and so is the
+    /// receiver-side apply, the merged result converges to the identical
+    /// state as shipping the run individually.
     /// </para>
     /// <para>
     /// Only plain point <see cref="MutationKind.Set"/> /
@@ -1967,20 +2055,31 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
-        // Coalescing is correctness-safe only for last-writer-wins trees.
-        // Every CRDT mode applies by folding each entry's typed delta into
-        // the loaded state, so dropping an intermediate version would lose
-        // its contribution rather than merely hide it. Resolve the tree's
-        // declared mode once (a cached dictionary read) and bail for
-        // anything other than LWW. A tree not declared replicated resolves
-        // to null, which collapses to the LWW default - but such a tree
-        // never activates a shipper, so the null case is unreachable here.
+        // Resolve the tree's declared mode once (a cached dictionary read)
+        // and dispatch. A tree not declared replicated resolves to null,
+        // which collapses to the LWW default - but such a tree never
+        // activates a shipper, so the null case is unreachable here.
         var mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister;
-        if (mode != LatticeMergeMode.LwwRegister)
+        if (mode == LatticeMergeMode.LwwRegister)
         {
-            return;
+            CoalesceLwwDrainBuffer();
         }
+        else
+        {
+            CoalesceCrdtDrainBuffer(mode);
+        }
+    }
 
+    /// <summary>
+    /// Last-writer-wins branch of <see cref="CoalesceDrainBuffer"/>. Keeps
+    /// only the highest-HLC same-key point write in the drained batch and
+    /// elides the earlier same-key versions; the receiver's LWW apply
+    /// converges to the same state because the earlier versions are
+    /// invisible after merge. See <see cref="CoalesceDrainBuffer"/> for the
+    /// safety argument.
+    /// </summary>
+    private void CoalesceLwwDrainBuffer()
+    {
         var lastIndex = _coalesceLastIndex ??= new Dictionary<string, int>(StringComparer.Ordinal);
         lastIndex.Clear();
 
@@ -2045,6 +2144,178 @@ internal sealed class ReplicationShipperGrain(
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
         LatticeReplicationMetrics.CoalesceBytesElided.Add(
             elidedBytes,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+    }
+
+    /// <summary>
+    /// CRDT branch of <see cref="CoalesceDrainBuffer"/>. Folds the typed
+    /// deltas of a same-key run into a single combined delta, re-encodes it
+    /// onto the kept (highest-HLC) entry, and elides the earlier same-key
+    /// ones. Falls back to shipping a key's entries verbatim when the
+    /// mode's <see cref="CrdtShape"/> has no combine (the generic OR-Map
+    /// shape) or any of the key's entries carries an opaque (null) typed
+    /// delta, so no data is ever lost. The merged result inherits the
+    /// last contributing entry's HLC and causal metadata.
+    /// </summary>
+    private void CoalesceCrdtDrainBuffer(LatticeMergeMode mode)
+    {
+        // Resolve the shape descriptor for this tree's mode. The registry
+        // is injected from DI in a configured silo; unit-test
+        // constructions may pass null, in which case we lazily build a
+        // private registry carrying the closed-shape combiners. An
+        // unregistered OR-Map tree returns null (no combine available), so
+        // we ship verbatim.
+        var registry = _crdtShapeRegistry ??= new CrdtShapeRegistry();
+        var shape = registry.TryGet(_treeName, mode);
+        if (shape is null || shape.CombineDeltas is null || shape.SerializeDelta is null)
+        {
+            return;
+        }
+
+        var states = _coalesceCrdtState ??= new Dictionary<string, CrdtCoalesceState>(StringComparer.Ordinal);
+        states.Clear();
+
+        var count = _drainBuffer.Count;
+
+        // Pass 1: accumulate, per coalescable key, the running combined
+        // delta and the index of the last contributing entry. An opaque
+        // (null-delta) same-key entry flips the key to non-combinable so
+        // every one of its entries ships verbatim. The drain buffer is
+        // HLC-ascending and single-origin, so folding in iteration order
+        // is the same causal order the receiver would apply.
+        for (var i = 0; i < count; i++)
+        {
+            var entry = _drainBuffer[i];
+            if (!IsCoalescable(in entry))
+            {
+                continue;
+            }
+
+            var key = entry.Key ?? string.Empty;
+            if (!states.TryGetValue(key, out var state))
+            {
+                state = new CrdtCoalesceState { CanCombine = true };
+            }
+
+            if (entry.Delta is null)
+            {
+                // Opaque payload on a CRDT mode: cannot be combined safely.
+                // Force the whole key to ship verbatim.
+                state.CanCombine = false;
+                states[key] = state;
+                continue;
+            }
+
+            if (!state.CanCombine)
+            {
+                states[key] = state;
+                continue;
+            }
+
+            var delta = shape.DeserializeDelta(entry.Delta);
+            if (state.FoldCount == 0)
+            {
+                state.Combined = delta;
+            }
+            else
+            {
+                state.Combined = shape.CombineDeltas(state.Combined!, delta);
+            }
+            state.LastIndex = i;
+            state.FoldCount++;
+            states[key] = state;
+        }
+
+        // Pass 2: compact in place. Keep every non-coalescable entry and
+        // every entry of a non-combinable key verbatim. For a combinable
+        // key with two-or-more folded deltas, keep only the last
+        // contributing entry (re-encoded with the combined delta) and
+        // elide the rest.
+        var writer = _coalesceReencodeWriter ??= new ArrayBufferWriter<byte>();
+        var write = 0;
+        var elidedCount = 0;
+        var elidedBytes = 0L;
+        var reencodeByteDelta = 0L;
+        var deltasMerged = 0L;
+        for (var i = 0; i < count; i++)
+        {
+            var entry = _drainBuffer[i];
+            var keep = true;
+            var replace = false;
+            if (IsCoalescable(in entry))
+            {
+                var key = entry.Key ?? string.Empty;
+                var state = states[key];
+                if (state.CanCombine && state.FoldCount >= 2)
+                {
+                    if (i == state.LastIndex)
+                    {
+                        replace = true;
+                    }
+                    else
+                    {
+                        keep = false;
+                    }
+                }
+            }
+
+            if (!keep)
+            {
+                elidedCount++;
+                elidedBytes += _drainEncodedSegments[i].Count;
+                continue;
+            }
+
+            if (replace)
+            {
+                var key = entry.Key ?? string.Empty;
+                var state = states[key];
+                var combinedBytes = shape.SerializeDelta!(state.Combined!);
+                // The merged result inherits the last contributing entry's
+                // HLC / causal metadata (entry is that entry); only the
+                // typed delta payload changes. Re-encode through the same
+                // codec the producer used so the wire shape is identical to
+                // a natively-emitted single delta entry.
+                var merged = entry with { Delta = combinedBytes };
+                writer.Clear();
+                _walRecordEncoder.Encode(in merged, writer);
+                var newSegment = new ArraySegment<byte>(writer.WrittenSpan.ToArray());
+                reencodeByteDelta += newSegment.Count - _drainEncodedSegments[i].Count;
+                deltasMerged += state.FoldCount;
+                _drainBuffer[write] = merged;
+                _drainEncodedSegments[write] = newSegment;
+                write++;
+                continue;
+            }
+
+            if (write != i)
+            {
+                _drainBuffer[write] = entry;
+                _drainEncodedSegments[write] = _drainEncodedSegments[i];
+            }
+            write++;
+        }
+
+        if (elidedCount == 0)
+        {
+            return;
+        }
+
+        _drainBuffer.RemoveRange(write, count - write);
+        _drainEncodedSegments.RemoveRange(write, count - write);
+        _drainEncodedByteCount += reencodeByteDelta - elidedBytes;
+
+        LatticeReplicationMetrics.CoalesceEntriesElided.Add(
+            elidedCount,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+        LatticeReplicationMetrics.CoalesceBytesElided.Add(
+            elidedBytes,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+        LatticeReplicationMetrics.CoalesceDeltasMerged.Add(
+            deltasMerged,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
     }

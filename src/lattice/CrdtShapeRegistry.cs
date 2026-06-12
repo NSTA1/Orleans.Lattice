@@ -41,6 +41,31 @@ public sealed class CrdtShape
     /// <summary>Serialises a typed state instance back to bytes for snapshot capture.</summary>
     public Func<object, byte[]> SerializeState { get; }
 
+    /// <summary>
+    /// Serialises a typed delta instance back to bytes, the inverse of
+    /// <see cref="DeserializeDelta"/>. <see langword="null"/> for shapes
+    /// that do not support pre-ship delta coalescing (those whose
+    /// <see cref="CombineDeltas"/> is also <see langword="null"/>). Used
+    /// by the sender-side coalescing pass to re-encode a combined delta
+    /// onto the wire.
+    /// </summary>
+    public Func<object, byte[]>? SerializeDelta { get; }
+
+    /// <summary>
+    /// Associatively folds two deserialised typed deltas into a single
+    /// combined delta whose receiver-side apply effect is identical to
+    /// applying the two source deltas in sequence. The operation mirrors
+    /// the primitive's own join semilattice (union for observed-remove
+    /// adds / removes, pointwise-max for counters and version vectors,
+    /// dot-dominance merge for the multi-value register), so it is
+    /// commutative, associative, and idempotent. <see langword="null"/>
+    /// for shapes that do not support pre-ship delta coalescing (the
+    /// generic <see cref="LatticeMergeMode.OrMap"/> shape), in which case
+    /// the sender ships the source deltas individually rather than
+    /// combining them.
+    /// </summary>
+    public Func<object, object, object>? CombineDeltas { get; }
+
     /// <summary>Initialises a new <see cref="CrdtShape"/>.</summary>
     public CrdtShape(
         LatticeMergeMode mode,
@@ -49,7 +74,9 @@ public sealed class CrdtShape
         Action<object, object> mergeDelta,
         Action<object, object> mergeStates,
         Func<object> createEmpty,
-        Func<object, byte[]> serializeState)
+        Func<object, byte[]> serializeState,
+        Func<object, byte[]>? serializeDelta = null,
+        Func<object, object, object>? combineDeltas = null)
     {
         ArgumentNullException.ThrowIfNull(deserializeState);
         ArgumentNullException.ThrowIfNull(deserializeDelta);
@@ -64,6 +91,8 @@ public sealed class CrdtShape
         MergeStates = mergeStates;
         CreateEmpty = createEmpty;
         SerializeState = serializeState;
+        SerializeDelta = serializeDelta;
+        CombineDeltas = combineDeltas;
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.OrSet"/> shape.</summary>
@@ -77,7 +106,9 @@ public sealed class CrdtShape
             (state, delta) => ((OrSet)state).MergeDelta((OrSetDelta)delta),
             (state, other) => ((OrSet)state).MergeFrom((OrSet)other),
             () => new OrSet(),
-            state => JsonSerializer.SerializeToUtf8Bytes((OrSet)state, ctx.OrSet));
+            state => JsonSerializer.SerializeToUtf8Bytes((OrSet)state, ctx.OrSet),
+            delta => JsonSerializer.SerializeToUtf8Bytes((OrSetDelta)delta, ctx.OrSetDelta),
+            static (a, b) => CombineOrSetDelta((OrSetDelta)a, (OrSetDelta)b));
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.PnCounter"/> shape.</summary>
@@ -91,7 +122,9 @@ public sealed class CrdtShape
             (state, delta) => ((PnCounter)state).MergeDelta((PnCounterDelta)delta),
             (state, other) => ((PnCounter)state).MergeFrom((PnCounter)other),
             () => new PnCounter(),
-            state => JsonSerializer.SerializeToUtf8Bytes((PnCounter)state, ctx.PnCounter));
+            state => JsonSerializer.SerializeToUtf8Bytes((PnCounter)state, ctx.PnCounter),
+            delta => JsonSerializer.SerializeToUtf8Bytes((PnCounterDelta)delta, ctx.PnCounterDelta),
+            static (a, b) => CombinePnCounterDelta((PnCounterDelta)a, (PnCounterDelta)b));
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.VersionVector"/> shape.</summary>
@@ -105,7 +138,9 @@ public sealed class CrdtShape
             (state, delta) => ((VersionVector)state).MergeDelta((VersionVectorDelta)delta),
             (state, other) => ((VersionVector)state).MergeFrom((VersionVector)other),
             () => new VersionVector(),
-            state => JsonSerializer.SerializeToUtf8Bytes((VersionVector)state, ctx.VersionVector));
+            state => JsonSerializer.SerializeToUtf8Bytes((VersionVector)state, ctx.VersionVector),
+            delta => JsonSerializer.SerializeToUtf8Bytes((VersionVectorDelta)delta, ctx.VersionVectorDelta),
+            static (a, b) => CombineVersionVectorDelta((VersionVectorDelta)a, (VersionVectorDelta)b));
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.MvRegister"/> shape.</summary>
@@ -119,7 +154,9 @@ public sealed class CrdtShape
             (state, delta) => ((MvRegister)state).MergeDelta((MvRegisterDelta)delta),
             (state, other) => ((MvRegister)state).MergeFrom((MvRegister)other),
             () => new MvRegister(),
-            state => JsonSerializer.SerializeToUtf8Bytes((MvRegister)state, ctx.MvRegister));
+            state => JsonSerializer.SerializeToUtf8Bytes((MvRegister)state, ctx.MvRegister),
+            delta => JsonSerializer.SerializeToUtf8Bytes((MvRegisterDelta)delta, ctx.MvRegisterDelta),
+            static (a, b) => CombineMvRegisterDelta((MvRegisterDelta)a, (MvRegisterDelta)b));
     }
 
     /// <summary>
@@ -140,7 +177,9 @@ public sealed class CrdtShape
             (state, delta) => ((Rga)state).MergeDelta((RgaDelta)delta),
             (state, other) => ((Rga)state).MergeFrom((Rga)other),
             () => new Rga(),
-            state => s.Serialize((Rga)state));
+            state => s.Serialize((Rga)state),
+            delta => d.Serialize((RgaDelta)delta),
+            static (a, b) => CombineRgaDelta((RgaDelta)a, (RgaDelta)b));
     }
 
     /// <summary>
@@ -149,6 +188,16 @@ public sealed class CrdtShape
     /// tree for <see cref="LatticeMergeMode.OrMap"/> register the matching
     /// pair via
     /// <see cref="LatticeServiceCollectionExtensions.AddOrMapShape{TKey, TValue}(ISiloBuilder, string)"/>.
+    /// <para>
+    /// The OR-Map shape leaves <see cref="CombineDeltas"/> unset, so the
+    /// sender-side pre-ship coalescing pass ships OR-Map delta entries
+    /// individually rather than combining them: a correct combine would
+    /// have to recurse into the per-(key, dot) value CRDT through the
+    /// erased <c>TValue</c>, which this type-erased descriptor cannot do
+    /// without re-introducing the generic parameters. Shipping individually
+    /// is loss-free (the receiver folds every shipped delta), it just
+    /// forgoes the OR-Map-specific bandwidth saving.
+    /// </para>
     /// </summary>
     public static CrdtShape ForOrMap<TKey, TValue>()
         where TKey : notnull
@@ -163,7 +212,216 @@ public sealed class CrdtShape
             (state, delta) => ((OrMap<TKey, TValue>)state).MergeDelta((OrMapDelta<TKey, TValue>)delta),
             (state, other) => ((OrMap<TKey, TValue>)state).MergeFrom((OrMap<TKey, TValue>)other),
             () => new OrMap<TKey, TValue>(),
-            state => s.Serialize((OrMap<TKey, TValue>)state));
+            state => s.Serialize((OrMap<TKey, TValue>)state),
+            delta => d.Serialize((OrMapDelta<TKey, TValue>)delta),
+            combineDeltas: null);
+    }
+
+    // --- Delta-combine helpers (pre-ship coalescing) ----------------------------
+    //
+    // Each helper folds two source deltas into a single combined delta whose
+    // receiver-side apply effect equals applying the two in sequence. The
+    // operations mirror each primitive's join semilattice, so they are
+    // commutative, associative, and idempotent: the sender may combine an
+    // arbitrary same-key run in any order and ship the result once.
+
+    private static OrSetDelta CombineOrSetDelta(OrSetDelta a, OrSetDelta b) => new()
+    {
+        // Observed-remove adds / removes are grow-only dot sets; the union
+        // of the two deltas' dot sets reproduces applying both in sequence.
+        Adds = UnionOrSetDeltaDots(a.Adds, b.Adds),
+        Removes = UnionOrSetDeltaDots(a.Removes, b.Removes),
+    };
+
+    private static PnCounterDelta CombinePnCounterDelta(PnCounterDelta a, PnCounterDelta b) => new()
+    {
+        // Per-replica cumulative components merge by pointwise-max: each
+        // delta carries the highest count observed from a replica, never an
+        // increment to sum.
+        Increments = PointwiseMaxLong(a.Increments, b.Increments),
+        Decrements = PointwiseMaxLong(a.Decrements, b.Decrements),
+    };
+
+    private static VersionVectorDelta CombineVersionVectorDelta(VersionVectorDelta a, VersionVectorDelta b) => new()
+    {
+        // Version vectors merge by pointwise-max per replica entry.
+        Entries = PointwiseMaxHlc(a.Entries, b.Entries),
+    };
+
+    private static MvRegisterDelta CombineMvRegisterDelta(MvRegisterDelta a, MvRegisterDelta b)
+    {
+        // The multi-value register's merge resolves dot dominance (a later
+        // write supersedes the earlier entries its context observed), which
+        // a naive entry concat would get wrong. Reuse the primitive's own
+        // MergeFrom against transient registers built from the two deltas,
+        // then read the post-merge live entries + dot context back out as
+        // the combined delta - structurally identical to the delta shape.
+        var left = ToMvRegister(a);
+        left.MergeFrom(ToMvRegister(b));
+        return new MvRegisterDelta
+        {
+            Entries = left.Entries.ToArray(),
+            Context = new Dictionary<string, long>(left.Context, StringComparer.Ordinal),
+        };
+    }
+
+    private static RgaDelta CombineRgaDelta(RgaDelta a, RgaDelta b) => new()
+    {
+        // RGA inserts (keyed by dot) and tombstones (dots) are both grow-
+        // only sets; the union of the two deltas reproduces applying both.
+        Inserts = UnionRgaInserts(a.Inserts, b.Inserts),
+        Tombstones = UnionOrSetDots(a.Tombstones, b.Tombstones),
+    };
+
+    private static MvRegister ToMvRegister(MvRegisterDelta delta)
+    {
+        var register = new MvRegister();
+        var entries = delta.Entries;
+        if (entries is { Count: > 0 })
+        {
+            register.Entries.Capacity = entries.Count;
+            foreach (var entry in entries)
+            {
+                register.Entries.Add(entry);
+            }
+        }
+        var context = delta.Context;
+        if (context is { Count: > 0 })
+        {
+            foreach (var (replicaId, counter) in context)
+            {
+                register.Context[replicaId] = counter;
+            }
+        }
+        return register;
+    }
+
+    private static IReadOnlyList<OrSetDeltaDot> UnionOrSetDeltaDots(
+        IReadOnlyList<OrSetDeltaDot>? a,
+        IReadOnlyList<OrSetDeltaDot>? b)
+    {
+        var result = new List<OrSetDeltaDot>((a?.Count ?? 0) + (b?.Count ?? 0));
+        var seen = new HashSet<(string ReplicaId, long Counter, string Element)>();
+        AppendOrSetDeltaDots(a, result, seen);
+        AppendOrSetDeltaDots(b, result, seen);
+        return result;
+    }
+
+    private static void AppendOrSetDeltaDots(
+        IReadOnlyList<OrSetDeltaDot>? source,
+        List<OrSetDeltaDot> result,
+        HashSet<(string ReplicaId, long Counter, string Element)> seen)
+    {
+        if (source is null)
+        {
+            return;
+        }
+        foreach (var dot in source)
+        {
+            var element = dot.Element is null ? string.Empty : Convert.ToBase64String(dot.Element);
+            if (seen.Add((dot.ReplicaId ?? string.Empty, dot.Counter, element)))
+            {
+                result.Add(dot);
+            }
+        }
+    }
+
+    private static IReadOnlyList<RgaDeltaNode> UnionRgaInserts(
+        IReadOnlyList<RgaDeltaNode>? a,
+        IReadOnlyList<RgaDeltaNode>? b)
+    {
+        var result = new List<RgaDeltaNode>((a?.Count ?? 0) + (b?.Count ?? 0));
+        var seen = new HashSet<OrSetDot>();
+        AppendRgaInserts(a, result, seen);
+        AppendRgaInserts(b, result, seen);
+        return result;
+    }
+
+    private static void AppendRgaInserts(
+        IReadOnlyList<RgaDeltaNode>? source,
+        List<RgaDeltaNode> result,
+        HashSet<OrSetDot> seen)
+    {
+        if (source is null)
+        {
+            return;
+        }
+        foreach (var node in source)
+        {
+            if (seen.Add(node.Dot))
+            {
+                result.Add(node);
+            }
+        }
+    }
+
+    private static IReadOnlyList<OrSetDot> UnionOrSetDots(
+        IReadOnlyList<OrSetDot>? a,
+        IReadOnlyList<OrSetDot>? b)
+    {
+        var result = new List<OrSetDot>((a?.Count ?? 0) + (b?.Count ?? 0));
+        var seen = new HashSet<OrSetDot>();
+        if (a is not null)
+        {
+            foreach (var dot in a)
+            {
+                if (seen.Add(dot))
+                {
+                    result.Add(dot);
+                }
+            }
+        }
+        if (b is not null)
+        {
+            foreach (var dot in b)
+            {
+                if (seen.Add(dot))
+                {
+                    result.Add(dot);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static Dictionary<string, long> PointwiseMaxLong(
+        Dictionary<string, long>? a,
+        Dictionary<string, long>? b)
+    {
+        var result = a is null
+            ? new Dictionary<string, long>(b?.Count ?? 0, StringComparer.Ordinal)
+            : new Dictionary<string, long>(a, StringComparer.Ordinal);
+        if (b is not null)
+        {
+            foreach (var (key, value) in b)
+            {
+                if (!result.TryGetValue(key, out var existing) || value > existing)
+                {
+                    result[key] = value;
+                }
+            }
+        }
+        return result;
+    }
+
+    private static Dictionary<string, HybridLogicalClock> PointwiseMaxHlc(
+        Dictionary<string, HybridLogicalClock>? a,
+        Dictionary<string, HybridLogicalClock>? b)
+    {
+        var result = a is null
+            ? new Dictionary<string, HybridLogicalClock>(b?.Count ?? 0, StringComparer.Ordinal)
+            : new Dictionary<string, HybridLogicalClock>(a, StringComparer.Ordinal);
+        if (b is not null)
+        {
+            foreach (var (key, value) in b)
+            {
+                if (!result.TryGetValue(key, out var existing) || value.CompareTo(existing) > 0)
+                {
+                    result[key] = value;
+                }
+            }
+        }
+        return result;
     }
 }
 

@@ -40,6 +40,21 @@ Every record is a `readonly record struct`, marked `[GenerateSerializer]` and `[
 | `OrMapDelta<TKey, TValue>` | For each entry in `Adds`, fold the inner `Value` into the local per-key value via `ICrdt<TValue>.MergeFrom`; for each `Tombstones` dot, drop the matching local dot. Order-independent and idempotent. Receivers must register the concrete `(TKey, TValue)` pair once at startup via `siloBuilder.AddOrMapShape<TKey, TValue>(treeName)`. |
 | `RgaDelta` | Add each `Inserts` node as a live node keyed by its `(replicaId, counter)` dot (idempotent; a present node has its parent / value refreshed and its tombstone flag preserved), then mark each `Tombstones` dot tombstoned. Sibling order under a shared parent is the descending `(Counter, ReplicaId)` tie-break resolved at materialise time, so every replica that applies the same deltas yields an identical ordered traversal. Order-independent and idempotent; a tombstone observed before its insert records a tombstoned placeholder so the merge stays total. |
 
+## Sender-side delta combine (pre-ship coalescing)
+
+When pre-ship coalescing is enabled (`LatticeReplicationOptions.PreShipCoalescingEnabled`, **default off**), the per-(tree, peer) shipper folds the typed deltas of a same-key run drained into one outbound batch into a single combined delta, re-encodes it onto the kept (highest-HLC) entry, and elides the earlier same-key entries. The combine for each primitive is a join over its own semilattice, so the combined delta's receiver-side apply effect is identical to applying the source deltas in sequence - for **every** receiver state `S`, `MergeDelta(S, combine(d1, d2)) == MergeDelta(MergeDelta(S, d1), d2)`:
+
+| Delta | Sender combines by |
+|-------|--------------------|
+| `OrSetDelta` | Union the two deltas' `Adds`, union their `Removes` (both are grow-only dot sets, deduped by `(replicaId, counter, element)`). |
+| `PnCounterDelta` | Pointwise-max the per-replica `Increments` and `Decrements` (cumulative components - never sum). |
+| `VersionVectorDelta` | Pointwise-max the per-replica `Entries`. |
+| `MvRegisterDelta` | Merge through the register's own dot-dominance rule (build a transient register from each delta and `MergeFrom`, then read the surviving entries + pointwise-max context back out). A naive entry concat would wrongly keep a superseded entry. |
+| `RgaDelta` | Union the `Inserts` (deduped by dot) and union the `Tombstones` (both grow-only). |
+| `OrMapDelta<TKey, TValue>` | **Not combined.** The generic value CRDT is type-erased on the shipper, so OR-Map entries ship individually (loss-free; only the bandwidth saving is forgone). |
+
+Each combine is commutative, associative, and idempotent, so the shipper may fold an arbitrary same-key run in iteration (HLC-ascending) order and ship the result once. A CRDT entry carrying no typed delta (`WalRecord.Delta == null`, an opaque or legacy payload) is never combined; its whole key ships verbatim. Coalescing stays within a single origin and never crosses an atomic-batch boundary - range deletes, saga terminal marks, prepared atomic-batch entries, and zero-HLC entries are never candidates. The combined entry inherits the last contributing entry's HLC and causal metadata, and the on-wire entry shape is unchanged (fewer / merged entries of the existing format - no wire-version bump). See [`replication.md`](replication.md) for the operator-facing description and the `coalesce.deltas_merged` metric.
+
 ## Equality caveats
 
 The deltas are `readonly record struct`s, so the synthesized `Equals` operator delegates to `EqualityComparer<T>.Default` for each field. That means:
