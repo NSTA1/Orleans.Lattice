@@ -3,7 +3,7 @@
 `Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
 
 - **Per-peer gauges** - `entries_behind`, `bytes_behind`, `ship_in_flight`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind`, `bytes_behind`, and `ship_in_flight` remain outbound-only (the receiver does not track a per-peer backlog into itself, nor does it pipeline into itself).
-- **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`, `apply.parallel_runs`. Reported in milliseconds except `apply.parallel_runs` (unit `{run}`).
+- **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`, `apply.parallel_runs`, `ship.effective_batch_size`, `ship.ack_latency`. Reported in milliseconds except `apply.parallel_runs` (unit `{run}`) and `ship.effective_batch_size` (unit `{entry}`).
 - **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The opt-in `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter when content-hash dedup measurement is enabled.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
@@ -115,6 +115,23 @@ These two counters are **opt-in** and fire only when `LatticeReplicationOptions.
 The shipper keeps a per-activation, per-key bounded LRU of the last-shipped content hash (FNV-1a 64-bit over the op, key, range end-key, and value bytes), sized by `LatticeReplicationOptions.ContentHashDedupCacheSize` (default `4096`, validated `>= 64`). Read the redundant fraction as `rate(ship_redundant_payloads) / rate(wal_entries_shipped)` per `(tree, peer)`: a high ratio signals idempotent upstream retry logic re-sending the same value, which is exactly the signal that justifies opting into a dedup round trip. `ship.redundant_payload_bytes` quantifies the bandwidth that round trip could reclaim, not just the entry count.
 
 The measurement is **observability-only**: it never elides, reorders, or alters the bytes the sender ships, so the wire output is unchanged whether or not dedup measurement is enabled. (Actually skipping a byte-identical re-set carrying a newer HLC would strand the receiver's per-origin high-water mark and change LWW/HLC convergence; the receiver must consent through a manifest/pull exchange, which is deferred until wire-version capability negotiation lands.) Because the counters fire as entries are framed onto the wire, a batch re-shipped after a transient transport failure counts its entries again - which is correct, since a re-ship is itself a redundant wire payload.
+
+## Sender-side adaptive batch sizing (`ship.effective_batch_size` / `ship.ack_latency`)
+
+These two histograms instrument the sender-side AIMD batch-size controller behind `LatticeReplicationOptions.AdaptiveBatchSizingEnabled` (see [Sender-side adaptive batch sizing](receiver-flow-control.md#sender-side-adaptive-batch-sizing)). **Both emit once per acknowledged batch regardless of the flag** - they are pure observability and are useful even with static sizing, where `ship.effective_batch_size` collapses onto the configured `ShipBatchSize` (modulated only by any active receiver hint).
+
+| Property | `ship.effective_batch_size` | `ship.ack_latency` |
+|---|---|---|
+| Name | `orleans.lattice.replication.ship.effective_batch_size` | `orleans.lattice.replication.ship.ack_latency` |
+| Constant | `LatticeReplicationMetrics.ShipEffectiveBatchSizeName` | `LatticeReplicationMetrics.ShipAckLatencyName` |
+| Unit | `{entry}` | `ms` |
+| Tags | `tree`, `peer` | `tree`, `peer` |
+
+`ship.effective_batch_size` records the entry cap the sender actually applied for the batch - the result of `min(adaptive size, receiver-suggested size, ShipBatchSize)` floored at `1`. With adaptive sizing off the distribution tracks the static cap; with it on the distribution tracks the controller's AIMD output as it grows on fast acks and backs off on rising latency or errors.
+
+`ship.ack_latency` records the wall-clock interval between the sender launching a batch's `IReplicationTransport.SendAsync` and that batch's ack returning, measured with `Stopwatch.GetElapsedTime(long)` (allocation-free, monotonic). On the bounded-pipelining path the interval includes the time the batch spent queued behind lower-HLC batches in the FIFO window, so it reflects the effective per-batch round-trip the sender observes - which is exactly the signal the controller's sliding window averages against `AdaptiveBatchLatencyThreshold`. Neither histogram samples liveness probes.
+
+Operators correlate the two: a rising `ship.ack_latency` p50 followed by a falling `ship.effective_batch_size` is the controller backing off ahead of the receiver's WAL-saturation hint; a flat `ship.effective_batch_size` pinned at `ShipBatchSize` with low `ship.ack_latency` is a healthy link running at the configured ceiling.
 
 ## Subscribing
 

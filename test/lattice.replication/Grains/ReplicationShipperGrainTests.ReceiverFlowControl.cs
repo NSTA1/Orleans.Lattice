@@ -1,5 +1,7 @@
 using NSubstitute;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication.Grains;
+using Orleans.Lattice.Replication.Tests;
 
 namespace Orleans.Lattice.Replication.Tests.Grains;
 
@@ -466,4 +468,3 @@ public partial class ReplicationShipperGrainTests
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
     }
 }
-

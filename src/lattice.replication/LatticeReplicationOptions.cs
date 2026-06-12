@@ -825,6 +825,101 @@ public class LatticeReplicationOptions
     /// </summary>
     public int UnknownPeerWireVersionFloor { get; set; } = DefaultUnknownPeerWireVersionFloor;
 
+    /// <summary>
+    /// Whether the per-<c>(tree, peer)</c> shipper grain adapts its
+    /// effective outbound batch size below the configured
+    /// <see cref="ShipBatchSize"/> ceiling using a sender-side
+    /// additive-increase / multiplicative-decrease (AIMD) controller
+    /// driven by measured ack latency and error rate. Defaults to
+    /// <see langword="false"/>: with the flag off the shipper sizes
+    /// every batch exactly as it does today (at <see cref="ShipBatchSize"/>,
+    /// modulated only downward by an active receiver flow-control hint),
+    /// so steady-state behaviour is byte-identical to the static path.
+    /// <para>
+    /// When enabled, the shipper grows the effective batch size additively
+    /// toward <see cref="ShipBatchSize"/> while acks stay below
+    /// <see cref="AdaptiveBatchLatencyThreshold"/>, and backs it off
+    /// multiplicatively (by <see cref="AdaptiveBatchDecreaseFactor"/>) when
+    /// ack latency rises above the threshold or a send fails - *before*
+    /// the receiver has to raise its WAL-saturation hint. The adaptive
+    /// size only ever operates in the headroom beneath the receiver hint:
+    /// the effective per-tick cap is
+    /// <c>min(adaptive size, receiver-suggested size, ShipBatchSize)</c>,
+    /// floored at <c>1</c>, so the receiver flow-control hint
+    /// (<see cref="ReplicationAck.SuggestedBatchSize"/>) remains the hard
+    /// upper bound and always wins. The adaptation never reorders work,
+    /// never crosses a batch boundary, and never affects the per-origin
+    /// FIFO or advance-strictly-on-ack cursor semantics; it only shrinks
+    /// or grows the per-tick entry cap.
+    /// </para>
+    /// <para>
+    /// Controller state is in-memory and activation-scoped (per
+    /// <c>(tree, peer)</c> shipper activation); a grain re-activation
+    /// resets the effective size to <see cref="ShipBatchSize"/> and the
+    /// controller re-learns from the live link. Off by default until the
+    /// adaptive path has been validated against the replication chaos
+    /// fixtures.
+    /// </para>
+    /// </summary>
+    public bool AdaptiveBatchSizingEnabled { get; set; } = DefaultAdaptiveBatchSizingEnabled;
+
+    /// <summary>
+    /// Additive-increase step the adaptive batch-size controller adds to
+    /// the effective batch size on each ack whose measured latency is at
+    /// or below <see cref="AdaptiveBatchLatencyThreshold"/>, capped at
+    /// <see cref="ShipBatchSize"/>. Only consulted when
+    /// <see cref="AdaptiveBatchSizingEnabled"/> is <see langword="true"/>.
+    /// Larger values re-accelerate faster after a back-off at the cost of
+    /// a coarser approach to the ceiling. Defaults to
+    /// <see cref="DefaultAdaptiveBatchIncrement"/>. Must be at least
+    /// <c>1</c>; the registered options validator rejects non-positive
+    /// values at first-resolve time.
+    /// </summary>
+    public int AdaptiveBatchIncrement { get; set; } = DefaultAdaptiveBatchIncrement;
+
+    /// <summary>
+    /// Multiplicative-decrease factor the adaptive batch-size controller
+    /// multiplies the effective batch size by when ack latency rises above
+    /// <see cref="AdaptiveBatchLatencyThreshold"/> or a send fails (the
+    /// "MD" half of AIMD), floored at <c>1</c>. Only consulted when
+    /// <see cref="AdaptiveBatchSizingEnabled"/> is <see langword="true"/>.
+    /// Must be strictly greater than <c>0.0</c> and strictly less than
+    /// <c>1.0</c>; the registered options validator rejects values outside
+    /// the open interval <c>(0.0, 1.0)</c> at first-resolve time. Smaller
+    /// values back off more aggressively. Defaults to
+    /// <see cref="DefaultAdaptiveBatchDecreaseFactor"/> (halving).
+    /// </summary>
+    public double AdaptiveBatchDecreaseFactor { get; set; } = DefaultAdaptiveBatchDecreaseFactor;
+
+    /// <summary>
+    /// Ack-latency threshold the adaptive batch-size controller compares
+    /// the sliding-window mean ack latency against to decide between
+    /// additive increase (mean at or below the threshold) and
+    /// multiplicative decrease (mean above it). Only consulted when
+    /// <see cref="AdaptiveBatchSizingEnabled"/> is <see langword="true"/>.
+    /// Set this near the steady-state per-batch ack round-trip the link is
+    /// expected to sustain; a rising mean above it is the early
+    /// back-pressure signal the controller acts on before the receiver
+    /// raises its WAL-saturation hint. Defaults to
+    /// <see cref="DefaultAdaptiveBatchLatencyThreshold"/>. Must be strictly
+    /// greater than <see cref="TimeSpan.Zero"/>.
+    /// </summary>
+    public TimeSpan AdaptiveBatchLatencyThreshold { get; set; } = DefaultAdaptiveBatchLatencyThreshold;
+
+    /// <summary>
+    /// Number of recent ack latencies the adaptive batch-size controller
+    /// averages over its sliding window when deciding increase vs.
+    /// decrease. Only consulted when
+    /// <see cref="AdaptiveBatchSizingEnabled"/> is <see langword="true"/>.
+    /// A longer window smooths transient latency spikes at the cost of a
+    /// slower reaction to a sustained shift; a shorter window reacts faster
+    /// but is noisier. Defaults to
+    /// <see cref="DefaultAdaptiveBatchWindowLength"/>. Must be at least
+    /// <c>1</c>; the registered options validator rejects non-positive
+    /// values at first-resolve time.
+    /// </summary>
+    public int AdaptiveBatchWindowLength { get; set; } = DefaultAdaptiveBatchWindowLength;
+
 
     /// <summary>
     /// Default value for <see cref="ClusterId"/>: an empty sentinel that
@@ -1178,4 +1273,47 @@ public class LatticeReplicationOptions
     /// heterogeneous upgrade lower this to a conservative floor.
     /// </summary>
     public const int DefaultUnknownPeerWireVersionFloor = EncodedBatchHeader.CurrentWireVersion;
+
+    /// <summary>
+    /// Default value for <see cref="AdaptiveBatchSizingEnabled"/>:
+    /// <see langword="false"/>. Sender-side adaptive batch sizing is a
+    /// dark-launched opt-in: with the flag off the shipper sizes every
+    /// batch exactly as the static path does today, so a host that never
+    /// touches the option gets byte-identical steady-state behaviour.
+    /// </summary>
+    public const bool DefaultAdaptiveBatchSizingEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="AdaptiveBatchIncrement"/>: <c>8</c>
+    /// entries per healthy ack. Sized so the controller re-approaches the
+    /// canonical <see cref="DefaultShipBatchSize"/> of 256 over a few tens
+    /// of acks after a back-off without overshooting on a single fast ack.
+    /// </summary>
+    public const int DefaultAdaptiveBatchIncrement = 8;
+
+    /// <summary>
+    /// Default value for <see cref="AdaptiveBatchDecreaseFactor"/>:
+    /// <c>0.5</c> (halving). The canonical AIMD multiplicative-decrease
+    /// factor - aggressive enough to shed load quickly when ack latency
+    /// climbs, while the additive increase rebuilds the batch size
+    /// gradually as the link recovers.
+    /// </summary>
+    public const double DefaultAdaptiveBatchDecreaseFactor = 0.5;
+
+    /// <summary>
+    /// Default value for <see cref="AdaptiveBatchLatencyThreshold"/>:
+    /// 50 ms. Sits above the canonical in-cluster ack round-trip yet low
+    /// enough that a sustained climb into the tens-of-milliseconds range
+    /// trips the controller's back-off before the receiver's
+    /// WAL-saturation hint engages. Tune per link.
+    /// </summary>
+    public static readonly TimeSpan DefaultAdaptiveBatchLatencyThreshold = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// Default value for <see cref="AdaptiveBatchWindowLength"/>: <c>16</c>
+    /// recent acks. Smooths a single transient latency spike (one slow ack
+    /// in sixteen barely moves the mean) while still reacting within a
+    /// couple of pump ticks to a sustained shift.
+    /// </summary>
+    public const int DefaultAdaptiveBatchWindowLength = 16;
 }

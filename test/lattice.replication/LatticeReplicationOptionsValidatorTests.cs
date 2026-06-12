@@ -1260,5 +1260,163 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    // ------------------------------------------------------------------
+    // Sender-side adaptive batch sizing (AIMD controller)
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_adaptive_batch_increment_is_non_positive(int increment)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchIncrement = increment,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AdaptiveBatchIncrement)));
+        });
+    }
+
+    [TestCase(0.0)]
+    [TestCase(-0.1)]
+    [TestCase(1.0)]
+    [TestCase(1.5)]
+    public void Validate_fails_when_adaptive_batch_decrease_factor_is_outside_open_unit_interval(double factor)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchDecreaseFactor = factor,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AdaptiveBatchDecreaseFactor)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_adaptive_batch_decrease_factor_is_nan()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchDecreaseFactor = double.NaN,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AdaptiveBatchDecreaseFactor)));
+        });
+    }
+
+    [TestCase(0.01)]
+    [TestCase(0.5)]
+    [TestCase(0.99)]
+    public void Validate_succeeds_for_adaptive_batch_decrease_factor_inside_open_unit_interval(double factor)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchDecreaseFactor = factor,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_fails_when_adaptive_batch_latency_threshold_is_zero()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchLatencyThreshold = TimeSpan.Zero,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AdaptiveBatchLatencyThreshold)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_adaptive_batch_latency_threshold_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchLatencyThreshold = TimeSpan.FromMilliseconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AdaptiveBatchLatencyThreshold)));
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_adaptive_batch_window_length_is_non_positive(int windowLength)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchWindowLength = windowLength,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.AdaptiveBatchWindowLength)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_adaptive_batch_sizing_options()
+    {
+        // The dark-launch defaults (flag off, increment 8, factor 0.5,
+        // threshold 50 ms, window 16) must all pass validation so a host
+        // that never touches the knobs resolves cleanly.
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_fully_configured_adaptive_batch_sizing()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            AdaptiveBatchSizingEnabled = true,
+            AdaptiveBatchIncrement = 4,
+            AdaptiveBatchDecreaseFactor = 0.75,
+            AdaptiveBatchLatencyThreshold = TimeSpan.FromMilliseconds(25),
+            AdaptiveBatchWindowLength = 8,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

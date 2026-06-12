@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -104,6 +105,18 @@ internal sealed class ReplicationShipperGrain(
     /// the receiver re-stamps its preference on the next ack.
     /// </summary>
     private int? _receiverSuggestedBatchSize;
+
+    /// <summary>
+    /// Lazily-created sender-side adaptive batch-size controller, present
+    /// only when <see cref="LatticeReplicationOptions.AdaptiveBatchSizingEnabled"/>
+    /// is on. Activation-scoped and in-memory: a grain reactivation resets
+    /// the controller (the effective size returns to
+    /// <see cref="LatticeReplicationOptions.ShipBatchSize"/> and the
+    /// controller re-learns from the live link). The receiver flow-control
+    /// hint remains the hard ceiling - the controller only ever shrinks the
+    /// per-tick cap in the headroom beneath it.
+    /// </summary>
+    private AdaptiveBatchSizeController? _adaptiveController;
 
     /// <summary>
     /// Random source for backoff jitter. Aliased to the process-wide
@@ -437,6 +450,100 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
+    /// Computes the effective per-tick batch-size cap for this pump tick,
+    /// composing the three independent throttles as a minimum so each one
+    /// can only ever lower the cap:
+    /// <list type="number">
+    ///   <item>the configured <see cref="LatticeReplicationOptions.ShipBatchSize"/>
+    ///   ceiling (floored at <c>1</c>);</item>
+    ///   <item>the sender-side adaptive batch-size controller's current
+    ///   size, when <see cref="LatticeReplicationOptions.AdaptiveBatchSizingEnabled"/>
+    ///   is on;</item>
+    ///   <item>any active receiver flow-control hint
+    ///   (<see cref="ReplicationAck.SuggestedBatchSize"/>), which remains the
+    ///   hard upper bound and always wins.</item>
+    /// </list>
+    /// The result is <c>min(adaptive, receiver-suggested, ShipBatchSize)</c>,
+    /// floored at <c>1</c>. When adaptive sizing is off and no receiver hint
+    /// is active this returns exactly <c>max(1, ShipBatchSize)</c> - the
+    /// byte-identical static path.
+    /// </summary>
+    private int ComputeMaxPerBatch(LatticeReplicationOptions options)
+    {
+        var configuredMax = Math.Max(1, options.ShipBatchSize);
+        var maxPerBatch = configuredMax;
+
+        if (options.AdaptiveBatchSizingEnabled)
+        {
+            maxPerBatch = Math.Min(maxPerBatch, GetOrCreateAdaptiveController(options).CurrentBatchSize);
+        }
+
+        // Receiver flow-control hint is the hard ceiling and always wins.
+        // A non-null, strictly-positive hint clamps the cap; min(...) is
+        // commutative so its position in the composition does not matter.
+        if (_receiverSuggestedBatchSize is { } suggested && suggested > 0)
+        {
+            maxPerBatch = Math.Min(maxPerBatch, Math.Max(1, suggested));
+        }
+
+        return Math.Max(1, maxPerBatch);
+    }
+
+    /// <summary>
+    /// Returns the activation-scoped adaptive batch-size controller,
+    /// creating it on first use from the current per-tree options. Only
+    /// called when <see cref="LatticeReplicationOptions.AdaptiveBatchSizingEnabled"/>
+    /// is on.
+    /// </summary>
+    private AdaptiveBatchSizeController GetOrCreateAdaptiveController(LatticeReplicationOptions options) =>
+        _adaptiveController ??= new AdaptiveBatchSizeController(
+            maxBatchSize: Math.Max(1, options.ShipBatchSize),
+            additiveIncrement: options.AdaptiveBatchIncrement,
+            multiplicativeDecreaseFactor: options.AdaptiveBatchDecreaseFactor,
+            latencyThreshold: options.AdaptiveBatchLatencyThreshold,
+            windowLength: options.AdaptiveBatchWindowLength);
+
+    /// <summary>
+    /// Records the per-batch adaptive-sizing observability (the effective
+    /// cap and the measured ack latency) and, when adaptive sizing is on,
+    /// feeds the latency sample to the AIMD controller so its additive
+    /// increase / multiplicative decrease fires on the next tick. Called
+    /// once per acknowledged batch on both the serial and pipelined paths;
+    /// not called for liveness probes.
+    /// </summary>
+    private void OnShipAckObserved(LatticeReplicationOptions options, int effectiveBatchSize, TimeSpan ackLatency)
+    {
+        LatticeReplicationMetrics.ShipEffectiveBatchSize.Record(
+            effectiveBatchSize,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+        LatticeReplicationMetrics.ShipAckLatency.Record(
+            ackLatency.TotalMilliseconds,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+
+        if (options.AdaptiveBatchSizingEnabled)
+        {
+            GetOrCreateAdaptiveController(options).RecordAck(ackLatency);
+        }
+    }
+
+    /// <summary>
+    /// Feeds a failed peer round-trip (transport throw or ack rejection)
+    /// to the adaptive batch-size controller so its multiplicative
+    /// decrease fires. No-op when adaptive sizing is off. Local drain
+    /// failures are not peer faults and must not be reported here, matching
+    /// the per-peer error-tally semantics of <see cref="ApplyBackoff"/>.
+    /// </summary>
+    private void OnShipErrorObserved(LatticeReplicationOptions options)
+    {
+        if (options.AdaptiveBatchSizingEnabled)
+        {
+            GetOrCreateAdaptiveController(options).RecordError();
+        }
+    }
+
+    /// <summary>
     /// Drains one batch from the change feed, applies producer-side
     /// filters, calls the transport, advances the cursor on positive
     /// ack, and applies backoff on transient failure. Schema-shaped
@@ -457,20 +564,12 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private async Task PumpSerialOnceAsync(LatticeReplicationOptions options, CancellationToken cancellationToken)
     {
-        // Clamp the per-tick batch cap to the receiver's last
-        // stamped SuggestedBatchSize when present (receiver-side
-        // flow-control hint). The receiver may stamp values outside
-        // the valid range; we clamp to [1, options.ShipBatchSize] so
-        // a malformed hint can never push the cap above the configured
-        // ceiling nor below 1. A null hint (the default, or the
-        // canonical re-acceleration signal) leaves the cap at the
-        // configured ShipBatchSize.
-        var configuredMax = Math.Max(1, options.ShipBatchSize);
-        var maxPerBatch = configuredMax;
-        if (_receiverSuggestedBatchSize is { } suggested && suggested > 0)
-        {
-            maxPerBatch = Math.Min(configuredMax, Math.Max(1, suggested));
-        }
+        // Effective per-tick cap = min(adaptive, receiver hint, ShipBatchSize),
+        // floored at 1. The receiver flow-control hint is the hard ceiling
+        // and always wins; the adaptive controller only operates in the
+        // headroom beneath it. With adaptive sizing off and no active hint
+        // this is byte-identical to the static path's max(1, ShipBatchSize).
+        var maxPerBatch = ComputeMaxPerBatch(options);
         try
         {
             await DrainBatchAsync(options, maxPerBatch, cancellationToken);
@@ -599,6 +698,7 @@ internal sealed class ReplicationShipperGrain(
         }
 
         ReplicationAck ack;
+        TimeSpan ackLatency;
         try
         {
             var batch = new ReplicationBatch
@@ -627,10 +727,16 @@ internal sealed class ReplicationShipperGrain(
                 // grain turns and SendAsync awaits inline.
                 EncodedEnvelope = encodedEnvelope,
             };
+            // Measure ack latency for the ship.ack_latency histogram and
+            // the adaptive controller. Stopwatch.GetElapsedTime is
+            // allocation-free and monotonic.
+            var sendStartTimestamp = Stopwatch.GetTimestamp();
             ack = await _transport.SendAsync(batch, cancellationToken);
+            ackLatency = Stopwatch.GetElapsedTime(sendStartTimestamp);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            OnShipErrorObserved(options);
             ApplyBackoff(options, ex, "transport");
             return;
         }
@@ -639,6 +745,7 @@ internal sealed class ReplicationShipperGrain(
         {
             // Receiver rejected the batch; treat as transient (the
             // sender's cursor stays put and we retry after backoff).
+            OnShipErrorObserved(options);
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
             return;
         }
@@ -709,6 +816,11 @@ internal sealed class ReplicationShipperGrain(
         var entriesBehind = hitBatchCap ? (long)_drainBuffer.Count : 0L;
         var bytesBehind = hitBatchCap ? _drainEncodedByteCount : 0L;
         _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind, bytesBehind);
+
+        // Adaptive batch sizing: record the effective cap and the measured
+        // ack latency, and feed the latency to the AIMD controller (when
+        // enabled) so it grows / backs off on the next tick.
+        OnShipAckObserved(options, maxPerBatch, ackLatency);
     }
 
     /// <summary>
@@ -1070,7 +1182,8 @@ internal sealed class ReplicationShipperGrain(
         bool[] AdvancedSnapshot,
         int EntryCount,
         long ByteCount,
-        bool HitBatchCap);
+        bool HitBatchCap,
+        long LaunchTimestamp);
 
     /// <summary>
     /// Bounded sender-side pipelining path. Maintains a window of up to
@@ -1098,16 +1211,12 @@ internal sealed class ReplicationShipperGrain(
         int window,
         CancellationToken cancellationToken)
     {
-        var configuredMax = Math.Max(1, options.ShipBatchSize);
-        // When this path runs, no receiver SuggestedBatchSize hint is
-        // active (a non-null hint collapses the window to 1 in the
-        // dispatcher), so the per-batch cap is simply the configured
-        // ShipBatchSize. The clamp is retained defensively.
-        var maxPerBatch = configuredMax;
-        if (_receiverSuggestedBatchSize is { } suggested && suggested > 0)
-        {
-            maxPerBatch = Math.Min(configuredMax, Math.Max(1, suggested));
-        }
+        // Effective per-tick cap = min(adaptive, receiver hint, ShipBatchSize),
+        // floored at 1. When this path runs, no receiver SuggestedBatchSize
+        // hint is active (a non-null hint collapses the window to 1 in the
+        // dispatcher), so the receiver-hint term is inert here; the adaptive
+        // controller can still lower the cap below the configured ceiling.
+        var maxPerBatch = ComputeMaxPerBatch(options);
 
         try
         {
@@ -1176,6 +1285,7 @@ internal sealed class ReplicationShipperGrain(
                 }
 
                 Task<ReplicationAck> sendTask;
+                long launchTimestamp;
                 try
                 {
                     var batch = new ReplicationBatch
@@ -1187,6 +1297,7 @@ internal sealed class ReplicationShipperGrain(
                         Envelope = null,
                         EncodedEnvelope = encodedEnvelope,
                     };
+                    launchTimestamp = Stopwatch.GetTimestamp();
                     sendTask = _transport.SendAsync(batch, cancellationToken);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1194,19 +1305,20 @@ internal sealed class ReplicationShipperGrain(
                     // Synchronous throw from SendAsync (before returning
                     // a task): treat as a transport failure for this
                     // batch and stop the window.
+                    OnShipErrorObserved(options);
                     ApplyBackoff(options, ex, "transport");
                     failed = true;
                     break;
                 }
 
                 inFlight.Enqueue(new InFlightShipBatch(
-                    sendTask, sourceHlc, maxReadSnapshot, advancedSnapshot, entryCount, byteCount, hitBatchCap));
+                    sendTask, sourceHlc, maxReadSnapshot, advancedSnapshot, entryCount, byteCount, hitBatchCap, launchTimestamp));
                 shippedAny = true;
                 _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
 
                 if (inFlight.Count >= window)
                 {
-                    if (!await DrainOneInFlightAsync(inFlight, options, cancellationToken))
+                    if (!await DrainOneInFlightAsync(inFlight, options, maxPerBatch, cancellationToken))
                     {
                         failed = true;
                         break;
@@ -1225,7 +1337,7 @@ internal sealed class ReplicationShipperGrain(
             // trip is still healthy.
             while (!failed && inFlight.Count > 0)
             {
-                if (!await DrainOneInFlightAsync(inFlight, options, cancellationToken))
+                if (!await DrainOneInFlightAsync(inFlight, options, maxPerBatch, cancellationToken))
                 {
                     failed = true;
                     break;
@@ -1287,24 +1399,29 @@ internal sealed class ReplicationShipperGrain(
     private async Task<bool> DrainOneInFlightAsync(
         Queue<InFlightShipBatch> inFlight,
         LatticeReplicationOptions options,
+        int effectiveBatchSize,
         CancellationToken cancellationToken)
     {
         var batch = inFlight.Dequeue();
         _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
 
         ReplicationAck ack;
+        TimeSpan ackLatency;
         try
         {
             ack = await batch.SendTask;
+            ackLatency = Stopwatch.GetElapsedTime(batch.LaunchTimestamp);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            OnShipErrorObserved(options);
             ApplyBackoff(options, ex, "transport");
             return false;
         }
 
         if (!ack.Accepted)
         {
+            OnShipErrorObserved(options);
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
             return false;
         }
@@ -1335,6 +1452,11 @@ internal sealed class ReplicationShipperGrain(
         var entriesBehind = batch.HitBatchCap ? (long)batch.EntryCount : 0L;
         var bytesBehind = batch.HitBatchCap ? batch.ByteCount : 0L;
         _peerStats.RecordBacklog(_treeName, _peerClusterId, entriesBehind, bytesBehind);
+
+        // Adaptive batch sizing: record the effective cap and the measured
+        // ack latency, and feed the latency to the AIMD controller (when
+        // enabled) so it grows / backs off on the next tick.
+        OnShipAckObserved(options, effectiveBatchSize, ackLatency);
         return true;
     }
 

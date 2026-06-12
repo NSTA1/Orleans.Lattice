@@ -894,4 +894,55 @@ public static class LatticeReplicationMetrics
         DigestProbeOutcome.RemoteUnavailable => DigestProbeOutcomeRemoteUnavailable,
         _ => DigestProbeOutcomeRemoteUnavailable,
     };
+
+    // --- Sender-side adaptive batch sizing --------------------------------------
+
+    /// <summary>
+    /// Histogram of the effective outbound batch-size cap the
+    /// per-<c>(tree, peer)</c> shipper used for a single ship attempt -
+    /// the entry cap the sender actually applied after composing the
+    /// configured <see cref="LatticeReplicationOptions.ShipBatchSize"/>
+    /// ceiling, any active receiver flow-control hint
+    /// (<see cref="ReplicationAck.SuggestedBatchSize"/>), and the
+    /// sender-side adaptive batch-size controller's current size when
+    /// <see cref="LatticeReplicationOptions.AdaptiveBatchSizingEnabled"/>
+    /// is on. Recorded once per acknowledged batch (not per liveness
+    /// probe). With adaptive sizing off the distribution collapses onto
+    /// the static cap (<see cref="LatticeReplicationOptions.ShipBatchSize"/>
+    /// modulated only by the receiver hint); with it on the distribution
+    /// tracks the AIMD controller's output. Tagged by <see cref="TagTree"/>
+    /// and <see cref="TagPeer"/>.
+    /// </summary>
+    public static readonly Histogram<int> ShipEffectiveBatchSize =
+        Meter.CreateHistogram<int>("orleans.lattice.replication.ship.effective_batch_size", unit: "{entry}",
+            description: "Effective per-tick outbound batch-size cap the sender applied, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipEffectiveBatchSize"/> histogram.
+    /// </summary>
+    public const string ShipEffectiveBatchSizeName = "orleans.lattice.replication.ship.effective_batch_size";
+
+    /// <summary>
+    /// Histogram of the measured outbound ack latency - the wall-clock
+    /// interval, in milliseconds, between the sender launching a batch's
+    /// <see cref="IReplicationTransport.SendAsync"/> and that batch's ack
+    /// returning. Recorded once per acknowledged batch (not per liveness
+    /// probe), measured with <see cref="System.Diagnostics.Stopwatch.GetElapsedTime(long)"/>
+    /// so it is allocation-free and monotonic. On the bounded-pipelining
+    /// path the interval includes the time the batch spent queued behind
+    /// lower-HLC batches in the FIFO window, so it reflects the effective
+    /// per-batch round-trip the sender observes. This is the signal the
+    /// sender-side adaptive batch-size controller acts on when
+    /// <see cref="LatticeReplicationOptions.AdaptiveBatchSizingEnabled"/>
+    /// is on, and is emitted regardless of that flag. Tagged by
+    /// <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// </summary>
+    public static readonly Histogram<double> ShipAckLatency =
+        Meter.CreateHistogram<double>("orleans.lattice.replication.ship.ack_latency", unit: "ms",
+            description: "Measured outbound ack latency per acknowledged batch, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipAckLatency"/> histogram.
+    /// </summary>
+    public const string ShipAckLatencyName = "orleans.lattice.replication.ship.ack_latency";
 }
