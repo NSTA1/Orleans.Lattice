@@ -110,6 +110,7 @@ For day-to-day use and operations:
 - [Dead-Letter Queue](dead-letter-queue.md) - quarantine model, operator surface, replay.
 - [Snapshot Bootstrap](snapshot-bootstrap.md) - point-in-time bootstrap, snapshot HLC, incremental cutover.
 - [Auto-Bootstrap](auto-bootstrap.md) - fall-off-the-log detection and automatic re-seed.
+- [Automatic drift remediation](automatic-drift-remediation.md) - operator playbook for the opt-in anti-entropy stack: default-off posture, opt-in path, metrics surface, and the version-skew / WAL-trimmed / circuit-breaker failure-mode matrix.
 - [Transport Security](transport-security.md) - shared-secret authentication, HTTPS-by-default, custom secret sources, env-var convention.
 
 For internals (the "how"):
