@@ -342,6 +342,24 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "value; a non-positive budget would re-ship nothing.");
         }
 
+        if (options.BootstrapFallbackMaxEntries < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.BootstrapFallbackMaxEntries)} "
+                + $"must be at least 1 ({scope}); got {options.BootstrapFallbackMaxEntries}. "
+                + "The bootstrap-snapshot fallback re-ships at most this many committed-projection entries per pass; "
+                + "a non-positive cap would re-ship nothing.");
+        }
+
+        if (options.BootstrapFallbackMaxBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.BootstrapFallbackMaxBytes)} "
+                + $"must be at least 1 ({scope}); got {options.BootstrapFallbackMaxBytes}. "
+                + "The bootstrap-snapshot fallback caps the cumulative re-shipped payload bytes at this "
+                + "value; a non-positive budget would re-ship nothing.");
+        }
+
         // Reject the all-bits-zero "well-known None" sentinel range
         // only when the host has clearly typoed - i.e. the tag is
         // in the core-reserved range [0x02, 0x7F] but is not a

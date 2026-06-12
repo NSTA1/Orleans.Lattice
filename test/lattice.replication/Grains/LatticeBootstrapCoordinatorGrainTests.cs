@@ -452,7 +452,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         Assert.That(fake.State.InProgress, Is.False);
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.Idle));
-        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default!, default!, default, default);
+        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default(string)!, default(string)!, default, default);
     }
 
     [Test]
@@ -868,7 +868,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         Assert.That(fake.State.InProgress, Is.False);
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
-        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default!, default!, default, default);
+        await provider.DidNotReceiveWithAnyArgs().ExportAsync(default(string)!, default(string)!, default, default);
         await hwm.DidNotReceiveWithAnyArgs().PinSnapshotAsync(default, default!, default);
     }
 

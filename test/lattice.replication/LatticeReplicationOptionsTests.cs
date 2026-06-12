@@ -48,6 +48,32 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
+    public void Bootstrap_fallback_defaults_are_off_and_capped()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationOptions.DefaultBootstrapFallbackEnabled, Is.False);
+            Assert.That(LatticeReplicationOptions.DefaultBootstrapFallbackMaxEntries, Is.EqualTo(4096));
+            Assert.That(LatticeReplicationOptions.DefaultBootstrapFallbackMaxBytes, Is.EqualTo(1024L * 1024L));
+        });
+    }
+
+    [Test]
+    public void New_instance_has_bootstrap_fallback_defaults()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.BootstrapFallbackEnabled,
+                Is.EqualTo(LatticeReplicationOptions.DefaultBootstrapFallbackEnabled));
+            Assert.That(opts.BootstrapFallbackMaxEntries,
+                Is.EqualTo(LatticeReplicationOptions.DefaultBootstrapFallbackMaxEntries));
+            Assert.That(opts.BootstrapFallbackMaxBytes,
+                Is.EqualTo(LatticeReplicationOptions.DefaultBootstrapFallbackMaxBytes));
+        });
+    }
+
+    [Test]
     public void New_instance_has_null_key_filter()
     {
         var opts = new LatticeReplicationOptions();

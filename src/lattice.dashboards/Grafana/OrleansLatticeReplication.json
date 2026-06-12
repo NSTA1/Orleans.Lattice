@@ -1097,6 +1097,87 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_peer_fell_off_log_suppressed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
       ]
+    },
+    {
+      "id": 43,
+      "title": "Bootstrap fallback triggered (rate)",
+      "description": "Rate of scoped bootstrap-snapshot fallback passes that began after a targeted leaf re-replay reported the local write-ahead-log was garbage-collected past the divergence point. Opt-in via BootstrapFallbackEnabled; stays zero unless a wal_trimmed leaf re-replay occurs and the fallback is enabled.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 92
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_bootstrap_fallback_triggered_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{tree}} -> {{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 44,
+      "title": "Bootstrap fallback entries re-shipped (rate)",
+      "description": "Rate of committed-projection entries the scoped bootstrap-snapshot fallback re-derived from the live tree and re-shipped to a diverged peer. Opt-in via BootstrapFallbackEnabled; stays zero unless a fallback pass ships at least one entry.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 92
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_bootstrap_fallback_entries_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{tree}} -> {{peer}}"
+        }
+      ]
+    },
+    {
+      "id": 45,
+      "title": "Bootstrap fallback skipped (rate by reason)",
+      "description": "Rate of scoped bootstrap-snapshot fallback passes that skipped without re-shipping, split by reason (disabled, range_empty, empty). A disabled series is the operator-only signal that a wal_trimmed divergence was repairable but the fallback was not opted in.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 99
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_bootstrap_fallback_skipped_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
     }
   ]
 }

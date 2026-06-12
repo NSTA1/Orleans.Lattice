@@ -309,7 +309,7 @@ public class RemoteSnapshotProviderTests
         // delegating, so an intra-cluster provider inherits the guard
         // without writing it locally.
         Assert.That(
-            async () => await asInterface.ExportAsync(Tree, null!, Hlc(42)),
+            async () => await asInterface.ExportAsync(Tree, (string)null!, Hlc(42)),
             Throws.InstanceOf<ArgumentException>());
     }
 
