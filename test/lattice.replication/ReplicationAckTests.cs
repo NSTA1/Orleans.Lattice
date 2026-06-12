@@ -308,3 +308,160 @@ public class WireVersionNegotiationResultTests
         });
     }
 }
+
+[TestFixture]
+public class WireVersionDownEncoderTests
+{
+    private static EncodedBatchHeader MakeHeader(
+        int wireVersion = EncodedBatchHeader.CurrentWireVersion,
+        LatticeMergeMode mode = LatticeMergeMode.LwwRegister,
+        LatticeCompression compression = LatticeCompression.None)
+        => new()
+        {
+            Magic = EncodedBatchHeader.MagicValue,
+            WireVersion = wireVersion,
+            OriginClusterIdHash = EncodedBatchHeader.HashClusterId("site-a"),
+            EntryCount = 1,
+            BatchSequence = 1L,
+            AtomicBatchSpanCount = 0,
+            Mode = mode,
+            Compression = compression,
+        };
+
+    [Test]
+    public void MinimumDownEncodableWireVersion_is_one_below_current()
+    {
+        Assert.That(
+            WireVersionDownEncoder.MinimumDownEncodableWireVersion,
+            Is.EqualTo(EncodedBatchHeader.CurrentWireVersion - 1));
+    }
+
+    [Test]
+    public void EnsureDownEncodable_same_version_is_a_noop_for_any_mode()
+    {
+        // A same-version target is never down-stamped, so even a CRDT
+        // mode and a compressed tail are accepted (the verbatim hot path
+        // ships the current-version frame unchanged).
+        Assert.That(
+            () => WireVersionDownEncoder.EnsureDownEncodable(
+                EncodedBatchHeader.CurrentWireVersion,
+                LatticeMergeMode.PnCounter,
+                LatticeCompression.Zstd),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void EnsureDownEncodable_lww_uncompressed_down_stamp_is_allowed()
+    {
+        Assert.That(
+            () => WireVersionDownEncoder.EnsureDownEncodable(
+                WireVersionDownEncoder.MinimumDownEncodableWireVersion,
+                LatticeMergeMode.LwwRegister,
+                LatticeCompression.None),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void EnsureDownEncodable_crdt_mode_down_stamp_throws_not_supported()
+    {
+        Assert.That(
+            () => WireVersionDownEncoder.EnsureDownEncodable(
+                WireVersionDownEncoder.MinimumDownEncodableWireVersion,
+                LatticeMergeMode.PnCounter,
+                LatticeCompression.None),
+            Throws.InstanceOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void EnsureDownEncodable_compressed_down_stamp_throws_not_supported()
+    {
+        Assert.That(
+            () => WireVersionDownEncoder.EnsureDownEncodable(
+                WireVersionDownEncoder.MinimumDownEncodableWireVersion,
+                LatticeMergeMode.LwwRegister,
+                LatticeCompression.Zstd),
+            Throws.InstanceOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void EnsureDownEncodable_below_floor_throws_not_supported()
+    {
+        Assert.That(
+            () => WireVersionDownEncoder.EnsureDownEncodable(
+                WireVersionDownEncoder.MinimumDownEncodableWireVersion - 1,
+                LatticeMergeMode.LwwRegister,
+                LatticeCompression.None),
+            Throws.InstanceOf<NotSupportedException>());
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void EnsureDownEncodable_below_one_throws_argument_out_of_range(int version)
+    {
+        Assert.That(
+            () => WireVersionDownEncoder.EnsureDownEncodable(
+                version, LatticeMergeMode.LwwRegister, LatticeCompression.None),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void EnsureDownEncodable_above_current_throws_argument_out_of_range()
+    {
+        Assert.That(
+            () => WireVersionDownEncoder.EnsureDownEncodable(
+                EncodedBatchHeader.CurrentWireVersion + 1,
+                LatticeMergeMode.LwwRegister,
+                LatticeCompression.None),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void PrepareHeader_same_version_returns_header_unchanged()
+    {
+        var header = MakeHeader();
+
+        var prepared = WireVersionDownEncoder.PrepareHeader(
+            header, EncodedBatchHeader.CurrentWireVersion);
+
+        Assert.That(prepared, Is.EqualTo(header));
+    }
+
+    [Test]
+    public void PrepareHeader_down_stamp_lowers_wire_version_only()
+    {
+        var header = MakeHeader();
+        var target = WireVersionDownEncoder.MinimumDownEncodableWireVersion;
+
+        var prepared = WireVersionDownEncoder.PrepareHeader(header, target);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prepared.WireVersion, Is.EqualTo(target));
+            // Every other field is preserved verbatim - only the version
+            // slot changes, so the entry segments stay byte-identical.
+            Assert.That(prepared, Is.EqualTo(header with { WireVersion = target }));
+        });
+    }
+
+    [Test]
+    public void PrepareHeader_crdt_mode_down_stamp_throws_not_supported()
+    {
+        var header = MakeHeader(mode: LatticeMergeMode.PnCounter);
+
+        Assert.That(
+            () => WireVersionDownEncoder.PrepareHeader(
+                header, WireVersionDownEncoder.MinimumDownEncodableWireVersion),
+            Throws.InstanceOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void PrepareHeader_compressed_down_stamp_throws_not_supported()
+    {
+        var header = MakeHeader(compression: LatticeCompression.Zstd);
+
+        Assert.That(
+            () => WireVersionDownEncoder.PrepareHeader(
+                header, WireVersionDownEncoder.MinimumDownEncodableWireVersion),
+            Throws.InstanceOf<NotSupportedException>());
+    }
+}
