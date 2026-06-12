@@ -474,13 +474,13 @@ public class WireVersionNegotiationState
             LatticeReplicationMetrics.WireVersionNegotiatedName,
             static () => _current?.ObserveNegotiated() ?? Array.Empty<Measurement<long>>(),
             unit: "{version}",
-            description: "Framing wire version the local sender has negotiated to encode at for the named peer.");
+            description: "Framing wire version the local sender has negotiated as the target for the named peer.");
 
         meter.CreateObservableGauge<long>(
             LatticeReplicationMetrics.WireVersionDowngradeActiveName,
             static () => _current?.ObserveDowngradeActive() ?? Array.Empty<Measurement<long>>(),
             unit: "{bool}",
-            description: "1 when the local sender is down-encoding to an older peer (mixed-version fleet), else 0.");
+            description: "1 when the negotiated target version is below the sender's current version (mixed-version fleet), else 0.");
     }
 
     /// <summary>
@@ -572,11 +572,11 @@ public class WireVersionNegotiationState
 /// <param name="Tree">The replicated tree id.</param>
 /// <param name="Peer">The remote peer cluster id.</param>
 /// <param name="NegotiatedVersion">
-/// The framing wire version the sender encodes at for this peer.
+/// The negotiated target framing wire version for this peer.
 /// </param>
 /// <param name="DowngradeActive">
-/// <see langword="true"/> when the negotiated version is below the
-/// sender's current wire version (the sender is down-encoding).
+/// <see langword="true"/> when the negotiated target version is below
+/// the sender's current wire version.
 /// </param>
 /// <param name="PeerCapabilityKnown">
 /// <see langword="true"/> when the peer advertised a supported wire

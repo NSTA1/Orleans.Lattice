@@ -128,11 +128,13 @@ public readonly record struct ReplicationAck
     /// <summary>
     /// The maximum framing wire-format version this receiver can decode
     /// (its build's <see cref="EncodedBatchHeader.CurrentWireVersion"/>).
-    /// Advertised on every ack so the sender can negotiate the encode
-    /// version for the next batch to
-    /// <c>min(localCurrent, peerAdvertised)</c> - transparently
-    /// down-encoding for an older receiver during a rolling upgrade
-    /// rather than shipping a newer frame the receiver would reject.
+    /// Advertised on every ack so an opted-in sender can observe the
+    /// peer's capability and compute the negotiated target version
+    /// (<c>min(localCurrent, peerAdvertised)</c>) for telemetry and the
+    /// minimum-floor fail-fast guard. (Applying that target to the
+    /// encoded bytes - actually re-encoding for an older receiver during
+    /// a rolling upgrade - is future wire-touching work; this slot is the
+    /// advertisement it will build on.)
     /// A value of <see langword="null"/> means the receiver did not
     /// advertise a capability (a build predating wire-version
     /// negotiation); the sender treats that peer's capability as
@@ -153,13 +155,16 @@ public readonly record struct ReplicationAck
 
 /// <summary>
 /// Pure, allocation-free helper that computes the wire-format version a
-/// sender should encode an outbound batch at for a given peer, applying
-/// the capability advertised on <see cref="ReplicationAck.SupportedWireVersion"/>.
-/// This is the reusable negotiation surface that later wire-touching
-/// work builds on: a newer sender transparently down-encodes for an
-/// older receiver until that receiver upgrades, while a peer that falls
-/// below the sender's minimum-supported floor still surfaces the
-/// canonical fail-fast hard error.
+/// sender would target for a given peer, applying the capability
+/// advertised on <see cref="ReplicationAck.SupportedWireVersion"/>.
+/// This is the reusable negotiation surface that records the negotiated
+/// target for telemetry and preserves the canonical fail-fast hard
+/// error when a peer falls below the sender's minimum-supported floor.
+/// Applying the negotiated version to the encoded entry bytes (actually
+/// re-encoding an outbound batch at an older version so a newer sender
+/// can ship to a not-yet-upgraded receiver) is future wire-touching work
+/// that consumes this surface; today the result is observed and
+/// floor-guarded but does not alter the on-wire payload.
 /// </summary>
 public static class WireVersionNegotiation
 {
@@ -280,28 +285,31 @@ public static class WireVersionNegotiation
 /// serialised and never travels on the wire. The advertised peer
 /// capability that feeds the negotiation travels additively on
 /// <see cref="ReplicationAck.SupportedWireVersion"/>; this type is the
-/// sender-side projection the shipper acts on (which version to encode
-/// at, and whether a down-encode is in effect for a mixed-version
-/// fleet).
+/// sender-side projection the shipper records (the negotiated target
+/// version, and whether that target is below the sender's current
+/// version for a mixed-version fleet).
 /// </para>
 /// </summary>
 public readonly record struct WireVersionNegotiationResult
 {
     /// <summary>
-    /// The wire-format version the sender should encode the next batch
-    /// at for this peer: <c>min(localCurrent, peerAdvertised)</c> once
-    /// the peer's capability is known, or the conservative
-    /// unknown-peer floor until the first acknowledgement advertises a
-    /// version. Always lies in the closed interval
-    /// <c>[minimumSupported, localCurrent]</c>.
+    /// The negotiated target wire-format version for this peer:
+    /// <c>min(localCurrent, peerAdvertised)</c> once the peer's
+    /// capability is known, or the conservative unknown-peer floor until
+    /// the first acknowledgement advertises a version. Always lies in
+    /// the closed interval <c>[minimumSupported, localCurrent]</c>. This
+    /// is the version a future re-encode seam would target; today it is
+    /// recorded for telemetry and floor-guard decisions and does not
+    /// change the encoded payload.
     /// </summary>
     public int EffectiveWireVersion { get; init; }
 
     /// <summary>
     /// <see langword="true"/> when <see cref="EffectiveWireVersion"/>
     /// is strictly less than the sender's current wire version - i.e.
-    /// the sender is (or would be) down-encoding to interoperate with
-    /// an older peer. Surfaced to operators through the
+    /// the negotiated target is below the local current version (a future
+    /// re-encode seam would down-encode for this older peer). Surfaced to
+    /// operators through the
     /// <c>replication.wire_version.downgrade_active</c> gauge so a
     /// mixed-version fleet is observable during a rolling upgrade.
     /// </summary>

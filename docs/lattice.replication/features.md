@@ -50,6 +50,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-130](https://github.com/NSTA1/Orleans.Lattice/issues/694) - Pre-ship WAL entry coalescing (LWW latest-wins + CRDT delta merge)
 - [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
 - [R-133](https://github.com/NSTA1/Orleans.Lattice/issues/697) - Adaptive sender-side batch sizing from ack-latency / throughput
+- [R-134](https://github.com/NSTA1/Orleans.Lattice/issues/703) - Re-encode WAL batches at the negotiated wire version (true down-encode)
 
 ### Shipped
 
