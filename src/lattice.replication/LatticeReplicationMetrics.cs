@@ -750,4 +750,98 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="BootstrapTransientRetries"/> counter.
     /// </summary>
     public const string BootstrapTransientRetriesName = "orleans.lattice.replication.bootstrap.transient_retries";
+
+    // --- Anti-entropy peer digest probe (detect stage) --------------------------
+
+    /// <summary>
+    /// Counter incremented once per per-shard digest comparison whose
+    /// versions agreed but whose digest hashes differed - i.e. the local
+    /// cluster and the named peer have diverged for that
+    /// <c>(tree, shard)</c>. Tagged by <see cref="TagTree"/>,
+    /// <see cref="TagShard"/>, and <see cref="TagPeer"/>. A version-skew
+    /// comparison does <b>not</b> contribute (the hashes are not
+    /// comparable across contribution-function versions). This counter is
+    /// the headline drift-detection signal for the anti-entropy chain;
+    /// every increment is also reflected as a
+    /// <see cref="DigestProbeOutcomeMismatch"/>-tagged sample on
+    /// <see cref="DigestProbeCompared"/>.
+    /// </summary>
+    public static readonly Counter<long> DigestProbeMismatch =
+        Meter.CreateCounter<long>("orleans.lattice.replication.digest_probe.mismatch", unit: "{comparison}",
+            description: "Per-shard digest comparisons whose versions matched but hashes differed, tagged by tree, shard, and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="DigestProbeMismatch"/> counter.
+    /// </summary>
+    public const string DigestProbeMismatchName = "orleans.lattice.replication.digest_probe.mismatch";
+
+    /// <summary>
+    /// Counter incremented once per per-shard digest comparison performed
+    /// by the anti-entropy digest-probe scheduler, regardless of result.
+    /// Tagged by <see cref="TagTree"/>, <see cref="TagShard"/>,
+    /// <see cref="TagPeer"/>, and <see cref="TagOutcome"/>; the outcome
+    /// value is one of <see cref="DigestProbeOutcomeMatch"/>,
+    /// <see cref="DigestProbeOutcomeMismatch"/>,
+    /// <see cref="DigestProbeOutcomeVersionSkew"/>, or
+    /// <see cref="DigestProbeOutcomeRemoteUnavailable"/>. Pairs with
+    /// <see cref="DigestProbeMismatch"/> so operators can compute the
+    /// divergence ratio (mismatches divided by comparisons) per peer.
+    /// </summary>
+    public static readonly Counter<long> DigestProbeCompared =
+        Meter.CreateCounter<long>("orleans.lattice.replication.digest_probe.compared", unit: "{comparison}",
+            description: "Per-shard digest comparisons performed by the anti-entropy probe scheduler, tagged by tree, shard, peer, and outcome.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="DigestProbeCompared"/> counter.
+    /// </summary>
+    public const string DigestProbeComparedName = "orleans.lattice.replication.digest_probe.compared";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="DigestProbeCompared"/>:
+    /// versions matched and the digest hashes were byte-identical.
+    /// Corresponds to <see cref="DigestProbeOutcome.Match"/>.
+    /// </summary>
+    public const string DigestProbeOutcomeMatch = "match";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="DigestProbeCompared"/>:
+    /// versions matched but the digest hashes differed. Corresponds to
+    /// <see cref="DigestProbeOutcome.Mismatch"/> and is the only outcome
+    /// that also increments <see cref="DigestProbeMismatch"/>.
+    /// </summary>
+    public const string DigestProbeOutcomeMismatch = "mismatch";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="DigestProbeCompared"/>:
+    /// the local and remote digests carry different contribution-function
+    /// versions, so their hashes are not comparable. Corresponds to
+    /// <see cref="DigestProbeOutcome.VersionSkew"/>; never raises a
+    /// mismatch.
+    /// </summary>
+    public const string DigestProbeOutcomeVersionSkew = "version_skew";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="DigestProbeCompared"/>:
+    /// the remote peer could not produce a digest (projection-digest
+    /// maintenance disabled or latched off remotely). Corresponds to
+    /// <see cref="DigestProbeOutcome.RemoteUnavailable"/>; never raises a
+    /// mismatch.
+    /// </summary>
+    public const string DigestProbeOutcomeRemoteUnavailable = "remote_unavailable";
+
+    /// <summary>
+    /// Maps a <see cref="DigestProbeOutcome"/> to its canonical
+    /// <see cref="TagOutcome"/> string value for
+    /// <see cref="DigestProbeCompared"/>.
+    /// </summary>
+    /// <param name="outcome">The comparison outcome.</param>
+    /// <returns>The matching outcome-tag string constant.</returns>
+    public static string DigestProbeOutcomeTag(DigestProbeOutcome outcome) => outcome switch
+    {
+        DigestProbeOutcome.Match => DigestProbeOutcomeMatch,
+        DigestProbeOutcome.Mismatch => DigestProbeOutcomeMismatch,
+        DigestProbeOutcome.VersionSkew => DigestProbeOutcomeVersionSkew,
+        DigestProbeOutcome.RemoteUnavailable => DigestProbeOutcomeRemoteUnavailable,
+        _ => DigestProbeOutcomeRemoteUnavailable,
+    };
 }

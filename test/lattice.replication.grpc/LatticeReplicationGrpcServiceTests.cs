@@ -36,9 +36,32 @@ public class LatticeReplicationGrpcServiceTests
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
         var envSerializer = sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>();
+        var probeRequestSerializer = sp.GetRequiredService<Serializer<DigestProbeRequest>>();
+        var probeResponseSerializer = sp.GetRequiredService<Serializer<DigestProbeResponse>>();
         var encoder = new TestEncoder(envSerializer);
-        method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), ackSerializer);
-        return new LatticeReplicationGrpcService(method, applier, cursorRegistry, policy, NullLogger<LatticeReplicationGrpcService>.Instance);
+        method = new LatticeReplicationGrpcMethod(
+            encoder,
+            new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()),
+            ackSerializer,
+            probeRequestSerializer,
+            probeResponseSerializer);
+        return new LatticeReplicationGrpcService(
+            method, applier, cursorRegistry, policy, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance);
+    }
+
+    private static LatticeReplicationGrpcService CreateServiceWithFactory(
+        IGrainFactory grainFactory,
+        out LatticeReplicationGrpcMethod method)
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        method = BuildMethod(sp);
+        return new LatticeReplicationGrpcService(
+            method,
+            Substitute.For<IReplicationApplier>(),
+            new InMemoryWalCursorRegistry(),
+            NoOpReceiverFlowControlPolicy.Instance,
+            grainFactory,
+            NullLogger<LatticeReplicationGrpcService>.Instance);
     }
 
     private sealed class TestEncoder : IReplicationBatchEncoder
@@ -94,7 +117,7 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_method_null()
     {
         Assert.That(
-            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -102,11 +125,10 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_applier_null()
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
-        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), sp.GetRequiredService<Serializer<ReplicationAck>>());
+        var method = BuildMethod(sp);
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -114,11 +136,21 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_flow_control_policy_null()
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
-        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), sp.GetRequiredService<Serializer<ReplicationAck>>());
+        var method = BuildMethod(sp);
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!, NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_throws_when_grain_factory_null()
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var method = BuildMethod(sp);
+
+        Assert.That(
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, null!, NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -126,12 +158,22 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_logger_null()
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
-        var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
-        var method = new LatticeReplicationGrpcMethod(encoder, new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()), sp.GetRequiredService<Serializer<ReplicationAck>>());
+        var method = BuildMethod(sp);
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, null!),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), null!),
             Throws.ArgumentNullException);
+    }
+
+    private static LatticeReplicationGrpcMethod BuildMethod(ServiceProvider sp)
+    {
+        var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
+        return new LatticeReplicationGrpcMethod(
+            encoder,
+            new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()),
+            sp.GetRequiredService<Serializer<ReplicationAck>>(),
+            sp.GetRequiredService<Serializer<DigestProbeRequest>>(),
+            sp.GetRequiredService<Serializer<DigestProbeResponse>>());
     }
 
     [Test]
@@ -709,6 +751,96 @@ public class LatticeReplicationGrpcServiceTests
             Assert.That(ack.Value.SuggestedBatchSize, Is.Null);
             Assert.That(ack.Value.PauseForMs, Is.Null);
         });
+    }
+
+    // ---- Anti-entropy digest-probe handler -----------------------------
+
+    [Test]
+    public void ProbeDigest_throws_when_request_box_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        Assert.That(
+            async () => await svc.ProbeDigest(null!, new TestServerCallContext()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ProbeDigest_throws_when_context_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new DigestProbeRequestBox
+        {
+            Value = new DigestProbeRequest { TreeName = "tree", ShardIndex = 0 },
+        };
+        Assert.That(
+            async () => await svc.ProbeDigest(box, null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ProbeDigest_throws_invalid_argument_when_tree_name_empty()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new DigestProbeRequestBox
+        {
+            Value = new DigestProbeRequest { TreeName = string.Empty, ShardIndex = 0 },
+        };
+        Assert.That(
+            async () => await svc.ProbeDigest(box, new TestServerCallContext()),
+            Throws.TypeOf<RpcException>().With.Property("StatusCode").EqualTo(StatusCode.InvalidArgument));
+    }
+
+    [Test]
+    public async Task ProbeDigest_returns_available_digest_on_success()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Substitute.For<ILattice>();
+        var digest = new LeafProjectionDigest
+        {
+            Hash = new byte[] { 1, 2, 3 },
+            EntryCount = 7,
+            CheckpointOffset = 42,
+            Version = 3,
+        };
+        lattice.GetLeafProjectionDigestAsync(2, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(digest));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new DigestProbeRequestBox
+        {
+            Value = new DigestProbeRequest { TreeName = "tree", ShardIndex = 2 },
+        };
+
+        var response = await svc.ProbeDigest(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.DigestAvailable, Is.True);
+            Assert.That(response.Value.Digest.Version, Is.EqualTo(3));
+            Assert.That(response.Value.Digest.EntryCount, Is.EqualTo(7));
+            Assert.That(response.Value.Digest.Hash, Is.EqualTo(new byte[] { 1, 2, 3 }));
+        });
+    }
+
+    [Test]
+    public async Task ProbeDigest_returns_unavailable_when_digest_disabled()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+            .Returns<Task<LeafProjectionDigest>>(_ => throw new InvalidOperationException("digest disabled"));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new DigestProbeRequestBox
+        {
+            Value = new DigestProbeRequest { TreeName = "tree", ShardIndex = 0 },
+        };
+
+        var response = await svc.ProbeDigest(box, new TestServerCallContext());
+
+        Assert.That(response.Value.DigestAvailable, Is.False);
     }
 }
 

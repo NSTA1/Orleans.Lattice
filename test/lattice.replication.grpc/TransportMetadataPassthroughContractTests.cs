@@ -85,6 +85,7 @@ public class TransportMetadataPassthroughContractTests
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
+                    services.AddSingleton(Substitute.For<IGrainFactory>());
                     services.AddLatticeReplicationGrpc();
                     // This contract fixture validates the transport metadata
                     // pass-through round-trip rather than the shared-secret
@@ -158,7 +159,7 @@ public class TransportMetadataPassthroughContractTests
     private async Task PushAsync(ReplicationBatchEnvelope envelope)
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
         var invoker = _channel.CreateCallInvoker();
         var box = new ReplicationBatchEnvelopeBox { Value = envelope };
         using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: default, request: box);

@@ -43,6 +43,7 @@ public class GrpcPushTransportIntegrationTests
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
+                    services.AddSingleton(Substitute.For<IGrainFactory>());
                     services.AddLatticeReplicationGrpc();
                     // This fixture validates the wire shape rather than the
                     // shared-secret authenticator; disable the receiver-side
@@ -146,7 +147,7 @@ public class GrpcPushTransportIntegrationTests
     public async Task Push_round_trips_an_envelope_and_returns_max_hwm()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
         var invoker = _channel.CreateCallInvoker();
 
         var hlcA = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
@@ -183,7 +184,7 @@ public class GrpcPushTransportIntegrationTests
     public async Task Push_returns_zero_hwm_for_empty_batch_over_the_wire()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        var method = new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
         var invoker = _channel.CreateCallInvoker();
 
         var box = new ReplicationBatchEnvelopeBox

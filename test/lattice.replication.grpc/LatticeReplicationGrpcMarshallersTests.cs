@@ -15,6 +15,8 @@ public class LatticeReplicationGrpcMarshallersTests
     private ServiceProvider _sp = null!;
     private Serializer<ReplicationBatchEnvelope> _envSerializer = null!;
     private Serializer<ReplicationAck> _ackSerializer = null!;
+    private Serializer<DigestProbeRequest> _probeRequestSerializer = null!;
+    private Serializer<DigestProbeResponse> _probeResponseSerializer = null!;
 
     private sealed class TestEncoder : IReplicationBatchEncoder
     {
@@ -32,6 +34,8 @@ public class LatticeReplicationGrpcMarshallersTests
         _sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         _envSerializer = _sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>();
         _ackSerializer = _sp.GetRequiredService<Serializer<ReplicationAck>>();
+        _probeRequestSerializer = _sp.GetRequiredService<Serializer<DigestProbeRequest>>();
+        _probeResponseSerializer = _sp.GetRequiredService<Serializer<DigestProbeResponse>>();
     }
 
     [OneTimeTearDown]
@@ -136,6 +140,83 @@ public class LatticeReplicationGrpcMarshallersTests
         var ack = new ReplicationAck { Accepted = true, HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 } };
         var box = new ReplicationAckBox { Value = ack };
         Assert.That(box.Value, Is.EqualTo(ack));
+    }
+
+    [Test]
+    public void CreateProbeRequestMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateProbeRequestMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void CreateProbeResponseMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateProbeResponseMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ProbeRequest_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var request = new DigestProbeRequest { TreeName = "orders", ShardIndex = 7 };
+
+        var writer = new ArrayBufferWriter<byte>();
+        _probeRequestSerializer.Serialize(request, writer);
+        var decoded = _probeRequestSerializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.TreeName, Is.EqualTo("orders"));
+            Assert.That(decoded.ShardIndex, Is.EqualTo(7));
+        });
+    }
+
+    [Test]
+    public void ProbeResponse_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var response = new DigestProbeResponse
+        {
+            DigestAvailable = true,
+            Digest = new LeafProjectionDigest
+            {
+                Hash = new byte[] { 9, 8, 7 },
+                EntryCount = 11,
+                CheckpointOffset = 42,
+                Version = LeafProjectionDigest.CurrentVersion,
+            },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        _probeResponseSerializer.Serialize(response, writer);
+        var decoded = _probeResponseSerializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.DigestAvailable, Is.True);
+            Assert.That(decoded.Digest.Hash, Is.EqualTo(new byte[] { 9, 8, 7 }));
+            Assert.That(decoded.Digest.EntryCount, Is.EqualTo(11));
+            Assert.That(decoded.Digest.CheckpointOffset, Is.EqualTo(42));
+            Assert.That(decoded.Digest.Version, Is.EqualTo(LeafProjectionDigest.CurrentVersion));
+        });
+    }
+
+    [Test]
+    public void ProbeRequestBox_carries_value_verbatim()
+    {
+        var request = new DigestProbeRequest { TreeName = "t", ShardIndex = 3 };
+        var box = new DigestProbeRequestBox { Value = request };
+        Assert.That(box.Value, Is.EqualTo(request));
+    }
+
+    [Test]
+    public void ProbeResponseBox_carries_value_verbatim()
+    {
+        var response = new DigestProbeResponse { DigestAvailable = false };
+        var box = new DigestProbeResponseBox { Value = response };
+        Assert.That(box.Value, Is.EqualTo(response));
     }
 }
 

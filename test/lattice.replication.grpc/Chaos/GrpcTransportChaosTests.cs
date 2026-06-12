@@ -91,6 +91,7 @@ public class GrpcTransportChaosTests
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new SerializerBackedBatchEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
+                    services.AddSingleton(Substitute.For<IGrainFactory>());
                     services.AddLatticeReplicationGrpc();
                     services.Configure<LatticeReplicationSecurityOptions>(o => o.RequireAuthentication = false);
                 });
@@ -245,8 +246,7 @@ public class GrpcTransportChaosTests
         secrets.IsAcceptedAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<bool>(true));
 
-        var method = new LatticeReplicationGrpcMethod(
-            _encoder, GrpcTestFactories.CreateWalRecordEncoder(), _ackSerializer);
+        var method = GrpcTestFactories.CreateMethod(_encoder, _ackSerializer);
 
         return new GrpcPushTransport(
             method, _encoder, grpcMonitor, secrets, lroMonitor);

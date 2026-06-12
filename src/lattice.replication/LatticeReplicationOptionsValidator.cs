@@ -279,6 +279,24 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + $"{nameof(ILatticeFallOffLogDetector)}.{nameof(ILatticeFallOffLogDetector.CheckAndTriggerAsync)} calls.");
         }
 
+        if (options.DigestProbeInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.DigestProbeInterval)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative cadence would cause the anti-entropy digest-probe scheduler to "
+                + "run a comparison pass on every phase tick instead of at the configured low frequency.");
+        }
+
+        if (options.DigestProbeJitter is < 0.0 or > 1.0 or double.NaN)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.DigestProbeJitter)} "
+                + $"must be in the closed interval [0.0, 1.0] ({scope}); got {options.DigestProbeJitter}. "
+                + "Jitter is a multiplicative factor applied as a +/- spread on the digest-probe interval; "
+                + "0.0 disables jitter entirely, 1.0 randomises across the full +/-100 % range.");
+        }
+
         // Reject the all-bits-zero "well-known None" sentinel range
         // only when the host has clearly typoed - i.e. the tag is
         // in the core-reserved range [0x02, 0x7F] but is not a

@@ -744,6 +744,60 @@
           "legendFormat": "{{tree}} / {{peer}}"
         }
       ]
+    },
+    {
+      "id": 23,
+      "title": "Anti-entropy digest-probe comparisons (rate, by outcome)",
+      "description": "Per-shard digest comparisons performed by the anti-entropy probe scheduler, by outcome (match / mismatch / version_skew / remote_unavailable). Dark/opt-in: zero unless DigestProbeEnabled is set.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(orleans_lattice_replication_digest_probe_compared_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Anti-entropy digest divergence (mismatch rate)",
+      "description": "Per-shard digest comparisons whose versions matched but hashes differed - the local cluster and the named peer have diverged for that shard. Pair with the comparisons panel to compute the divergence ratio. Dark/opt-in.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (peer) (rate(orleans_lattice_replication_digest_probe_mismatch_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "{{peer}}"
+        }
+      ]
     }
   ]
 }

@@ -58,6 +58,12 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.AddSingleton<IPostConfigureOptions<LatticeOptions>, MirrorReplicationOptionsToLatticeOptions>();
 
         builder.Services.TryAddSingleton<IReplicationTransport, NoOpReplicationTransport>();
+        // Anti-entropy digest-probe transport: default no-op so the
+        // detection scheduler records a non-comparable outcome rather
+        // than a spurious mismatch when no real probe transport (e.g.
+        // the gRPC binding) is wired in. The gRPC package replaces this
+        // with a real implementation via Replace().
+        builder.Services.TryAddSingleton<IReplicationDigestProbeTransport, NoOpReplicationDigestProbeTransport>();
         builder.Services.TryAddSingleton<IReplogSink, ShardedReplogSink>();
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
 

@@ -85,6 +85,7 @@ public class GrpcReplicationAuthIntegrationTests
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
+                    services.AddSingleton(Substitute.For<IGrainFactory>());
                     services.AddLatticeReplicationGrpc();
 
                     // Replace the default env-var source with a fixed in-memory
@@ -132,7 +133,7 @@ public class GrpcReplicationAuthIntegrationTests
     private LatticeReplicationGrpcMethod ResolveMethod()
     {
         var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
-        return new LatticeReplicationGrpcMethod(_encoder, GrpcTestFactories.CreateWalRecordEncoder(), ackSerializer);
+        return GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
     }
 
     [Test]

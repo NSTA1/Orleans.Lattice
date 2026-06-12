@@ -147,9 +147,16 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         });
         services.TryAddSingleton<LatticeReplicationGrpcAuthInterceptor>();
 
-        // Live-push transport (outbound, client side).
+        // Live-push transport (outbound, client side). Register the
+        // concrete transport as its own singleton and forward both the
+        // live-push seam and the anti-entropy digest-probe seam to that
+        // single instance so they share one per-peer channel cache.
         RegisterPushMethodFactory(services);
-        services.Replace(ServiceDescriptor.Singleton<IReplicationTransport, GrpcPushTransport>());
+        services.TryAddSingleton<GrpcPushTransport>();
+        services.Replace(ServiceDescriptor.Singleton<IReplicationTransport>(
+            sp => sp.GetRequiredService<GrpcPushTransport>()));
+        services.Replace(ServiceDescriptor.Singleton<IReplicationDigestProbeTransport>(
+            sp => sp.GetRequiredService<GrpcPushTransport>()));
 
         // Live-push receiver service (inbound, server side).
         services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
@@ -217,7 +224,10 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
             var encoder = sp.GetRequiredService<IReplicationBatchEncoder>();
             var walRecordEncoder = sp.GetRequiredService<IWalRecordEncoder>();
             var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
-            var method = new LatticeReplicationGrpcMethod(encoder, walRecordEncoder, ackSerializer);
+            var probeRequestSerializer = sp.GetRequiredService<Serializer<DigestProbeRequest>>();
+            var probeResponseSerializer = sp.GetRequiredService<Serializer<DigestProbeResponse>>();
+            var method = new LatticeReplicationGrpcMethod(
+                encoder, walRecordEncoder, ackSerializer, probeRequestSerializer, probeResponseSerializer);
             LatticeReplicationGrpcMethodHolder.Current = method;
             return method;
         });

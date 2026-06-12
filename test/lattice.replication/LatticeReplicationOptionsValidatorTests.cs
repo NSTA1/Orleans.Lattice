@@ -1086,5 +1086,122 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
+
+    // ------------------------------------------------------------------
+    // Anti-entropy digest-probe scheduler options
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Validate_fails_when_digest_probe_interval_is_zero()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            DigestProbeInterval = TimeSpan.Zero,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.DigestProbeInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_digest_probe_interval_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            DigestProbeInterval = TimeSpan.FromSeconds(-1),
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.DigestProbeInterval)));
+        });
+    }
+
+    [TestCase(-0.01)]
+    [TestCase(-1.0)]
+    [TestCase(1.01)]
+    [TestCase(2.0)]
+    public void Validate_fails_when_digest_probe_jitter_is_outside_unit_interval(double jitter)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            DigestProbeJitter = jitter,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.DigestProbeJitter)));
+        });
+    }
+
+    [Test]
+    public void Validate_fails_when_digest_probe_jitter_is_nan()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            DigestProbeJitter = double.NaN,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.DigestProbeJitter)));
+        });
+    }
+
+    [TestCase(0.0)]
+    [TestCase(0.2)]
+    [TestCase(1.0)]
+    public void Validate_succeeds_for_digest_probe_jitter_inside_unit_interval(double jitter)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", DigestProbeJitter = jitter };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_digest_probe_options()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.DigestProbeEnabled, Is.False);
+            Assert.That(opts.DigestProbeInterval, Is.EqualTo(LatticeReplicationOptions.DefaultDigestProbeInterval));
+            Assert.That(opts.DigestProbeJitter, Is.EqualTo(LatticeReplicationOptions.DefaultDigestProbeJitter));
+            Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_digest_probe_enabled_with_valid_cadence()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            DigestProbeEnabled = true,
+            DigestProbeInterval = TimeSpan.FromMinutes(10),
+            DigestProbeJitter = 0.5,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
 }
 

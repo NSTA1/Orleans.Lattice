@@ -40,7 +40,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 ### Planned / open
 
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
-- [R-105](https://github.com/NSTA1/Orleans.Lattice/issues/513) - Peer digest probe RPC + scheduler
 - [R-106](https://github.com/NSTA1/Orleans.Lattice/issues/514) - Merkle-walk drift localisation
 - [R-107](https://github.com/NSTA1/Orleans.Lattice/issues/515) - Targeted leaf re-replay from WAL
 - [R-108](https://github.com/NSTA1/Orleans.Lattice/issues/516) - Rate-limit, circuit breaker, and operator override
@@ -129,6 +128,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-102](https://github.com/NSTA1/Orleans.Lattice/issues/510) - Bootstrap snapshot in-progress saga handling
 - [R-103](https://github.com/NSTA1/Orleans.Lattice/issues/511) - End-to-end atomic visibility chaos verification
 - [R-104](https://github.com/NSTA1/Orleans.Lattice/issues/512) - Documentation + operator playbook
+- [R-105](https://github.com/NSTA1/Orleans.Lattice/issues/513) - Peer digest probe RPC + scheduler
 - [R-112](https://github.com/NSTA1/Orleans.Lattice/issues/520) - Pre-built `TableServiceClient` slot on `AzureTableWalStorageOptions`
 - [R-113](https://github.com/NSTA1/Orleans.Lattice/issues/521) - Widen `IReplicationTopology` to govern doorbell + fall-off probes
 - [R-114](https://github.com/NSTA1/Orleans.Lattice/issues/522) - One-encode commit-to-wire via `WalRecord`-shaped WAL bytes and framing-only replication envelope

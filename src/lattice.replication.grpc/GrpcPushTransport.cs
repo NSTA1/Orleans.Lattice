@@ -48,7 +48,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// the transport.
 /// </para>
 /// </remarks>
-internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
+internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDigestProbeTransport, IDisposable
 {
     private readonly LatticeReplicationGrpcMethod _method;
     private readonly IReplicationBatchEncoder _encoder;
@@ -84,6 +84,39 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IDisposable
     /// <inheritdoc />
     public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
         => SendCoreAsync(batch, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<DigestProbeResponse> ProbeDigestAsync(
+        string targetClusterId,
+        DigestProbeRequest request,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+        if (string.IsNullOrEmpty(targetClusterId))
+        {
+            throw new ArgumentException(
+                "targetClusterId must be non-empty.",
+                nameof(targetClusterId));
+        }
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new ArgumentException(
+                "DigestProbeRequest.TreeName must be non-empty.",
+                nameof(request));
+        }
+
+        var channel = ResolvePeerChannel(targetClusterId);
+        using var call = channel.Invoker.AsyncUnaryCall(
+            _method.ProbeDigest,
+            host: null,
+            options: new CallOptions(cancellationToken: cancellationToken),
+            request: new DigestProbeRequestBox { Value = request });
+
+        var responseBox = await call.ResponseAsync.ConfigureAwait(false);
+        return responseBox.Value;
+    }
 
     private async Task<ReplicationAck> SendCoreAsync(ReplicationBatch batch, CancellationToken cancellationToken)
     {

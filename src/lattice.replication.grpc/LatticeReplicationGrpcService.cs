@@ -33,6 +33,12 @@ internal abstract class LatticeReplicationGrpcServiceBase
     public abstract Task<ReplicationAckBox> Push(ReplicationBatchEnvelopeBox request, ServerCallContext context);
 
     /// <summary>
+    /// Handles a single anti-entropy digest probe. Implemented in
+    /// <see cref="LatticeReplicationGrpcService"/>.
+    /// </summary>
+    public abstract Task<DigestProbeResponseBox> ProbeDigest(DigestProbeRequestBox request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called
     /// once at startup with <paramref name="serviceImpl"/> set to
     /// <see langword="null"/> to record method metadata; the actual
@@ -56,10 +62,12 @@ internal abstract class LatticeReplicationGrpcServiceBase
             // null handler. Grpc.AspNetCore replaces the handler with
             // the real per-request invoker resolved through DI.
             binder.AddMethod(method.Push, (UnaryServerMethod<ReplicationBatchEnvelopeBox, ReplicationAckBox>?)null);
+            binder.AddMethod(method.ProbeDigest, (UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>?)null);
             return;
         }
 
         binder.AddMethod(method.Push, new UnaryServerMethod<ReplicationBatchEnvelopeBox, ReplicationAckBox>(serviceImpl.Push));
+        binder.AddMethod(method.ProbeDigest, new UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>(serviceImpl.ProbeDigest));
     }
 }
 
@@ -99,6 +107,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly IReplicationApplier _applier;
     private readonly IWalCursorRegistry _cursorRegistry;
     private readonly IReceiverFlowControlPolicy _flowControlPolicy;
+    private readonly IGrainFactory _grainFactory;
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
 
     /// <summary>
@@ -111,24 +120,30 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// <see cref="LatticeReplicationGrpcMethodHolder.Current"/>)
     /// before this service resolves, so the static
     /// <see cref="LatticeReplicationGrpcServiceBase.BindService"/>
-    /// hook always observes a populated holder.
+    /// hook always observes a populated holder. The
+    /// <paramref name="grainFactory"/> resolves the local
+    /// <see cref="ILattice"/> grain when answering an inbound digest
+    /// probe.
     /// </summary>
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethod method,
         IReplicationApplier applier,
         IWalCursorRegistry cursorRegistry,
         IReceiverFlowControlPolicy flowControlPolicy,
+        IGrainFactory grainFactory,
         ILogger<LatticeReplicationGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
         ArgumentNullException.ThrowIfNull(cursorRegistry);
         ArgumentNullException.ThrowIfNull(flowControlPolicy);
+        ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(logger);
 
         _applier = applier;
         _cursorRegistry = cursorRegistry;
         _flowControlPolicy = flowControlPolicy;
+        _grainFactory = grainFactory;
         _logger = logger;
     }
 
@@ -270,6 +285,53 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
             },
         };
+    }
+
+    /// <inheritdoc />
+    public override async Task<DigestProbeResponseBox> ProbeDigest(DigestProbeRequestBox requestBox, ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestBox);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var request = requestBox.Value;
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument,
+                "DigestProbeRequest.TreeName must be non-empty."));
+        }
+
+        var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
+        try
+        {
+            var digest = await lattice
+                .GetLeafProjectionDigestAsync(request.ShardIndex, context.CancellationToken)
+                .ConfigureAwait(false);
+
+            return new DigestProbeResponseBox
+            {
+                Value = new DigestProbeResponse
+                {
+                    DigestAvailable = true,
+                    Digest = digest,
+                },
+            };
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InvalidOperationException)
+        {
+            // Projection-digest maintenance is disabled (or latched off)
+            // for this tree locally. Report the digest as unavailable so
+            // the probing peer records a non-comparable outcome rather
+            // than treating the absence as a failure.
+            return new DigestProbeResponseBox
+            {
+                Value = new DigestProbeResponse { DigestAvailable = false },
+            };
+        }
     }
 }
 
