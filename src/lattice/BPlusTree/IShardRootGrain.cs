@@ -490,6 +490,29 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<LeafProjectionDigest> GetShardProjectionDigestAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns a read-only reference to this shard's current root node - its
+    /// grain identity and whether it is a leaf (flat tree) or an internal node
+    /// - or <see langword="null"/> when the shard has no root yet (empty
+    /// shard). The reference is the entry point for a read-only anti-entropy
+    /// drift-localisation traversal that descends the internal-node tree by
+    /// separator-key range; combined with
+    /// <see cref="IBPlusInternalGrain.GetRoutingTableAsync"/> and
+    /// <see cref="IBPlusInternalGrain.GetSubtreeProjectionDigestAsync"/> it lets
+    /// a caller walk the tree top-down without mutating any state.
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: the
+    /// implementation is a synchronous read of the shard root's in-memory
+    /// <c>RootNodeId</c> / <c>RootIsLeaf</c> slots wrapped in
+    /// <see cref="Task.FromResult{TResult}(TResult)"/>, so it cannot race any
+    /// other in-flight turn and never queues behind producer writes. The
+    /// returned reference is a best-effort point-in-time snapshot; it never
+    /// mutates data or any cursor.
+    /// </para>
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<ShardRootNodeRef?> GetRootNodeRefAsync();
+
+    /// <summary>
     /// Operator-tooling rebuild: clears the materialised projection state
     /// (entries, projection hash, persisted checkpoint offset, pending-tx
     /// machinery) on every leaf in this shard's chain and forces each

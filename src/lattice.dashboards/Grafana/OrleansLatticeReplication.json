@@ -869,6 +869,60 @@
         { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_replication_ship_ack_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
         { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_replication_ship_ack_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p99" }
       ]
+    },
+    {
+      "id": 28,
+      "title": "Merkle-walk leaves localised (rate)",
+      "description": "Rate of diverging leaves the read-only anti-entropy Merkle walk narrowed a shard mismatch down to. Opt-in via MerkleWalkEnabled; stays zero unless a range-answering probe transport is wired up.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 78
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (rate(orleans_lattice_replication_merkle_walk_localised_total{cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "title": "Merkle-walk aborted (rate by reason)",
+      "description": "Rate of read-only Merkle-walk passes that stopped before localising, split by reason (depth_cap, byte_budget, remote_unavailable, version_skew). With the default transport every triggered walk reports remote_unavailable.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 78
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_merkle_walk_aborted_total{cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
     }
   ]
 }

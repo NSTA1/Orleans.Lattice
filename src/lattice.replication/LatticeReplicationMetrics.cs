@@ -945,4 +945,101 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="ShipAckLatency"/> histogram.
     /// </summary>
     public const string ShipAckLatencyName = "orleans.lattice.replication.ship.ack_latency";
+    // --- Anti-entropy Merkle-walk drift localisation (localise stage) -----------
+
+    /// <summary>
+    /// Tag key for the depth a successful Merkle-walk localisation reached
+    /// within the shard's internal-node tree - <c>0</c> for the shard root
+    /// itself, incrementing by one per level descended. Carried by
+    /// <see cref="MerkleWalkLocalised"/>.
+    /// </summary>
+    public const string TagDepth = "depth";
+
+    /// <summary>
+    /// Counter incremented when the read-only Merkle-walk drift-localisation
+    /// pass narrows a shard-level digest mismatch down to a single leaf or a
+    /// small set of leaves. The increment amount is the number of diverging
+    /// leaves localised. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagDepth"/> (the depth in the internal-node tree at which the
+    /// localisation completed). The walk is strictly read-only and ships dark
+    /// behind <see cref="LatticeReplicationOptions.MerkleWalkEnabled"/>; it runs
+    /// only after the digest probe reports a
+    /// <see cref="DigestProbeOutcome.Mismatch"/>.
+    /// </summary>
+    public static readonly Counter<long> MerkleWalkLocalised =
+        Meter.CreateCounter<long>("orleans.lattice.replication.merkle_walk.localised", unit: "{leaf}",
+            description: "Diverging leaves localised by the read-only anti-entropy Merkle walk, tagged by tree and depth.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="MerkleWalkLocalised"/> counter.
+    /// </summary>
+    public const string MerkleWalkLocalisedName = "orleans.lattice.replication.merkle_walk.localised";
+
+    /// <summary>
+    /// Counter incremented once per Merkle-walk pass that aborts before
+    /// localising - because the recursion-depth cap or the byte budget was
+    /// exhausted, a remote peer could not answer a range probe, or a
+    /// contribution-function version skew made the hashes incomparable. Tagged
+    /// by <see cref="TagReason"/>; the reason value is one of
+    /// <see cref="MerkleWalkAbortDepthCap"/>, <see cref="MerkleWalkAbortByteBudget"/>,
+    /// <see cref="MerkleWalkAbortRemoteUnavailable"/>, or
+    /// <see cref="MerkleWalkAbortVersionSkew"/>.
+    /// </summary>
+    public static readonly Counter<long> MerkleWalkAborted =
+        Meter.CreateCounter<long>("orleans.lattice.replication.merkle_walk.aborted", unit: "{walk}",
+            description: "Read-only anti-entropy Merkle walks that aborted before localising, tagged by reason.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="MerkleWalkAborted"/> counter.
+    /// </summary>
+    public const string MerkleWalkAbortedName = "orleans.lattice.replication.merkle_walk.aborted";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="MerkleWalkAborted"/>: the
+    /// configured recursion-depth cap
+    /// (<see cref="LatticeReplicationOptions.MerkleWalkMaxDepth"/>) was reached
+    /// before the walk localised a leaf. Corresponds to
+    /// <see cref="MerkleWalkAbortReason.DepthCapExceeded"/>.
+    /// </summary>
+    public const string MerkleWalkAbortDepthCap = "depth_cap";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="MerkleWalkAborted"/>: the
+    /// per-probe byte budget
+    /// (<see cref="LatticeReplicationOptions.MerkleWalkMaxBytes"/>) was exhausted
+    /// before the walk localised a leaf. Corresponds to
+    /// <see cref="MerkleWalkAbortReason.ByteBudgetExceeded"/>.
+    /// </summary>
+    public const string MerkleWalkAbortByteBudget = "byte_budget";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="MerkleWalkAborted"/>: a
+    /// remote peer could not answer a key-range subtree-digest probe, so the
+    /// walk could not compare apples-to-apples and stopped. Corresponds to
+    /// <see cref="MerkleWalkAbortReason.RemoteUnavailable"/>.
+    /// </summary>
+    public const string MerkleWalkAbortRemoteUnavailable = "remote_unavailable";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="MerkleWalkAborted"/>: the
+    /// local and remote digests carry different contribution-function versions,
+    /// so their hashes are not comparable and the walk stopped. Corresponds to
+    /// <see cref="MerkleWalkAbortReason.VersionSkew"/>.
+    /// </summary>
+    public const string MerkleWalkAbortVersionSkew = "version_skew";
+
+    /// <summary>
+    /// Maps a <see cref="MerkleWalkAbortReason"/> to its canonical
+    /// <see cref="TagReason"/> string value for <see cref="MerkleWalkAborted"/>.
+    /// </summary>
+    /// <param name="reason">The abort reason.</param>
+    /// <returns>The matching reason-tag string constant.</returns>
+    public static string MerkleWalkAbortReasonTag(MerkleWalkAbortReason reason) => reason switch
+    {
+        MerkleWalkAbortReason.DepthCapExceeded => MerkleWalkAbortDepthCap,
+        MerkleWalkAbortReason.ByteBudgetExceeded => MerkleWalkAbortByteBudget,
+        MerkleWalkAbortReason.RemoteUnavailable => MerkleWalkAbortRemoteUnavailable,
+        MerkleWalkAbortReason.VersionSkew => MerkleWalkAbortVersionSkew,
+        _ => MerkleWalkAbortRemoteUnavailable,
+    };
 }

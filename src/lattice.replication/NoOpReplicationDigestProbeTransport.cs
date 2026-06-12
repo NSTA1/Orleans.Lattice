@@ -13,6 +13,9 @@ internal sealed class NoOpReplicationDigestProbeTransport : IReplicationDigestPr
     private static readonly Task<DigestProbeResponse> Unavailable =
         Task.FromResult(new DigestProbeResponse { DigestAvailable = false });
 
+    private static readonly Task<MerkleWalkProbeResponse> MerkleWalkUnavailable =
+        Task.FromResult(MerkleWalkProbeResponse.Unavailable);
+
     /// <inheritdoc />
     public Task<DigestProbeResponse> ProbeDigestAsync(
         string targetClusterId,
@@ -34,5 +37,28 @@ internal sealed class NoOpReplicationDigestProbeTransport : IReplicationDigestPr
         }
 
         return Unavailable;
+    }
+
+    /// <inheritdoc />
+    public Task<MerkleWalkProbeResponse> ProbeMerkleWalkAsync(
+        string targetClusterId,
+        MerkleWalkProbeRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(targetClusterId))
+        {
+            throw new ArgumentException(
+                "targetClusterId must be non-empty.",
+                nameof(targetClusterId));
+        }
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new ArgumentException(
+                "MerkleWalkProbeRequest.TreeName must be non-empty.",
+                nameof(request));
+        }
+
+        return MerkleWalkUnavailable;
     }
 }

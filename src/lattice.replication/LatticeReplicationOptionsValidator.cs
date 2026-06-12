@@ -306,6 +306,24 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "0.0 disables jitter entirely, 1.0 randomises across the full +/-100 % range.");
         }
 
+        if (options.MerkleWalkMaxDepth < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MerkleWalkMaxDepth)} "
+                + $"must be at least 1 ({scope}); got {options.MerkleWalkMaxDepth}. "
+                + "The Merkle-walk localisation pass descends a shard's internal-node tree up to this "
+                + "depth before aborting; a non-positive cap would localise nothing.");
+        }
+
+        if (options.MerkleWalkMaxBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MerkleWalkMaxBytes)} "
+                + $"must be at least 1 ({scope}); got {options.MerkleWalkMaxBytes}. "
+                + "The Merkle-walk localisation pass caps the cumulative digest bytes it inspects at this "
+                + "value; a non-positive budget would abort before inspecting any node.");
+        }
+
         // Reject the all-bits-zero "well-known None" sentinel range
         // only when the host has clearly typoed - i.e. the tag is
         // in the core-reserved range [0x02, 0x7F] but is not a

@@ -52,4 +52,38 @@ public class NoOpReplicationDigestProbeTransportTests
                 CancellationToken.None),
             Throws.ArgumentException);
     }
+
+    [Test]
+    public async Task ProbeMerkleWalkAsync_reports_remote_unavailable()
+    {
+        var response = await Transport.ProbeMerkleWalkAsync(
+            "site-b",
+            new MerkleWalkProbeRequest { TreeName = "tree", ShardIndex = 0, Depth = 0 },
+            CancellationToken.None);
+
+        Assert.That(response.Available, Is.False);
+    }
+
+    [TestCase("")]
+    [TestCase(null)]
+    public void ProbeMerkleWalkAsync_throws_when_target_cluster_is_empty(string? target)
+    {
+        Assert.That(
+            async () => await Transport.ProbeMerkleWalkAsync(
+                target!,
+                new MerkleWalkProbeRequest { TreeName = "tree", ShardIndex = 0, Depth = 0 },
+                CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void ProbeMerkleWalkAsync_throws_when_tree_name_is_empty()
+    {
+        Assert.That(
+            async () => await Transport.ProbeMerkleWalkAsync(
+                "site-b",
+                new MerkleWalkProbeRequest { TreeName = "", ShardIndex = 0, Depth = 0 },
+                CancellationToken.None),
+            Throws.ArgumentException);
+    }
 }

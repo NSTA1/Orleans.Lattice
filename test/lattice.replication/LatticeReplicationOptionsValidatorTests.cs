@@ -1418,5 +1418,74 @@ public class LatticeReplicationOptionsValidatorTests
 
         Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
     }
-}
 
+    // ------------------------------------------------------------------
+    // Anti-entropy Merkle-walk drift-localisation options
+    // ------------------------------------------------------------------
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_fails_when_merkle_walk_max_depth_is_non_positive(int depth)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MerkleWalkMaxDepth = depth,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MerkleWalkMaxDepth)));
+        });
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void Validate_fails_when_merkle_walk_max_bytes_is_non_positive(long bytes)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MerkleWalkMaxBytes = bytes,
+        };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MerkleWalkMaxBytes)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_default_merkle_walk_options()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(opts.MerkleWalkEnabled, Is.False);
+            Assert.That(opts.MerkleWalkMaxDepth, Is.EqualTo(LatticeReplicationOptions.DefaultMerkleWalkMaxDepth));
+            Assert.That(opts.MerkleWalkMaxBytes, Is.EqualTo(LatticeReplicationOptions.DefaultMerkleWalkMaxBytes));
+            Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_merkle_walk_enabled_with_positive_caps()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MerkleWalkEnabled = true,
+            MerkleWalkMaxDepth = 8,
+            MerkleWalkMaxBytes = 4096,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+}

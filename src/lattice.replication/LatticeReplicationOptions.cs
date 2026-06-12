@@ -692,6 +692,55 @@ public class LatticeReplicationOptions
     public double DigestProbeJitter { get; set; } = DefaultDigestProbeJitter;
 
     /// <summary>
+    /// Master switch for the read-only anti-entropy Merkle-walk drift
+    /// localisation pass - the localise stage that follows the digest probe's
+    /// detect stage. When <see langword="true"/> and
+    /// <see cref="DigestProbeEnabled"/> is also <see langword="true"/>, a
+    /// shard-level digest mismatch found by the probe triggers a top-down walk
+    /// of the shard's internal-node tree by separator-key range, narrowing the
+    /// divergence to a single leaf or a small set of leaves and emitting the
+    /// <see cref="LatticeReplicationMetrics.MerkleWalkLocalised"/> and
+    /// <see cref="LatticeReplicationMetrics.MerkleWalkAborted"/> counters. The
+    /// walk is strictly read-only: it never mutates data or advances any
+    /// cursor, and it never attempts repair.
+    /// <para>
+    /// Defaults to <see cref="DefaultMerkleWalkEnabled"/>
+    /// (<see langword="false"/>). The localisation feature ships dark and
+    /// opt-in - it runs only when the probe is enabled, the probe reports a
+    /// mismatch, and this flag is set - so an un-opted host pays nothing.
+    /// </para>
+    /// </summary>
+    public bool MerkleWalkEnabled { get; set; } = DefaultMerkleWalkEnabled;
+
+    /// <summary>
+    /// Maximum recursion depth the Merkle-walk localisation pass descends into
+    /// a shard's internal-node tree before aborting with reason
+    /// <see cref="LatticeReplicationMetrics.MerkleWalkAbortDepthCap"/>. The
+    /// shard root is depth <c>0</c>; each descended level adds one. Bounds the
+    /// worst-case number of grain hops and remote probes a single localisation
+    /// can issue against a pathologically deep or skewed tree. Only consulted
+    /// when <see cref="MerkleWalkEnabled"/> is <see langword="true"/>.
+    /// Defaults to <see cref="DefaultMerkleWalkMaxDepth"/>. Must be at least
+    /// <c>1</c>; the registered options validator rejects non-positive values
+    /// at first-resolve time.
+    /// </summary>
+    public int MerkleWalkMaxDepth { get; set; } = DefaultMerkleWalkMaxDepth;
+
+    /// <summary>
+    /// Maximum cumulative number of digest hash bytes the Merkle-walk
+    /// localisation pass inspects (summed across every local and remote digest
+    /// it compares) before aborting with reason
+    /// <see cref="LatticeReplicationMetrics.MerkleWalkAbortByteBudget"/>. Bounds
+    /// the work a single localisation can do against a high-fan-out tree
+    /// independently of the depth cap. Only consulted when
+    /// <see cref="MerkleWalkEnabled"/> is <see langword="true"/>. Defaults to
+    /// <see cref="DefaultMerkleWalkMaxBytes"/>. Must be at least <c>1</c>; the
+    /// registered options validator rejects non-positive values at
+    /// first-resolve time.
+    /// </summary>
+    public long MerkleWalkMaxBytes { get; set; } = DefaultMerkleWalkMaxBytes;
+
+    /// <summary>
     /// Whether <see cref="ShardedReplogSink"/> rings the per-peer
     /// shipper grain after a successful WAL append, signalling that
     /// new entries are available. Disabling the doorbell falls back
@@ -1218,6 +1267,31 @@ public class LatticeReplicationOptions
     /// each side of the nominal interval.
     /// </summary>
     public const double DefaultDigestProbeJitter = 0.2;
+
+    /// <summary>
+    /// Default value for <see cref="MerkleWalkEnabled"/>:
+    /// <see langword="false"/>. The drift-localisation feature ships dark and
+    /// opt-in so it does not change replication behaviour for a host that has
+    /// not enabled it.
+    /// </summary>
+    public const bool DefaultMerkleWalkEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="MerkleWalkMaxDepth"/>: 16 levels. A B+ tree
+    /// with a realistic fan-out reaches billions of leaves well within this
+    /// depth, so the cap only bites on a pathologically skewed tree while still
+    /// bounding the worst-case walk.
+    /// </summary>
+    public const int DefaultMerkleWalkMaxDepth = 16;
+
+    /// <summary>
+    /// Default value for <see cref="MerkleWalkMaxBytes"/>: 1 MB of cumulative
+    /// inspected digest bytes. At a 16-byte digest hash per node this allows on
+    /// the order of tens of thousands of node comparisons per localisation -
+    /// far more than a healthy walk needs - while still capping a pathological
+    /// high-fan-out descent.
+    /// </summary>
+    public const long DefaultMerkleWalkMaxBytes = 1024L * 1024L;
 
     /// <summary>
     /// Default value for <see cref="ShipDoorbellEnabled"/>: doorbell
