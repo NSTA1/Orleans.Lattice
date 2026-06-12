@@ -74,6 +74,41 @@ public class LatticeReplicationServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplication_registers_wal_saturation_flow_control_policy_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(
+            provider.GetRequiredService<IReceiverFlowControlPolicy>(),
+            Is.InstanceOf<WalSaturationReceiverFlowControlPolicy>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_does_not_overwrite_pre_registered_flow_control_policy()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        services.AddSingleton<IReceiverFlowControlPolicy>(NoOpReceiverFlowControlPolicy.Instance);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(
+            provider.GetRequiredService<IReceiverFlowControlPolicy>(),
+            Is.SameAs(NoOpReceiverFlowControlPolicy.Instance));
+    }
+
+    [Test]
     public void AddLatticeReplication_registers_sharded_replog_sink_by_default()
     {
         var services = new ServiceCollection();

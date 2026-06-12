@@ -139,6 +139,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-124](https://github.com/NSTA1/Orleans.Lattice/issues/532) - Multi-silo chaos fixture with silo-restart driver
 - [R-125](https://github.com/NSTA1/Orleans.Lattice/issues/533) - gRPC transport chaos fixture with fault-injecting Channel
 - [R-126](https://github.com/NSTA1/Orleans.Lattice/issues/534) - Azure Table WAL chaos fixture under Azurite throttling
+- [R-127](https://github.com/NSTA1/Orleans.Lattice/issues/690) - Receiver WAL-saturation back-pressure feeds sender backoff
 
 ## Follow-up fixes
 
