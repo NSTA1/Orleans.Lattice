@@ -32,6 +32,18 @@ public sealed class DashboardJsonTests
     private static readonly Regex InstrumentTokenRegex =
         new(@"\borleans_lattice(?:_replication)?_[a-z0-9_]+\b", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Canonical dotted names of instruments that are intentionally not charted
+    /// on any bundled dashboard. Every live instrument is currently referenced
+    /// by at least one panel, so this opt-out set is empty. If a future
+    /// instrument is deliberately left off the dashboards (for example a
+    /// short-lived diagnostic counter), add its canonical name here together
+    /// with a comment explaining why, and the forward-coverage guard below will
+    /// tolerate the gap.
+    /// </summary>
+    private static readonly IReadOnlySet<string> IntentionallyUnpaneledInstruments =
+        new HashSet<string>(StringComparer.Ordinal);
+
     private static IReadOnlyDictionary<string, string> ExpectedTokenToMeter { get; } =
         BuildExpectedTokenToMeterMap();
 
@@ -206,6 +218,65 @@ public sealed class DashboardJsonTests
         Assert.That(unknown, Is.Empty,
             $"Dashboard '{kind}' references metric tokens that do not resolve to instruments on '{expectedMeter}':{Environment.NewLine}  - " +
             string.Join(Environment.NewLine + "  - ", unknown));
+    }
+
+    [Test]
+    public void Every_live_instrument_is_referenced_by_at_least_one_dashboard_panel()
+    {
+        // Forward direction: union every metric token referenced by any bundled
+        // dashboard, then assert each live instrument exposes at least one
+        // canonical PromQL form that appears in that union. The inverse guard
+        // (Every_metric_token_referenced_in_dashboard_resolves_to_a_known_instrument)
+        // catches stale references to renamed/removed instruments; this guard
+        // catches the opposite drift - an instrument that ships with no panel -
+        // keeping docs/lattice.dashboards/metrics-to-panel-map.md's "every
+        // instrument is referenced by at least one panel" claim honest.
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var kind in LatticeDashboards.All)
+        {
+            referenced.UnionWith(ExtractInstrumentTokens(LatticeDashboards.GetGrafanaDashboardJson(kind)));
+        }
+
+        // De-duplicate the canonical name + owning meter of every instrument we
+        // know about: the live MeterListener snapshot plus the documented
+        // ...Name constants (for instruments whose factories aren't statically
+        // wired at test time).
+        var instruments = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, meter) in EnumerateLiveInstruments())
+        {
+            instruments[name] = meter;
+        }
+        foreach (var name in EnumerateDocumentedInstrumentConstants(typeof(LatticeMetrics)))
+        {
+            instruments[name] = LatticeMetrics.MeterName;
+        }
+        foreach (var name in EnumerateDocumentedInstrumentConstants(typeof(LatticeReplicationMetrics)))
+        {
+            instruments[name] = LatticeReplicationMetrics.MeterName;
+        }
+
+        var unpaneled = new List<string>();
+        foreach (var (name, meter) in instruments)
+        {
+            if (IntentionallyUnpaneledInstruments.Contains(name))
+            {
+                continue;
+            }
+
+            var forms = new Dictionary<string, string>(StringComparer.Ordinal);
+            AddInstrumentForms(forms, name, meter);
+            if (!forms.Keys.Any(referenced.Contains))
+            {
+                unpaneled.Add($"{name} (meter '{meter}')");
+            }
+        }
+
+        unpaneled.Sort(StringComparer.Ordinal);
+        Assert.That(unpaneled, Is.Empty,
+            "The following live instruments are not referenced by any bundled Grafana dashboard panel. " +
+            "Add a panel (and a docs/lattice.dashboards/metrics-to-panel-map.md row), or - if the omission " +
+            "is intentional - add the instrument to IntentionallyUnpaneledInstruments with a justifying " +
+            $"comment:{Environment.NewLine}  - " + string.Join(Environment.NewLine + "  - ", unpaneled));
     }
 
     private static HashSet<string> ExtractInstrumentTokens(string json)
