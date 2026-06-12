@@ -577,6 +577,72 @@ public class LatticeReplicationOptionsValidatorTests
     }
 
     // ------------------------------------------------------------------
+    // Shared-dictionary framing compression
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Validate_fails_when_zstd_dictionary_selected_with_zero_dictionary_id()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompression = LatticeCompression.ZstdDictionary,
+            FramingCompressionDictionaryId = 0u,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.FramingCompressionDictionaryId)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_when_zstd_dictionary_selected_with_non_zero_dictionary_id()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompression = LatticeCompression.ZstdDictionary,
+            FramingCompressionDictionaryId = 7u,
+        };
+
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(23)]
+    public void Validate_fails_when_zstd_dictionary_level_out_of_range(int level)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            FramingCompression = LatticeCompression.ZstdDictionary,
+            FramingCompressionDictionaryId = 1u,
+            FramingCompressionLevel = level,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.FramingCompressionLevel)));
+        });
+    }
+
+    [Test]
+    public void Validate_succeeds_for_zstd_dictionary_id_at_default_when_dictionary_tag_not_selected()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        Assert.That(opts.FramingCompressionDictionaryId, Is.EqualTo(LatticeReplicationOptions.DefaultFramingCompressionDictionaryId));
+        Assert.That(Validator.Validate(null, opts).Succeeded, Is.True);
+    }
+
+    // ------------------------------------------------------------------
     // Turn-safe batching options
     // ------------------------------------------------------------------
 

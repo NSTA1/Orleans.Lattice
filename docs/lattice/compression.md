@@ -30,8 +30,9 @@ Implementations must be **thread-safe** and **allocation-free on the steady-stat
 | Range | Reservation | Meaning |
 |---|---|---|
 | `0x00` | Core | `LatticeCompression.None` - no compression, payload is verbatim. |
-| `0x01` | Core | `LatticeCompression.Zstd` - RFC 8478 Zstandard. Only the core `ZstdLatticeCompressor` type may claim this tag. |
-| `0x02` - `0x7F` | Core (reserved) | Reserved for future core-shipped algorithms. Hosts must not invent values in this range; the encoder rejects such registrations with `ArgumentException` at silo startup. |
+| `0x01` | Core | `LatticeCompression.Zstd` - RFC 8478 Zstandard, dictionary-less. Only the core `ZstdLatticeCompressor` type may claim this tag. |
+| `0x02` | Core | `LatticeCompression.ZstdDictionary` - RFC 8478 Zstandard with a shared dictionary selected by a stable id carried in the framed tail. Only the core `ZstdDictionaryLatticeCompressor` type may claim this tag. |
+| `0x03` - `0x7F` | Core (reserved) | Reserved for future core-shipped algorithms. Hosts must not invent values in this range; the encoder rejects such registrations with `ArgumentException` at silo startup. |
 | `0x80` - `0xFF` | Host | Available to hosts that ship their own compressor without coordinating with the core library - **including** alternative implementations of a core algorithm (e.g. a host's own Zstd-compatible codec must claim a tag here, not `0x01`). |
 
 The encoder's internal dispatch is **keyed on the raw byte value of `Algorithm`**, not on the named enum members. A host that wants to ship a custom algorithm casts a byte from the host-reserved range into `LatticeCompression`, assigns it as `ILatticeCompressor.Algorithm`, and registers the compressor via DI. Encode and decode round-trip the byte verbatim through the fixed header; no core enum churn is required.
@@ -130,12 +131,59 @@ siloBuilder.AddLatticeReplication(o =>
 | Option | Type | Default | Meaning |
 |---|---|---|---|
 | `FramingCompression` | `LatticeCompression` | `None` | Algorithm tag stamped into the framing header. |
-| `FramingCompressionLevel` | `int` | `3` | Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd`; ignored otherwise. |
+| `FramingCompressionLevel` | `int` | `3` | Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd` or `ZstdDictionary`; ignored otherwise. |
 | `FramingCompressionMinBatchBytes` | `int` | `512` | Uncompressed-tail threshold below which the shipper stamps `Compression = None` for the batch (heartbeats / small-bursty traffic skip the per-batch fixed overhead). `0` disables the threshold. |
+| `FramingCompressionDictionaryId` | `uint` | `0` | Stable id of the shared dictionary the shipper requests when `FramingCompression` is `ZstdDictionary`. `0` means "no dictionary"; required to be non-zero when the algorithm is `ZstdDictionary`. |
 
 Compression is invisible to the apply pipeline - `ReceiverFlowControlContext`, mutation observers, and the WAL replay path see the same plaintext entries regardless of the on-wire tag.
 
 The wire-format layout of the compressed tail (length prefixes, alignment with the fixed plaintext header, no-wire-version-bump guarantee) is documented in [`docs/lattice.replication/wire-format.md`](../lattice.replication/wire-format.md).
+
+## Shared-dictionary Zstandard compression
+
+Replication payloads are highly self-similar: repeated key prefixes, identical value schemas, and recurring CRDT delta shapes recur across batches. Dictionary-less Zstandard (`LatticeCompression.Zstd`) compresses each batch independently with a fresh compressor, so the cross-batch redundancy is invisible to it and small batches compress poorly. The `LatticeCompression.ZstdDictionary` tag (`0x02`) compresses the batch tail against a **shared dictionary** trained on (or representative of) that redundancy, recovering the saving a per-batch compressor cannot see.
+
+The shared dictionary is identified by a stable `uint` **dictionary id**. The id travels in the framed tail (a 4-byte little-endian prefix ahead of the existing length prefixes) so the receiver selects the matching dictionary before inflating; the reserved id `0` means "no dictionary". The framing wire version is unchanged - `None` and `Zstd` frames are byte-identical to before, and the dictionary id rides the variable tail rather than the fixed 32-byte header.
+
+**Obtaining a dictionary.** Operator-supplied (pre-trained) dictionaries are the primary path: a host ships the dictionary asset with its configuration and registers it by id. Register the dictionary bytes and the dictionary-aware compressor on every silo that produces or consumes dictionary frames:
+
+```text
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice;
+
+// 1. Register the pre-trained dictionary bytes by stable id.
+services.AddLatticeCompressionDictionaries(new Dictionary<uint, ReadOnlyMemory<byte>>
+{
+    [1u] = preTrainedDictionaryBytes,
+});
+
+// 2. Register the dictionary-aware Zstandard compressor (wire tag 0x02).
+services.AddLatticeZstdDictionaryCompressor(compressionLevel: 3);
+```
+
+```text
+siloBuilder.AddLatticeReplication(o =>
+{
+    o.ClusterId = "site-a";
+    o.FramingCompression = LatticeCompression.ZstdDictionary;
+    o.FramingCompressionDictionaryId = 1u;   // must match a registered dictionary id
+    o.FramingCompressionLevel = 3;
+});
+```
+
+**Graceful fallback.** Shared-dictionary compression is opt-in and degrades safely:
+
+- An encoder that cannot resolve the requested dictionary locally (no dictionary-aware compressor registered, or an unknown id) re-stamps the frame as plain `Zstd` (still decodable by any peer carrying the core Zstd compressor) rather than emitting an unreadable dictionary frame.
+- A receiver that cannot resolve the dictionary id (or does not recognise the tag) surfaces `NotSupportedException` from the framing decoder and routes through the existing transient-backoff / dead-letter classification path, rather than silently mis-decoding.
+
+As with every other compression knob, flipping to a non-zero dictionary id requires a coordinated rollout: the dictionary bytes behind the id must be registered on every receiver before any sender selects it.
+
+The before/after ratio is observable - see [`docs/lattice.replication/observability.md`](../lattice.replication/observability.md).
+
+### Honest scope
+
+The shipped surface covers operator-supplied (pre-trained) dictionaries end to end: dictionary carriage in the tail, receiver-side dictionary selection, graceful fallback, opt-in options, validation, and before/after observability. Two pieces are documented follow-ups: **auto-training** a dictionary from sampled WAL payloads (the issue's "sampled-and-trained" alternative to operator-supplied), and **per-peer capability negotiation** of shared-dictionary support over the wire-version channel (today the encoder's local-availability fallback is the safety net, and dictionary support is wire-version-free so it does not correlate with the negotiated wire version).
+
 
 ## Azure Table WAL row-payload compression
 

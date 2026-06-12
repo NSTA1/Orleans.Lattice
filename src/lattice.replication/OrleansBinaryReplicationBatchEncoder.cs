@@ -261,11 +261,36 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
             return;
         }
 
-        if (!_compressors.TryGetValue((byte)header.Compression, out var compressor))
+        // Resolve the effective algorithm + dictionary id, applying
+        // graceful local fallback for the dictionary tag: when the
+        // requested ZstdDictionary frame cannot be produced on this
+        // silo (no dictionary-aware compressor registered, or the
+        // requested dictionary id is not resolvable here) we degrade
+        // to plain Zstd - still decodable by any peer carrying the
+        // core Zstd compressor - or, failing that, to the verbatim
+        // uncompressed layout. The plain Zstd and host-defined paths
+        // are unchanged and still throw NotSupportedException when
+        // their compressor is absent.
+        var (effectiveCompression, dictionaryId, compressor) =
+            ResolveEffectiveCompression(header.Compression, header.DictionaryId);
+
+        if (effectiveCompression == LatticeCompression.None)
         {
-            throw new NotSupportedException(
-                $"No {nameof(ILatticeCompressor)} is registered for compression tag 0x{(byte)header.Compression:X2}; register a singleton via DI before encoding batches with this algorithm.");
+            var verbatimHeader = header with
+            {
+                Compression = LatticeCompression.None,
+                DictionaryId = 0u,
+            };
+            EncodeUncompressedFraming(verbatimHeader, treeName, originClusterId, entries, writer);
+            return;
         }
+
+        var effectiveHeader = header with
+        {
+            Compression = effectiveCompression,
+            DictionaryId = dictionaryId,
+        };
+        var isDictionary = effectiveCompression == LatticeCompression.ZstdDictionary;
 
         // Pool the uncompressed-tail buffer through ArrayPool<byte>.Shared
         // so the compressed-encode hot path is allocation-free in
@@ -286,10 +311,24 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
             var tailSpan = uncompressedRented.AsSpan(0, uncompressedLength);
             WriteTailIntoSpan(tailSpan, treeName, originClusterId, entries.Span);
 
-            // Fixed header first (plaintext, with header.Compression set).
+            // Fixed header first (plaintext, with the effective
+            // Compression set; the fixed 32-byte layout is byte-
+            // identical to every prior wire version - DictionaryId
+            // rides the tail, not the header).
             var headerSpan = writer.GetSpan(EncodedBatchHeader.WireSize);
-            header.WriteTo(headerSpan);
+            effectiveHeader.WriteTo(headerSpan);
             writer.Advance(EncodedBatchHeader.WireSize);
+
+            // Dictionary tail prepends the 4-byte little-endian
+            // dictionary id ahead of the existing uncompressed /
+            // compressed length prefixes so the receiver can select
+            // the matching dictionary before inflating.
+            if (isDictionary)
+            {
+                var dictSpan = writer.GetSpan(4);
+                BinaryPrimitives.WriteUInt32LittleEndian(dictSpan, dictionaryId);
+                writer.Advance(4);
+            }
 
             // Uncompressed length prefix.
             var unprefixSpan = writer.GetSpan(4);
@@ -302,16 +341,81 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
             // call. The compressor writes directly into the reserved
             // span; afterwards we patch the length prefix and Advance
             // by the actual written count.
-            var bound = compressor.GetMaxCompressedLength(uncompressedLength);
-            var compressedSpan = writer.GetSpan(4 + bound);
-            var compressedLength = compressor.Compress(tailSpan, compressedSpan[4..(4 + bound)]);
-            BinaryPrimitives.WriteInt32LittleEndian(compressedSpan[0..4], compressedLength);
-            writer.Advance(4 + compressedLength);
+            int compressedLength;
+            if (isDictionary)
+            {
+                var dictCompressor = (ILatticeDictionaryCompressor)compressor!;
+                var bound = dictCompressor.GetMaxCompressedLength(uncompressedLength, dictionaryId);
+                var compressedSpan = writer.GetSpan(4 + bound);
+                compressedLength = dictCompressor.Compress(tailSpan, compressedSpan[4..(4 + bound)], dictionaryId);
+                BinaryPrimitives.WriteInt32LittleEndian(compressedSpan[0..4], compressedLength);
+                writer.Advance(4 + compressedLength);
+
+                // Before/after ratio observability so an operator can
+                // quantify the dictionary win against the dictionary-
+                // less baseline.
+                LatticeReplicationMetrics.CompressDictionaryBytesIn.Add(
+                    uncompressedLength,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName));
+                LatticeReplicationMetrics.CompressDictionaryBytesOut.Add(
+                    compressedLength,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName));
+            }
+            else
+            {
+                var bound = compressor!.GetMaxCompressedLength(uncompressedLength);
+                var compressedSpan = writer.GetSpan(4 + bound);
+                compressedLength = compressor.Compress(tailSpan, compressedSpan[4..(4 + bound)]);
+                BinaryPrimitives.WriteInt32LittleEndian(compressedSpan[0..4], compressedLength);
+                writer.Advance(4 + compressedLength);
+            }
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(uncompressedRented);
         }
+    }
+
+    /// <summary>
+    /// Resolves the algorithm actually used to frame a batch given the
+    /// requested <paramref name="requested"/> tag and
+    /// <paramref name="requestedDictionaryId"/>. For
+    /// <see cref="LatticeCompression.ZstdDictionary"/> this applies the
+    /// graceful local fallback chain (dictionary -> plain Zstd ->
+    /// verbatim) so a silo that lacks the requested dictionary still
+    /// ships a decodable frame; for every other non-None tag it
+    /// preserves the historical "throw when the compressor is absent"
+    /// contract.
+    /// </summary>
+    private (LatticeCompression Compression, uint DictionaryId, ILatticeCompressor? Compressor) ResolveEffectiveCompression(
+        LatticeCompression requested,
+        uint requestedDictionaryId)
+    {
+        if (requested == LatticeCompression.ZstdDictionary)
+        {
+            if (requestedDictionaryId != 0
+                && _compressors.TryGetValue((byte)LatticeCompression.ZstdDictionary, out var dictCandidate)
+                && dictCandidate is ILatticeDictionaryCompressor dictCompressor
+                && dictCompressor.HasDictionary(requestedDictionaryId))
+            {
+                return (LatticeCompression.ZstdDictionary, requestedDictionaryId, dictCandidate);
+            }
+
+            if (_compressors.TryGetValue((byte)LatticeCompression.Zstd, out var zstd))
+            {
+                return (LatticeCompression.Zstd, 0u, zstd);
+            }
+
+            return (LatticeCompression.None, 0u, null);
+        }
+
+        if (!_compressors.TryGetValue((byte)requested, out var compressor))
+        {
+            throw new NotSupportedException(
+                $"No {nameof(ILatticeCompressor)} is registered for compression tag 0x{(byte)requested:X2}; register a singleton via DI before encoding batches with this algorithm.");
+        }
+
+        return (requested, 0u, compressor);
     }
 
     /// <summary>
@@ -367,11 +471,49 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
                 $"No {nameof(ILatticeCompressor)} is registered for compression tag 0x{(byte)parsed.Compression:X2}; register a singleton via DI before decoding batches with this algorithm.");
         }
 
+        var isDictionary = parsed.Compression == LatticeCompression.ZstdDictionary;
+        ILatticeDictionaryCompressor? dictCompressor = null;
+        uint dictionaryId = 0;
+        var cursor = EncodedBatchHeader.WireSize;
+
+        // The dictionary tail prepends a 4-byte little-endian
+        // dictionary id ahead of the two length prefixes so the
+        // receiver can select the matching dictionary. A frame that
+        // references a dictionary this silo cannot resolve (no
+        // dictionary-aware compressor, or an unknown id) surfaces
+        // NotSupportedException rather than silently mis-decoding -
+        // the consuming pipeline routes that through its existing
+        // unknown-tag negotiation/backoff path.
+        if (isDictionary)
+        {
+            if (cursor + 4 > payload.Length)
+            {
+                throw new ArgumentException(
+                    $"Framing payload is truncated at the dictionary-id prefix; expected at least 4 more bytes at offset {cursor}.",
+                    nameof(payload));
+            }
+            dictionaryId = BinaryPrimitives.ReadUInt32LittleEndian(span[cursor..(cursor + 4)]);
+            cursor += 4;
+
+            dictCompressor = compressor as ILatticeDictionaryCompressor;
+            if (dictCompressor is null)
+            {
+                throw new NotSupportedException(
+                    $"The compressor registered for compression tag 0x{(byte)parsed.Compression:X2} does not implement {nameof(ILatticeDictionaryCompressor)}; cannot decode a dictionary frame.");
+            }
+            if (!dictCompressor.HasDictionary(dictionaryId))
+            {
+                throw new NotSupportedException(
+                    $"Compression dictionary id {dictionaryId} is not available on this receiver; the matching dictionary must be registered before decoding this frame.");
+            }
+        }
+
         // Read the two 4-byte length prefixes from the compressed
         // tail layout. The fixed header was 32 bytes; the next 4
         // bytes are uncompressed length, the 4 after that are
-        // compressed length, then the compressed body.
-        var cursor = EncodedBatchHeader.WireSize;
+        // compressed length, then the compressed body. For the
+        // dictionary tail the cursor has already advanced past the
+        // 4-byte dictionary id.
         if (cursor + 8 > payload.Length)
         {
             throw new ArgumentException(
@@ -408,7 +550,14 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
         {
             var inflateDest = new Span<byte>(rented, 0, uncompressedLength);
             var compressedSlice = span.Slice(cursor, compressedLength);
-            compressor.Decompress(compressedSlice, inflateDest, uncompressedLength);
+            if (isDictionary)
+            {
+                dictCompressor!.Decompress(compressedSlice, inflateDest, uncompressedLength, dictionaryId);
+            }
+            else
+            {
+                compressor.Decompress(compressedSlice, inflateDest, uncompressedLength);
+            }
 
             // Copy into a freshly-allocated byte[] backing buffer so
             // the surfaced ArraySegment<byte> entries remain valid
@@ -427,7 +576,7 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
                 out originClusterId,
                 out var segments);
 
-            header = parsed;
+            header = isDictionary ? parsed with { DictionaryId = dictionaryId } : parsed;
             entries = segments;
             return true;
         }

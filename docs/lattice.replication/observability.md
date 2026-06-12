@@ -144,6 +144,17 @@ These two counters are **opt-in** and fire only when `LatticeReplicationOptions.
 
 Coalescing runs only on trees whose declared `LatticeMergeMode` is `LwwRegister` - every CRDT mode is left verbatim because the receiver applies it by folding each entry's typed delta, so a dropped version would lose its contribution. Only plain point `Set` / `Delete` writes with a real (non-`Zero`) HLC that are not prepared atomic-batch entries are eligible; range deletes, saga terminal marks, and zero-HLC entries are never elided. Read the elided fraction as `rate(coalesce_entries_elided) / rate(wal_entries_shipped)` per `(tree, peer)`: a high ratio signals a hot rewrite pattern that coalescing is collapsing, and `coalesce.bytes_elided` quantifies the cross-cluster bandwidth reclaimed. The coalesced output is a strict subset of the verbatim batch, so an unmodified receiver converges identically.
 
+## Shared-dictionary compression ratio (`compress.dictionary.bytes_in` / `compress.dictionary.bytes_out`)
+
+These two counters are **opt-in** and fire only when shared-dictionary compression is selected (`LatticeReplicationOptions.FramingCompression = LatticeCompression.ZstdDictionary` with a non-zero `FramingCompressionDictionaryId`, and the requested dictionary resolves on the sending silo); the default build never records them. They quantify the before/after win of compressing the batch tail against a shared Zstandard dictionary (see [Shared-dictionary Zstandard compression](../lattice/compression.md#shared-dictionary-zstandard-compression)).
+
+| Counter | Constant | Unit | Tags | Recorded |
+|---|---|---|---|---|
+| `orleans.lattice.replication.compress.dictionary.bytes_in` | `LatticeReplicationMetrics.CompressDictionaryBytesInName` | `By` | `tree` | The uncompressed tail length each time a batch is framed with the `ZstdDictionary` tag (the "before"). |
+| `orleans.lattice.replication.compress.dictionary.bytes_out` | `LatticeReplicationMetrics.CompressDictionaryBytesOutName` | `By` | `tree` | The compressed tail length emitted for that same batch (the "after"). |
+
+Read the achieved ratio as `rate(compress_dictionary_bytes_out) / rate(compress_dictionary_bytes_in)` per `tree`: a value well below `1.0` is the dictionary saving (lower is better; `1.0` means no saving). Compare it against the dictionary-less `Zstd` baseline on the same workload to decide whether a given dictionary id is worth shipping. The counters are emitted on the framing encode path only, so a frame that gracefully degrades to plain `Zstd` (because the dictionary could not be resolved locally) does not contribute - which keeps the ratio honest about the dictionary path specifically. The `peer` tag is not available at the encode seam, so these counters are tagged by `tree` only.
+
 ## Subscribing
 
 Wire `LatticeReplicationMetrics.MeterName` into an OpenTelemetry `MeterProviderBuilder.AddMeter(...)` call, or attach a `MeterListener` directly:
