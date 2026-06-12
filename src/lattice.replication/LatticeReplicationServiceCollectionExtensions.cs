@@ -174,12 +174,21 @@ public static partial class LatticeReplicationServiceCollectionExtensions
             ServiceDescriptor.Singleton<ILatticeCompressor, ZstdLatticeCompressor>(
                 _ => new ZstdLatticeCompressor(LatticeReplicationOptions.DefaultFramingCompressionLevel)));
 
-        // Default receiver-side flow-control policy: no-op (no hint
-        // stamped on the ack). Hosts that want receiver-driven
-        // throttling replace this registration with their own
-        // IReceiverFlowControlPolicy implementation before or after
-        // AddLatticeReplication.
-        builder.Services.TryAddSingleton<IReceiverFlowControlPolicy>(_ => NoOpReceiverFlowControlPolicy.Instance);
+        // Default receiver-side flow-control policy: WAL-saturation-driven
+        // back-pressure (on by default). The policy reads the core
+        // IWalSaturationSignal and asks the sender to shrink batches and
+        // pause when the receiver's local WAL is Throttled or Saturated,
+        // and degrades to ReceiverFlowControlHint.None when no signal is
+        // registered. Registered via TryAddSingleton, so a host that wants
+        // the old blind-push behaviour pre-registers
+        // NoOpReceiverFlowControlPolicy before this call, and a host that
+        // wants to tune the mapping calls AddWalSaturationReceiverFlowControl(...).
+        builder.Services.AddOptions<WalSaturationReceiverFlowControlOptions>();
+        builder.Services.TryAddSingleton<IReceiverFlowControlPolicy>(sp =>
+            new WalSaturationReceiverFlowControlPolicy(
+                sp.GetService<IWalSaturationSignal>(),
+                sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+                sp.GetRequiredService<IOptionsMonitor<WalSaturationReceiverFlowControlOptions>>()));
         // The cursor registry, leaf-cursor reporter, and WAL GC are core
         // seams (formerly in this package, promoted in v3.5.0). Calling
         // AddWalCursorRegistry registers the in-memory default plus the

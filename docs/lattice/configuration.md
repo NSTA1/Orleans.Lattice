@@ -722,6 +722,14 @@ Peer membership in particular has its own resolution model (topology
 seam vs. `ReplicationPeers` projection) covered in
 [Peer configuration](../lattice.replication/replication-drivers.md#peer-configuration-topology-vs-replicationpeers).
 
+The replication receiver also consumes this file's WAL-saturation options
+indirectly: with `AddLatticeReplication`, a receiver translates its local
+WAL-saturation state (driven by `WalSaturationThrottledRatio` and the other
+`WalSaturation*` knobs above) into sender backoff hints **by default**. That
+mapping is tuned with the separate `WalSaturationReceiverFlowControlOptions`,
+documented in
+[Receiver flow control](../lattice.replication/receiver-flow-control.md#built-in-wal-saturation-policy).
+
 ## Full Example
 
 ```csharp verify

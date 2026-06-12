@@ -870,6 +870,10 @@ A flat-zero series on `transitions` is the healthy steady state. A rising rate o
 
 See [WAL Saturation Signal](wal-saturation-signal.md) for the full design including the per-tree resolution contract, the multi-tree aggregate view, and the bench-side adoption pattern.
 
+### Consumers
+
+In addition to application callers, the `Orleans.Lattice.Replication` package consumes this signal automatically: a receiver's `WalSaturationReceiverFlowControlPolicy` (registered by `AddLatticeReplication` by default) reads `IWalSaturationSignal.GetCurrentState(treeId)` after each applied push and translates the regime into the backoff hints carried on the `ReplicationAck`, so a saturated receiver asks the sender to ship smaller batches and pause before its local admission gate faults the apply. See [Receiver flow control](../lattice.replication/receiver-flow-control.md#built-in-wal-saturation-policy).
+
 ## Shutdown back-pressure - `LatticeShuttingDownException`
 
 Public typed exception thrown by any `ILattice` operator (and by the internal saga coordinator on its caller-facing throw path) when the operation cannot complete because the owning silo's write-ahead-log writer is draining as part of host shutdown. Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot lets callers that care about the shutdown regime explicitly distinguish it from genuine `InvalidOperationException` failures (which are not back-pressure).

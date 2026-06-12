@@ -31,7 +31,37 @@ The policy returns a `ReceiverFlowControlHint` whose two `int?` fields project d
 
 ## Defaults
 
-The default registration is `NoOpReceiverFlowControlPolicy`, a stateless singleton that always returns `ReceiverFlowControlHint.None`. The ack carries `SuggestedBatchSize = null` and `PauseForMs = null`, the sender resumes at its configured `ShipBatchSize`, and existing blind-push behaviour is preserved verbatim. Hosts opt in by registering their own implementation before or after `AddLatticeReplication` / `AddLatticeReplicationGrpc`; both call sites register the no-op via `TryAddSingleton`, so a custom registration wins regardless of composition order.
+The default registration is `WalSaturationReceiverFlowControlPolicy` (see [Built-in WAL-saturation policy](#built-in-wal-saturation-policy) below): `AddLatticeReplication` registers it via `TryAddSingleton`, so receivers translate local WAL back-pressure into sender back-off out of the box. When no `IWalSaturationSignal` is present (e.g. a stand-alone gRPC host that never called `AddLattice`) the policy degrades to `ReceiverFlowControlHint.None`, preserving blind-push behaviour. Hosts opt **out** by pre-registering `NoOpReceiverFlowControlPolicy` (a stateless singleton that always returns `ReceiverFlowControlHint.None`) before `AddLatticeReplication`; because the default uses `TryAddSingleton`, that pre-registration wins. A fully custom `IReceiverFlowControlPolicy` is registered the same way, and `AddWalSaturationReceiverFlowControl` force-installs (remove-then-add) the saturation policy regardless of composition order.
+
+## Built-in WAL-saturation policy
+
+The receiver locally applies replicated mutations through the same per-tree apply path the public write surface uses, so a pushed batch routes through the writer-side WAL admission gate and can drive the receiver's local WAL into the core library's `Throttled` or `Saturated` regime. The `WalSaturationReceiverFlowControlPolicy` bridges that signal to the sender: on every successful push it reads `IWalSaturationSignal.GetCurrentState(treeName)` for the just-applied tree and maps the regime onto the hint.
+
+| WAL state | `SuggestedBatchSize` | `PauseForMs` |
+|---|---|---|
+| `Healthy` | `null` (resume at `ShipBatchSize`) | `null` |
+| `Throttled` | `ceil(ShipBatchSize * ThrottledBatchRatio)` | `ThrottledPauseMs` |
+| `Saturated` | `SaturatedBatchSize` (a minimal drip-feed) | `SaturatedPauseMs` |
+
+Without this bridge a saturated receiver keeps accepting full-size batches until the admission gate's wait budget expires and the apply throws `LatticeSaturatedException`, which surfaces to the sender as a hard push failure rather than a graceful slow-down. With it, the receiver asks the sender to back off *before* the gate runs out of headroom.
+
+`WalSaturationReceiverFlowControlPolicy` is the default policy installed by `AddLatticeReplication`. To keep the old blind-push behaviour, pre-register the no-op before `AddLatticeReplication`:
+
+```csharp verify
+siloBuilder.Services.AddSingleton<IReceiverFlowControlPolicy>(NoOpReceiverFlowControlPolicy.Instance);
+```
+
+To tune the mapping, call `AddWalSaturationReceiverFlowControl`, which removes any prior `IReceiverFlowControlPolicy` registration (including the default) and installs the saturation policy with your options, so the result is deterministic regardless of composition order with `AddLatticeReplication`:
+
+```csharp verify
+siloBuilder.AddWalSaturationReceiverFlowControl(options =>
+{
+    options.ThrottledBatchRatio = 0.25;
+    options.SaturatedPauseMs = 1000;
+});
+```
+
+The mapping is tuned per tree through `WalSaturationReceiverFlowControlOptions`: `ThrottledBatchRatio` (the fraction of `ShipBatchSize` to suggest while throttled, clamped to `[0, 1]`), `ThrottledPauseMs`, `SaturatedBatchSize` (an absolute floor, defaulting to a single-entry drip-feed), and `SaturatedPauseMs`. Every suggested size is clamped to `[1, ShipBatchSize]`, and a non-positive pause is surfaced as "no pause requested" (`PauseForMs = null`). The hint rides the existing additive `ReplicationAck` slots, so there is no wire change. When no `IWalSaturationSignal` is registered (the signal is produced by `AddLattice`), the policy degrades to `ReceiverFlowControlHint.None` and the receiver keeps the existing blind-push behaviour.
 
 ## Sender-side semantics
 

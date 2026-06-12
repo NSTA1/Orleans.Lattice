@@ -475,6 +475,18 @@ condition clears.
 All options resolve via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`,
 so per-tree overrides are honoured.
 
+### Receiver-side flow control
+
+Receiver-side WAL back-pressure is on by default: `AddLatticeReplication`
+installs `WalSaturationReceiverFlowControlPolicy`, which translates the local
+WAL's saturation state into the sender backoff hints carried on each
+`ReplicationAck`. The mapping is tuned with the separate
+`WalSaturationReceiverFlowControlOptions` (`ThrottledBatchRatio`,
+`ThrottledPauseMs`, `SaturatedBatchSize`, `SaturatedPauseMs`) via
+`ISiloBuilder.AddWalSaturationReceiverFlowControl(...)`. Hosts opt out by
+pre-registering `NoOpReceiverFlowControlPolicy`. See
+[Receiver flow control](receiver-flow-control.md#built-in-wal-saturation-policy).
+
 ---
 
 ## Metric activation

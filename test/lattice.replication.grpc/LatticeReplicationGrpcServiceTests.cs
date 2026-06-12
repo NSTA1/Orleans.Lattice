@@ -2,6 +2,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
@@ -628,6 +629,83 @@ public class LatticeReplicationGrpcServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(ack.Value.Accepted, Is.True);
+            Assert.That(ack.Value.SuggestedBatchSize, Is.Null);
+            Assert.That(ack.Value.PauseForMs, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Push_with_wal_saturation_policy_stamps_backoff_when_receiver_is_saturated()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        // Force the receiver's local WAL into the Saturated regime; the real
+        // WalSaturationReceiverFlowControlPolicy must translate that into a
+        // drip-feed batch + long pause on the ack the sender reads.
+        var signal = Substitute.For<IWalSaturationSignal>();
+        signal.GetCurrentState("tree").Returns(WalSaturationState.Saturated);
+
+        var repOptions = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        repOptions.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions());
+        var fcOptions = Substitute.For<IOptionsMonitor<WalSaturationReceiverFlowControlOptions>>();
+        fcOptions.Get(Arg.Any<string>()).Returns(new WalSaturationReceiverFlowControlOptions());
+
+        var policy = new WalSaturationReceiverFlowControlPolicy(signal, repOptions, fcOptions);
+        var svc = CreateService(applier, new InMemoryWalCursorRegistry(), policy, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = new[] { MakeSet("a", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }) },
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.SuggestedBatchSize,
+                Is.EqualTo(WalSaturationReceiverFlowControlOptions.DefaultSaturatedBatchSize));
+            Assert.That(ack.Value.PauseForMs,
+                Is.EqualTo(WalSaturationReceiverFlowControlOptions.DefaultSaturatedPauseMs));
+        });
+    }
+
+    [Test]
+    public async Task Push_with_wal_saturation_policy_omits_hint_when_receiver_is_healthy()
+    {
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero }));
+
+        var signal = Substitute.For<IWalSaturationSignal>();
+        signal.GetCurrentState("tree").Returns(WalSaturationState.Healthy);
+
+        var repOptions = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        repOptions.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions());
+        var fcOptions = Substitute.For<IOptionsMonitor<WalSaturationReceiverFlowControlOptions>>();
+        fcOptions.Get(Arg.Any<string>()).Returns(new WalSaturationReceiverFlowControlOptions());
+
+        var policy = new WalSaturationReceiverFlowControlPolicy(signal, repOptions, fcOptions);
+        var svc = CreateService(applier, new InMemoryWalCursorRegistry(), policy, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = new[] { MakeSet("a", new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }) },
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
             Assert.That(ack.Value.SuggestedBatchSize, Is.Null);
             Assert.That(ack.Value.PauseForMs, Is.Null);
         });
