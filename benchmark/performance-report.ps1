@@ -234,20 +234,17 @@ $Layer1Rows = @(
 		CeilingUnit = 'keys/s';
 	},
 	@{
-		Label = '`GetManyAsync` (16 keys/call)';
+		Label = '`GetManyAsync` (4 keys/call)';
 		WorkloadId = 'point-get-many';
 		BdnMethod = 'PointGetMany';
 		MetricSlug = 'point_get_many';
-		ExpectedBatchSize = 16;
+		ExpectedBatchSize = 4;
 		CeilingUnit = 'keys/s';
-		# Note: the current bench builds a 4-key batch (LatticeMicroBenchmarks.cs
-		# line ~430). When this script first runs against the real bench, the
-		# row label '(16 keys/call)' will not match. The aggregator emits a
-		# warning; consider adding a BENCH_MICROBENCH_GETMANY_BATCH env to the
-		# fixture and pinning it to 16 to align bench with doc. The per-key
-		# ceiling cell scales by ExpectedBatchSize, so a mismatch silently
-		# inflates the displayed throughput - rebuild the bench to match
-		# before publishing.
+		# The PointGetMany bench builds a fixed 4-key batch
+		# (LatticeMicroBenchmarks.cs GlobalSetup, getManyBatchSize = min(4,...)).
+		# The label and ExpectedBatchSize are pinned to 4 to match the fixture;
+		# the per-key ceiling cell scales by ExpectedBatchSize, so keeping these
+		# aligned avoids silently inflating the displayed throughput.
 	},
 	@{
 		Label = '`SetManyAsync` (1,000 keys/call)';
@@ -309,10 +306,28 @@ $Layer2Rows = @(
 		ThroughputUnit = 'keys/s';
 	},
 	@{
-		Label = '`SetAsync` (point write)';
+		Label = '`SetAsync` (point write, 100 veh/5 Hz)';
 		WorkloadId = 'set-point';
 		WorkloadMode = 'set-point';
 		ThroughputUnit = 'keys/s';
+		# Per-workload offered rung. Point writes are the most account-bound
+		# mode: each key is its own WAL append and its own Azure Table
+		# operation (no batching of round-trips), so the eight in-flight
+		# flush slots cap the sustained rate at only ~800-850 key-writes/s
+		# against a single Tables account on the D8as_v5 host. Unlike the
+		# batched modes, point writes peg the flush slots (inFlight 8/8) at
+		# any offered rate near that ceiling, and once the slots are pinned a
+		# WAL append can wait behind the admission cap past its 30s dispatch
+		# timeout and fail - so cohorts at/near the ceiling fail ~2/3 of the
+		# time (validated: 350 veh -> 1/3 HEALTHY). Holding the offered rate
+		# well below the ceiling keeps the flush slots unsaturated (inFlight
+		# stays low) so no append ever waits out its dispatch timeout, and
+		# all three cohorts complete with zero failures. The reported number
+		# is therefore a conservative *sustained* point-write rate at a sub-
+		# saturation offered load, not the saturation ceiling (the account
+		# ceiling is discussed in docs/lattice/throughput.md).
+		# 100 veh x 5 Hz = 500 keys/s offered.
+		Rung = '100:5:45';
 	},
 	@{
 		Label = '`GetManyAsync` (4,096 keys/call)';
@@ -321,7 +336,7 @@ $Layer2Rows = @(
 		ThroughputUnit = 'keys/s';
 	},
 	@{
-		Label = '`SetManyAsync` (4,096 keys/call)';
+		Label = '`SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz)';
 		WorkloadId = 'set-many';
 		WorkloadMode = 'set-many';
 		# Unit is keys/s (matches other rows) - one SetManyAsync entry = one
@@ -329,30 +344,110 @@ $Layer2Rows = @(
 		# describes the per-call batch shape; the throughput cell is the
 		# resulting key-write rate.
 		ThroughputUnit = 'keys/s';
+		# Per-workload offered rung. Batched writes amortise grain-RPC and
+		# WAL cost across the call, so the saturation ceiling (~12.5k key-
+		# writes/s) is much higher than point writes - but each flush still
+		# decomposes into many ~100-entity Azure Table transactions, any one
+		# of which can tail-spike past the 30s WAL dispatch timeout when the
+		# single account is pushed near its ceiling. A single timed-out
+		# transaction fails its whole 4,096-key flush (~11k failed keys),
+		# leaving failed>0 -> FAILED; that struck ~1/3 of cohorts at the
+		# ceiling rung. Holding the offered rate to roughly half the ceiling
+		# keeps the per-transaction latency in the fast path so no flush
+		# times out, every cohort finishes with zero failures, and the
+		# reported number is a conservative *sustained* rate (not the
+		# saturation ceiling - see docs/lattice/throughput.md).
+		# 1200 veh x 5 Hz = 6,000 keys/s offered.
+		Rung = '1200:5:45';
 	},
 	@{
-		Label = '`SetManyAtomicAsync` (64 keys/saga)';
+		Label = '`SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz)';
 		WorkloadId = 'set-many-atomic';
 		WorkloadMode = 'set-many-atomic';
 		ThroughputUnit = 'keys/s';
+		# Per-workload offered rung. Two constraints bound this value:
+		#   1. FLOOR: each saga commits 64 *distinct* keys as one all-or-
+		#      nothing batch, and the producer derives one key per vehicle,
+		#      so the cohort must run at least 64 vehicles or the saga can
+		#      only form <64 distinct keys and emits a duplicate-key batch
+		#      that the atomic-write API (correctly) rejects with
+		#      ArgumentException -> every flush fails (validated: 60 veh ->
+		#      FINAL ops=0 failed=13262). A 64-key saga must be driven at
+		#      >= 64 vehicles.
+		#   2. CEILING: the saga holds one of the eight in-flight flush slots
+		#      for its whole prepare+commit round-trip, so the slots peg
+		#      (inFlight 8/8) at a sustained ceiling of only ~450-530 key-
+		#      writes/s. Driving near that ceiling is not reproducible: with
+		#      the slots pinned, an Azure tail-latency burst times out a saga
+		#      flush (validated: 450 veh -> 2/3, one cohort FINAL failed).
+		# 100 veh satisfies both: above the 64-key floor, and well below the
+		# saturation point so the flush slots stay unsaturated (inFlight ~1-2,
+		# matching the proven cross-tree-atomic-64 @ 100 shape) and the in-
+		# flight sub-sagas quiesce to zero before stop. All cohorts then
+		# report HEALTHY at a conservative *sustained* saga-commit rate (not
+		# the ceiling - see docs/lattice/throughput.md).
+		# 100 veh x 5 Hz = 500 keys/s offered.
+		Rung = '100:5:45';
 	},
 	@{
-		Label = '`SetManyAtomicAsync` (2 keys/saga, single-tree)';
+		Label = '`SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz)';
 		WorkloadId = 'set-many-atomic-2';
 		WorkloadMode = 'set-many-atomic-2';
 		ThroughputUnit = 'keys/s';
+		# Per-workload offered rung. Small-batch atomic sagas are saga-rate
+		# bound (each 2-key SetManyAtomicAsync is a full two-phase commit
+		# whose Azure Table WAL writes saturate a single Tables account at a
+		# few hundred sagas/s). The uniform high rung (4000 veh) offers ~150x
+		# the sustainable saga rate, so the bounded ingest channel fills and
+		# the post-load drain tail cannot clear inside the host stop window -
+		# a non-representative overload wedge, not a throughput measurement.
+		# The offered rate is also held comfortably below the saturation
+		# ceiling so the in-flight flush slots are not pinned at the cap; that
+		# keeps the post-producer drain tail short (few stragglers to finalize)
+		# and the cohort reliably HEALTHY. 20 veh x 5 Hz ~= 100 keys/s offered.
+		Rung = '20:5:45';
 	},
 	@{
-		Label = '`BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees)';
+		Label = '`BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz)';
 		WorkloadId = 'cross-tree-atomic-2';
 		WorkloadMode = 'cross-tree-atomic-2';
 		ThroughputUnit = 'keys/s';
+		# Cross-tree 2-key sagas carry the highest per-op coordination cost
+		# (coordinator grain + one sub-saga AtomicWriteGrain per tree), so
+		# their sustainable rate is the lowest of all modes and their post-
+		# load settle (quiescing the in-flight sub-sagas) is the most drain-
+		# sensitive. Measured saturation ceiling on the D8as_v5 host is
+		# ~105 entries/s (steady mean pins there with the 8 in-flight flush
+		# slots fully saturated); at 15 veh the offered rate exceeds that
+		# ceiling, so an ingest backlog accumulates over the load window that
+		# the post-producer quiesce cannot reliably drain -> intermittent
+		# drain-tail WEDGE. Holding the offered rate to ~80 entries/s (about
+		# three quarters of the ceiling) keeps the flush slots unsaturated,
+		# so no backlog builds, the in-flight sub-sagas quiesce to zero within
+		# the pre-stop wait, and the cohort drains immediately and reports
+		# HEALTHY. 8 veh x 5 Hz x 2 keys ~= 80 keys/s offered.
+		Rung = '8:5:45';
 	},
 	@{
-		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees)';
+		Label = '`BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 100 veh/5 Hz)';
 		WorkloadId = 'cross-tree-atomic-64';
 		WorkloadMode = 'cross-tree-atomic-64';
 		ThroughputUnit = 'keys/s';
+		# Per-workload offered rung. Cross-tree 64-key sagas pay the saga
+		# coordination cost (coordinator grain + one sub-saga AtomicWriteGrain
+		# per tree) on top of the WAL-flush ceiling, and commit WAL writes to
+		# two trees per saga, so they push the single Tables account hardest
+		# of all the write modes - the eight flush slots peg (inFlight 8/8) and
+		# the sustained ceiling is only ~800-850 key-writes/s, the same shape
+		# as point writes. Driving near that ceiling is not reproducible: an
+		# Azure tail-latency burst times out cross-tree flushes (validated:
+		# 350 veh -> 2/3, one cohort FINAL failed=28672). Holding the offered
+		# rate well below the ceiling keeps the flush slots unsaturated so no
+		# flush times out and the in-flight sub-sagas quiesce to zero before
+		# stop; all cohorts then report HEALTHY at a conservative *sustained*
+		# rate (not the ceiling - see docs/lattice/throughput.md).
+		# 100 veh x 5 Hz = 500 keys/s offered.
+		Rung = '100:5:45';
 	}
 )
 
@@ -800,7 +895,13 @@ function Invoke-Layer2Cohorts {
 	$result = @{}
 	foreach ($row in $rows) {
 		$mode = $row.WorkloadMode
-		Write-Host "[layer2] mode=$mode N=$N" -ForegroundColor Cyan
+		# Per-workload offered rung: a row may override the sweep-wide $Rung
+		# with its own 'vehicles:tickHz:durationSec' spec (see $Layer2Rows).
+		# Small-batch atomic modes use a reduced rung so they are driven at
+		# their sustainable saga rate instead of being over-driven into a
+		# non-representative drain-tail wedge by the uniform high rung.
+		$rowRung = if ($row.ContainsKey('Rung') -and $row.Rung) { Resolve-Rung -Spec $row.Rung } else { $Rung }
+		Write-Host "[layer2] mode=$mode N=$N rung=$($rowRung.Vehicles)veh/$($rowRung.TickHz)Hz/$($rowRung.DurationSec)s" -ForegroundColor Cyan
 		$cohortList = New-Object System.Collections.Generic.List[hashtable]
 
 		for ($i = 1; $i -le $N; $i++) {
@@ -826,9 +927,9 @@ function Invoke-Layer2Cohorts {
 			# enumeration to skip the noise. Mirrors the Out-Host pattern in
 			# Invoke-Layer1Cohorts.
 			& $runCohort `
-				-Vehicles    $Rung.Vehicles `
-				-TickHz      $Rung.TickHz `
-				-DurationSec $Rung.DurationSec `
+				-Vehicles    $rowRung.Vehicles `
+				-TickHz      $rowRung.TickHz `
+				-DurationSec $rowRung.DurationSec `
 				-NamePrefix  $Prefix `
 				-ParametersFile $ParametersFilePath `
 				-ExtraSiloEnv $extraEnv | Out-Host
@@ -862,6 +963,9 @@ function Invoke-Layer2Cohorts {
 				inFlightMax   = $parsed.InFlightMax
 				failed        = $parsed.Failed
 				verdict       = $parsed.Verdict
+				rungVehicles  = $rowRung.Vehicles
+				rungTickHz    = $rowRung.TickHz
+				rungDurationSec = $rowRung.DurationSec
 			})
 		}
 		$result[$mode] = @($cohortList.ToArray())
@@ -1091,6 +1195,25 @@ function Aggregate-Layer2Cells {
 			Write-Warning "[aggregate-l2] no cohorts for mode=$mode (row '$($row.Label)')"
 			continue
 		}
+		# Only aggregate cohorts the harness graded HEALTHY. A WEDGE/FAILED
+		# cohort's silo reporter often closes on a single-sample window, so
+		# its per-call p50/p75/p90/p99 collapse to one identical (and wildly
+		# inflated) value; letting that into the cross-cohort median poisons
+		# the published per-call cells even when the other cohorts are clean.
+		# Its steady-state mean is equally unrepresentative (drain-tail
+		# thrash depresses it). Dropping non-HEALTHY cohorts keeps the doc a
+		# measurement of the system's healthy behaviour; if a workload has no
+		# HEALTHY cohort the row is left to its preserved/_pending_ state and
+		# a warning is surfaced for the operator.
+		$healthy = @($cohorts | Where-Object { (Get-StateOr $_ 'verdict' '') -eq 'HEALTHY' })
+		if ($healthy.Count -lt $cohorts.Count) {
+			Write-Warning "[aggregate-l2] mode=${mode}: excluding $($cohorts.Count - $healthy.Count)/$($cohorts.Count) non-HEALTHY cohort(s) from aggregation"
+		}
+		if ($healthy.Count -eq 0) {
+			Write-Warning "[aggregate-l2] mode=${mode}: no HEALTHY cohorts in $($cohorts.Count) cohort(s); row '$($row.Label)' not updated"
+			continue
+		}
+		$cohorts = $healthy
 		$means = @($cohorts | ForEach-Object { $_.steadyMean } | Where-Object { $_ -gt 0 })
 		$p50s  = @($cohorts | ForEach-Object { $_.perCallP50Ms } | Where-Object { $null -ne $_ })
 		$p75s  = @($cohorts | ForEach-Object { $_.perCallP75Ms } | Where-Object { $null -ne $_ })
@@ -1303,7 +1426,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
 		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']        = 'Throughput cell = median across N cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
+		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
 	}
 	return $meta
 }
@@ -1440,7 +1563,7 @@ function Render-ProvenanceNote {
 		'layer2' {
 			$region = if ($Meta.ContainsKey('region')) { $Meta['region'] }  else { 'unknown' }
 			$rung   = if ($Meta.ContainsKey('rung'))   { $Meta['rung'] }    else { 'unknown' }
-			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts at ${rung}."
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts. Read workloads were driven at ${rung}; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation."
 		}
 		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
 	}
