@@ -343,6 +343,55 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string ShipRedundantPayloadBytesName = "orleans.lattice.replication.ship.redundant_payload_bytes";
 
+    // --- Pre-ship coalescing counters -------------------------------------------
+
+    /// <summary>
+    /// Counter of WAL entries elided from an outbound batch by pre-ship
+    /// coalescing - the count of redundant per-key versions dropped
+    /// before they reach the cross-cluster wire. Incremented once per
+    /// elided entry as the shipper compacts a drained batch, only when
+    /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
+    /// is set (the counter never fires under the default-off behaviour).
+    /// <para>
+    /// Coalescing collapses a hot key rewritten several times within a
+    /// single drained batch down to the single version a last-writer-wins
+    /// receiver would have converged to, so the elided entries are the
+    /// intermediate versions the receiver would have overwritten anyway.
+    /// Pairs with <see cref="WalEntriesShipped"/> so operators can read
+    /// the elided fraction directly. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagPeer"/>. Distinct from
+    /// <see cref="ShipRedundantPayloads"/>, which is a measurement-only
+    /// content-hash signal that never alters the bytes shipped; this
+    /// counter records entries that were actually dropped from the wire.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> CoalesceEntriesElided =
+        Meter.CreateCounter<long>("orleans.lattice.replication.coalesce.entries_elided", unit: "{entry}",
+            description: "WAL entries dropped from an outbound batch by pre-ship coalescing, tagged by tree and peer.");
+
+    /// <summary>
+    /// Counter of pre-encoded entry-payload bytes elided from an outbound
+    /// batch by pre-ship coalescing - the sum of the wire-segment lengths
+    /// of the entries counted by <see cref="CoalesceEntriesElided"/>. Lets
+    /// operators quantify the cross-cluster bandwidth coalescing reclaimed,
+    /// not just the entry count. Same firing conditions and tags
+    /// (<see cref="TagTree"/> and <see cref="TagPeer"/>) as
+    /// <see cref="CoalesceEntriesElided"/>.
+    /// </summary>
+    public static readonly Counter<long> CoalesceBytesElided =
+        Meter.CreateCounter<long>("orleans.lattice.replication.coalesce.bytes_elided", unit: "By",
+            description: "Pre-encoded entry-payload bytes dropped from an outbound batch by pre-ship coalescing, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="CoalesceEntriesElided"/> counter.
+    /// </summary>
+    public const string CoalesceEntriesElidedName = "orleans.lattice.replication.coalesce.entries_elided";
+
+    /// <summary>
+    /// Canonical name of the <see cref="CoalesceBytesElided"/> counter.
+    /// </summary>
+    public const string CoalesceBytesElidedName = "orleans.lattice.replication.coalesce.bytes_elided";
+
     // --- Dead-letter queue counters ---------------------------------------------
 
     /// <summary>
