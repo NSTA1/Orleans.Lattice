@@ -117,6 +117,15 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "runs may apply concurrently.");
         }
 
+        if (options.ContentHashDedupCacheSize < 64)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ContentHashDedupCacheSize)} "
+                + $"must be at least 64 ({scope}). The content-hash dedup measurement cache must retain "
+                + "enough recently-shipped keys that a pathological key burst cannot evict the cache faster "
+                + "than it fills and starve the payload-re-send-rate measurement.");
+        }
+
         if (options.WalRetention is { } retention && retention <= TimeSpan.Zero)
         {
             return ValidateOptionsResult.Fail(

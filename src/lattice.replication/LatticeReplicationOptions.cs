@@ -246,6 +246,52 @@ public class LatticeReplicationOptions
     public int ApplyMaxParallelRuns { get; set; } = DefaultApplyMaxParallelRuns;
 
     /// <summary>
+    /// Whether the per-<c>(tree, peer)</c> shipper measures the
+    /// content-hash payload re-send rate: the fraction of shipped
+    /// <see cref="MutationKind.Set"/> entries whose value bytes are
+    /// byte-identical to the value most recently shipped for the same
+    /// key. Defaults to <see langword="false"/>; when off the shipper
+    /// behaves and frames bytes exactly as it does today (no extra
+    /// hashing, no cache, no metric), so the on-the-wire output is
+    /// byte-identical to a build without this option.
+    /// <para>
+    /// Idempotent upstream retry logic - a caller that re-sets the same
+    /// value on every retry - is the canonical source of redundant
+    /// payload re-sends. Enabling this option records the
+    /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloads"/> and
+    /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloadBytes"/>
+    /// counters so an operator can decide whether the re-send rate
+    /// justifies a future sender-manifest / receiver-pull-missing
+    /// round trip. The measurement itself never elides, reorders, or
+    /// alters the bytes shipped: every entry is still shipped verbatim,
+    /// so last-writer-wins / HLC convergence semantics are unaffected.
+    /// </para>
+    /// </summary>
+    public bool ContentHashDedupEnabled { get; set; } = DefaultContentHashDedupEnabled;
+
+    /// <summary>
+    /// Maximum number of distinct keys the per-<c>(tree, peer)</c>
+    /// content-hash dedup measurement cache retains. The cache maps each
+    /// recently-shipped key to the content hash of the last value
+    /// shipped for it; a re-send of byte-identical content for a key
+    /// still in the cache increments the redundant-payload counters.
+    /// Larger values measure the re-send rate accurately across a wider
+    /// working set of keys at the cost of more per-shipper memory;
+    /// eviction is least-recently-shipped first on overflow.
+    /// <para>
+    /// Only consulted when <see cref="ContentHashDedupEnabled"/> is
+    /// <see langword="true"/>. Defaults to
+    /// <see cref="DefaultContentHashDedupCacheSize"/>. Must be at least
+    /// <c>64</c>; the registered options validator rejects smaller
+    /// values at first-resolve time so a single pathological key burst
+    /// cannot evict the cache faster than it fills and starve the
+    /// measurement.
+    /// </para>
+    /// </summary>
+    public int ContentHashDedupCacheSize { get; set; } = DefaultContentHashDedupCacheSize;
+
+
+    /// <summary>
     /// Optional wall-clock hard ceiling for WAL retention. When set,
     /// the WAL garbage collector
     /// (<see cref="ILatticeWalGc"/>) trims entries whose
@@ -876,6 +922,27 @@ public class LatticeReplicationOptions
     /// gets the exact historical apply ordering and concurrency.
     /// </summary>
     public const int DefaultApplyMaxParallelRuns = 1;
+
+    /// <summary>
+    /// Default value for <see cref="ContentHashDedupEnabled"/>: the
+    /// content-hash payload-re-send measurement is off so the shipper's
+    /// behaviour and on-the-wire output are byte-identical to a build
+    /// without the option. Operators opt in only when they suspect
+    /// idempotent upstream retries are inflating replication bandwidth
+    /// and want to measure the re-send rate.
+    /// </summary>
+    public const bool DefaultContentHashDedupEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="ContentHashDedupCacheSize"/>: 4096
+    /// retained keys per <c>(tree, peer)</c>. Sized to track the
+    /// re-send rate across a comfortable hot-key working set while
+    /// keeping the per-shipper memory footprint bounded (~64 KB per
+    /// shipper at typical key sizes - one key string plus an 8-byte
+    /// digest per slot).
+    /// </summary>
+    public const int DefaultContentHashDedupCacheSize = 4096;
+
 
     /// <summary>
     /// Default value for <see cref="AutoBootstrapOnFallOffLog"/>:

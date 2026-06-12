@@ -39,7 +39,6 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 
 ### Planned / open
 
-- [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
 - [R-106](https://github.com/NSTA1/Orleans.Lattice/issues/514) - Merkle-walk drift localisation
 - [R-107](https://github.com/NSTA1/Orleans.Lattice/issues/515) - Targeted leaf re-replay from WAL
 - [R-108](https://github.com/NSTA1/Orleans.Lattice/issues/516) - Rate-limit, circuit breaker, and operator override
@@ -148,6 +147,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-128](https://github.com/NSTA1/Orleans.Lattice/issues/692) - Sender-side multi-batch pipelining (activate `ShipMaxInFlight`)
 - [R-129](https://github.com/NSTA1/Orleans.Lattice/issues/693) - Wire-version capability negotiation for safe rolling upgrades
 - [R-131](https://github.com/NSTA1/Orleans.Lattice/issues/695) - Parallel receiver apply across independent (tree, origin) runs
+- [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
 
 ## Follow-up fixes
 

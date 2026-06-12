@@ -162,6 +162,23 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private long _drainEncodedByteCount;
 
+    /// <summary>
+    /// Activation-scoped content-hash dedup measurement cache, lazily
+    /// created on the first pump tick that observes
+    /// <see cref="LatticeReplicationOptions.ContentHashDedupEnabled"/>
+    /// set. Maps each recently-shipped key to the content hash of the
+    /// last value shipped for it; a re-send of byte-identical content
+    /// for a cached key increments the
+    /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloads"/> /
+    /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloadBytes"/>
+    /// counters. <see langword="null"/> while the option is off (the
+    /// default), so a host that never opts in pays no cache memory and
+    /// the steady-state ship path is byte-identical to today's. The
+    /// cache only measures - it never elides or alters the bytes
+    /// shipped.
+    /// </summary>
+    private ShippedContentHashCache? _contentHashCache;
+
     // ── Activation-scoped scratch arrays for the k-way HLC merge ──
     //
     // Sized lazily on first pump tick (and resized on partition-count
@@ -1642,7 +1659,56 @@ internal sealed class ReplicationShipperGrain(
             var payload = winningShipping.EncodedPayload;
             _drainEncodedSegments.Add(new ArraySegment<byte>(payload));
             _drainEncodedByteCount += payload.Length;
+
+            // Content-hash dedup measurement (opt-in, default off). The
+            // measurement is observability-only: the entry above is
+            // shipped verbatim regardless of the outcome, so LWW / HLC
+            // convergence semantics and the on-the-wire bytes are
+            // unaffected. We hash the entry's content and record a
+            // redundant-payload sample when the same key was last
+            // shipped with byte-identical content - the idempotent
+            // re-set signal upstream retry logic generates.
+            MeasureContentHashRedundancy(in winningRecord, options);
         }
+    }
+
+    /// <summary>
+    /// Records the content-hash payload-re-send measurement for a single
+    /// entry being shipped. No-op unless
+    /// <see cref="LatticeReplicationOptions.ContentHashDedupEnabled"/> is
+    /// set; only <see cref="MutationKind.Set"/> entries (the only
+    /// mutation kind that carries a value payload) are measured. When
+    /// the entry's content hash matches the value most recently shipped
+    /// for the same key the
+    /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloads"/> and
+    /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloadBytes"/>
+    /// counters are incremented.
+    /// </summary>
+    private void MeasureContentHashRedundancy(in WalRecord record, LatticeReplicationOptions options)
+    {
+        if (!options.ContentHashDedupEnabled || record.Op != MutationKind.Set)
+        {
+            return;
+        }
+
+        var cache = _contentHashCache ??=
+            new ShippedContentHashCache(Math.Max(64, options.ContentHashDedupCacheSize));
+        var key = record.Key ?? string.Empty;
+        var hash = ReplicationContentHash.Compute(in record);
+        if (!cache.Observe(key, hash))
+        {
+            return;
+        }
+
+        var valueBytes = record.Value?.Length ?? 0;
+        LatticeReplicationMetrics.ShipRedundantPayloads.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+        LatticeReplicationMetrics.ShipRedundantPayloadBytes.Add(
+            valueBytes,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
     }
 
     /// <summary>
