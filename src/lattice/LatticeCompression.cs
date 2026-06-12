@@ -18,7 +18,8 @@ namespace Orleans.Lattice;
 ///       <c>0x00</c> - <c>0x7F</c> - core-reserved tags. Only the
 ///       members of this enum are guaranteed-stable wire values
 ///       (<see cref="None"/> = <c>0x00</c>, <see cref="Zstd"/> =
-///       <c>0x01</c>). Only types declared in the core
+///       <c>0x01</c>, <see cref="ZstdDictionary"/> = <c>0x02</c>).
+///       Only types declared in the core
 ///       <c>Orleans.Lattice</c> assembly may claim a tag in this
 ///       range; host-defined compressors (including alternative
 ///       implementations of a core algorithm) are rejected at
@@ -60,12 +61,32 @@ public enum LatticeCompression : byte
 
     /// <summary>
     /// Payload bytes are compressed with the Zstandard algorithm
-    /// (RFC 8478). The canonical implementation is
-    /// <see cref="ZstdLatticeCompressor"/> in
+    /// (RFC 8478) <b>without</b> a shared dictionary. The canonical
+    /// implementation is <see cref="ZstdLatticeCompressor"/> in
     /// <c>Orleans.Lattice</c>; hosts that want a different
     /// algorithm cast a byte in <c>[0x80, 0xFF]</c> into this enum
     /// and register a matching <see cref="ILatticeCompressor"/>
     /// via <c>AddLatticeCompressor</c>.
     /// </summary>
     Zstd = 1,
+
+    /// <summary>
+    /// Payload bytes are compressed with the Zstandard algorithm
+    /// (RFC 8478) using a <b>shared dictionary</b> pre-trained on (or
+    /// operator-supplied for) the layer's self-similar payloads. The
+    /// surrounding wire layer carries a stable dictionary id alongside
+    /// the compressed bytes so the receiver selects the matching
+    /// dictionary; a dictionary id of <c>0</c> means "no dictionary"
+    /// and is semantically equivalent to <see cref="Zstd"/>. The
+    /// canonical implementation is <see cref="ZstdDictionaryLatticeCompressor"/>
+    /// (which also implements <see cref="ILatticeDictionaryCompressor"/>),
+    /// resolving dictionary bytes from a registered
+    /// <see cref="ILatticeCompressionDictionaryProvider"/>. A receiver
+    /// that has no compressor registered for this tag - or no
+    /// dictionary registered for the carried id - surfaces
+    /// <see cref="System.NotSupportedException"/> from the consuming
+    /// decoder, exactly like any other unrecognised tag, so the
+    /// feature ships without a coordinated wire-version bump.
+    /// </summary>
+    ZstdDictionary = 2,
 }

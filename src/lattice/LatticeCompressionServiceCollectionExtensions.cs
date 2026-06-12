@@ -78,4 +78,107 @@ public static class LatticeCompressionServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton(compressor));
         return services;
     }
+
+    /// <summary>
+    /// Registers a shared compression-dictionary provider as the
+    /// singleton <see cref="ILatticeCompressionDictionaryProvider"/> on
+    /// the supplied <paramref name="services"/> container. The
+    /// dictionary-aware compressor
+    /// (<see cref="ZstdDictionaryLatticeCompressor"/>) resolves the
+    /// dictionary bytes for a wire-carried dictionary id through this
+    /// provider. Uses
+    /// <see cref="ServiceCollectionDescriptorExtensions.TryAddSingleton(IServiceCollection, ServiceDescriptor)"/>
+    /// so a host-supplied provider registered before
+    /// <c>AddLatticeReplication</c> wins over the default empty
+    /// provider.
+    /// </summary>
+    /// <param name="services">The DI service collection.</param>
+    /// <param name="provider">The dictionary provider instance.</param>
+    /// <returns>
+    /// The same <paramref name="services"/> instance for fluent
+    /// chaining.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="services"/> or <paramref name="provider"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    public static IServiceCollection AddLatticeCompressionDictionaryProvider(
+        this IServiceCollection services,
+        ILatticeCompressionDictionaryProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(provider);
+        services.TryAddSingleton(provider);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers a set of operator-supplied (pre-trained) compression
+    /// dictionaries keyed by stable id, wrapping them in an
+    /// <see cref="OperatorSuppliedCompressionDictionaryProvider"/> and
+    /// registering it as the singleton
+    /// <see cref="ILatticeCompressionDictionaryProvider"/>. This is the
+    /// primary path for shipping a pre-trained dictionary as a
+    /// configuration asset: the same dictionary map must be registered
+    /// on every silo in the topology that produces or consumes
+    /// dictionary frames.
+    /// </summary>
+    /// <param name="services">The DI service collection.</param>
+    /// <param name="dictionaries">
+    /// Stable dictionary id to dictionary bytes. The reserved id
+    /// <c>0</c> ("no dictionary") must not be present.
+    /// </param>
+    /// <returns>
+    /// The same <paramref name="services"/> instance for fluent
+    /// chaining.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="services"/> or <paramref name="dictionaries"/>
+    /// is <see langword="null"/>.
+    /// </exception>
+    public static IServiceCollection AddLatticeCompressionDictionaries(
+        this IServiceCollection services,
+        IReadOnlyDictionary<uint, ReadOnlyMemory<byte>> dictionaries)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(dictionaries);
+        return services.AddLatticeCompressionDictionaryProvider(
+            new OperatorSuppliedCompressionDictionaryProvider(dictionaries));
+    }
+
+    /// <summary>
+    /// Registers the shared-dictionary Zstandard compressor
+    /// (<see cref="ZstdDictionaryLatticeCompressor"/>, wire tag
+    /// <see cref="LatticeCompression.ZstdDictionary"/>) as a singleton
+    /// <see cref="ILatticeCompressor"/>. The compressor resolves
+    /// dictionary bytes through the registered
+    /// <see cref="ILatticeCompressionDictionaryProvider"/>, so register
+    /// a provider (e.g. via
+    /// <see cref="AddLatticeCompressionDictionaries"/>) for any non-zero
+    /// dictionary id to activate. Registration is idempotent via
+    /// <see cref="ServiceCollectionDescriptorExtensions.TryAddEnumerable(IServiceCollection, ServiceDescriptor)"/>.
+    /// </summary>
+    /// <param name="services">The DI service collection.</param>
+    /// <param name="compressionLevel">
+    /// The Zstandard compression level (1-22); the canonical default
+    /// is <c>3</c>.
+    /// </param>
+    /// <returns>
+    /// The same <paramref name="services"/> instance for fluent
+    /// chaining.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="services"/> is <see langword="null"/>.
+    /// </exception>
+    public static IServiceCollection AddLatticeZstdDictionaryCompressor(
+        this IServiceCollection services,
+        int compressionLevel = 3)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILatticeCompressor, ZstdDictionaryLatticeCompressor>(sp =>
+            new ZstdDictionaryLatticeCompressor(
+                compressionLevel,
+                sp.GetRequiredService<ILatticeCompressionDictionaryProvider>())));
+        return services;
+    }
 }

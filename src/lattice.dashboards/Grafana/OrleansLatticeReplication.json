@@ -1232,6 +1232,82 @@
           "legendFormat": "{{reason}}"
         }
       ]
+    },
+    {
+      "id": 48,
+      "title": "Shared-dictionary compression ratio",
+      "description": "Achieved shared-dictionary Zstandard compression ratio on the framing encode path (FramingCompression = ZstdDictionary with a non-zero FramingCompressionDictionaryId). 'ratio' is compressed-out over uncompressed-in (lower is better; 1.0 means no saving); 'in bytes/s' and 'out bytes/s' are the before/after byte rates. Flat-zero unless shared-dictionary compression is opted into and a dictionary resolves on this silo.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 113
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "IN"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "binBps"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "bytes/s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "OUT"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "binBps"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "RATIO",
+          "expr": "sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_out_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_in_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1)",
+          "legendFormat": "ratio {{tree}}"
+        },
+        {
+          "refId": "IN",
+          "expr": "sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_in_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "in bytes/s {{tree}}"
+        },
+        {
+          "refId": "OUT",
+          "expr": "sum by (tree) (rate(orleans_lattice_replication_compress_dictionary_bytes_out_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "out bytes/s {{tree}}"
+        }
+      ]
     }
   ]
 }

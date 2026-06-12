@@ -177,6 +177,31 @@ public readonly record struct EncodedBatchHeader
     public LatticeCompression Compression { get; init; }
 
     /// <summary>
+    /// Shared-dictionary id selecting the compression dictionary the
+    /// receiver must load to inflate the tail. Only meaningful when
+    /// <see cref="Compression"/> is
+    /// <see cref="LatticeCompression.ZstdDictionary"/>; <c>0</c> (the
+    /// default) means "no dictionary" and is the only value the
+    /// dictionary-less paths (<see cref="LatticeCompression.None"/> /
+    /// <see cref="LatticeCompression.Zstd"/>) ever carry.
+    /// <para>
+    /// This field is <b>not</b> part of the fixed 32-byte wire layout:
+    /// <see cref="WriteTo(Span{byte})"/> and
+    /// <see cref="ReadFrom(ReadOnlySpan{byte})"/> never touch it, so
+    /// the fixed header is byte-identical to every prior wire version.
+    /// The dictionary id is carried in the variable-length compressed
+    /// tail produced by the canonical encoder for the
+    /// <see cref="LatticeCompression.ZstdDictionary"/> tag (a 4-byte
+    /// little-endian prefix ahead of the existing uncompressed /
+    /// compressed length prefixes), and the framing decoder populates
+    /// this property from those tail bytes. Because the property is
+    /// an in-process carrier rather than a serialised header field,
+    /// adding it does not change the framing wire version.
+    /// </para>
+    /// </summary>
+    public uint DictionaryId { get; init; }
+
+    /// <summary>
     /// Writes this header into the supplied <paramref name="destination"/>
     /// span using the canonical little-endian wire layout. The span
     /// must be at least <see cref="WireSize"/> bytes long.

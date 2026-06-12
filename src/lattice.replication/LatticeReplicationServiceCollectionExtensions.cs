@@ -180,6 +180,18 @@ public static partial class LatticeReplicationServiceCollectionExtensions
             ServiceDescriptor.Singleton<ILatticeCompressor, ZstdLatticeCompressor>(
                 _ => new ZstdLatticeCompressor(LatticeReplicationOptions.DefaultFramingCompressionLevel)));
 
+        // Default shared-dictionary provider: an empty operator-supplied
+        // provider that resolves no dictionary ids. This keeps the
+        // dictionary-aware compressor's DI dependency satisfiable on
+        // every silo (so the optional AddLatticeZstdDictionaryCompressor
+        // registration always activates), while a default build never
+        // resolves a dictionary - opting into shared-dictionary
+        // compression requires a host to register its own provider (e.g.
+        // via AddLatticeCompressionDictionaries) before this call, and
+        // TryAddSingleton preserves that host-supplied registration.
+        builder.Services.TryAddSingleton<ILatticeCompressionDictionaryProvider>(
+            _ => OperatorSuppliedCompressionDictionaryProvider.Empty);
+
         // Default receiver-side flow-control policy: WAL-saturation-driven
         // back-pressure (on by default). The policy reads the core
         // IWalSaturationSignal and asks the sender to shrink batches and

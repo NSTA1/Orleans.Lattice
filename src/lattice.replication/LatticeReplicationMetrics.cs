@@ -343,6 +343,48 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string ShipRedundantPayloadBytesName = "orleans.lattice.replication.ship.redundant_payload_bytes";
 
+    // --- Shared-dictionary compression counters --------------------------------
+
+    /// <summary>
+    /// Counter of uncompressed tail bytes fed into the shared-dictionary
+    /// Zstandard compressor on the framing encode path - the "before"
+    /// half of the dictionary before/after ratio. Incremented by the
+    /// uncompressed tail length each time a batch is framed with the
+    /// <see cref="LatticeCompression.ZstdDictionary"/> tag (i.e. only
+    /// when shared-dictionary compression is opted into and a dictionary
+    /// is resolvable on this silo; the default-off build never fires
+    /// it). Pairs with <see cref="CompressDictionaryBytesOut"/> so an
+    /// operator can compute the achieved compression ratio directly.
+    /// Tagged by <see cref="TagTree"/>.
+    /// </summary>
+    public static readonly Counter<long> CompressDictionaryBytesIn =
+        Meter.CreateCounter<long>("orleans.lattice.replication.compress.dictionary.bytes_in", unit: "By",
+            description: "Uncompressed tail bytes fed into the shared-dictionary Zstandard compressor, tagged by tree.");
+
+    /// <summary>
+    /// Counter of compressed tail bytes emitted by the shared-dictionary
+    /// Zstandard compressor on the framing encode path - the "after"
+    /// half of the dictionary before/after ratio. Incremented by the
+    /// compressed tail length each time a batch is framed with the
+    /// <see cref="LatticeCompression.ZstdDictionary"/> tag. Pairs with
+    /// <see cref="CompressDictionaryBytesIn"/>: the ratio of out to in
+    /// quantifies the shared-dictionary win against the uncompressed
+    /// baseline. Tagged by <see cref="TagTree"/>.
+    /// </summary>
+    public static readonly Counter<long> CompressDictionaryBytesOut =
+        Meter.CreateCounter<long>("orleans.lattice.replication.compress.dictionary.bytes_out", unit: "By",
+            description: "Compressed tail bytes emitted by the shared-dictionary Zstandard compressor, tagged by tree.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="CompressDictionaryBytesIn"/> counter.
+    /// </summary>
+    public const string CompressDictionaryBytesInName = "orleans.lattice.replication.compress.dictionary.bytes_in";
+
+    /// <summary>
+    /// Canonical name of the <see cref="CompressDictionaryBytesOut"/> counter.
+    /// </summary>
+    public const string CompressDictionaryBytesOutName = "orleans.lattice.replication.compress.dictionary.bytes_out";
+
     // --- Pre-ship coalescing counters -------------------------------------------
 
     /// <summary>

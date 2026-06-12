@@ -376,18 +376,29 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.FramingCompression)} "
                 + $"must be a defined {nameof(LatticeCompression)} value or a host-defined tag in the reserved [0x80, 0xFF] range ({scope}); "
                 + $"got '0x{compressionTag:X2}'. "
-                + "Core-defined tags are LatticeCompression.None (0x00) and LatticeCompression.Zstd (0x01); "
+                + "Core-defined tags are LatticeCompression.None (0x00), LatticeCompression.Zstd (0x01), and LatticeCompression.ZstdDictionary (0x02); "
                 + "host-defined algorithms must cast a byte in [0x80, 0xFF] into LatticeCompression and register a matching ILatticeCompressor via AddLatticeCompressor.");
         }
 
-        if (options.FramingCompression == LatticeCompression.Zstd
+        if (options.FramingCompression is LatticeCompression.Zstd or LatticeCompression.ZstdDictionary
             && (options.FramingCompressionLevel < 1 || options.FramingCompressionLevel > 22))
         {
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.FramingCompressionLevel)} "
                 + $"must be in the closed interval [1, 22] when {nameof(LatticeReplicationOptions.FramingCompression)} "
-                + $"is {nameof(LatticeCompression.Zstd)} ({scope}); got {options.FramingCompressionLevel}. "
+                + $"is {nameof(LatticeCompression.Zstd)} or {nameof(LatticeCompression.ZstdDictionary)} ({scope}); got {options.FramingCompressionLevel}. "
                 + "Zstandard accepts levels 1 (fastest) through 22 (highest ratio); the canonical default is 3.");
+        }
+
+        if (options.FramingCompression == LatticeCompression.ZstdDictionary
+            && options.FramingCompressionDictionaryId == 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.FramingCompressionDictionaryId)} "
+                + $"must be a non-zero shared-dictionary id when {nameof(LatticeReplicationOptions.FramingCompression)} "
+                + $"is {nameof(LatticeCompression.ZstdDictionary)} ({scope}); got 0. "
+                + "The reserved id 0 means 'no dictionary'; select ZstdDictionary together with the id of a dictionary "
+                + "registered via an ILatticeCompressionDictionaryProvider, or use LatticeCompression.Zstd for dictionary-less compression.");
         }
 
         if (options.FramingCompressionMinBatchBytes < 0)

@@ -119,3 +119,5 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.bootstrap_fallback.skipped` | counter | `tree`, `peer`, `reason` | Bootstrap fallback skipped (rate by reason) |
 | `orleans.lattice.replication.digest_remediation.disabled` | observable gauge | `tree`, `peer`, `reason` | Remediation disabled (tree/peer by reason) |
 | `orleans.lattice.replication.digest_remediation.skipped` | counter | `tree`, `peer`, `reason` | Remediation skipped (rate by reason) |
+| `orleans.lattice.replication.compress.dictionary.bytes_in` | counter (`By`) | `tree` | Shared-dictionary compression ratio (before/after) |
+| `orleans.lattice.replication.compress.dictionary.bytes_out` | counter (`By`) | `tree` | Shared-dictionary compression ratio (before/after) |
