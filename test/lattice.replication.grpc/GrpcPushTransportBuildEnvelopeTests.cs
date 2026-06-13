@@ -82,7 +82,11 @@ public class GrpcPushTransportBuildEnvelopeTests
             sp.GetRequiredService<Serializer<ContentManifestRequest>>(),
             sp.GetRequiredService<Serializer<ContentManifestResponse>>(),
             sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>(),
-            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>());
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>(),
+            sp.GetRequiredService<Serializer<MerkleWalkProbeRequest>>(),
+            sp.GetRequiredService<Serializer<MerkleWalkProbeResponse>>(),
+            sp.GetRequiredService<Serializer<PeerHighWaterMarkRequest>>(),
+            sp.GetRequiredService<Serializer<PeerHighWaterMarkResponse>>());
         var transport = new GrpcPushTransport(
             method,
             encoder,

@@ -51,7 +51,11 @@ public class LatticeReplicationGrpcServiceTests
             manifestRequestSerializer,
             manifestResponseSerializer,
             sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>(),
-            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>());
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>(),
+            sp.GetRequiredService<Serializer<MerkleWalkProbeRequest>>(),
+            sp.GetRequiredService<Serializer<MerkleWalkProbeResponse>>(),
+            sp.GetRequiredService<Serializer<PeerHighWaterMarkRequest>>(),
+            sp.GetRequiredService<Serializer<PeerHighWaterMarkResponse>>());
         return new LatticeReplicationGrpcService(
             method, applier, cursorRegistry, policy, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance);
     }
@@ -204,7 +208,11 @@ public class LatticeReplicationGrpcServiceTests
             sp.GetRequiredService<Serializer<ContentManifestRequest>>(),
             sp.GetRequiredService<Serializer<ContentManifestResponse>>(),
             sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>(),
-            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>());
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>(),
+            sp.GetRequiredService<Serializer<MerkleWalkProbeRequest>>(),
+            sp.GetRequiredService<Serializer<MerkleWalkProbeResponse>>(),
+            sp.GetRequiredService<Serializer<PeerHighWaterMarkRequest>>(),
+            sp.GetRequiredService<Serializer<PeerHighWaterMarkResponse>>());
     }
 
     [Test]
@@ -1190,6 +1198,212 @@ public class LatticeReplicationGrpcServiceTests
             Assert.That(response.Value.ExchangeSupported, Is.True);
             Assert.That(response.Value.Found, Is.False);
         });
+    }
+
+    // ---- Merkle-walk localisation handler ------------------------------
+
+    [Test]
+    public void ProbeMerkleWalk_throws_when_request_box_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        Assert.That(
+            async () => await svc.ProbeMerkleWalk(null!, new TestServerCallContext()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ProbeMerkleWalk_throws_when_context_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new MerkleWalkProbeRequestBox
+        {
+            Value = new MerkleWalkProbeRequest { TreeName = "tree", ShardIndex = 0 },
+        };
+        Assert.That(
+            async () => await svc.ProbeMerkleWalk(box, null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ProbeMerkleWalk_throws_invalid_argument_when_tree_name_empty()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new MerkleWalkProbeRequestBox
+        {
+            Value = new MerkleWalkProbeRequest { TreeName = string.Empty, ShardIndex = 0 },
+        };
+        Assert.That(
+            async () => await svc.ProbeMerkleWalk(box, new TestServerCallContext()),
+            Throws.TypeOf<RpcException>().With.Property("StatusCode").EqualTo(StatusCode.InvalidArgument));
+    }
+
+    [Test]
+    public async Task ProbeMerkleWalk_returns_available_range_digest_on_success()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Substitute.For<ILattice>();
+        var digest = new LeafProjectionDigest
+        {
+            Hash = new byte[] { 4, 5, 6 },
+            EntryCount = 9,
+            CheckpointOffset = 21,
+            Version = LeafProjectionDigest.CurrentVersion,
+        };
+        lattice.GetLeafProjectionDigestForRangeAsync(2, "k010", "k090", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(digest));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new MerkleWalkProbeRequestBox
+        {
+            Value = new MerkleWalkProbeRequest
+            {
+                TreeName = "tree",
+                ShardIndex = 2,
+                RangeStartKey = "k010",
+                RangeEndKey = "k090",
+                Depth = 1,
+            },
+        };
+
+        var response = await svc.ProbeMerkleWalk(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.Available, Is.True);
+            Assert.That(response.Value.Digest.EntryCount, Is.EqualTo(9));
+            Assert.That(response.Value.Digest.Hash, Is.EqualTo(new byte[] { 4, 5, 6 }));
+        });
+    }
+
+    [Test]
+    public async Task ProbeMerkleWalk_returns_unavailable_when_digest_disabled()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetLeafProjectionDigestForRangeAsync(0, null, null, Arg.Any<CancellationToken>())
+            .Returns<Task<LeafProjectionDigest>>(_ => throw new InvalidOperationException("digest disabled"));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new MerkleWalkProbeRequestBox
+        {
+            Value = new MerkleWalkProbeRequest { TreeName = "tree", ShardIndex = 0 },
+        };
+
+        var response = await svc.ProbeMerkleWalk(box, new TestServerCallContext());
+
+        Assert.That(response.Value.Available, Is.False);
+    }
+
+    [Test]
+    public async Task ProbeMerkleWalk_returns_unavailable_when_shard_index_unknown()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetLeafProjectionDigestForRangeAsync(99, null, null, Arg.Any<CancellationToken>())
+            .Returns<Task<LeafProjectionDigest>>(_ => throw new ArgumentOutOfRangeException("shardIndex"));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new MerkleWalkProbeRequestBox
+        {
+            Value = new MerkleWalkProbeRequest { TreeName = "tree", ShardIndex = 99 },
+        };
+
+        var response = await svc.ProbeMerkleWalk(box, new TestServerCallContext());
+
+        Assert.That(response.Value.Available, Is.False);
+    }
+
+    // ---- Peer high-water-mark probe handler ----------------------------
+
+    [Test]
+    public void GetPeerHighWaterMark_throws_when_request_box_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        Assert.That(
+            async () => await svc.GetPeerHighWaterMark(null!, new TestServerCallContext()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void GetPeerHighWaterMark_throws_when_context_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = "site-a" },
+        };
+        Assert.That(
+            async () => await svc.GetPeerHighWaterMark(box, null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void GetPeerHighWaterMark_throws_invalid_argument_when_tree_name_empty()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest { TreeName = string.Empty, OriginClusterId = "site-a" },
+        };
+        Assert.That(
+            async () => await svc.GetPeerHighWaterMark(box, new TestServerCallContext()),
+            Throws.TypeOf<RpcException>().With.Property("StatusCode").EqualTo(StatusCode.InvalidArgument));
+    }
+
+    [Test]
+    public void GetPeerHighWaterMark_throws_invalid_argument_when_origin_empty()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = string.Empty },
+        };
+        Assert.That(
+            async () => await svc.GetPeerHighWaterMark(box, new TestServerCallContext()),
+            Throws.TypeOf<RpcException>().With.Property("StatusCode").EqualTo(StatusCode.InvalidArgument));
+    }
+
+    [Test]
+    public async Task GetPeerHighWaterMark_returns_stored_clock_for_known_origin()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var clock = new HybridLogicalClock { WallClockTicks = 555, Counter = 6 };
+        hwm.GetAsync("site-a", Arg.Any<CancellationToken>()).Returns(Task.FromResult(clock));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwm);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = "site-a" },
+        };
+
+        var response = await svc.GetPeerHighWaterMark(box, new TestServerCallContext());
+
+        Assert.That(response.Value.Clock, Is.EqualTo(clock));
+    }
+
+    [Test]
+    public async Task GetPeerHighWaterMark_returns_zero_clock_for_unknown_origin()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwm.GetAsync("never-seen", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(HybridLogicalClock.Zero));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwm);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = "never-seen" },
+        };
+
+        var response = await svc.GetPeerHighWaterMark(box, new TestServerCallContext());
+
+        Assert.That(response.Value.Clock, Is.EqualTo(HybridLogicalClock.Zero));
     }
 }
 

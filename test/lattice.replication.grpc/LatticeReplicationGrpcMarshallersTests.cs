@@ -380,5 +380,180 @@ public class LatticeReplicationGrpcMarshallersTests
         var box = new CompressionDictionaryPullResponseBox { Value = response };
         Assert.That(box.Value, Is.EqualTo(response));
     }
+
+    [Test]
+    public void CreateMerkleWalkProbeRequestMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateMerkleWalkProbeRequestMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void CreateMerkleWalkProbeResponseMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateMerkleWalkProbeResponseMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void MerkleWalkProbeRequest_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<MerkleWalkProbeRequest>>();
+        var request = new MerkleWalkProbeRequest
+        {
+            TreeName = "orders",
+            ShardIndex = 5,
+            RangeStartKey = "k010",
+            RangeEndKey = "k090",
+            Depth = 3,
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(request, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.TreeName, Is.EqualTo("orders"));
+            Assert.That(decoded.ShardIndex, Is.EqualTo(5));
+            Assert.That(decoded.RangeStartKey, Is.EqualTo("k010"));
+            Assert.That(decoded.RangeEndKey, Is.EqualTo("k090"));
+            Assert.That(decoded.Depth, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void MerkleWalkProbeRequest_round_trip_preserves_null_bounds()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<MerkleWalkProbeRequest>>();
+        var request = new MerkleWalkProbeRequest
+        {
+            TreeName = "orders",
+            ShardIndex = 0,
+            RangeStartKey = null,
+            RangeEndKey = null,
+            Depth = 0,
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(request, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.RangeStartKey, Is.Null);
+            Assert.That(decoded.RangeEndKey, Is.Null);
+        });
+    }
+
+    [Test]
+    public void MerkleWalkProbeResponse_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<MerkleWalkProbeResponse>>();
+        var response = new MerkleWalkProbeResponse
+        {
+            Available = true,
+            Digest = new LeafProjectionDigest
+            {
+                Hash = new byte[] { 4, 5, 6 },
+                EntryCount = 7,
+                CheckpointOffset = 13,
+                Version = LeafProjectionDigest.CurrentVersion,
+            },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(response, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.Available, Is.True);
+            Assert.That(decoded.Digest.Hash, Is.EqualTo(new byte[] { 4, 5, 6 }));
+            Assert.That(decoded.Digest.EntryCount, Is.EqualTo(7));
+            Assert.That(decoded.Digest.CheckpointOffset, Is.EqualTo(13));
+        });
+    }
+
+    [Test]
+    public void MerkleWalkProbeRequestBox_carries_value_verbatim()
+    {
+        var request = new MerkleWalkProbeRequest { TreeName = "t", ShardIndex = 1 };
+        var box = new MerkleWalkProbeRequestBox { Value = request };
+        Assert.That(box.Value, Is.EqualTo(request));
+    }
+
+    [Test]
+    public void MerkleWalkProbeResponseBox_carries_value_verbatim()
+    {
+        var response = MerkleWalkProbeResponse.Unavailable;
+        var box = new MerkleWalkProbeResponseBox { Value = response };
+        Assert.That(box.Value, Is.EqualTo(response));
+    }
+
+    [Test]
+    public void CreatePeerHighWaterMarkRequestMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreatePeerHighWaterMarkRequestMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void CreatePeerHighWaterMarkResponseMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreatePeerHighWaterMarkResponseMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void PeerHighWaterMarkRequest_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<PeerHighWaterMarkRequest>>();
+        var request = new PeerHighWaterMarkRequest { TreeName = "orders", OriginClusterId = "site-a" };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(request, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.TreeName, Is.EqualTo("orders"));
+            Assert.That(decoded.OriginClusterId, Is.EqualTo("site-a"));
+        });
+    }
+
+    [Test]
+    public void PeerHighWaterMarkResponse_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<PeerHighWaterMarkResponse>>();
+        var clock = new HybridLogicalClock { WallClockTicks = 99, Counter = 4 };
+        var response = new PeerHighWaterMarkResponse { Clock = clock };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(response, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.That(decoded.Clock, Is.EqualTo(clock));
+    }
+
+    [Test]
+    public void PeerHighWaterMarkRequestBox_carries_value_verbatim()
+    {
+        var request = new PeerHighWaterMarkRequest { TreeName = "t", OriginClusterId = "o" };
+        var box = new PeerHighWaterMarkRequestBox { Value = request };
+        Assert.That(box.Value, Is.EqualTo(request));
+    }
+
+    [Test]
+    public void PeerHighWaterMarkResponseBox_carries_value_verbatim()
+    {
+        var response = new PeerHighWaterMarkResponse { Clock = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 } };
+        var box = new PeerHighWaterMarkResponseBox { Value = response };
+        Assert.That(box.Value, Is.EqualTo(response));
+    }
 }
 

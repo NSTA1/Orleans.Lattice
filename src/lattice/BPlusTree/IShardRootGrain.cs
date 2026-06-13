@@ -490,6 +490,37 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<LeafProjectionDigest> GetShardProjectionDigestAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
+    /// for the half-open key range [<paramref name="startInclusive"/>,
+    /// <paramref name="endExclusive"/>) of this shard's B+ tree - the
+    /// range-scoped analogue of <see cref="GetShardProjectionDigestAsync"/>.
+    /// A <see langword="null"/> bound denotes negative infinity
+    /// (<paramref name="startInclusive"/>) or positive infinity
+    /// (<paramref name="endExclusive"/>); passing both as
+    /// <see langword="null"/> produces a digest byte-identical to
+    /// <see cref="GetShardProjectionDigestAsync"/>. The fold descends the
+    /// internal-node tree by separator-key range, touches only the leaves
+    /// (and whole subtrees) that overlap the query range, and combines them
+    /// with the same algebra the internal nodes use (XOR the raw
+    /// projection hashes, sum the entry counts, max-reduce the checkpoint
+    /// offsets) before wrapping the result in the same
+    /// XxHash128(rawHash || entryCount || checkpointOffset) shape an
+    /// internal node spanning exactly that range would publish. Because the
+    /// per-entry contribution is content-only, two clusters holding the same
+    /// logical entries in the range compute the same raw fold regardless of
+    /// how each cluster physically split its leaves. This is the core
+    /// primitive that backs the cross-cluster anti-entropy Merkle walk's
+    /// separator-key-bounded localisation. Strictly read-only.
+    /// </summary>
+    /// <param name="startInclusive">Inclusive lower key bound, or <see langword="null"/> for unbounded below.</param>
+    /// <param name="endExclusive">Exclusive upper key bound, or <see langword="null"/> for unbounded above.</param>
+    /// <param name="cancellationToken">Cancels the range descent between nodes.</param>
+    Task<LeafProjectionDigest> GetShardProjectionDigestForRangeAsync(
+        string? startInclusive,
+        string? endExclusive,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns a read-only reference to this shard's current root node - its
     /// grain identity and whether it is a leaf (flat tree) or an internal node
     /// - or <see langword="null"/> when the shard has no root yet (empty

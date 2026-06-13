@@ -44,12 +44,15 @@ public interface IReplicationDigestProbeTransport
     /// The probe is strictly read-only. A default no-op implementation returns
     /// <see cref="MerkleWalkProbeResponse.Unavailable"/> so the localisation
     /// pass aborts cleanly with reason
-    /// <see cref="MerkleWalkAbortReason.RemoteUnavailable"/> until a transport
+    /// <see cref="MerkleWalkAbortReason.RemoteUnavailable"/> when no transport
     /// that can compute a key-range subtree digest on the remote side is wired
-    /// in. Computing an arbitrary-key-range digest on the remote requires a
-    /// range-fold over the remote leaf chain that the current shipping surface
-    /// does not expose; see the anti-entropy Merkle-walk documentation for the
-    /// honest scope of this limitation.
+    /// in. The gRPC binding overrides this: it resolves the peer's
+    /// <see cref="ILattice.GetLeafProjectionDigestForRangeAsync"/> over the
+    /// same per-peer channel cache the push transport uses, folding the remote
+    /// shard subtree bounded by the request's separator-key range into a
+    /// content-comparable digest. The fold is content-only, so two clusters
+    /// holding the same logical entries in the range compute the same digest
+    /// independently of each cluster's physical B+ tree layout.
     /// </para>
     /// </summary>
     /// <param name="targetClusterId">The peer cluster id to probe. Must be non-empty.</param>
@@ -74,10 +77,12 @@ public interface IReplicationDigestProbeTransport
     /// The probe is strictly read-only. A default implementation returns
     /// <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/> - the conservative
     /// answer that re-ships every in-range retained entry and relies on the
-    /// receiver's per-origin idempotent dedup to discard duplicates. A transport
-    /// that can read the peer's applied watermark cheaply should override this to
-    /// tighten the re-replay bound; see the targeted leaf re-replay documentation
-    /// for the honest scope of this seam.
+    /// receiver's per-origin idempotent dedup to discard duplicates. The gRPC
+    /// binding overrides this: it resolves the peer's
+    /// <c>IReplicationHighWaterMarkGrain.GetAsync(originClusterId)</c> over the
+    /// same per-peer channel cache the push transport uses, so the re-replay
+    /// bound is tightened to the genuine gap and re-ships only entries above
+    /// the peer's reported watermark.
     /// </para>
     /// </summary>
     /// <param name="targetClusterId">The peer cluster id to probe. Must be non-empty.</param>
