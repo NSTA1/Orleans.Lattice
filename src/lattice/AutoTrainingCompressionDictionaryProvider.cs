@@ -27,14 +27,21 @@ namespace Orleans.Lattice;
 /// mis-decoding.
 /// </para>
 /// <para>
-/// The dictionary bytes produced here are local; this provider does not
-/// distribute them to peers. As with operator-supplied dictionaries, the
-/// trained bytes must be provisioned out-of-band to every silo that produces or
-/// consumes dictionary frames.
+/// Trained dictionary ids are enumerable through the
+/// <see cref="ILatticeCompressionDictionaryCatalog"/> this provider also
+/// implements, so a receiver advertises them to peers (via
+/// <c>ReplicationAck.AdvertisedDictionaries</c>) and an opted-in sender can
+/// gate dictionary compression on whether the target peer can resolve the
+/// chosen dictionary. The advertised id set carries a content fingerprint
+/// alongside each id, so two clusters that each auto-train an id 1 dictionary
+/// over different corpora never negotiate a bare-id match. The dictionary
+/// bytes themselves are distributed out of band (operator-provisioned) or via
+/// the replication transport's pull-bytes seam; this provider produces and
+/// resolves them but does not itself ship them.
 /// </para>
 /// </summary>
 public sealed class AutoTrainingCompressionDictionaryProvider
-    : ILatticeCompressionDictionaryProvider, IDisposable
+    : ILatticeCompressionDictionaryProvider, ILatticeCompressionDictionaryCatalog, ILatticeCompressionDictionarySink, ILatticeActiveCompressionDictionary, ILatticeCompressionDictionarySampler, IDisposable
 {
     private const int ProbeCompressionLevel = 3;
     private const ulong FnvOffsetBasis = 14695981039346656037UL;
@@ -56,6 +63,13 @@ public sealed class AutoTrainingCompressionDictionaryProvider
 
     private volatile FrozenDictionary<uint, ReadOnlyMemory<byte>> _versions
         = FrozenDictionary<uint, ReadOnlyMemory<byte>>.Empty;
+
+    // Sorted, immutable snapshot of the ids currently resolvable via
+    // _versions. Rebuilt under _publishGate on every roll-over/eviction and
+    // read lock-free by AvailableDictionaryIds, so capability advertisement
+    // never allocates and never enumerates the live FrozenDictionary while it
+    // is being swapped.
+    private volatile uint[] _availableIds = Array.Empty<uint>();
     private uint _currentId;        // 0 until the first successful train.
     private uint _nextId;           // Next id to assign on roll-over.
     private ulong _currentHash;     // FNV-1a of the current dictionary bytes.
@@ -117,10 +131,34 @@ public sealed class AutoTrainingCompressionDictionaryProvider
     public bool Enabled => _options.Enabled;
 
     /// <summary>
+    /// The minimum interval the provider enforces between successive training
+    /// passes (<see cref="CompressionDictionaryTrainingOptions.MinTrainingInterval"/>).
+    /// A driver that pumps <see cref="TryTrain"/> reads this to size its poll
+    /// cadence; <see cref="TryTrain"/> itself re-checks the interval, so calling
+    /// it more often is harmless.
+    /// </summary>
+    public TimeSpan MinTrainingInterval => _options.MinTrainingInterval;
+
+    /// <summary>
     /// The currently active dictionary id, or <c>0</c> when no dictionary has
     /// been trained yet.
     /// </summary>
     public uint CurrentDictionaryId => Volatile.Read(ref _currentId);
+
+    /// <inheritdoc />
+    public uint ActiveDictionaryId => Volatile.Read(ref _currentId);
+
+    /// <summary>
+    /// The stable ids of every auto-trained dictionary this provider can
+    /// currently resolve - the live retained-version ring. Never includes the
+    /// reserved id <c>0</c>, is empty until the first successful training pass
+    /// (and while training is disabled), and is returned as an immutable
+    /// snapshot ordered ascending by id so a receiver advertises a
+    /// deterministic, concurrently-enumerable capability. The snapshot is
+    /// rebuilt only when the version ring changes (a roll-over or eviction),
+    /// so a steady-state advertisement is allocation-free.
+    /// </summary>
+    public IReadOnlyCollection<uint> AvailableDictionaryIds => _availableIds;
 
     /// <summary>
     /// Observes a payload for possible inclusion in the training reservoir. A
@@ -251,6 +289,16 @@ public sealed class AutoTrainingCompressionDictionaryProvider
                 }
 
                 _versions = next.ToFrozenDictionary();
+
+                // Publish a fresh sorted id snapshot for capability
+                // advertisement. Built once per roll-over (cold path), so the
+                // allocation is bounded by the training cadence, not the ship
+                // path.
+                var ids = new uint[next.Count];
+                next.Keys.CopyTo(ids, 0);
+                Array.Sort(ids);
+                _availableIds = ids;
+
                 _currentHash = hash;
                 Volatile.Write(ref _currentId, id);
                 return true;
@@ -273,6 +321,75 @@ public sealed class AutoTrainingCompressionDictionaryProvider
         }
 
         return _versions.TryGetValue(dictionaryId, out dictionary);
+    }
+
+    /// <summary>
+    /// Installs dictionary bytes pulled from a peer under
+    /// <paramref name="dictionaryId"/> so this provider can resolve - and
+    /// therefore compress and decompress against - a dictionary the peer
+    /// trained. Rejects (returns <see langword="false"/>) the reserved id
+    /// <c>0</c>, empty bytes, and an id that already resolves to
+    /// <em>different</em> bytes (a fingerprint collision the caller must not
+    /// silently overwrite); installing byte-identical content under an
+    /// already-held id is an idempotent success. Installed ids join the
+    /// retained-version ring and are advertised through
+    /// <see cref="AvailableDictionaryIds"/> exactly like locally-trained ids,
+    /// but they never become <see cref="CurrentDictionaryId"/> - a pulled
+    /// dictionary is resolvable for decode and opt-in encode, while the
+    /// active id that local training rolls forward stays this provider's own.
+    /// A no-op while the provider is disposed-guarded.
+    /// </summary>
+    /// <param name="dictionaryId">The stable id to install the bytes under.</param>
+    /// <param name="dictionary">The dictionary bytes to install.</param>
+    /// <returns>
+    /// <see langword="true"/> when the id resolves to <paramref name="dictionary"/>
+    /// after the call; otherwise <see langword="false"/>.
+    /// </returns>
+    /// <exception cref="ObjectDisposedException">The provider has been disposed.</exception>
+    public bool TryInstall(uint dictionaryId, ReadOnlyMemory<byte> dictionary)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (dictionaryId == 0u || dictionary.IsEmpty)
+        {
+            return false;
+        }
+
+        lock (_publishGate)
+        {
+            if (_versions.TryGetValue(dictionaryId, out var existing))
+            {
+                // Idempotent install: same id, byte-identical content succeeds;
+                // a different payload under a live id is a collision we refuse.
+                return existing.Span.SequenceEqual(dictionary.Span);
+            }
+
+            // Copy the bytes so a caller-owned/rented buffer cannot mutate the
+            // installed dictionary after the fact.
+            var copy = dictionary.ToArray();
+
+            var next = new Dictionary<uint, ReadOnlyMemory<byte>>(_versions.Count + 1);
+            foreach (var kv in _versions)
+            {
+                next[kv.Key] = kv.Value;
+            }
+            next[dictionaryId] = copy;
+
+            _retained.Enqueue(dictionaryId);
+            while (_retained.Count > _options.RetainedVersionCount)
+            {
+                var evicted = _retained.Dequeue();
+                next.Remove(evicted);
+            }
+
+            _versions = next.ToFrozenDictionary();
+
+            var ids = new uint[next.Count];
+            next.Keys.CopyTo(ids, 0);
+            Array.Sort(ids);
+            _availableIds = ids;
+
+            return true;
+        }
     }
 
     /// <summary>

@@ -39,9 +39,18 @@ internal sealed class LatticeReplicationGrpcMethod
     /// </summary>
     public const string ExchangeContentManifestMethodName = "ExchangeContentManifest";
 
+    /// <summary>
+    /// The unary self-distributing shared-dictionary pull RPC method
+    /// name. The caller pulls the bytes behind a peer-advertised
+    /// dictionary id it does not yet hold so an auto-training cluster
+    /// converges onto a peer's trained dictionary.
+    /// </summary>
+    public const string PullCompressionDictionaryMethodName = "PullCompressionDictionary";
+
     private readonly Method<ReplicationBatchEnvelopeBox, ReplicationAckBox> _push;
     private readonly Method<DigestProbeRequestBox, DigestProbeResponseBox> _probeDigest;
     private readonly Method<ContentManifestRequestBox, ContentManifestResponseBox> _exchangeContentManifest;
+    private readonly Method<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox> _pullCompressionDictionary;
 
     /// <summary>
     /// Initialises the holder with the supplied
@@ -55,7 +64,9 @@ internal sealed class LatticeReplicationGrpcMethod
         Serializer<DigestProbeRequest> probeRequestSerializer,
         Serializer<DigestProbeResponse> probeResponseSerializer,
         Serializer<ContentManifestRequest> contentManifestRequestSerializer,
-        Serializer<ContentManifestResponse> contentManifestResponseSerializer)
+        Serializer<ContentManifestResponse> contentManifestResponseSerializer,
+        Serializer<CompressionDictionaryPullRequest> compressionDictionaryPullRequestSerializer,
+        Serializer<CompressionDictionaryPullResponse> compressionDictionaryPullResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(encoder);
         ArgumentNullException.ThrowIfNull(walRecordEncoder);
@@ -64,6 +75,8 @@ internal sealed class LatticeReplicationGrpcMethod
         ArgumentNullException.ThrowIfNull(probeResponseSerializer);
         ArgumentNullException.ThrowIfNull(contentManifestRequestSerializer);
         ArgumentNullException.ThrowIfNull(contentManifestResponseSerializer);
+        ArgumentNullException.ThrowIfNull(compressionDictionaryPullRequestSerializer);
+        ArgumentNullException.ThrowIfNull(compressionDictionaryPullResponseSerializer);
 
         _push = new Method<ReplicationBatchEnvelopeBox, ReplicationAckBox>(
             type: MethodType.Unary,
@@ -85,6 +98,13 @@ internal sealed class LatticeReplicationGrpcMethod
             name: ExchangeContentManifestMethodName,
             requestMarshaller: LatticeReplicationGrpcMarshallers.CreateContentManifestRequestMarshaller(contentManifestRequestSerializer),
             responseMarshaller: LatticeReplicationGrpcMarshallers.CreateContentManifestResponseMarshaller(contentManifestResponseSerializer));
+
+        _pullCompressionDictionary = new Method<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: PullCompressionDictionaryMethodName,
+            requestMarshaller: LatticeReplicationGrpcMarshallers.CreateCompressionDictionaryPullRequestMarshaller(compressionDictionaryPullRequestSerializer),
+            responseMarshaller: LatticeReplicationGrpcMarshallers.CreateCompressionDictionaryPullResponseMarshaller(compressionDictionaryPullResponseSerializer));
     }
 
     /// <summary>
@@ -111,5 +131,14 @@ internal sealed class LatticeReplicationGrpcMethod
     /// marshallers.
     /// </summary>
     public Method<ContentManifestRequestBox, ContentManifestResponseBox> ExchangeContentManifest => _exchangeContentManifest;
+
+    /// <summary>
+    /// The unary <c>PullCompressionDictionary</c> RPC method for the
+    /// self-distributing shared-dictionary pull. Used by both the
+    /// client-side invoker (<see cref="GrpcPushTransport"/>) and the
+    /// server-side service binder so both ends wire up identical
+    /// marshallers.
+    /// </summary>
+    public Method<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox> PullCompressionDictionary => _pullCompressionDictionary;
 }
 

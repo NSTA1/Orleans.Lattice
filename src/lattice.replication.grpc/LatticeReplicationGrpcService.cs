@@ -46,6 +46,12 @@ internal abstract class LatticeReplicationGrpcServiceBase
     public abstract Task<ContentManifestResponseBox> ExchangeContentManifest(ContentManifestRequestBox request, ServerCallContext context);
 
     /// <summary>
+    /// Handles a single self-distributing shared-dictionary pull.
+    /// Implemented in <see cref="LatticeReplicationGrpcService"/>.
+    /// </summary>
+    public abstract Task<CompressionDictionaryPullResponseBox> PullCompressionDictionary(CompressionDictionaryPullRequestBox request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called
     /// once at startup with <paramref name="serviceImpl"/> set to
     /// <see langword="null"/> to record method metadata; the actual
@@ -71,12 +77,14 @@ internal abstract class LatticeReplicationGrpcServiceBase
             binder.AddMethod(method.Push, (UnaryServerMethod<ReplicationBatchEnvelopeBox, ReplicationAckBox>?)null);
             binder.AddMethod(method.ProbeDigest, (UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>?)null);
             binder.AddMethod(method.ExchangeContentManifest, (UnaryServerMethod<ContentManifestRequestBox, ContentManifestResponseBox>?)null);
+            binder.AddMethod(method.PullCompressionDictionary, (UnaryServerMethod<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox>?)null);
             return;
         }
 
         binder.AddMethod(method.Push, new UnaryServerMethod<ReplicationBatchEnvelopeBox, ReplicationAckBox>(serviceImpl.Push));
         binder.AddMethod(method.ProbeDigest, new UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>(serviceImpl.ProbeDigest));
         binder.AddMethod(method.ExchangeContentManifest, new UnaryServerMethod<ContentManifestRequestBox, ContentManifestResponseBox>(serviceImpl.ExchangeContentManifest));
+        binder.AddMethod(method.PullCompressionDictionary, new UnaryServerMethod<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox>(serviceImpl.PullCompressionDictionary));
     }
 }
 
@@ -484,6 +492,41 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
 
         return new ContentManifestResponseBox { Value = response };
+    }
+
+    /// <inheritdoc />
+    public override Task<CompressionDictionaryPullResponseBox> PullCompressionDictionary(
+        CompressionDictionaryPullRequestBox requestBox,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestBox);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var dictionaryId = requestBox.Value.DictionaryId;
+
+        // The reserved id 0 ("no dictionary") is never served, and a
+        // receiver with no provider (or one that cannot resolve the id)
+        // answers "supported but not held" so the puller stops asking this
+        // hop for this tick rather than treating the peer as un-upgraded.
+        if (dictionaryId != 0u
+            && _dictionaryProvider is { } provider
+            && provider.TryGetDictionary(dictionaryId, out var bytes))
+        {
+            var response = new CompressionDictionaryPullResponse
+            {
+                ExchangeSupported = true,
+                Found = true,
+                DictionaryId = dictionaryId,
+                Fingerprint = CompressionDictionaryFingerprint.Compute(bytes.Span),
+                Dictionary = bytes,
+            };
+            return Task.FromResult(new CompressionDictionaryPullResponseBox { Value = response });
+        }
+
+        return Task.FromResult(new CompressionDictionaryPullResponseBox
+        {
+            Value = CompressionDictionaryPullResponse.NotHeld,
+        });
     }
 
     /// <summary>

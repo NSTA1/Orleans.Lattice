@@ -245,27 +245,96 @@ public partial class ReplicationShipperGrainTests
         });
     }
 
-    [Test]
-    public async Task PumpOnceAsync_negotiates_id_only_when_peer_predates_fingerprint_slot()
+    private sealed class FakeActiveDictionaryProvider
+        : ILatticeCompressionDictionaryProvider, ILatticeActiveCompressionDictionary, ILatticeCompressionDictionarySink
     {
-        // Backward-compat: a peer built before the fingerprint slot advertises
-        // only the id-only AdvertisedDictionaryIds. Even with a provider
-        // present, the shipper negotiates exactly as before (id-only) and
-        // compresses with the configured dictionary.
-        var bytes = new byte[] { 1, 2, 3, 4 };
-        var provider = DictionaryProvider(7u, bytes);
+        private readonly Dictionary<uint, byte[]> _dictionaries = new();
+
+        public FakeActiveDictionaryProvider(uint activeId, byte[]? activeBytes = null)
+        {
+            ActiveDictionaryId = activeId;
+            if (activeId != 0u && activeBytes is not null)
+            {
+                _dictionaries[activeId] = activeBytes;
+            }
+        }
+
+        public uint ActiveDictionaryId { get; }
+
+        public bool TryGetDictionary(uint dictionaryId, out ReadOnlyMemory<byte> dictionary)
+        {
+            if (dictionaryId != 0u && _dictionaries.TryGetValue(dictionaryId, out var bytes))
+            {
+                dictionary = bytes;
+                return true;
+            }
+
+            dictionary = ReadOnlyMemory<byte>.Empty;
+            return false;
+        }
+
+        public bool TryInstall(uint dictionaryId, ReadOnlyMemory<byte> dictionary)
+        {
+            if (dictionaryId == 0u || dictionary.IsEmpty)
+            {
+                return false;
+            }
+
+            _dictionaries[dictionaryId] = dictionary.ToArray();
+            return true;
+        }
+    }
+
+    private sealed class FakePullDictionaryTransport(
+        IReadOnlyDictionary<uint, byte[]> served) : IReplicationDigestProbeTransport
+    {
+        public Task<DigestProbeResponse> ProbeDigestAsync(
+            string targetClusterId, DigestProbeRequest request, CancellationToken cancellationToken)
+            => Task.FromResult(default(DigestProbeResponse));
+
+        public Task<CompressionDictionaryPullResponse> PullCompressionDictionaryAsync(
+            string targetClusterId,
+            CompressionDictionaryPullRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (served.TryGetValue(request.DictionaryId, out var bytes))
+            {
+                return Task.FromResult(new CompressionDictionaryPullResponse
+                {
+                    ExchangeSupported = true,
+                    Found = true,
+                    DictionaryId = request.DictionaryId,
+                    Fingerprint = CompressionDictionaryFingerprint.Compute(bytes),
+                    Dictionary = bytes,
+                });
+            }
+
+            return Task.FromResult(CompressionDictionaryPullResponse.NotHeld);
+        }
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_auto_active_forces_dictionary_framing_and_negotiates_active_id()
+    {
+        // Auto-shared-dictionary on with an active trained id overrides both the
+        // configured framing (plain Zstd here) and the negotiation switch (off
+        // here): the ship path frames with ZstdDictionary and negotiates the
+        // provider's live active id once the peer advertises it.
+        var bytes = new byte[] { 4, 4, 2, 2, 1 };
+        var provider = new FakeActiveDictionaryProvider(5u, bytes);
+        var fingerprint = CompressionDictionaryFingerprint.Compute(bytes);
         var (grain, _, feed, transport, _, _, _) = Create(
             new LatticeReplicationOptions
             {
                 ClusterId = LocalCluster,
                 ShipCursorWriteInterval = 1,
-                FramingCompression = LatticeCompression.ZstdDictionary,
-                FramingCompressionDictionaryId = 7u,
+                FramingCompression = LatticeCompression.Zstd,
                 FramingCompressionMinBatchBytes = 0,
-                DictionaryNegotiationEnabled = true,
+                DictionaryNegotiationEnabled = false,
+                AutoSharedDictionaryEnabled = true,
             },
             dictionaryProvider: provider);
-        AdvertiseDictionaryIds(transport, 7u);
+        AdvertiseDictionaries(transport, new AdvertisedCompressionDictionary(5u, fingerprint));
 
         feed.Append(MakeEntry("k1", ticks: 1));
         await grain.OnDoorbellAsync(CancellationToken.None);
@@ -276,7 +345,77 @@ public partial class ReplicationShipperGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.ZstdDictionary));
-            Assert.That(CapturedHeaderDictionaryId(transport), Is.EqualTo(7u));
+            Assert.That(CapturedHeaderDictionaryId(transport), Is.EqualTo(5u));
         });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_off_path_ignores_active_provider_and_stays_byte_identical()
+    {
+        // With the auto switch off, the presence of an auto-trainer with an
+        // active id must not change the wire: plain Zstd, dictionary id 0,
+        // byte-identical to the pre-feature build.
+        var provider = new FakeActiveDictionaryProvider(5u, new byte[] { 1, 2, 3 });
+        var (grain, _, feed, transport, _, _, _) = Create(
+            new LatticeReplicationOptions
+            {
+                ClusterId = LocalCluster,
+                ShipCursorWriteInterval = 1,
+                FramingCompression = LatticeCompression.Zstd,
+                FramingCompressionMinBatchBytes = 0,
+                DictionaryNegotiationEnabled = false,
+                AutoSharedDictionaryEnabled = false,
+            },
+            dictionaryProvider: provider);
+        AdvertiseDictionaries(transport,
+            new AdvertisedCompressionDictionary(5u, CompressionDictionaryFingerprint.Compute(new byte[] { 1, 2, 3 })));
+
+        feed.Append(MakeEntry("k1", ticks: 1));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        feed.Append(MakeEntry("k2", ticks: 2));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.Zstd));
+            Assert.That(CapturedHeaderDictionaryId(transport), Is.EqualTo(0u));
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_auto_active_converges_onto_an_unheld_advertised_dictionary()
+    {
+        // The peer advertises a dictionary id the local provider does not hold.
+        // With the auto switch on, the ship path pulls the bytes over the
+        // digest-probe transport and installs them so the very next negotiation
+        // can compress with the adopted dictionary.
+        var bytes = new byte[] { 7, 7, 7, 1, 2, 3 };
+        var fingerprint = CompressionDictionaryFingerprint.Compute(bytes);
+        var provider = new FakeActiveDictionaryProvider(0u);
+        var pullTransport = new FakePullDictionaryTransport(
+            new Dictionary<uint, byte[]> { [9u] = bytes });
+        var (grain, _, feed, transport, _, _, _) = Create(
+            new LatticeReplicationOptions
+            {
+                ClusterId = LocalCluster,
+                ShipCursorWriteInterval = 1,
+                FramingCompression = LatticeCompression.Zstd,
+                FramingCompressionMinBatchBytes = 0,
+                AutoSharedDictionaryEnabled = true,
+            },
+            digestProbeTransport: pullTransport,
+            dictionaryProvider: provider);
+        AdvertiseDictionaries(transport, new AdvertisedCompressionDictionary(9u, fingerprint));
+
+        // Tick 1 captures the peer advertisement; tick 2 converges on it.
+        feed.Append(MakeEntry("k1", ticks: 1));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        feed.Append(MakeEntry("k2", ticks: 2));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(provider.TryGetDictionary(9u, out var stored), Is.True);
+        Assert.That(stored.ToArray(), Is.EqualTo(bytes));
     }
 }

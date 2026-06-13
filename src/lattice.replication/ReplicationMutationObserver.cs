@@ -63,6 +63,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options;
     private readonly ILatticeMergeModeResolver _modeResolver;
     private readonly LocalVectorClockCache _localVectorClockCache;
+    private readonly ILatticeCompressionDictionarySampler? _dictionarySampler;
     private readonly ConcurrentDictionary<string, CompiledFilter> _filters = new(StringComparer.Ordinal);
     private readonly Func<string, CompiledFilter> _factory;
     private readonly IDisposable? _changeSubscription;
@@ -71,7 +72,8 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         IReplogSink sink,
         IOptionsMonitor<LatticeReplicationOptions> options,
         ILatticeMergeModeResolver modeResolver,
-        LocalVectorClockCache localVectorClockCache)
+        LocalVectorClockCache localVectorClockCache,
+        ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(options);
@@ -81,6 +83,12 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         _options = options;
         _modeResolver = modeResolver;
         _localVectorClockCache = localVectorClockCache;
+        // The injected shared-dictionary provider doubles as the training
+        // sampler when it trains at runtime (the auto-trainer). The default
+        // operator-supplied provider does not implement the sampler, so the
+        // capture path samples nothing unless the host opted into the
+        // auto-distributing dictionary.
+        _dictionarySampler = dictionaryProvider as ILatticeCompressionDictionarySampler;
         _factory = treeId => CompiledFilter.From(_options.Get(treeId));
 
         // Any options change invalidates every cached filter. ConfigureAll
@@ -149,6 +157,21 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         if (!filter.AcceptsKey(key))
         {
             return;
+        }
+
+        // Auto-trained shared-dictionary sampling (opt-in): feed the
+        // committed value bytes into the training reservoir so the
+        // auto-trainer builds a dictionary representative of the very
+        // traffic that will be shipped, with no host wiring. Gated by the
+        // per-tree AutoSharedDictionaryEnabled switch snapshotted on the
+        // compiled filter, so the default-off build samples nothing. Only
+        // Set carries a value worth sampling; Delete / DeleteRange do not.
+        if (filter.SampleForTraining
+            && _dictionarySampler is { } sampler
+            && op == MutationKind.Set
+            && mutation.Value is { Length: > 0 } valueBytes)
+        {
+            sampler.Observe(valueBytes);
         }
 
         // The mutation already carries an origin when it is a replay of a
@@ -287,15 +310,24 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         private CompiledFilter(
             string clusterId,
             string[]? prefixes,
-            Func<string, bool>? keyFilter)
+            Func<string, bool>? keyFilter,
+            bool sampleForTraining)
         {
             ClusterId = clusterId;
             _prefixes = prefixes;
             _keyFilter = keyFilter;
+            SampleForTraining = sampleForTraining;
         }
 
         /// <summary>Snapshot of <see cref="LatticeReplicationOptions.ClusterId"/>.</summary>
         public string ClusterId { get; }
+
+        /// <summary>
+        /// Snapshot of <see cref="LatticeReplicationOptions.AutoSharedDictionaryEnabled"/>:
+        /// whether committed values for this tree are sampled into the
+        /// auto-trained shared-dictionary reservoir.
+        /// </summary>
+        public bool SampleForTraining { get; }
 
         /// <summary>
         /// Returns <c>true</c> when the supplied key passes the
@@ -352,7 +384,8 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             return new CompiledFilter(
                 options.ClusterId,
                 prefixes,
-                options.KeyFilter);
+                options.KeyFilter,
+                options.AutoSharedDictionaryEnabled);
         }
     }
 }

@@ -154,4 +154,13 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.AdvertisedCompressionDictionary"/>.</summary>
     internal const string AdvertisedCompressionDictionary = "olr.ad";
 
+    // Self-distributing shared-dictionary pull round trip (receiver pulls
+    // the bytes behind a peer-advertised id it does not yet hold)
+
+    /// <summary>Alias for <see cref="Replication.CompressionDictionaryPullRequest"/>.</summary>
+    internal const string CompressionDictionaryPullRequest = "olr.kq";
+
+    /// <summary>Alias for <see cref="Replication.CompressionDictionaryPullResponse"/>.</summary>
+    internal const string CompressionDictionaryPullResponse = "olr.kp";
+
 }

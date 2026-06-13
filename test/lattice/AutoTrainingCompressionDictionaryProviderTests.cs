@@ -296,6 +296,75 @@ public sealed class AutoTrainingCompressionDictionaryProviderTests
     }
 
     [Test]
+    public void AvailableDictionaryIds_is_empty_while_disabled()
+    {
+        using var provider = new AutoTrainingCompressionDictionaryProvider(
+            new CompressionDictionaryTrainingOptions { Enabled = false });
+
+        FeedCorpus(provider, 500);
+        provider.TryTrain();
+
+        Assert.That(provider.AvailableDictionaryIds, Is.Empty);
+    }
+
+    [Test]
+    public void AvailableDictionaryIds_is_empty_before_first_train()
+    {
+        using var provider = new AutoTrainingCompressionDictionaryProvider(EnabledOptions());
+
+        Assert.That(provider.AvailableDictionaryIds, Is.Empty);
+    }
+
+    [Test]
+    public void AvailableDictionaryIds_advertises_the_trained_id()
+    {
+        using var provider = new AutoTrainingCompressionDictionaryProvider(EnabledOptions());
+        FeedCorpus(provider, 1000);
+        Assert.That(provider.TryTrain(), Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.AvailableDictionaryIds, Is.EqualTo(new[] { 1u }));
+            Assert.That(provider.AvailableDictionaryIds, Does.Not.Contain(0u));
+        });
+    }
+
+    [Test]
+    public void AvailableDictionaryIds_tracks_the_retained_ring_in_ascending_order()
+    {
+        var clock = new FakeClock(DateTimeOffset.UnixEpoch);
+        using var provider = new AutoTrainingCompressionDictionaryProvider(
+            EnabledOptions(o =>
+            {
+                o.RetainedVersionCount = 2;
+                o.MinTrainingInterval = TimeSpan.Zero;
+            }),
+            clock);
+
+        for (var v = 1; v <= 3; v++)
+        {
+            FeedCorpus(provider, 1000, salt: $"corpus-variant-{v}-distinct-prefix");
+            Assert.That(provider.TryTrain(), Is.True, $"training pass {v} should publish");
+        }
+
+        // Ring cap is 2, so id 1 is evicted and only the two most recent
+        // versions remain, ordered ascending.
+        Assert.That(provider.AvailableDictionaryIds, Is.EqualTo(new[] { 2u, 3u }));
+    }
+
+    [Test]
+    public void AvailableDictionaryIds_is_exposed_through_the_catalog_interface()
+    {
+        using var provider = new AutoTrainingCompressionDictionaryProvider(EnabledOptions());
+        FeedCorpus(provider, 1000);
+        Assert.That(provider.TryTrain(), Is.True);
+
+        ILatticeCompressionDictionaryCatalog catalog = provider;
+
+        Assert.That(catalog.AvailableDictionaryIds, Is.EqualTo(new[] { 1u }));
+    }
+
+    [Test]
     public void Dispose_makes_members_throw()
     {
         var provider = new AutoTrainingCompressionDictionaryProvider(EnabledOptions());

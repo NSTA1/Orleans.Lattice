@@ -308,5 +308,77 @@ public class LatticeReplicationGrpcMarshallersTests
         var box = new ContentManifestResponseBox { Value = response };
         Assert.That(box.Value, Is.EqualTo(response));
     }
+
+    [Test]
+    public void CreateCompressionDictionaryPullRequestMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateCompressionDictionaryPullRequestMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void CreateCompressionDictionaryPullResponseMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateCompressionDictionaryPullResponseMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void CompressionDictionaryPullRequest_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>();
+        var request = new CompressionDictionaryPullRequest { DictionaryId = 42u };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(request, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.That(decoded.DictionaryId, Is.EqualTo(42u));
+    }
+
+    [Test]
+    public void CompressionDictionaryPullResponse_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>();
+        var response = new CompressionDictionaryPullResponse
+        {
+            ExchangeSupported = true,
+            Found = true,
+            DictionaryId = 11u,
+            Fingerprint = 0xABCDUL,
+            Dictionary = new byte[] { 5, 6, 7 },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(response, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.ExchangeSupported, Is.True);
+            Assert.That(decoded.Found, Is.True);
+            Assert.That(decoded.DictionaryId, Is.EqualTo(11u));
+            Assert.That(decoded.Fingerprint, Is.EqualTo(0xABCDUL));
+            Assert.That(decoded.Dictionary.ToArray(), Is.EqualTo(new byte[] { 5, 6, 7 }));
+        });
+    }
+
+    [Test]
+    public void CompressionDictionaryPullRequestBox_carries_value_verbatim()
+    {
+        var request = new CompressionDictionaryPullRequest { DictionaryId = 3u };
+        var box = new CompressionDictionaryPullRequestBox { Value = request };
+        Assert.That(box.Value, Is.EqualTo(request));
+    }
+
+    [Test]
+    public void CompressionDictionaryPullResponseBox_carries_value_verbatim()
+    {
+        var response = CompressionDictionaryPullResponse.NotHeld;
+        var box = new CompressionDictionaryPullResponseBox { Value = response };
+        Assert.That(box.Value, Is.EqualTo(response));
+    }
 }
 

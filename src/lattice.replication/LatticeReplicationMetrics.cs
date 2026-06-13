@@ -1670,4 +1670,51 @@ public static class LatticeReplicationMetrics
                     ? DictionaryNegotiationOutcomeFellBack
                     : DictionaryNegotiationOutcomeUnknown))
             : DictionaryNegotiationOutcomeMatched;
+
+    // --- Self-distributing shared-dictionary convergence (opt-in) ---
+
+    /// <summary>
+    /// Counter incremented once per shared-dictionary pull attempt the
+    /// shipper makes against a peer-advertised id it does not yet hold,
+    /// when the auto-distributing shared dictionary is opted into. Tagged
+    /// by <see cref="TagTree"/>, <see cref="TagPeer"/>, and
+    /// <see cref="TagOutcome"/> (one of
+    /// <see cref="DictionaryConvergenceOutcomeInstalled"/>,
+    /// <see cref="DictionaryConvergenceOutcomeRejected"/>, or
+    /// <see cref="DictionaryConvergenceOutcomeUnavailable"/>), so an
+    /// operator can watch how a fleet converges onto a shared trained
+    /// dictionary and spot fingerprint rejections.
+    /// </summary>
+    public static readonly Counter<long> DictionaryConvergence =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.dictionary_convergence", unit: "{pull}",
+            description: "Shared-dictionary convergence pulls, tagged by tree, peer, and outcome.");
+
+    /// <summary>Canonical name of the <see cref="DictionaryConvergence"/> counter.</summary>
+    public const string DictionaryConvergenceName = "orleans.lattice.replication.ship.dictionary_convergence";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on the
+    /// <see cref="DictionaryConvergence"/> counter: the peer served the
+    /// dictionary bytes, their fingerprint matched the advertised
+    /// fingerprint, and they were installed locally.
+    /// </summary>
+    public const string DictionaryConvergenceOutcomeInstalled = "installed";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on the
+    /// <see cref="DictionaryConvergence"/> counter: the peer served bytes
+    /// whose fingerprint did not match the advertised fingerprint, or a
+    /// local id collision rejected the install, so the bytes were
+    /// discarded without installing.
+    /// </summary>
+    public const string DictionaryConvergenceOutcomeRejected = "rejected";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on the
+    /// <see cref="DictionaryConvergence"/> counter: the peer (or transport)
+    /// did not serve the pull - an un-upgraded peer, a momentarily
+    /// unreachable hop, or the peer no longer holds the id - so the shipper
+    /// leaves the dictionary uninstalled and retries on a later tick.
+    /// </summary>
+    public const string DictionaryConvergenceOutcomeUnavailable = "unavailable";
 }

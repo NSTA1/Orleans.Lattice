@@ -1127,6 +1127,34 @@ public class LatticeReplicationOptions
     public bool DictionaryNegotiationEnabled { get; set; } = DefaultDictionaryNegotiationEnabled;
 
     /// <summary>
+    /// Master opt-in switch for the auto-shared-dictionary feature. When
+    /// <see langword="true"/>, a host that has also registered the runtime
+    /// auto-training compression-dictionary provider gets the whole
+    /// converge-on-a-shared-dictionary pipeline with a single flag:
+    /// <list type="bullet">
+    /// <item>the built-in training driver samples outbound ship payloads into
+    /// the provider's reservoir and pumps a training pass on a cadence, so
+    /// training needs no host code;</item>
+    /// <item>each receiver advertises its auto-trained dictionary ids - each
+    /// paired with a content fingerprint - to peers on its acks; and</item>
+    /// <item>a sender that sees a peer advertise a dictionary id it cannot yet
+    /// resolve pulls the bytes from that peer over the transport's
+    /// pull-bytes seam, verifies them against the advertised fingerprint, and
+    /// installs them locally (rejecting any payload whose fingerprint
+    /// disagrees) so the two clusters converge onto the same dictionary and
+    /// can then compress the cross-cluster link against it.</item>
+    /// </list>
+    /// <para>
+    /// Defaults to <see cref="DefaultAutoSharedDictionaryEnabled"/>
+    /// (<see langword="false"/>). With the flag off the training driver is an
+    /// allocation-free no-op, no dictionary ids are advertised by this feature,
+    /// no pull RPC is ever issued, and the bytes on the wire are byte-identical
+    /// to a build without the feature.
+    /// </para>
+    /// </summary>
+    public bool AutoSharedDictionaryEnabled { get; set; } = DefaultAutoSharedDictionaryEnabled;
+
+    /// <summary>
     /// Opts in to wire-version capability negotiation on the outbound
     /// ship path. When <see langword="true"/>, the per-<c>(tree, peer)</c>
     /// shipper reads each peer's advertised
@@ -1852,6 +1880,16 @@ public class LatticeReplicationOptions
     /// dictionary compression on each peer's advertised capability.
     /// </summary>
     public const bool DefaultDictionaryNegotiationEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="AutoSharedDictionaryEnabled"/>:
+    /// <see langword="false"/>. The auto-shared-dictionary feature ships dark
+    /// and opt-in: with the flag off the training driver is an allocation-free
+    /// no-op, this feature advertises no dictionary ids and issues no pull RPC,
+    /// and a host that never touches the option gets byte-identical
+    /// on-the-wire output.
+    /// </summary>
+    public const bool DefaultAutoSharedDictionaryEnabled = false;
 
     /// <summary>
     /// Default value for <see cref="WireVersionNegotiationEnabled"/>:
