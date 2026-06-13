@@ -56,6 +56,18 @@ var atomicWrites = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKin
 
 Either import each JSON via Grafana's *Dashboards -> New -> Import* UI, or write the strings to a provisioning directory referenced by `Provisioning/dashboards.yaml`.
 
+## Reference
+
+For day-to-day use:
+
+- [API Reference](api.md) - the public `LatticeDashboards` accessor and `LatticeDashboardKind` kinds.
+- [Configuration](configuration.md) - meter registration, dashboard selection, and the Grafana provisioning templates.
+- [Metric-to-panel map](metrics-to-panel-map.md) - the per-instrument coverage table across both meters.
+
+For internals (the "how"):
+
+- [Architecture](architecture.md) - embedded JSON resources, the bidirectional drift guard, and the provisioning-template layout.
+
 ## Feature tracking
 
 The dashboards are tracked alongside the core and replication packages on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues). The [core feature index](../lattice/features.md) and [replication feature index](../lattice.replication/features.md) link the metrics-observability items to their issues.
