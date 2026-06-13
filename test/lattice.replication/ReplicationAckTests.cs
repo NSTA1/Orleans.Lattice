@@ -612,4 +612,31 @@ public class WireVersionDownEncoderTests
                 header, WireVersionDownEncoder.MinimumDownEncodableWireVersion),
             Throws.InstanceOf<NotSupportedException>());
     }
+
+    [Test]
+    public void EnsureDownEncodable_lww_down_stamp_accepts_uncompressed_but_rejects_compressed()
+    {
+        // The encoder owns only the byte-level validity check: a
+        // last-writer-wins tree down-stamped to the oldest down-encodable
+        // version is fine uncompressed but still rejected compressed. The
+        // shipper - not the encoder - owns the decision to *drop* framing
+        // compression for a down-stamped peer (it re-validates here with
+        // LatticeCompression.None), so this contract must stay: the encoder
+        // never silently accepts a compressed down-stamp.
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => WireVersionDownEncoder.EnsureDownEncodable(
+                    WireVersionDownEncoder.MinimumDownEncodableWireVersion,
+                    LatticeMergeMode.LwwRegister,
+                    LatticeCompression.None),
+                Throws.Nothing);
+            Assert.That(
+                () => WireVersionDownEncoder.EnsureDownEncodable(
+                    WireVersionDownEncoder.MinimumDownEncodableWireVersion,
+                    LatticeMergeMode.LwwRegister,
+                    LatticeCompression.Zstd),
+                Throws.InstanceOf<NotSupportedException>());
+        });
+    }
 }

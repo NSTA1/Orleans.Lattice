@@ -1434,6 +1434,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer, outcome) (rate(orleans_lattice_replication_ship_dictionary_convergence_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}} {{tree}} -> {{peer}}" }
       ]
+    },
+    {
+      "id": 59,
+      "title": "Wire-version down-stamp outcomes (rate by reason)",
+      "description": "Rate of per-batch wire-version down-stamp outcomes the shipper recorded while negotiating the framing version for an older peer (orleans.lattice.replication.ship.wire_version_down_stamp), split by reason. compression_dropped = a last-writer-wins tree's framing compression was auto-dropped for this peer so it keeps replicating uncompressed (lossless); blocked_crdt_mode = a CRDT-mode tree cannot be faithfully down-encoded for a pre-current-version receiver, so replication to the peer is paused until upgrade; blocked_unsupported_version = the negotiated target is below the down-encode floor. Opt-in via WireVersionNegotiationEnabled; flat-zero unless a mixed-version fleet is down-stamping. A non-zero blocked_* series is the operator-actionable signal that a peer must be upgraded.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 155 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer, reason) (rate(orleans_lattice_replication_ship_wire_version_down_stamp_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{reason}} {{tree}} -> {{peer}}" }
+      ]
     }
   ]
 }

@@ -133,6 +133,7 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.ship.dictionary_negotiation` | counter | `tree`, `peer`, `outcome` | Shared-dictionary negotiation outcomes (rate) |
 | `orleans.lattice.replication.ship.dictionary_batches` | counter | `tree`, `peer`, `dictionary` | Batches shipped with vs without a shared dictionary (rate) |
 | `orleans.lattice.replication.ship.dictionary_convergence` | counter | `tree`, `peer`, `outcome` | Shared-dictionary convergence pulls (rate) |
+| `orleans.lattice.replication.ship.wire_version_down_stamp` | counter | `tree`, `peer`, `reason` | Wire-version down-stamp outcomes (rate by reason) |
 | `orleans.lattice.replication.receiver.content_manifest_exchanges` | counter | `tree`, `peer` | Receiver content-hash exchanges handled (rate) |
 | `orleans.lattice.replication.receiver.content_entries_elided` | counter | `tree`, `peer` | Receiver content entries elided (rate) |
 | `orleans.lattice.replication.receiver.content_hwm_advances` | counter | `tree`, `peer` | Receiver metadata-only HWM advances (rate) |

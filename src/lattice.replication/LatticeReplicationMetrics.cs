@@ -343,6 +343,59 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string ShipRedundantPayloadBytesName = "orleans.lattice.replication.ship.redundant_payload_bytes";
 
+    /// <summary>
+    /// Counter of per-batch wire-version down-stamp outcomes recorded while
+    /// the shipper negotiates the framing wire version for an older peer
+    /// during a rolling upgrade. Incremented once per negotiation that has a
+    /// down-stamp outcome worth surfacing, tagged by <see cref="TagTree"/>,
+    /// <see cref="TagPeer"/>, and <see cref="TagReason"/>. The reason values
+    /// are <see cref="DownStampReasonCompressionDropped"/> (the tree's framing
+    /// compression was dropped for this peer so a compressed last-writer-wins
+    /// tree keeps replicating uncompressed rather than stalling),
+    /// <see cref="DownStampReasonBlockedCrdtMode"/> (a CRDT-mode tree cannot be
+    /// faithfully down-encoded for a pre-current-version receiver, so
+    /// replication to the peer is paused until it is upgraded), and
+    /// <see cref="DownStampReasonBlockedUnsupportedVersion"/> (the negotiated
+    /// target is below the down-encode floor, so the frame cannot be made
+    /// decodable for the peer). The blocked reasons make a paused stream an
+    /// observable, operator-actionable signal rather than a silent stall.
+    /// </summary>
+    public static readonly Counter<long> ShipWireVersionDownStamp =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.wire_version_down_stamp", unit: "{batch}",
+            description: "Per-batch wire-version down-stamp outcomes during negotiation, tagged by tree, peer and reason (compression_dropped / blocked_crdt_mode / blocked_unsupported_version).");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipWireVersionDownStamp"/> counter.
+    /// </summary>
+    public const string ShipWireVersionDownStampName = "orleans.lattice.replication.ship.wire_version_down_stamp";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for <see cref="ShipWireVersionDownStamp"/>:
+    /// the negotiated down-stamp target could not carry the tree's configured
+    /// framing compression, so the shipper dropped compression for this peer's
+    /// batch and shipped it uncompressed. Lossless - compression rides the
+    /// framing tail only - so a compressed last-writer-wins tree keeps
+    /// replicating to an older peer instead of stalling.
+    /// </summary>
+    public const string DownStampReasonCompressionDropped = "compression_dropped";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for <see cref="ShipWireVersionDownStamp"/>:
+    /// the tree is in a CRDT merge mode whose per-entry merge dispatch depends
+    /// on the hoisted framing-header mode a pre-current-version receiver cannot
+    /// read, so it cannot be faithfully down-encoded. Replication to this peer
+    /// is paused until the peer is upgraded.
+    /// </summary>
+    public const string DownStampReasonBlockedCrdtMode = "blocked_crdt_mode";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for <see cref="ShipWireVersionDownStamp"/>:
+    /// the negotiated target wire version is below the oldest version this
+    /// build can down-stamp to, so the frame cannot be made decodable for the
+    /// peer. Replication to this peer is paused until the peer is upgraded.
+    /// </summary>
+    public const string DownStampReasonBlockedUnsupportedVersion = "blocked_unsupported_version";
+
     // --- Shared-dictionary compression counters --------------------------------
 
     /// <summary>
