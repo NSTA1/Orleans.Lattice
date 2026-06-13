@@ -76,6 +76,9 @@ Net effect: a host-supplied factory is **order-independent** with respect to `Ad
 This contract was tightened to fix a silent-drop bug: previously both branches used `TryAddSingleton`, so a host that called `AddLattice` before `AddAzureTableWalStorage` would silently end up on the in-memory baseline because `AddLattice`'s own `AddWalStorage()` call had already won the `TryAdd` race.
 
 The replication package additionally exposes per-tree overrides via `LatticeReplicationOptions.WalStorageProvider` for trees that should opt out of the silo-wide default.
+
+For production deployments, the canonical durable WAL backend is the Azure Table Storage provider in the optional `Orleans.Lattice.Storage.AzureTable` package - register it with `AddAzureTableWalStorage` so the commit log survives silo restarts. See [Orleans.Lattice.Storage.AzureTable](../lattice.storage.azuretable/README.md) for its setup, configuration, and operations guide.
+
 ## Multi-account fan-out: named providers and pinned placement
 
 A single storage account has a throughput ceiling (Azure Table tops out around 22-24 ke/s per account). A tree whose write rate exceeds one account's ceiling needs its WAL partitions spread across **several** accounts. The seam for that is a per-silo **provider catalogue** keyed by string, plus a per-tree **placement pin** that maps each WAL partition to a catalogue key. The pin is durable cluster state; a partition's placement only ever changes through the managed `ILatticeAdmin` move surface, never as a side effect of a config edit.
