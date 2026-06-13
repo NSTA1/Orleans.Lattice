@@ -1188,6 +1188,54 @@
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
         { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_compaction_shard_dirty_leaves_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" }
       ]
+    },
+    {
+      "id": 44,
+      "title": "Auto-trained dictionary - training runs by outcome (rate)",
+      "description": "Rate of auto-trained shared-dictionary training-pass attempts on the orleans.lattice.compress.dictionary.training_runs counter, split by outcome: trained (a dictionary was built), skipped_insufficient_samples (the reservoir held too few samples or the builder rejected the corpus), or skipped_cadence (the minimum training interval had not elapsed). A flat zero means auto-training is disabled or no host is driving training passes. A series dominated by skipped_insufficient_samples is the cue to lower MinSamplesToTrain or raise the sampling rate; one dominated by skipped_cadence means passes are being attempted faster than MinTrainingInterval allows.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 138 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(orleans_lattice_compress_dictionary_training_runs_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 45,
+      "title": "Auto-trained dictionary - active version",
+      "description": "Current active auto-trained dictionary id (orleans.lattice.compress.dictionary.active_version observable gauge), per silo. 0 means no dictionary has been trained yet. A step up marks a successful training roll-over; a monotonically rising series across a long window indicates frequent re-training (each roll-over bumps the version id). The id is the version the encoder requests; recent prior versions stay resolvable so in-flight frames against a just-superseded version still decompress.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 138 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "lineInterpolation": "stepAfter" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (instance) (orleans_lattice_compress_dictionary_active_version{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 46,
+      "title": "Auto-trained dictionary - reservoir fill",
+      "description": "Auto-training reservoir occupancy (orleans.lattice.compress.dictionary.reservoir_fill observable gauge), split by kind: samples (retained sample count) and bytes (retained total bytes). Both are bounded by MaxSampleCount and MaxReservoirBytes; a series pinned at the cap with a healthy training-run rate is normal steady state. A samples series stuck below MinSamplesToTrain explains a training_runs panel dominated by skipped_insufficient_samples.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 145 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max by (kind) (orleans_lattice_compress_dictionary_reservoir_fill{cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{kind}}" }
+      ]
+    },
+    {
+      "id": 47,
+      "title": "Auto-trained dictionary - trained vs baseline compression ratio",
+      "description": "Trained-dictionary compressed size as a fraction of the no-dictionary (plain Zstd) baseline on the training probe: rate(trained_bytes_out) / rate(trained_bytes_in). Below 1 means the auto-trained dictionary beats plain Zstd on the sampled corpus (lower is better); at or above 1 means the dictionary is not helping and the corpus may be too heterogeneous to train a useful shared dictionary. Reads as no data when no training pass has completed in the window.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 145 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "RATIO", "expr": "sum (rate(orleans_lattice_compress_dictionary_trained_bytes_out_bytes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum (rate(orleans_lattice_compress_dictionary_trained_bytes_in_bytes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "trained / baseline" }
+      ]
     }
   ]
 }

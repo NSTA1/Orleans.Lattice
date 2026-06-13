@@ -108,6 +108,69 @@ public class LatticeCompressionServiceCollectionExtensionsTests
         Assert.That(result, Is.SameAs(services));
     }
 
+    [Test]
+    public void AddLatticeAutoTrainingCompressionDictionary_throws_on_null_services()
+    {
+        Assert.That(
+            () => LatticeCompressionServiceCollectionExtensions.AddLatticeAutoTrainingCompressionDictionary(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void AddLatticeAutoTrainingCompressionDictionary_registers_provider_as_interface_and_concrete()
+    {
+        var services = new ServiceCollection();
+        services.AddLatticeAutoTrainingCompressionDictionary();
+        using var sp = services.BuildServiceProvider();
+
+        var byInterface = sp.GetRequiredService<ILatticeCompressionDictionaryProvider>();
+        var byConcrete = sp.GetRequiredService<AutoTrainingCompressionDictionaryProvider>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(byInterface, Is.InstanceOf<AutoTrainingCompressionDictionaryProvider>());
+            Assert.That(byInterface, Is.SameAs(byConcrete));
+        });
+    }
+
+    [Test]
+    public void AddLatticeAutoTrainingCompressionDictionary_applies_configure_delegate()
+    {
+        var services = new ServiceCollection();
+        services.AddLatticeAutoTrainingCompressionDictionary(o => o.Enabled = true);
+        using var sp = services.BuildServiceProvider();
+
+        var provider = sp.GetRequiredService<AutoTrainingCompressionDictionaryProvider>();
+        Assert.That(provider.Enabled, Is.True);
+    }
+
+    [Test]
+    public void AddLatticeAutoTrainingCompressionDictionary_defaults_to_disabled()
+    {
+        var services = new ServiceCollection();
+        services.AddLatticeAutoTrainingCompressionDictionary();
+        using var sp = services.BuildServiceProvider();
+
+        var provider = sp.GetRequiredService<AutoTrainingCompressionDictionaryProvider>();
+        Assert.That(provider.Enabled, Is.False);
+    }
+
+    [Test]
+    public void AddLatticeAutoTrainingCompressionDictionary_throws_on_invalid_options()
+    {
+        var services = new ServiceCollection();
+        Assert.That(
+            () => services.AddLatticeAutoTrainingCompressionDictionary(o => o.MinSamplesToTrain = 0),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void AddLatticeAutoTrainingCompressionDictionary_returns_same_services_for_chaining()
+    {
+        var services = new ServiceCollection();
+        var result = services.AddLatticeAutoTrainingCompressionDictionary();
+        Assert.That(result, Is.SameAs(services));
+    }
+
     private sealed class FakeCompressor : ILatticeCompressor
     {
         public LatticeCompression Algorithm => (LatticeCompression)0x80;

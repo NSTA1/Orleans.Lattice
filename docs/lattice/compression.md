@@ -180,9 +180,49 @@ As with every other compression knob, flipping to a non-zero dictionary id requi
 
 The before/after ratio is observable - see [`docs/lattice.replication/observability.md`](../lattice.replication/observability.md).
 
+### Auto-trained dictionaries
+
+Operator-supplied dictionaries require an offline training step and a manual roll-out. As an alternative, Orleans.Lattice can **train a shared dictionary at runtime** from a sampled reservoir of representative payloads. Auto-training is **opt-in and off by default**; when disabled it is an allocation-free no-op that emits no telemetry, and the wire format is byte-identical to a build that never references it.
+
+Register the auto-trainer as the dictionary provider alongside the dictionary-aware compressor:
+
+```text
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice;
+
+// 1. Register the auto-trained dictionary provider (opt-in; disabled by default).
+services.AddLatticeAutoTrainingCompressionDictionary(o =>
+{
+    o.Enabled = true;
+    o.MaxSampleCount = 1024;            // reservoir cap (samples)
+    o.MaxReservoirBytes = 8 * 1024 * 1024; // reservoir cap (bytes)
+    o.MaxSampleBytes = 64 * 1024;       // per-sample cap
+    o.SamplingRate = 1.0;               // probability a payload is sampled
+    o.DictionaryCapacityBytes = 112 * 1024; // trained dictionary size cap
+    o.MinSamplesToTrain = 100;          // floor before a pass runs
+    o.MinTrainingInterval = TimeSpan.FromMinutes(5); // cadence cap
+    o.RetainedVersionCount = 4;         // recent versions kept resolvable
+    o.FirstDictionaryId = 1u;           // monotonic id base (non-zero)
+});
+
+// 2. Register the dictionary-aware Zstandard compressor (wire tag 0x02).
+services.AddLatticeZstdDictionaryCompressor(compressionLevel: 3);
+```
+
+How it works:
+
+- **Bounded reservoir.** Observed payloads are sampled into a reservoir capped by both sample count and total bytes, with a per-sample byte cap and a configurable sampling rate. When the reservoir is full the oldest sample is evicted to admit a new one, so memory use is strictly bounded regardless of traffic volume. Feeding the reservoir is an explicit ingestion hook (`Observe`) and a no-op while disabled.
+- **Off-hot-path training.** Training is driven by an explicit pass (`TryTrain`) the host invokes from a turn-safe schedule rather than a hidden background timer, so cadence is deterministic and bounded by `MinTrainingInterval`; a pass below `MinSamplesToTrain`, inside the cadence window, or whose corpus the builder rejects is skipped and never throws to the caller. At most one training pass runs at a time.
+- **Versioned roll-over.** Each successful pass builds the dictionary fully, then atomically publishes it under a new monotonically increasing dictionary id paired with a content hash (an in-process FNV-1a digest used only to detect that a freshly trained dictionary is byte-identical to the current one and skip a redundant version bump; it never travels on the wire). A bounded ring of the most recent versions stays resolvable, so a frame compressed against a version that a roll-over has just superseded still decompresses.
+- **Safe fallback.** A consumer that lacks the dictionary for a requested id resolves it as absent and degrades through the same decoder path as any unknown id, rather than mis-decoding - so a roll-over never causes data loss.
+
+Auto-training produces a dictionary **locally**; it does not distribute the trained bytes to peers. As with operator-supplied dictionaries, the trained dictionary must be provisioned out-of-band to every silo that produces or consumes dictionary frames before any sender selects it (negotiating shared-dictionary support per peer over the wire is a separate follow-up).
+
+The training cadence, active version, reservoir fill, and the trained-versus-baseline compression ratio are all observable - see the auto-trained-dictionary panels on the Overview dashboard and [`docs/lattice.dashboards/metrics-to-panel-map.md`](../lattice.dashboards/metrics-to-panel-map.md).
+
 ### Honest scope
 
-The shipped surface covers operator-supplied (pre-trained) dictionaries end to end: dictionary carriage in the tail, receiver-side dictionary selection, graceful fallback, opt-in options, validation, and before/after observability. Two pieces are documented follow-ups: **auto-training** a dictionary from sampled WAL payloads (the issue's "sampled-and-trained" alternative to operator-supplied), and **per-peer capability negotiation** of shared-dictionary support over the wire-version channel (today the encoder's local-availability fallback is the safety net, and dictionary support is wire-version-free so it does not correlate with the negotiated wire version).
+The shipped surface covers operator-supplied (pre-trained) dictionaries and runtime auto-training end to end: dictionary carriage in the tail, receiver-side dictionary selection, graceful fallback, opt-in options, validation, versioned roll-over, and before/after observability. One piece is a documented follow-up: **per-peer capability negotiation** of shared-dictionary support over the wire-version channel (today the encoder's local-availability fallback is the safety net, and dictionary support is wire-version-free so it does not correlate with the negotiated wire version, so a dictionary - operator-supplied or auto-trained - must be provisioned out-of-band to every peer that needs it).
 
 
 ## Azure Table WAL row-payload compression
