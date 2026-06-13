@@ -7,9 +7,9 @@ Cross-cluster replication for [Orleans.Lattice](../../README.md) - captures ever
 `Orleans.Lattice.Replication` is the **end-to-end cross-cluster replication subsystem** that layers on top of `Orleans.Lattice`. It is more than a wire format - it covers the full producer/transport/receiver pipeline plus the operational surface around it:
 
 - **Capture.** Mutations are intercepted at commit time on the producing cluster and written to a per-tree WAL via the pluggable `IWalStorageProvider` seam (in-memory default, optional Azure Table Storage backend).
-- **Ship.** A per-peer `IReplicationShipperGrain` streams batches to each peer over a long-lived push transport (`IReplicationTransport`, with gRPC as the canonical binding).
+- **Ship.** A per-peer shipper streams batches to each peer over a long-lived push transport (`IReplicationTransport`, with gRPC as the canonical binding).
 - **Apply.** Inbound entries flow through `IReplicationApplier`, which performs per-origin HWM dedup, causal-dependency parking via the causal-apply buffer, shadow-forward de-duplication, and CRDT-aware merges (LWW-Register, OR-Set, PN-Counter, VersionVector, MV-Register, OR-Map).
-- **Bootstrap.** New or fallen-off-the-log peers seed via the snapshot subsystem (`ISnapshotProvider`, `IRemoteSnapshotTransport`, `LatticeRemoteSnapshotService`, `RemoteSnapshotProvider`) coordinated by the per-tree `LatticeBootstrapCoordinatorGrain` with crash-resumable state.
+- **Bootstrap.** New or fallen-off-the-log peers seed via the snapshot subsystem (`ISnapshotProvider`, `IRemoteSnapshotTransport`, `LatticeRemoteSnapshotService`, `RemoteSnapshotProvider`) coordinated by the per-tree bootstrap coordinator (`ILatticeBootstrapCoordinator`) with crash-resumable state.
 - **Operate.** Dead-letter quarantine for poison entries, per-tree merge-mode resolution, operator-driven re-seed, fall-off-log detection, admin introspection (`ILatticeReplicationAdmin`, `ILatticeWalIntrospection`), shared-secret-based mutual auth between clusters, and first-class metrics (apply duration, lag, FIFO violations, bootstrap retries, dead-letter rates) are all in-scope.
 
 No external broker, no shared database, no host-level outgoing-call filter.
@@ -127,6 +127,10 @@ siloBuilder.AddLatticeReplication(opts =>
 
 For day-to-day use and operations:
 
+- [Architecture](architecture.md) - the producer-to-receiver pipeline, the seams it attaches to, and the invariants it preserves end to end.
+- [API Reference](api.md) - the public types, seams, registration helpers, and extension points.
+- [Configuration](configuration.md) - every `LatticeReplicationOptions` knob, its default, and per-tree scope.
+- [Chaos Tests](chaos-tests.md) - the cross-cluster, gRPC transport, and Azure Table WAL chaos suites.
 - [Replication Modes](replication-modes.md) - per-tree opt-in, `LatticeMergeMode` selection, per-key filter.
 - [Observability](observability.md) - `LatticeReplicationMetrics` instruments, per-peer lag, error counters.
 - [Dead-Letter Queue](dead-letter-queue.md) - quarantine model, operator surface, replay.

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Replication Feature Index
 
-Feature planning for the `Orleans.Lattice.Replication` package - a cross-cluster replication library layered on top of `Orleans.Lattice` - is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication), not in roadmap files. See the [package overview](./replication.md) for the user-facing description. This page is a grouped, human-readable index that links each tracked item to its issue. Keep it in sync whenever an issue is opened, closed, or retitled (see the agent instructions in `.github/copilot-instructions.md`).
+Feature planning for the `Orleans.Lattice.Replication` package - a cross-cluster replication library layered on top of `Orleans.Lattice` - is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication), not in roadmap files. See the [package overview](./README.md) for the user-facing description. This page is a grouped, human-readable index that links each tracked item to its issue. Keep it in sync whenever an issue is opened, closed, or retitled (see the agent instructions in `.github/copilot-instructions.md`).
 
 - **Browse all replication issues:** https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication
 - **Open replication issues:** https://github.com/NSTA1/Orleans.Lattice/issues?q=is%3Aopen+label%3Alattice.replication
