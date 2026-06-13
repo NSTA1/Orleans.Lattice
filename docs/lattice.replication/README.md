@@ -101,7 +101,7 @@ app.MapLatticeReplicationGrpc();
 
 For a working multi-cluster example exercising HLC-ordered facts, typed OR-Set replication, and gRPC push, see the `MultiSiteManufacturing` project under [`samples/`](../../samples).
 
-### Default efficiency posture
+### Default efficiency posture (versions greater than v7.1.0)
 
 A stock `AddLatticeReplication` deployment ships with the **safe efficiency bundle** on out of the box, so the minimal setup above is already coalesced, compressed, and measured:
 
