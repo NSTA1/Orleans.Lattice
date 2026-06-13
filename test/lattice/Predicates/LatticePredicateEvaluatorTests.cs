@@ -124,4 +124,47 @@ public class LatticePredicateEvaluatorTests
         var bytes = System.Text.Encoding.UTF8.GetBytes("{\"name\":\"x\"}");
         Assert.That(LatticePredicateEvaluator.Matches(bytes, ir), Is.False);
     }
+
+    private static LatticePredicateNode NestNot(LatticePredicateNode inner, int levels)
+    {
+        var node = inner;
+        for (var i = 0; i < levels; i++)
+            node = LatticePredicateNode.Bool(LatticeBooleanOperator.Not, node);
+        return node;
+    }
+
+    [Test]
+    public void Matches_deeply_nested_predicate_throws_rather_than_overflowing_the_stack()
+    {
+        // The IR is a serializable, client-supplied tree. A crafted or corrupt
+        // payload nested far beyond any legitimate translator output must be
+        // rejected with a catchable exception, never allowed to recurse until
+        // the silo crashes with an uncatchable StackOverflowException.
+        var leaf = LatticePredicateNode.Compare(
+            LatticeComparisonOperator.GreaterThanOrEqual,
+            LatticePredicateNode.Member("Age"),
+            LatticePredicateNode.Const(LatticeConstant.Integer(0)));
+        var bomb = NestNot(leaf, 5000);
+        var bytes = System.Text.Encoding.UTF8.GetBytes("{\"age\":5}");
+
+        Assert.That(
+            () => LatticePredicateEvaluator.Matches(bytes, bomb),
+            Throws.TypeOf<InvalidOperationException>());
+    }
+
+    [Test]
+    public void Matches_nesting_within_the_depth_limit_still_evaluates()
+    {
+        // A predicate nested below the ceiling must fold normally: 100 Not
+        // wrappers over a true comparison leave the result unchanged (even
+        // number of negations), proving the guard does not clip valid trees.
+        var leaf = LatticePredicateNode.Compare(
+            LatticeComparisonOperator.GreaterThanOrEqual,
+            LatticePredicateNode.Member("Age"),
+            LatticePredicateNode.Const(LatticeConstant.Integer(0)));
+        var nested = NestNot(leaf, 100);
+        var bytes = System.Text.Encoding.UTF8.GetBytes("{\"age\":5}");
+
+        Assert.That(LatticePredicateEvaluator.Matches(bytes, nested), Is.True);
+    }
 }

@@ -57,6 +57,15 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "permit at least one entry; a non-positive value would block every flush.");
         }
 
+        if (options.MaxInboundDecompressedBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.MaxInboundDecompressedBytes)} "
+                + $"must be at least 1 ({scope}). The ceiling bounds the buffer the framing "
+                + "decoder allocates to inflate an inbound compressed batch; a non-positive "
+                + "value would reject every compressed batch.");
+        }
+
         if (options.WalMaxPendingBatches < 1)
         {
             return ValidateOptionsResult.Fail(
