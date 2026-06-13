@@ -1028,6 +1028,32 @@ public class LatticeReplicationOptions
     public int FramingCompressionLevel { get; set; } = DefaultFramingCompressionLevel;
 
     /// <summary>
+    /// Hard ceiling, in bytes, on the <b>decompressed</b> size of an inbound
+    /// compressed replication framing batch. The framing header carries the
+    /// declared uncompressed length as a 32-bit field that a hostile or corrupt
+    /// sender can forge independently of how few compressed bytes it actually
+    /// sends, so the receiver bounds the buffer it will allocate to inflate the
+    /// payload <b>before</b> decompressing. A batch whose declared uncompressed
+    /// length exceeds this ceiling is rejected with an <see cref="ArgumentException"/>
+    /// (routed through the framing decoder's existing corrupt-payload path)
+    /// rather than driving a multi-gigabyte allocation from a tiny request - the
+    /// classic decompression-bomb amplification. This bound matters because the
+    /// gRPC transport deserializes (and therefore decodes framing) before the
+    /// shared-secret auth interceptor body runs, so the allocation is reachable
+    /// by any caller that can open a connection.
+    /// <para>
+    /// Defaults to <see cref="DefaultMaxInboundDecompressedBytes"/> (64 MB),
+    /// which is 16x the 4 MB default WAL batch ceiling
+    /// (<see cref="WalMaxBatchBytes"/>) - generous headroom for a legitimately
+    /// large or highly compressible batch while still capping a hostile
+    /// sender's decompressed allocation far below the ~2 GB a forged length
+    /// field could otherwise demand. Operators that ship larger replication
+    /// batches must raise this in step. Must be at least <c>1</c>.
+    /// </para>
+    /// </summary>
+    public long MaxInboundDecompressedBytes { get; set; } = DefaultMaxInboundDecompressedBytes;
+
+    /// <summary>
     /// Minimum uncompressed-tail byte count below which the shipper
     /// stamps <see cref="LatticeCompression.None"/> regardless of the
     /// configured <see cref="FramingCompression"/> value. The
@@ -1417,6 +1443,14 @@ public class LatticeReplicationOptions
     /// Azure Table Storage 4 MB batch payload ceiling.
     /// </summary>
     public const long DefaultWalMaxBatchBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// Default value for <see cref="MaxInboundDecompressedBytes"/>: 64 MB,
+    /// 16x the 4 MB default WAL batch ceiling (<see cref="DefaultWalMaxBatchBytes"/>),
+    /// giving generous headroom for legitimately large or highly compressible
+    /// batches while bounding a hostile sender's decompressed allocation.
+    /// </summary>
+    public const long DefaultMaxInboundDecompressedBytes = 16 * DefaultWalMaxBatchBytes;
 
     /// <summary>
     /// Default value for <see cref="WalMaxPendingBatches"/>: caps the

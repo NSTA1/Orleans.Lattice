@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Replication;
 using Orleans.Serialization;
 
@@ -35,6 +37,20 @@ public class CompressedFramingRoundtripTests
 
     private OrleansBinaryReplicationBatchEncoder NewEncoderNoCompressors()
         => new(_serializer);
+
+    private OrleansBinaryReplicationBatchEncoder NewEncoderWithZstdAndCeiling(long maxInboundDecompressedBytes, int level = 3)
+    {
+        var services = new ServiceCollection();
+        services
+            .AddOptions<LatticeReplicationOptions>()
+            .Configure(o => o.MaxInboundDecompressedBytes = maxInboundDecompressedBytes);
+        var monitor = services.BuildServiceProvider()
+            .GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
+        return new OrleansBinaryReplicationBatchEncoder(
+            _serializer,
+            new ILatticeCompressor[] { new ZstdLatticeCompressor(level) },
+            monitor);
+    }
 
     private static EncodedBatchHeader Header(
         int entryCount,
@@ -149,6 +165,62 @@ public class CompressedFramingRoundtripTests
         Assert.That(decoded.Length, Is.EqualTo(2));
         Assert.That(decoded.Span[0].ToArray(), Is.EqualTo(bodyA));
         Assert.That(decoded.Span[1].ToArray(), Is.EqualTo(bodyB));
+    }
+
+    [Test]
+    public void TryDecodeFraming_throws_on_forged_oversized_uncompressed_length_without_giant_allocation()
+    {
+        // A hostile sender can forge the declared uncompressed-tail
+        // length independently of how few compressed bytes it ships -
+        // the classic decompression-bomb amplification. The gRPC
+        // transport decodes framing before the shared-secret auth
+        // interceptor body runs, so this allocation is reachable
+        // pre-auth. The decoder must reject the frame against the
+        // configured ceiling rather than renting a ~2 GB buffer.
+        var encoder = NewEncoderWithZstd();
+        var writer = new ArrayBufferWriter<byte>();
+        var body = new byte[256];
+        for (var i = 0; i < body.Length; i++) body[i] = (byte)(i % 9);
+        var entries = new[] { new ArraySegment<byte>(body) };
+        encoder.EncodeFraming(Header(1, LatticeCompression.Zstd), "tree-1", "site-a", entries, writer);
+
+        // Compressed tail layout for plain Zstd: the 32-byte header is
+        // followed immediately by the 4-byte uncompressed length (the
+        // routing strings are compressed inside the tail, not emitted
+        // ahead of it). Patch that length to int.MaxValue.
+        var payload = writer.WrittenMemory.ToArray();
+        var uncompressedLengthOffset = EncodedBatchHeader.WireSize;
+        BinaryPrimitives.WriteInt32LittleEndian(
+            payload.AsSpan(uncompressedLengthOffset, 4),
+            int.MaxValue);
+
+        Assert.That(
+            () => encoder.TryDecodeFraming(payload, out _, out _, out _, out _),
+            Throws.ArgumentException
+                .With.Message.Contains(nameof(LatticeReplicationOptions.MaxInboundDecompressedBytes)));
+    }
+
+    [Test]
+    public void TryDecodeFraming_honours_configured_decompression_ceiling()
+    {
+        // The producer ships a legitimate, well-formed compressed
+        // frame; the consumer is configured with a decompression
+        // ceiling below the frame's true uncompressed tail size, so
+        // the decoder must reject it. This pins the option as the
+        // wired, decode-time bound (read through IOptionsMonitor so a
+        // reload takes effect) rather than a fixed compile-time value.
+        var producer = NewEncoderWithZstd();
+        var writer = new ArrayBufferWriter<byte>();
+        var body = new byte[256];
+        for (var i = 0; i < body.Length; i++) body[i] = (byte)(i % 9);
+        var entries = new[] { new ArraySegment<byte>(body) };
+        producer.EncodeFraming(Header(1, LatticeCompression.Zstd), "tree-1", "site-a", entries, writer);
+
+        var consumer = NewEncoderWithZstdAndCeiling(maxInboundDecompressedBytes: 16);
+        Assert.That(
+            () => consumer.TryDecodeFraming(writer.WrittenMemory, out _, out _, out _, out _),
+            Throws.ArgumentException
+                .With.Message.Contains(nameof(LatticeReplicationOptions.MaxInboundDecompressedBytes)));
     }
 
     [Test]

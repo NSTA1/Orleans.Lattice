@@ -330,6 +330,27 @@ public class ReplicationBatchEncoderFramingTests
     }
 
     [Test]
+    public void TryDecodeFraming_throws_on_forged_oversized_entry_count_without_giant_allocation()
+    {
+        // Encode a small, valid single-entry frame, then forge the EntryCount
+        // field in the fixed header to int.MaxValue. The per-entry truncation
+        // checks run only after the segment array is allocated, so an
+        // unbounded EntryCount would otherwise drive a multi-gigabyte
+        // ArraySegment[] allocation (an unauthenticated OOM vector, since gRPC
+        // deserializes the request before the auth interceptor body runs). The
+        // decoder must reject it cheaply against the payload length instead.
+        var writer = new ArrayBufferWriter<byte>();
+        _encoder.EncodeFraming(MakeHeader(entryCount: 1), TreeName, OriginClusterId, new ArraySegment<byte>[] { Seg(1, 2) }, writer);
+        var forged = writer.WrittenMemory.ToArray();
+        // EntryCount lives at offset 16 in the fixed header (see EncodedBatchHeader.WriteTo).
+        BinaryPrimitives.WriteInt32LittleEndian(forged.AsSpan(16, 4), int.MaxValue);
+
+        Assert.That(
+            () => _encoder.TryDecodeFraming(forged, out _, out _, out _, out _),
+            Throws.ArgumentException);
+    }
+
+    [Test]
     public void TryDecodeFraming_entries_alias_back_into_payload_buffer()
     {
         var writer = new ArrayBufferWriter<byte>();
