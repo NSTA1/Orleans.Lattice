@@ -178,7 +178,6 @@ _None._
 - [G-009](https://github.com/NSTA1/Orleans.Lattice/issues/426) - `AtomicWriteGrain` generalization to non-tree mutations
 - [G-010](https://github.com/NSTA1/Orleans.Lattice/issues/427) - Repository of point-in-time tree snapshots
 - [G-013](https://github.com/NSTA1/Orleans.Lattice/issues/430) - Observer-latency telemetry
-- [G-015](https://github.com/NSTA1/Orleans.Lattice/issues/432) - Structural ops as WAL-replayable deterministic log entries
 - [G-017](https://github.com/NSTA1/Orleans.Lattice/issues/434) - Snapshot blob size cap and oversized-row policy (investigative)
 - [G-018](https://github.com/NSTA1/Orleans.Lattice/issues/435) - Periodic recheck classifier-input cache (investigative)
 
