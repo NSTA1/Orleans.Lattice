@@ -2271,10 +2271,15 @@ internal sealed class ReplicationShipperGrain(
     /// deltas of a same-key run into a single combined delta, re-encodes it
     /// onto the kept (highest-HLC) entry, and elides the earlier same-key
     /// ones. Falls back to shipping a key's entries verbatim when the
-    /// mode's <see cref="CrdtShape"/> has no combine (the generic OR-Map
-    /// shape) or any of the key's entries carries an opaque (null) typed
-    /// delta, so no data is ever lost. The merged result inherits the
-    /// last contributing entry's HLC and causal metadata.
+    /// mode's <see cref="CrdtShape"/> has no combine - an OR-Map tree whose
+    /// shape is unregistered (the registry returns no descriptor) or any
+    /// other mode without a combiner - or any of the key's entries carries
+    /// an opaque (null) typed delta, so no data is ever lost. Registered
+    /// OR-Map shapes now carry a combiner (folding the dot-tagged adds /
+    /// tombstones with same-dot value snapshots lattice-merged through the
+    /// value CRDT), so they coalesce like the closed primitives. The merged
+    /// result inherits the last contributing entry's HLC and causal
+    /// metadata.
     /// </summary>
     private void CoalesceCrdtDrainBuffer(LatticeMergeMode mode)
     {

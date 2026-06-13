@@ -20,6 +20,29 @@ public partial class ReplicationShipperGrainTests
     /// <summary>Closed-shape descriptor reused to author typed delta bytes for the CRDT tests.</summary>
     private static readonly CrdtShape PnShape = CrdtShape.ForPnCounter();
 
+    /// <summary>OR-Map descriptor (string key, PN-Counter value) reused to author typed OR-Map delta bytes.</summary>
+    private static readonly CrdtShape OrMapShape = CrdtShape.ForOrMap<string, PnCounter>();
+
+    /// <summary>Authors the Orleans-serialised bytes of an OR-Map add delta carrying a single dot-tagged PN-Counter snapshot.</summary>
+    private static byte[] OrMapAddDelta(string key, string replicaId, long counter, string incReplica, long amount)
+    {
+        var value = new PnCounter();
+        value.Increment(incReplica, amount);
+        return OrMapShape.SerializeDelta!(new OrMapDelta<string, PnCounter>
+        {
+            Adds = new[] { new OrMapDeltaEntry<string, PnCounter> { Key = key, ReplicaId = replicaId, Counter = counter, Value = value } },
+            Tombstones = Array.Empty<OrMapDeltaTombstone<string>>(),
+        });
+    }
+
+    /// <summary>A registry with the test tree's OR-Map shape registered so the shipper resolves a combiner for it.</summary>
+    private static CrdtShapeRegistry RegisteredOrMapRegistry()
+    {
+        var registry = new CrdtShapeRegistry();
+        registry.Register(Tree, CrdtShape.ForOrMap<string, PnCounter>());
+        return registry;
+    }
+
     /// <summary>Authors the Orleans-serialised bytes of a PN-Counter increment delta for one replica.</summary>
     private static byte[] PnDelta(string replica, long cumulativeIncrement)
         => PnShape.SerializeDelta!(new PnCounterDelta
@@ -296,11 +319,36 @@ public partial class ReplicationShipperGrainTests
     }
 
     [Test]
-    public void CrdtShape_ormap_has_no_combine_so_the_shipper_falls_back_to_ship_individually()
+    public void CrdtShape_ormap_exposes_a_combine_that_folds_through_the_value_crdt()
     {
         var shape = CrdtShape.ForOrMap<string, PnCounter>();
-        Assert.That(shape.CombineDeltas, Is.Null,
-            "the generic OR-Map shape cannot combine through the erased value CRDT; entries ship individually");
+        Assert.That(shape.CombineDeltas, Is.Not.Null,
+            "the registered OR-Map shape now combines same-key delta runs via the value CRDT join");
+
+        var value1 = new PnCounter();
+        value1.Increment("X", 2);
+        var value2 = new PnCounter();
+        value2.Increment("Y", 3);
+        var d1 = new OrMapDelta<string, PnCounter>
+        {
+            Adds = new[] { new OrMapDeltaEntry<string, PnCounter> { Key = "k", ReplicaId = "A", Counter = 1, Value = value1 } },
+            Tombstones = Array.Empty<OrMapDeltaTombstone<string>>(),
+        };
+        var d2 = new OrMapDelta<string, PnCounter>
+        {
+            Adds = new[] { new OrMapDeltaEntry<string, PnCounter> { Key = "k", ReplicaId = "A", Counter = 2, Value = value2 } },
+            Tombstones = Array.Empty<OrMapDeltaTombstone<string>>(),
+        };
+
+        // Smoke: the combine folds distinct dots into one delta whose live
+        // value equals the sequential apply (5 = 2 + 3 across the two dots).
+        var combined = (OrMapDelta<string, PnCounter>)shape.CombineDeltas!(d1, d2);
+        var fromCombined = (OrMap<string, PnCounter>)shape.CreateEmpty();
+        shape.MergeDelta(fromCombined, combined);
+        var fromSequence = (OrMap<string, PnCounter>)shape.CreateEmpty();
+        shape.MergeDelta(fromSequence, d1);
+        shape.MergeDelta(fromSequence, d2);
+        Assert.That(fromCombined.Get("k")!.Value, Is.EqualTo(fromSequence.Get("k")!.Value));
     }
 
     // --- Shipper-level CRDT coalescing behaviour ---
@@ -436,6 +484,103 @@ public partial class ReplicationShipperGrainTests
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
             "an unregistered OR-Map tree has no combiner; entries ship individually");
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_with_registered_ormap_mode_merges_same_key_deltas_to_one_entry()
+    {
+        var (grain, _, feed, transport, _, _, _) = Create(
+            CoalesceOptions(),
+            modeResolver: ResolverFor(LatticeMergeMode.OrMap),
+            crdtShapeRegistry: RegisteredOrMapRegistry());
+        feed.Append(MakeCrdtSet("k", ticks: 1, OrMapAddDelta("k", "A", 1, "X", 1)));
+        feed.Append(MakeCrdtSet("k", ticks: 2, OrMapAddDelta("k", "A", 2, "X", 2)));
+        feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 3, "X", 3)));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
+            "a registered OR-Map tree folds the three same-key deltas into a single combined-delta entry");
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_with_registered_ormap_mode_records_deltas_merged_and_entries_elided_counters()
+    {
+        var (grain, _, feed, transport, _, _, _) = Create(
+            CoalesceOptions(),
+            modeResolver: ResolverFor(LatticeMergeMode.OrMap),
+            crdtShapeRegistry: RegisteredOrMapRegistry());
+        feed.Append(MakeCrdtSet("k", ticks: 1, OrMapAddDelta("k", "A", 1, "X", 1)));
+        feed.Append(MakeCrdtSet("k", ticks: 2, OrMapAddDelta("k", "A", 2, "X", 2)));
+        feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 3, "X", 3)));
+
+        using var recorder = new CrdtCoalesceMetricRecorder();
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder.DeltasMerged, Is.EqualTo(3),
+                "three OR-Map source deltas were folded into the combined delta");
+            Assert.That(recorder.EntriesElided, Is.EqualTo(2),
+                "two of the three OR-Map source entries were dropped from the wire");
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_with_registered_ormap_mode_keeps_distinct_keys_and_merges_per_key()
+    {
+        var (grain, _, feed, transport, _, _, _) = Create(
+            CoalesceOptions(),
+            modeResolver: ResolverFor(LatticeMergeMode.OrMap),
+            crdtShapeRegistry: RegisteredOrMapRegistry());
+        feed.Append(MakeCrdtSet("k", ticks: 1, OrMapAddDelta("k", "A", 1, "X", 1)));
+        feed.Append(MakeCrdtSet("j", ticks: 2, OrMapAddDelta("j", "A", 1, "X", 1)));
+        feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 2, "X", 2)));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
+            "the two 'k' OR-Map deltas merge to one; 'j' (single delta) ships verbatim");
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_with_registered_ormap_mode_null_delta_ships_verbatim()
+    {
+        var (grain, _, feed, transport, _, _, _) = Create(
+            CoalesceOptions(),
+            modeResolver: ResolverFor(LatticeMergeMode.OrMap),
+            crdtShapeRegistry: RegisteredOrMapRegistry());
+        // Opaque OR-Map entries (no typed delta) cannot be combined safely;
+        // they fall back to ship-individually even though a combiner exists.
+        feed.Append(MakeCrdtSet("k", ticks: 1, delta: null));
+        feed.Append(MakeCrdtSet("k", ticks: 2, delta: null));
+
+        using var recorder = new CrdtCoalesceMetricRecorder();
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
+                "null-delta OR-Map entries fall back to ship-individually");
+            Assert.That(recorder.DeltasMerged, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_with_registered_ormap_mode_coalescing_disabled_ships_every_delta_verbatim()
+    {
+        var (grain, _, feed, transport, _, _, _) = Create(
+            CoalesceOptions(enabled: false),
+            modeResolver: ResolverFor(LatticeMergeMode.OrMap),
+            crdtShapeRegistry: RegisteredOrMapRegistry());
+        feed.Append(MakeCrdtSet("k", ticks: 1, OrMapAddDelta("k", "A", 1, "X", 1)));
+        feed.Append(MakeCrdtSet("k", ticks: 2, OrMapAddDelta("k", "A", 2, "X", 2)));
+        feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 3, "X", 3)));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
+            "the default-off path is byte-identical even for a registered OR-Map tree: every delta ships");
     }
 
     [Test]
