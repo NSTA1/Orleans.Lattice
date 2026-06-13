@@ -138,6 +138,18 @@ internal sealed class ReplicationShipperGrain(
     private int _negotiatedWireVersion = EncodedBatchHeader.CurrentWireVersion;
 
     /// <summary>
+    /// Set by <see cref="TryNegotiateWireVersion"/> when the negotiated
+    /// down-stamp target cannot carry the configured framing compression but
+    /// is otherwise down-encodable (<see cref="LatticeMergeMode.LwwRegister"/>,
+    /// version &gt;= <see cref="WireVersionDownEncoder.MinimumDownEncodableWireVersion"/>).
+    /// When set, <see cref="ResolveFramingCompression"/> forces the per-peer
+    /// batch uncompressed so a compressed LWW tree keeps replicating to an
+    /// older peer instead of stalling. Activation-scoped; recomputed every
+    /// negotiation.
+    /// </summary>
+    private bool _downStampDropsCompression;
+
+    /// <summary>
     /// The peer's most recently advertised
     /// <see cref="ReplicationAck.AdvertisedDictionaryIds"/>, or
     /// <see langword="null"/> until the peer has acknowledged a batch (or
@@ -2877,19 +2889,27 @@ internal sealed class ReplicationShipperGrain(
     /// gauges, records the version the header sites will stamp into
     /// <see cref="_negotiatedWireVersion"/>, and returns
     /// <see langword="true"/> when the batch may ship. Returns
-    /// <see langword="false"/> - after logging an error and applying
-    /// backoff - for the two genuinely-unsupported cases that must fail
-    /// fast rather than ship an un-applyable frame: the peer advertised a
-    /// version older than the configured
+    /// <see langword="false"/> - after logging an error, recording the
+    /// <see cref="LatticeReplicationMetrics.ShipWireVersionDownStamp"/>
+    /// counter, and applying backoff - for the genuinely-unsupported cases
+    /// that must pause rather than ship an un-applyable frame: the peer
+    /// advertised a version older than the configured
     /// <see cref="LatticeReplicationOptions.MinimumSupportedWireVersion"/>
-    /// floor, or the negotiated target is a down-stamp this build cannot
-    /// produce for the batch's shape (a CRDT-mode tree, a compressed
-    /// framing tail, or a target below
-    /// <see cref="WireVersionDownEncoder.MinimumDownEncodableWireVersion"/>).
-    /// When the negotiated target equals the current wire version this is
-    /// a true no-op: the shipper keeps its verbatim pre-encoded entry hot
-    /// path and the bytes on the wire are byte-identical to a build that
-    /// never negotiated.
+    /// floor, the tree is in a CRDT merge mode (reason
+    /// <see cref="LatticeReplicationMetrics.DownStampReasonBlockedCrdtMode"/>),
+    /// or the negotiated target is below
+    /// <see cref="WireVersionDownEncoder.MinimumDownEncodableWireVersion"/>
+    /// (reason
+    /// <see cref="LatticeReplicationMetrics.DownStampReasonBlockedUnsupportedVersion"/>).
+    /// A compressed last-writer-wins tree down-stamping to an otherwise
+    /// down-encodable target is NOT paused: framing compression is dropped for
+    /// that peer's batch (via <see cref="_downStampDropsCompression"/>, reason
+    /// <see cref="LatticeReplicationMetrics.DownStampReasonCompressionDropped"/>)
+    /// so it keeps replicating uncompressed - lossless, because compression
+    /// rides the framing tail only. When the negotiated target equals the
+    /// current wire version this is a true no-op: the shipper keeps its
+    /// verbatim pre-encoded entry hot path and the bytes on the wire are
+    /// byte-identical to a build that never negotiated.
     /// </summary>
     private bool TryNegotiateWireVersion(LatticeReplicationOptions options)
     {
@@ -2924,29 +2944,68 @@ internal sealed class ReplicationShipperGrain(
         // frame the older peer would mis-apply. Skipped entirely when no
         // downgrade is in effect (same-version peers stay the verbatim
         // no-op).
+        _downStampDropsCompression = false;
         if (negotiation.DowngradeActive)
         {
             var mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister;
+            var target = negotiation.EffectiveWireVersion;
+            // Compression rides the framing tail only; dropping it for this peer
+            // is lossless, so a compressed LWW tree degrades to an uncompressed
+            // frame rather than stalling. Determine whether the tree intends any
+            // framing compression (explicit option or the auto-distributing
+            // dictionary) - if so and we are down-stamping, plan to drop it and
+            // validate down-encodability with LatticeCompression.None.
+            var intendsCompression = AutoDictionaryActive(options)
+                || options.FramingCompression != LatticeCompression.None;
+            var compressionForValidation = intendsCompression && target < EncodedBatchHeader.CurrentWireVersion
+                ? LatticeCompression.None
+                : options.FramingCompression;
+            var willDropCompression = intendsCompression && target < EncodedBatchHeader.CurrentWireVersion;
+
             try
             {
-                WireVersionDownEncoder.EnsureDownEncodable(
-                    negotiation.EffectiveWireVersion, mode, options.FramingCompression);
+                WireVersionDownEncoder.EnsureDownEncodable(target, mode, compressionForValidation);
             }
             catch (NotSupportedException ex)
             {
+                // Genuinely un-down-encodable: a CRDT-mode tree (cannot be faithfully
+                // represented for a pre-version-5 receiver) or a target below the
+                // down-encode floor. This is NOT a silent stall - surface a metered,
+                // operator-actionable signal then back off.
+                var reason = mode != LatticeMergeMode.LwwRegister
+                    ? LatticeReplicationMetrics.DownStampReasonBlockedCrdtMode
+                    : LatticeReplicationMetrics.DownStampReasonBlockedUnsupportedVersion;
+                RecordWireVersionDownStamp(reason);
                 Logger.LogError(ex,
-                    "Negotiated wire version {Version} for peer {Peer} on tree {Tree} is not a "
-                    + "down-stamp this build can produce for the batch's shape; cannot ship until "
-                    + "the peer upgrades (or compression is disabled for this tree).",
-                    negotiation.EffectiveWireVersion, _peerClusterId, _treeName);
+                    "Cannot down-stamp tree {Tree} to wire version {Version} for peer {Peer} ({Reason}); "
+                    + "replication to this peer is paused until it is upgraded. CRDT-mode trees and "
+                    + "sub-floor targets cannot be down-encoded.",
+                    _treeName, target, _peerClusterId, reason);
                 ApplyBackoff(options, exception: null, reason: "wire-version-unsupported");
                 return false;
+            }
+
+            if (willDropCompression)
+            {
+                _downStampDropsCompression = true;
+                RecordWireVersionDownStamp(LatticeReplicationMetrics.DownStampReasonCompressionDropped);
             }
         }
 
         _negotiatedWireVersion = negotiation.EffectiveWireVersion;
         return true;
     }
+
+    /// <summary>
+    /// Records a single per-batch wire-version down-stamp outcome on the
+    /// <see cref="LatticeReplicationMetrics.ShipWireVersionDownStamp"/> counter,
+    /// tagged with the tree, peer, and outcome <paramref name="reason"/>.
+    /// </summary>
+    private void RecordWireVersionDownStamp(string reason)
+        => LatticeReplicationMetrics.ShipWireVersionDownStamp.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
 
     /// <summary>
     /// Computes the per-peer shared-dictionary capability negotiation for
@@ -3138,6 +3197,14 @@ internal sealed class ReplicationShipperGrain(
     private (LatticeCompression Compression, uint DictionaryId) ResolveFramingCompression(
         LatticeReplicationOptions options)
     {
+        if (_downStampDropsCompression)
+        {
+            // A down-stamped pre-current-version peer cannot decode framing-tail
+            // compression (plain or dictionary), so ship this peer's batch
+            // uncompressed. Lossless: compression is framing-only.
+            return (LatticeCompression.None, 0u);
+        }
+
         var autoActive = AutoDictionaryActive(options);
         var framingCompression = autoActive ? LatticeCompression.ZstdDictionary : options.FramingCompression;
         var eligible = framingCompression != LatticeCompression.None

@@ -196,9 +196,22 @@ Down-stamping to version 4 is consequently exact when - and only when - the batc
 The helper refuses (with `NotSupportedException`, the same fail-fast posture as a below-floor peer) to down-stamp the two genuinely un-down-encodable shapes:
 
 - **A CRDT-mode tree** - its per-entry merge dispatch depends on the hoisted header mode a pre-version-5 receiver cannot read, so down-stamping would silently mis-apply the entries.
-- **A compressed framing tail** - compression rides the header without a wire-version bump, so a pre-version-5 receiver is not guaranteed to carry the matching `ILatticeCompressor`. Leave `FramingCompression` at `None` for trees replicated to a mixed-version fleet.
+- **A compressed framing tail** - compression rides the header without a wire-version bump, so a pre-version-5 receiver is not guaranteed to carry the matching `ILatticeCompressor`. The encoder therefore refuses a compressed down-stamp; the shipper resolves this case by dropping compression for the down-stamped peer's batch (see the down-encodable matrix below) so a compressed last-writer-wins tree keeps replicating uncompressed rather than pausing.
 
 The receiver-side apply path restores the elided per-entry fields from the framing context via `IWalRecordEncoder.Decode(span, treeId, mode)`: the tree id comes from the framing tail's `TreeName`, the merge mode from the header's `Mode` field.
+
+### Down-encodable matrix
+
+The shipper owns the down-stamp decision per peer. Compression is the one blocker it resolves by degrading rather than pausing: because framing-tail compression is pure transport framing, shipping a batch *uncompressed* to an older peer is lossless, so a last-writer-wins tree blocked only by compression drops compression for that peer's batch and keeps replicating. CRDT-mode and sub-floor targets cannot be down-encoded at all and pause until the peer is upgraded. `WireVersionDownEncoder.EnsureDownEncodable` itself is unchanged - it still refuses a compressed batch; the shipper validates with `LatticeCompression.None` and stamps the per-peer header uncompressed.
+
+| Merge mode | Framing compression | Target wire version | Down-encodable? | Behaviour |
+|------------|---------------------|---------------------|-----------------|-----------|
+| LwwRegister | None | >= 4 | Yes | Header-only down-stamp; entry segments shipped verbatim. |
+| LwwRegister | Zstd / ZstdDictionary | >= 4 | Yes | Compression auto-dropped for that peer; the batch ships uncompressed (lossless). |
+| Any | Any | < 4 | No | Fail-fast; replication to the peer is paused until it is upgraded. |
+| CRDT mode | Any | < current | No | Fail-fast; cannot be faithfully represented for a pre-version-5 receiver, paused until upgrade. |
+
+The compression auto-degrade is lossless: compression rides the framing tail only, so an uncompressed frame carries the identical entry bytes a pre-current-version receiver expects. Every down-stamp outcome is observable on the `orleans.lattice.replication.ship.wire_version_down_stamp` counter (tagged by `tree`, `peer`, and `reason`): `compression_dropped` (degraded but still shipping), `blocked_crdt_mode`, and `blocked_unsupported_version`. The two blocked reasons make a paused stream an operator-actionable signal rather than a silent stall, so a blocked CRDT tree is never an invisible stop - the operator sees the counter climb and knows exactly which peer to upgrade.
 
 ### Opting in
 
@@ -218,9 +231,9 @@ siloBuilder.AddLatticeReplication(o =>
 
 ### Scope and current posture
 
-The down-stamp mechanism is **implemented and tested** for last-writer-wins, uncompressed trees: a current-build sender negotiates the previous wire version for an older peer, down-stamps the framing header, and the previous-version receiver path decodes and applies the entries to field-complete `WalRecord` values. A same-version peer is a true verbatim no-op (the bytes on the wire are byte-identical to a build that never negotiated). CRDT-mode and compressed trees fail fast rather than emit a frame the older peer would mis-apply.
+The down-stamp mechanism is **implemented and tested** for last-writer-wins trees: a current-build sender negotiates the previous wire version for an older peer, down-stamps the framing header, and the previous-version receiver path decodes and applies the entries to field-complete `WalRecord` values. A same-version peer is a true verbatim no-op (the bytes on the wire are byte-identical to a build that never negotiated). A last-writer-wins tree configured with framing compression keeps replicating to an older peer by auto-dropping compression for that peer's batch (shipping it uncompressed - lossless, because compression is framing-only). CRDT-mode trees and sub-floor targets cannot be down-encoded and pause rather than emit a frame the older peer would mis-apply; the pause is observable on the `orleans.lattice.replication.ship.wire_version_down_stamp` counter (`blocked_crdt_mode` / `blocked_unsupported_version`) so it is never a silent stall.
 
-Negotiation ships **dark** (`WireVersionNegotiationEnabled` defaults to `false`), and the default-on flip is **deferred**: the down-stamp is exact only for last-writer-wins, uncompressed trees, and flipping the default on safely for a heterogeneous fleet (including CRDT trees) requires the upgrade-direction stall analysis that a later issue will carry. Hosts performing a controlled rolling upgrade of last-writer-wins trees can opt in today. Because the feature is dark by default, there is no behavioural change for a host that does not opt in. The default-on posture is tracked as follow-up work on [#703](https://github.com/NSTA1/Orleans.Lattice/issues/703).
+Negotiation ships **dark** (`WireVersionNegotiationEnabled` defaults to `false`), and the default-on flip is **deferred**: the down-stamp is exact for last-writer-wins trees (compressed ones degrade losslessly to uncompressed for the older peer), and flipping the default on safely for a heterogeneous fleet (including CRDT trees) requires the upgrade-direction stall analysis that a later issue will carry. Hosts performing a controlled rolling upgrade of last-writer-wins trees can opt in today. Because the feature is dark by default, there is no behavioural change for a host that does not opt in. The default-on posture is tracked as follow-up work on [#703](https://github.com/NSTA1/Orleans.Lattice/issues/703).
 
 ## Per-peer shared-dictionary capability negotiation
 
