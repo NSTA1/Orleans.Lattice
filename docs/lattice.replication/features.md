@@ -43,6 +43,11 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-146](https://github.com/NSTA1/Orleans.Lattice/issues/741) - Live cross-cluster Merkle-walk localisation + peer high-water-mark probe
 - [R-148](https://github.com/NSTA1/Orleans.Lattice/issues/743) - Wire-version down-stamp coverage for CRDT and compressed batches
 - [R-149](https://github.com/NSTA1/Orleans.Lattice/issues/745) - Default-on the safe replication efficiency bundle (LWW coalescing, dedup measurement, Zstd framing)
+- [R-150](https://github.com/NSTA1/Orleans.Lattice/issues/748) - Per-origin shipper cursor + ack for relay-safe WAL GC
+- [R-151](https://github.com/NSTA1/Orleans.Lattice/issues/749) - Re-resolvable endpoint resolver seam for the gRPC push transport
+- [R-152](https://github.com/NSTA1/Orleans.Lattice/issues/750) - DNS/SRV-backed replication peer discovery provider
+- [R-153](https://github.com/NSTA1/Orleans.Lattice/issues/751) - DANE/TLSA trust pinning for DNS-discovered replication peers
+- [R-154](https://github.com/NSTA1/Orleans.Lattice/issues/752) - Per-origin WAL record signing for relay authenticity
 
 ### Shipped
 
