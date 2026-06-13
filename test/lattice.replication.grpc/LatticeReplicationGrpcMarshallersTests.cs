@@ -218,5 +218,95 @@ public class LatticeReplicationGrpcMarshallersTests
         var box = new DigestProbeResponseBox { Value = response };
         Assert.That(box.Value, Is.EqualTo(response));
     }
+
+    [Test]
+    public void CreateContentManifestRequestMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateContentManifestRequestMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void CreateContentManifestResponseMarshaller_throws_when_serializer_null()
+    {
+        Assert.That(
+            () => LatticeReplicationGrpcMarshallers.CreateContentManifestResponseMarshaller(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ContentManifestRequest_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<ContentManifestRequest>>();
+        var request = new ContentManifestRequest
+        {
+            TreeName = "orders",
+            OriginClusterId = "site-a",
+            Entries = new[]
+            {
+                new ContentManifestEntry
+                {
+                    EntryIndex = 3,
+                    Key = "k",
+                    ContentHash = 0xDEADBEEFUL,
+                    Hlc = new HybridLogicalClock { WallClockTicks = 5, Counter = 1 },
+                },
+            },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(request, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.TreeName, Is.EqualTo("orders"));
+            Assert.That(decoded.OriginClusterId, Is.EqualTo("site-a"));
+            Assert.That(decoded.Entries, Has.Count.EqualTo(1));
+            Assert.That(decoded.Entries[0].EntryIndex, Is.EqualTo(3));
+            Assert.That(decoded.Entries[0].Key, Is.EqualTo("k"));
+            Assert.That(decoded.Entries[0].ContentHash, Is.EqualTo(0xDEADBEEFUL));
+        });
+    }
+
+    [Test]
+    public void ContentManifestResponse_round_trip_via_orleans_serializer_preserves_fields()
+    {
+        var serializer = _sp.GetRequiredService<Serializer<ContentManifestResponse>>();
+        var response = new ContentManifestResponse
+        {
+            ExchangeSupported = true,
+            MissingEntryIndices = new[] { 1, 4, 9 },
+            AdvancedHlc = new HybridLogicalClock { WallClockTicks = 12, Counter = 3 },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        serializer.Serialize(response, writer);
+        var decoded = serializer.Deserialize(writer.WrittenMemory.Span);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.ExchangeSupported, Is.True);
+            Assert.That(decoded.MissingEntryIndices, Is.EqualTo(new[] { 1, 4, 9 }));
+            Assert.That(decoded.AdvancedHlc, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 12, Counter = 3 }));
+        });
+    }
+
+    [Test]
+    public void ContentManifestRequestBox_carries_value_verbatim()
+    {
+        var request = new ContentManifestRequest { TreeName = "t", OriginClusterId = "o" };
+        var box = new ContentManifestRequestBox { Value = request };
+        Assert.That(box.Value, Is.EqualTo(request));
+    }
+
+    [Test]
+    public void ContentManifestResponseBox_carries_value_verbatim()
+    {
+        var response = ContentManifestResponse.NotSupported;
+        var box = new ContentManifestResponseBox { Value = response };
+        Assert.That(box.Value, Is.EqualTo(response));
+    }
 }
 

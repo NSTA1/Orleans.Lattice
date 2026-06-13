@@ -1386,6 +1386,42 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer, dictionary) (rate(orleans_lattice_replication_ship_dictionary_batches_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{dictionary}} {{tree}} -> {{peer}}" }
       ]
+    },
+    {
+      "id": 55,
+      "title": "Receiver content-hash exchanges handled (rate)",
+      "description": "Rate of content-hash manifest exchanges the receiver answered for each origin peer (orleans.lattice.replication.receiver.content_manifest_exchanges). One per inbound pull-missing request handled. Pairs with the sender-side manifest-exchanges panel so an operator can confirm both ends of the round trip agree on the exchange volume. Flat-zero unless a peer ships with ContentHashDedupElisionEnabled against this receiver.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 141 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_manifest_exchanges_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
+      ]
+    },
+    {
+      "id": 56,
+      "title": "Receiver content entries elided (rate)",
+      "description": "Rate of manifest entries the receiver reported it already holds byte-identical content for (orleans.lattice.replication.receiver.content_entries_elided) - the entries the receiver told the sender it does not need shipped. Pairs with the sender-side content-hash payload elision panel: the two track the same elided entries from each end of the round trip. Flat-zero unless the receiver's applied-content index is populated (ContentHashDedupEnabled) and a peer advertises the exchange.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 141 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_entries_elided_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
+      ]
+    },
+    {
+      "id": 57,
+      "title": "Receiver metadata-only HWM advances (rate)",
+      "description": "Rate of metadata-only per-origin high-water-mark advances the receiver performed during a content-hash exchange (orleans.lattice.replication.receiver.content_hwm_advances) - the identical-content-newer-clock idempotent re-set case where the high-water-mark advances without the payload travelling. Flat-zero unless idempotent upstream retry re-sends byte-identical content with a newer clock and the receiver already holds it.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 148 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_hwm_advances_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
+      ]
     }
   ]
 }

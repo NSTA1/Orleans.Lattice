@@ -30,10 +30,25 @@ internal sealed partial class ReplicationApplier(
     LocalVectorClockCache localVectorClockCache,
     CrdtShapeRegistry? crdtShapes = null,
     ILogger<ReplicationApplier>? logger = null,
-    ReplicationPeerStats? peerStats = null) : IReplicationApplier
+    ReplicationPeerStats? peerStats = null,
+    ReceiverAppliedContentIndex? appliedContentIndex = null) : IReplicationApplier
 {
     private readonly ILogger<ReplicationApplier> _logger =
         logger ?? NullLogger<ReplicationApplier>.Instance;
+
+    /// <summary>
+    /// Optional receiver-side applied-content index. When non-<see langword="null"/>
+    /// and the entry's tree has
+    /// <see cref="LatticeReplicationOptions.ContentHashDedupEnabled"/>
+    /// set, a successfully-applied point-<see cref="MutationKind.Set"/>
+    /// records its key-to-content-hash mapping so a subsequent inbound
+    /// content-manifest exchange can report the receiver already holds
+    /// the content; an applied <see cref="MutationKind.Delete"/> removes
+    /// the key and a <see cref="MutationKind.DeleteRange"/> invalidates
+    /// the whole tree's index. Maintained off-path-free when the
+    /// content-hash dedup master switch is off (the index stays empty).
+    /// </summary>
+    private readonly ReceiverAppliedContentIndex? _appliedContentIndex = appliedContentIndex;
 
     /// <summary>
     /// Optional per-peer telemetry sink. When non-<see langword="null"/>
@@ -191,6 +206,7 @@ internal sealed partial class ReplicationApplier(
                 }
 
                 await ApplyRangeAsync(entry, cancellationToken);
+                InvalidateAppliedContentIndexForRange(in entry, resolved);
                 outcome = LatticeReplicationMetrics.OutcomeSuccess;
                 return new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero };
             }
@@ -351,6 +367,7 @@ internal sealed partial class ReplicationApplier(
 
                 await ApplyPointAsync(entry);
                 RecordApplyLag(entry);
+                RecordAppliedContentForIndex(in entry, resolved);
 
                 // Bootstrap-drain bypass: skip the per-origin HWM
                 // advance and the per-(tree, origin) FIFO-violation
@@ -461,6 +478,71 @@ internal sealed partial class ReplicationApplier(
     private static bool HasCausalDependencies(WalRecord entry) =>
         entry.VectorClock is { Entries.Count: > 0 };
 
+    /// <summary>
+    /// Records a successfully-applied point mutation into the
+    /// receiver-side applied-content index so a subsequent inbound
+    /// content-manifest exchange can answer "do I already hold
+    /// byte-identical content for this key?". No-op when no index is
+    /// registered or the tree's content-hash dedup master switch is off,
+    /// so the index is maintained off-path-free under the default
+    /// behaviour. Only last-writer-wins point Set / Delete entries that
+    /// are not part of a not-yet-visible atomic-batch prepare phase are
+    /// recorded: a Set stamps the key's content hash (computed with the
+    /// same FNV-1a digest the sender manifests), a Delete removes the
+    /// key. CRDT-mode entries are skipped because the receiver merges
+    /// rather than overwrites them, so they are never elision-eligible
+    /// and must always ship.
+    /// </summary>
+    private void RecordAppliedContentForIndex(in WalRecord entry, LatticeReplicationOptions resolved)
+    {
+        if (_appliedContentIndex is null
+            || !resolved.ContentHashDedupEnabled
+            || entry.Mode != LatticeMergeMode.LwwRegister
+            || entry.IsPrepared
+            || entry.AtomicBatchSize > 0
+            || string.IsNullOrEmpty(entry.TreeId))
+        {
+            return;
+        }
+
+        if (entry.Op == MutationKind.Set)
+        {
+            _appliedContentIndex.RecordSet(
+                entry.TreeId!,
+                entry.Key ?? string.Empty,
+                ReplicationContentHash.Compute(in entry),
+                resolved.ContentHashDedupCacheSize);
+        }
+        else if (entry.Op == MutationKind.Delete)
+        {
+            _appliedContentIndex.RecordDelete(entry.TreeId!, entry.Key ?? string.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Invalidates the receiver-side applied-content index for a tree
+    /// after a range delete removed an arbitrary key span from the
+    /// visible projection. The index has no range query, so the whole
+    /// tree's entries are cleared rather than risk a stale "already
+    /// holds" answer for a key the range delete removed (which would
+    /// otherwise let the sender elide a payload the receiver no longer
+    /// holds). Range deletes are rare, so the coarse clear is cheap; a
+    /// cleared index simply reports subsequent manifest entries as
+    /// missing until it re-populates. No-op when no index is registered
+    /// or the tree's content-hash dedup master switch is off.
+    /// </summary>
+    private void InvalidateAppliedContentIndexForRange(in WalRecord entry, LatticeReplicationOptions resolved)
+    {
+        if (_appliedContentIndex is null
+            || !resolved.ContentHashDedupEnabled
+            || string.IsNullOrEmpty(entry.TreeId))
+        {
+            return;
+        }
+
+        _appliedContentIndex.InvalidateTree(entry.TreeId!);
+    }
+
     private async Task ParkAsync(
         WalRecord entry,
         LatticeReplicationOptions resolved,
@@ -523,6 +605,7 @@ internal sealed partial class ReplicationApplier(
                     await ApplyPointAsync(ent);
                     RecordApplyLag(ent);
                     RecordFifoState(ent);
+                    RecordAppliedContentForIndex(in ent, resolved);
                     var advancedDrained = await hwmGrain
                         .TryAdvanceAsync(ent.OriginClusterId!, ent.Timestamp, cancellationToken)
                         .ConfigureAwait(false);

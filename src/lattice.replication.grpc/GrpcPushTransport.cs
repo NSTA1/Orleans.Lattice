@@ -118,6 +118,61 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         return responseBox.Value;
     }
 
+    /// <inheritdoc />
+    public async Task<ContentManifestResponse> ExchangeContentManifestAsync(
+        string targetClusterId,
+        ContentManifestRequest request,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+        if (string.IsNullOrEmpty(targetClusterId))
+        {
+            throw new ArgumentException(
+                "targetClusterId must be non-empty.",
+                nameof(targetClusterId));
+        }
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new ArgumentException(
+                "ContentManifestRequest.TreeName must be non-empty.",
+                nameof(request));
+        }
+
+        if (string.IsNullOrEmpty(request.OriginClusterId))
+        {
+            throw new ArgumentException(
+                "ContentManifestRequest.OriginClusterId must be non-empty.",
+                nameof(request));
+        }
+
+        var channel = ResolvePeerChannel(targetClusterId);
+        try
+        {
+            using var call = channel.Invoker.AsyncUnaryCall(
+                _method.ExchangeContentManifest,
+                host: null,
+                options: new CallOptions(cancellationToken: cancellationToken),
+                request: new ContentManifestRequestBox { Value = request });
+
+            var responseBox = await call.ResponseAsync.ConfigureAwait(false);
+            return responseBox.Value;
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.Unimplemented or StatusCode.Unavailable)
+        {
+            // An un-upgraded peer that has not bound the
+            // ExchangeContentManifest RPC answers Unimplemented; a peer
+            // that is momentarily unreachable answers Unavailable. In
+            // both cases the sender must fall back to shipping the full
+            // batch verbatim, which is exactly what
+            // ContentManifestResponse.NotSupported signals - so the
+            // exchange is rolling-upgrade safe without a wire-version
+            // pre-check on this hop.
+            return ContentManifestResponse.NotSupported;
+        }
+    }
+
     private async Task<ReplicationAck> SendCoreAsync(ReplicationBatch batch, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);

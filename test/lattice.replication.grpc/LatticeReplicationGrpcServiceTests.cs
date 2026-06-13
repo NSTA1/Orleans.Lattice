@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Grpc;
 using Orleans.Serialization;
 
@@ -38,19 +39,31 @@ public class LatticeReplicationGrpcServiceTests
         var envSerializer = sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>();
         var probeRequestSerializer = sp.GetRequiredService<Serializer<DigestProbeRequest>>();
         var probeResponseSerializer = sp.GetRequiredService<Serializer<DigestProbeResponse>>();
+        var manifestRequestSerializer = sp.GetRequiredService<Serializer<ContentManifestRequest>>();
+        var manifestResponseSerializer = sp.GetRequiredService<Serializer<ContentManifestResponse>>();
         var encoder = new TestEncoder(envSerializer);
         method = new LatticeReplicationGrpcMethod(
             encoder,
             new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()),
             ackSerializer,
             probeRequestSerializer,
-            probeResponseSerializer);
+            probeResponseSerializer,
+            manifestRequestSerializer,
+            manifestResponseSerializer);
         return new LatticeReplicationGrpcService(
-            method, applier, cursorRegistry, policy, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance);
+            method, applier, cursorRegistry, policy, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance);
     }
 
     private static LatticeReplicationGrpcService CreateServiceWithFactory(
         IGrainFactory grainFactory,
+        out LatticeReplicationGrpcMethod method)
+    {
+        return CreateServiceWithFactory(grainFactory, new ReceiverAppliedContentIndex(), out method);
+    }
+
+    private static LatticeReplicationGrpcService CreateServiceWithFactory(
+        IGrainFactory grainFactory,
+        ReceiverAppliedContentIndex appliedContentIndex,
         out LatticeReplicationGrpcMethod method)
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
@@ -61,6 +74,7 @@ public class LatticeReplicationGrpcServiceTests
             new InMemoryWalCursorRegistry(),
             NoOpReceiverFlowControlPolicy.Instance,
             grainFactory,
+            appliedContentIndex,
             NullLogger<LatticeReplicationGrpcService>.Instance);
     }
 
@@ -117,7 +131,7 @@ public class LatticeReplicationGrpcServiceTests
     public void Constructor_throws_when_method_null()
     {
         Assert.That(
-            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(null!, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -128,7 +142,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = BuildMethod(sp);
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, null!, new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -139,7 +153,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = BuildMethod(sp);
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!, Substitute.For<IGrainFactory>(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), null!, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -150,7 +164,18 @@ public class LatticeReplicationGrpcServiceTests
         var method = BuildMethod(sp);
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, null!, NullLogger<LatticeReplicationGrpcService>.Instance),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, null!, new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_throws_when_applied_content_index_null()
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var method = BuildMethod(sp);
+
+        Assert.That(
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), null!, NullLogger<LatticeReplicationGrpcService>.Instance),
             Throws.ArgumentNullException);
     }
 
@@ -161,7 +186,7 @@ public class LatticeReplicationGrpcServiceTests
         var method = BuildMethod(sp);
 
         Assert.That(
-            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), null!),
+            () => new LatticeReplicationGrpcService(method, Substitute.For<IReplicationApplier>(), new InMemoryWalCursorRegistry(), NoOpReceiverFlowControlPolicy.Instance, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), null!),
             Throws.ArgumentNullException);
     }
 
@@ -173,7 +198,9 @@ public class LatticeReplicationGrpcServiceTests
             new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()),
             sp.GetRequiredService<Serializer<ReplicationAck>>(),
             sp.GetRequiredService<Serializer<DigestProbeRequest>>(),
-            sp.GetRequiredService<Serializer<DigestProbeResponse>>());
+            sp.GetRequiredService<Serializer<DigestProbeResponse>>(),
+            sp.GetRequiredService<Serializer<ContentManifestRequest>>(),
+            sp.GetRequiredService<Serializer<ContentManifestResponse>>());
     }
 
     [Test]
@@ -259,6 +286,7 @@ public class LatticeReplicationGrpcServiceTests
             new InMemoryWalCursorRegistry(),
             NoOpReceiverFlowControlPolicy.Instance,
             Substitute.For<IGrainFactory>(),
+            new ReceiverAppliedContentIndex(),
             NullLogger<LatticeReplicationGrpcService>.Instance,
             dictionaryProvider);
     }
@@ -904,6 +932,207 @@ public class LatticeReplicationGrpcServiceTests
         var response = await svc.ProbeDigest(box, new TestServerCallContext());
 
         Assert.That(response.Value.DigestAvailable, Is.False);
+    }
+
+    // ---- Content-hash manifest-exchange handler ------------------------
+
+    [Test]
+    public void ExchangeContentManifest_throws_when_request_box_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        Assert.That(
+            async () => await svc.ExchangeContentManifest(null!, new TestServerCallContext()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ExchangeContentManifest_throws_when_context_null()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a", Entries = Array.Empty<ContentManifestEntry>() },
+        };
+        Assert.That(
+            async () => await svc.ExchangeContentManifest(box, null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ExchangeContentManifest_throws_invalid_argument_when_tree_name_empty()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest { TreeName = string.Empty, OriginClusterId = "site-a", Entries = Array.Empty<ContentManifestEntry>() },
+        };
+        Assert.That(
+            async () => await svc.ExchangeContentManifest(box, new TestServerCallContext()),
+            Throws.TypeOf<RpcException>().With.Property("StatusCode").EqualTo(StatusCode.InvalidArgument));
+    }
+
+    [Test]
+    public void ExchangeContentManifest_throws_invalid_argument_when_origin_empty()
+    {
+        var svc = CreateServiceWithFactory(Substitute.For<IGrainFactory>(), out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest { TreeName = "tree", OriginClusterId = string.Empty, Entries = Array.Empty<ContentManifestEntry>() },
+        };
+        Assert.That(
+            async () => await svc.ExchangeContentManifest(box, new TestServerCallContext()),
+            Throws.TypeOf<RpcException>().With.Property("StatusCode").EqualTo(StatusCode.InvalidArgument));
+    }
+
+    [Test]
+    public async Task ExchangeContentManifest_reports_all_missing_when_index_cold()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(HybridLogicalClock.Zero));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+
+        // Cold index: never populated, so every manifested key is reported
+        // missing and the sender must ship them all.
+        var svc = CreateServiceWithFactory(factory, new ReceiverAppliedContentIndex(), out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest
+            {
+                TreeName = "tree",
+                OriginClusterId = "site-a",
+                Entries = new[]
+                {
+                    new ContentManifestEntry { EntryIndex = 0, Key = "a", ContentHash = 11UL, Hlc = new HybridLogicalClock { WallClockTicks = 5, Counter = 0 } },
+                    new ContentManifestEntry { EntryIndex = 1, Key = "b", ContentHash = 22UL, Hlc = new HybridLogicalClock { WallClockTicks = 6, Counter = 0 } },
+                },
+            },
+        };
+
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.MissingEntryIndices, Is.EqualTo(new[] { 0, 1 }));
+            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(HybridLogicalClock.Zero));
+        });
+        await hwmGrain.DidNotReceive().TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExchangeContentManifest_elides_entry_receiver_already_holds()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var heldClock = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(heldClock));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+
+        var index = new ReceiverAppliedContentIndex();
+        // Receiver already holds content hash 22 for key "b".
+        index.RecordSet("tree", "b", 22UL, 64);
+
+        var svc = CreateServiceWithFactory(factory, index, out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest
+            {
+                TreeName = "tree",
+                OriginClusterId = "site-a",
+                Entries = new[]
+                {
+                    new ContentManifestEntry { EntryIndex = 0, Key = "a", ContentHash = 11UL, Hlc = new HybridLogicalClock { WallClockTicks = 5, Counter = 0 } },
+                    // Same clock as the recorded HWM, so held -> elided but no advance.
+                    new ContentManifestEntry { EntryIndex = 1, Key = "b", ContentHash = 22UL, Hlc = heldClock },
+                },
+            },
+        };
+
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.MissingEntryIndices, Is.EqualTo(new[] { 0 }));
+            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(HybridLogicalClock.Zero));
+        });
+        await hwmGrain.DidNotReceive().TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExchangeContentManifest_advances_hwm_for_identical_content_newer_clock()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var heldClock = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
+        var newerClock = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 };
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(heldClock));
+        hwmGrain.TryAdvanceAsync("site-a", newerClock, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+
+        var index = new ReceiverAppliedContentIndex();
+        index.RecordSet("tree", "b", 22UL, 64);
+
+        var svc = CreateServiceWithFactory(factory, index, out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest
+            {
+                TreeName = "tree",
+                OriginClusterId = "site-a",
+                Entries = new[]
+                {
+                    // Receiver holds identical content but the manifest clock
+                    // is newer than the recorded HWM -> metadata-only advance.
+                    new ContentManifestEntry { EntryIndex = 0, Key = "b", ContentHash = 22UL, Hlc = newerClock },
+                },
+            },
+        };
+
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.MissingEntryIndices, Is.Empty);
+            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(newerClock));
+        });
+        await hwmGrain.Received(1).TryAdvanceAsync("site-a", newerClock, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExchangeContentManifest_empty_manifest_returns_supported_with_no_missing()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(HybridLogicalClock.Zero));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+
+        var svc = CreateServiceWithFactory(factory, out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest
+            {
+                TreeName = "tree",
+                OriginClusterId = "site-a",
+                Entries = Array.Empty<ContentManifestEntry>(),
+            },
+        };
+
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.MissingEntryIndices, Is.Empty);
+            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(HybridLogicalClock.Zero));
+        });
     }
 }
 
