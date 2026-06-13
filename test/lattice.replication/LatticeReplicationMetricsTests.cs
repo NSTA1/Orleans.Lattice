@@ -1015,4 +1015,68 @@ public class LatticeReplicationMetricsTests
                 t.Key == "reason" && (string?)t.Value == "opt_out"));
         });
     }
+
+    // ------------------------------------------------------------------
+    // Shared-dictionary negotiation outcome tag (incl. fingerprint guard)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Dictionary_negotiation_outcome_constants_use_canonical_values()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeMatched,
+                Is.EqualTo("matched"));
+            Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeFellBack,
+                Is.EqualTo("fell_back"));
+            Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeUnknown,
+                Is.EqualTo("unknown"));
+            Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeFingerprintMismatch,
+                Is.EqualTo("fingerprint_mismatch"));
+        });
+    }
+
+    [Test]
+    public void Dictionary_negotiation_outcome_tag_maps_matched()
+    {
+        var result = new SharedDictionaryNegotiationResult(
+            EffectiveDictionaryId: 7u, Matched: true, PeerCapabilityKnown: true, FellBack: false);
+
+        Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(result),
+            Is.EqualTo("matched"));
+    }
+
+    [Test]
+    public void Dictionary_negotiation_outcome_tag_maps_fell_back()
+    {
+        var result = new SharedDictionaryNegotiationResult(
+            EffectiveDictionaryId: 0u, Matched: false, PeerCapabilityKnown: true, FellBack: true);
+
+        Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(result),
+            Is.EqualTo("fell_back"));
+    }
+
+    [Test]
+    public void Dictionary_negotiation_outcome_tag_maps_unknown()
+    {
+        var result = new SharedDictionaryNegotiationResult(
+            EffectiveDictionaryId: 0u, Matched: false, PeerCapabilityKnown: false, FellBack: true);
+
+        Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(result),
+            Is.EqualTo("unknown"));
+    }
+
+    [Test]
+    public void Dictionary_negotiation_outcome_tag_maps_fingerprint_mismatch()
+    {
+        var result = new SharedDictionaryNegotiationResult(
+            EffectiveDictionaryId: 0u,
+            Matched: false,
+            PeerCapabilityKnown: true,
+            FellBack: true,
+            FingerprintMismatch: true);
+
+        Assert.That(LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(result),
+            Is.EqualTo("fingerprint_mismatch"));
+    }
 }

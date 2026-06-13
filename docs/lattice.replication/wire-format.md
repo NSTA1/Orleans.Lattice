@@ -230,7 +230,7 @@ Shared-dictionary compression (`LatticeCompression.ZstdDictionary`) can be negot
 
 1. **The receiver advertises its dictionary capability.** Every `ReplicationAck` carries an additive `[Id(6)] uint[]? AdvertisedDictionaryIds` slot. When the receiver's registered `ILatticeCompressionDictionaryProvider` also implements `ILatticeCompressionDictionaryCatalog`, the slot is stamped with the sorted set of dictionary ids that provider can resolve; otherwise it is `null`. The slot is strictly additive on the wire (same compatibility profile as `SupportedWireVersion`): a receiver built before dictionary negotiation omits it (decodes as `null`), and a sender built before negotiation ignores it.
 2. **The sender negotiates the effective dictionary id.** On each pump tick the shipper feeds the peer's most recently advertised ids into the pure `SharedDictionaryNegotiation.Negotiate(...)` helper, which returns a `SharedDictionaryNegotiationResult`: the configured id is used (`Matched`) when the peer advertised it; otherwise the sender falls back to id `0` (dictionary-less) and stamps `LatticeCompression.Zstd` instead of `ZstdDictionary`, so the receiver decodes a plain Zstd frame. A `null` advertisement is treated as an as-yet-unknown capability and also falls back. The per-peer negotiated state is activation-scoped and refreshed on every ack, so it adapts when a peer reconnects or changes its advertised capability. Unlike wire-version negotiation, this **never** fails fast - the dictionary-less fallback is always decodable.
-3. **Operators can see the outcome.** The shipper records the per-`(tree, peer)` negotiation outcome to the `orleans.lattice.replication.ship.dictionary_negotiation{tree,peer,outcome}` counter (`outcome` is `matched`, `fell_back`, or `unknown`) and the share of batches shipped with versus without a shared dictionary to `orleans.lattice.replication.ship.dictionary_batches{tree,peer,dictionary}` (`dictionary` is `with_dictionary` or `without_dictionary`).
+3. **Operators can see the outcome.** The shipper records the per-`(tree, peer)` negotiation outcome to the `orleans.lattice.replication.ship.dictionary_negotiation{tree,peer,outcome}` counter (`outcome` is `matched`, `fell_back`, `unknown`, or `fingerprint_mismatch` - see [Content-fingerprint safety guard](#content-fingerprint-safety-guard)) and the share of batches shipped with versus without a shared dictionary to `orleans.lattice.replication.ship.dictionary_batches{tree,peer,dictionary}` (`dictionary` is `with_dictionary` or `without_dictionary`).
 
 ```csharp verify
 var negotiation = SharedDictionaryNegotiation.Negotiate(
@@ -260,4 +260,38 @@ siloBuilder.AddLatticeReplication(o =>
 ```
 
 Because the feature is dark by default and the slot is additive, there is no behavioural change and the bytes on the wire are byte-identical for a host that does not opt in.
+
+### Content-fingerprint safety guard
+
+Negotiating on the bare numeric dictionary id alone has a sharp edge: two deployments can map the **same id to different bytes** - an operator slip, or the guaranteed collision when two clusters both auto-train and each labels its first dictionary id 1. With id-only negotiation the sender sees the id advertised, compresses with its own (different) bytes, and the receiver hard-fails decode with `ArgumentException`. The provider contract warns that "changing the bytes behind an id would silently corrupt in-flight frames," but nothing enforced it on the wire.
+
+The fingerprint guard closes that gap by carrying a **content fingerprint** alongside the id:
+
+1. **The receiver advertises (id, fingerprint) pairs.** Every `ReplicationAck` carries an additive `[Id(7)] AdvertisedCompressionDictionary[]? AdvertisedDictionaries` slot in addition to the id-only `[Id(6)] AdvertisedDictionaryIds`. Each `AdvertisedCompressionDictionary` is an `(uint Id, ulong Fingerprint)` pair where the fingerprint is `CompressionDictionaryFingerprint.Compute(bytes)` - the 64-bit FNV-1a of the receiver's dictionary bytes for that id (the same hash family the framing header uses for the origin cluster id, deterministic across processes and architectures). A receiver on the current build populates **both** slots, so an older sender keeps negotiating on the id-only slot while a current sender prefers the fingerprint-gated slot.
+2. **The sender gates on (id, fingerprint).** When the peer advertised the fingerprint-bearing slot, the shipper calls the `SharedDictionaryNegotiation.Negotiate(configuredDictionaryId, configuredFingerprint, peerAdvertised)` overload, resolving its own configured dictionary's fingerprint via the registered `ILatticeCompressionDictionaryProvider`. The dictionary is honoured only when the peer advertised the configured id **and** a matching fingerprint; a same-id/different-fingerprint peer falls back to dictionary-less `Zstd` exactly like an absent id, so the receiver never sees an undecodable frame. When the peer advertised only the id-only slot (a build predating the fingerprint slot), the sender negotiates on the id alone exactly as before.
+3. **The misconfiguration is legible.** A same-id/different-fingerprint fallback surfaces a distinct `fingerprint_mismatch` value on the `orleans.lattice.replication.ship.dictionary_negotiation{tree,peer,outcome}` counter (joining `matched`, `fell_back`, and `unknown`), and the shipper logs a one-shot warning per activation naming the id to reconcile. The misconfiguration is therefore visible as a recognisable telemetry signal instead of manifesting as receiver-side decode failures.
+
+```csharp verify
+var bytes = new byte[] { 1, 2, 3, 4 };
+var fingerprint = CompressionDictionaryFingerprint.Compute(bytes);
+
+var negotiation = SharedDictionaryNegotiation.Negotiate(
+    configuredDictionaryId: 7u,
+    configuredFingerprint: fingerprint,
+    peerAdvertised: new[] { new AdvertisedCompressionDictionary(7u, fingerprint) });
+
+if (negotiation.Matched)
+{
+    // The peer advertised id 7 with a byte-matching fingerprint, so the
+    // sender compresses with it. A same-id/different-fingerprint peer
+    // instead returns FellBack && FingerprintMismatch and the sender ships
+    // plain dictionary-less Zstd.
+}
+```
+
+The guard needs no opt-in beyond `DictionaryNegotiationEnabled`: when negotiation is on and the peer advertises the fingerprint-bearing slot, the gate is active. The `AdvertisedDictionaries` slot is strictly additive (same compatibility profile as `AdvertisedDictionaryIds`), so a peer predating the fingerprint slot negotiates exactly as before and the bytes on the wire are unchanged for any host that does not opt into dictionary negotiation.
+
+#### Scope: negotiation-layer guard, not a frame-tail fingerprint
+
+The fingerprint is carried on the **advertisement + negotiation** layer (the additive ack slot), not stamped into the framing frame tail. The dictionary slot in `EncodedBatchHeader` carries only the numeric id, and bumping the frame layout to carry a fingerprint would break every current receiver when wire-version negotiation is off (a negotiation-off sender always frames at `CurrentWireVersion`). The negotiation-layer guard fully satisfies the safety goal - a same-id/different-bytes configuration never produces a decode failure - because the sender simply never selects a mismatching dictionary in the first place; a frame-tail fingerprint would be unreachable defense-in-depth given that guard.
 

@@ -30,8 +30,20 @@ namespace Orleans.Lattice.Replication;
 /// dictionary for this peer and fell back to dictionary-less compression;
 /// <see langword="false"/> otherwise.
 /// </param>
+/// <param name="FingerprintMismatch">
+/// <see langword="true"/> when the peer advertised the configured dictionary
+/// id but with a content fingerprint that differs from the sender's configured
+/// dictionary bytes - a same-id/different-bytes misconfiguration. The sender
+/// always falls back to dictionary-less compression in this case
+/// (<see cref="FellBack"/> is also <see langword="true"/>); the distinct flag
+/// lets the ship path surface a recognisable telemetry outcome instead of the
+/// misconfiguration manifesting as a receiver-side decode failure. Defaults to
+/// <see langword="false"/> on the id-only negotiation path (a peer predating
+/// the fingerprint slot) and whenever no fingerprint conflict was observed.
+/// </param>
 public readonly record struct SharedDictionaryNegotiationResult(
     uint EffectiveDictionaryId,
     bool Matched,
     bool PeerCapabilityKnown,
-    bool FellBack);
+    bool FellBack,
+    bool FingerprintMismatch = false);

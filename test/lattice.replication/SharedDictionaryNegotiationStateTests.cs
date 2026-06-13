@@ -57,7 +57,35 @@ public class SharedDictionaryNegotiationStateTests
     }
 
     [Test]
-    public void Record_keeps_tree_peer_pairs_isolated()
+    public void Record_then_snapshot_round_trips_the_fingerprint_mismatch_flag()
+    {
+        var state = new SharedDictionaryNegotiationState();
+        state.Record("tree-a", "peer-a",
+            new SharedDictionaryNegotiationResult(
+                0u, Matched: false, PeerCapabilityKnown: true, FellBack: true,
+                FingerprintMismatch: true));
+
+        var snap = state.Snapshot().Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snap.FellBack, Is.True);
+            Assert.That(snap.FingerprintMismatch, Is.True);
+        });
+    }
+
+    [Test]
+    public void Snapshot_defaults_fingerprint_mismatch_to_false()
+    {
+        var state = new SharedDictionaryNegotiationState();
+        state.Record("tree-a", "peer-a",
+            new SharedDictionaryNegotiationResult(7u, true, true, false));
+
+        Assert.That(state.Snapshot().Single().FingerprintMismatch, Is.False);
+    }
+
+    [Test]
+    public void Snapshot_returns_one_entry_per_recorded_peer()
     {
         var state = new SharedDictionaryNegotiationState();
         state.Record("tree-a", "peer-a",

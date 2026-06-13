@@ -48,6 +48,7 @@ public sealed class SharedDictionaryNegotiationState
             entry.Matched = result.Matched;
             entry.PeerCapabilityKnown = result.PeerCapabilityKnown;
             entry.FellBack = result.FellBack;
+            entry.FingerprintMismatch = result.FingerprintMismatch;
         }
     }
 
@@ -62,16 +63,17 @@ public sealed class SharedDictionaryNegotiationState
         foreach (var kv in _state)
         {
             uint effective;
-            bool matched, known, fellBack;
+            bool matched, known, fellBack, fingerprintMismatch;
             lock (kv.Value)
             {
                 effective = kv.Value.EffectiveDictionaryId;
                 matched = kv.Value.Matched;
                 known = kv.Value.PeerCapabilityKnown;
                 fellBack = kv.Value.FellBack;
+                fingerprintMismatch = kv.Value.FingerprintMismatch;
             }
             list.Add(new SharedDictionaryNegotiationSnapshot(
-                kv.Key.Tree, kv.Key.Peer, effective, matched, known, fellBack));
+                kv.Key.Tree, kv.Key.Peer, effective, matched, known, fellBack, fingerprintMismatch));
         }
         return list;
     }
@@ -84,5 +86,6 @@ public sealed class SharedDictionaryNegotiationState
         public bool Matched;
         public bool PeerCapabilityKnown;
         public bool FellBack;
+        public bool FingerprintMismatch;
     }
 }

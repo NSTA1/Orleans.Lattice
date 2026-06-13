@@ -45,7 +45,8 @@ internal sealed class ReplicationShipperGrain(
     WireVersionNegotiationState negotiationState,
     IReplicationDigestProbeTransport digestProbeTransport,
     CrdtShapeRegistry? crdtShapeRegistry = null,
-    SharedDictionaryNegotiationState? dictionaryNegotiationState = null)
+    SharedDictionaryNegotiationState? dictionaryNegotiationState = null,
+    ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -93,6 +94,16 @@ internal sealed class ReplicationShipperGrain(
     private readonly SharedDictionaryNegotiationState _dictionaryNegotiationState =
         dictionaryNegotiationState ?? new SharedDictionaryNegotiationState();
 
+    // Resolves the sender's own configured shared-dictionary bytes so the
+    // ship path can fingerprint them and gate dictionary compression on
+    // (id, fingerprint) against a peer that advertised the fingerprint-bearing
+    // capability. Optional constructor dependency: the DI registration supplies
+    // the same provider the encoder uses; null in unit-test constructions that
+    // never exercise the fingerprint path (those fall through to the id-only
+    // negotiation, matching a peer that predates the fingerprint slot).
+    private readonly ILatticeCompressionDictionaryProvider? _dictionaryProvider =
+        dictionaryProvider;
+
     private string _treeName = "";
     private string _peerClusterId = "";
     private bool _keyParsed;
@@ -139,6 +150,35 @@ internal sealed class ReplicationShipperGrain(
     /// point the next ack re-advertises the peer's dictionary capability.
     /// </summary>
     private uint[]? _peerAdvertisedDictionaryIds;
+
+    /// <summary>
+    /// The peer's most recently advertised
+    /// <see cref="ReplicationAck.AdvertisedDictionaries"/> (the
+    /// fingerprint-bearing <c>(id, fingerprint)</c> capability), or
+    /// <see langword="null"/> until the peer has acknowledged a batch with the
+    /// slot populated (a build predating the fingerprint slot never stamps it).
+    /// When non-null this takes precedence over
+    /// <see cref="_peerAdvertisedDictionaryIds"/>: the ship path negotiates on
+    /// <c>(id, fingerprint)</c> so a same-id/different-bytes peer falls back to
+    /// dictionary-less compression. Activation-scoped: lost on deactivation, at
+    /// which point the next ack re-advertises the peer's capability.
+    /// </summary>
+    private AdvertisedCompressionDictionary[]? _peerAdvertisedDictionaries;
+
+    /// <summary>
+    /// One-shot latch so the same-id/different-fingerprint misconfiguration is
+    /// logged at most once per activation (the distinct telemetry counter still
+    /// increments every tick). Reset implicitly on deactivation.
+    /// </summary>
+    private bool _dictionaryFingerprintMismatchWarned;
+
+    // Caches the fingerprint of the sender's own configured dictionary bytes so
+    // the per-tick negotiation does not re-resolve and re-hash on every pump.
+    // Keyed on the configured id: a runtime options flip to a different id
+    // invalidates the cache. Activation-scoped.
+    private uint _cachedFingerprintForId;
+    private ulong _cachedFingerprint;
+    private bool _cachedFingerprintResolved;
 
     /// <summary>
     /// The shared compression-dictionary id the shipper stamps on the next
@@ -986,6 +1026,7 @@ internal sealed class ReplicationShipperGrain(
         // the next tick's dictionary negotiation. Harmless when
         // dictionary negotiation is off (the value is never read).
         _peerAdvertisedDictionaryIds = ack.AdvertisedDictionaryIds;
+        _peerAdvertisedDictionaries = ack.AdvertisedDictionaries;
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -2804,6 +2845,7 @@ internal sealed class ReplicationShipperGrain(
         _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
         _peerWireVersion = ack.SupportedWireVersion;
         _peerAdvertisedDictionaryIds = ack.AdvertisedDictionaryIds;
+        _peerAdvertisedDictionaries = ack.AdvertisedDictionaries;
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -2898,20 +2940,27 @@ internal sealed class ReplicationShipperGrain(
 
     /// <summary>
     /// Computes the per-peer shared-dictionary capability negotiation for
-    /// the next batch against the peer's most recently advertised
-    /// <see cref="ReplicationAck.AdvertisedDictionaryIds"/>, records the
-    /// outcome to the
+    /// the next batch. When the peer advertised the fingerprint-bearing
+    /// <see cref="ReplicationAck.AdvertisedDictionaries"/> capability the
+    /// negotiation gates on <c>(id, fingerprint)</c> - resolving this sender's
+    /// own configured dictionary fingerprint via
+    /// <see cref="ResolveConfiguredDictionaryFingerprint(uint)"/> - so a
+    /// same-id/different-bytes peer falls back rather than shipping a frame the
+    /// receiver cannot decode; otherwise it negotiates on the id-only
+    /// <see cref="ReplicationAck.AdvertisedDictionaryIds"/> exactly as a peer
+    /// predating the fingerprint slot would. Records the outcome to the
     /// <see cref="LatticeReplicationMetrics.DictionaryNegotiation"/> counter
     /// and the process-wide <see cref="SharedDictionaryNegotiationState"/>,
-    /// and stores the effective dictionary id the header sites will stamp
-    /// into <see cref="_negotiatedDictionaryId"/>. Only acts when
+    /// logs a one-shot warning on a fingerprint mismatch, and stores the
+    /// effective dictionary id the header sites will stamp into
+    /// <see cref="_negotiatedDictionaryId"/>. Only acts when
     /// <see cref="LatticeReplicationOptions.DictionaryNegotiationEnabled"/>
     /// is set and a shared dictionary is actually configured
     /// (<see cref="LatticeCompression.ZstdDictionary"/> with a non-zero
     /// <see cref="LatticeReplicationOptions.FramingCompressionDictionaryId"/>);
     /// otherwise it resets the negotiated id to <c>0</c>. Unlike
     /// <see cref="TryNegotiateWireVersion"/> this never fails fast: an
-    /// unmatched or as-yet-unknown peer capability falls back to
+    /// unmatched, mismatching, or as-yet-unknown peer capability falls back to
     /// dictionary-less compression, which every peer can decode, so no peer
     /// ever receives a frame compressed with a dictionary it has not
     /// advertised.
@@ -2926,8 +2975,13 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
-        var negotiation = SharedDictionaryNegotiation.Negotiate(
-            options.FramingCompressionDictionaryId, _peerAdvertisedDictionaryIds);
+        var negotiation = _peerAdvertisedDictionaries is { } advertised
+            ? SharedDictionaryNegotiation.Negotiate(
+                options.FramingCompressionDictionaryId,
+                ResolveConfiguredDictionaryFingerprint(options.FramingCompressionDictionaryId),
+                advertised)
+            : SharedDictionaryNegotiation.Negotiate(
+                options.FramingCompressionDictionaryId, _peerAdvertisedDictionaryIds);
 
         _dictionaryNegotiationState.Record(_treeName, _peerClusterId, negotiation);
         LatticeReplicationMetrics.DictionaryNegotiation.Add(
@@ -2938,7 +2992,51 @@ internal sealed class ReplicationShipperGrain(
                 LatticeReplicationMetrics.TagOutcome,
                 LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(negotiation)));
 
+        if (negotiation.FingerprintMismatch && !_dictionaryFingerprintMismatchWarned)
+        {
+            _dictionaryFingerprintMismatchWarned = true;
+            Logger.LogWarning(
+                "Shared-dictionary fingerprint mismatch shipping tree {Tree} to peer {Peer}: " +
+                "the peer advertised dictionary id {DictionaryId} with different bytes than this " +
+                "sender holds. Falling back to dictionary-less compression for this peer to avoid " +
+                "a receiver-side decode failure. Reconcile the dictionary bytes behind id " +
+                "{DictionaryId} across both deployments.",
+                _treeName,
+                _peerClusterId,
+                options.FramingCompressionDictionaryId);
+        }
+
         _negotiatedDictionaryId = negotiation.EffectiveDictionaryId;
+    }
+
+    /// <summary>
+    /// Resolves the content fingerprint of this sender's own configured
+    /// shared-dictionary bytes for <paramref name="dictionaryId"/>, caching the
+    /// result per id so the per-tick negotiation does not re-resolve and re-hash
+    /// on every pump. Returns <c>0</c> when no dictionary provider is injected
+    /// or the provider cannot resolve the id; a <c>0</c> fingerprint never
+    /// matches a peer's advertised non-zero fingerprint, so the sender falls
+    /// back to dictionary-less compression rather than risk a decode failure.
+    /// </summary>
+    private ulong ResolveConfiguredDictionaryFingerprint(uint dictionaryId)
+    {
+        if (_cachedFingerprintResolved && _cachedFingerprintForId == dictionaryId)
+        {
+            return _cachedFingerprint;
+        }
+
+        var fingerprint = 0UL;
+        if (dictionaryId != 0u
+            && _dictionaryProvider is not null
+            && _dictionaryProvider.TryGetDictionary(dictionaryId, out var bytes))
+        {
+            fingerprint = CompressionDictionaryFingerprint.Compute(bytes.Span);
+        }
+
+        _cachedFingerprintForId = dictionaryId;
+        _cachedFingerprint = fingerprint;
+        _cachedFingerprintResolved = true;
+        return fingerprint;
     }
 
     /// <summary>

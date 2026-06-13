@@ -1631,6 +1631,18 @@ public static class LatticeReplicationMetrics
     public const string DictionaryNegotiationOutcomeUnknown = "unknown";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value on the
+    /// <see cref="DictionaryNegotiation"/> counter: the peer advertised the
+    /// configured dictionary id but with a content fingerprint that differs
+    /// from the sender's configured dictionary bytes (a
+    /// same-id/different-bytes misconfiguration). The sender fell back to
+    /// dictionary-less compression; the distinct outcome makes the
+    /// misconfiguration legible instead of letting it surface as a
+    /// receiver-side decode failure.
+    /// </summary>
+    public const string DictionaryNegotiationOutcomeFingerprintMismatch = "fingerprint_mismatch";
+
+    /// <summary>
     /// <see cref="TagDictionary"/> value on the <see cref="DictionaryBatches"/>
     /// counter: the batch was compressed with a shared dictionary.
     /// </summary>
@@ -1652,8 +1664,10 @@ public static class LatticeReplicationMetrics
     /// <returns>The matching outcome-tag string constant.</returns>
     public static string DictionaryNegotiationOutcomeTag(SharedDictionaryNegotiationResult result) =>
         result.FellBack
-            ? (result.PeerCapabilityKnown
-                ? DictionaryNegotiationOutcomeFellBack
-                : DictionaryNegotiationOutcomeUnknown)
+            ? (result.FingerprintMismatch
+                ? DictionaryNegotiationOutcomeFingerprintMismatch
+                : (result.PeerCapabilityKnown
+                    ? DictionaryNegotiationOutcomeFellBack
+                    : DictionaryNegotiationOutcomeUnknown))
             : DictionaryNegotiationOutcomeMatched;
 }

@@ -331,7 +331,9 @@ public partial class ReplicationShipperGrainTests
             IGrainFactory? grainFactory = null,
             ILatticeMergeModeResolver? modeResolver = null,
             IReplicationDigestProbeTransport? digestProbeTransport = null,
-            CrdtShapeRegistry? crdtShapeRegistry = null)
+            CrdtShapeRegistry? crdtShapeRegistry = null,
+            SharedDictionaryNegotiationState? dictionaryNegotiationState = null,
+            ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{treeName}/{peerClusterId}"));
@@ -356,7 +358,7 @@ public partial class ReplicationShipperGrainTests
             new ReplicationPeerStats(),
             modeResolver ?? Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState(), digestProbeTransport ?? new NoOpReplicationDigestProbeTransport(),
-            crdtShapeRegistry);
+            crdtShapeRegistry, dictionaryNegotiationState, dictionaryProvider);
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
     }

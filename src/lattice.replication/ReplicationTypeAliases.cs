@@ -149,4 +149,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.ContentManifestResponse"/>.</summary>
     internal const string ContentManifestResponse = "olr.cp";
 
+    // Content-fingerprint guard in shared-dictionary negotiation
+
+    /// <summary>Alias for <see cref="Replication.AdvertisedCompressionDictionary"/>.</summary>
+    internal const string AdvertisedCompressionDictionary = "olr.ad";
+
 }
