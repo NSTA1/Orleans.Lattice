@@ -52,6 +52,18 @@ internal abstract class LatticeReplicationGrpcServiceBase
     public abstract Task<CompressionDictionaryPullResponseBox> PullCompressionDictionary(CompressionDictionaryPullRequestBox request, ServerCallContext context);
 
     /// <summary>
+    /// Handles a single anti-entropy Merkle-walk drift-localisation probe.
+    /// Implemented in <see cref="LatticeReplicationGrpcService"/>.
+    /// </summary>
+    public abstract Task<MerkleWalkProbeResponseBox> ProbeMerkleWalk(MerkleWalkProbeRequestBox request, ServerCallContext context);
+
+    /// <summary>
+    /// Handles a single anti-entropy peer high-water-mark probe.
+    /// Implemented in <see cref="LatticeReplicationGrpcService"/>.
+    /// </summary>
+    public abstract Task<PeerHighWaterMarkResponseBox> GetPeerHighWaterMark(PeerHighWaterMarkRequestBox request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called
     /// once at startup with <paramref name="serviceImpl"/> set to
     /// <see langword="null"/> to record method metadata; the actual
@@ -78,6 +90,8 @@ internal abstract class LatticeReplicationGrpcServiceBase
             binder.AddMethod(method.ProbeDigest, (UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>?)null);
             binder.AddMethod(method.ExchangeContentManifest, (UnaryServerMethod<ContentManifestRequestBox, ContentManifestResponseBox>?)null);
             binder.AddMethod(method.PullCompressionDictionary, (UnaryServerMethod<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox>?)null);
+            binder.AddMethod(method.ProbeMerkleWalk, (UnaryServerMethod<MerkleWalkProbeRequestBox, MerkleWalkProbeResponseBox>?)null);
+            binder.AddMethod(method.GetPeerHighWaterMark, (UnaryServerMethod<PeerHighWaterMarkRequestBox, PeerHighWaterMarkResponseBox>?)null);
             return;
         }
 
@@ -85,6 +99,8 @@ internal abstract class LatticeReplicationGrpcServiceBase
         binder.AddMethod(method.ProbeDigest, new UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>(serviceImpl.ProbeDigest));
         binder.AddMethod(method.ExchangeContentManifest, new UnaryServerMethod<ContentManifestRequestBox, ContentManifestResponseBox>(serviceImpl.ExchangeContentManifest));
         binder.AddMethod(method.PullCompressionDictionary, new UnaryServerMethod<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox>(serviceImpl.PullCompressionDictionary));
+        binder.AddMethod(method.ProbeMerkleWalk, new UnaryServerMethod<MerkleWalkProbeRequestBox, MerkleWalkProbeResponseBox>(serviceImpl.ProbeMerkleWalk));
+        binder.AddMethod(method.GetPeerHighWaterMark, new UnaryServerMethod<PeerHighWaterMarkRequestBox, PeerHighWaterMarkResponseBox>(serviceImpl.GetPeerHighWaterMark));
     }
 }
 
@@ -527,6 +543,99 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         {
             Value = CompressionDictionaryPullResponse.NotHeld,
         });
+    }
+
+    /// <inheritdoc />
+    public override async Task<MerkleWalkProbeResponseBox> ProbeMerkleWalk(
+        MerkleWalkProbeRequestBox requestBox,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestBox);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var request = requestBox.Value;
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument,
+                "MerkleWalkProbeRequest.TreeName must be non-empty."));
+        }
+
+        var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
+        try
+        {
+            var digest = await lattice
+                .GetLeafProjectionDigestForRangeAsync(
+                    request.ShardIndex,
+                    request.RangeStartKey,
+                    request.RangeEndKey,
+                    context.CancellationToken)
+                .ConfigureAwait(false);
+
+            return new MerkleWalkProbeResponseBox
+            {
+                Value = new MerkleWalkProbeResponse
+                {
+                    Available = true,
+                    Digest = digest,
+                },
+            };
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InvalidOperationException)
+        {
+            // Projection-digest maintenance is disabled (or latched off)
+            // for this tree locally. Report the range digest as unavailable
+            // so the walking peer aborts cleanly rather than treating the
+            // absence as a hard failure.
+            return new MerkleWalkProbeResponseBox { Value = MerkleWalkProbeResponse.Unavailable };
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // The shard index does not exist on this peer (divergent shard
+            // map). Report unavailable rather than faulting the walk.
+            return new MerkleWalkProbeResponseBox { Value = MerkleWalkProbeResponse.Unavailable };
+        }
+    }
+
+    /// <inheritdoc />
+    public override async Task<PeerHighWaterMarkResponseBox> GetPeerHighWaterMark(
+        PeerHighWaterMarkRequestBox requestBox,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestBox);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var request = requestBox.Value;
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument,
+                "PeerHighWaterMarkRequest.TreeName must be non-empty."));
+        }
+
+        if (string.IsNullOrEmpty(request.OriginClusterId))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument,
+                "PeerHighWaterMarkRequest.OriginClusterId must be non-empty."));
+        }
+
+        // Resolve the receiver's durable per-origin high-water-mark for the
+        // (tree, origin) stream. An origin the receiver has never applied
+        // returns HybridLogicalClock.Zero from the grain, which the walking
+        // peer treats as "re-ship the whole in-range retained set".
+        var hwmGrain = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(request.TreeName);
+        var clock = await hwmGrain
+            .GetAsync(request.OriginClusterId, context.CancellationToken)
+            .ConfigureAwait(false);
+
+        return new PeerHighWaterMarkResponseBox
+        {
+            Value = new PeerHighWaterMarkResponse { Clock = clock },
+        };
     }
 
     /// <summary>

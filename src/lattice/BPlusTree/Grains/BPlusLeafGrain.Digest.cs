@@ -197,6 +197,74 @@ internal sealed partial class BPlusLeafGrain
         };
     }
 
+    /// <inheritdoc />
+    public Task<ChildDigestSnapshot> GetProjectionDigestForRangeAsync(string? startInclusive, string? endExclusive)
+    {
+        // Content-only range fold over the in-range subset of this leaf's
+        // entry cache. Mirrors GetChildDigestSnapshotAsync (raw 16-byte XOR
+        // hash + entry count + checkpoint offset) but restricts the XOR fold
+        // and the count to entries whose key falls in
+        // [startInclusive, endExclusive). A null bound denotes -infinity
+        // (start) or +infinity (end); both null reproduces the whole-leaf
+        // snapshot. The per-entry contribution is the same one the
+        // whole-leaf fold uses, so the partial digest is content-convergent
+        // across clusters - it does not depend on this leaf's WAL position
+        // (the checkpoint is carried separately and intentionally folded by
+        // the shard-root wrapper to keep the full-range result byte-identical
+        // to the same-cluster whole-shard digest; cross-cluster precision is
+        // delivered by the peer-high-water-mark bound, not by this hash).
+        EnsureProjectionHashInitialized();
+
+        var hash = new byte[ProjectionHashSize];
+        long count = 0;
+
+        // Fast path: an unbounded range is the whole leaf, so fold the
+        // pre-walked rows without per-row bound comparisons.
+        if (startInclusive is null && endExclusive is null)
+        {
+            Span<byte> wholeContribution = stackalloc byte[ProjectionHashSize];
+            foreach (var (key, lww) in Cache.EnumerateRows())
+            {
+                ComputeEntryContribution(key, in lww, wholeContribution);
+                for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= wholeContribution[i];
+                count++;
+            }
+
+            return Task.FromResult(new ChildDigestSnapshot
+            {
+                Hash = hash,
+                EntryCount = count,
+                CheckpointOffset = state.State.ProjectionCheckpointOffset,
+            });
+        }
+
+        Span<byte> contribution = stackalloc byte[ProjectionHashSize];
+        foreach (var (key, lww) in Cache.EnumerateRows())
+        {
+            if (startInclusive is not null && string.CompareOrdinal(key, startInclusive) < 0)
+            {
+                continue;
+            }
+            if (endExclusive is not null && string.CompareOrdinal(key, endExclusive) >= 0)
+            {
+                // Rows enumerate in ascending ordinal order, so once a key
+                // reaches the exclusive upper bound every subsequent key is
+                // also out of range and the fold can stop early.
+                break;
+            }
+            ComputeEntryContribution(key, in lww, contribution);
+            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= contribution[i];
+            count++;
+        }
+
+        return Task.FromResult(new ChildDigestSnapshot
+        {
+            Hash = hash,
+            EntryCount = count,
+            CheckpointOffset = state.State.ProjectionCheckpointOffset,
+        });
+    }
+
     /// <summary>
     /// Lazily backfills <c>state.State.ProjectionHash</c> if persisted state
     /// pre-dates the slot or carries a hash from an older algorithm whose

@@ -47,10 +47,28 @@ internal sealed class LatticeReplicationGrpcMethod
     /// </summary>
     public const string PullCompressionDictionaryMethodName = "PullCompressionDictionary";
 
+    /// <summary>
+    /// The unary anti-entropy Merkle-walk RPC method name. The caller
+    /// asks the peer for its content digest over a cluster-stable
+    /// separator-key range so a divergent shard can be localised to a
+    /// leaf or small key range.
+    /// </summary>
+    public const string ProbeMerkleWalkMethodName = "ProbeMerkleWalk";
+
+    /// <summary>
+    /// The unary anti-entropy peer high-water-mark RPC method name. The
+    /// caller asks the peer for the clock it has durably applied for a
+    /// given (tree, origin) stream so targeted leaf re-replay bounds its
+    /// re-ship set to entries above that watermark.
+    /// </summary>
+    public const string GetPeerHighWaterMarkMethodName = "GetPeerHighWaterMark";
+
     private readonly Method<ReplicationBatchEnvelopeBox, ReplicationAckBox> _push;
     private readonly Method<DigestProbeRequestBox, DigestProbeResponseBox> _probeDigest;
     private readonly Method<ContentManifestRequestBox, ContentManifestResponseBox> _exchangeContentManifest;
     private readonly Method<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox> _pullCompressionDictionary;
+    private readonly Method<MerkleWalkProbeRequestBox, MerkleWalkProbeResponseBox> _probeMerkleWalk;
+    private readonly Method<PeerHighWaterMarkRequestBox, PeerHighWaterMarkResponseBox> _getPeerHighWaterMark;
 
     /// <summary>
     /// Initialises the holder with the supplied
@@ -66,7 +84,11 @@ internal sealed class LatticeReplicationGrpcMethod
         Serializer<ContentManifestRequest> contentManifestRequestSerializer,
         Serializer<ContentManifestResponse> contentManifestResponseSerializer,
         Serializer<CompressionDictionaryPullRequest> compressionDictionaryPullRequestSerializer,
-        Serializer<CompressionDictionaryPullResponse> compressionDictionaryPullResponseSerializer)
+        Serializer<CompressionDictionaryPullResponse> compressionDictionaryPullResponseSerializer,
+        Serializer<MerkleWalkProbeRequest> merkleWalkProbeRequestSerializer,
+        Serializer<MerkleWalkProbeResponse> merkleWalkProbeResponseSerializer,
+        Serializer<PeerHighWaterMarkRequest> peerHighWaterMarkRequestSerializer,
+        Serializer<PeerHighWaterMarkResponse> peerHighWaterMarkResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(encoder);
         ArgumentNullException.ThrowIfNull(walRecordEncoder);
@@ -77,6 +99,10 @@ internal sealed class LatticeReplicationGrpcMethod
         ArgumentNullException.ThrowIfNull(contentManifestResponseSerializer);
         ArgumentNullException.ThrowIfNull(compressionDictionaryPullRequestSerializer);
         ArgumentNullException.ThrowIfNull(compressionDictionaryPullResponseSerializer);
+        ArgumentNullException.ThrowIfNull(merkleWalkProbeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(merkleWalkProbeResponseSerializer);
+        ArgumentNullException.ThrowIfNull(peerHighWaterMarkRequestSerializer);
+        ArgumentNullException.ThrowIfNull(peerHighWaterMarkResponseSerializer);
 
         _push = new Method<ReplicationBatchEnvelopeBox, ReplicationAckBox>(
             type: MethodType.Unary,
@@ -105,6 +131,20 @@ internal sealed class LatticeReplicationGrpcMethod
             name: PullCompressionDictionaryMethodName,
             requestMarshaller: LatticeReplicationGrpcMarshallers.CreateCompressionDictionaryPullRequestMarshaller(compressionDictionaryPullRequestSerializer),
             responseMarshaller: LatticeReplicationGrpcMarshallers.CreateCompressionDictionaryPullResponseMarshaller(compressionDictionaryPullResponseSerializer));
+
+        _probeMerkleWalk = new Method<MerkleWalkProbeRequestBox, MerkleWalkProbeResponseBox>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ProbeMerkleWalkMethodName,
+            requestMarshaller: LatticeReplicationGrpcMarshallers.CreateMerkleWalkProbeRequestMarshaller(merkleWalkProbeRequestSerializer),
+            responseMarshaller: LatticeReplicationGrpcMarshallers.CreateMerkleWalkProbeResponseMarshaller(merkleWalkProbeResponseSerializer));
+
+        _getPeerHighWaterMark = new Method<PeerHighWaterMarkRequestBox, PeerHighWaterMarkResponseBox>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetPeerHighWaterMarkMethodName,
+            requestMarshaller: LatticeReplicationGrpcMarshallers.CreatePeerHighWaterMarkRequestMarshaller(peerHighWaterMarkRequestSerializer),
+            responseMarshaller: LatticeReplicationGrpcMarshallers.CreatePeerHighWaterMarkResponseMarshaller(peerHighWaterMarkResponseSerializer));
     }
 
     /// <summary>
@@ -140,5 +180,22 @@ internal sealed class LatticeReplicationGrpcMethod
     /// marshallers.
     /// </summary>
     public Method<CompressionDictionaryPullRequestBox, CompressionDictionaryPullResponseBox> PullCompressionDictionary => _pullCompressionDictionary;
+
+    /// <summary>
+    /// The unary anti-entropy <c>ProbeMerkleWalk</c> RPC method for the
+    /// cross-cluster Merkle-walk drift localisation. Used by both the
+    /// client-side invoker (<see cref="GrpcPushTransport"/>) and the
+    /// server-side service binder so both ends wire up identical
+    /// marshallers.
+    /// </summary>
+    public Method<MerkleWalkProbeRequestBox, MerkleWalkProbeResponseBox> ProbeMerkleWalk => _probeMerkleWalk;
+
+    /// <summary>
+    /// The unary anti-entropy <c>GetPeerHighWaterMark</c> RPC method for
+    /// bounding targeted leaf re-replay. Used by both the client-side
+    /// invoker (<see cref="GrpcPushTransport"/>) and the server-side
+    /// service binder so both ends wire up identical marshallers.
+    /// </summary>
+    public Method<PeerHighWaterMarkRequestBox, PeerHighWaterMarkResponseBox> GetPeerHighWaterMark => _getPeerHighWaterMark;
 }
 

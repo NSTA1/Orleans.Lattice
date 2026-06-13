@@ -163,4 +163,13 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.CompressionDictionaryPullResponse"/>.</summary>
     internal const string CompressionDictionaryPullResponse = "olr.kp";
 
+    // Anti-entropy peer high-water-mark probe (re-replay bound) - the gRPC
+    // binding's GetPeerHighWaterMark RPC request/response pair.
+
+    /// <summary>Alias for <see cref="Replication.PeerHighWaterMarkRequest"/>.</summary>
+    internal const string PeerHighWaterMarkRequest = "olr.hq";
+
+    /// <summary>Alias for <see cref="Replication.PeerHighWaterMarkResponse"/>.</summary>
+    internal const string PeerHighWaterMarkResponse = "olr.hp";
+
 }

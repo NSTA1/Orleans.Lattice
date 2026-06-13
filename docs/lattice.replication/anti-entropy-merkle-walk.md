@@ -16,11 +16,17 @@ The one coordinate both sides agree on is the B+ tree's **separator-key ranges**
 
 The shard root is depth `0`; each level descended increments the depth.
 
-## Honest limitation: the remote range-fold
+## The remote range-fold (wired over gRPC)
 
-A clean key-range-keyed **remote** subtree digest is not computable with today's public surface. No public method folds an arbitrary key-range into a digest, and a peer's internal-node grain identities are not addressable from another cluster. The default probe transport therefore answers every range probe with `Available = false`.
+A key-range-keyed **remote** subtree digest requires two things: a public core API that folds an arbitrary key-range into a digest, and a transport that can invoke it on the peer. Both now exist.
 
-The practical consequence: with the built-in (or no-op) transport, the walk **aborts immediately with reason `remote_unavailable`**. The local descent engine, the wire shape (`MerkleWalkProbeRequest` / `MerkleWalkProbeResponse`), the depth and byte caps, and both metrics are all real and exercised - but end-to-end cross-cluster localisation needs a host-supplied transport that can answer a range-keyed fold. A range-answering remote fold is the documented follow-up. Until then the feature is a complete, dark, read-only scaffold rather than a live cross-cluster localiser.
+The core library exposes `ILattice.GetLeafProjectionDigestForRangeAsync(int shardIndex, string? startKeyInclusive, string? endKeyExclusive, CancellationToken)`. The owning shard root descends its internal-node tree by separator-key range, touches only the leaves (and whole subtrees) that overlap the half-open `[start, end)` query range, and combines them with the same algebra the internal nodes use (XOR the raw projection hashes, sum the entry counts, max-reduce the checkpoint offsets) before wrapping the result in the identical `XxHash128(rawHash || entryCount || checkpointOffset)` shape an internal node spanning exactly that range would publish. A full-range `[null, null)` probe is byte-identical to the whole-shard `GetLeafProjectionDigestAsync`. The per-entry contribution is **content-only** - it never depends on the local WAL replay position - so two clusters holding the same logical entries in the range compute the same fold independent of how each physically split its leaves. This is the layout-independence property the walk needs.
+
+The `Orleans.Lattice.Replication.Grpc` binding implements `ProbeMerkleWalkAsync` on top of that API: it resolves the peer's `GetLeafProjectionDigestForRangeAsync` over the same per-peer channel cache the push transport uses, so the walk no longer aborts `remote_unavailable` against a healthy gRPC peer. An un-upgraded peer that has not bound the `ProbeMerkleWalk` method answers `Unimplemented` (or momentary `Unavailable`) and the walk aborts cleanly with the remote-unavailable reason - rolling-upgrade safe and wire byte-identical to today.
+
+### Cross-cluster comparison basis
+
+The range digest deliberately folds in the max-reduced checkpoint offset so that a full-range probe is byte-identical to the same-cluster whole-shard digest, and so that the local node digest the walk compares against (computed the same way) lines up exactly with the existing `DigestProbeComparer` detect layer, which compares full published hashes including the checkpoint. Cross-cluster the checkpoint offset is each cluster's independent WAL replay position, so it differs even for byte-identical logical content. The Merkle walk is therefore a deliberately **conservative trigger**: hashes that differ only because the checkpoints differ still descend, so the walk may over-localise across clusters. That is safe - repair precision is delivered by the [peer high-water-mark bound](anti-entropy-leaf-rereplay.md) plus the receiver's per-origin idempotent dedup, not by the digest. The walk narrows divergence to a leaf or small key range; the re-replay stage re-ships only entries strictly above the peer's reported watermark and the receiver discards any duplicates.
 
 ## Enabling it
 

@@ -214,6 +214,116 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         }
     }
 
+    /// <inheritdoc />
+    public async Task<MerkleWalkProbeResponse> ProbeMerkleWalkAsync(
+        string targetClusterId,
+        MerkleWalkProbeRequest request,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+        if (string.IsNullOrEmpty(targetClusterId))
+        {
+            throw new ArgumentException(
+                "targetClusterId must be non-empty.",
+                nameof(targetClusterId));
+        }
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new ArgumentException(
+                "MerkleWalkProbeRequest.TreeName must be non-empty.",
+                nameof(request));
+        }
+
+        var channel = ResolvePeerChannel(targetClusterId);
+        try
+        {
+            using var call = channel.Invoker.AsyncUnaryCall(
+                _method.ProbeMerkleWalk,
+                host: null,
+                options: new CallOptions(cancellationToken: cancellationToken),
+                request: new MerkleWalkProbeRequestBox { Value = request });
+
+            var responseBox = await call.ResponseAsync.ConfigureAwait(false);
+            return responseBox.Value;
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.Unimplemented or StatusCode.Unavailable)
+        {
+            // An un-upgraded peer that has not bound the ProbeMerkleWalk RPC
+            // answers Unimplemented; a momentarily-unreachable peer answers
+            // Unavailable. In both cases the Merkle-walk localisation pass
+            // aborts cleanly with the remote-unavailable reason, which is
+            // exactly what MerkleWalkProbeResponse.Unavailable signals - so
+            // the walk is rolling-upgrade safe without a wire-version
+            // pre-check on this hop.
+            return MerkleWalkProbeResponse.Unavailable;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<Orleans.Lattice.HybridLogicalClock> GetPeerHighWaterMarkAsync(
+        string targetClusterId,
+        string treeName,
+        string originClusterId,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+        if (string.IsNullOrEmpty(targetClusterId))
+        {
+            throw new ArgumentException(
+                "targetClusterId must be non-empty.",
+                nameof(targetClusterId));
+        }
+
+        if (string.IsNullOrEmpty(treeName))
+        {
+            throw new ArgumentException(
+                "treeName must be non-empty.",
+                nameof(treeName));
+        }
+
+        if (string.IsNullOrEmpty(originClusterId))
+        {
+            throw new ArgumentException(
+                "originClusterId must be non-empty.",
+                nameof(originClusterId));
+        }
+
+        var channel = ResolvePeerChannel(targetClusterId);
+        try
+        {
+            using var call = channel.Invoker.AsyncUnaryCall(
+                _method.GetPeerHighWaterMark,
+                host: null,
+                options: new CallOptions(cancellationToken: cancellationToken),
+                request: new PeerHighWaterMarkRequestBox
+                {
+                    Value = new PeerHighWaterMarkRequest
+                    {
+                        TreeName = treeName,
+                        OriginClusterId = originClusterId,
+                    },
+                });
+
+            var responseBox = await call.ResponseAsync.ConfigureAwait(false);
+            return responseBox.Value.Clock;
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.Unimplemented or StatusCode.Unavailable)
+        {
+            // An un-upgraded peer that has not bound the GetPeerHighWaterMark
+            // RPC answers Unimplemented; a momentarily-unreachable peer
+            // answers Unavailable. In both cases the re-replay stage falls
+            // back to the conservative HybridLogicalClock.Zero bound - which
+            // re-ships every in-range retained entry and relies on the
+            // receiver's per-origin idempotent dedup - so the probe is
+            // rolling-upgrade safe without a wire-version pre-check on this
+            // hop.
+            return Orleans.Lattice.HybridLogicalClock.Zero;
+        }
+    }
+
     private async Task<ReplicationAck> SendCoreAsync(ReplicationBatch batch, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);

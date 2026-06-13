@@ -572,6 +572,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafProjectionDigest> GetProjectionDigestAsync();
 
     /// <summary>
+    /// Returns this leaf's contribution to its parent's subtree fold
+    /// restricted to the entries whose key falls in the half-open range
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>):
+    /// the raw 16-byte XOR-fold projection hash over only the in-range
+    /// entries, the in-range entry count (live plus tombstoned), and the
+    /// leaf's persisted projection-checkpoint offset. A <see langword="null"/>
+    /// bound denotes negative infinity (<paramref name="startInclusive"/>)
+    /// or positive infinity (<paramref name="endExclusive"/>); passing both
+    /// as <see langword="null"/> folds the entire leaf (the whole-leaf raw
+    /// snapshot: raw XOR hash, total entry count, checkpoint offset). The
+    /// per-entry contribution is byte-identical to the
+    /// whole-leaf fold, so a separator-key boundary that straddles this leaf
+    /// still yields a content-convergent partial digest independent of each
+    /// cluster's physical B+ tree layout. Used by the shard-root range-fold
+    /// (<see cref="IShardRootGrain.GetShardProjectionDigestForRangeAsync"/>)
+    /// that backs the cross-cluster anti-entropy Merkle walk. Strictly
+    /// read-only: never mutates data or any cursor.
+    /// </summary>
+    /// <param name="startInclusive">Inclusive lower key bound, or <see langword="null"/> for unbounded below.</param>
+    /// <param name="endExclusive">Exclusive upper key bound, or <see langword="null"/> for unbounded above.</param>
+    Task<ChildDigestSnapshot> GetProjectionDigestForRangeAsync(string? startInclusive, string? endExclusive);
+
+    /// <summary>
     /// Returns the persisted projection-checkpoint offset for this leaf -
     /// the highest WAL offset whose mutation has been durably applied to
     /// the in-memory projection via

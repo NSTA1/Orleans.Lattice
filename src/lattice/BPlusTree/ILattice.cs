@@ -652,6 +652,48 @@ public interface ILattice : IGrainWithStringKey
     Task<LeafProjectionDigest> GetLeafProjectionDigestAsync(int shardIndex, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
+    /// for the half-open key range [<paramref name="startKeyInclusive"/>,
+    /// <paramref name="endKeyExclusive"/>) of the physical shard at
+    /// <paramref name="shardIndex"/> - the range-scoped analogue of
+    /// <see cref="GetLeafProjectionDigestAsync"/>. A <see langword="null"/>
+    /// bound denotes negative infinity (<paramref name="startKeyInclusive"/>)
+    /// or positive infinity (<paramref name="endKeyExclusive"/>); passing
+    /// both as <see langword="null"/> yields a digest byte-identical to
+    /// <see cref="GetLeafProjectionDigestAsync"/> for the same shard.
+    /// <para>
+    /// This is the core primitive that backs the cross-cluster anti-entropy
+    /// Merkle-walk localisation: a host-supplied digest-probe transport (e.g.
+    /// the gRPC binding) folds an arbitrary separator-key-bounded subtree
+    /// into a comparable digest so a divergent shard can be narrowed to a
+    /// leaf or key range rather than re-shipping the whole in-range WAL. The
+    /// fold is content-only: the per-entry contribution does not depend on
+    /// the local WAL replay position, so two clusters holding the same
+    /// logical entries in the range compute the same raw fold independent of
+    /// how each cluster physically split its leaves. The shape still folds
+    /// the max-reduced checkpoint offset (so a full-range probe matches the
+    /// same-cluster whole-shard digest), but cross-cluster repair precision
+    /// is delivered by the peer high-water-mark bound, not by this hash.
+    /// </para>
+    /// <para>
+    /// Throws <see cref="InvalidOperationException"/> when the per-tree
+    /// <see cref="LatticeOptions.MaintainProjectionDigest"/> opt-out is set
+    /// to <c>false</c>, and <see cref="ArgumentOutOfRangeException"/> when
+    /// <paramref name="shardIndex"/> is not a physical shard of this tree -
+    /// matching <see cref="GetLeafProjectionDigestAsync"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="shardIndex">The physical shard index resolved from the per-tree <c>ShardMap</c>.</param>
+    /// <param name="startKeyInclusive">Inclusive lower key bound, or <see langword="null"/> for unbounded below.</param>
+    /// <param name="endKeyExclusive">Exclusive upper key bound, or <see langword="null"/> for unbounded above.</param>
+    /// <param name="cancellationToken">Cancels the range descent before the next node.</param>
+    Task<LeafProjectionDigest> GetLeafProjectionDigestForRangeAsync(
+        int shardIndex,
+        string? startKeyInclusive,
+        string? endKeyExclusive,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Operator-tooling rebuild: clears the materialised projection
     /// state (entries, projection hash, persisted checkpoint offset,
     /// pending-tx machinery) on every leaf in the shard's chain and

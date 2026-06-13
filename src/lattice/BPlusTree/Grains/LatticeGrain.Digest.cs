@@ -60,4 +60,46 @@ internal sealed partial class LatticeGrain
             () => shard.GetShardProjectionDigestAsync(cancellationToken),
             cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<LeafProjectionDigest> GetLeafProjectionDigestForRangeAsync(
+        int shardIndex,
+        string? startKeyInclusive,
+        string? endKeyExclusive,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Same fast-fail as GetLeafProjectionDigestAsync: a digest-quiescent
+        // tree has no maintained aggregates, so a range probe would return
+        // stale bytes. Fail loudly at the public surface before paying a
+        // routing fetch and a shard-root hop.
+        if (!Options.MaintainProjectionDigest)
+        {
+            throw new InvalidOperationException(
+                $"Projection-digest maintenance is disabled for tree '{TreeId}' " +
+                $"({nameof(LatticeOptions)}.{nameof(LatticeOptions.MaintainProjectionDigest)} = false), " +
+                "so the persisted aggregates are not the source of truth and the " +
+                "digest API is unavailable. Set the option to true to resume maintenance.");
+        }
+
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var physicalShards = shardMap.GetPhysicalShardIndices();
+        if (!physicalShards.Contains(shardIndex))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(shardIndex),
+                shardIndex,
+                $"Shard index {shardIndex} is not a physical shard of tree '{TreeId}'. " +
+                $"Valid indices: [{string.Join(", ", physicalShards)}].");
+        }
+
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+        return await ShardActivationRetry.RunAsync(
+            () => shard.GetShardProjectionDigestForRangeAsync(startKeyInclusive, endKeyExclusive, cancellationToken),
+            cancellationToken);
+    }
 }

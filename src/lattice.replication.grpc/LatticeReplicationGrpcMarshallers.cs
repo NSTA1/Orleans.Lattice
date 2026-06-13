@@ -131,6 +131,49 @@ internal sealed class CompressionDictionaryPullResponseBox
 }
 
 /// <summary>
+/// Reference-typed wrapper around <see cref="MerkleWalkProbeRequest"/> for
+/// the anti-entropy Merkle-walk RPC. gRPC's
+/// <see cref="Method{TRequest, TResponse}"/> imposes a <c>class</c>
+/// constraint; the public request is a <c>readonly record struct</c>.
+/// Mirrors <see cref="DigestProbeRequestBox"/>.
+/// </summary>
+internal sealed class MerkleWalkProbeRequestBox
+{
+    public MerkleWalkProbeRequest Value { get; init; }
+}
+
+/// <summary>
+/// Reference-typed wrapper around <see cref="MerkleWalkProbeResponse"/> for
+/// the anti-entropy Merkle-walk RPC. Mirrors <see cref="DigestProbeResponseBox"/>.
+/// </summary>
+internal sealed class MerkleWalkProbeResponseBox
+{
+    public MerkleWalkProbeResponse Value { get; init; }
+}
+
+/// <summary>
+/// Reference-typed wrapper around <see cref="PeerHighWaterMarkRequest"/> for
+/// the anti-entropy peer high-water-mark RPC. gRPC's
+/// <see cref="Method{TRequest, TResponse}"/> imposes a <c>class</c>
+/// constraint; the public request is a <c>readonly record struct</c>.
+/// Mirrors <see cref="DigestProbeRequestBox"/>.
+/// </summary>
+internal sealed class PeerHighWaterMarkRequestBox
+{
+    public PeerHighWaterMarkRequest Value { get; init; }
+}
+
+/// <summary>
+/// Reference-typed wrapper around <see cref="PeerHighWaterMarkResponse"/> for
+/// the anti-entropy peer high-water-mark RPC. Mirrors
+/// <see cref="DigestProbeResponseBox"/>.
+/// </summary>
+internal sealed class PeerHighWaterMarkResponseBox
+{
+    public PeerHighWaterMarkResponse Value { get; init; }
+}
+
+/// <summary>
 /// Builds gRPC <see cref="Marshaller{T}"/> instances that delegate to
 /// <see cref="IReplicationBatchEncoder"/> for the request envelope and
 /// to the Orleans <see cref="Serializer{T}"/> for the response ack. The
@@ -333,6 +376,82 @@ internal static class LatticeReplicationGrpcMarshallers
                 context.Complete();
             },
             deserializer: context => new CompressionDictionaryPullResponseBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="MerkleWalkProbeRequestBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer hand-off
+    /// pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<MerkleWalkProbeRequestBox> CreateMerkleWalkProbeRequestMarshaller(Serializer<MerkleWalkProbeRequest> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<MerkleWalkProbeRequestBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new MerkleWalkProbeRequestBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="MerkleWalkProbeResponseBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer hand-off
+    /// pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<MerkleWalkProbeResponseBox> CreateMerkleWalkProbeResponseMarshaller(Serializer<MerkleWalkProbeResponse> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<MerkleWalkProbeResponseBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new MerkleWalkProbeResponseBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="PeerHighWaterMarkRequestBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer hand-off
+    /// pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<PeerHighWaterMarkRequestBox> CreatePeerHighWaterMarkRequestMarshaller(Serializer<PeerHighWaterMarkRequest> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<PeerHighWaterMarkRequestBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new PeerHighWaterMarkRequestBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="PeerHighWaterMarkResponseBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer hand-off
+    /// pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<PeerHighWaterMarkResponseBox> CreatePeerHighWaterMarkResponseMarshaller(Serializer<PeerHighWaterMarkResponse> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<PeerHighWaterMarkResponseBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new PeerHighWaterMarkResponseBox { Value = DeserializeValue(serializer, context) });
     }
 
     private static T DeserializeValue<T>(Serializer<T> serializer, GrpcDeserializationContext context)

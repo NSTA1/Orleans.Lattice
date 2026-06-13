@@ -64,7 +64,11 @@ public class GrpcPushTransportTests
             sp.GetRequiredService<Orleans.Serialization.Serializer<ContentManifestRequest>>(),
             sp.GetRequiredService<Orleans.Serialization.Serializer<ContentManifestResponse>>(),
             sp.GetRequiredService<Orleans.Serialization.Serializer<CompressionDictionaryPullRequest>>(),
-            sp.GetRequiredService<Orleans.Serialization.Serializer<CompressionDictionaryPullResponse>>());
+            sp.GetRequiredService<Orleans.Serialization.Serializer<CompressionDictionaryPullResponse>>(),
+            sp.GetRequiredService<Orleans.Serialization.Serializer<MerkleWalkProbeRequest>>(),
+            sp.GetRequiredService<Orleans.Serialization.Serializer<MerkleWalkProbeResponse>>(),
+            sp.GetRequiredService<Orleans.Serialization.Serializer<PeerHighWaterMarkRequest>>(),
+            sp.GetRequiredService<Orleans.Serialization.Serializer<PeerHighWaterMarkResponse>>());
         return new GrpcPushTransport(
             method,
             encoder,
@@ -263,6 +267,96 @@ public class GrpcPushTransportTests
         transport.Dispose();
         Assert.That(
             async () => await transport.ExchangeContentManifestAsync("peer", MakeManifest(), CancellationToken.None),
+            Throws.TypeOf<ObjectDisposedException>());
+    }
+
+    // ---- ProbeMerkleWalkAsync client invoker ---------------------------
+
+    private static MerkleWalkProbeRequest MakeMerkleRequest(string tree = "tree", int shard = 0)
+        => new() { TreeName = tree, ShardIndex = shard };
+
+    [Test]
+    public void ProbeMerkleWalkAsync_throws_when_target_cluster_id_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.ProbeMerkleWalkAsync(string.Empty, MakeMerkleRequest(), CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void ProbeMerkleWalkAsync_throws_when_tree_name_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.ProbeMerkleWalkAsync("peer", MakeMerkleRequest(tree: string.Empty), CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void ProbeMerkleWalkAsync_throws_when_peer_endpoint_not_configured()
+    {
+        using var transport = CreateTransport(); // empty PeerEndpoints
+        Assert.That(
+            async () => await transport.ProbeMerkleWalkAsync("unknown-peer", MakeMerkleRequest(), CancellationToken.None),
+            Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void ProbeMerkleWalkAsync_throws_object_disposed_after_dispose()
+    {
+        var transport = CreateTransport();
+        transport.Dispose();
+        Assert.That(
+            async () => await transport.ProbeMerkleWalkAsync("peer", MakeMerkleRequest(), CancellationToken.None),
+            Throws.TypeOf<ObjectDisposedException>());
+    }
+
+    // ---- GetPeerHighWaterMarkAsync client invoker ----------------------
+
+    [Test]
+    public void GetPeerHighWaterMarkAsync_throws_when_target_cluster_id_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.GetPeerHighWaterMarkAsync(string.Empty, "tree", "origin", CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void GetPeerHighWaterMarkAsync_throws_when_tree_name_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.GetPeerHighWaterMarkAsync("peer", string.Empty, "origin", CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void GetPeerHighWaterMarkAsync_throws_when_origin_cluster_id_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.GetPeerHighWaterMarkAsync("peer", "tree", string.Empty, CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void GetPeerHighWaterMarkAsync_throws_when_peer_endpoint_not_configured()
+    {
+        using var transport = CreateTransport(); // empty PeerEndpoints
+        Assert.That(
+            async () => await transport.GetPeerHighWaterMarkAsync("unknown-peer", "tree", "origin", CancellationToken.None),
+            Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void GetPeerHighWaterMarkAsync_throws_object_disposed_after_dispose()
+    {
+        var transport = CreateTransport();
+        transport.Dispose();
+        Assert.That(
+            async () => await transport.GetPeerHighWaterMarkAsync("peer", "tree", "origin", CancellationToken.None),
             Throws.TypeOf<ObjectDisposedException>());
     }
 }

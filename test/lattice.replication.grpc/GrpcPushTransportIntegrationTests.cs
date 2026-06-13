@@ -1,4 +1,6 @@
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Replication.Grains;
 using System.Buffers;
 using Grpc.Net.Client;
 using Microsoft.AspNetCore.Builder;
@@ -9,6 +11,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
@@ -25,11 +28,13 @@ public class GrpcPushTransportIntegrationTests
     private IReplicationApplier _applier = null!;
     private IReplicationBatchEncoder _encoder = null!;
     private Serializer<ReplicationBatchEnvelope> _envSerializer = null!;
+    private IGrainFactory _grainFactory = null!;
 
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
         _applier = Substitute.For<IReplicationApplier>();
+        _grainFactory = Substitute.For<IGrainFactory>();
 
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
@@ -43,7 +48,7 @@ public class GrpcPushTransportIntegrationTests
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
-                    services.AddSingleton(Substitute.For<IGrainFactory>());
+                    services.AddSingleton(_grainFactory);
                     // Register a dictionary provider holding one installed
                     // dictionary so the pull RPC has a held id to serve.
                     var dictionaryProvider = new AutoTrainingCompressionDictionaryProvider(
@@ -263,6 +268,102 @@ public class GrpcPushTransportIntegrationTests
             Assert.That(response.Value.ExchangeSupported, Is.True);
             Assert.That(response.Value.Found, Is.False);
         });
+    }
+
+    [Test]
+    public async Task ProbeMerkleWalk_round_trips_a_range_digest_over_the_wire()
+    {
+        var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
+        var invoker = _channel.CreateCallInvoker();
+
+        var digest = new LeafProjectionDigest
+        {
+            Hash = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },
+            EntryCount = 7,
+            CheckpointOffset = 3,
+            Version = LeafProjectionDigest.CurrentVersion,
+        };
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetLeafProjectionDigestForRangeAsync(2, "a", "m", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(digest));
+        _grainFactory.GetGrain<ILattice>("tree").Returns(lattice);
+
+        var box = new MerkleWalkProbeRequestBox
+        {
+            Value = new MerkleWalkProbeRequest
+            {
+                TreeName = "tree",
+                ShardIndex = 2,
+                RangeStartKey = "a",
+                RangeEndKey = "m",
+                Depth = 1,
+            },
+        };
+
+        using var call = invoker.AsyncUnaryCall(method.ProbeMerkleWalk, host: null, options: default, request: box);
+        var response = await call.ResponseAsync;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.Available, Is.True);
+            Assert.That(response.Value.Digest.EntryCount, Is.EqualTo(7));
+            Assert.That(response.Value.Digest.Hash, Is.EqualTo(digest.Hash));
+        });
+    }
+
+    [Test]
+    public async Task ProbeMerkleWalk_reports_unavailable_when_digest_disabled_over_the_wire()
+    {
+        var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
+        var invoker = _channel.CreateCallInvoker();
+
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetLeafProjectionDigestForRangeAsync(0, null, null, Arg.Any<CancellationToken>())
+            .Throws(new InvalidOperationException("digest disabled"));
+        _grainFactory.GetGrain<ILattice>("disabled-tree").Returns(lattice);
+
+        var box = new MerkleWalkProbeRequestBox
+        {
+            Value = new MerkleWalkProbeRequest
+            {
+                TreeName = "disabled-tree",
+                ShardIndex = 0,
+                RangeStartKey = null,
+                RangeEndKey = null,
+                Depth = 0,
+            },
+        };
+
+        using var call = invoker.AsyncUnaryCall(method.ProbeMerkleWalk, host: null, options: default, request: box);
+        var response = await call.ResponseAsync;
+
+        Assert.That(response.Value.Available, Is.False);
+    }
+
+    [Test]
+    public async Task GetPeerHighWaterMark_round_trips_the_stored_clock_over_the_wire()
+    {
+        var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
+        var invoker = _channel.CreateCallInvoker();
+
+        var clock = new HybridLogicalClock { WallClockTicks = 9000, Counter = 4 };
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwmGrain.GetAsync("origin", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(clock));
+        _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = "origin" },
+        };
+
+        using var call = invoker.AsyncUnaryCall(method.GetPeerHighWaterMark, host: null, options: default, request: box);
+        var response = await call.ResponseAsync;
+
+        Assert.That(response.Value.Clock, Is.EqualTo(clock));
     }
 }
 
