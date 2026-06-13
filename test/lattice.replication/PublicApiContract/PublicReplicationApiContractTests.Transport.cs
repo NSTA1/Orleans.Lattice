@@ -56,25 +56,31 @@ public partial class PublicReplicationApiContractTests
     {
         var treeId = NextTreeId("tx-ack");
         var treeOnA = await CreateReplicatedTreeAsync(treeId);
-        var treeOnB = _fixture.TreeOnB(treeId);
 
         await treeOnA.SetAsync("k", Bytes("v"));
+
+        // Gate on the delivery *record*, not just value convergence.
+        // LoopbackDeliveringTransport enqueues its DeliveryRecord only
+        // after the apply that makes the value visible on Site B, so a
+        // value-only wait can observe the converged value a beat before
+        // the record lands and then read an empty queue. Polling for the
+        // applied record gates value-visibility and record-visibility
+        // together, removing that race.
+        var applied = default(LoopbackDeliveringTransport.DeliveryRecord);
         await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
-            async () => Str(await treeOnB.GetAsync("k")) == "v",
-            "initial replication");
+            () =>
+            {
+                applied = LoopbackDeliveringTransport
+                    .DeliveredBatches
+                    .FirstOrDefault(d => d.TreeName == treeId
+                                      && d.OriginClusterId == PublicReplicationApiClusterFixture.SiteAClusterId
+                                      && d.Result.Applied);
+                return Task.FromResult(
+                    !applied.Equals(default(LoopbackDeliveringTransport.DeliveryRecord)));
+            },
+            "applied delivery record for the tree");
 
-        var deliveries = LoopbackDeliveringTransport
-            .DeliveredBatches
-            .Where(d => d.TreeName == treeId
-                     && d.OriginClusterId == PublicReplicationApiClusterFixture.SiteAClusterId)
-            .ToList();
-
-        Assert.That(deliveries, Is.Not.Empty);
-
-        var withApply = deliveries.FirstOrDefault(d => d.Result.Applied);
-        Assert.That(withApply, Is.Not.EqualTo(default(LoopbackDeliveringTransport.DeliveryRecord)),
-            "At least one delivery should have Applied=true.");
-        Assert.That(withApply.Result.HighWaterMark, Is.Not.EqualTo(HybridLogicalClock.Zero),
+        Assert.That(applied.Result.HighWaterMark, Is.Not.EqualTo(HybridLogicalClock.Zero),
             "The HighWaterMark on the ApplyResult must reflect the entry's stamped HLC.");
     }
 }
