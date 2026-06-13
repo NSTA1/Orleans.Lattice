@@ -216,3 +216,42 @@ The down-stamp mechanism is **implemented and tested** for last-writer-wins, unc
 
 Negotiation ships **dark** (`WireVersionNegotiationEnabled` defaults to `false`), and the default-on flip is **deferred**: the down-stamp is exact only for last-writer-wins, uncompressed trees, and flipping the default on safely for a heterogeneous fleet (including CRDT trees) requires the upgrade-direction stall analysis that a later issue will carry. Hosts performing a controlled rolling upgrade of last-writer-wins trees can opt in today. Because the feature is dark by default, there is no behavioural change for a host that does not opt in. The default-on posture is tracked as follow-up work on [#703](https://github.com/NSTA1/Orleans.Lattice/issues/703).
 
+## Per-peer shared-dictionary capability negotiation
+
+Shared-dictionary compression (`LatticeCompression.ZstdDictionary`) can be negotiated per peer over the same ack-based capability channel that carries the wire version. When enabled, a sender only compresses a batch with the configured shared-dictionary id for a peer that has **advertised** that id; otherwise it falls back to plain dictionary-less `Zstd` for that peer. This guarantees no peer ever receives a frame compressed with a dictionary it cannot resolve, so a mixed fleet (some peers carrying the dictionary, some not) keeps shipping during a rolling dictionary rollout.
+
+### How it works
+
+1. **The receiver advertises its dictionary capability.** Every `ReplicationAck` carries an additive `[Id(6)] uint[]? AdvertisedDictionaryIds` slot. When the receiver's registered `ILatticeCompressionDictionaryProvider` also implements `ILatticeCompressionDictionaryCatalog`, the slot is stamped with the sorted set of dictionary ids that provider can resolve; otherwise it is `null`. The slot is strictly additive on the wire (same compatibility profile as `SupportedWireVersion`): a receiver built before dictionary negotiation omits it (decodes as `null`), and a sender built before negotiation ignores it.
+2. **The sender negotiates the effective dictionary id.** On each pump tick the shipper feeds the peer's most recently advertised ids into the pure `SharedDictionaryNegotiation.Negotiate(...)` helper, which returns a `SharedDictionaryNegotiationResult`: the configured id is used (`Matched`) when the peer advertised it; otherwise the sender falls back to id `0` (dictionary-less) and stamps `LatticeCompression.Zstd` instead of `ZstdDictionary`, so the receiver decodes a plain Zstd frame. A `null` advertisement is treated as an as-yet-unknown capability and also falls back. The per-peer negotiated state is activation-scoped and refreshed on every ack, so it adapts when a peer reconnects or changes its advertised capability. Unlike wire-version negotiation, this **never** fails fast - the dictionary-less fallback is always decodable.
+3. **Operators can see the outcome.** The shipper records the per-`(tree, peer)` negotiation outcome to the `orleans.lattice.replication.ship.dictionary_negotiation{tree,peer,outcome}` counter (`outcome` is `matched`, `fell_back`, or `unknown`) and the share of batches shipped with versus without a shared dictionary to `orleans.lattice.replication.ship.dictionary_batches{tree,peer,dictionary}` (`dictionary` is `with_dictionary` or `without_dictionary`).
+
+```csharp verify
+var negotiation = SharedDictionaryNegotiation.Negotiate(
+    configuredDictionaryId: 7u,
+    peerAdvertisedIds: new uint[] { 3u, 7u });
+
+if (negotiation.Matched)
+{
+    // The peer advertised dictionary id 7, so the sender compresses with
+    // it (negotiation.EffectiveDictionaryId). Otherwise FellBack is true
+    // and EffectiveDictionaryId is 0 (plain dictionary-less Zstd).
+}
+```
+
+### Opting in
+
+Negotiation ships **dark**: `LatticeReplicationOptions.DictionaryNegotiationEnabled` defaults to `false`, so a host that does not opt in stamps the configured dictionary id exactly as before and the receiver-advertised `AdvertisedDictionaryIds` slot is simply never consumed. A host rolling out a shared dictionary across a mixed fleet opts in on the `ZstdDictionary` tree:
+
+```csharp verify
+siloBuilder.AddLatticeReplication(o =>
+{
+    o.ClusterId = "site-a";
+    o.FramingCompression = LatticeCompression.ZstdDictionary;
+    o.FramingCompressionDictionaryId = 7u;
+    o.DictionaryNegotiationEnabled = true;
+});
+```
+
+Because the feature is dark by default and the slot is additive, there is no behavioural change and the bytes on the wire are byte-identical for a host that does not opt in.
+

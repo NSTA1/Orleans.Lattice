@@ -1,5 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -141,6 +143,79 @@ public class ReplicationAckTests
         Assert.Multiple(() =>
         {
             Assert.That(a, Is.EqualTo(b));
+            Assert.That(a, Is.Not.EqualTo(different));
+        });
+    }
+
+    [Test]
+    public void Default_advertised_dictionary_ids_slot_is_null()
+    {
+        var ack = default(ReplicationAck);
+
+        Assert.That(ack.AdvertisedDictionaryIds, Is.Null);
+    }
+
+    [Test]
+    public void Init_assigns_advertised_dictionary_ids_slot()
+    {
+        var ack = new ReplicationAck
+        {
+            Accepted = true,
+            HighestAppliedHlc = HybridLogicalClock.Zero,
+            AdvertisedDictionaryIds = new uint[] { 3u, 7u },
+        };
+
+        Assert.That(ack.AdvertisedDictionaryIds, Is.EqualTo(new uint[] { 3u, 7u }));
+    }
+
+    [Test]
+    public void Advertised_dictionary_ids_round_trips_through_the_serializer()
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
+        var ack = new ReplicationAck
+        {
+            Accepted = true,
+            HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 },
+            SupportedWireVersion = 5,
+            AdvertisedDictionaryIds = new uint[] { 1u, 9u, 17u },
+        };
+
+        var bytes = serializer.SerializeToArray(ack);
+        var decoded = serializer.Deserialize(bytes);
+
+        Assert.That(decoded.AdvertisedDictionaryIds, Is.EqualTo(new uint[] { 1u, 9u, 17u }));
+    }
+
+    [Test]
+    public void Omitted_advertised_dictionary_ids_slot_decodes_as_null_additive()
+    {
+        // An ack that never set the additive slot must round-trip as null,
+        // matching the decode a sender built before dictionary negotiation
+        // would see when a newer receiver simply leaves the slot unset.
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
+        var ack = new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
+
+        var bytes = serializer.SerializeToArray(ack);
+        var decoded = serializer.Deserialize(bytes);
+
+        Assert.That(decoded.AdvertisedDictionaryIds, Is.Null);
+    }
+
+    [Test]
+    public void Equality_uses_advertised_dictionary_ids_slot()
+    {
+        var a = new ReplicationAck { Accepted = true, AdvertisedDictionaryIds = new uint[] { 7u } };
+        var b = new ReplicationAck { Accepted = true, AdvertisedDictionaryIds = new uint[] { 7u } };
+        var different = a with { AdvertisedDictionaryIds = new uint[] { 9u } };
+
+        Assert.Multiple(() =>
+        {
+            // uint[] uses reference equality under record value semantics,
+            // so distinct arrays (even with identical contents) are not
+            // equal - assert the slot itself is wired into the record.
+            Assert.That(a.AdvertisedDictionaryIds, Is.EqualTo(b.AdvertisedDictionaryIds));
             Assert.That(a, Is.Not.EqualTo(different));
         });
     }

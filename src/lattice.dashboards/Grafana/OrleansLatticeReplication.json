@@ -1362,6 +1362,30 @@
           "legendFormat": "deltas/s {{tree}}/{{peer}}"
         }
       ]
+    },
+    {
+      "id": 53,
+      "title": "Shared-dictionary negotiation outcomes (rate)",
+      "description": "Rate of per-peer shared-dictionary capability negotiations by outcome (orleans.lattice.replication.ship.dictionary_negotiation). matched = the peer advertised the configured dictionary id and the sender compressed with it; fell_back = the peer advertised a capability without the configured id; unknown = the peer has not advertised a dictionary capability yet. Opt-in via DictionaryNegotiationEnabled with a ZstdDictionary tree; flat-zero unless negotiation is enabled and a shared dictionary is configured.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 134 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer, outcome) (rate(orleans_lattice_replication_ship_dictionary_negotiation_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}} {{tree}} -> {{peer}}" }
+      ]
+    },
+    {
+      "id": 54,
+      "title": "Batches shipped with vs without a shared dictionary (rate)",
+      "description": "Rate of batches shipped on the dictionary-eligible path split by whether a shared dictionary was used (orleans.lattice.replication.ship.dictionary_batches). with_dictionary = compressed against a negotiated shared dictionary; without_dictionary = plain dictionary-less Zstd (the fallback for a peer that has not advertised the configured id). Read alongside the negotiation-outcomes panel to confirm a mixed fleet keeps shipping during a rolling dictionary rollout.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 134 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer, dictionary) (rate(orleans_lattice_replication_ship_dictionary_batches_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{dictionary}} {{tree}} -> {{peer}}" }
+      ]
     }
   ]
 }

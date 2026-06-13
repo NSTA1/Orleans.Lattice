@@ -151,6 +151,35 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(5)] public int? SupportedWireVersion { get; init; }
+
+    /// <summary>
+    /// The set of shared compression-dictionary ids this receiver can
+    /// currently resolve (the stable ids registered on its
+    /// <see cref="ILatticeCompressionDictionaryProvider"/>, when that
+    /// provider also implements
+    /// <see cref="ILatticeCompressionDictionaryCatalog"/>). Advertised so
+    /// a sender that has opted into shared-dictionary negotiation only
+    /// compresses a batch with a dictionary id this peer has advertised;
+    /// when the configured id is absent from this set the sender falls
+    /// back to dictionary-less <see cref="LatticeCompression.Zstd"/> for
+    /// this peer, guaranteeing no peer receives a frame it cannot decode.
+    /// A value of <see langword="null"/> means the receiver did not
+    /// advertise a dictionary capability (a build predating dictionary
+    /// negotiation, or a receiver whose provider exposes no catalog); the
+    /// sender treats that peer's dictionary capability as unknown and
+    /// falls back to dictionary-less compression until a later ack carries
+    /// the slot. An empty array means the receiver advertised the
+    /// capability but currently holds no dictionaries.
+    /// <para>
+    /// Strictly additive on the wire (same compat profile as
+    /// <see cref="SupportedWireVersion"/>): receivers built before
+    /// dictionary negotiation omit the slot entirely (decodes as
+    /// <see langword="null"/>); senders built before negotiation ignore
+    /// the field. The slot is therefore safe to roll out independently on
+    /// either side of a peering.
+    /// </para>
+    /// </summary>
+    [Id(6)] public uint[]? AdvertisedDictionaryIds { get; init; }
 }
 
 /// <summary>

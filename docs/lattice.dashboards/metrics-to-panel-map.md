@@ -130,3 +130,5 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.ship.elided_payloads` | counter | `tree`, `peer` | Content-hash payload elision (rate) |
 | `orleans.lattice.replication.ship.elided_payload_bytes` | counter (`By`) | `tree`, `peer` | Content-hash payload elision (rate) |
 | `orleans.lattice.replication.ship.manifest_exchanges` | counter | `tree`, `peer` | Content-hash manifest exchanges (rate) |
+| `orleans.lattice.replication.ship.dictionary_negotiation` | counter | `tree`, `peer`, `outcome` | Shared-dictionary negotiation outcomes (rate) |
+| `orleans.lattice.replication.ship.dictionary_batches` | counter | `tree`, `peer`, `dictionary` | Batches shipped with vs without a shared dictionary (rate) |

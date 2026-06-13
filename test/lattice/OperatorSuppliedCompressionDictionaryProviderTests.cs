@@ -77,4 +77,36 @@ public class OperatorSuppliedCompressionDictionaryProviderTests
     {
         Assert.That(OperatorSuppliedCompressionDictionaryProvider.Empty.TryGetDictionary(1u, out _), Is.False);
     }
+
+    [Test]
+    public void AvailableDictionaryIds_returns_registered_ids_sorted()
+    {
+        var provider = new OperatorSuppliedCompressionDictionaryProvider(
+            new Dictionary<uint, ReadOnlyMemory<byte>>
+            {
+                [7u] = new byte[] { 1 },
+                [3u] = new byte[] { 2 },
+                [11u] = new byte[] { 3 },
+            });
+
+        Assert.That(provider.AvailableDictionaryIds, Is.EqualTo(new uint[] { 3u, 7u, 11u }));
+    }
+
+    [Test]
+    public void AvailableDictionaryIds_is_empty_for_empty_provider()
+    {
+        Assert.That(OperatorSuppliedCompressionDictionaryProvider.Empty.AvailableDictionaryIds, Is.Empty);
+    }
+
+    [Test]
+    public void Provider_exposes_the_dictionary_catalog_interface()
+    {
+        ILatticeCompressionDictionaryProvider provider =
+            new OperatorSuppliedCompressionDictionaryProvider(
+                new Dictionary<uint, ReadOnlyMemory<byte>> { [5u] = new byte[] { 1 } });
+
+        Assert.That(provider, Is.InstanceOf<ILatticeCompressionDictionaryCatalog>());
+        Assert.That(((ILatticeCompressionDictionaryCatalog)provider).AvailableDictionaryIds,
+            Is.EqualTo(new uint[] { 5u }));
+    }
 }

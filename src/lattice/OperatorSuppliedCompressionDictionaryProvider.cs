@@ -11,9 +11,11 @@ namespace Orleans.Lattice;
 /// deployment's configuration, then registered by id on every silo that
 /// produces or consumes dictionary frames.
 /// </summary>
-public sealed class OperatorSuppliedCompressionDictionaryProvider : ILatticeCompressionDictionaryProvider
+public sealed class OperatorSuppliedCompressionDictionaryProvider
+    : ILatticeCompressionDictionaryProvider, ILatticeCompressionDictionaryCatalog
 {
     private readonly FrozenDictionary<uint, ReadOnlyMemory<byte>> _dictionaries;
+    private readonly uint[] _availableDictionaryIds;
 
     /// <summary>
     /// An empty provider that resolves no dictionary ids. Registered as
@@ -62,7 +64,19 @@ public sealed class OperatorSuppliedCompressionDictionaryProvider : ILatticeComp
         }
 
         _dictionaries = dictionaries.ToFrozenDictionary();
+
+        // Materialise the advertised id set once at construction: a
+        // sorted, immutable snapshot of the registered ids. Sorting gives
+        // a deterministic advertisement order on the wire, and caching the
+        // array avoids re-allocating on every capability advertisement.
+        var ids = new uint[_dictionaries.Count];
+        _dictionaries.Keys.CopyTo(ids, 0);
+        Array.Sort(ids);
+        _availableDictionaryIds = ids;
     }
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<uint> AvailableDictionaryIds => _availableDictionaryIds;
 
     /// <inheritdoc />
     public bool TryGetDictionary(uint dictionaryId, out ReadOnlyMemory<byte> dictionary)
