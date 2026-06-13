@@ -1,6 +1,6 @@
 # Orleans.Lattice.Replication Feature Index
 
-Feature planning for the `Orleans.Lattice.Replication` package - a cross-cluster replication library layered on top of `Orleans.Lattice` - is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication), not in roadmap files. See the [package overview](./replication.md) for the user-facing description. This page is a grouped, human-readable index that links each tracked item to its issue. Keep it in sync whenever an issue is opened, closed, or retitled (see the agent instructions in `.github/copilot-instructions.md`).
+Feature planning for the `Orleans.Lattice.Replication` package - a cross-cluster replication library layered on top of `Orleans.Lattice` - is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication), not in roadmap files. See the [package overview](./README.md) for the user-facing description. This page is a grouped, human-readable index that links each tracked item to its issue. Keep it in sync whenever an issue is opened, closed, or retitled (see the agent instructions in `.github/copilot-instructions.md`).
 
 - **Browse all replication issues:** https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication
 - **Open replication issues:** https://github.com/NSTA1/Orleans.Lattice/issues?q=is%3Aopen+label%3Alattice.replication
@@ -18,18 +18,6 @@ The core library's WAL-only commit model shipped under the core WAL-as-sole-comm
 1. **The WAL entry schema is the canonical mutation record**, not a replication-only side-car. `WalRecord` carries the operation, key, value-or-delta, HLC and origin cluster id - the same shape the core-library local-apply pipeline consumes.
 2. **`IChangeFeed` treats the outbound replication ship loop as one consumer among many.** The core-library local materialiser, secondary indexes, or projection rebuilders subscribe at the same seam without replication being installed.
 3. **Per-origin high-water mark is keyed `(tree, originClusterId)`, but the shape generalises to local apply.** A `null`/local origin is a valid key; the log-replay-on-activation path uses the same table without schema changes.
-
-## Guiding principles
-
-Don't carry forward the reference sample's shortcuts:
-
-- **No thread-local cycle-break.** Origin is durable metadata, not ambient state that is fragile across async boundaries.
-- **No ship-time value read.** Capture the mutation at commit time; readers of a replog entry never re-read the primary.
-- **No post-merge LWW-by-bytes.** The wire carries CRDT deltas for recognised primitives; opaque bytes are the fallback, not the default.
-- **No host-level outgoing-call filter.** Replication is produced by the grain at commit time, so value capture is atomic with the write.
-- **No reminder-cadence pull for hot paths.** Push transport with backoff is the baseline; HTTP pull is retained only for bootstrap / low-frequency paths.
-
-Preserve what the sample got right: per-peer HLC cursor, advance-strictly-on-ack, don't-replicate-the-replog, per-tree opt-in + per-key filter, janitor as a separate grain.
 
 ## Cross-cluster bootstrap transport
 

@@ -20,7 +20,7 @@ It supports:
 - Online resize, online reshard, and online snapshots (offline mode also available).
 - Soft delete with a configurable retention window, and undo of resize within the window.
 - Per-tree event stream, diagnostics, and `System.Diagnostics.Metrics` instruments.
-- Optional cross-cluster replication via the sibling [`Orleans.Lattice.Replication`](docs/lattice.replication/replication.md) package.
+- Optional cross-cluster replication via the sibling [`Orleans.Lattice.Replication`](docs/lattice.replication/README.md) package.
 
 The name comes from its use of **lattice-based state primitives** - mathematical structures where merges are commutative, associative, and idempotent - which is what makes the system conflict-free and recoverable without distributed locks or consensus.
 
@@ -42,7 +42,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing semantics across multiple keys - locally, across shards, and across replicating clusters. An `IGrainFactory.SetManyAtomicAsync` overload extends the same all-or-nothing visibility to a batch spanning multiple trees. No reader ever observes a partial-set state. | [Atomic Writes](docs/lattice/atomic-writes.md) |
 | **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion. Idempotent and retryable. | [Bulk Loading](docs/lattice/bulk-loading.md) |
 | **Conflict-free merges** | Concurrent writes converge deterministically. | [State Primitives](docs/lattice/state-primitives.md) |
-| **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. | [Replication](docs/lattice.replication/replication.md) |
+| **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. | [Replication](docs/lattice.replication/README.md) |
 | **Diagnostics** | `DiagnoseAsync` returns a per-tree health snapshot: per-shard depth, live keys, tombstones, hotness, and recent splits. | [Diagnostics](docs/lattice/diagnostics.md) |
 | **Durable cursors** | Server-checkpointed iterators that survive silo failovers, client restarts, and topology changes. Resume from the last yielded key automatically. | [Durable Cursors](docs/lattice/durable-cursors.md) |
 | **Events** | Per-tree `LatticeTreeEvent` Orleans stream with operation-id correlation. | [Events](docs/lattice/events.md) |
@@ -92,7 +92,7 @@ siloBuilder
     });
 ```
 
-Add cross-cluster replication on top by registering `AddLatticeReplication(...)` alongside the WAL. See the [`Orleans.Lattice.Replication` overview](docs/lattice.replication/replication.md) for the full multi-cluster setup.
+Add cross-cluster replication on top by registering `AddLatticeReplication(...)` alongside the WAL. See the [`Orleans.Lattice.Replication` overview](docs/lattice.replication/README.md) for the full multi-cluster setup.
 
 For full setup details, silo configuration options, and complete usage examples, see the [API Reference](docs/lattice/api.md). For runnable sample projects exercising `ILattice`, see [Samples](docs/lattice/samples.md).
 
@@ -124,11 +124,18 @@ For feature tracking (the "what's planned / what shipped"):
 - [Core Feature Index](docs/lattice/features.md) - grouped, issue-linked index of the core `Orleans.Lattice` package's tracked features, fixes, and gaps.
 - [Replication Feature Index](docs/lattice.replication/features.md) - grouped, issue-linked index of the `Orleans.Lattice.Replication` package's tracked features, fixes, and gaps.
 
-For replication operations (the "how do I run it"):
-
-- [Automatic Drift Remediation](docs/lattice.replication/automatic-drift-remediation.md) - operator playbook for the opt-in anti-entropy stack: default-off posture, end-to-end opt-in configuration, the consolidated metrics surface, and a failure-mode matrix.
-
 Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files. The feature-index pages above summarize and link to those issues.
+
+## Child Packages
+
+Each optional add-on ships as its own NuGet package with its own documentation set, anchored by a package README that mirrors this one (overview, features, quick start, then API / configuration / architecture references):
+
+| Package | Description | Docs |
+|---|---|---|
+| `Orleans.Lattice.Replication` | Cross-cluster active-active replication: producer, WAL, shipper, apply, bootstrap, and anti-entropy. | [README](docs/lattice.replication/README.md) |
+| `Orleans.Lattice.Replication.Grpc` | The canonical gRPC push-transport binding for replication. | [README](docs/lattice.replication.grpc/README.md) |
+| `Orleans.Lattice.Storage.AzureTable` | The durable Azure Table Storage write-ahead-log backend. | [README](docs/lattice.storage.azuretable/README.md) |
+| `Orleans.Lattice.Dashboards` | Bundled Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. | [README](docs/lattice.dashboards/README.md) |
 
 ## Releases
 

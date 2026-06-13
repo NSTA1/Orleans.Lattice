@@ -7,9 +7,9 @@ Cross-cluster replication for [Orleans.Lattice](../../README.md) - captures ever
 `Orleans.Lattice.Replication` is the **end-to-end cross-cluster replication subsystem** that layers on top of `Orleans.Lattice`. It is more than a wire format - it covers the full producer/transport/receiver pipeline plus the operational surface around it:
 
 - **Capture.** Mutations are intercepted at commit time on the producing cluster and written to a per-tree WAL via the pluggable `IWalStorageProvider` seam (in-memory default, optional Azure Table Storage backend).
-- **Ship.** A per-peer `IReplicationShipperGrain` streams batches to each peer over a long-lived push transport (`IReplicationTransport`, with gRPC as the canonical binding).
+- **Ship.** A per-peer shipper streams batches to each peer over a long-lived push transport (`IReplicationTransport`, with gRPC as the canonical binding).
 - **Apply.** Inbound entries flow through `IReplicationApplier`, which performs per-origin HWM dedup, causal-dependency parking via the causal-apply buffer, shadow-forward de-duplication, and CRDT-aware merges (LWW-Register, OR-Set, PN-Counter, VersionVector, MV-Register, OR-Map).
-- **Bootstrap.** New or fallen-off-the-log peers seed via the snapshot subsystem (`ISnapshotProvider`, `IRemoteSnapshotTransport`, `LatticeRemoteSnapshotService`, `RemoteSnapshotProvider`) coordinated by the per-tree `LatticeBootstrapCoordinatorGrain` with crash-resumable state.
+- **Bootstrap.** New or fallen-off-the-log peers seed via the snapshot subsystem (`ISnapshotProvider`, `IRemoteSnapshotTransport`, `LatticeRemoteSnapshotService`, `RemoteSnapshotProvider`) coordinated by the per-tree bootstrap coordinator (`ILatticeBootstrapCoordinator`) with crash-resumable state.
 - **Operate.** Dead-letter quarantine for poison entries, per-tree merge-mode resolution, operator-driven re-seed, fall-off-log detection, admin introspection (`ILatticeReplicationAdmin`, `ILatticeWalIntrospection`), shared-secret-based mutual auth between clusters, and first-class metrics (apply duration, lag, FIFO violations, bootstrap retries, dead-letter rates) are all in-scope.
 
 No external broker, no shared database, no host-level outgoing-call filter.
@@ -48,7 +48,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Auto-bootstrap on fall-off-log** | Peers whose cursor falls behind the retained WAL are re-seeded from a fresh snapshot automatically - no operator intervention. | [Auto-Bootstrap](auto-bootstrap.md) |
 | **Causal+ ordering** | A receiver never observes a write before its causal dependencies - point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards all preserve causal order. | [WAL](wal.md) |
 | **Dead-letter queue** | Poison entries - schema skew, oversized values, corrupt HLC - are quarantined per tree after a configurable retry budget; replication continues past them. | [Dead-Letter Queue](dead-letter-queue.md) |
-| **gRPC push transport** | Long-lived gRPC streaming sender / receiver pair. Push latency is sub-second, well below reminder-cadence pull. | [gRPC Push Transport](grpc-push-transport.md) |
+| **gRPC push transport** | Long-lived gRPC streaming sender / receiver pair. Push latency is sub-second, well below reminder-cadence pull. | [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md) |
 | **Health check** | ASP.NET Core / Kubernetes `IHealthCheck` reporting `Degraded` when entries-behind, last-contact age, or consecutive-error streak crosses a soft bound, `Unhealthy` when sustained for longer than the configured grace window. | [Health Check](health-check.md) |
 | **Observability** | Per-peer entries-behind, bytes-behind, seconds-behind, consecutive-errors, last-contact metrics on `LatticeReplicationMetrics`. | [Observability](observability.md) |
 | **Origin-stamped HLC** | Every replicated record carries `(originClusterId, hlc)`. Cycles break naturally, transitive topologies preserve causality, and applies are idempotent by identity. | [Replication Apply](replication-apply.md) |
@@ -101,7 +101,7 @@ app.MapLatticeReplicationGrpc();
 
 For a working multi-cluster example exercising HLC-ordered facts, typed OR-Set replication, and gRPC push, see the `MultiSiteManufacturing` project under [`samples/`](../../samples).
 
-### Default efficiency posture
+### Default efficiency posture (versions greater than v7.1.0)
 
 A stock `AddLatticeReplication` deployment ships with the **safe efficiency bundle** on out of the box, so the minimal setup above is already coalesced, compressed, and measured:
 
@@ -127,6 +127,10 @@ siloBuilder.AddLatticeReplication(opts =>
 
 For day-to-day use and operations:
 
+- [Architecture](architecture.md) - the producer-to-receiver pipeline, the seams it attaches to, and the invariants it preserves end to end.
+- [API Reference](api.md) - the public types, seams, registration helpers, and extension points.
+- [Configuration](configuration.md) - every `LatticeReplicationOptions` knob, its default, and per-tree scope.
+- [Chaos Tests](chaos-tests.md) - the cross-cluster, gRPC transport, and Azure Table WAL chaos suites.
 - [Replication Modes](replication-modes.md) - per-tree opt-in, `LatticeMergeMode` selection, per-key filter.
 - [Observability](observability.md) - `LatticeReplicationMetrics` instruments, per-peer lag, error counters.
 - [Dead-Letter Queue](dead-letter-queue.md) - quarantine model, operator surface, replay.
@@ -141,7 +145,7 @@ For internals (the "how"):
 - [Replication Apply](replication-apply.md) - receiver-side applier, per-origin high-water-mark, recent-apply cache, atomic batch buffering.
 - [Replication Drivers](replication-drivers.md) - production drivers that turn the dormant seams into a running pipeline.
 - [Transport](transport.md) - `IReplicationTransport` seam, batch shape, acks.
-- [gRPC Push Transport](grpc-push-transport.md) - canonical transport: streaming RPC, channel reuse, custom marshallers.
+- [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md) - canonical transport: streaming RPC, channel reuse, custom marshallers.
 - [Receiver Flow Control](receiver-flow-control.md) - `IReceiverFlowControlPolicy` seam, ack-stamped hints, sender clamping / pause composition.
 - [Wire Format](wire-format.md) - `ReplicationBatchEnvelope`, `IReplicationBatchEncoder`, wire version negotiation.
 - [Deltas](deltas.md) - typed CRDT delta records on the wire.

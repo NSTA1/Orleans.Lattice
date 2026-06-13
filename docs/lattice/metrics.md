@@ -276,73 +276,20 @@ the same pipeline as the traffic they affect.
 ## Replication meter
 
 The replication package (`Orleans.Lattice.Replication`) publishes its own
-meter so an operator can subscribe to cross-cluster telemetry independently
-of the core lattice surface. The meter name is pinned by a regression test
-in the replication package; subscribe to it the same way as the core meter.
+meter, `orleans.lattice.replication`, so an operator can subscribe to
+cross-cluster telemetry independently of the core lattice surface. The meter
+name is pinned by a regression test in the replication package.
 
 | Member | Value |
 |---|---|
 | `LatticeReplicationMetrics.MeterName` | `orleans.lattice.replication` |
 | `LatticeReplicationMetrics.Meter` | the `Meter` instance |
 
-### Tag conventions (replication)
-
-| Tag key | Applies to | Value |
-|---|---|---|
-| `tree` | every instrument | Logical tree id |
-| `peer` | ship-side and per-peer instruments | Configured peer cluster identifier |
-| `origin` | apply-side instruments | Origin cluster id stamped on the inbound mutation |
-| `shard` | causal-apply buffer gauges | Physical shard index |
-| `outcome` | ship / bootstrap instruments | `success`, `transient_fault`, `permanent_fault`, etc. |
-| `reason` | dead-letter counters | Discriminator describing why the entry was parked / removed |
-| `direction` | per-peer `consecutive_errors` and `last_contact_seconds` gauges | `outbound` (recorded by the local sender after a ship attempt) or `inbound` (recorded by the local receiver after an apply attempt) |
-
-### Outbound (ship) and replog throughput
-
-| Name | Kind | Unit | Description |
-|---|---|---|---|
-| `orleans.lattice.replication.ship.duration` | `Histogram<double>` | `ms` | Wall-clock duration of one outbound ship-batch attempt. Tagged `tree`, `peer`, `outcome`. |
-| `orleans.lattice.replication.wal.entries_appended` | `Counter<long>` | `{entry}` | Replog entries committed to the local WAL. Tagged `tree`. |
-| `orleans.lattice.replication.wal.entries_shipped` | `Counter<long>` | `{entry}` | Replog entries acknowledged by a remote peer. Tagged `tree`, `peer`. |
-| `orleans.lattice.replication.peer.fell_off_log` | `Counter<long>` | `{event}` | Receiver fall-off-the-log detection events. Tagged `tree`, `origin`. |
-| `orleans.lattice.replication.peer.fell_off_log_suppressed` | `Counter<long>` | `{event}` | Receiver fall-off-the-log probes suppressed because the bootstrap coordinator is already draining from the same origin. Tagged `tree`, `origin`. |
-
-### Inbound (apply) and causal-buffer
-
-| Name | Kind | Unit | Description |
-|---|---|---|---|
-| `orleans.lattice.replication.apply.duration` | `Histogram<double>` | `ms` | Wall-clock duration of one inbound apply-batch attempt. Tagged `tree`, `peer`, `outcome`. |
-| `orleans.lattice.replication.apply.lag` | `Histogram<double>` | `ms` | Receiver-side replication lag observed at successful apply. Tagged `tree`, `peer`. |
-| `orleans.lattice.replication.apply.buffered_entries` | `ObservableGauge<long>` | `{entry}` | Replog entries currently parked in the causal-apply buffer. Tagged `tree`, `shard`. |
-| `orleans.lattice.replication.apply.buffer_bytes` | `ObservableGauge<long>` | `By` | Cumulative serialised payload size parked in the causal-apply buffer. Tagged `tree`, `shard`. |
-| `orleans.lattice.replication.apply.dependency_wait_ms` | `Histogram<double>` | `ms` | Wait time between park and drain for a buffered causal-apply entry. Tagged `tree`. |
-| `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `{entry}` | Replog entries blocked by an unsatisfied causal dependency at apply time. Tagged `tree`. |
-| `orleans.lattice.replication.apply.fifo_violations` | `Counter<long>` | `{entry}` | Successful applies whose source HLC was strictly less than the previous apply for the same `(tree, origin)` pair. Tagged `tree`, `origin`. **Any non-zero rate is alert-worthy** - a FIFO violation breaks the per-origin causal guarantee. |
-
-### Dead-letter queue
-
-| Name | Kind | Unit | Description |
-|---|---|---|---|
-| `orleans.lattice.replication.dead_letter.enqueued` | `Counter<long>` | `{entry}` | Replog entries parked on the per-tree dead-letter queue. Tagged `tree`, `reason`. |
-| `orleans.lattice.replication.dead_letter.removed` | `Counter<long>` | `{entry}` | Entries removed from the per-tree dead-letter queue. Tagged `tree`, `reason`. |
-
-### Per-peer health (observable gauges)
-
-| Name | Kind | Unit | Description |
-|---|---|---|---|
-| `orleans.lattice.replication.peer.entries_behind` | observable `Gauge<long>` | `{entry}` | Number of replog entries the local sender has appended to its WAL but has yet to ship to the named peer. Tagged `tree`, `peer`. Outbound-only - the receiver does not track a per-peer backlog into itself - so no `direction` tag. |
-| `orleans.lattice.replication.peer.bytes_behind` | observable `Gauge<long>` | `By` | Serialised byte cost of the same backlog. Tagged `tree`, `peer`. Outbound-only; no `direction` tag. |
-| `orleans.lattice.replication.peer.consecutive_errors` | observable `Gauge<long>` | `{error}` | Number of consecutive recent failures observed for the named peer. Tagged `tree`, `peer`, `direction` (`outbound` for ship-side, `inbound` for apply-side). A persistent non-zero value indicates the cohort runner's exponential backoff has not yet observed a success. |
-| `orleans.lattice.replication.peer.last_contact_seconds` | observable `Gauge<double>` | `s` | Wall-clock seconds since the most recent successful contact with the named peer. Tagged `tree`, `peer`, `direction` (`outbound`, `inbound`). A monotonically rising value is the leading indicator that the peer has gone silent. |
-
-### Bootstrap (receiver-side coordinator)
-
-| Name | Kind | Unit | Description |
-|---|---|---|---|
-| `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `{entry}` | Snapshot entries applied by the bootstrap coordinator. Tagged `tree`, `origin`. |
-| `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` | `By` | Bytes applied by the bootstrap coordinator. Tagged `tree`, `origin`. |
-| `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` | `ms` | Bootstrap drain duration from `RequestingSnapshot` to the terminal phase. Tagged `tree`, `origin`, `outcome`. |
-| `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `{retry}` | Number of transient-fault retries consumed by the receiver-side bootstrap drain. Tagged `tree`, `origin`. |
+The full per-instrument catalogue - ship / apply / lag, causal-apply buffer,
+dead-letter, per-peer health, and bootstrap instruments, plus the replication
+tag conventions - lives in the replication package's
+[Observability](../lattice.replication/observability.md) document, which is the
+source of truth for every `orleans.lattice.replication.*` instrument.
 
 To subscribe to both meters, register them by name in the OpenTelemetry pipeline:
 

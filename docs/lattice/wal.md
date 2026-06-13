@@ -767,7 +767,7 @@ tree id and (for `leaf.commit.duration`) the pipeline step.
 | `leaf.replay.entries` | counter | `tree`, `result` ∈ `{applied, skipped}` | Mutations consumed during replay. `skipped` covers entries below the persisted checkpoint or out-of-order arrivals filtered by LWW. |
 
 The bundled Grafana dashboards consume these instruments directly; see
-[`../lattice.dashboards/index.md`](../lattice.dashboards/index.md).
+[`../lattice.dashboards/README.md`](../lattice.dashboards/README.md).
 
 ## Related surfaces
 
