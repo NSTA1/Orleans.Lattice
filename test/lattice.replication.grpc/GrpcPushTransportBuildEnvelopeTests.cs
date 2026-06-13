@@ -78,7 +78,9 @@ public class GrpcPushTransportBuildEnvelopeTests
             new OrleansBinaryWalRecordEncoder(sp.GetRequiredService<Serializer<WalRecord>>()),
             ackSerializer,
             sp.GetRequiredService<Serializer<DigestProbeRequest>>(),
-            sp.GetRequiredService<Serializer<DigestProbeResponse>>());
+            sp.GetRequiredService<Serializer<DigestProbeResponse>>(),
+            sp.GetRequiredService<Serializer<ContentManifestRequest>>(),
+            sp.GetRequiredService<Serializer<ContentManifestResponse>>());
         var transport = new GrpcPushTransport(
             method,
             encoder,

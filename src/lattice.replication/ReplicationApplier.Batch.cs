@@ -580,6 +580,7 @@ internal sealed partial class ReplicationApplier
                 var (deferredIdx, deferredStartTs) = dispatchApplies[p];
                 var deferredEntry = entries[deferredIdx];
                 RecordApplyLag(deferredEntry);
+                RecordAppliedContentForIndex(in deferredEntry, resolved);
                 if (!bootstrapMode)
                 {
                     // Bootstrap drain is intentionally non-monotonic
@@ -632,6 +633,7 @@ internal sealed partial class ReplicationApplier
                     // visible before the range walk starts.
                     await FlushPendingAsync().ConfigureAwait(false);
                     await ApplyRangeAsync(entry, cancellationToken).ConfigureAwait(false);
+                    InvalidateAppliedContentIndexForRange(in entry, resolved);
                     anyApplied = true;
                     outcome = LatticeReplicationMetrics.OutcomeSuccess;
                     continue;
@@ -754,6 +756,7 @@ internal sealed partial class ReplicationApplier
                     // outcome for non-failure paths).
                     cacheReservedForCurrent = false;
                     RecordApplyLag(entry);
+                    RecordAppliedContentForIndex(in entry, resolved);
                     if (!bootstrapMode)
                     {
                         // Bootstrap drain suppresses FIFO state tracking

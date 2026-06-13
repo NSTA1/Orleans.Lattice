@@ -216,6 +216,16 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.AddWalCursorRegistry();
         builder.AddLatticeWalGc();
         builder.Services.TryAddSingleton<ReplicationPeerStats>();
+        // Receiver-side applied-content index backing the content-hash
+        // payload-elision manifest exchange. Populated by the applier
+        // when it applies a point-Set on a content-hash-dedup-enabled
+        // tree, and queried by the gRPC receiver service when it answers
+        // an inbound manifest exchange. A best-effort, in-process,
+        // bounded cache - never serialized, never durable - so a cold
+        // or evicted index simply reports the entry as missing and the
+        // sender ships it (always safe). Maintaining it is off-path-free
+        // when ContentHashDedupEnabled is false.
+        builder.Services.TryAddSingleton<ReceiverAppliedContentIndex>();
         // Per-peer wire-version negotiation telemetry singleton. Backs
         // the wire_version.negotiated / wire_version.downgrade_active
         // observable gauges and is injected into the shipper grain so

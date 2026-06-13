@@ -160,6 +160,16 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
 
         // Live-push receiver service (inbound, server side).
         services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
+        // Receiver-side applied-content index backing the content-hash
+        // manifest exchange. Shared between the applier (populate path)
+        // and the gRPC service (query path). TryAdd preserves the
+        // registration AddLatticeReplication already supplied; the
+        // fallback here keeps stand-alone gRPC hosts (integration tests
+        // composing only the gRPC surface) satisfiable. The index is a
+        // best-effort cache - a cold index reports every entry as
+        // missing, so the receiver is always correct even when the
+        // populate path never ran.
+        services.TryAddSingleton<ReceiverAppliedContentIndex>();
         // Default receiver-side flow-control policy. Hosts that wire
         // a custom policy via AddLatticeReplication retain their
         // registration because both call sites use TryAddSingleton;
@@ -226,8 +236,11 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
             var ackSerializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
             var probeRequestSerializer = sp.GetRequiredService<Serializer<DigestProbeRequest>>();
             var probeResponseSerializer = sp.GetRequiredService<Serializer<DigestProbeResponse>>();
+            var manifestRequestSerializer = sp.GetRequiredService<Serializer<ContentManifestRequest>>();
+            var manifestResponseSerializer = sp.GetRequiredService<Serializer<ContentManifestResponse>>();
             var method = new LatticeReplicationGrpcMethod(
-                encoder, walRecordEncoder, ackSerializer, probeRequestSerializer, probeResponseSerializer);
+                encoder, walRecordEncoder, ackSerializer, probeRequestSerializer, probeResponseSerializer,
+                manifestRequestSerializer, manifestResponseSerializer);
             LatticeReplicationGrpcMethodHolder.Current = method;
             return method;
         });

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication.Grains;
 
 namespace Orleans.Lattice.Replication.Grpc;
 
@@ -39,6 +40,12 @@ internal abstract class LatticeReplicationGrpcServiceBase
     public abstract Task<DigestProbeResponseBox> ProbeDigest(DigestProbeRequestBox request, ServerCallContext context);
 
     /// <summary>
+    /// Handles a single content-hash payload-elision manifest exchange.
+    /// Implemented in <see cref="LatticeReplicationGrpcService"/>.
+    /// </summary>
+    public abstract Task<ContentManifestResponseBox> ExchangeContentManifest(ContentManifestRequestBox request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called
     /// once at startup with <paramref name="serviceImpl"/> set to
     /// <see langword="null"/> to record method metadata; the actual
@@ -63,11 +70,13 @@ internal abstract class LatticeReplicationGrpcServiceBase
             // the real per-request invoker resolved through DI.
             binder.AddMethod(method.Push, (UnaryServerMethod<ReplicationBatchEnvelopeBox, ReplicationAckBox>?)null);
             binder.AddMethod(method.ProbeDigest, (UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>?)null);
+            binder.AddMethod(method.ExchangeContentManifest, (UnaryServerMethod<ContentManifestRequestBox, ContentManifestResponseBox>?)null);
             return;
         }
 
         binder.AddMethod(method.Push, new UnaryServerMethod<ReplicationBatchEnvelopeBox, ReplicationAckBox>(serviceImpl.Push));
         binder.AddMethod(method.ProbeDigest, new UnaryServerMethod<DigestProbeRequestBox, DigestProbeResponseBox>(serviceImpl.ProbeDigest));
+        binder.AddMethod(method.ExchangeContentManifest, new UnaryServerMethod<ContentManifestRequestBox, ContentManifestResponseBox>(serviceImpl.ExchangeContentManifest));
     }
 }
 
@@ -108,6 +117,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly IWalCursorRegistry _cursorRegistry;
     private readonly IReceiverFlowControlPolicy _flowControlPolicy;
     private readonly IGrainFactory _grainFactory;
+    private readonly ReceiverAppliedContentIndex _appliedContentIndex;
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
     private readonly ILatticeCompressionDictionaryProvider? _dictionaryProvider;
 
@@ -124,9 +134,13 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// hook always observes a populated holder. The
     /// <paramref name="grainFactory"/> resolves the local
     /// <see cref="ILattice"/> grain when answering an inbound digest
-    /// probe. The optional <paramref name="dictionaryProvider"/> lets the
-    /// receiver advertise which shared compression dictionaries it can
-    /// resolve (when the provider implements
+    /// probe and the per-tree high-water-mark grain when answering an
+    /// inbound content-manifest exchange. The
+    /// <paramref name="appliedContentIndex"/> answers the
+    /// "which hashes do I already hold?" lookup the content-manifest
+    /// exchange depends on. The optional <paramref name="dictionaryProvider"/>
+    /// lets the receiver advertise which shared compression dictionaries it
+    /// can resolve (when the provider implements
     /// <see cref="ILatticeCompressionDictionaryCatalog"/>) so an opted-in
     /// sender only compresses with a dictionary this peer can decode; the
     /// default registration is the always-resolvable empty operator-supplied
@@ -138,6 +152,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         IWalCursorRegistry cursorRegistry,
         IReceiverFlowControlPolicy flowControlPolicy,
         IGrainFactory grainFactory,
+        ReceiverAppliedContentIndex appliedContentIndex,
         ILogger<LatticeReplicationGrpcService> logger,
         ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
     {
@@ -146,12 +161,14 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         ArgumentNullException.ThrowIfNull(cursorRegistry);
         ArgumentNullException.ThrowIfNull(flowControlPolicy);
         ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(appliedContentIndex);
         ArgumentNullException.ThrowIfNull(logger);
 
         _applier = applier;
         _cursorRegistry = cursorRegistry;
         _flowControlPolicy = flowControlPolicy;
         _grainFactory = grainFactory;
+        _appliedContentIndex = appliedContentIndex;
         _logger = logger;
         _dictionaryProvider = dictionaryProvider;
     }
@@ -367,5 +384,104 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             };
         }
     }
+
+    /// <inheritdoc />
+    public override async Task<ContentManifestResponseBox> ExchangeContentManifest(
+        ContentManifestRequestBox requestBox,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestBox);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var request = requestBox.Value;
+
+        if (string.IsNullOrEmpty(request.TreeName))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument,
+                "ContentManifestRequest.TreeName must be non-empty."));
+        }
+
+        if (string.IsNullOrEmpty(request.OriginClusterId))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument,
+                "ContentManifestRequest.OriginClusterId must be non-empty."));
+        }
+
+        var entries = request.Entries ?? (IReadOnlyList<ContentManifestEntry>)Array.Empty<ContentManifestEntry>();
+
+        // Resolve the durable per-origin high-water-mark so the
+        // identical-content-newer-clock decision is taken against the
+        // receiver's authoritative recorded clock rather than the
+        // best-effort applied-content index. The index answers only
+        // "do I hold byte-identical content for this key?"; the clock
+        // comparison that drives the metadata-only advance is anchored
+        // on the high-water-mark grain.
+        var hwmGrain = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(request.TreeName);
+        var hwm = await hwmGrain
+            .GetAsync(request.OriginClusterId, context.CancellationToken)
+            .ConfigureAwait(false);
+
+        // Project the applied-content index onto the manifest's keys. A
+        // key absent from the index (cold / never-applied / evicted) is
+        // simply omitted, so the planner reports it as missing and the
+        // sender ships it - always safe. The held clock is stamped at
+        // the durable high-water-mark so the planner's advance is the
+        // max manifest clock strictly newer than the recorded
+        // high-water-mark among content-matching entries.
+        Dictionary<string, (ulong ContentHash, HybridLogicalClock Hlc)>? held = null;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var key = entries[i].Key ?? string.Empty;
+            if (_appliedContentIndex.TryGetContentHash(request.TreeName, key, out var contentHash))
+            {
+                (held ??= new Dictionary<string, (ulong, HybridLogicalClock)>(StringComparer.Ordinal))[key] =
+                    (contentHash, hwm);
+            }
+        }
+
+        var response = ContentManifestPlanner.ComputeMissingSet(
+            in request,
+            held ?? (IReadOnlyDictionary<string, (ulong, HybridLogicalClock)>)EmptyHeld);
+
+        // Durably advance the per-origin high-water-mark for the
+        // identical-content entries the receiver elided whose clock was
+        // newer than its recorded clock (the idempotent re-set). The
+        // advance is metadata-only - no payload travelled - and is
+        // strictly-greater-only inside the grain, so re-running the
+        // exchange is idempotent. Surface the candidate clock on the
+        // response so the sender can observe the advance.
+        var advanced = false;
+        if (response.AdvancedHlc != HybridLogicalClock.Zero)
+        {
+            advanced = await hwmGrain
+                .TryAdvanceAsync(request.OriginClusterId, response.AdvancedHlc, context.CancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var missingCount = response.MissingEntryIndices?.Count ?? 0;
+        var elidedCount = entries.Count - missingCount;
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, request.TreeName);
+        var peerTag = new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, request.OriginClusterId);
+        LatticeReplicationMetrics.ReceiverContentManifestExchanges.Add(1, treeTag, peerTag);
+        if (elidedCount > 0)
+        {
+            LatticeReplicationMetrics.ReceiverContentEntriesElided.Add(elidedCount, treeTag, peerTag);
+        }
+        if (advanced)
+        {
+            LatticeReplicationMetrics.ReceiverContentHwmAdvances.Add(1, treeTag, peerTag);
+        }
+
+        return new ContentManifestResponseBox { Value = response };
+    }
+
+    /// <summary>
+    /// Shared empty held-content view for an exchange whose manifest
+    /// keys are all absent from the applied-content index. Avoids
+    /// allocating a per-call empty dictionary on the cold-index path.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, (ulong ContentHash, HybridLogicalClock Hlc)> EmptyHeld =
+        new Dictionary<string, (ulong, HybridLogicalClock)>(StringComparer.Ordinal);
 }
 

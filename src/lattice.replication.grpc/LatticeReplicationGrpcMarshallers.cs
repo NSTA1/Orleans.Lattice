@@ -87,6 +87,28 @@ internal sealed class DigestProbeResponseBox
 }
 
 /// <summary>
+/// Reference-typed wrapper around <see cref="ContentManifestRequest"/> for
+/// the content-hash payload-elision manifest-exchange RPC. gRPC's
+/// <see cref="Method{TRequest, TResponse}"/> imposes a <c>class</c>
+/// constraint; the public request is a <c>readonly record struct</c>.
+/// Mirrors <see cref="DigestProbeRequestBox"/>.
+/// </summary>
+internal sealed class ContentManifestRequestBox
+{
+    public ContentManifestRequest Value { get; init; }
+}
+
+/// <summary>
+/// Reference-typed wrapper around <see cref="ContentManifestResponse"/> for
+/// the content-hash payload-elision manifest-exchange RPC. Mirrors
+/// <see cref="DigestProbeResponseBox"/>.
+/// </summary>
+internal sealed class ContentManifestResponseBox
+{
+    public ContentManifestResponse Value { get; init; }
+}
+
+/// <summary>
 /// Builds gRPC <see cref="Marshaller{T}"/> instances that delegate to
 /// <see cref="IReplicationBatchEncoder"/> for the request envelope and
 /// to the Orleans <see cref="Serializer{T}"/> for the response ack. The
@@ -213,6 +235,44 @@ internal static class LatticeReplicationGrpcMarshallers
                 context.Complete();
             },
             deserializer: context => new DigestProbeResponseBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="ContentManifestRequestBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer
+    /// hand-off pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<ContentManifestRequestBox> CreateContentManifestRequestMarshaller(Serializer<ContentManifestRequest> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<ContentManifestRequestBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new ContentManifestRequestBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="ContentManifestResponseBox"/> bound to the supplied Orleans
+    /// <paramref name="serializer"/>. Uses the same buffer-writer
+    /// hand-off pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<ContentManifestResponseBox> CreateContentManifestResponseMarshaller(Serializer<ContentManifestResponse> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<ContentManifestResponseBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new ContentManifestResponseBox { Value = DeserializeValue(serializer, context) });
     }
 
     private static T DeserializeValue<T>(Serializer<T> serializer, GrpcDeserializationContext context)

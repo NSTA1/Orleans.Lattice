@@ -526,6 +526,67 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string ManifestExchangesName = "orleans.lattice.replication.ship.manifest_exchanges";
 
+    // --- Receiver-side content-hash exchange counters ---------------------------
+
+    /// <summary>
+    /// Counter of content-hash manifest exchanges the receiver handled - one
+    /// increment per inbound pull-missing request the receiver answered for a
+    /// peer's advertised manifest. Pairs with the sender-side
+    /// <see cref="ManifestExchanges"/> so an operator can confirm both ends
+    /// of the round trip agree on the exchange volume. Recorded on the
+    /// receiver's content-manifest handler regardless of how many entries the
+    /// receiver held, so an exchange that ends up eliding nothing still
+    /// counts. Tagged by <see cref="TagTree"/> and <see cref="TagPeer"/> (the
+    /// requesting origin cluster id).
+    /// </summary>
+    public static readonly Counter<long> ReceiverContentManifestExchanges =
+        Meter.CreateCounter<long>("orleans.lattice.replication.receiver.content_manifest_exchanges", unit: "{exchange}",
+            description: "Content-hash manifest exchanges answered by the receiver, tagged by tree and origin peer.");
+
+    /// <summary>
+    /// Counter of manifest entries the receiver reported it already holds
+    /// byte-identical content for - the entries the receiver told the sender
+    /// it does not need shipped, so the sender elides their payloads.
+    /// Incremented by the count of held (non-missing) entries each exchange.
+    /// Pairs with the sender-side <see cref="ShipElidedPayloads"/>: the two
+    /// counters track the same elided entries observed from each end of the
+    /// round trip. Tagged by <see cref="TagTree"/> and <see cref="TagPeer"/>
+    /// (the requesting origin cluster id).
+    /// </summary>
+    public static readonly Counter<long> ReceiverContentEntriesElided =
+        Meter.CreateCounter<long>("orleans.lattice.replication.receiver.content_entries_elided", unit: "{entry}",
+            description: "Manifest entries the receiver reported it already holds, tagged by tree and origin peer.");
+
+    /// <summary>
+    /// Counter of metadata-only high-water-mark advances the receiver
+    /// performed during a content-hash exchange - one increment per exchange
+    /// that durably advanced the per-origin high-water-mark for an
+    /// identical-content entry carrying a newer clock (the idempotent
+    /// re-set), without the payload ever travelling. Incremented once per
+    /// exchange whose durable advance succeeded, never under the default-off
+    /// behaviour (a cold or empty applied-content index reports every entry
+    /// as missing and performs no advance). Tagged by <see cref="TagTree"/>
+    /// and <see cref="TagPeer"/> (the requesting origin cluster id).
+    /// </summary>
+    public static readonly Counter<long> ReceiverContentHwmAdvances =
+        Meter.CreateCounter<long>("orleans.lattice.replication.receiver.content_hwm_advances", unit: "{advance}",
+            description: "Metadata-only high-water-mark advances performed by the receiver during a content-hash exchange, tagged by tree and origin peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ReceiverContentManifestExchanges"/> counter.
+    /// </summary>
+    public const string ReceiverContentManifestExchangesName = "orleans.lattice.replication.receiver.content_manifest_exchanges";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ReceiverContentEntriesElided"/> counter.
+    /// </summary>
+    public const string ReceiverContentEntriesElidedName = "orleans.lattice.replication.receiver.content_entries_elided";
+
+    /// <summary>
+    /// Canonical name of the <see cref="ReceiverContentHwmAdvances"/> counter.
+    /// </summary>
+    public const string ReceiverContentHwmAdvancesName = "orleans.lattice.replication.receiver.content_hwm_advances";
+
     // --- Dead-letter queue counters ---------------------------------------------
 
     /// <summary>

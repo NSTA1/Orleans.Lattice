@@ -60,7 +60,9 @@ public class GrpcPushTransportTests
             GrpcTestFactories.CreateWalRecordEncoder(),
             ackSerializer,
             probeRequestSerializer,
-            probeResponseSerializer);
+            probeResponseSerializer,
+            sp.GetRequiredService<Orleans.Serialization.Serializer<ContentManifestRequest>>(),
+            sp.GetRequiredService<Orleans.Serialization.Serializer<ContentManifestResponse>>());
         return new GrpcPushTransport(
             method,
             encoder,
@@ -202,6 +204,64 @@ public class GrpcPushTransportTests
         var transport = CreateTransport();
         transport.Dispose();
         Assert.DoesNotThrow(transport.Dispose);
+    }
+
+    // ---- ExchangeContentManifestAsync client invoker -------------------
+
+    private static ContentManifestRequest MakeManifest(
+        string tree = "tree",
+        string origin = "self")
+        => new()
+        {
+            TreeName = tree,
+            OriginClusterId = origin,
+            Entries = Array.Empty<ContentManifestEntry>(),
+        };
+
+    [Test]
+    public void ExchangeContentManifestAsync_throws_when_target_cluster_id_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.ExchangeContentManifestAsync(string.Empty, MakeManifest(), CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void ExchangeContentManifestAsync_throws_when_tree_name_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.ExchangeContentManifestAsync("peer", MakeManifest(tree: string.Empty), CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void ExchangeContentManifestAsync_throws_when_origin_cluster_id_empty()
+    {
+        using var transport = CreateTransport();
+        Assert.That(
+            async () => await transport.ExchangeContentManifestAsync("peer", MakeManifest(origin: string.Empty), CancellationToken.None),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void ExchangeContentManifestAsync_throws_when_peer_endpoint_not_configured()
+    {
+        using var transport = CreateTransport(); // empty PeerEndpoints
+        Assert.That(
+            async () => await transport.ExchangeContentManifestAsync("unknown-peer", MakeManifest(), CancellationToken.None),
+            Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void ExchangeContentManifestAsync_throws_object_disposed_after_dispose()
+    {
+        var transport = CreateTransport();
+        transport.Dispose();
+        Assert.That(
+            async () => await transport.ExchangeContentManifestAsync("peer", MakeManifest(), CancellationToken.None),
+            Throws.TypeOf<ObjectDisposedException>());
     }
 }
 
