@@ -591,19 +591,14 @@ internal sealed class ReplicationShipperGrain(
             window = 1;
         }
 
-        // Content-hash payload elision performs a per-batch manifest
-        // exchange on the strict-serial ship path only, so a configured
-        // pipelining window collapses to one while elision is enabled. This
-        // keeps the per-batch exchange composed with per-origin FIFO and
-        // atomic-batch boundaries (each batch's exchange + ship + ack
-        // completes before the next batch is drained) rather than racing
-        // several manifests concurrently. Elision is opt-in and gated on
-        // the content-hash dedup master switch, so the default path is
-        // unaffected.
-        if (window > 1 && options.ContentHashDedupElisionEnabled && options.ContentHashDedupEnabled)
-        {
-            window = 1;
-        }
+        // Content-hash payload elision composes with the bounded-pipelining
+        // window: the per-batch manifest exchange runs inline in the drain
+        // loop before each batch ships, so it no longer forces the window
+        // back to one. A fully-elided batch advances the durable cursor
+        // in-order through the same FIFO in-flight queue via a synthetic
+        // completed ack, preserving per-origin FIFO and atomic-batch
+        // boundaries. Elision is opt-in and gated on the content-hash dedup
+        // master switch, so the default path is unaffected.
 
         if (window == 1)
         {
@@ -1379,6 +1374,15 @@ internal sealed class ReplicationShipperGrain(
     /// the batch's ack lands in FIFO order: the batch's source HLC
     /// frontier, the per-partition consumed-sequence snapshot, and the
     /// entry / byte counts for the backlog gauges.
+    /// <para>
+    /// <paramref name="Elided"/> marks a batch every entry of which the
+    /// receiver already held byte-identical (the content-hash manifest
+    /// exchange dropped the whole batch). Such a batch ships no envelope;
+    /// its <see cref="SendTask"/> is a synthetic already-completed ack so it
+    /// still flows through the FIFO drain and advances the durable cursor
+    /// strictly in-order, but the drain path skips the ship-specific
+    /// telemetry a zero-latency synthetic ack would otherwise pollute.
+    /// </para>
     /// </summary>
     private readonly record struct InFlightShipBatch(
         Task<ReplicationAck> SendTask,
@@ -1388,7 +1392,8 @@ internal sealed class ReplicationShipperGrain(
         int EntryCount,
         long ByteCount,
         bool HitBatchCap,
-        long LaunchTimestamp);
+        long LaunchTimestamp,
+        bool Elided = false);
 
     /// <summary>
     /// Bounded sender-side pipelining path. Maintains a window of up to
@@ -1483,6 +1488,57 @@ internal sealed class ReplicationShipperGrain(
                 var sourceHlc = _drainBuffer[^1].Timestamp;
                 var maxReadSnapshot = SnapshotPartitionMaxReadSeq();
                 var advancedSnapshot = SnapshotPartitionAdvanced();
+
+                // Content-hash payload elision (opt-in, default off). Runs
+                // after the full-range cursor-advance inputs above were
+                // captured from the pre-elision drain, so the cursor still
+                // advances past every originally-drained entry regardless of
+                // how many were elided - identical to the serial path. It
+                // mutates the drain buffers in place and is a no-op when the
+                // option is off or the peer cannot exchange, so the default
+                // pipelined path is byte-identical to today. The short-batch
+                // "WAL exhausted" break and the window cap below both key off
+                // the pre-elision entryCount, not the survivor count.
+                await TryElideViaManifestExchangeAsync(options, cancellationToken);
+
+                if (_drainBuffer.Count == 0)
+                {
+                    // Every drained entry was elided: the receiver already
+                    // held all of them and advanced its high-water-mark via
+                    // the exchange. Ship no envelope; enqueue a synthetic
+                    // already-completed successful ack so the fully-elided
+                    // batch flows through the same FIFO DrainOneInFlightAsync
+                    // ordering and advances the durable cursor strictly
+                    // in-order (never before an earlier real in-flight batch).
+                    var elidedAck = Task.FromResult(new ReplicationAck
+                    {
+                        Accepted = true,
+                        HighestAppliedHlc = sourceHlc,
+                    });
+                    inFlight.Enqueue(new InFlightShipBatch(
+                        elidedAck, sourceHlc, maxReadSnapshot, advancedSnapshot,
+                        entryCount, 0L, hitBatchCap, Stopwatch.GetTimestamp(), Elided: true));
+                    shippedAny = true;
+                    _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
+
+                    if (inFlight.Count >= window)
+                    {
+                        if (!await DrainOneInFlightAsync(inFlight, options, maxPerBatch, cancellationToken))
+                        {
+                            failed = true;
+                            break;
+                        }
+                    }
+
+                    // A short batch (pre-elision) means the WAL is exhausted
+                    // for this tick; stop drawing new batches.
+                    if (entryCount < maxPerBatch)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
 
                 ReplicationBatchEncodedEnvelope encodedEnvelope;
                 long byteCount;
@@ -1626,6 +1682,30 @@ internal sealed class ReplicationShipperGrain(
     {
         var batch = inFlight.Dequeue();
         _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
+
+        if (batch.Elided)
+        {
+            // Fully-elided batch: the receiver already held every entry and
+            // advanced its high-water-mark during the manifest exchange, so
+            // no envelope was ever shipped and the synthetic completed ack
+            // carries zero latency. Advance the durable cursor strictly
+            // in-order over the full pre-elision range (it sits behind every
+            // earlier real in-flight batch in this FIFO queue) and reset the
+            // per-peer failure budget, but SKIP the ship-specific telemetry a
+            // zero-latency synthetic ack would pollute: no adaptive-latency
+            // sample (OnShipAckObserved), no error tally, no ship-bytes
+            // backlog reading, and no _receiverSuggestedBatchSize overwrite.
+            // The real ManifestExchanges / ShipElidedPayloads counters were
+            // already emitted inside TryElideViaManifestExchangeAsync, so the
+            // elision is still observable.
+            await AdvanceCursorPipelinedAsync(
+                batch.SourceHlc, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
+            state.State.ConsecutiveFailures = 0;
+            _nextRetryAtUtc = DateTime.MinValue;
+            _peerStats.RecordSuccess(_treeName, _peerClusterId);
+            _lastSuccessfulContactUtc = DateTime.UtcNow;
+            return true;
+        }
 
         ReplicationAck ack;
         TimeSpan ackLatency;
