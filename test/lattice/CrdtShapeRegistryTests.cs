@@ -212,4 +212,200 @@ public class CrdtShapeRegistryTests
         shape.MergeStates(a, b);
         Assert.That(a.Count, Is.EqualTo(2));
     }
+
+    // --- OR-Map pre-ship delta coalescing -----------------------------------
+
+    private static OrMapDeltaEntry<string, PnCounter> Add(string key, string replicaId, long counter, string incReplica, long amount)
+    {
+        var counterValue = new PnCounter();
+        counterValue.Increment(incReplica, amount);
+        return new OrMapDeltaEntry<string, PnCounter>
+        {
+            Key = key,
+            ReplicaId = replicaId,
+            Counter = counter,
+            Value = counterValue,
+        };
+    }
+
+    private static OrMapDeltaTombstone<string> Tombstone(string key, string replicaId, long counter) => new()
+    {
+        Key = key,
+        ReplicaId = replicaId,
+        Counter = counter,
+    };
+
+    private static OrMapDelta<string, PnCounter> MapDelta(
+        OrMapDeltaEntry<string, PnCounter>[]? adds = null,
+        OrMapDeltaTombstone<string>[]? tombstones = null) => new()
+    {
+        Adds = adds ?? Array.Empty<OrMapDeltaEntry<string, PnCounter>>(),
+        Tombstones = tombstones ?? Array.Empty<OrMapDeltaTombstone<string>>(),
+    };
+
+    private static OrMapDelta<string, PnCounter> Combine(
+        OrMapDelta<string, PnCounter> a,
+        OrMapDelta<string, PnCounter> b)
+    {
+        var shape = CrdtShape.ForOrMap<string, PnCounter>();
+        return (OrMapDelta<string, PnCounter>)shape.CombineDeltas!(a, b);
+    }
+
+    private static OrMap<string, PnCounter> ApplySequential(params OrMapDelta<string, PnCounter>[] deltas)
+    {
+        var map = new OrMap<string, PnCounter>();
+        foreach (var d in deltas)
+        {
+            map.MergeDelta(d);
+        }
+        return map;
+    }
+
+    private static void AssertLiveEquivalent(OrMap<string, PnCounter> left, OrMap<string, PnCounter> right)
+    {
+        var leftKeys = left.Keys().OrderBy(k => k, StringComparer.Ordinal).ToArray();
+        var rightKeys = right.Keys().OrderBy(k => k, StringComparer.Ordinal).ToArray();
+        Assert.That(leftKeys, Is.EqualTo(rightKeys));
+        foreach (var key in leftKeys)
+        {
+            Assert.That(left.Get(key)!.Value, Is.EqualTo(right.Get(key)!.Value), $"value mismatch at key '{key}'");
+        }
+    }
+
+    [Test]
+    public void ForOrMap_descriptor_exposes_non_null_combine_deltas()
+    {
+        var shape = CrdtShape.ForOrMap<string, PnCounter>();
+        Assert.That(shape.CombineDeltas, Is.Not.Null);
+        Assert.That(shape.SerializeDelta, Is.Not.Null);
+    }
+
+    [Test]
+    public void CombineDeltas_distinct_dots_for_same_key_preserves_multi_value()
+    {
+        var a = MapDelta(adds: new[] { Add("k", "A", 1, "X", 2) });
+        var b = MapDelta(adds: new[] { Add("k", "A", 2, "Y", 3) });
+
+        var combined = Combine(a, b);
+
+        Assert.That(combined.Adds, Has.Count.EqualTo(2));
+        // Both distinct-dot snapshots survive; the live merged value folds both.
+        var map = new OrMap<string, PnCounter>();
+        map.MergeDelta(combined);
+        Assert.That(map.Get("k")!.Value, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void CombineDeltas_unions_tombstones_deduped()
+    {
+        var a = MapDelta(tombstones: new[] { Tombstone("k", "A", 1) });
+        var b = MapDelta(tombstones: new[] { Tombstone("k", "A", 1), Tombstone("k", "B", 2) });
+
+        var combined = Combine(a, b);
+
+        Assert.That(combined.Tombstones, Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public void CombineDeltas_same_dot_value_collision_yields_value_crdt_join()
+    {
+        var a = MapDelta(adds: new[] { Add("k", "A", 1, "X", 2) });
+        var b = MapDelta(adds: new[] { Add("k", "A", 1, "Y", 3) });
+
+        var combined = Combine(a, b);
+
+        Assert.That(combined.Adds, Has.Count.EqualTo(1));
+        Assert.That(combined.Adds[0].Value.Value, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void CombineDeltas_same_dot_value_collision_does_not_mutate_source_deltas()
+    {
+        var a = MapDelta(adds: new[] { Add("k", "A", 1, "X", 2) });
+        var b = MapDelta(adds: new[] { Add("k", "A", 1, "Y", 3) });
+
+        _ = Combine(a, b);
+
+        // Clone-on-insert means the source snapshots keep their original value.
+        Assert.That(a.Adds[0].Value.Value, Is.EqualTo(2));
+        Assert.That(b.Adds[0].Value.Value, Is.EqualTo(3));
+    }
+
+    [Test]
+    public void CombineDeltas_apply_equivalent_for_distinct_dot_adds()
+    {
+        var a = MapDelta(adds: new[] { Add("k", "A", 1, "X", 2) });
+        var b = MapDelta(adds: new[] { Add("k", "B", 1, "Y", 3) });
+
+        var combinedMap = ApplySequential(Combine(a, b));
+        var sequentialMap = ApplySequential(a, b);
+
+        AssertLiveEquivalent(combinedMap, sequentialMap);
+        Assert.That(combinedMap.Get("k")!.Value, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void CombineDeltas_apply_equivalent_for_add_then_tombstone()
+    {
+        var a = MapDelta(adds: new[] { Add("k", "A", 1, "X", 2) });
+        var b = MapDelta(tombstones: new[] { Tombstone("k", "A", 1) });
+
+        var combinedMap = ApplySequential(Combine(a, b));
+        var sequentialMap = ApplySequential(a, b);
+
+        AssertLiveEquivalent(combinedMap, sequentialMap);
+        Assert.That(combinedMap.ContainsKey("k"), Is.False);
+    }
+
+    [Test]
+    public void CombineDeltas_apply_equivalent_for_same_dot_value_merge()
+    {
+        var a = MapDelta(adds: new[] { Add("k", "A", 1, "X", 2) });
+        var b = MapDelta(adds: new[] { Add("k", "A", 1, "Y", 3) });
+
+        var combinedMap = ApplySequential(Combine(a, b));
+        var sequentialMap = ApplySequential(a, b);
+
+        AssertLiveEquivalent(combinedMap, sequentialMap);
+        Assert.That(combinedMap.Get("k")!.Value, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void CombineDeltas_is_commutative_under_apply()
+    {
+        var a = MapDelta(
+            adds: new[] { Add("k", "A", 1, "X", 2) },
+            tombstones: new[] { Tombstone("m", "C", 9) });
+        var b = MapDelta(adds: new[] { Add("k", "A", 1, "Y", 3), Add("k", "B", 1, "Z", 4) });
+
+        var ab = ApplySequential(Combine(a, b));
+        var ba = ApplySequential(Combine(b, a));
+
+        AssertLiveEquivalent(ab, ba);
+    }
+
+    [Test]
+    public void CombineDeltas_is_idempotent_under_apply()
+    {
+        var a = MapDelta(
+            adds: new[] { Add("k", "A", 1, "X", 2), Add("k", "B", 1, "Y", 3) },
+            tombstones: new[] { Tombstone("k", "C", 5) });
+
+        var combinedMap = ApplySequential(Combine(a, a));
+        var singleMap = ApplySequential(a);
+
+        AssertLiveEquivalent(combinedMap, singleMap);
+    }
+
+    [Test]
+    public void CombineDeltas_treats_default_delta_as_empty()
+    {
+        var a = MapDelta(adds: new[] { Add("k", "A", 1, "X", 2) });
+        var combined = Combine(a, default);
+
+        Assert.That(combined.Adds, Is.Not.Null);
+        Assert.That(combined.Tombstones, Is.Not.Null);
+        Assert.That(combined.Adds, Has.Count.EqualTo(1));
+        Assert.That(combined.Tombstones, Is.Empty);
+    }
 }

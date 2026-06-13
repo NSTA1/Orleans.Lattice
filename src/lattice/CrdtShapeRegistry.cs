@@ -57,11 +57,12 @@ public sealed class CrdtShape
     /// applying the two source deltas in sequence. The operation mirrors
     /// the primitive's own join semilattice (union for observed-remove
     /// adds / removes, pointwise-max for counters and version vectors,
-    /// dot-dominance merge for the multi-value register), so it is
+    /// dot-dominance merge for the multi-value register, union of the dot-
+    /// tagged adds / tombstones with same-dot value snapshots lattice-
+    /// merged through the value CRDT for the OR-Map), so it is
     /// commutative, associative, and idempotent. <see langword="null"/>
-    /// for shapes that do not support pre-ship delta coalescing (the
-    /// generic <see cref="LatticeMergeMode.OrMap"/> shape), in which case
-    /// the sender ships the source deltas individually rather than
+    /// for shapes that do not support pre-ship delta coalescing, in which
+    /// case the sender ships the source deltas individually rather than
     /// combining them.
     /// </summary>
     public Func<object, object, object>? CombineDeltas { get; }
@@ -189,14 +190,17 @@ public sealed class CrdtShape
     /// pair via
     /// <see cref="LatticeServiceCollectionExtensions.AddOrMapShape{TKey, TValue}(ISiloBuilder, string)"/>.
     /// <para>
-    /// The OR-Map shape leaves <see cref="CombineDeltas"/> unset, so the
-    /// sender-side pre-ship coalescing pass ships OR-Map delta entries
-    /// individually rather than combining them: a correct combine would
-    /// have to recurse into the per-(key, dot) value CRDT through the
-    /// erased <c>TValue</c>, which this type-erased descriptor cannot do
-    /// without re-introducing the generic parameters. Shipping individually
-    /// is loss-free (the receiver folds every shipped delta), it just
-    /// forgoes the OR-Map-specific bandwidth saving.
+    /// The OR-Map shape now folds same-key delta runs the same way the
+    /// closed shapes do: it unions the dot-tagged adds and tombstones and
+    /// lattice-merges any same-dot value snapshots through the value CRDT's
+    /// own <see cref="ICrdt{TSelf}.MergeFrom(TSelf)"/>. Because the concrete
+    /// generic parameters are bound here at construction time, the
+    /// <see cref="CombineDeltas"/> lambda can recurse into <c>TValue</c>'s
+    /// own join, so registered OR-Map trees get the same pre-ship coalescing
+    /// bandwidth saving as the closed primitives. The loss-free ship-
+    /// individually fall-back still applies when a tree's OR-Map shape is
+    /// unregistered (the registry returns no descriptor) or an entry carries
+    /// an opaque (null) delta.
     /// </para>
     /// </summary>
     public static CrdtShape ForOrMap<TKey, TValue>()
@@ -214,7 +218,8 @@ public sealed class CrdtShape
             () => new OrMap<TKey, TValue>(),
             state => s.Serialize((OrMap<TKey, TValue>)state),
             delta => d.Serialize((OrMapDelta<TKey, TValue>)delta),
-            combineDeltas: null);
+            combineDeltas: static (a, b) =>
+                CombineOrMapDelta<TKey, TValue>((OrMapDelta<TKey, TValue>)a, (OrMapDelta<TKey, TValue>)b));
     }
 
     // --- Delta-combine helpers (pre-ship coalescing) ----------------------------
@@ -272,6 +277,116 @@ public sealed class CrdtShape
         Inserts = UnionRgaInserts(a.Inserts, b.Inserts),
         Tombstones = UnionOrSetDots(a.Tombstones, b.Tombstones),
     };
+
+    private static OrMapDelta<TKey, TValue> CombineOrMapDelta<TKey, TValue>(
+        OrMapDelta<TKey, TValue> a, OrMapDelta<TKey, TValue> b)
+        where TKey : notnull
+        where TValue : ICrdt<TValue>, new()
+    {
+        // Mirror OrMap.MergeFrom on the delta shape: union the dot-tagged
+        // adds keyed by the (key, replicaId, counter) dot, lattice-merging
+        // same-dot value snapshots through the value CRDT's own join, then
+        // union the tombstones deduped by the same dot. The value join is
+        // commutative, associative, and idempotent, and dot union is set
+        // union, so the combined delta's receiver-side apply effect equals
+        // applying the two source deltas in sequence.
+        var addsByDot = new Dictionary<(TKey Key, string ReplicaId, long Counter), OrMapDeltaEntry<TKey, TValue>>();
+        var addsOrder = new List<(TKey Key, string ReplicaId, long Counter)>();
+        AppendOrMapAdds(a.Adds, addsByDot, addsOrder);
+        AppendOrMapAdds(b.Adds, addsByDot, addsOrder);
+
+        var adds = addsOrder.Count == 0
+            ? System.Array.Empty<OrMapDeltaEntry<TKey, TValue>>()
+            : BuildOrderedAdds(addsByDot, addsOrder);
+
+        var tombstoneSeen = new HashSet<(TKey Key, string ReplicaId, long Counter)>();
+        var tombstones = new List<OrMapDeltaTombstone<TKey>>(
+            (a.Tombstones?.Count ?? 0) + (b.Tombstones?.Count ?? 0));
+        AppendOrMapTombstones(a.Tombstones, tombstones, tombstoneSeen);
+        AppendOrMapTombstones(b.Tombstones, tombstones, tombstoneSeen);
+
+        return new OrMapDelta<TKey, TValue>
+        {
+            Adds = adds,
+            Tombstones = tombstones.Count == 0
+                ? System.Array.Empty<OrMapDeltaTombstone<TKey>>()
+                : tombstones,
+        };
+    }
+
+    private static void AppendOrMapAdds<TKey, TValue>(
+        IReadOnlyList<OrMapDeltaEntry<TKey, TValue>>? source,
+        Dictionary<(TKey Key, string ReplicaId, long Counter), OrMapDeltaEntry<TKey, TValue>> byDot,
+        List<(TKey Key, string ReplicaId, long Counter)> order)
+        where TKey : notnull
+        where TValue : ICrdt<TValue>, new()
+    {
+        if (source is null)
+        {
+            return;
+        }
+        foreach (var entry in source)
+        {
+            var replicaId = entry.ReplicaId ?? string.Empty;
+            var dot = (entry.Key, replicaId, entry.Counter);
+            if (byDot.TryGetValue(dot, out var stored))
+            {
+                // Same dot from both sides: lattice-merge the incoming
+                // value into the stored clone. The clone is a reference,
+                // so mutating it in place is sufficient - the dictionary
+                // already holds the merged entry.
+                stored.Value.MergeFrom(entry.Value);
+            }
+            else
+            {
+                // First occurrence: store a CLONED value so a later same-
+                // dot merge never mutates the source delta's snapshot.
+                var clone = new TValue();
+                clone.MergeFrom(entry.Value);
+                byDot[dot] = new OrMapDeltaEntry<TKey, TValue>
+                {
+                    Key = entry.Key,
+                    ReplicaId = replicaId,
+                    Counter = entry.Counter,
+                    Value = clone,
+                };
+                order.Add(dot);
+            }
+        }
+    }
+
+    private static OrMapDeltaEntry<TKey, TValue>[] BuildOrderedAdds<TKey, TValue>(
+        Dictionary<(TKey Key, string ReplicaId, long Counter), OrMapDeltaEntry<TKey, TValue>> byDot,
+        List<(TKey Key, string ReplicaId, long Counter)> order)
+        where TKey : notnull
+        where TValue : ICrdt<TValue>, new()
+    {
+        var adds = new OrMapDeltaEntry<TKey, TValue>[order.Count];
+        for (var i = 0; i < order.Count; i++)
+        {
+            adds[i] = byDot[order[i]];
+        }
+        return adds;
+    }
+
+    private static void AppendOrMapTombstones<TKey>(
+        IReadOnlyList<OrMapDeltaTombstone<TKey>>? source,
+        List<OrMapDeltaTombstone<TKey>> result,
+        HashSet<(TKey Key, string ReplicaId, long Counter)> seen)
+        where TKey : notnull
+    {
+        if (source is null)
+        {
+            return;
+        }
+        foreach (var tombstone in source)
+        {
+            if (seen.Add((tombstone.Key, tombstone.ReplicaId ?? string.Empty, tombstone.Counter)))
+            {
+                result.Add(tombstone);
+            }
+        }
+    }
 
     private static MvRegister ToMvRegister(MvRegisterDelta delta)
     {
