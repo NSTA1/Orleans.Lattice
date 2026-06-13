@@ -329,7 +329,8 @@ public partial class ReplicationShipperGrainTests
             string treeName = Tree,
             string peerClusterId = Peer,
             IGrainFactory? grainFactory = null,
-            ILatticeMergeModeResolver? modeResolver = null)
+            ILatticeMergeModeResolver? modeResolver = null,
+            IReplicationDigestProbeTransport? digestProbeTransport = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{treeName}/{peerClusterId}"));
@@ -353,7 +354,7 @@ public partial class ReplicationShipperGrainTests
             monitor, transport, encoder, walRecordEncoder, registry, factory, fakeState,
             new ReplicationPeerStats(),
             modeResolver ?? Substitute.For<ILatticeMergeModeResolver>(),
-            new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
+            new WireVersionNegotiationState(), digestProbeTransport ?? new NoOpReplicationDigestProbeTransport());
         grain.InitializeForTesting(treeName, peerClusterId);
         return (grain, fakeState, feed, transport, encoder, registry, monitor.CurrentValue);
     }
@@ -1455,6 +1456,260 @@ public partial class ReplicationShipperGrainTests
             // bytes_behind is the encoded payload size - TestEncoder
             // writes 3 bytes per encode so bytes_behind is at least 1.
             Assert.That(snap.BytesBehind, Is.GreaterThan(0L));
+        });
+    }
+
+    // --- Content-hash payload elision on the bounded-pipelining path ---
+    //
+    // Elision now composes with sender-side multi-batch pipelining: the
+    // per-batch manifest exchange runs inline in the drain loop, so a
+    // configured ShipMaxInFlight > 1 window no longer collapses to one
+    // when elision is enabled. A fully-elided batch advances the durable
+    // cursor strictly in FIFO order via a synthetic completed ack without
+    // shipping an empty envelope or polluting the adaptive controller.
+
+    /// <summary>
+    /// In-memory <see cref="IReplicationDigestProbeTransport"/> double that
+    /// answers the content-hash manifest exchange from a caller-supplied
+    /// responder and records every exchange call so tests can assert the
+    /// default-off path performs no exchange.
+    /// </summary>
+    private sealed class FakeManifestExchangeTransport(
+        Func<ContentManifestRequest, ContentManifestResponse> responder) : IReplicationDigestProbeTransport
+    {
+        public int ExchangeCalls { get; private set; }
+
+        public Task<DigestProbeResponse> ProbeDigestAsync(
+            string targetClusterId, DigestProbeRequest request, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ContentManifestResponse> ExchangeContentManifestAsync(
+            string targetClusterId, ContentManifestRequest request, CancellationToken cancellationToken)
+        {
+            ExchangeCalls++;
+            return Task.FromResult(responder(request));
+        }
+    }
+
+    /// <summary>
+    /// Builds a manifest-exchange double whose receiver already holds (and
+    /// therefore elides) every manifest entry whose key is in
+    /// <paramref name="heldKeys"/>, and reports every other manifested entry
+    /// as missing (shipped verbatim).
+    /// </summary>
+    private static FakeManifestExchangeTransport ManifestTransportHolding(params string[] heldKeys)
+    {
+        var held = new HashSet<string>(heldKeys, StringComparer.Ordinal);
+        return new FakeManifestExchangeTransport(request =>
+        {
+            var missing = new List<int>();
+            foreach (var entry in request.Entries)
+            {
+                if (!held.Contains(entry.Key))
+                {
+                    missing.Add(entry.EntryIndex);
+                }
+            }
+            return new ContentManifestResponse
+            {
+                ExchangeSupported = true,
+                MissingEntryIndices = missing,
+                AdvancedHlc = HybridLogicalClock.Zero,
+            };
+        });
+    }
+
+    private static LatticeReplicationOptions ElisionPipelinedOptions(
+        int shipMaxInFlight = 4,
+        int shipBatchSize = 2,
+        bool elisionEnabled = true) =>
+        new()
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ReplogPartitions = 1,
+            ShipBatchSize = shipBatchSize,
+            ShipMaxInFlight = shipMaxInFlight,
+            ContentHashDedupEnabled = elisionEnabled,
+            ContentHashDedupElisionEnabled = elisionEnabled,
+        };
+
+    private static int SendAsyncCallCount(IReplicationTransport transport) =>
+        transport.ReceivedCalls()
+            .Count(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync));
+
+    [Test]
+    public async Task PumpPipelinedOnceAsync_with_elision_enabled_keeps_window_above_one()
+    {
+        // Core behaviour: with elision enabled and ShipMaxInFlight > 1
+        // the dispatcher no longer collapses the window to one, so the
+        // pipelined path drains and ships several batches within a single
+        // pump tick. The default no-op digest transport keeps elision inert
+        // (the peer cannot exchange), so every batch ships verbatim - the
+        // observable signal is the multi-batch in-flight window.
+        var opts = ElisionPipelinedOptions(shipMaxInFlight: 4, shipBatchSize: 2);
+        var (grain, _, feed, transport, _, _, _) = Create(opts);
+        for (var i = 1; i <= 8; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", ticks: i));
+        }
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        // 8 entries / ShipBatchSize 2 = 4 batches in one pipelined tick. A
+        // collapsed (serial) window would ship exactly one batch per tick.
+        Assert.That(SendAsyncCallCount(transport), Is.EqualTo(4),
+            "elision must no longer collapse the pipelining window to one");
+    }
+
+    [Test]
+    public async Task PumpPipelinedOnceAsync_partial_elision_ships_survivors_and_advances_cursor_past_full_range()
+    {
+        var opts = ElisionPipelinedOptions(shipMaxInFlight: 4, shipBatchSize: 10);
+        var fake = ManifestTransportHolding("k2", "k3");
+        var (grain, state, feed, transport, _, _, _) = Create(opts, digestProbeTransport: fake);
+        using var elided = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipElidedPayloadsName);
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k2", new byte[] { 2 }, ticks: 2));
+        feed.Append(MakeEntryWithValue("k3", new byte[] { 3 }, ticks: 3));
+        feed.Append(MakeEntryWithValue("k4", new byte[] { 4 }, ticks: 4));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // k2 / k3 elided; k1 / k4 survive and ship in one envelope.
+            Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2));
+            Assert.That(elided.Measurements.Sum(m => m.Value), Is.EqualTo(2));
+            // Cursor advances past the FULL drained range (tick 4), not just
+            // the survivors, because the advance inputs were captured
+            // pre-elision.
+            Assert.That(state.State.Cursor,
+                Is.EqualTo(new HybridLogicalClock { WallClockTicks = 4, Counter = 0 }));
+        });
+    }
+
+    [Test]
+    public async Task PumpPipelinedOnceAsync_fully_elided_mid_window_batch_advances_cursor_without_empty_envelope()
+    {
+        // ShipBatchSize 1 makes every entry its own batch: k1 (shipped),
+        // k2 (fully elided), k3 (shipped). The elided batch must advance the
+        // cursor in FIFO order without putting an empty envelope on the wire.
+        var opts = ElisionPipelinedOptions(shipMaxInFlight: 4, shipBatchSize: 1);
+        var fake = ManifestTransportHolding("k2");
+        var (grain, state, feed, transport, _, _, _) = Create(opts, digestProbeTransport: fake);
+        var captured = new List<int>();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var batch = call.Arg<ReplicationBatch>();
+                captured.Add(batch.EncodedEnvelope!.Value.EncodedEntries.Length);
+                return new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
+            });
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k2", new byte[] { 2 }, ticks: 2));
+        feed.Append(MakeEntryWithValue("k3", new byte[] { 3 }, ticks: 3));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // Only the two real batches (k1, k3) reach the transport; the
+            // fully-elided k2 never ships an envelope.
+            Assert.That(captured, Has.Count.EqualTo(2));
+            Assert.That(captured, Has.All.EqualTo(1),
+                "no empty envelope may be shipped for a fully-elided batch");
+            // Cursor advanced through every batch in FIFO order, including
+            // the elided one sitting between two real batches.
+            Assert.That(state.State.Cursor,
+                Is.EqualTo(new HybridLogicalClock { WallClockTicks = 3, Counter = 0 }));
+        });
+    }
+
+    [Test]
+    public async Task PumpPipelinedOnceAsync_fully_elided_batch_does_not_record_ship_ack_latency()
+    {
+        // A tick whose only work is a fully-elided batch must advance the
+        // cursor but must NOT feed the adaptive controller: the synthetic
+        // zero-latency ack would otherwise pollute the ship.ack_latency
+        // sample stream.
+        var opts = ElisionPipelinedOptions(shipMaxInFlight: 4, shipBatchSize: 10);
+        var fake = ManifestTransportHolding("k1", "k2");
+        var (grain, state, feed, transport, _, _, _) = Create(opts, digestProbeTransport: fake);
+        using var ackLatency = new MeterCollector<double>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipAckLatencyName);
+        using var elided = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ShipElidedPayloadsName);
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k2", new byte[] { 2 }, ticks: 2));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // No envelope shipped; the whole batch was elided.
+            Assert.That(SendAsyncCallCount(transport), Is.EqualTo(0));
+            Assert.That(elided.Measurements.Sum(m => m.Value), Is.EqualTo(2));
+            // The synthetic ack never reaches OnShipAckObserved, so no
+            // ship.ack_latency sample is recorded for the elided tick.
+            Assert.That(ackLatency.Measurements, Is.Empty);
+            // Progress was still made: the cursor advanced past the range.
+            Assert.That(state.State.Cursor,
+                Is.EqualTo(new HybridLogicalClock { WallClockTicks = 2, Counter = 0 }));
+        });
+    }
+
+    [Test]
+    public async Task PumpPipelinedOnceAsync_with_elision_disabled_performs_no_manifest_exchange()
+    {
+        // Default-off: the pipelined path must be byte-identical to today and
+        // never call the manifest exchange when elision is disabled.
+        var opts = ElisionPipelinedOptions(shipMaxInFlight: 4, shipBatchSize: 2, elisionEnabled: false);
+        var fake = ManifestTransportHolding("k1", "k2", "k3", "k4");
+        var (grain, _, feed, transport, _, _, _) = Create(opts, digestProbeTransport: fake);
+        for (var i = 1; i <= 4; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", ticks: i));
+        }
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fake.ExchangeCalls, Is.EqualTo(0),
+                "elision disabled must not trigger a manifest exchange");
+            // 4 entries / ShipBatchSize 2 = 2 verbatim batches shipped.
+            Assert.That(SendAsyncCallCount(transport), Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task PumpPipelinedOnceAsync_earlier_real_batch_failure_blocks_later_elided_cursor_advance()
+    {
+        // FIFO: an earlier real batch failing must leave a later (already
+        // enqueued) elided batch's cursor un-advanced - the elided batch's
+        // synthetic ack is dequeued only after every lower-HLC batch acked.
+        var opts = ElisionPipelinedOptions(shipMaxInFlight: 4, shipBatchSize: 1);
+        var fake = ManifestTransportHolding("k2");
+        var (grain, state, feed, transport, _, _, _) = Create(opts, digestProbeTransport: fake);
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });
+        feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
+        feed.Append(MakeEntryWithValue("k2", new byte[] { 2 }, ticks: 2));
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // The earlier real batch (k1) was rejected, so the window stops
+            // advancing cursors; the later elided batch (k2) never advances
+            // past the failure.
+            Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(state.State.ConsecutiveFailures, Is.GreaterThan(0));
         });
     }
 }
