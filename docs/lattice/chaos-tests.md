@@ -25,7 +25,7 @@ idempotent bulk graft) under random storage-write faults. The
 replication suite extends those guarantees to the production shipper,
 WAL trim, per-peer liveness, tombstone-reap filtering, and the gRPC
 transport; the Azure Table WAL suite pins append-batch atomicity and
-offset monotonicity against a real Azurite-backed provider.
+offset monotonicity against the local Azurite emulator.
 
 Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to itself, and is tagged `[Category("Chaos")]` so the iterative-development test filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them.
 
@@ -53,8 +53,9 @@ Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to 
 The replication package ships its own chaos suites - cross-cluster convergence
 and atomic visibility (`test/lattice.replication/Chaos/`), the gRPC transport
 suite (`test/lattice.replication.grpc/Chaos/`), and the Azure Table WAL suite
-(`test/lattice.storage.azuretable/Chaos/`). They run end to end against real
-replication silos and are documented in
+(`test/lattice.storage.azuretable/Chaos/`). They drive the real replication
+pipeline using in-process test clusters, a simulated delivery pump, an in-memory
+test server, and the Azurite emulator, and are documented in
 [the replication chaos tests](../lattice.replication/chaos-tests.md).
 
 ## The workload
@@ -668,7 +669,7 @@ in [shard-splitting.md](shard-splitting.md),
 [state-primitives.md](state-primitives.md),
 [../lattice.replication/README.md](../lattice.replication/README.md),
 [../lattice.replication/transport.md](../lattice.replication/transport.md),
-[../lattice.replication/grpc-push-transport.md](../lattice.replication/grpc-push-transport.md),
+[../lattice.replication.grpc/README.md](../lattice.replication.grpc/README.md),
 and the architecture notes:
 
 The table below covers the four full-workload topology-mutation chaos fixtures (Tests 1-4). The atomic-write reader-isolation (Test 5), atomic-visibility-across-topology siblings (Test 6), digest-determinism (Test 7), cross-cluster atomic-visibility (Test 8), per-mode convergence chaos (Test 9), multi-site smoke (Test 10), and the per-test invariant fixtures (range delete, CAS, scan cancel, multi-silo restart, WAL trim, liveness + inbound stats, OR-Map convergence, compaction + shipping, gRPC transport, Azure Table WAL) target orthogonal invariants and are documented in their own grids below.
@@ -787,9 +788,11 @@ transport suite, and the Azure Table WAL suite) follow the same general
 shape - short chaos window, bounded drain, single-tree or single-key
 universe - and add per-suite cost in proportion to the workload described
 in their "Purpose" column above. The cross-cluster, gRPC, and Azure Table
-suites all run end-to-end against real `AddLatticeReplication` (and, where
-applicable, real `AddLatticeReplicationGrpc` / `AddLatticeAzureTableWal`)
-silos rather than test-double transports.
+suites exercise the real `AddLatticeReplication` capture/ship/apply code paths
+(and the real gRPC transport service and Azure Table provider where applicable)
+rather than test doubles of that logic, but they run in-process: in-process test
+clusters with a simulated delivery pump, an in-memory test server, and the
+Azurite emulator stand in for networked silos and a real cloud storage account.
 
 ## See also
 

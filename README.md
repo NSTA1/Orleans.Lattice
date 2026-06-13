@@ -124,11 +124,18 @@ For feature tracking (the "what's planned / what shipped"):
 - [Core Feature Index](docs/lattice/features.md) - grouped, issue-linked index of the core `Orleans.Lattice` package's tracked features, fixes, and gaps.
 - [Replication Feature Index](docs/lattice.replication/features.md) - grouped, issue-linked index of the `Orleans.Lattice.Replication` package's tracked features, fixes, and gaps.
 
-For replication operations (the "how do I run it"):
-
-- [Automatic Drift Remediation](docs/lattice.replication/automatic-drift-remediation.md) - operator playbook for the opt-in anti-entropy stack: default-off posture, end-to-end opt-in configuration, the consolidated metrics surface, and a failure-mode matrix.
-
 Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files. The feature-index pages above summarize and link to those issues.
+
+## Child Packages
+
+Each optional add-on ships as its own NuGet package with its own documentation set, anchored by a package README that mirrors this one (overview, features, quick start, then API / configuration / architecture references):
+
+| Package | Description | Docs |
+|---|---|---|
+| `Orleans.Lattice.Replication` | Cross-cluster active-active replication: producer, WAL, shipper, apply, bootstrap, and anti-entropy. | [README](docs/lattice.replication/README.md) |
+| `Orleans.Lattice.Replication.Grpc` | The canonical gRPC push-transport binding for replication. | [README](docs/lattice.replication.grpc/README.md) |
+| `Orleans.Lattice.Storage.AzureTable` | The durable Azure Table Storage write-ahead-log backend. | [README](docs/lattice.storage.azuretable/README.md) |
+| `Orleans.Lattice.Dashboards` | Bundled Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. | [README](docs/lattice.dashboards/README.md) |
 
 ## Releases
 

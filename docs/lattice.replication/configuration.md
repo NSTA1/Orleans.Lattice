@@ -1,6 +1,6 @@
 # Configuration
 
-This document covers the public configuration surface for `Orleans.Lattice.Replication`, the gRPC replication transport, and the Azure Table WAL backend. Compression knobs that are shared with the core package are cross-referenced to [core compression](../lattice/compression.md).
+This document covers the public configuration surface for `Orleans.Lattice.Replication`. The gRPC transport and the Azure Table WAL backend are separate packages and are configured in their own docs, cross-linked at the end of this page. Compression knobs that are shared with the core package are cross-referenced to [core compression](../lattice/compression.md).
 
 ## Registering replication
 
@@ -429,49 +429,8 @@ Time before the remediation circuit may reset after failures.
 
 ## gRPC replication transport options
 
-Register the gRPC binding with `AddLatticeReplicationGrpc` and map endpoints with `MapLatticeReplicationGrpc`. See [gRPC Push Transport](grpc-push-transport.md) and [Transport Security](transport-security.md).
-
-| Option | Type | Default |
-|---|---|---|
-| `Peers` | `IDictionary<string, Uri>` | empty ordinal dictionary |
-| `AllowPlaintextEndpoints` | `bool` | `false` |
-| `ConfigureChannel` | `Action<string, GrpcChannelOptions>?` | `null` |
-| `LocalClusterId` | `string?` | `null` |
-
-`Peers` maps peer cluster id to endpoint. `AllowPlaintextEndpoints` permits `http://` endpoints for development and tests; leave it `false` in production. `ConfigureChannel` customizes each peer's `GrpcChannelOptions`. `LocalClusterId` overrides the outbound origin header; when `null`, the binding uses `LatticeReplicationOptions.ClusterId`.
+The gRPC transport ships as the separate `Orleans.Lattice.Replication.Grpc` package. Register it with `AddLatticeReplicationGrpc`, map endpoints with `MapLatticeReplicationGrpc`, and configure peer endpoints and channels through `LatticeReplicationGrpcOptions`. Every option and operational note lives in [Orleans.Lattice.Replication.Grpc configuration](../lattice.replication.grpc/configuration.md); see also [Transport Security](transport-security.md).
 
 ## Azure Table WAL storage options
 
-Register with `AddAzureTableWalStorage`. This backend is the durable WAL option for production replication deployments. For the core WAL provider model, see [WAL Storage Providers](../lattice/wal-storage-providers.md); for replication WAL behaviour, see [WAL](wal.md).
-
-| Option | Type | Default |
-|---|---|---|
-| `ConnectionString` | `string?` | `null` |
-| `ServiceUri` | `Uri?` | `null` |
-| `TokenCredential` | `TokenCredential?` | `null` |
-| `SharedKeyCredential` | `TableSharedKeyCredential?` | `null` |
-| `ServiceClient` | `TableServiceClient?` | `null` |
-| `TableName` | `string` | `"OrleansLatticeWal"` |
-| `ConfigureClientOptions` | `Action<TableClientOptions>?` | `null` |
-| `RetryMaxAttempts` | `int?` | `null` |
-| `RetryDelay` | `TimeSpan?` | `null` |
-| `RetryMaxDelay` | `TimeSpan?` | `null` |
-| `RetryNetworkTimeout` | `TimeSpan?` | `null` |
-| `RetryMode` | `RetryMode?` | `null` |
-| `PipelinePhaseTwoCommits` | `bool` | `true` |
-| `EliminateCandidateRowOnHotPath` | `bool` | `true` |
-| `PipelinedPhaseTwoFaultHandler` | `Action<Exception>?` | `null` |
-| `PhaseTwoCoalescingWindow` | `TimeSpan` | 5 ms |
-| `PhaseTwoCommitTimeout` | `TimeSpan?` | 3 seconds |
-| `HonorSaturationSignal` | `bool` | `true` |
-| `SaturationShortCircuitCooldown` | `TimeSpan` | 2 seconds |
-| `Compression` | `LatticeCompression` | `Zstd` |
-| `CompressionMinPayloadBytes` | `int` | 256 |
-
-Exactly one authentication mode must be configured: connection string, service URI plus token credential, service URI plus shared key credential, or a pre-built `TableServiceClient`. `TableName` must be non-empty. Retry options are passed into Azure Tables client options when set; `ConfigureClientOptions` can apply any additional client customization.
-
-`PipelinePhaseTwoCommits` and `PhaseTwoCoalescingWindow` control the provider's two-phase commit completion path. `EliminateCandidateRowOnHotPath` removes extra candidate-row work from the hot path where supported. `PipelinedPhaseTwoFaultHandler` observes asynchronous phase-two faults. `PhaseTwoCommitTimeout` bounds phase-two work.
-
-`HonorSaturationSignal` lets the provider short-circuit Azure SDK retries while the local WAL saturation signal says the tree is saturated. `SaturationShortCircuitCooldown` controls how long that short-circuit remains active after a saturation observation.
-
-`Compression` and `CompressionMinPayloadBytes` compress stored WAL payloads. Stored rows are self-describing, so changing compression affects newly written rows while existing rows continue to decode with their recorded tags.
+The durable Azure Table WAL backend ships as the separate `Orleans.Lattice.Storage.AzureTable` package. Register it with `AddAzureTableWalStorage` and configure it through `AzureTableWalStorageOptions` (authentication, table, retry, pipelining, saturation, and compression). Every option and tuning note lives in [Orleans.Lattice.Storage.AzureTable configuration](../lattice.storage.azuretable/configuration.md). For the core WAL provider model, see [WAL Storage Providers](../lattice/wal-storage-providers.md); for replication WAL behaviour, see [WAL](wal.md).

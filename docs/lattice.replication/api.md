@@ -40,18 +40,18 @@ siloBuilder.Services.AddLatticeReplicationGrpc(grpc =>
 });
 ```
 
-On the receiving HTTP pipeline, map the gRPC endpoints with `MapLatticeReplicationGrpc`. See [gRPC Push Transport](grpc-push-transport.md) and [Transport Security](transport-security.md).
+On the receiving HTTP pipeline, map the gRPC endpoints with `MapLatticeReplicationGrpc`. The gRPC binding is a separate package with its own docs - see [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md) and [Transport Security](transport-security.md).
 
 ## Registration and DI
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeReplicationServiceCollectionExtensions` | static class | Registers replication services on an Orleans silo. | `AddLatticeReplication`, `ConfigureLatticeReplication`, `AddLatticeAutoSharedDictionary`, `AddLatticeReplicationHealthCheck`, `AddWalSaturationReceiverFlowControl` |
-| `LatticeReplicationGrpcServiceCollectionExtensions` | static class | Registers and maps the gRPC push and snapshot transport. | `AddLatticeReplicationGrpc`, `MapLatticeReplicationGrpc` |
-| `LatticeAzureTableServiceCollectionExtensions` | static class | Registers the Azure Table WAL storage provider. | `AddAzureTableWalStorage`, `DefaultCompressionLevel` |
 | `LatticeReplicationSecurityServiceCollectionExtensions` | static class | Registers shared-secret sources and security options. | `AddLatticeReplicationSecrets`, `AddLatticeReplicationSecretsFromConfiguration`, `ConfigureLatticeReplicationSecurity` |
 
 `AddLatticeReplication` wires the replication pipeline and default no-op transport. A production deployment replaces the transport by adding the gRPC binding or a custom `IReplicationTransport`. `ConfigureLatticeReplication` follows .NET named options: the overload without a tree name sets global defaults; the `treeName` overload overrides a single tree.
+
+The gRPC transport and the Azure Table WAL backend ship as separate packages with their own API references - see [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/api.md) (`AddLatticeReplicationGrpc`, `MapLatticeReplicationGrpc`, `LatticeReplicationGrpcOptions`) and [Orleans.Lattice.Storage.AzureTable](../lattice.storage.azuretable/api.md) (`AddAzureTableWalStorage`, `AzureTableWalStorageProvider`, `AzureTableWalStorageOptions`).
 
 ## Replication modes and configuration types
 
@@ -78,7 +78,7 @@ The feed is for locally-authored writes. Entries installed by inbound apply are 
 
 ## Transport and wire envelope
 
-See [Transport](transport.md), [gRPC Push Transport](grpc-push-transport.md), and [Wire Format](wire-format.md).
+See [Transport](transport.md), [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md), and [Wire Format](wire-format.md).
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
@@ -88,9 +88,8 @@ See [Transport](transport.md), [gRPC Push Transport](grpc-push-transport.md), an
 | `ReplicationBatchEncodedEnvelope` | readonly record struct | Pre-encoded envelope used by transport implementations. | Encoded header and payload slots. |
 | `ReplicationAck` | readonly record struct | Receiver acknowledgement and hints. | `Accepted`, `HighestAppliedHlc`, flow-control hints, dictionary and wire-version hints. |
 | `EncodedBatchHeader` | readonly record struct | Fixed wire framing header. | Wire-version, compression, dictionary, and length fields. |
-| `LatticeReplicationGrpcOptions` | sealed class | gRPC peer endpoint and channel options. | `Peers`, `AllowPlaintextEndpoints`, `ConfigureChannel`, `LocalClusterId` |
 
-A transport must be idempotent at the batch boundary: sender retries can redeliver a batch, and the receiver deduplicates by origin and HLC.
+A transport must be idempotent at the batch boundary: sender retries can redeliver a batch, and the receiver deduplicates by origin and HLC. The gRPC binding that implements this seam (`LatticeReplicationGrpcOptions` and the registration helpers) is documented in [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/api.md).
 
 ## Replication apply
 
@@ -268,13 +267,4 @@ The gRPC binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is en
 
 ## Azure Table WAL durability
 
-See [WAL](wal.md) and [core WAL Storage Providers](../lattice/wal-storage-providers.md).
-
-| Type | Kind | Purpose | Key public members |
-|---|---|---|---|
-| `AzureTableWalStorageProvider` | sealed partial class | Durable Azure Table implementation of the WAL provider. | Implements the public WAL provider contract and `IAsyncDisposable` |
-| `AzureTableWalStorageOptions` | sealed class | Azure Table WAL backend options. | Authentication, table, retry, pipelining, saturation, and compression properties. See [Configuration](configuration.md#azure-table-wal-storage-options). |
-| `RetryAttemptTrackingPolicy` | sealed class | Azure SDK pipeline policy for retry telemetry. | Pipeline policy override members |
-| `SaturationAwareRetryPolicy` | sealed class | Azure SDK pipeline policy that short-circuits while WAL saturation is active. | Pipeline policy override members |
-
-Use `AddAzureTableWalStorage` when the replication WAL must survive silo restarts and support production retention, bootstrap, and replay windows.
+The durable Azure Table WAL backend ships as the separate `Orleans.Lattice.Storage.AzureTable` package. Use `AddAzureTableWalStorage` when the replication WAL must survive silo restarts and support production retention, bootstrap, and replay windows. Its public surface (`AzureTableWalStorageProvider`, `AzureTableWalStorageOptions`, and the retry policies) and configuration are documented in [Orleans.Lattice.Storage.AzureTable](../lattice.storage.azuretable/README.md) - see its [API Reference](../lattice.storage.azuretable/api.md) and [Configuration](../lattice.storage.azuretable/configuration.md). For the core WAL provider seam, see [WAL](wal.md) and [core WAL Storage Providers](../lattice/wal-storage-providers.md).

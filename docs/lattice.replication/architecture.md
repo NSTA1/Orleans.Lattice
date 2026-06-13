@@ -67,7 +67,7 @@ flowchart LR
    batches between clusters. A long-lived gRPC streaming binding is the
    canonical implementation; in-process and custom transports plug into the same
    contract. See [`transport.md`](transport.md) and
-   [`grpc-push-transport.md`](grpc-push-transport.md). The receiver stamps
+   [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md). The receiver stamps
    flow-control hints onto every acknowledgement so a struggling receiver can
    throttle in-band - see [`receiver-flow-control.md`](receiver-flow-control.md).
 

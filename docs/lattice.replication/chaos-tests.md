@@ -1,8 +1,8 @@
 # Chaos tests
 
-The replication subsystem ships its own chaos-test suites that hammer a live
-multi-cluster (or downstream-binding) deployment and assert the cross-cluster
-correctness guarantees end to end. They are the replication-side counterpart to
+The replication subsystem ships its own chaos-test suites that exercise
+multi-cluster (and downstream-binding) behaviour and assert the cross-cluster
+correctness guarantees. They are the replication-side counterpart to
 the core library's [chaos tests](../lattice/chaos-tests.md): where the core
 suites prove single-cluster consistency and convergence under topology churn,
 these prove that mutations survive partitions, reordering, and faults on their
@@ -15,9 +15,10 @@ gates but is excluded from the fast iterative loop:
 dotnet test --filter "TestCategory!=Chaos"
 ```
 
-All of these suites run end to end against real `AddLatticeReplication` silos
-(and, where applicable, a real gRPC binding or a real Azure Table-backed WAL),
-not test-double transports.
+These suites exercise the real `AddLatticeReplication` capture, ship, and apply
+code paths rather than test doubles of that logic, but they run in-process:
+in-process test clusters wired with a simulated, fault-injectable inter-site
+delivery layer stand in for networked silos.
 
 ## Cross-cluster suite (`test/lattice.replication/Chaos/`)
 
@@ -58,21 +59,22 @@ compaction + shipping) follow the same general shape - short chaos window,
 bounded drain, single-tree or single-key universe - and add per-suite cost in
 proportion to the workload in their row above.
 
-## gRPC transport suite (`test/lattice.replication.grpc/Chaos/`)
+## Downstream binding chaos suites
 
-Exercises the gRPC replication transport under transient channel faults: server
-restart mid-shipment, idle-channel reconnection, and slow-receiver back-pressure
-all converge with no batch loss and no duplicate apply. Runs against a real
-`AddLatticeReplicationGrpc` binding. See
-[gRPC Push Transport](grpc-push-transport.md).
+The gRPC transport and the Azure Table WAL backend ship their own chaos suites in
+their own packages, each driving the real registration and pipeline code paths
+in-process:
 
-## Azure Table WAL suite (`test/lattice.storage.azuretable/Chaos/`)
-
-Drives the Azure Table-backed WAL provider under concurrent append + read load
-with transient storage faults, asserting append-batch atomicity, monotone offset
-assignment, and trim correctness. It runs against a real Azurite emulator and is
-skipped at run time when the local emulator probe cannot reach it. See
-[WAL Storage Providers](../lattice/wal-storage-providers.md).
+- The gRPC transport chaos suite exercises the transport under transient channel
+  faults - mid-shipment failures, idle-channel reconnection, and slow-receiver
+  back-pressure - and converges with no batch loss and no duplicate apply, with
+  the receiver hosted on an in-memory ASP.NET Core test server. See
+  [Orleans.Lattice.Replication.Grpc chaos tests](../lattice.replication.grpc/chaos-tests.md).
+- The Azure Table WAL chaos suite drives the durable provider under concurrent
+  append and read load against the local Azurite emulator, asserting append-batch
+  atomicity, monotone offset assignment, and trim correctness, and is skipped when
+  the emulator is unreachable. See
+  [Orleans.Lattice.Storage.AzureTable chaos tests](../lattice.storage.azuretable/chaos-tests.md).
 
 ## See also
 

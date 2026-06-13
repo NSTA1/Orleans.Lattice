@@ -48,7 +48,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Auto-bootstrap on fall-off-log** | Peers whose cursor falls behind the retained WAL are re-seeded from a fresh snapshot automatically - no operator intervention. | [Auto-Bootstrap](auto-bootstrap.md) |
 | **Causal+ ordering** | A receiver never observes a write before its causal dependencies - point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards all preserve causal order. | [WAL](wal.md) |
 | **Dead-letter queue** | Poison entries - schema skew, oversized values, corrupt HLC - are quarantined per tree after a configurable retry budget; replication continues past them. | [Dead-Letter Queue](dead-letter-queue.md) |
-| **gRPC push transport** | Long-lived gRPC streaming sender / receiver pair. Push latency is sub-second, well below reminder-cadence pull. | [gRPC Push Transport](grpc-push-transport.md) |
+| **gRPC push transport** | Long-lived gRPC streaming sender / receiver pair. Push latency is sub-second, well below reminder-cadence pull. | [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md) |
 | **Health check** | ASP.NET Core / Kubernetes `IHealthCheck` reporting `Degraded` when entries-behind, last-contact age, or consecutive-error streak crosses a soft bound, `Unhealthy` when sustained for longer than the configured grace window. | [Health Check](health-check.md) |
 | **Observability** | Per-peer entries-behind, bytes-behind, seconds-behind, consecutive-errors, last-contact metrics on `LatticeReplicationMetrics`. | [Observability](observability.md) |
 | **Origin-stamped HLC** | Every replicated record carries `(originClusterId, hlc)`. Cycles break naturally, transitive topologies preserve causality, and applies are idempotent by identity. | [Replication Apply](replication-apply.md) |
@@ -145,7 +145,7 @@ For internals (the "how"):
 - [Replication Apply](replication-apply.md) - receiver-side applier, per-origin high-water-mark, recent-apply cache, atomic batch buffering.
 - [Replication Drivers](replication-drivers.md) - production drivers that turn the dormant seams into a running pipeline.
 - [Transport](transport.md) - `IReplicationTransport` seam, batch shape, acks.
-- [gRPC Push Transport](grpc-push-transport.md) - canonical transport: streaming RPC, channel reuse, custom marshallers.
+- [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md) - canonical transport: streaming RPC, channel reuse, custom marshallers.
 - [Receiver Flow Control](receiver-flow-control.md) - `IReceiverFlowControlPolicy` seam, ack-stamped hints, sender clamping / pause composition.
 - [Wire Format](wire-format.md) - `ReplicationBatchEnvelope`, `IReplicationBatchEncoder`, wire version negotiation.
 - [Deltas](deltas.md) - typed CRDT delta records on the wire.
