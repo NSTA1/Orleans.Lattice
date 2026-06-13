@@ -141,6 +141,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-127](https://github.com/NSTA1/Orleans.Lattice/issues/690) - Receiver WAL-saturation back-pressure feeds sender backoff
 - [R-128](https://github.com/NSTA1/Orleans.Lattice/issues/692) - Sender-side multi-batch pipelining (activate `ShipMaxInFlight`)
 - [R-129](https://github.com/NSTA1/Orleans.Lattice/issues/693) - Wire-version capability negotiation for safe rolling upgrades
+- [R-130](https://github.com/NSTA1/Orleans.Lattice/issues/694) - Pre-ship WAL entry coalescing
 - [R-131](https://github.com/NSTA1/Orleans.Lattice/issues/695) - Parallel receiver apply across independent (tree, origin) runs
 - [R-132](https://github.com/NSTA1/Orleans.Lattice/issues/696) - Shared/trained Zstd dictionary for batch compression
 - [R-044](https://github.com/NSTA1/Orleans.Lattice/issues/461) - Content-hash dedup
