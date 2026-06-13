@@ -334,6 +334,16 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 // minimum-floor guard).
                 SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
                 AdvertisedDictionaryIds = advertisedDictionaryIds,
+                // Advertise the same dictionaries carrying a content
+                // fingerprint per id so a sender that has opted into
+                // fingerprint-gated negotiation only compresses with a
+                // dictionary whose bytes byte-match on both sides; a
+                // same-id/different-bytes peer falls back to dictionary-less
+                // compression instead of hard-failing decode. Null on the
+                // same conditions as the id-only slot above (no catalog or no
+                // dictionaries), so an older sender keeps negotiating on the
+                // id-only slot.
+                AdvertisedDictionaries = CompressionDictionaryAdvertisement.Build(_dictionaryProvider),
             },
         };
     }

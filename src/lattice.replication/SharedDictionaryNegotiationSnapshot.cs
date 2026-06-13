@@ -22,10 +22,17 @@ namespace Orleans.Lattice.Replication;
 /// <see langword="true"/> when the sender fell back to dictionary-less
 /// compression for this peer.
 /// </param>
+/// <param name="FingerprintMismatch">
+/// <see langword="true"/> when the fallback was caused by the peer advertising
+/// the configured dictionary id with a content fingerprint that differs from
+/// the sender's configured dictionary bytes (a same-id/different-bytes
+/// misconfiguration).
+/// </param>
 public readonly record struct SharedDictionaryNegotiationSnapshot(
     string Tree,
     string Peer,
     uint EffectiveDictionaryId,
     bool Matched,
     bool PeerCapabilityKnown,
-    bool FellBack);
+    bool FellBack,
+    bool FingerprintMismatch = false);

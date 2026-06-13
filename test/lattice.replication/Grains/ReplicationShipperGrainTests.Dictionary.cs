@@ -144,12 +144,139 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k2", ticks: 2));
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        // The peer never advertised id 7, so the shipper must keep falling
-        // back to dictionary-less Zstd rather than ship an undecodable frame.
         Assert.Multiple(() =>
         {
             Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.Zstd));
             Assert.That(CapturedHeaderDictionaryId(transport), Is.EqualTo(0u));
+        });
+    }
+
+    private static void AdvertiseDictionaries(
+        IReplicationTransport transport, params AdvertisedCompressionDictionary[] dictionaries)
+    {
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck
+            {
+                Accepted = true,
+                HighestAppliedHlc = HybridLogicalClock.Zero,
+                AdvertisedDictionaries = dictionaries,
+            });
+    }
+
+    private static OperatorSuppliedCompressionDictionaryProvider DictionaryProvider(
+        uint id, byte[] bytes) =>
+        new(new Dictionary<uint, ReadOnlyMemory<byte>> { [id] = bytes });
+
+    [Test]
+    public async Task PumpOnceAsync_stamps_dictionary_id_when_peer_advertises_matching_fingerprint()
+    {
+        var bytes = new byte[] { 9, 8, 7, 6, 5 };
+        var provider = DictionaryProvider(7u, bytes);
+        var fingerprint = CompressionDictionaryFingerprint.Compute(bytes);
+        var (grain, _, feed, transport, _, _, _) = Create(
+            new LatticeReplicationOptions
+            {
+                ClusterId = LocalCluster,
+                ShipCursorWriteInterval = 1,
+                FramingCompression = LatticeCompression.ZstdDictionary,
+                FramingCompressionDictionaryId = 7u,
+                FramingCompressionMinBatchBytes = 0,
+                DictionaryNegotiationEnabled = true,
+            },
+            dictionaryProvider: provider);
+        AdvertiseDictionaries(transport, new AdvertisedCompressionDictionary(7u, fingerprint));
+
+        // Tick 1: capability not yet captured -> conservative fallback.
+        feed.Append(MakeEntry("k1", ticks: 1));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        // Tick 2: the peer advertised id 7 with a matching fingerprint, so the
+        // shipper compresses with the negotiated dictionary.
+        feed.Append(MakeEntry("k2", ticks: 2));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.ZstdDictionary));
+            Assert.That(CapturedHeaderDictionaryId(transport), Is.EqualTo(7u));
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_falls_back_when_peer_advertises_same_id_different_fingerprint()
+    {
+        var bytes = new byte[] { 9, 8, 7, 6, 5 };
+        var provider = DictionaryProvider(7u, bytes);
+        var senderFingerprint = CompressionDictionaryFingerprint.Compute(bytes);
+        var negotiationState = new SharedDictionaryNegotiationState();
+        var (grain, _, feed, transport, _, _, _) = Create(
+            new LatticeReplicationOptions
+            {
+                ClusterId = LocalCluster,
+                ShipCursorWriteInterval = 1,
+                FramingCompression = LatticeCompression.ZstdDictionary,
+                FramingCompressionDictionaryId = 7u,
+                FramingCompressionMinBatchBytes = 0,
+                DictionaryNegotiationEnabled = true,
+            },
+            dictionaryNegotiationState: negotiationState,
+            dictionaryProvider: provider);
+        // The peer maps id 7 to *different* bytes (a different fingerprint):
+        // the guaranteed collision when two clusters each auto-train id 7.
+        AdvertiseDictionaries(transport,
+            new AdvertisedCompressionDictionary(7u, senderFingerprint ^ 0xFFFFFFFFFFFFFFFFUL));
+
+        feed.Append(MakeEntry("k1", ticks: 1));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        feed.Append(MakeEntry("k2", ticks: 2));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        // The fingerprints disagree, so the shipper must fall back to
+        // dictionary-less Zstd rather than ship a frame the peer would
+        // hard-fail to decode, and surface the distinct mismatch signal.
+        Assert.Multiple(() =>
+        {
+            Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.Zstd));
+            Assert.That(CapturedHeaderDictionaryId(transport), Is.EqualTo(0u));
+            var snap = negotiationState.Snapshot().Single();
+            Assert.That(snap.FellBack, Is.True);
+            Assert.That(snap.FingerprintMismatch, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_negotiates_id_only_when_peer_predates_fingerprint_slot()
+    {
+        // Backward-compat: a peer built before the fingerprint slot advertises
+        // only the id-only AdvertisedDictionaryIds. Even with a provider
+        // present, the shipper negotiates exactly as before (id-only) and
+        // compresses with the configured dictionary.
+        var bytes = new byte[] { 1, 2, 3, 4 };
+        var provider = DictionaryProvider(7u, bytes);
+        var (grain, _, feed, transport, _, _, _) = Create(
+            new LatticeReplicationOptions
+            {
+                ClusterId = LocalCluster,
+                ShipCursorWriteInterval = 1,
+                FramingCompression = LatticeCompression.ZstdDictionary,
+                FramingCompressionDictionaryId = 7u,
+                FramingCompressionMinBatchBytes = 0,
+                DictionaryNegotiationEnabled = true,
+            },
+            dictionaryProvider: provider);
+        AdvertiseDictionaryIds(transport, 7u);
+
+        feed.Append(MakeEntry("k1", ticks: 1));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        feed.Append(MakeEntry("k2", ticks: 2));
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.ZstdDictionary));
+            Assert.That(CapturedHeaderDictionaryId(transport), Is.EqualTo(7u));
         });
     }
 }

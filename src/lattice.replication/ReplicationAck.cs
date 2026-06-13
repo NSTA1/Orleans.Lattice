@@ -180,6 +180,40 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(6)] public uint[]? AdvertisedDictionaryIds { get; init; }
+
+    /// <summary>
+    /// The set of shared compression dictionaries this receiver can currently
+    /// resolve, each carried as an <c>(id, fingerprint)</c> pair where the
+    /// fingerprint is the
+    /// <see cref="CompressionDictionaryFingerprint.Compute(System.ReadOnlySpan{byte})"/>
+    /// of the receiver's dictionary bytes for that id. This is the
+    /// fingerprint-bearing successor to <see cref="AdvertisedDictionaryIds"/>:
+    /// a sender that has opted into shared-dictionary negotiation gates
+    /// dictionary compression on <c>(id, fingerprint)</c> rather than the bare
+    /// id, so two deployments that map the same id to different bytes (an
+    /// operator slip, or two clusters that each auto-trained an id 1 dictionary
+    /// over different corpora) never negotiate a match - the sender falls back
+    /// to dictionary-less <see cref="LatticeCompression.Zstd"/> and surfaces a
+    /// distinct telemetry outcome instead of shipping a frame the receiver
+    /// would hard-fail to decode. A value of <see langword="null"/> means the
+    /// receiver did not advertise the fingerprint-bearing capability (a build
+    /// predating this slot, or a receiver whose provider exposes no catalog);
+    /// the sender then negotiates on the id-only
+    /// <see cref="AdvertisedDictionaryIds"/> slot exactly as before. An empty
+    /// array means the receiver advertised the capability but currently holds
+    /// no dictionaries.
+    /// <para>
+    /// Strictly additive on the wire (same compat profile as
+    /// <see cref="AdvertisedDictionaryIds"/>): receivers built before this slot
+    /// omit it (decodes as <see langword="null"/>); senders built before it
+    /// ignore the field. A receiver on the current build populates both this
+    /// slot and <see cref="AdvertisedDictionaryIds"/>, so an older sender keeps
+    /// negotiating on the id-only slot while a current sender prefers the
+    /// fingerprint-gated slot. The slot is therefore safe to roll out
+    /// independently on either side of a peering.
+    /// </para>
+    /// </summary>
+    [Id(7)] public AdvertisedCompressionDictionary[]? AdvertisedDictionaries { get; init; }
 }
 
 /// <summary>

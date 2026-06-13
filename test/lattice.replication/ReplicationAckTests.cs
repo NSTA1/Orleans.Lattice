@@ -219,6 +219,79 @@ public class ReplicationAckTests
             Assert.That(a, Is.Not.EqualTo(different));
         });
     }
+
+    [Test]
+    public void Default_advertised_dictionaries_slot_is_null()
+    {
+        var ack = default(ReplicationAck);
+
+        Assert.That(ack.AdvertisedDictionaries, Is.Null);
+    }
+
+    [Test]
+    public void Init_assigns_advertised_dictionaries_slot()
+    {
+        var ack = new ReplicationAck
+        {
+            Accepted = true,
+            HighestAppliedHlc = HybridLogicalClock.Zero,
+            AdvertisedDictionaries = new[]
+            {
+                new AdvertisedCompressionDictionary(3u, 11UL),
+                new AdvertisedCompressionDictionary(7u, 42UL),
+            },
+        };
+
+        Assert.That(ack.AdvertisedDictionaries, Is.EqualTo(new[]
+        {
+            new AdvertisedCompressionDictionary(3u, 11UL),
+            new AdvertisedCompressionDictionary(7u, 42UL),
+        }));
+    }
+
+    [Test]
+    public void Advertised_dictionaries_round_trips_through_the_serializer()
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
+        var ack = new ReplicationAck
+        {
+            Accepted = true,
+            HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 42, Counter = 1 },
+            SupportedWireVersion = 5,
+            AdvertisedDictionaryIds = new uint[] { 1u, 9u },
+            AdvertisedDictionaries = new[]
+            {
+                new AdvertisedCompressionDictionary(1u, 100UL),
+                new AdvertisedCompressionDictionary(9u, 900UL),
+            },
+        };
+
+        var bytes = serializer.SerializeToArray(ack);
+        var decoded = serializer.Deserialize(bytes);
+
+        Assert.That(decoded.AdvertisedDictionaries, Is.EqualTo(new[]
+        {
+            new AdvertisedCompressionDictionary(1u, 100UL),
+            new AdvertisedCompressionDictionary(9u, 900UL),
+        }));
+    }
+
+    [Test]
+    public void Omitted_advertised_dictionaries_slot_decodes_as_null_additive()
+    {
+        // An ack that never set the fingerprint-bearing slot must round-trip
+        // as null, matching the decode a sender built before the fingerprint
+        // slot would see when a newer receiver leaves the slot unset.
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = sp.GetRequiredService<Serializer<ReplicationAck>>();
+        var ack = new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
+
+        var bytes = serializer.SerializeToArray(ack);
+        var decoded = serializer.Deserialize(bytes);
+
+        Assert.That(decoded.AdvertisedDictionaries, Is.Null);
+    }
 }
 
 [TestFixture]
