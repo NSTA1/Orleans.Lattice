@@ -12,7 +12,7 @@ The snapshot is bounded to the `[StartKey, EndKey)` covering ranges the [Merkle 
 
 The fallback ships **committed projection rows only**: prepared (not-yet-decided) saga rows and tombstoned keys are skipped, since the committed projection already reflects every decided value. Each row becomes a `Set` stamped with the local cluster id, capped per pass and always shipping at least one entry.
 
-## Honest limitations
+## Scope and limitations
 
 - **Client-side scoping in the default provider.** The default `ISnapshotProvider` implements the range overload by exporting the whole tree and filtering the stream client-side - it does **not** push the range bound into storage. A storage-aware provider can override the overload to avoid streaming out-of-range entries it then discards; the metadata it returns must match the whole-tree export at the same as-of HLC so receivers pin the same resume cut.
 - **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport acks but does not deliver. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair, exactly as for leaf re-replay.

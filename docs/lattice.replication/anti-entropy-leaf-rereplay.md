@@ -13,7 +13,7 @@ Producer-side selection uses two inputs to bound what gets re-sent:
 
 An entry is a candidate when it is the local cluster's own origin, its clock is strictly greater than the peer's cursor, and its key falls inside one of the localised ranges. Atomic-batch boundaries are respected: if any member of an atomic (`SetManyAtomicAsync`) batch is selected, every retained sibling of that batch ships with it, and the entry / byte caps are applied as whole units so a batch is never split across the cap boundary. At least one unit always ships.
 
-## Honest limitations
+## Scope and limitations
 
 - **Peer cursor seam over gRPC.** Reading the peer's applied watermark needs a read-only RPC. The `Orleans.Lattice.Replication.Grpc` binding now implements `IReplicationDigestProbeTransport.GetPeerHighWaterMarkAsync` by resolving the peer's per-origin `IReplicationHighWaterMarkGrain.GetAsync`, so the pass re-ships only entries whose clock is strictly greater than the peer's reported cursor instead of every in-range retained entry. An un-upgraded peer that has not bound the `GetPeerHighWaterMark` method answers `Unimplemented` and the seam falls back to `HybridLogicalClock.Zero` (re-ship everything, rely on the receiver's per-origin idempotent dedup) - rolling-upgrade safe. A custom transport can still override the method directly.
 - **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport acks but does not deliver. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair.
