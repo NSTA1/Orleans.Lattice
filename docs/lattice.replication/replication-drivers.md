@@ -437,14 +437,15 @@ dedupes.
 
 ### Content-hash dedup measurement
 
-Set `LatticeReplicationOptions.ContentHashDedupEnabled` (default
-`false`) to measure the **payload re-send rate**: how often the shipper
+`LatticeReplicationOptions.ContentHashDedupEnabled` (default `true`)
+measures the **payload re-send rate**: how often the shipper
 ships a `Set` whose value bytes are byte-identical to the value most
 recently shipped for the same key. This is the idempotent-re-write rate
 that decides whether a sender-manifest / receiver-pull-missing dedup
-round trip would pay for its extra latency, exactly per the opt-in
-guidance ("opt in when measurement shows payload re-send rate justifies
-the round-trip").
+round trip would pay for its extra latency. The measurement is on out of
+the box so the re-send-rate signal is available without a config change;
+a host that wants the historical zero-overhead path sets
+`ContentHashDedupEnabled = false`.
 
 When enabled, the shipper keeps a per-activation, per-key bounded LRU
 of the last-shipped content hash - FNV-1a 64-bit over the op, key,
@@ -455,8 +456,8 @@ two observability counters
 `orleans.lattice.replication.ship.redundant_payloads` and
 `orleans.lattice.replication.ship.redundant_payload_bytes` (tagged
 `tree` + `peer`; see [Observability](observability.md#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes)).
-When the flag is off the shipper does no extra work and never touches
-the cache or the counters.
+When the flag is set to `false` the shipper does no extra work and never
+touches the cache or the counters.
 
 The measurement is **observability-only**: it never elides, reorders,
 or alters the bytes the sender ships, so the wire output is byte-for-byte
@@ -470,9 +471,10 @@ LWW/HLC convergence against concurrent foreign-origin writes. Eliding
 safely requires the receiver to advertise which content hashes it
 already holds (the manifest/pull exchange), which needs an
 additive-but-new request/response shape on `IReplicationTransport`.
-That shape is deliberately deferred until wire-version capability
-negotiation lands, so this release ships the measurement that justifies
-the round trip without any wire-format, serialization, `[Id]`, or
+That elision (`ContentHashDedupElisionEnabled`) is deliberately kept
+opt-in and deferred until wire-version capability negotiation lands, so
+the default build ships the measurement that justifies the round trip
+without any wire-format, serialization, `[Id]`, or
 `[Alias]` change. Because the counters fire as entries are framed onto
 the wire, a batch re-shipped after a transient transport failure counts
 its entries again - correct, since a re-ship is itself a redundant wire
@@ -480,12 +482,14 @@ payload.
 
 ### Pre-ship coalescing
 
-Set `LatticeReplicationOptions.PreShipCoalescingEnabled` (default
-`false`) to collapse redundant per-key versions out of a freshly-drained
+`LatticeReplicationOptions.PreShipCoalescingEnabled` (default `true`)
+collapses redundant per-key versions out of a freshly-drained
 batch **before** they cross the cross-cluster link. A hot key rewritten
 several times within a single ship window otherwise ships every
 intermediate version a last-writer-wins receiver would overwrite anyway;
-coalescing drops those intermediate versions from the wire. This is
+coalescing drops those intermediate versions from the wire. This runs in
+a default build; a host that wants the historical verbatim drain/ship
+path sets `PreShipCoalescingEnabled = false`. This is
 distinct from the content-hash dedup measurement above, which never
 alters the bytes shipped - coalescing actually elides entries.
 

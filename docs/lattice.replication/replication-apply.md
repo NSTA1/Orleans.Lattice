@@ -62,6 +62,13 @@ The applier holds a per-tree bounded FIFO cache of recently-applied identity tup
 
 Correctness is still bounded by the HWM. The cache is a fast-path optimisation: it suppresses the duplicate-emit pair before the apply grain hop even when the HWM round-trip would otherwise admit both. Cache eviction under sustained churn cannot cause a re-merge - the HWM remains the authoritative dedupe key for any entry the cache has evicted.
 
+### 5. Causal-dependency gate
+
+Entries authored with causal-plus tracking carry a `VectorClock` frontier. Before applying such an entry the receiver fetches its local vector clock and checks that every component of the entry's frontier is dominated-or-equal locally; an entry with an unsatisfied dependency is parked in the per-tree bounded causal-apply buffer and retried each time a later apply advances the local clock. Two frontier components are exempt from the check:
+
+- **The entry's own origin diagonal.** The per-origin high-water-mark table is the authoritative dedupe key for that component, so requiring the local clock to dominate the diagonal would deadlock the very entry being applied.
+- **The receiver's own cluster id.** The receiver-side local vector clock tracks only *foreign*-applied frontiers - it never advances its own diagonal - but the receiver durably holds every write it authored itself, so any dependency on one of the receiver's own writes is trivially satisfied. Without this exemption a peer entry whose frontier references a write the receiver originated (for example, site C's post-partition write that causally follows site A's pre-partition write, once an A-C partition heals) would park forever against a perpetually-zero self-component and stall convergence.
+
 ## Validation
 
 `ApplyAsync` throws `ArgumentException` when:

@@ -7,7 +7,7 @@ This document is the source of truth for everything related to compression in Or
 - The compression seam is the public interface `ILatticeCompressor` in the `Orleans.Lattice` namespace.
 - The on-wire tag is a single `byte` (`LatticeCompression`), carried in plaintext alongside the relevant layer's fixed header so receivers can dispatch before allocating an inflate buffer.
 - Register compressors on the silo's DI container via `AddLatticeCompressor` - the encoder layer keys its dispatch on the **raw byte**, not the named enum, so hosts can ship custom algorithms without core enum churn.
-- Out of the box, replication ships Zstandard (`LatticeCompression.Zstd`) registered automatically by `AddLatticeReplication`.
+- Out of the box, replication ships Zstandard (`LatticeCompression.Zstd`) registered automatically by `AddLatticeReplication`, and dict-less Zstd is the **default** framing algorithm - a stock cluster compresses its framing tail with no extra configuration.
 
 ## The seam
 
@@ -116,12 +116,13 @@ The option validator accepts any tag in the host-reserved `[0x80, 0xFF]` range w
 
 ## Replication framing-tail compression
 
-The replication layer is the first in-tree consumer of the compression seam. Compression is opt-in per cluster via `LatticeReplicationOptions`:
+The replication layer is the first in-tree consumer of the compression seam. Dict-less Zstandard (`LatticeCompression.Zstd`) is the **default** framing algorithm: a stock `AddLatticeReplication` cluster compresses its framing tail out of the box, and the `Zstd` compressor is registered unconditionally so every current-wire-version receiver already decodes it. The per-batch threshold (`FramingCompressionMinBatchBytes`, 512 bytes) still skips compression on tiny batches, and shared dictionaries remain opt-in. A host that wants the historical uncompressed framing opts out with `FramingCompression = LatticeCompression.None`:
 
 ```text
 siloBuilder.AddLatticeReplication(o =>
 {
     o.ClusterId = "site-a";
+    // Dict-less Zstd is the default; set this to LatticeCompression.None to opt out.
     o.FramingCompression = LatticeCompression.Zstd;
     o.FramingCompressionLevel = 3;          // Zstd: 1 (fastest) - 22 (highest ratio), default 3
     o.FramingCompressionMinBatchBytes = 512; // skip compression below this uncompressed tail size
@@ -130,7 +131,7 @@ siloBuilder.AddLatticeReplication(o =>
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `FramingCompression` | `LatticeCompression` | `None` | Algorithm tag stamped into the framing header. |
+| `FramingCompression` | `LatticeCompression` | `Zstd` | Algorithm tag stamped into the framing header. Defaults to dict-less Zstd; set to `None` to opt out. |
 | `FramingCompressionLevel` | `int` | `3` | Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd` or `ZstdDictionary`; ignored otherwise. |
 | `FramingCompressionMinBatchBytes` | `int` | `512` | Uncompressed-tail threshold below which the shipper stamps `Compression = None` for the batch (heartbeats / small-bursty traffic skip the per-batch fixed overhead). `0` disables the threshold. |
 | `FramingCompressionDictionaryId` | `uint` | `0` | Stable id of the shared dictionary the shipper requests when `FramingCompression` is `ZstdDictionary`. `0` means "no dictionary"; required to be non-zero when the algorithm is `ZstdDictionary`. |

@@ -697,7 +697,7 @@ internal sealed partial class ReplicationApplier
                         cachedLocalVc = await hwmGrain.GetVectorAsync(cancellationToken).ConfigureAwait(false);
                         localVcDirty = false;
                     }
-                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, cachedLocalVc))
+                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, cachedLocalVc, resolved.ClusterId))
                     {
                         await ParkAsync(entry, resolved, cancellationToken).ConfigureAwait(false);
                         // Park retains the cache reservation (mirroring

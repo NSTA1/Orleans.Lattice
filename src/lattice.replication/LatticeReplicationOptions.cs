@@ -250,14 +250,14 @@ public class LatticeReplicationOptions
     /// content-hash payload re-send rate: the fraction of shipped
     /// <see cref="MutationKind.Set"/> entries whose value bytes are
     /// byte-identical to the value most recently shipped for the same
-    /// key. Defaults to <see langword="false"/>; when off the shipper
-    /// behaves and frames bytes exactly as it does today (no extra
-    /// hashing, no cache, no metric), so the on-the-wire output is
-    /// byte-identical to a build without this option.
+    /// key. Defaults to <see langword="true"/> (measurement on); set it
+    /// to <see langword="false"/> to opt out, after which the shipper
+    /// behaves and frames bytes exactly as a build without this option
+    /// (no extra hashing, no cache, no metric).
     /// <para>
     /// Idempotent upstream retry logic - a caller that re-sets the same
     /// value on every retry - is the canonical source of redundant
-    /// payload re-sends. Enabling this option records the
+    /// payload re-sends. The measurement records the
     /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloads"/> and
     /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloadBytes"/>
     /// counters so an operator can decide whether the re-send rate
@@ -294,10 +294,10 @@ public class LatticeReplicationOptions
     /// Whether the per-<c>(tree, peer)</c> shipper collapses redundant
     /// per-key versions out of an outbound batch before they reach the
     /// cross-cluster wire (pre-ship coalescing). Defaults to
-    /// <see langword="false"/>; when off the drain / ship path is
-    /// byte-identical to a build without this option - no coalescing
-    /// pass runs, no entry is elided, and the framed bytes match today's
-    /// output exactly.
+    /// <see langword="true"/>; set it to <see langword="false"/> to opt
+    /// out, after which the drain / ship path is byte-identical to a
+    /// build without this option - no coalescing pass runs and no entry
+    /// is elided.
     /// <para>
     /// When enabled, coalescing applies to trees declared
     /// <see cref="LatticeMergeMode.LwwRegister"/> and to recognised CRDT
@@ -989,11 +989,11 @@ public class LatticeReplicationOptions
     /// variable-length bytes following the fixed 32-byte
     /// <see cref="EncodedBatchHeader"/>: <c>treeName</c>,
     /// <c>originClusterId</c>, and the length-prefixed entry segments)
-    /// when the shipper builds an outbound batch. Defaults to
-    /// <see cref="LatticeCompression.None"/>; setting this to
-    /// <see cref="LatticeCompression.Zstd"/> opts in to Zstandard
-    /// compression at the level configured by
-    /// <see cref="FramingCompressionLevel"/>.
+    /// when the shipper builds an outbound batch. Defaults to dict-less
+    /// <see cref="LatticeCompression.Zstd"/> (Zstandard at the level
+    /// configured by <see cref="FramingCompressionLevel"/>); set this to
+    /// <see cref="LatticeCompression.None"/> to opt out and frame the
+    /// tail uncompressed.
     /// <para>
     /// Compression is skipped (and <see cref="LatticeCompression.None"/>
     /// is stamped on the wire regardless of this setting) when the
@@ -1004,13 +1004,18 @@ public class LatticeReplicationOptions
     /// </para>
     /// <para>
     /// The receiver decompresses based on the on-wire algorithm value,
-    /// not this option, so a coordinated rollout is required: every
-    /// receiver in the topology must run a build that has the
-    /// corresponding <see cref="ILatticeCompressor"/> registered before
-    /// any sender flips this to a non-<see cref="LatticeCompression.None"/>
-    /// value. An unsupported algorithm at the receiver surfaces as
-    /// <see cref="NotSupportedException"/> from the framing decoder
-    /// and routes through the existing transient-backoff +
+    /// not this option. Because every current-wire-version build
+    /// registers the dict-less Zstd <see cref="ILatticeCompressor"/>
+    /// unconditionally, a stock receiver already decodes the default
+    /// Zstd framing with no extra wiring. The coordinated-rollout caveat
+    /// therefore applies only to <em>custom</em> host-registered
+    /// algorithms and to shared dictionaries
+    /// (<c>ZstdDictionary</c>): every receiver in the topology must run a
+    /// build that has the corresponding
+    /// <see cref="ILatticeCompressor"/> (or dictionary) registered before
+    /// any sender selects it. An unsupported algorithm at the receiver
+    /// surfaces as <see cref="NotSupportedException"/> from the framing
+    /// decoder and routes through the existing transient-backoff +
     /// dead-letter classification path.
     /// </para>
     /// </summary>
@@ -1541,13 +1546,19 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Default value for <see cref="ContentHashDedupEnabled"/>: the
-    /// content-hash payload-re-send measurement is off so the shipper's
-    /// behaviour and on-the-wire output are byte-identical to a build
-    /// without the option. Operators opt in only when they suspect
-    /// idempotent upstream retries are inflating replication bandwidth
-    /// and want to measure the re-send rate.
+    /// sender-side content-hash payload-re-send measurement is on by
+    /// default. The measurement is observability-only - it emits the
+    /// redundant-payload counters
+    /// (<see cref="LatticeReplicationMetrics.ShipRedundantPayloads"/> /
+    /// <see cref="LatticeReplicationMetrics.ShipRedundantPayloadBytes"/>)
+    /// out of the box and never alters, elides, or reorders the bytes a
+    /// shipper frames onto the wire, so convergence is unaffected.
+    /// Operators opt out by setting
+    /// <see cref="ContentHashDedupEnabled"/> to <see langword="false"/>.
+    /// The separate payload-elision round trip
+    /// (<see cref="ContentHashDedupElisionEnabled"/>) remains opt-in.
     /// </summary>
-    public const bool DefaultContentHashDedupEnabled = false;
+    public const bool DefaultContentHashDedupEnabled = true;
 
     /// <summary>
     /// Default value for <see cref="ContentHashDedupCacheSize"/>: 4096
@@ -1572,14 +1583,17 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Default value for <see cref="PreShipCoalescingEnabled"/>: pre-ship
-    /// coalescing is off so the shipper's drain / ship path and its
-    /// on-the-wire output are byte-identical to a build without the
-    /// option. Operators opt in per tree once they have a hot
-    /// last-writer-wins key that is rewritten several times within a
-    /// single ship window and want to collapse the redundant versions
-    /// off the cross-cluster link.
+    /// coalescing runs by default. It is convergent by construction - a
+    /// last-writer-wins tree keeps only the highest-<see cref="HybridLogicalClock"/>
+    /// entry per key, a registered CRDT shape delta-merges same-key
+    /// entries over its semilattice, and the generic / unregistered
+    /// OR-Map plus opaque / legacy payloads still ship verbatim. Cursor
+    /// accounting runs pre-coalesce so the resume bookkeeping advances
+    /// past every elided entry, and there is no wire-format change.
+    /// Operators opt out by setting
+    /// <see cref="PreShipCoalescingEnabled"/> to <see langword="false"/>.
     /// </summary>
-    public const bool DefaultPreShipCoalescingEnabled = false;
+    public const bool DefaultPreShipCoalescingEnabled = true;
 
     /// <summary>
     /// Default value for <see cref="AutoBootstrapOnFallOffLog"/>:
@@ -1842,12 +1856,17 @@ public class LatticeReplicationOptions
     public const bool DefaultShipDoorbellEnabled = true;
 
     /// <summary>
-    /// Default value for <see cref="FramingCompression"/>: no
-    /// compression. Hosts that want bandwidth-optimised replication
-    /// over a constrained link opt in by setting this to
-    /// <see cref="LatticeCompression.Zstd"/>.
+    /// Default value for <see cref="FramingCompression"/>: dict-less
+    /// Zstandard. The default framing algorithm is symmetric and
+    /// decodable by every current-wire-version peer (the Zstd compressor
+    /// is registered unconditionally), the
+    /// <see cref="FramingCompressionMinBatchBytes"/> threshold (512 bytes)
+    /// still skips compression on tiny batches, and shared dictionaries
+    /// (<c>ZstdDictionary</c>) remain opt-in. Hosts that want the
+    /// historical uncompressed framing opt out by setting this to
+    /// <see cref="LatticeCompression.None"/>.
     /// </summary>
-    public const LatticeCompression DefaultFramingCompression = LatticeCompression.None;
+    public const LatticeCompression DefaultFramingCompression = LatticeCompression.Zstd;
 
     /// <summary>
     /// Default value for <see cref="FramingCompressionLevel"/>: <c>3</c>,

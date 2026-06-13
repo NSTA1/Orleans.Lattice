@@ -101,6 +101,28 @@ app.MapLatticeReplicationGrpc();
 
 For a working multi-cluster example exercising HLC-ordered facts, typed OR-Set replication, and gRPC push, see the `MultiSiteManufacturing` project under [`samples/`](../../samples).
 
+### Default efficiency posture
+
+A stock `AddLatticeReplication` deployment ships with the **safe efficiency bundle** on out of the box, so the minimal setup above is already coalesced, compressed, and measured:
+
+- **Pre-ship coalescing** (`PreShipCoalescingEnabled`, default `true`) collapses redundant per-key versions off the cross-cluster wire before they ship. It is convergent by construction - a last-writer-wins tree keeps the highest-HLC version per key, recognised CRDT shapes delta-merge, and generic / unregistered OR-Map plus opaque payloads ship verbatim.
+- **Content-hash dedup measurement** (`ContentHashDedupEnabled`, default `true`) records the payload re-send rate (`ship.redundant_payloads`). It is observability-only and never alters the shipped bytes; the actual payload **elision** (`ContentHashDedupElisionEnabled`) stays opt-in.
+- **Dict-less Zstandard framing compression** (`FramingCompression`, default `LatticeCompression.Zstd`) compresses the framing tail of every batch over the `FramingCompressionMinBatchBytes` (512-byte) threshold. Every current-wire-version peer decodes it with no extra wiring; shared dictionaries (`ZstdDictionary`) stay opt-in.
+
+The wire bytes change shape but remain backward-compatible to decode by any current-wire-version peer, so no coordinated rollout is required. Each knob is individually overridable back to the prior behaviour:
+
+```csharp verify
+siloBuilder.AddLatticeReplication(opts =>
+{
+    opts.ClusterId = "site-a";
+
+    // Opt out of any part of the safe efficiency bundle individually.
+    opts.PreShipCoalescingEnabled = false;             // ship every version verbatim
+    opts.ContentHashDedupEnabled = false;              // stop the re-send-rate measurement
+    opts.FramingCompression = LatticeCompression.None; // ship the framing tail uncompressed
+});
+```
+
 ## Reference
 
 For day-to-day use and operations:

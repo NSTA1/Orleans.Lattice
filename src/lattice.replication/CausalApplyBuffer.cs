@@ -158,8 +158,13 @@ internal sealed class CausalApplyBuffer
     /// Removes and returns every parked entry whose declared
     /// dependencies are dominated by <paramref name="localVc"/>.
     /// Iteration is FIFO so causally-earlier entries unblock first.
+    /// A dependency on <paramref name="localClusterId"/> (the receiver's
+    /// own cluster) is treated as satisfied - see
+    /// <see cref="DependenciesSatisfied(WalRecord, VersionVector, string?)"/>
+    /// for why the self-diagonal can never be satisfied through the
+    /// foreign-only local vector clock.
     /// </summary>
-    public List<WalRecord> DrainSatisfied(VersionVector localVc)
+    public List<WalRecord> DrainSatisfied(VersionVector localVc, string? localClusterId = null)
     {
         ArgumentNullException.ThrowIfNull(localVc);
         var ready = new List<WalRecord>();
@@ -176,7 +181,7 @@ internal sealed class CausalApplyBuffer
             while (node is not null)
             {
                 var next = node.Next;
-                if (DependenciesSatisfied(node.Value.Entry, localVc))
+                if (DependenciesSatisfied(node.Value.Entry, localVc, localClusterId))
                 {
                     ready.Add(node.Value.Entry);
                     drainedBytesTotal += node.Value.SizeBytes;
@@ -219,8 +224,22 @@ internal sealed class CausalApplyBuffer
     /// is excluded - the per-origin high-water-mark table is the
     /// authoritative dedup key for that component, and including it
     /// here would deadlock the diagonal.
+    /// <para>
+    /// A dependency on <paramref name="localClusterId"/> (the receiver's
+    /// own cluster) is likewise treated as satisfied. The receiver-side
+    /// local vector clock tracks only <em>foreign</em>-applied frontiers,
+    /// so it never advances its own diagonal; but the receiver, by
+    /// definition, durably holds every write it authored itself, so any
+    /// foreign entry that causally depends on one of the receiver's own
+    /// writes is trivially satisfiable. Without this exemption such an
+    /// entry parks forever (the self-diagonal stays at zero), which
+    /// stalls convergence whenever a peer's write causally follows a
+    /// write the receiver originated - e.g. after an A-C partition heals
+    /// and C's post-partition write carries a vector-clock dependency on
+    /// A's pre-partition write.
+    /// </para>
     /// </summary>
-    public static bool DependenciesSatisfied(WalRecord entry, VersionVector localVc)
+    public static bool DependenciesSatisfied(WalRecord entry, VersionVector localVc, string? localClusterId = null)
     {
         ArgumentNullException.ThrowIfNull(localVc);
         var vc = entry.VectorClock;
@@ -232,6 +251,12 @@ internal sealed class CausalApplyBuffer
         foreach (var (origin, ts) in vc.Entries)
         {
             if (string.Equals(origin, entry.OriginClusterId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (localClusterId is not null
+                && string.Equals(origin, localClusterId, StringComparison.Ordinal))
             {
                 continue;
             }

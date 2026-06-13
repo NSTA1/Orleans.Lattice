@@ -357,7 +357,7 @@ internal sealed partial class ReplicationApplier(
                 if (!isPreparedAtomicBatch && HasCausalDependencies(entry))
                 {
                     var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc))
+                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc, resolved.ClusterId))
                     {
                         await ParkAsync(entry, resolved, cancellationToken);
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
@@ -591,7 +591,7 @@ internal sealed partial class ReplicationApplier(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-            var ready = buffer.DrainSatisfied(localVc);
+            var ready = buffer.DrainSatisfied(localVc, resolved.ClusterId);
             if (ready.Count == 0)
             {
                 return;
