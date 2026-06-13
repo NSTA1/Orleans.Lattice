@@ -173,6 +173,47 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         }
     }
 
+    /// <inheritdoc />
+    public async Task<CompressionDictionaryPullResponse> PullCompressionDictionaryAsync(
+        string targetClusterId,
+        CompressionDictionaryPullRequest request,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+        if (string.IsNullOrEmpty(targetClusterId))
+        {
+            throw new ArgumentException(
+                "targetClusterId must be non-empty.",
+                nameof(targetClusterId));
+        }
+
+        var channel = ResolvePeerChannel(targetClusterId);
+        try
+        {
+            using var call = channel.Invoker.AsyncUnaryCall(
+                _method.PullCompressionDictionary,
+                host: null,
+                options: new CallOptions(cancellationToken: cancellationToken),
+                request: new CompressionDictionaryPullRequestBox { Value = request });
+
+            var responseBox = await call.ResponseAsync.ConfigureAwait(false);
+            return responseBox.Value;
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.Unimplemented or StatusCode.Unavailable)
+        {
+            // An un-upgraded peer that has not bound the
+            // PullCompressionDictionary RPC answers Unimplemented; a peer
+            // that is momentarily unreachable answers Unavailable. In
+            // both cases the caller leaves the dictionary uninstalled and
+            // retries on a later tick, which is exactly what
+            // CompressionDictionaryPullResponse.NotSupported signals - so
+            // the pull is rolling-upgrade safe without a wire-version
+            // pre-check on this hop.
+            return CompressionDictionaryPullResponse.NotSupported;
+        }
+    }
+
     private async Task<ReplicationAck> SendCoreAsync(ReplicationBatch batch, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);

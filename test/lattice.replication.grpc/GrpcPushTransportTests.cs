@@ -62,7 +62,9 @@ public class GrpcPushTransportTests
             probeRequestSerializer,
             probeResponseSerializer,
             sp.GetRequiredService<Orleans.Serialization.Serializer<ContentManifestRequest>>(),
-            sp.GetRequiredService<Orleans.Serialization.Serializer<ContentManifestResponse>>());
+            sp.GetRequiredService<Orleans.Serialization.Serializer<ContentManifestResponse>>(),
+            sp.GetRequiredService<Orleans.Serialization.Serializer<CompressionDictionaryPullRequest>>(),
+            sp.GetRequiredService<Orleans.Serialization.Serializer<CompressionDictionaryPullResponse>>());
         return new GrpcPushTransport(
             method,
             encoder,

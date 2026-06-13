@@ -847,6 +847,12 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
+        // Self-distributing shared-dictionary convergence (opt-in): adopt
+        // any peer-advertised dictionary this sender does not yet hold
+        // before negotiating, so a freshly trained peer dictionary becomes
+        // immediately usable. A no-op when the option is off.
+        await MaybeConvergeSharedDictionariesAsync(options, cancellationToken);
+
         // Per-peer shared-dictionary capability negotiation (opt-in).
         // Resolves the effective dictionary id for this peer against its
         // advertised capability; a no-op when the option is off. Never
@@ -1491,6 +1497,10 @@ internal sealed class ReplicationShipperGrain(
         {
             return;
         }
+
+        // Self-distributing shared-dictionary convergence (opt-in) for the
+        // pipelining path, mirroring the serial path. A no-op when off.
+        await MaybeConvergeSharedDictionariesAsync(options, cancellationToken);
 
         // Per-peer shared-dictionary capability negotiation (opt-in),
         // mirroring the serial path. A no-op when the option is off.
@@ -2967,9 +2977,12 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private void TryNegotiateSharedDictionary(LatticeReplicationOptions options)
     {
-        if (!options.DictionaryNegotiationEnabled
-            || options.FramingCompression != LatticeCompression.ZstdDictionary
-            || options.FramingCompressionDictionaryId == 0)
+        var autoActive = AutoDictionaryActive(options);
+        var configuredId = EffectiveConfiguredDictionaryId(options);
+        var dictionaryFraming = autoActive || options.FramingCompression == LatticeCompression.ZstdDictionary;
+        var negotiationOn = autoActive || options.DictionaryNegotiationEnabled;
+
+        if (!negotiationOn || !dictionaryFraming || configuredId == 0)
         {
             _negotiatedDictionaryId = 0u;
             return;
@@ -2977,11 +2990,11 @@ internal sealed class ReplicationShipperGrain(
 
         var negotiation = _peerAdvertisedDictionaries is { } advertised
             ? SharedDictionaryNegotiation.Negotiate(
-                options.FramingCompressionDictionaryId,
-                ResolveConfiguredDictionaryFingerprint(options.FramingCompressionDictionaryId),
+                configuredId,
+                ResolveConfiguredDictionaryFingerprint(configuredId),
                 advertised)
             : SharedDictionaryNegotiation.Negotiate(
-                options.FramingCompressionDictionaryId, _peerAdvertisedDictionaryIds);
+                configuredId, _peerAdvertisedDictionaryIds);
 
         _dictionaryNegotiationState.Record(_treeName, _peerClusterId, negotiation);
         LatticeReplicationMetrics.DictionaryNegotiation.Add(
@@ -3000,13 +3013,77 @@ internal sealed class ReplicationShipperGrain(
                 "the peer advertised dictionary id {DictionaryId} with different bytes than this " +
                 "sender holds. Falling back to dictionary-less compression for this peer to avoid " +
                 "a receiver-side decode failure. Reconcile the dictionary bytes behind id " +
-                "{DictionaryId} across both deployments.",
+                "{MismatchedDictionaryId} across both deployments.",
                 _treeName,
                 _peerClusterId,
-                options.FramingCompressionDictionaryId);
+                configuredId,
+                configuredId);
         }
 
         _negotiatedDictionaryId = negotiation.EffectiveDictionaryId;
+    }
+
+    /// <summary>
+    /// Whether the self-distributing auto-trained shared dictionary is opted
+    /// into for this tree and the injected provider currently has an active
+    /// trained dictionary to compress with. When <see langword="true"/> the
+    /// ship path treats the provider's
+    /// <see cref="ILatticeActiveCompressionDictionary.ActiveDictionaryId"/> as
+    /// the configured dictionary id and frames with
+    /// <see cref="LatticeCompression.ZstdDictionary"/>, negotiating it against
+    /// the peer exactly as a statically configured dictionary would be.
+    /// </summary>
+    private bool AutoDictionaryActive(LatticeReplicationOptions options)
+        => options.AutoSharedDictionaryEnabled
+           && _dictionaryProvider is ILatticeActiveCompressionDictionary { ActiveDictionaryId: not 0u };
+
+    /// <summary>
+    /// Resolves the shared-dictionary id this sender should negotiate and stamp:
+    /// the auto-trainer's live
+    /// <see cref="ILatticeActiveCompressionDictionary.ActiveDictionaryId"/> when
+    /// the auto-distributing dictionary is opted in and active, otherwise the
+    /// statically configured
+    /// <see cref="LatticeReplicationOptions.FramingCompressionDictionaryId"/>.
+    /// </summary>
+    private uint EffectiveConfiguredDictionaryId(LatticeReplicationOptions options)
+        => options.AutoSharedDictionaryEnabled
+           && _dictionaryProvider is ILatticeActiveCompressionDictionary active
+           && active.ActiveDictionaryId != 0u
+            ? active.ActiveDictionaryId
+            : options.FramingCompressionDictionaryId;
+
+    /// <summary>
+    /// Converges this sender onto the peer's trained shared compression
+    /// dictionaries when the auto-distributing shared dictionary is opted into
+    /// (<see cref="LatticeReplicationOptions.AutoSharedDictionaryEnabled"/>).
+    /// For every <c>(id, fingerprint)</c> the peer advertised that the local
+    /// provider does not yet hold, pulls the bytes over the digest-probe
+    /// transport, verifies them against the advertised fingerprint, and
+    /// installs them through the provider's
+    /// <see cref="ILatticeCompressionDictionarySink"/>, so the very next
+    /// <see cref="TryNegotiateSharedDictionary"/> can compress with the freshly
+    /// adopted dictionary instead of falling back. A no-op when the option is
+    /// off, when no provider that can install is injected, or when the peer has
+    /// advertised nothing new - so the default-off build never pulls.
+    /// </summary>
+    private async Task MaybeConvergeSharedDictionariesAsync(
+        LatticeReplicationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.AutoSharedDictionaryEnabled
+            || _dictionaryProvider is null
+            || _peerAdvertisedDictionaries is not { Length: > 0 } advertised)
+        {
+            return;
+        }
+
+        await CompressionDictionaryConvergence.ConvergeAsync(
+            _digestProbeTransport,
+            _dictionaryProvider,
+            _peerClusterId,
+            advertised,
+            _treeName,
+            cancellationToken);
     }
 
     /// <summary>
@@ -3061,27 +3138,31 @@ internal sealed class ReplicationShipperGrain(
     private (LatticeCompression Compression, uint DictionaryId) ResolveFramingCompression(
         LatticeReplicationOptions options)
     {
-        var eligible = options.FramingCompression != LatticeCompression.None
+        var autoActive = AutoDictionaryActive(options);
+        var framingCompression = autoActive ? LatticeCompression.ZstdDictionary : options.FramingCompression;
+        var eligible = framingCompression != LatticeCompression.None
                        && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes;
         if (!eligible)
         {
             return (LatticeCompression.None, 0u);
         }
 
-        if (options.FramingCompression != LatticeCompression.ZstdDictionary)
+        if (framingCompression != LatticeCompression.ZstdDictionary)
         {
-            return (options.FramingCompression, 0u);
+            return (framingCompression, 0u);
         }
 
         // Dictionary-eligible path. When negotiation is off, stamp the
-        // configured id exactly as before. When on, stamp the negotiated id
+        // configured id exactly as before. When on (explicitly, or implied
+        // by the auto-distributing dictionary), stamp the negotiated id
         // (0 unless the peer advertised the configured id) and degrade the
         // tag to plain Zstd on fallback.
-        var dictionaryId = options.DictionaryNegotiationEnabled
+        var negotiationOn = autoActive || options.DictionaryNegotiationEnabled;
+        var dictionaryId = negotiationOn
             ? _negotiatedDictionaryId
-            : options.FramingCompressionDictionaryId;
+            : EffectiveConfiguredDictionaryId(options);
 
-        if (options.DictionaryNegotiationEnabled && dictionaryId == 0)
+        if (negotiationOn && dictionaryId == 0)
         {
             RecordDictionaryBatch(LatticeReplicationMetrics.DictionaryBatchWithout);
             return (LatticeCompression.Zstd, 0u);

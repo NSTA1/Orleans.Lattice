@@ -1422,6 +1422,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_hwm_advances_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
       ]
+    },
+    {
+      "id": 58,
+      "title": "Shared-dictionary convergence pulls (rate)",
+      "description": "Rate of shared-dictionary convergence byte-pulls a sender performed against an advertising peer (orleans.lattice.replication.ship.dictionary_convergence), tagged by outcome. installed = the peer served the advertised dictionary bytes and the sender installed them (fingerprint-verified); rejected = the peer served bytes whose fingerprint did not match the advertisement, so they were discarded; unavailable = the peer or transport did not serve the bytes (un-upgraded peer, transport fallback). Opt-in via AddLatticeAutoSharedDictionary; flat-zero unless the self-distributing auto-dictionary feature is enabled and a peer advertises a dictionary this sender does not yet hold.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 148 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, peer, outcome) (rate(orleans_lattice_replication_ship_dictionary_convergence_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}} {{tree}} -> {{peer}}" }
+      ]
     }
   ]
 }
