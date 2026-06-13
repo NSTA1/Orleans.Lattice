@@ -44,7 +44,8 @@ internal sealed class ReplicationShipperGrain(
     ILatticeMergeModeResolver modeResolver,
     WireVersionNegotiationState negotiationState,
     IReplicationDigestProbeTransport digestProbeTransport,
-    CrdtShapeRegistry? crdtShapeRegistry = null)
+    CrdtShapeRegistry? crdtShapeRegistry = null,
+    SharedDictionaryNegotiationState? dictionaryNegotiationState = null)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -84,6 +85,14 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private CrdtShapeRegistry? _crdtShapeRegistry = crdtShapeRegistry;
 
+    // Per-(tree, peer) shared-dictionary negotiation telemetry. Optional
+    // constructor dependency so the many direct-construction unit tests
+    // continue to compile unchanged; the DI registration always supplies
+    // the process-wide singleton, and the null-coalescing fallback gives
+    // a self-contained instance when one is not injected. Never null.
+    private readonly SharedDictionaryNegotiationState _dictionaryNegotiationState =
+        dictionaryNegotiationState ?? new SharedDictionaryNegotiationState();
+
     private string _treeName = "";
     private string _peerClusterId = "";
     private bool _keyParsed;
@@ -116,6 +125,34 @@ internal sealed class ReplicationShipperGrain(
     /// the wire. Activation-scoped.
     /// </summary>
     private int _negotiatedWireVersion = EncodedBatchHeader.CurrentWireVersion;
+
+    /// <summary>
+    /// The peer's most recently advertised
+    /// <see cref="ReplicationAck.AdvertisedDictionaryIds"/>, or
+    /// <see langword="null"/> until the peer has acknowledged a batch (or
+    /// the peer is a build that predates dictionary negotiation and never
+    /// stamps the slot). Feeds
+    /// <see cref="SharedDictionaryNegotiation.Negotiate(uint, System.Collections.Generic.IReadOnlyCollection{uint})"/>
+    /// on the next pump tick when
+    /// <see cref="LatticeReplicationOptions.DictionaryNegotiationEnabled"/>
+    /// is set. Activation-scoped: lost on grain deactivation, at which
+    /// point the next ack re-advertises the peer's dictionary capability.
+    /// </summary>
+    private uint[]? _peerAdvertisedDictionaryIds;
+
+    /// <summary>
+    /// The shared compression-dictionary id the shipper stamps on the next
+    /// batch's <see cref="EncodedBatchHeader"/>. Defaults to <c>0</c> ("no
+    /// dictionary") and is only set to a non-zero id when
+    /// <see cref="LatticeReplicationOptions.DictionaryNegotiationEnabled"/>
+    /// is set and <see cref="TryNegotiateSharedDictionary"/> has confirmed
+    /// the peer advertised the configured id. When negotiation is off the
+    /// field is never read (the header sites stamp
+    /// <see cref="LatticeReplicationOptions.FramingCompressionDictionaryId"/>
+    /// directly), so a stale value cannot leak onto the wire.
+    /// Activation-scoped.
+    /// </summary>
+    private uint _negotiatedDictionaryId;
 
     /// <summary>
     /// Wall-clock instant at or after which the next phase tick is
@@ -775,6 +812,13 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
+        // Per-peer shared-dictionary capability negotiation (opt-in).
+        // Resolves the effective dictionary id for this peer against its
+        // advertised capability; a no-op when the option is off. Never
+        // fails fast - an unmatched or unknown peer falls back to
+        // dictionary-less compression at the stamp site.
+        TryNegotiateSharedDictionary(options);
+
         // Build the framing-only EncodedEnvelope. The drain has
         // already populated _drainEncodedSegments with the
         // pre-encoded WAL entry payloads (the bytes the canonical
@@ -788,6 +832,7 @@ internal sealed class ReplicationShipperGrain(
         ReplicationBatchEncodedEnvelope encodedEnvelope;
         try
         {
+            var (framingCompression, framingDictionaryId) = ResolveFramingCompression(options);
             var header = new EncodedBatchHeader
             {
                 Magic = EncodedBatchHeader.MagicValue,
@@ -805,26 +850,16 @@ internal sealed class ReplicationShipperGrain(
                 // matches both the producer-side WAL writer's stamp
                 // and the wire-baseline default of pre-Mode-hoist receivers.
                 Mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister,
-                // Framing-tail compression. Honour the option only
-                // when the uncompressed tail is large enough to
-                // amortise the per-batch fixed overhead; below the
-                // threshold (or when the option is None), stamp
-                // LatticeCompression.None so heartbeat / small-bursty
-                // batches do not pay the compression cost.
-                Compression = options.FramingCompression != LatticeCompression.None
-                              && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
-                    ? options.FramingCompression
-                    : LatticeCompression.None,
-                // Shared-dictionary id, only meaningful for the
-                // ZstdDictionary tag. Carried in the framed tail (not
-                // the fixed header) so the receiver can select the
-                // matching dictionary; the encoder degrades to plain
-                // Zstd when the requested dictionary cannot be
-                // resolved locally. Every other tag carries id 0.
-                DictionaryId = options.FramingCompression == LatticeCompression.ZstdDictionary
-                               && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
-                    ? options.FramingCompressionDictionaryId
-                    : 0u,
+                // Framing-tail compression and shared-dictionary id are
+                // resolved together by ResolveFramingCompression: it
+                // honours the threshold/algorithm exactly as before, and
+                // applies per-peer shared-dictionary negotiation when the
+                // option is on (falling back to dictionary-less Zstd for a
+                // peer that has not advertised the configured id). When
+                // negotiation is off the result is byte-identical to the
+                // prior inline computation.
+                Compression = framingCompression,
+                DictionaryId = framingDictionaryId,
             };
             // CollectionsMarshal.AsSpan(...) of List<T> exposes the
             // List's backing array as a contiguous Memory<T>; we copy
@@ -952,6 +987,10 @@ internal sealed class ReplicationShipperGrain(
         // next tick's negotiation. Harmless when negotiation is off
         // (the value is simply never read).
         _peerWireVersion = ack.SupportedWireVersion;
+        // Capture the peer's advertised shared-dictionary capability for
+        // the next tick's dictionary negotiation. Harmless when
+        // dictionary negotiation is off (the value is never read).
+        _peerAdvertisedDictionaryIds = ack.AdvertisedDictionaryIds;
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -1407,6 +1446,10 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
+        // Per-peer shared-dictionary capability negotiation (opt-in),
+        // mirroring the serial path. A no-op when the option is off.
+        TryNegotiateSharedDictionary(options);
+
         var inFlight = new Queue<InFlightShipBatch>(window);
         var failed = false;
         var shippedAny = false;
@@ -1656,6 +1699,7 @@ internal sealed class ReplicationShipperGrain(
         var entries = new ArraySegment<byte>[count];
         System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_drainEncodedSegments).CopyTo(entries);
         byteCount = _drainEncodedByteCount;
+        var (framingCompression, framingDictionaryId) = ResolveFramingCompression(options);
         var header = new EncodedBatchHeader
         {
             Magic = EncodedBatchHeader.MagicValue,
@@ -1666,14 +1710,8 @@ internal sealed class ReplicationShipperGrain(
             EntryCount = count,
             BatchSequence = 0,
             Mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister,
-            Compression = options.FramingCompression != LatticeCompression.None
-                          && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
-                ? options.FramingCompression
-                : LatticeCompression.None,
-            DictionaryId = options.FramingCompression == LatticeCompression.ZstdDictionary
-                           && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes
-                ? options.FramingCompressionDictionaryId
-                : 0u,
+            Compression = framingCompression,
+            DictionaryId = framingDictionaryId,
         };
         return new ReplicationBatchEncodedEnvelope
         {
@@ -2680,6 +2718,7 @@ internal sealed class ReplicationShipperGrain(
         _nextRetryAtUtc = DateTime.MinValue;
         _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
         _peerWireVersion = ack.SupportedWireVersion;
+        _peerAdvertisedDictionaryIds = ack.AdvertisedDictionaryIds;
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -2771,6 +2810,112 @@ internal sealed class ReplicationShipperGrain(
         _negotiatedWireVersion = negotiation.EffectiveWireVersion;
         return true;
     }
+
+    /// <summary>
+    /// Computes the per-peer shared-dictionary capability negotiation for
+    /// the next batch against the peer's most recently advertised
+    /// <see cref="ReplicationAck.AdvertisedDictionaryIds"/>, records the
+    /// outcome to the
+    /// <see cref="LatticeReplicationMetrics.DictionaryNegotiation"/> counter
+    /// and the process-wide <see cref="SharedDictionaryNegotiationState"/>,
+    /// and stores the effective dictionary id the header sites will stamp
+    /// into <see cref="_negotiatedDictionaryId"/>. Only acts when
+    /// <see cref="LatticeReplicationOptions.DictionaryNegotiationEnabled"/>
+    /// is set and a shared dictionary is actually configured
+    /// (<see cref="LatticeCompression.ZstdDictionary"/> with a non-zero
+    /// <see cref="LatticeReplicationOptions.FramingCompressionDictionaryId"/>);
+    /// otherwise it resets the negotiated id to <c>0</c>. Unlike
+    /// <see cref="TryNegotiateWireVersion"/> this never fails fast: an
+    /// unmatched or as-yet-unknown peer capability falls back to
+    /// dictionary-less compression, which every peer can decode, so no peer
+    /// ever receives a frame compressed with a dictionary it has not
+    /// advertised.
+    /// </summary>
+    private void TryNegotiateSharedDictionary(LatticeReplicationOptions options)
+    {
+        if (!options.DictionaryNegotiationEnabled
+            || options.FramingCompression != LatticeCompression.ZstdDictionary
+            || options.FramingCompressionDictionaryId == 0)
+        {
+            _negotiatedDictionaryId = 0u;
+            return;
+        }
+
+        var negotiation = SharedDictionaryNegotiation.Negotiate(
+            options.FramingCompressionDictionaryId, _peerAdvertisedDictionaryIds);
+
+        _dictionaryNegotiationState.Record(_treeName, _peerClusterId, negotiation);
+        LatticeReplicationMetrics.DictionaryNegotiation.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            new KeyValuePair<string, object?>(
+                LatticeReplicationMetrics.TagOutcome,
+                LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(negotiation)));
+
+        _negotiatedDictionaryId = negotiation.EffectiveDictionaryId;
+    }
+
+    /// <summary>
+    /// Resolves the framing-tail compression algorithm and shared-dictionary
+    /// id to stamp on the next batch's <see cref="EncodedBatchHeader"/>.
+    /// Honours the configured algorithm and the
+    /// <see cref="LatticeReplicationOptions.FramingCompressionMinBatchBytes"/>
+    /// threshold exactly as before; on the dictionary-eligible path
+    /// (configured <see cref="LatticeCompression.ZstdDictionary"/> with a
+    /// large-enough tail) it applies per-peer shared-dictionary negotiation
+    /// when <see cref="LatticeReplicationOptions.DictionaryNegotiationEnabled"/>
+    /// is set: a matched peer keeps the negotiated dictionary id, while an
+    /// unmatched or unknown peer is stamped with plain dictionary-less
+    /// <see cref="LatticeCompression.Zstd"/> so the receiver decodes a frame
+    /// it can always handle. When negotiation is off the returned pair is
+    /// byte-identical to the prior inline computation. The method records
+    /// the per-batch
+    /// <see cref="LatticeReplicationMetrics.DictionaryBatches"/> counter on
+    /// the dictionary-eligible path; metric recording never changes the
+    /// bytes on the wire.
+    /// </summary>
+    private (LatticeCompression Compression, uint DictionaryId) ResolveFramingCompression(
+        LatticeReplicationOptions options)
+    {
+        var eligible = options.FramingCompression != LatticeCompression.None
+                       && _drainEncodedByteCount >= options.FramingCompressionMinBatchBytes;
+        if (!eligible)
+        {
+            return (LatticeCompression.None, 0u);
+        }
+
+        if (options.FramingCompression != LatticeCompression.ZstdDictionary)
+        {
+            return (options.FramingCompression, 0u);
+        }
+
+        // Dictionary-eligible path. When negotiation is off, stamp the
+        // configured id exactly as before. When on, stamp the negotiated id
+        // (0 unless the peer advertised the configured id) and degrade the
+        // tag to plain Zstd on fallback.
+        var dictionaryId = options.DictionaryNegotiationEnabled
+            ? _negotiatedDictionaryId
+            : options.FramingCompressionDictionaryId;
+
+        if (options.DictionaryNegotiationEnabled && dictionaryId == 0)
+        {
+            RecordDictionaryBatch(LatticeReplicationMetrics.DictionaryBatchWithout);
+            return (LatticeCompression.Zstd, 0u);
+        }
+
+        RecordDictionaryBatch(dictionaryId != 0
+            ? LatticeReplicationMetrics.DictionaryBatchWith
+            : LatticeReplicationMetrics.DictionaryBatchWithout);
+        return (LatticeCompression.ZstdDictionary, dictionaryId);
+    }
+
+    private void RecordDictionaryBatch(string dictionaryTag) =>
+        LatticeReplicationMetrics.DictionaryBatches.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDictionary, dictionaryTag));
 
     private void ApplyBackoff(LatticeReplicationOptions options, Exception? exception, string reason)
     {

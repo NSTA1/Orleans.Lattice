@@ -109,6 +109,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly IReceiverFlowControlPolicy _flowControlPolicy;
     private readonly IGrainFactory _grainFactory;
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
+    private readonly ILatticeCompressionDictionaryProvider? _dictionaryProvider;
 
     /// <summary>
     /// Initialises the service with its dependencies. The
@@ -123,7 +124,13 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// hook always observes a populated holder. The
     /// <paramref name="grainFactory"/> resolves the local
     /// <see cref="ILattice"/> grain when answering an inbound digest
-    /// probe.
+    /// probe. The optional <paramref name="dictionaryProvider"/> lets the
+    /// receiver advertise which shared compression dictionaries it can
+    /// resolve (when the provider implements
+    /// <see cref="ILatticeCompressionDictionaryCatalog"/>) so an opted-in
+    /// sender only compresses with a dictionary this peer can decode; the
+    /// default registration is the always-resolvable empty operator-supplied
+    /// provider, which advertises no dictionaries.
     /// </summary>
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethod method,
@@ -131,7 +138,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         IWalCursorRegistry cursorRegistry,
         IReceiverFlowControlPolicy flowControlPolicy,
         IGrainFactory grainFactory,
-        ILogger<LatticeReplicationGrpcService> logger)
+        ILogger<LatticeReplicationGrpcService> logger,
+        ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
@@ -145,6 +153,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         _flowControlPolicy = flowControlPolicy;
         _grainFactory = grainFactory;
         _logger = logger;
+        _dictionaryProvider = dictionaryProvider;
     }
 
     /// <inheritdoc />
@@ -268,6 +277,30 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 request.TreeName);
         }
 
+        // Advertise the shared compression dictionaries this receiver can
+        // resolve, so a sender that has opted into shared-dictionary
+        // negotiation only compresses a batch with a dictionary id this
+        // peer can decode. Null when the provider exposes no catalog (a
+        // build predating dictionary negotiation, or a provider without a
+        // catalog) or holds no dictionaries; otherwise a sorted snapshot of
+        // the registered ids for a deterministic advertisement order.
+        uint[]? advertisedDictionaryIds = null;
+        if (_dictionaryProvider is ILatticeCompressionDictionaryCatalog catalog)
+        {
+            var ids = catalog.AvailableDictionaryIds;
+            if (ids.Count > 0)
+            {
+                var snapshot = new uint[ids.Count];
+                var i = 0;
+                foreach (var id in ids)
+                {
+                    snapshot[i++] = id;
+                }
+                Array.Sort(snapshot);
+                advertisedDictionaryIds = snapshot;
+            }
+        }
+
         return new ReplicationAckBox
         {
             Value = new ReplicationAck
@@ -283,6 +316,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 // capability (for its negotiation telemetry and the
                 // minimum-floor guard).
                 SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
+                AdvertisedDictionaryIds = advertisedDictionaryIds,
             },
         };
     }

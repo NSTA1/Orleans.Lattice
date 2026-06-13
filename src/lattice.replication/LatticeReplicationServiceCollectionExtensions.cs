@@ -224,6 +224,12 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // shipper actually negotiates with, so an inactive replication
         // host emits nothing.
         builder.Services.TryAddSingleton<WireVersionNegotiationState>();
+        // Per-peer shared-dictionary negotiation telemetry singleton.
+        // Records the per-(tree, peer) negotiation outcome each pump tick
+        // and exposes a Snapshot() for diagnostics. Wired unconditionally -
+        // it records only for peers the shipper actually negotiates a
+        // dictionary with, so an inactive replication host stores nothing.
+        builder.Services.TryAddSingleton<SharedDictionaryNegotiationState>();
         // Default runtime-observable peer topology: projects
         // LatticeReplicationOptions.ReplicationPeers via
         // IOptionsMonitor.OnChange so hosts can add or remove peers at

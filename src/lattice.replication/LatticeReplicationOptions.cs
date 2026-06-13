@@ -1071,6 +1071,36 @@ public class LatticeReplicationOptions
     public uint FramingCompressionDictionaryId { get; set; } = DefaultFramingCompressionDictionaryId;
 
     /// <summary>
+    /// Opts in to per-peer shared-dictionary capability negotiation on the
+    /// outbound ship path. When <see langword="true"/> and the tree is
+    /// configured for <see cref="LatticeCompression.ZstdDictionary"/> with a
+    /// non-zero <see cref="FramingCompressionDictionaryId"/>, the
+    /// per-<c>(tree, peer)</c> shipper reads each peer's advertised
+    /// <see cref="ReplicationAck.AdvertisedDictionaryIds"/> from its acks and
+    /// negotiates the effective dictionary id via
+    /// <see cref="SharedDictionaryNegotiation.Negotiate(uint, System.Collections.Generic.IReadOnlyCollection{uint})"/>:
+    /// it compresses with the configured dictionary id only for a peer that
+    /// has advertised that id, and otherwise falls back to dictionary-less
+    /// <see cref="LatticeCompression.Zstd"/> for that peer. This guarantees a
+    /// sender never ships a frame compressed with a dictionary the target
+    /// peer cannot resolve, so mixed fleets where some peers lack the
+    /// dictionary keep working during a rolling upgrade. The per-peer
+    /// negotiated state is activation-scoped and refreshed on every ack, so
+    /// it adapts when a peer reconnects or changes its advertised capability.
+    /// The negotiation outcome and the share of batches shipped with versus
+    /// without a shared dictionary are published to the
+    /// <c>ship.dictionary_negotiation</c> and <c>ship.dictionary_batches</c>
+    /// counters.
+    /// <para>
+    /// Defaults to <see langword="false"/>: negotiation is off and the
+    /// shipper stamps the configured dictionary id exactly as it did before
+    /// this option existed - the bytes on the wire are byte-identical for
+    /// hosts that do not opt in.
+    /// </para>
+    /// </summary>
+    public bool DictionaryNegotiationEnabled { get; set; } = DefaultDictionaryNegotiationEnabled;
+
+    /// <summary>
     /// Opts in to wire-version capability negotiation on the outbound
     /// ship path. When <see langword="true"/>, the per-<c>(tree, peer)</c>
     /// shipper reads each peer's advertised
@@ -1780,6 +1810,14 @@ public class LatticeReplicationOptions
     /// to a dictionary-less build.
     /// </summary>
     public const uint DefaultFramingCompressionDictionaryId = 0u;
+
+    /// <summary>
+    /// Default value for <see cref="DictionaryNegotiationEnabled"/>:
+    /// <see langword="false"/>. Per-peer shared-dictionary negotiation
+    /// ships dark; hosts opt in explicitly once they want a sender to gate
+    /// dictionary compression on each peer's advertised capability.
+    /// </summary>
+    public const bool DefaultDictionaryNegotiationEnabled = false;
 
     /// <summary>
     /// Default value for <see cref="WireVersionNegotiationEnabled"/>:

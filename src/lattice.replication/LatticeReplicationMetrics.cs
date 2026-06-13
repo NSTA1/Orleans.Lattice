@@ -1497,4 +1497,102 @@ public static class LatticeReplicationMetrics
         RemediationDisabledReason.CircuitOpen => DigestRemediationReasonCircuitOpen,
         _ => DigestRemediationReasonOptOut,
     };
+
+    // --- Per-peer shared-dictionary capability negotiation (opt-in) ---
+
+    /// <summary>
+    /// Tag key for whether a shipped batch used a shared compression
+    /// dictionary. Carried by the <see cref="DictionaryBatches"/> counter;
+    /// the value is one of <see cref="DictionaryBatchWith"/> or
+    /// <see cref="DictionaryBatchWithout"/>.
+    /// </summary>
+    public const string TagDictionary = "dictionary";
+
+    /// <summary>
+    /// Counter incremented once per pump tick on which the shipper computes
+    /// a per-peer shared-dictionary capability negotiation against a peer's
+    /// advertised dictionary ids. Tagged by <see cref="TagTree"/>,
+    /// <see cref="TagPeer"/>, and <see cref="TagOutcome"/> (one of
+    /// <see cref="DictionaryNegotiationOutcomeMatched"/>,
+    /// <see cref="DictionaryNegotiationOutcomeFellBack"/>, or
+    /// <see cref="DictionaryNegotiationOutcomeUnknown"/>). Lets operators
+    /// watch how often a configured dictionary is honoured versus falling
+    /// back to dictionary-less compression across a mixed fleet. Emitted
+    /// only when
+    /// <see cref="LatticeReplicationOptions.DictionaryNegotiationEnabled"/>
+    /// is set and a shared dictionary is configured.
+    /// </summary>
+    public static readonly Counter<long> DictionaryNegotiation =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.dictionary_negotiation", unit: "{negotiation}",
+            description: "Per-peer shared-dictionary capability negotiations, tagged by tree, peer, and outcome.");
+
+    /// <summary>Canonical name of the <see cref="DictionaryNegotiation"/> counter.</summary>
+    public const string DictionaryNegotiationName = "orleans.lattice.replication.ship.dictionary_negotiation";
+
+    /// <summary>
+    /// Counter incremented once per shipped batch on the dictionary-eligible
+    /// path (configured <see cref="LatticeCompression.ZstdDictionary"/> with
+    /// a large-enough tail). Tagged by <see cref="TagTree"/>,
+    /// <see cref="TagPeer"/>, and <see cref="TagDictionary"/> (one of
+    /// <see cref="DictionaryBatchWith"/> or <see cref="DictionaryBatchWithout"/>),
+    /// so a dashboard can show the share of batches compressed with a shared
+    /// dictionary versus dictionary-less.
+    /// </summary>
+    public static readonly Counter<long> DictionaryBatches =
+        Meter.CreateCounter<long>("orleans.lattice.replication.ship.dictionary_batches", unit: "{batch}",
+            description: "Batches shipped on the dictionary-eligible path, tagged by tree, peer, and whether a shared dictionary was used.");
+
+    /// <summary>Canonical name of the <see cref="DictionaryBatches"/> counter.</summary>
+    public const string DictionaryBatchesName = "orleans.lattice.replication.ship.dictionary_batches";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on the
+    /// <see cref="DictionaryNegotiation"/> counter: the peer advertised the
+    /// configured dictionary id, so the sender compressed with it.
+    /// </summary>
+    public const string DictionaryNegotiationOutcomeMatched = "matched";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on the
+    /// <see cref="DictionaryNegotiation"/> counter: the peer advertised a
+    /// capability that did not include the configured dictionary id, so the
+    /// sender fell back to dictionary-less compression for this peer.
+    /// </summary>
+    public const string DictionaryNegotiationOutcomeFellBack = "fell_back";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on the
+    /// <see cref="DictionaryNegotiation"/> counter: the peer has not
+    /// advertised a dictionary capability yet (a build predating dictionary
+    /// negotiation, or no ack observed since activation), so the sender fell
+    /// back to dictionary-less compression conservatively.
+    /// </summary>
+    public const string DictionaryNegotiationOutcomeUnknown = "unknown";
+
+    /// <summary>
+    /// <see cref="TagDictionary"/> value on the <see cref="DictionaryBatches"/>
+    /// counter: the batch was compressed with a shared dictionary.
+    /// </summary>
+    public const string DictionaryBatchWith = "with_dictionary";
+
+    /// <summary>
+    /// <see cref="TagDictionary"/> value on the <see cref="DictionaryBatches"/>
+    /// counter: the batch was compressed without a shared dictionary (plain
+    /// Zstd, or below the compression threshold).
+    /// </summary>
+    public const string DictionaryBatchWithout = "without_dictionary";
+
+    /// <summary>
+    /// Maps a <see cref="SharedDictionaryNegotiationResult"/> to its
+    /// canonical <see cref="TagOutcome"/> string value for the
+    /// <see cref="DictionaryNegotiation"/> counter.
+    /// </summary>
+    /// <param name="result">The negotiation result.</param>
+    /// <returns>The matching outcome-tag string constant.</returns>
+    public static string DictionaryNegotiationOutcomeTag(SharedDictionaryNegotiationResult result) =>
+        result.FellBack
+            ? (result.PeerCapabilityKnown
+                ? DictionaryNegotiationOutcomeFellBack
+                : DictionaryNegotiationOutcomeUnknown)
+            : DictionaryNegotiationOutcomeMatched;
 }

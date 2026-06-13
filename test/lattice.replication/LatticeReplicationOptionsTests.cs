@@ -25,6 +25,24 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
+    public void DefaultDictionaryNegotiationEnabled_is_false() =>
+        Assert.That(LatticeReplicationOptions.DefaultDictionaryNegotiationEnabled, Is.False);
+
+    [Test]
+    public void New_instance_has_dictionary_negotiation_disabled()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.DictionaryNegotiationEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultDictionaryNegotiationEnabled));
+    }
+
+    [Test]
+    public void DictionaryNegotiationEnabled_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { DictionaryNegotiationEnabled = true };
+        Assert.That(opts.DictionaryNegotiationEnabled, Is.True);
+    }
+
+    [Test]
     public void DefaultClusterId_is_empty_string() =>
         Assert.That(LatticeReplicationOptions.DefaultClusterId, Is.EqualTo(""));
 

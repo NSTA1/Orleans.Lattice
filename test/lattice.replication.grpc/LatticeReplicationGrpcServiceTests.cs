@@ -247,6 +247,69 @@ public class LatticeReplicationGrpcServiceTests
         });
     }
 
+    private static LatticeReplicationGrpcService CreateServiceWithDictionaryProvider(
+        ILatticeCompressionDictionaryProvider? dictionaryProvider,
+        out LatticeReplicationGrpcMethod method)
+    {
+        var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        method = BuildMethod(sp);
+        return new LatticeReplicationGrpcService(
+            method,
+            Substitute.For<IReplicationApplier>(),
+            new InMemoryWalCursorRegistry(),
+            NoOpReceiverFlowControlPolicy.Instance,
+            Substitute.For<IGrainFactory>(),
+            NullLogger<LatticeReplicationGrpcService>.Instance,
+            dictionaryProvider);
+    }
+
+    private static ReplicationBatchEnvelopeBox EmptyBox() => new()
+    {
+        Value = new ReplicationBatchEnvelope
+        {
+            TreeName = "tree",
+            OriginClusterId = "remote",
+            Entries = Array.Empty<WalRecord>(),
+        },
+    };
+
+    [Test]
+    public async Task Push_advertises_sorted_catalog_dictionary_ids()
+    {
+        var provider = new OperatorSuppliedCompressionDictionaryProvider(
+            new Dictionary<uint, ReadOnlyMemory<byte>>
+            {
+                [7u] = new byte[] { 1, 2, 3 },
+                [3u] = new byte[] { 4, 5, 6 },
+            });
+        var svc = CreateServiceWithDictionaryProvider(provider, out _);
+
+        var ack = await svc.Push(EmptyBox(), new TestServerCallContext());
+
+        Assert.That(ack.Value.AdvertisedDictionaryIds, Is.EqualTo(new uint[] { 3u, 7u }));
+    }
+
+    [Test]
+    public async Task Push_advertises_null_dictionary_ids_for_empty_catalog()
+    {
+        var svc = CreateServiceWithDictionaryProvider(
+            OperatorSuppliedCompressionDictionaryProvider.Empty, out _);
+
+        var ack = await svc.Push(EmptyBox(), new TestServerCallContext());
+
+        Assert.That(ack.Value.AdvertisedDictionaryIds, Is.Null);
+    }
+
+    [Test]
+    public async Task Push_advertises_null_dictionary_ids_when_no_provider()
+    {
+        var svc = CreateServiceWithDictionaryProvider(dictionaryProvider: null, out _);
+
+        var ack = await svc.Push(EmptyBox(), new TestServerCallContext());
+
+        Assert.That(ack.Value.AdvertisedDictionaryIds, Is.Null);
+    }
+
     [Test]
     public async Task Push_returns_max_hwm_across_entries()
     {
