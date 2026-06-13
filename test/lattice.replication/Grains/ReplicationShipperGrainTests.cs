@@ -740,7 +740,7 @@ public partial class ReplicationShipperGrainTests
         Assert.That(captured!.Value.OriginClusterId, Is.EqualTo(LocalCluster));
     }
 
-    // --- Content-hash dedup measurement (opt-in, default off) ---
+    // --- Content-hash dedup measurement (default on, overridable off) ---
 
     private static WalRecord MakeEntryWithValue(
         string key,
@@ -764,6 +764,12 @@ public partial class ReplicationShipperGrainTests
             ShipCursorWriteInterval = 1,
             ReplogPartitions = 1,
             ContentHashDedupEnabled = enabled,
+            // These tests assert the verbatim shipped-entry count and the
+            // redundant-payload measurement over same-key re-sends. Pre-ship
+            // coalescing now defaults on and would collapse the same-key
+            // versions before they reach the wire, so pin it off here to keep
+            // the dedup-measurement assertions isolated to the dedup feature.
+            PreShipCoalescingEnabled = false,
         };
 
     [Test]

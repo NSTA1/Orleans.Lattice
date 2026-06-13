@@ -714,23 +714,23 @@ public class LatticeReplicationOptionsTests
     }
 
     // ------------------------------------------------------------------
-    // Content-hash dedup measurement (opt-in, default off)
+    // Content-hash dedup measurement (default on, overridable off)
     // ------------------------------------------------------------------
 
     [Test]
-    public void DefaultContentHashDedupEnabled_is_false() =>
-        Assert.That(LatticeReplicationOptions.DefaultContentHashDedupEnabled, Is.False);
+    public void DefaultContentHashDedupEnabled_is_true() =>
+        Assert.That(LatticeReplicationOptions.DefaultContentHashDedupEnabled, Is.True);
 
     [Test]
     public void DefaultContentHashDedupCacheSize_is_4096() =>
         Assert.That(LatticeReplicationOptions.DefaultContentHashDedupCacheSize, Is.EqualTo(4096));
 
     [Test]
-    public void New_instance_has_content_hash_dedup_disabled_by_default()
+    public void New_instance_has_content_hash_dedup_enabled_by_default()
     {
         var opts = new LatticeReplicationOptions();
         Assert.That(opts.ContentHashDedupEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultContentHashDedupEnabled));
-        Assert.That(opts.ContentHashDedupEnabled, Is.False);
+        Assert.That(opts.ContentHashDedupEnabled, Is.True);
     }
 
     [Test]
@@ -748,10 +748,84 @@ public class LatticeReplicationOptionsTests
     }
 
     [Test]
+    public void ContentHashDedupEnabled_can_be_overridden_off()
+    {
+        // The measurement defaults on; an operator opts out by setting the
+        // flag false, after which the shipper frames bytes exactly as a
+        // build without the measurement (no hashing, no cache, no metric).
+        var opts = new LatticeReplicationOptions { ContentHashDedupEnabled = false };
+        Assert.That(opts.ContentHashDedupEnabled, Is.False);
+    }
+
+    [Test]
     public void ContentHashDedupCacheSize_is_settable()
     {
         var opts = new LatticeReplicationOptions { ContentHashDedupCacheSize = 512 };
         Assert.That(opts.ContentHashDedupCacheSize, Is.EqualTo(512));
+    }
+
+    // ------------------------------------------------------------------
+    // Pre-ship coalescing (default on, overridable off)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultPreShipCoalescingEnabled_is_true() =>
+        Assert.That(LatticeReplicationOptions.DefaultPreShipCoalescingEnabled, Is.True);
+
+    [Test]
+    public void New_instance_has_pre_ship_coalescing_enabled_by_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.PreShipCoalescingEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultPreShipCoalescingEnabled));
+        Assert.That(opts.PreShipCoalescingEnabled, Is.True);
+    }
+
+    [Test]
+    public void PreShipCoalescingEnabled_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { PreShipCoalescingEnabled = true };
+        Assert.That(opts.PreShipCoalescingEnabled, Is.True);
+    }
+
+    [Test]
+    public void PreShipCoalescingEnabled_can_be_overridden_off()
+    {
+        // Coalescing defaults on; opting out restores the byte-identical
+        // verbatim drain (no coalescing pass, no entry elided).
+        var opts = new LatticeReplicationOptions { PreShipCoalescingEnabled = false };
+        Assert.That(opts.PreShipCoalescingEnabled, Is.False);
+    }
+
+    // ------------------------------------------------------------------
+    // Framing-tail compression (default dict-less Zstd, overridable to None)
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void DefaultFramingCompression_is_zstd() =>
+        Assert.That(LatticeReplicationOptions.DefaultFramingCompression, Is.EqualTo(LatticeCompression.Zstd));
+
+    [Test]
+    public void New_instance_has_zstd_framing_compression_by_default()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.FramingCompression, Is.EqualTo(LatticeReplicationOptions.DefaultFramingCompression));
+        Assert.That(opts.FramingCompression, Is.EqualTo(LatticeCompression.Zstd));
+    }
+
+    [Test]
+    public void FramingCompression_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { FramingCompression = LatticeCompression.ZstdDictionary };
+        Assert.That(opts.FramingCompression, Is.EqualTo(LatticeCompression.ZstdDictionary));
+    }
+
+    [Test]
+    public void FramingCompression_can_be_overridden_to_none()
+    {
+        // The default framing algorithm is dict-less Zstd; a host that wants
+        // the historical uncompressed framing opts out with None.
+        var opts = new LatticeReplicationOptions { FramingCompression = LatticeCompression.None };
+        Assert.That(opts.FramingCompression, Is.EqualTo(LatticeCompression.None));
     }
 
     // ------------------------------------------------------------------

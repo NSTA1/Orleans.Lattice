@@ -220,6 +220,69 @@ public class CausalApplyBufferTests
     }
 
     [Test]
+    public void DependenciesSatisfied_skips_local_cluster_diagonal()
+    {
+        // A foreign entry whose VC depends on a write the receiver itself
+        // authored. The receiver-side local vector clock tracks only
+        // foreign-applied frontiers, so its own diagonal stays at zero -
+        // but the receiver durably holds every write it originated, so the
+        // dependency is trivially satisfied. Without the local-cluster
+        // exemption this parks forever and stalls convergence (the bug a
+        // healed A-C partition exposes when C's write causally follows A's).
+        var entry = Entry("k", Hlc(100), origin: OriginC, vc: Vc((OriginA, Hlc(50))));
+
+        Assert.Multiple(() =>
+        {
+            // Without the receiver hint the self-dependency is unsatisfiable.
+            Assert.That(
+                CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector()),
+                Is.False);
+            // Naming OriginA as the receiver's own cluster satisfies it.
+            Assert.That(
+                CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector(), localClusterId: OriginA),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void DependenciesSatisfied_still_requires_other_origins_when_local_cluster_exempted()
+    {
+        // Mixed dependency: one component on the receiver's own cluster
+        // (exempt) and one on a genuine third-party origin (still gated).
+        var entry = Entry("k", Hlc(100), origin: OriginC, vc: Vc((OriginA, Hlc(50)), (OriginB, Hlc(70))));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector(), localClusterId: OriginA),
+                Is.False);
+            Assert.That(
+                CausalApplyBuffer.DependenciesSatisfied(entry, Vc((OriginB, Hlc(70))), localClusterId: OriginA),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void DrainSatisfied_releases_local_cluster_self_dependency()
+    {
+        // A parked entry whose only outstanding dependency is on the
+        // receiver's own cluster must drain once the receiver hint is
+        // supplied; without it the entry would stay parked forever.
+        var buffer = new CausalApplyBuffer();
+        buffer.TryAdd(Entry("self-dep", Hlc(100), origin: OriginC, vc: Vc((OriginA, Hlc(50)))), 16, 1 << 20, out _);
+
+        var stillParked = buffer.DrainSatisfied(new VersionVector());
+        var released = buffer.DrainSatisfied(new VersionVector(), localClusterId: OriginA);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stillParked, Is.Empty);
+            Assert.That(released.Select(e => e.Key), Is.EqualTo(new[] { "self-dep" }));
+            Assert.That(buffer.Count, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
     public void DependenciesSatisfied_throws_when_local_vc_is_null()
     {
         var entry = Entry("k", Hlc(1), vc: Vc((OriginC, Hlc(50))));

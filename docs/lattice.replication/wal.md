@@ -85,7 +85,7 @@ This design fixes three sample-pipeline shortcuts that the original outgoing-cal
 
 - **No ship-time value read.** The captured `WalRecord` already carries the value (or delta) at commit-time HLC; the ship loop never re-reads the primary.
 - **No host-level outgoing-call filter.** Capture happens grain-side via `IMutationObserver`, so the WAL append is atomic with the write rather than a best-effort post-write hook.
-- **No silent coalescing between append and ship.** Every mutation gets its own monotonic sequence number; a later overwrite cannot retroactively shadow an earlier WAL entry.
+- **No silent coalescing between append and ship.** Every mutation gets its own monotonic sequence number; a later overwrite cannot retroactively shadow an earlier WAL entry. (The outbound shipper does apply *pre-ship coalescing* by default - collapsing redundant per-key versions off the cross-cluster wire - but that is a convergent transform over what the ship loop reads, never a mutation of the durable WAL: a last-writer-wins tree keeps the highest-HLC version per key, registered CRDT shapes delta-merge, and generic / unregistered OR-Map plus opaque payloads ship verbatim. Every WAL entry retains its sequence and the resume cursor advances past every elided version. Opt out per tree with `PreShipCoalescingEnabled = false`.)
 
 ## Reading from the WAL
 

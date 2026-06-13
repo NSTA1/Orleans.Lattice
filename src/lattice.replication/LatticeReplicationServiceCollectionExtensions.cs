@@ -160,9 +160,10 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // implementation is registered as an ILatticeCompressor so the
         // canonical encoder's IEnumerable<ILatticeCompressor>
         // constructor can build its dispatch dictionary once. Zstd is
-        // registered unconditionally so opting in to
-        // LatticeCompression.Zstd via options requires no extra DI
-        // wiring; the underlying ZstdSharp.Port library is pure
+        // registered unconditionally because dict-less
+        // LatticeCompression.Zstd is now the default framing algorithm,
+        // so this registration backs the out-of-the-box behaviour (not
+        // just an opt-in); the underlying ZstdSharp.Port library is pure
         // managed code so the registration cost when the algorithm is
         // never used is one allocation at startup. The default
         // compressor uses LatticeReplicationOptions.DefaultFramingCompressionLevel

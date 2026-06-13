@@ -79,10 +79,11 @@ internal sealed class ReplicationShipperGrain(
     /// replication package runs inside a configured silo; <c>null</c>
     /// only in unit-test constructions that exercise non-CRDT paths, in
     /// which case the CRDT coalescing pass lazily instantiates a private
-    /// registry the first time a CRDT tree opts into coalescing. The
-    /// default-off coalescing posture means a host that never sets
-    /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
-    /// never touches this field.
+    /// registry the first time a CRDT tree opts into coalescing. Pre-ship
+    /// coalescing now defaults on, so a stock host touches this field for
+    /// CRDT trees unless it sets
+    /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/> to
+    /// <see langword="false"/>.
     /// </summary>
     private CrdtShapeRegistry? _crdtShapeRegistry = crdtShapeRegistry;
 
@@ -2148,8 +2149,8 @@ internal sealed class ReplicationShipperGrain(
             _drainEncodedSegments.Add(new ArraySegment<byte>(payload));
             _drainEncodedByteCount += payload.Length;
 
-            // Content-hash dedup measurement (opt-in, default off). The
-            // measurement is observability-only: the entry above is
+            // Content-hash dedup measurement (default on, overridable off).
+            // The measurement is observability-only: the entry above is
             // shipped verbatim regardless of the outcome, so LWW / HLC
             // convergence semantics and the on-the-wire bytes are
             // unaffected. We hash the entry's content and record a
@@ -2159,11 +2160,11 @@ internal sealed class ReplicationShipperGrain(
             MeasureContentHashRedundancy(in winningRecord, options);
         }
 
-        // Pre-ship coalescing (opt-in, default off). Collapse redundant
-        // per-key versions out of the freshly-drained batch before they
-        // reach the wire. A no-op when the option is off (the drained
-        // buffers are shipped verbatim), so the default path is
-        // byte-identical to today's.
+        // Pre-ship coalescing (default on, overridable off). Collapse
+        // redundant per-key versions out of the freshly-drained batch before
+        // they reach the wire. A no-op when the option is overridden off (the
+        // drained buffers are shipped verbatim), so opting out restores the
+        // byte-identical verbatim drain.
         CoalesceDrainBuffer(options);
     }
 

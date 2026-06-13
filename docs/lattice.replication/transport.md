@@ -134,7 +134,7 @@ The contract is pinned by `TransportMetadataPassthroughContractTests` in both `O
 
 ## Content-hash payload-elision round trip (opt-in, default off)
 
-The push transport above is one-way: one batch in, one ack out. The opt-in content-hash payload-elision feature adds a *second*, bidirectional exchange in front of the push so the shipper can avoid re-sending payloads a peer already holds. It is built on the same per-(tree, peer) content hashing that drives the default-off re-send-rate measurement (`ship.redundant_payloads`), but instead of merely counting redundant re-sends it elides them.
+The push transport above is one-way: one batch in, one ack out. The opt-in content-hash payload-elision feature adds a *second*, bidirectional exchange in front of the push so the shipper can avoid re-sending payloads a peer already holds. It is built on the same per-(tree, peer) content hashing that drives the default-on re-send-rate measurement (`ship.redundant_payloads`, enabled by `ContentHashDedupEnabled` which now defaults to `true`), but instead of merely counting redundant re-sends it elides them. The elision step itself (`ContentHashDedupElisionEnabled`) stays opt-in and default-off because it needs the receiver to advertise which hashes it already holds.
 
 The exchange is a default-no-op method on the `IReplicationDigestProbeTransport` seam (the same bidirectional probe transport the anti-entropy digest probe uses), so existing transports compile and behave unchanged:
 
