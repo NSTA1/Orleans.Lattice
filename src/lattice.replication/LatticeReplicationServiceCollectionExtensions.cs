@@ -337,6 +337,78 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Opts into the self-distributing, auto-activating shared compression
+    /// dictionary with a single switch. Composes the four primitives that were
+    /// previously separate host wiring: it registers the auto-training
+    /// shared-dictionary provider (<see cref="AutoTrainingCompressionDictionaryProvider"/>)
+    /// with training enabled and the dictionary-aware Zstandard compressor;
+    /// exposes the provider as the commit-time training sampler so every
+    /// replicated value feeds the reservoir; registers a turn-safe training
+    /// pump (<see cref="AutoSharedDictionaryTrainingService"/>) so dictionaries
+    /// are trained off the hot path with no host code; and turns on the per-tree
+    /// <see cref="LatticeReplicationOptions.AutoSharedDictionaryEnabled"/> switch
+    /// so the ship path converges onto a peer's advertised dictionary (pulling
+    /// the bytes it does not yet hold), negotiates it fingerprint-safely, and
+    /// compresses wire traffic with it. Two clusters that both call this
+    /// converge on a usable shared dictionary with no out-of-band asset
+    /// provisioning; the default build (this method not called) is byte-for-byte
+    /// unchanged and ships no new RPC traffic.
+    /// <para>
+    /// Must be called after <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/>.
+    /// Because it is an explicit opt-in, it installs the auto-training provider
+    /// as the active <see cref="ILatticeCompressionDictionaryProvider"/>,
+    /// overriding the framework-default operator-supplied provider; a host that
+    /// wants a different provider simply does not call this switch.
+    /// </para>
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configureTraining">
+    /// Optional delegate to tune the
+    /// <see cref="CompressionDictionaryTrainingOptions"/> (reservoir size,
+    /// training cadence, retained versions, ...). <see cref="CompressionDictionaryTrainingOptions.Enabled"/>
+    /// is forced on regardless of the delegate.
+    /// </param>
+    /// <returns>The same <paramref name="builder"/> for fluent chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <see langword="null"/>.</exception>
+    public static ISiloBuilder AddLatticeAutoSharedDictionary(
+        this ISiloBuilder builder,
+        Action<CompressionDictionaryTrainingOptions>? configureTraining = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        // Register the auto-training provider (training forced on) as the
+        // singleton ILatticeCompressionDictionaryProvider, and the
+        // dictionary-aware Zstandard compressor that resolves its bytes.
+        builder.Services.AddLatticeAutoTrainingCompressionDictionary(options =>
+        {
+            configureTraining?.Invoke(options);
+            options.Enabled = true;
+        });
+        builder.Services.AddLatticeZstdDictionaryCompressor();
+
+        // This is an explicit opt-in, so it wins over the framework-default
+        // operator-supplied provider that AddLatticeReplication registers. A
+        // host that wants a different provider simply does not call this
+        // switch; calling it installs the auto-trainer as the active provider.
+        builder.Services.Replace(ServiceDescriptor.Singleton<ILatticeCompressionDictionaryProvider>(
+            sp => sp.GetRequiredService<AutoTrainingCompressionDictionaryProvider>()));
+
+        // Drive the trainer with no host code: the commit-time observer
+        // already samples through the injected provider (it implements the
+        // sampler seam), and this hosted service pumps TryTrain on a
+        // turn-safe cadence.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, AutoSharedDictionaryTrainingService>());
+
+        // Turn on the per-tree ship-path switch for every replicated tree.
+        // ConfigureAll layers under any later per-tree override a host applies.
+        builder.Services.ConfigureAll<LatticeReplicationOptions>(
+            options => options.AutoSharedDictionaryEnabled = true);
+
+        return builder;
+    }
+
+    /// <summary>
     /// <see cref="IPostConfigureOptions{TOptions}"/> that mirrors WAL-related
     /// fields from <see cref="LatticeReplicationOptions"/> onto
     /// <see cref="LatticeOptions"/> for the same tree id, so a host that

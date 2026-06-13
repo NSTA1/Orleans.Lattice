@@ -44,6 +44,12 @@ public class GrpcPushTransportIntegrationTests
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
                     services.AddSingleton(Substitute.For<IGrainFactory>());
+                    // Register a dictionary provider holding one installed
+                    // dictionary so the pull RPC has a held id to serve.
+                    var dictionaryProvider = new AutoTrainingCompressionDictionaryProvider(
+                        new CompressionDictionaryTrainingOptions { Enabled = true });
+                    dictionaryProvider.TryInstall(8u, PulledDictionaryBytes);
+                    services.AddSingleton<ILatticeCompressionDictionaryProvider>(dictionaryProvider);
                     services.AddLatticeReplicationGrpc();
                     // This fixture validates the wire shape rather than the
                     // shared-secret authenticator; disable the receiver-side
@@ -118,6 +124,8 @@ public class GrpcPushTransportIntegrationTests
                 return Task.FromResult(new ApplyResult { Applied = applied, HighWaterMark = max });
             });
     }
+
+    private static readonly byte[] PulledDictionaryBytes = { 10, 20, 30, 40, 50, 60 };
 
     private sealed class TestEncoder : IReplicationBatchEncoder
     {
@@ -205,6 +213,55 @@ public class GrpcPushTransportIntegrationTests
         {
             Assert.That(ackBox.Value.Accepted, Is.True);
             Assert.That(ackBox.Value.HighestAppliedHlc, Is.EqualTo(HybridLogicalClock.Zero));
+        });
+    }
+
+    [Test]
+    public async Task PullCompressionDictionary_round_trips_a_held_dictionary_over_the_wire()
+    {
+        var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
+        var invoker = _channel.CreateCallInvoker();
+
+        var box = new CompressionDictionaryPullRequestBox
+        {
+            Value = new CompressionDictionaryPullRequest { DictionaryId = 8u },
+        };
+
+        using var call = invoker.AsyncUnaryCall(method.PullCompressionDictionary, host: null, options: default, request: box);
+        var response = await call.ResponseAsync;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.Found, Is.True);
+            Assert.That(response.Value.DictionaryId, Is.EqualTo(8u));
+            Assert.That(response.Value.Dictionary.ToArray(), Is.EqualTo(PulledDictionaryBytes));
+            Assert.That(
+                response.Value.Fingerprint,
+                Is.EqualTo(CompressionDictionaryFingerprint.Compute(PulledDictionaryBytes)));
+        });
+    }
+
+    [Test]
+    public async Task PullCompressionDictionary_returns_not_held_for_an_unknown_id_over_the_wire()
+    {
+        var ackSerializer = _host.Services.GetRequiredService<Serializer<ReplicationAck>>();
+        var method = GrpcTestFactories.CreateMethod(_encoder, ackSerializer);
+        var invoker = _channel.CreateCallInvoker();
+
+        var box = new CompressionDictionaryPullRequestBox
+        {
+            Value = new CompressionDictionaryPullRequest { DictionaryId = 1234u },
+        };
+
+        using var call = invoker.AsyncUnaryCall(method.PullCompressionDictionary, host: null, options: default, request: box);
+        var response = await call.ResponseAsync;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.Found, Is.False);
         });
     }
 }

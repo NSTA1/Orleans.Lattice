@@ -45,6 +45,8 @@ internal static class GrpcTestFactories
             sp.GetRequiredService<Serializer<DigestProbeRequest>>(),
             sp.GetRequiredService<Serializer<DigestProbeResponse>>(),
             sp.GetRequiredService<Serializer<ContentManifestRequest>>(),
-            sp.GetRequiredService<Serializer<ContentManifestResponse>>());
+            sp.GetRequiredService<Serializer<ContentManifestResponse>>(),
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>(),
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>());
     }
 }

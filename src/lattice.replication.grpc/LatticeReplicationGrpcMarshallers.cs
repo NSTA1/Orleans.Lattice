@@ -109,6 +109,28 @@ internal sealed class ContentManifestResponseBox
 }
 
 /// <summary>
+/// Reference-typed wrapper around <see cref="CompressionDictionaryPullRequest"/>
+/// for the self-distributing shared-dictionary pull RPC. gRPC's
+/// <see cref="Method{TRequest, TResponse}"/> imposes a <c>class</c>
+/// constraint; the public request is a <c>readonly record struct</c>.
+/// Mirrors <see cref="ContentManifestRequestBox"/>.
+/// </summary>
+internal sealed class CompressionDictionaryPullRequestBox
+{
+    public CompressionDictionaryPullRequest Value { get; init; }
+}
+
+/// <summary>
+/// Reference-typed wrapper around <see cref="CompressionDictionaryPullResponse"/>
+/// for the self-distributing shared-dictionary pull RPC. Mirrors
+/// <see cref="ContentManifestResponseBox"/>.
+/// </summary>
+internal sealed class CompressionDictionaryPullResponseBox
+{
+    public CompressionDictionaryPullResponse Value { get; init; }
+}
+
+/// <summary>
 /// Builds gRPC <see cref="Marshaller{T}"/> instances that delegate to
 /// <see cref="IReplicationBatchEncoder"/> for the request envelope and
 /// to the Orleans <see cref="Serializer{T}"/> for the response ack. The
@@ -273,6 +295,44 @@ internal static class LatticeReplicationGrpcMarshallers
                 context.Complete();
             },
             deserializer: context => new ContentManifestResponseBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="CompressionDictionaryPullRequestBox"/> bound to the supplied
+    /// Orleans <paramref name="serializer"/>. Uses the same buffer-writer
+    /// hand-off pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<CompressionDictionaryPullRequestBox> CreateCompressionDictionaryPullRequestMarshaller(Serializer<CompressionDictionaryPullRequest> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<CompressionDictionaryPullRequestBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new CompressionDictionaryPullRequestBox { Value = DeserializeValue(serializer, context) });
+    }
+
+    /// <summary>
+    /// Builds a contextual <see cref="Marshaller{T}"/> for
+    /// <see cref="CompressionDictionaryPullResponseBox"/> bound to the supplied
+    /// Orleans <paramref name="serializer"/>. Uses the same buffer-writer
+    /// hand-off pattern as the probe marshallers.
+    /// </summary>
+    public static Marshaller<CompressionDictionaryPullResponseBox> CreateCompressionDictionaryPullResponseMarshaller(Serializer<CompressionDictionaryPullResponse> serializer)
+    {
+        ArgumentNullException.ThrowIfNull(serializer);
+
+        return Marshallers.Create<CompressionDictionaryPullResponseBox>(
+            serializer: (box, context) =>
+            {
+                serializer.Serialize(box.Value, context.GetBufferWriter());
+                context.Complete();
+            },
+            deserializer: context => new CompressionDictionaryPullResponseBox { Value = DeserializeValue(serializer, context) });
     }
 
     private static T DeserializeValue<T>(Serializer<T> serializer, GrpcDeserializationContext context)

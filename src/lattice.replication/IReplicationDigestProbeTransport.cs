@@ -134,4 +134,32 @@ public interface IReplicationDigestProbeTransport
         ContentManifestRequest request,
         CancellationToken cancellationToken)
         => Task.FromResult(ContentManifestResponse.NotSupported);
+
+    /// <summary>
+    /// Pulls the raw bytes of a shared compression dictionary the local
+    /// provider does not yet hold from a peer that advertised it, so an
+    /// auto-training cluster converges onto a peer's trained dictionary
+    /// instead of failing to decode frames compressed against it. The
+    /// caller passes the advertised dictionary id; the peer answers with
+    /// the bytes and their content fingerprint, which the caller verifies
+    /// against the advertised fingerprint before installing.
+    /// <para>
+    /// A default implementation returns
+    /// <see cref="CompressionDictionaryPullResponse.NotSupported"/> -
+    /// <see cref="CompressionDictionaryPullResponse.ExchangeSupported"/> is
+    /// <see langword="false"/> - so a transport (or peer) that has not
+    /// implemented the pull behaves exactly as today: the caller leaves the
+    /// dictionary uninstalled and retries on a later tick. Real transports
+    /// (the gRPC binding) override this to invoke the pull RPC over the
+    /// same per-peer channel cache the push transport uses.
+    /// </para>
+    /// </summary>
+    /// <param name="targetClusterId">The peer cluster id to pull from. Must be non-empty.</param>
+    /// <param name="request">The advertised dictionary id to resolve.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<CompressionDictionaryPullResponse> PullCompressionDictionaryAsync(
+        string targetClusterId,
+        CompressionDictionaryPullRequest request,
+        CancellationToken cancellationToken)
+        => Task.FromResult(CompressionDictionaryPullResponse.NotSupported);
 }

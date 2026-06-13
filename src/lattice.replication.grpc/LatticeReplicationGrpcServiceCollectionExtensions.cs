@@ -238,9 +238,12 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
             var probeResponseSerializer = sp.GetRequiredService<Serializer<DigestProbeResponse>>();
             var manifestRequestSerializer = sp.GetRequiredService<Serializer<ContentManifestRequest>>();
             var manifestResponseSerializer = sp.GetRequiredService<Serializer<ContentManifestResponse>>();
+            var dictionaryPullRequestSerializer = sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>();
+            var dictionaryPullResponseSerializer = sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>();
             var method = new LatticeReplicationGrpcMethod(
                 encoder, walRecordEncoder, ackSerializer, probeRequestSerializer, probeResponseSerializer,
-                manifestRequestSerializer, manifestResponseSerializer);
+                manifestRequestSerializer, manifestResponseSerializer,
+                dictionaryPullRequestSerializer, dictionaryPullResponseSerializer);
             LatticeReplicationGrpcMethodHolder.Current = method;
             return method;
         });

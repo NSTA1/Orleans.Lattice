@@ -49,7 +49,9 @@ public class LatticeReplicationGrpcServiceTests
             probeRequestSerializer,
             probeResponseSerializer,
             manifestRequestSerializer,
-            manifestResponseSerializer);
+            manifestResponseSerializer,
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>(),
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>());
         return new LatticeReplicationGrpcService(
             method, applier, cursorRegistry, policy, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance);
     }
@@ -200,7 +202,9 @@ public class LatticeReplicationGrpcServiceTests
             sp.GetRequiredService<Serializer<DigestProbeRequest>>(),
             sp.GetRequiredService<Serializer<DigestProbeResponse>>(),
             sp.GetRequiredService<Serializer<ContentManifestRequest>>(),
-            sp.GetRequiredService<Serializer<ContentManifestResponse>>());
+            sp.GetRequiredService<Serializer<ContentManifestResponse>>(),
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullRequest>>(),
+            sp.GetRequiredService<Serializer<CompressionDictionaryPullResponse>>());
     }
 
     [Test]
@@ -1106,32 +1110,85 @@ public class LatticeReplicationGrpcServiceTests
     }
 
     [Test]
-    public async Task ExchangeContentManifest_empty_manifest_returns_supported_with_no_missing()
+    public async Task PullCompressionDictionary_throws_when_request_box_null()
     {
-        var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
-        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(HybridLogicalClock.Zero));
-        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+        var svc = CreateServiceWithDictionaryProvider(dictionaryProvider: null, out _);
 
-        var svc = CreateServiceWithFactory(factory, out _);
-        var box = new ContentManifestRequestBox
-        {
-            Value = new ContentManifestRequest
-            {
-                TreeName = "tree",
-                OriginClusterId = "site-a",
-                Entries = Array.Empty<ContentManifestEntry>(),
-            },
-        };
+        Assert.That(
+            async () => await svc.PullCompressionDictionary(null!, new TestServerCallContext()),
+            Throws.ArgumentNullException);
+    }
 
-        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+    [Test]
+    public async Task PullCompressionDictionary_serves_bytes_and_fingerprint_for_a_held_id()
+    {
+        var provider = new AutoTrainingCompressionDictionaryProvider(
+            new CompressionDictionaryTrainingOptions { Enabled = true });
+        var bytes = new byte[] { 3, 1, 4, 1, 5, 9 };
+        provider.TryInstall(8u, bytes);
+        var svc = CreateServiceWithDictionaryProvider(provider, out _);
+
+        var response = await svc.PullCompressionDictionary(
+            new CompressionDictionaryPullRequestBox { Value = new CompressionDictionaryPullRequest { DictionaryId = 8u } },
+            new TestServerCallContext());
 
         Assert.Multiple(() =>
         {
             Assert.That(response.Value.ExchangeSupported, Is.True);
-            Assert.That(response.Value.MissingEntryIndices, Is.Empty);
-            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(response.Value.Found, Is.True);
+            Assert.That(response.Value.DictionaryId, Is.EqualTo(8u));
+            Assert.That(response.Value.Dictionary.ToArray(), Is.EqualTo(bytes));
+            Assert.That(
+                response.Value.Fingerprint,
+                Is.EqualTo(CompressionDictionaryFingerprint.Compute(bytes)));
+        });
+    }
+
+    [Test]
+    public async Task PullCompressionDictionary_returns_not_held_for_an_unknown_id()
+    {
+        var provider = new AutoTrainingCompressionDictionaryProvider(
+            new CompressionDictionaryTrainingOptions { Enabled = true });
+        var svc = CreateServiceWithDictionaryProvider(provider, out _);
+
+        var response = await svc.PullCompressionDictionary(
+            new CompressionDictionaryPullRequestBox { Value = new CompressionDictionaryPullRequest { DictionaryId = 99u } },
+            new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.Found, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task PullCompressionDictionary_returns_not_held_for_reserved_id()
+    {
+        var provider = new AutoTrainingCompressionDictionaryProvider(
+            new CompressionDictionaryTrainingOptions { Enabled = true });
+        var svc = CreateServiceWithDictionaryProvider(provider, out _);
+
+        var response = await svc.PullCompressionDictionary(
+            new CompressionDictionaryPullRequestBox { Value = new CompressionDictionaryPullRequest { DictionaryId = 0u } },
+            new TestServerCallContext());
+
+        Assert.That(response.Value.Found, Is.False);
+    }
+
+    [Test]
+    public async Task PullCompressionDictionary_returns_not_held_when_no_provider_registered()
+    {
+        var svc = CreateServiceWithDictionaryProvider(dictionaryProvider: null, out _);
+
+        var response = await svc.PullCompressionDictionary(
+            new CompressionDictionaryPullRequestBox { Value = new CompressionDictionaryPullRequest { DictionaryId = 5u } },
+            new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.ExchangeSupported, Is.True);
+            Assert.That(response.Value.Found, Is.False);
         });
     }
 }
