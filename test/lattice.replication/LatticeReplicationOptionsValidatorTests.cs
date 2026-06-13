@@ -728,6 +728,21 @@ public class LatticeReplicationOptionsValidatorTests
         });
     }
 
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void Validate_fails_when_max_inbound_decompressed_bytes_is_non_positive(long value)
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a", MaxInboundDecompressedBytes = value };
+
+        var result = Validator.Validate(null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.MaxInboundDecompressedBytes)));
+        });
+    }
+
     [TestCase(0)]
     [TestCase(-1)]
     public void Validate_fails_when_wal_max_pending_batches_is_non_positive(int value)

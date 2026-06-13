@@ -2,6 +2,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Frozen;
+using Microsoft.Extensions.Options;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Replication;
@@ -38,6 +39,7 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
 
     private readonly Serializer<ReplicationBatchEnvelope> _serializer;
     private readonly FrozenDictionary<byte, ILatticeCompressor> _compressors;
+    private readonly IOptionsMonitor<LatticeReplicationOptions>? _options;
 
     /// <summary>
     /// Initialises the encoder with the supplied
@@ -55,13 +57,24 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
     /// algorithm. Duplicates throw at construction so a host that
     /// double-registers a compressor fails fast at startup rather
     /// than silently shadowing.
+    /// <para>
+    /// The optional <paramref name="options"/> monitor supplies the
+    /// decompression ceiling enforced on the inbound compressed
+    /// framing path (see
+    /// <see cref="LatticeReplicationOptions.MaxInboundDecompressedBytes"/>).
+    /// It is resolved from DI in the standard registration path; when
+    /// omitted (the direct-construction test path) the encoder falls
+    /// back to <see cref="LatticeReplicationOptions.DefaultMaxInboundDecompressedBytes"/>.
+    /// </para>
     /// </summary>
     public OrleansBinaryReplicationBatchEncoder(
         Serializer<ReplicationBatchEnvelope> serializer,
-        IEnumerable<ILatticeCompressor>? compressors = null)
+        IEnumerable<ILatticeCompressor>? compressors = null,
+        IOptionsMonitor<LatticeReplicationOptions>? options = null)
     {
         ArgumentNullException.ThrowIfNull(serializer);
         _serializer = serializer;
+        _options = options;
 
         if (compressors is null)
         {
@@ -531,6 +544,27 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
                 $"Framing payload reports a negative tail length (uncompressed={uncompressedLength}, compressed={compressedLength}); payload is corrupt.",
                 nameof(payload));
         }
+
+        // Bound the declared uncompressed length BEFORE renting a
+        // buffer sized to it. The length is a wire field a hostile or
+        // corrupt sender can forge independently of how few compressed
+        // bytes it actually ships, so an unbounded value drives a
+        // multi-gigabyte allocation from a tiny request - the classic
+        // decompression-bomb amplification. The gRPC transport decodes
+        // framing before the shared-secret auth interceptor body runs,
+        // so this allocation is reachable pre-auth.
+        var maxDecompressedBytes =
+            _options?.CurrentValue.MaxInboundDecompressedBytes
+            ?? LatticeReplicationOptions.DefaultMaxInboundDecompressedBytes;
+        if (uncompressedLength > maxDecompressedBytes)
+        {
+            throw new ArgumentException(
+                $"Framing payload declares an uncompressed tail length of {uncompressedLength} bytes, "
+                + $"which exceeds the configured {nameof(LatticeReplicationOptions.MaxInboundDecompressedBytes)} "
+                + $"ceiling of {maxDecompressedBytes} bytes; refusing to allocate a decompression buffer for a "
+                + "potential decompression bomb. Raise the ceiling if this reflects a legitimately large batch.",
+                nameof(payload));
+        }
         if (cursor + compressedLength > payload.Length)
         {
             throw new ArgumentException(
@@ -606,6 +640,25 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
                 nameof(payload));
         }
 
+        // Guard the up-front segment-array allocation against an adversarial
+        // entry count. EntryCount is read straight off the fixed header, which
+        // a caller can forge independently of the actual payload length; the
+        // per-entry truncation checks below run only *after* the array is
+        // allocated, so they do not protect this allocation. Every entry
+        // contributes at least a 4-byte length prefix, so an EntryCount larger
+        // than payload.Length / 4 cannot be satisfied and the payload is
+        // necessarily truncated. Rejecting it here turns a multi-gigabyte
+        // ArraySegment[] allocation (and the OutOfMemoryException it would
+        // raise) into a cheap, catchable ArgumentException.
+        var maxPossibleEntries = payload.Length / sizeof(int);
+        if (parsed.EntryCount > maxPossibleEntries)
+        {
+            throw new ArgumentException(
+                $"Framing header reports {parsed.EntryCount} entries but the {payload.Length}-byte "
+                + $"payload can hold at most {maxPossibleEntries}; payload is truncated or corrupt.",
+                nameof(payload));
+        }
+
         // Resolve the payload to a contiguous byte[] so each entry's
         // ArraySegment can point back into it without copying. The
         // canonical caller (gRPC marshaller) always wraps a byte[];
@@ -672,7 +725,7 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
 
         segments = entryCount == 0
             ? Array.Empty<ArraySegment<byte>>()
-            : new ArraySegment<byte>[entryCount];
+            : Bound(entryCount, tail.Length);
 
         for (var i = 0; i < entryCount; i++)
         {
@@ -693,6 +746,29 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
             segments[i] = new ArraySegment<byte>(tail, cursor, length);
             cursor += length;
         }
+    }
+
+    /// <summary>
+    /// Allocates the per-entry segment array after bounding
+    /// <paramref name="entryCount"/> against an adversarial value. Every entry
+    /// contributes at least a 4-byte length prefix, so an entry count larger
+    /// than <paramref name="tailLength"/> / 4 cannot be satisfied and the
+    /// payload is necessarily truncated. Rejecting it here turns a
+    /// multi-gigabyte array allocation (the entry count is read straight off the
+    /// wire, independent of the real payload length) into a cheap, catchable
+    /// <see cref="ArgumentException"/> raised before the allocation.
+    /// </summary>
+    private static ArraySegment<byte>[] Bound(int entryCount, int tailLength)
+    {
+        var maxPossibleEntries = tailLength / sizeof(int);
+        if (entryCount > maxPossibleEntries)
+        {
+            throw new ArgumentException(
+                $"Inflated framing tail reports {entryCount} entries but the {tailLength}-byte "
+                + $"tail can hold at most {maxPossibleEntries}; payload is truncated or corrupt.",
+                nameof(entryCount));
+        }
+        return new ArraySegment<byte>[entryCount];
     }
 
     private static string ReadLengthPrefixedUtf8(

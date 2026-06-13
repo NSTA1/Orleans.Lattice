@@ -19,6 +19,29 @@ namespace Orleans.Lattice;
 internal static class LatticePredicateEvaluator
 {
     /// <summary>
+    /// Maximum predicate-tree nesting depth the evaluator will fold. The IR is
+    /// a serializable, client-supplied tree that arrives on grain parameters,
+    /// the ambient request context, and durable cursor / atomic-write state, so
+    /// an adversarial or corrupt payload could otherwise nest deeply enough to
+    /// exhaust the call stack and crash the silo with an uncatchable
+    /// <see cref="StackOverflowException"/>. The guard converts that into a
+    /// catchable <see cref="InvalidOperationException"/> raised far below the
+    /// real stack limit. Legitimate translator output is only a handful of
+    /// levels deep, well under this ceiling.
+    /// </summary>
+    internal const int MaxDepth = 128;
+
+    private static void ThrowIfTooDeep(int depth)
+    {
+        if (depth > MaxDepth)
+        {
+            throw new InvalidOperationException(
+                $"Predicate nesting depth exceeds the maximum of {MaxDepth}. The predicate is " +
+                "rejected to protect the server from stack exhaustion.");
+        }
+    }
+
+    /// <summary>
     /// Evaluates <paramref name="predicate"/> against <paramref name="value"/>.
     /// Returns <c>false</c> for a null/empty payload or one that does not parse
     /// as a JSON document.
@@ -45,7 +68,7 @@ internal static class LatticePredicateEvaluator
             {
                 ReadOnlySpan<byte> json = value;
                 Validate(json);
-                return EvaluateBoolean(predicate, json);
+                return EvaluateBoolean(predicate, json, 0);
             }
             catch (JsonException)
             {
@@ -60,7 +83,7 @@ internal static class LatticePredicateEvaluator
         try
         {
             using var document = JsonDocument.Parse(value);
-            return EvaluateBoolean(predicate, document.RootElement);
+            return EvaluateBoolean(predicate, document.RootElement, 0);
         }
         catch (JsonException)
         {
@@ -118,24 +141,25 @@ internal static class LatticePredicateEvaluator
         }
     }
 
-    private static bool EvaluateBoolean(in LatticePredicateNode node, JsonElement root)
+    private static bool EvaluateBoolean(in LatticePredicateNode node, JsonElement root, int depth)
     {
+        ThrowIfTooDeep(depth);
         switch (node.Kind)
         {
             case LatticePredicateNodeKind.Boolean:
-                return EvaluateBooleanOperator(node, root);
+                return EvaluateBooleanOperator(node, root, depth);
 
             case LatticePredicateNodeKind.Compare:
-                return EvaluateComparison(node, root);
+                return EvaluateComparison(node, root, depth);
 
             case LatticePredicateNodeKind.StringMethod:
-                return EvaluateStringMethod(node, root);
+                return EvaluateStringMethod(node, root, depth);
 
             case LatticePredicateNodeKind.Member:
             case LatticePredicateNodeKind.Constant:
                 // A bare member / constant in boolean position is truthy iff it
                 // resolves to the boolean value true.
-                var operand = ResolveOperand(node, root);
+                var operand = ResolveOperand(node, root, depth);
                 return operand.Kind == OperandKind.Boolean && operand.Boolean;
 
             default:
@@ -143,7 +167,7 @@ internal static class LatticePredicateEvaluator
         }
     }
 
-    private static bool EvaluateBooleanOperator(in LatticePredicateNode node, JsonElement root)
+    private static bool EvaluateBooleanOperator(in LatticePredicateNode node, JsonElement root, int depth)
     {
         var children = node.Children;
         if (children is null || children.Length == 0)
@@ -153,43 +177,43 @@ internal static class LatticePredicateEvaluator
         {
             case LatticeBooleanOperator.And:
                 foreach (var child in children)
-                    if (!EvaluateBoolean(child, root))
+                    if (!EvaluateBoolean(child, root, depth + 1))
                         return false;
                 return true;
 
             case LatticeBooleanOperator.Or:
                 foreach (var child in children)
-                    if (EvaluateBoolean(child, root))
+                    if (EvaluateBoolean(child, root, depth + 1))
                         return true;
                 return false;
 
             case LatticeBooleanOperator.Not:
-                return !EvaluateBoolean(children[0], root);
+                return !EvaluateBoolean(children[0], root, depth + 1);
 
             default:
                 return false;
         }
     }
 
-    private static bool EvaluateComparison(in LatticePredicateNode node, JsonElement root)
+    private static bool EvaluateComparison(in LatticePredicateNode node, JsonElement root, int depth)
     {
         var children = node.Children;
         if (children is null || children.Length != 2)
             return false;
 
-        var left = ResolveOperand(children[0], root);
-        var right = ResolveOperand(children[1], root);
+        var left = ResolveOperand(children[0], root, depth + 1);
+        var right = ResolveOperand(children[1], root, depth + 1);
         return Compare(node.ComparisonOperator, left, right);
     }
 
-    private static bool EvaluateStringMethod(in LatticePredicateNode node, JsonElement root)
+    private static bool EvaluateStringMethod(in LatticePredicateNode node, JsonElement root, int depth)
     {
         var children = node.Children;
         if (children is null || children.Length != 2)
             return false;
 
-        var target = ResolveOperand(children[0], root);
-        var argument = ResolveOperand(children[1], root);
+        var target = ResolveOperand(children[0], root, depth + 1);
+        var argument = ResolveOperand(children[1], root, depth + 1);
         return ApplyStringMethod(node.StringMethod, target, argument);
     }
 
@@ -266,7 +290,7 @@ internal static class LatticePredicateEvaluator
         return null;
     }
 
-    private static Operand ResolveOperand(in LatticePredicateNode node, JsonElement root)
+    private static Operand ResolveOperand(in LatticePredicateNode node, JsonElement root, int depth)
     {
         switch (node.Kind)
         {
@@ -279,7 +303,7 @@ internal static class LatticePredicateEvaluator
             default:
                 // Nested boolean / comparison / string-method in operand
                 // position resolves to its boolean result.
-                return Operand.OfBoolean(EvaluateBoolean(node, root));
+                return Operand.OfBoolean(EvaluateBoolean(node, root, depth));
         }
     }
 
@@ -349,22 +373,23 @@ internal static class LatticePredicateEvaluator
     // only member resolution differs - each Member node is resolved by a fresh
     // forward scan of the (already validated) buffer.
 
-    private static bool EvaluateBoolean(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    private static bool EvaluateBoolean(in LatticePredicateNode node, ReadOnlySpan<byte> json, int depth)
     {
+        ThrowIfTooDeep(depth);
         switch (node.Kind)
         {
             case LatticePredicateNodeKind.Boolean:
-                return EvaluateBooleanOperator(node, json);
+                return EvaluateBooleanOperator(node, json, depth);
 
             case LatticePredicateNodeKind.Compare:
-                return EvaluateComparison(node, json);
+                return EvaluateComparison(node, json, depth);
 
             case LatticePredicateNodeKind.StringMethod:
-                return EvaluateStringMethod(node, json);
+                return EvaluateStringMethod(node, json, depth);
 
             case LatticePredicateNodeKind.Member:
             case LatticePredicateNodeKind.Constant:
-                var operand = ResolveOperand(node, json);
+                var operand = ResolveOperand(node, json, depth);
                 return operand.Kind == OperandKind.Boolean && operand.Boolean;
 
             default:
@@ -372,7 +397,7 @@ internal static class LatticePredicateEvaluator
         }
     }
 
-    private static bool EvaluateBooleanOperator(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    private static bool EvaluateBooleanOperator(in LatticePredicateNode node, ReadOnlySpan<byte> json, int depth)
     {
         var children = node.Children;
         if (children is null || children.Length == 0)
@@ -382,47 +407,47 @@ internal static class LatticePredicateEvaluator
         {
             case LatticeBooleanOperator.And:
                 foreach (var child in children)
-                    if (!EvaluateBoolean(child, json))
+                    if (!EvaluateBoolean(child, json, depth + 1))
                         return false;
                 return true;
 
             case LatticeBooleanOperator.Or:
                 foreach (var child in children)
-                    if (EvaluateBoolean(child, json))
+                    if (EvaluateBoolean(child, json, depth + 1))
                         return true;
                 return false;
 
             case LatticeBooleanOperator.Not:
-                return !EvaluateBoolean(children[0], json);
+                return !EvaluateBoolean(children[0], json, depth + 1);
 
             default:
                 return false;
         }
     }
 
-    private static bool EvaluateComparison(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    private static bool EvaluateComparison(in LatticePredicateNode node, ReadOnlySpan<byte> json, int depth)
     {
         var children = node.Children;
         if (children is null || children.Length != 2)
             return false;
 
-        var left = ResolveOperand(children[0], json);
-        var right = ResolveOperand(children[1], json);
+        var left = ResolveOperand(children[0], json, depth + 1);
+        var right = ResolveOperand(children[1], json, depth + 1);
         return Compare(node.ComparisonOperator, left, right);
     }
 
-    private static bool EvaluateStringMethod(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    private static bool EvaluateStringMethod(in LatticePredicateNode node, ReadOnlySpan<byte> json, int depth)
     {
         var children = node.Children;
         if (children is null || children.Length != 2)
             return false;
 
-        var target = ResolveOperand(children[0], json);
-        var argument = ResolveOperand(children[1], json);
+        var target = ResolveOperand(children[0], json, depth + 1);
+        var argument = ResolveOperand(children[1], json, depth + 1);
         return ApplyStringMethod(node.StringMethod, target, argument);
     }
 
-    private static Operand ResolveOperand(in LatticePredicateNode node, ReadOnlySpan<byte> json)
+    private static Operand ResolveOperand(in LatticePredicateNode node, ReadOnlySpan<byte> json, int depth)
     {
         switch (node.Kind)
         {
@@ -433,7 +458,7 @@ internal static class LatticePredicateEvaluator
                 return ResolveMember(node.MemberPath, json);
 
             default:
-                return Operand.OfBoolean(EvaluateBoolean(node, json));
+                return Operand.OfBoolean(EvaluateBoolean(node, json, depth));
         }
     }
 

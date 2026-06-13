@@ -282,6 +282,25 @@ public interface IReplicationBatchEncoder
                 nameof(payload));
         }
 
+        // Guard the up-front segment-array allocation against an adversarial
+        // entry count. EntryCount is read straight off the fixed header, which
+        // a caller can forge independently of the actual payload length; the
+        // per-entry truncation checks below run only *after* the array is
+        // allocated, so they do not protect this allocation. Every entry
+        // contributes at least a 4-byte length prefix, so an EntryCount larger
+        // than payload.Length / 4 cannot be satisfied and the payload is
+        // necessarily truncated. Rejecting it here turns a multi-gigabyte
+        // ArraySegment[] allocation (and the OutOfMemoryException it would
+        // raise) into a cheap, catchable ArgumentException.
+        var maxPossibleEntries = payload.Length / sizeof(int);
+        if (parsed.EntryCount > maxPossibleEntries)
+        {
+            throw new ArgumentException(
+                $"Framing header reports {parsed.EntryCount} entries but the {payload.Length}-byte "
+                + $"payload can hold at most {maxPossibleEntries}; payload is truncated or corrupt.",
+                nameof(payload));
+        }
+
         var segments = parsed.EntryCount == 0
             ? Array.Empty<ArraySegment<byte>>()
             : new ArraySegment<byte>[parsed.EntryCount];
