@@ -427,6 +427,14 @@ Failure count that opens the remediation circuit.
 
 Time before the remediation circuit may reset after failures.
 
+## Health-check thresholds - `LatticeReplicationHealthCheckOptions`
+
+The replication back-pressure health check has its own named options type, `LatticeReplicationHealthCheckOptions`, bound under the health check's registered name (default `"orleans.lattice.replication"`). Its tiered thresholds (`EntriesBehind`, `LastContactSeconds`, `ConsecutiveErrors`), the `UnhealthyAfter` sustained-degraded escalation window, and the opt-in `InboundDegradedAfter` / `InboundCriticalAfter` inbound-silence signals - with every type and default - are documented in [Back-pressure health check](health-check.md).
+
+## Receiver flow-control tuning - `WalSaturationReceiverFlowControlOptions`
+
+The default receiver-side flow-control policy is tuned through `WalSaturationReceiverFlowControlOptions` (`ThrottledBatchRatio` default `0.5`, `ThrottledPauseMs` default `50`, `SaturatedBatchSize` default `1`, `SaturatedPauseMs` default `500`), bound per tree and force-installed via `AddWalSaturationReceiverFlowControl`. Every knob, its type, and its default is documented in [Receiver-side flow control](receiver-flow-control.md).
+
 ## gRPC replication transport options
 
 The gRPC transport ships as the separate `Orleans.Lattice.Replication.Grpc` package. Register it with `AddLatticeReplicationGrpc`, map endpoints with `MapLatticeReplicationGrpc`, and configure peer endpoints and channels through `LatticeReplicationGrpcOptions`. Every option and operational note lives in [Orleans.Lattice.Replication.Grpc configuration](../lattice.replication.grpc/configuration.md); see also [Transport Security](transport-security.md).

@@ -9,7 +9,7 @@ Each dashboard is authored once as a Grafana dashboard model and compiled into t
 - Retrieval is a synchronous in-process read - no network call, no file-system dependency, and no external service to provision before a dashboard can be fetched.
 - The dashboards are version-pinned to the library. A given package version always returns dashboards whose panels reference exactly the instruments that version emits.
 
-The panels reference instruments by their metric name (for example `lattice.leaf.write.duration`), not by any internal handle, so a dashboard is portable across any backend that scrapes the OpenTelemetry meters.
+The panels reference instruments by their metric name (for example `orleans.lattice.leaf.write.duration`), not by any internal handle, so a dashboard is portable across any backend that scrapes the OpenTelemetry meters.
 
 ## The bidirectional drift guard
 

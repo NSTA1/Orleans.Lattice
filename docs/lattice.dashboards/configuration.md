@@ -60,18 +60,27 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
+    uid: prometheus
     url: http://prometheus:9090
     isDefault: true
+    editable: false
 ```
 
 ```yaml
 # Provisioning/dashboards.yaml
 apiVersion: 1
 providers:
-  - name: Orleans.Lattice
+  - name: orleans-lattice
+    orgId: 1
+    folder: Orleans.Lattice
     type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
     options:
-      path: /etc/grafana/dashboards
+      path: /var/lib/grafana/dashboards/orleans-lattice
+      foldersFromFilesStructure: false
 ```
 
 Mount the rendered JSON files at the `path` above and Grafana loads them at startup. The templates are a convenience baseline - adjust the data-source URL, folder, and provider name to match your environment.

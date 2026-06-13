@@ -65,7 +65,7 @@ The mapping is tuned per tree through `WalSaturationReceiverFlowControlOptions`:
 
 ## Sender-side semantics
 
-`ReplicationShipperGrain.PumpOnceAsync` consumes the ack hints on the next pump tick:
+The replication shipper consumes the ack hints on its next pump tick:
 
 - **`SuggestedBatchSize`** clamps the per-tick batch cap to `min(options.ShipBatchSize, max(1, ack.SuggestedBatchSize))`. A `null` or non-positive value reverts to the configured `ShipBatchSize` - the canonical re-acceleration signal once the receiver has recovered.
 - **`PauseForMs`** extends the per-peer retry deadline to `max(currentBackoffDeadline, now + PauseForMs)`. The success path already cleared the backoff deadline, so on the steady-state success path the composition collapses to `now + PauseForMs`; the `max(...)` shape only matters when a late pause races a still-in-flight exponential backoff. A receiver-requested pause never shortens an in-progress backoff.
