@@ -81,7 +81,7 @@ The append-time failure semantics inside the WAL grain itself (offset rollback, 
 
 ## Why a WAL grain rather than ship-time read
 
-This design fixes three sample-pipeline shortcuts that the original outgoing-call-filter prototype exhibited:
+Capturing each mutation into a WAL grain at commit time, rather than reading values at ship time, guarantees three properties:
 
 - **No ship-time value read.** The captured `WalRecord` already carries the value (or delta) at commit-time HLC; the ship loop never re-reads the primary.
 - **No host-level outgoing-call filter.** Capture happens grain-side via `IMutationObserver`, so the WAL append is atomic with the write rather than a best-effort post-write hook.

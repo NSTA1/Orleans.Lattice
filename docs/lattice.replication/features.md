@@ -19,18 +19,6 @@ The core library's WAL-only commit model shipped under the core WAL-as-sole-comm
 2. **`IChangeFeed` treats the outbound replication ship loop as one consumer among many.** The core-library local materialiser, secondary indexes, or projection rebuilders subscribe at the same seam without replication being installed.
 3. **Per-origin high-water mark is keyed `(tree, originClusterId)`, but the shape generalises to local apply.** A `null`/local origin is a valid key; the log-replay-on-activation path uses the same table without schema changes.
 
-## Guiding principles
-
-Don't carry forward the reference sample's shortcuts:
-
-- **No thread-local cycle-break.** Origin is durable metadata, not ambient state that is fragile across async boundaries.
-- **No ship-time value read.** Capture the mutation at commit time; readers of a replog entry never re-read the primary.
-- **No post-merge LWW-by-bytes.** The wire carries CRDT deltas for recognised primitives; opaque bytes are the fallback, not the default.
-- **No host-level outgoing-call filter.** Replication is produced by the grain at commit time, so value capture is atomic with the write.
-- **No reminder-cadence pull for hot paths.** Push transport with backoff is the baseline; HTTP pull is retained only for bootstrap / low-frequency paths.
-
-Preserve what the sample got right: per-peer HLC cursor, advance-strictly-on-ack, don't-replicate-the-replog, per-tree opt-in + per-key filter, janitor as a separate grain.
-
 ## Cross-cluster bootstrap transport
 
 A receiver whose per-origin high-water mark is older than the sender's oldest WAL entry triggers the auto-bootstrap path, which drives the receiver-side state machine and calls `ISnapshotProvider.ExportAsync` against the provider registered in DI. The default provider reads the **local** tree, so a naive auto-bootstrap delivers nothing across clusters. That gap is now closed: the package ships a remote-snapshot transport seam (`IRemoteSnapshotTransport`), a gRPC binding (`GrpcRemoteSnapshotTransport`, registered by `AddLatticeReplicationGrpc`), and the receiver-side `RemoteSnapshotProvider` that `AddLatticeReplication` auto-wires whenever a transport is registered, so the auto-bootstrap path streams a point-in-time snapshot from the remote sender. See [snapshot &amp; bootstrap](snapshot-bootstrap.md) for the pipeline.
