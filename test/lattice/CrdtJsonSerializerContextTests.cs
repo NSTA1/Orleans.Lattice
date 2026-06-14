@@ -55,6 +55,16 @@ public class CrdtJsonSerializerContextTests
         return m;
     }
 
+    private static OrFlag SampleOrFlag()
+    {
+        var f = new OrFlag();
+        f.Enable("replica-a", 1);
+        f.Enable("replica-b", 2);
+        f.Disable();
+        f.Enable("replica-a", 3);
+        return f;
+    }
+
     private static PnCounterDelta SamplePnCounterDelta() => new()
     {
         Increments = new Dictionary<string, long> { ["replica-a"] = 7, ["replica-b"] = 2 },
@@ -91,6 +101,19 @@ public class CrdtJsonSerializerContextTests
             new MvRegisterEntry { ReplicaId = "replica-b", Counter = 1, Value = [8] },
         },
         Context = new Dictionary<string, long> { ["replica-a"] = 1, ["replica-b"] = 1 },
+    };
+
+    private static OrFlagDelta SampleOrFlagDelta() => new()
+    {
+        Enables = new[]
+        {
+            new OrSetDot { ReplicaId = "replica-a", Counter = 1 },
+            new OrSetDot { ReplicaId = "replica-b", Counter = 2 },
+        },
+        Disables = new[]
+        {
+            new OrSetDot { ReplicaId = "replica-a", Counter = 1 },
+        },
     };
 
     [Test]
@@ -158,6 +181,22 @@ public class CrdtJsonSerializerContextTests
     }
 
     [Test]
+    public void OrFlag_state_is_byte_identical_to_reflection()
+    {
+        var value = SampleOrFlag();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.OrFlag);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
+    public void OrFlagDelta_is_byte_identical_to_reflection()
+    {
+        var value = SampleOrFlagDelta();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.OrFlagDelta);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
     public void Source_gen_reads_legacy_reflection_bytes_for_states()
     {
         // Old persisted rows were written by the reflection serialiser; the
@@ -175,6 +214,9 @@ public class CrdtJsonSerializerContextTests
 
         var mv = (MvRegister)registry.TryGet("t", LatticeMergeMode.MvRegister)!.DeserializeState(Reflection(SampleMvRegister()));
         Assert.That(mv.Entries.Count, Is.EqualTo(SampleMvRegister().Entries.Count));
+
+        var of = (OrFlag)registry.TryGet("t", LatticeMergeMode.OrFlag)!.DeserializeState(Reflection(SampleOrFlag()));
+        Assert.That(of.IsEnabled, Is.EqualTo(SampleOrFlag().IsEnabled));
     }
 
     [Test]
@@ -193,6 +235,9 @@ public class CrdtJsonSerializerContextTests
 
         var mv = (MvRegisterDelta)registry.TryGet("t", LatticeMergeMode.MvRegister)!.DeserializeDelta(Reflection(SampleMvRegisterDelta()));
         Assert.That(mv.Entries!.Count, Is.EqualTo(2));
+
+        var of = (OrFlagDelta)registry.TryGet("t", LatticeMergeMode.OrFlag)!.DeserializeDelta(Reflection(SampleOrFlagDelta()));
+        Assert.That(of.Enables!.Count, Is.EqualTo(2));
     }
 
     [Test]
@@ -213,5 +258,8 @@ public class CrdtJsonSerializerContextTests
 
         var mv = SampleMvRegister();
         Assert.That(registry.TryGet("t", LatticeMergeMode.MvRegister)!.SerializeState(mv), Is.EqualTo(Reflection(mv)));
+
+        var of = SampleOrFlag();
+        Assert.That(registry.TryGet("t", LatticeMergeMode.OrFlag)!.SerializeState(of), Is.EqualTo(Reflection(of)));
     }
 }

@@ -126,6 +126,26 @@ Because removes only tombstone the dots the local replica has actually observed,
 
 **Example use case:** an operator-visible label set on a shared entity (a maintenance ticket, a vehicle, an instrument) that multiple sites can tag concurrently while one site removes a label. With LWW, the remover's update silently drops the concurrent additions; with `OrSet`, the additions survive and only the dots the remover actually observed disappear.
 
+## Observed-Remove Flag (OR-Flag)
+
+`OrFlag` is the **single-element specialisation of the OR-Set**: an enable-wins flag that tracks *presence* ("enabled") rather than a set of element values. It carries no element payload - just two dot lists:
+
+```
+OrFlag = {
+    Enables:    [OrSetDot(replicaId, counter)]   // each Enable() mints a fresh dot
+    Tombstones: [OrSetDot]                        // dots observed-and-disabled
+}
+IsEnabled = at least one dot in Enables is not in Tombstones
+```
+
+`Enable(replicaId, counter)` mints a fresh causal dot and appends it to `Enables`; `Disable()` moves every currently-observed enable dot into `Tombstones`. Merge is the union of `Enables` and the union of `Tombstones` on both sides, after which membership is recomputed - commutative, associative, and idempotent.
+
+Because a `Disable()` only tombstones the dots the local replica has actually observed, a concurrent `Enable()` from another replica that the disabler never saw **survives** the merge - hence "enable-wins". This is exactly the OR-Set add-wins rule narrowed to a single logical element.
+
+`OrFlag` is the minimal observed-remove primitive for **composite-key membership rows** - e.g. a tag/key secondary index where each `(tag, member)` pair is stored under its own key and the meaningful bit is simply whether the row is present. Using `OrFlag` for those rows gives OR-Set-grade convergence under concurrent active-active enable/disable without storing a singleton set's element bytes on every row. Reach for `OrSet` when a single key must hold many elements; reach for `OrFlag` when each key holds exactly one presence bit.
+
+**Example use case:** a tag/key secondary index built on composite keys (`tag/{tag}/{key}`). Two sites concurrently associate a key with a tag while a third removes the association; the per-row `OrFlag` converges enable-wins so the association survives unless every observed enable has been disabled.
+
 ## Positive-Negative Counter (PN-Counter)
 
 `PnCounter` is a **state-based counter** that supports concurrent increments and decrements without coordination by tracking per-replica cumulative components:

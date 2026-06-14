@@ -385,4 +385,101 @@ public partial class PublicApiContractTests
             async () => await accessor.GetAsync(),
             Throws.InstanceOf<InvalidOperationException>());
     }
+
+    // ── OrFlag factory + accessor ───────────────────────────────────────
+
+    [Test]
+    public void OrFlag_with_null_lattice_throws()
+    {
+        Assert.That(
+            () => CrdtLatticeExtensions.OrFlag(null!, "k"),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task OrFlag_with_empty_key_throws()
+    {
+        var tree = await _fixture.CreateSmallTreeAsync(
+            "pac-crdt-orflag-emptykey-" + Guid.NewGuid().ToString("N")[..8], shardCount: 1);
+        Assert.That(() => tree.OrFlag(string.Empty), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task OrFlag_IsEnabledAsync_on_missing_key_returns_false()
+    {
+        var treeId = "pac-crdt-orflag-empty-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        Assert.That(await tree.OrFlag("absent").IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task OrFlag_EnableAsync_makes_flag_enabled()
+    {
+        var treeId = "pac-crdt-orflag-enable-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.OrFlag("flag");
+        await accessor.EnableAsync(replicaId: "r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task OrFlag_DisableAsync_makes_flag_disabled()
+    {
+        var treeId = "pac-crdt-orflag-disable-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.OrFlag("flag");
+        await accessor.EnableAsync(replicaId: "r1");
+        await accessor.DisableAsync();
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task OrFlag_EnableAsync_with_empty_replica_throws()
+    {
+        var treeId = "pac-crdt-orflag-emptyrep-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.OrFlag("flag").EnableAsync(replicaId: string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task OrFlag_MergeAsync_with_null_other_throws()
+    {
+        var treeId = "pac-crdt-orflag-mergenull-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.OrFlag("flag").MergeAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task OrFlag_MergeAsync_unions_state_enable_wins()
+    {
+        var treeId = "pac-crdt-orflag-merge-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        var accessor = tree.OrFlag("flag");
+        await accessor.EnableAsync(replicaId: "r1");
+        await accessor.DisableAsync();
+
+        var other = new OrFlag();
+        other.Enable("r2", 1);
+        await accessor.MergeAsync(other);
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public void OrFlagAccessor_default_throws_on_use()
+    {
+        var accessor = default(OrFlagAccessor);
+        Assert.That(
+            async () => await accessor.GetAsync(),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
 }
