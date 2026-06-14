@@ -26,6 +26,7 @@ internal static class TypeAliases
     internal const string RgaNode = "ol.rgn";
     internal const string RgaDelta = "ol.rgd";
     internal const string RgaDeltaNode = "ol.rgi";
+    internal const string OrFlag = "ol.orf";
     internal const string LeafDeliveryCursor = "ol.ldc";
 
     // Opt-in idempotency-key surface (carried on the ambient
@@ -216,6 +217,7 @@ internal static class TypeAliases
     internal const string OrMapDelta = "ol.omd";
     internal const string OrMapDeltaEntry = "ol.omx";
     internal const string OrMapDeltaTombstone = "ol.omt";
+    internal const string OrFlagDelta = "ol.ofd";
 
     // Grain interfaces - each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,

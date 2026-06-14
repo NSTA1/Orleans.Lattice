@@ -741,4 +741,111 @@ public class CrdtAccessorIntegrationTests
         Assert.That(values, Is.EquivalentTo(new[] { "a", "b" }));
         Assert.That(values.Count, Is.EqualTo(2));
     }
+
+    // ── OrFlag ──────────────────────────────────────────────────
+
+    [Test]
+    public async Task OrFlag_GetAsync_returns_disabled_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        var flag = await tree.OrFlag("missing").GetAsync();
+        Assert.That(flag.IsEnabled, Is.False);
+    }
+
+    [Test]
+    public async Task OrFlag_IsEnabledAsync_returns_false_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(await tree.OrFlag("missing").IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task OrFlag_EnableAsync_makes_flag_enabled()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrFlag("k");
+        await accessor.EnableAsync("r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task OrFlag_DisableAsync_after_enable_makes_flag_disabled()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrFlag("k");
+        await accessor.EnableAsync("r1");
+        await accessor.DisableAsync();
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task OrFlag_DisableAsync_on_missing_key_is_no_op()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.OrFlag("k").DisableAsync(), Throws.Nothing);
+        Assert.That(await tree.OrFlag("k").IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task OrFlag_EnableAsync_after_disable_re_enables()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrFlag("k");
+        await accessor.EnableAsync("r1");
+        await accessor.DisableAsync();
+        await accessor.EnableAsync("r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task OrFlag_MergeAsync_unions_remote_state_enable_wins()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrFlag("k");
+        await accessor.EnableAsync("r1");
+        await accessor.DisableAsync();
+
+        // Remote enabled with a dot the local replica never observed; the
+        // merge must keep the flag enabled.
+        var remote = new OrFlag();
+        remote.Enable("r2", 1);
+        await accessor.MergeAsync(remote);
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task OrFlag_EnableAsync_throws_on_empty_replica_id()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.OrFlag("k").EnableAsync(""), Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task OrFlag_MergeAsync_throws_on_null_other()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.OrFlag("k").MergeAsync(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task OrFlag_EnableAsync_throws_on_zero_max_attempts()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.OrFlag("k").EnableAsync("r1", maxAttempts: 0),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task OrFlag_accessor_exposes_lattice_and_key_properties()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.OrFlag("k");
+        Assert.That(accessor.Lattice, Is.SameAs(tree));
+        Assert.That(accessor.Key, Is.EqualTo("k"));
+    }
 }

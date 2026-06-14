@@ -16,7 +16,7 @@ Document these properties in the `<summary>` of every merge method.
 
 ## Namespace Placement
 
-Although these types live in the `Primitives/` folder, **public** CRDT primitives declare `namespace Orleans.Lattice` (not `Orleans.Lattice.Primitives`) so the whole public surface sits behind a single `using Orleans.Lattice;` - the repo convention that public API lives in the root namespace. The public primitives are `HybridLogicalClock`, `ICrdt<TSelf>`, `MvRegister`, `MvRegisterEntry`, `OrMap`, `OrMapEntry`, `OrSet`, `OrSetDot`, `PnCounter`, `Rga`, `RgaNode`, and `VersionVector`. The `Rga` sequence's typed replication delta DTOs `RgaDelta` and `RgaDeltaNode` live under `Crdt/` (in the same `Orleans.Lattice` namespace) alongside the other `*Delta` types.
+Although these types live in the `Primitives/` folder, **public** CRDT primitives declare `namespace Orleans.Lattice` (not `Orleans.Lattice.Primitives`) so the whole public surface sits behind a single `using Orleans.Lattice;` - the repo convention that public API lives in the root namespace. The public primitives are `HybridLogicalClock`, `ICrdt<TSelf>`, `MvRegister`, `MvRegisterEntry`, `OrFlag`, `OrMap`, `OrMapEntry`, `OrSet`, `OrSetDot`, `PnCounter`, `Rga`, `RgaNode`, and `VersionVector`. The `Rga` sequence's typed replication delta DTOs `RgaDelta` and `RgaDeltaNode`, and the `OrFlag` flag's typed delta DTO `OrFlagDelta`, live under `Crdt/` (in the same `Orleans.Lattice` namespace) alongside the other `*Delta` types.
 
 Area-internal helpers in the same folder (`LwwValue<T>`, `LeafDeliveryCursor`, `SplitState`, `SplitStateExtensions`, `StateDelta`) stay `internal` in `namespace Orleans.Lattice.Primitives`.
 
@@ -58,7 +58,8 @@ public sealed class MyAggregate
 | `LwwValue<T>` | Last-writer-wins register resolved by HLC. Carries optional `ExpiresAtTicks` ( TTL) - `0` means no expiry; reads filter entries where `IsExpired(nowUtcTicks)` returns `true`. Carries optional `OriginClusterId` (cluster-of-origin stamp, authored from the ambient `LatticeOriginContext`) and optional `VectorClock` (sparse `{originClusterId → HLC}` commit-time frontier, authored from the ambient `LatticeVectorClockContext`); both default to `null` for legacy persisted state. |
 | `VersionVector` | Per-replica version tracking for delta extraction. **Public** - also exposed through `ILattice.VersionVector(key)` as a value-surface CRDT accessor. |
 | `OrSet` | Observed-remove set CRDT (public). State-level merge unions both sides' adds and tombstones; concurrent adds and removes survive a later remove that did not observe them. Exposed through `ILattice.OrSet(key)`. |
-| `OrSetDot` | `(replicaId, counter)` dot tagged on each `OrSet` add. |
+| `OrFlag` | Observed-remove (enable-wins) flag CRDT (public). The single-element specialisation of `OrSet`: state is the set of enable dots minus the set of observed-remove (disable) dots, and the flag is present when at least one enable dot survives. Concurrent enable and disable converge enable-wins. The minimal observed-remove primitive for composite-key membership rows (e.g. a tag/key secondary index). Exposed through `ILattice.OrFlag(key)`. |
+| `OrSetDot` | `(replicaId, counter)` dot tagged on each `OrSet` add. Also carries `OrFlag` enable/disable dots. |
 | `PnCounter` | Positive-negative counter CRDT (public). Per-replica monotonic positive/negative components; merge is pointwise-max per side. Exposed through `ILattice.PnCounter(key)`. |
 | `MvRegister` | Multi-value register CRDT (public). Dot-context-tagged set of live values; concurrent writes from different replicas survive merge as conflict candidates rather than collapsing under last-writer-wins. Exposed through `ILattice.MvRegister<T>(key)`. |
 | `MvRegisterEntry` | Dot-tagged `(replicaId, counter, value)` triple inside an `MvRegister`. |
@@ -68,7 +69,8 @@ public sealed class MyAggregate
 | `RgaNode` | Tree node carrying `(replicaId, counter, parentDot, value, isTombstone)` inside an `Rga`. |
 | `RgaDelta` | Public typed replication delta DTO for `Rga`: dot-explicit inserted nodes (`RgaDeltaNode`) plus tombstoned dots. Folded by `Rga.MergeDelta(RgaDelta)`; dispatched under `LatticeMergeMode.Sequence`. Lives under `Crdt/`. |
 | `RgaDeltaNode` | A single inserted node inside an `RgaDelta`: the `(replicaId, counter)` dot, its parent dot, and the value bytes. |
-| `ICrdt<TSelf>` | Internal-feeling but `public` interface declaring `MergeFrom(TSelf)` plus `IsBottom`. Implemented by `OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMap`, and `Rga`; the constraint that lets `OrMap<TKey, TValue>` recurse through nested CRDT values without reflection. |
+| `OrFlagDelta` | Public typed replication delta DTO for `OrFlag`: the enable dots added (`OrSetDot`) plus the observed-remove (disable) dots. Folded by `OrFlag.MergeDelta(OrFlagDelta)`; dispatched under `LatticeMergeMode.OrFlag`. Lives under `Crdt/`. |
+| `ICrdt<TSelf>` | Internal-feeling but `public` interface declaring `MergeFrom(TSelf)` plus `IsBottom`. Implemented by `OrSet`, `OrFlag`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMap`, and `Rga`; the constraint that lets `OrMap<TKey, TValue>` recurse through nested CRDT values without reflection. |
 | `StateDelta` | Captures entries changed since a given version vector |
 | `SplitState` | Enum tracking leaf/internal split lifecycle |
 

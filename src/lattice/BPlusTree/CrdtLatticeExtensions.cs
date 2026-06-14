@@ -24,6 +24,24 @@ public static class CrdtLatticeExtensions
     }
 
     /// <summary>
+    /// Returns a typed accessor for an observed-remove (enable-wins) flag
+    /// stored under <paramref name="key"/> in <paramref name="lattice"/>.
+    /// The flag tracks presence ("enabled") rather than a value, converging
+    /// add-wins under concurrent active-active enable / disable. It is the
+    /// minimal observed-remove primitive for composite-key membership rows
+    /// (e.g. a tag/key secondary index) where the meaningful bit is the
+    /// row's presence.
+    /// </summary>
+    /// <param name="lattice">The tree containing the flag.</param>
+    /// <param name="key">The key the flag is stored under.</param>
+    public static OrFlagAccessor OrFlag(this ILattice lattice, string key)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        return new OrFlagAccessor(lattice, key);
+    }
+
+    /// <summary>
     /// Returns a typed accessor for a positive-negative (PN) counter
     /// stored under <paramref name="key"/> in <paramref name="lattice"/>.
     /// </summary>

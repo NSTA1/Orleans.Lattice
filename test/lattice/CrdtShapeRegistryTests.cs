@@ -19,6 +19,7 @@ public class CrdtShapeRegistryTests
         Assert.That(r.TryGet("any", LatticeMergeMode.VersionVector), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.MvRegister), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.Sequence), Is.Not.Null);
+        Assert.That(r.TryGet("any", LatticeMergeMode.OrFlag), Is.Not.Null);
     }
 
     [Test]
@@ -211,6 +212,47 @@ public class CrdtShapeRegistryTests
         b.InsertAfter(Rga.Root, "B", new byte[] { 2 });
         shape.MergeStates(a, b);
         Assert.That(a.Count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ForOrFlag_descriptor_roundtrips_delta_through_state()
+    {
+        var shape = CrdtShape.ForOrFlag();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.OrFlag));
+
+        var state = (OrFlag)shape.CreateEmpty();
+        Assert.That(state.IsBottom, Is.True);
+
+        var delta = new OrFlagDelta
+        {
+            Enables = new[] { new OrSetDot { ReplicaId = "A", Counter = 1 } },
+            Disables = Array.Empty<OrSetDot>(),
+        };
+        var deltaBytes = JsonLatticeSerializer<OrFlagDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+        Assert.That(state.IsEnabled, Is.True);
+
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (OrFlag)shape.DeserializeState(stateBytes);
+        Assert.That(roundtripped.IsEnabled, Is.True);
+    }
+
+    [Test]
+    public void ForOrFlag_descriptor_merges_other_state_enable_wins()
+    {
+        var shape = CrdtShape.ForOrFlag();
+
+        // a enables then disables (observing only its own dot); b enables
+        // concurrently with a dot a never saw. The state merge must keep
+        // the flag enabled (enable-wins).
+        var a = (OrFlag)shape.CreateEmpty();
+        a.Enable("A", 1);
+        a.Disable();
+        var b = (OrFlag)shape.CreateEmpty();
+        b.Enable("B", 1);
+
+        shape.MergeStates(a, b);
+        Assert.That(a.IsEnabled, Is.True);
     }
 
     // --- OR-Map pre-ship delta coalescing -----------------------------------

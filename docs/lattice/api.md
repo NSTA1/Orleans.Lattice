@@ -213,7 +213,7 @@ affect tree availability.
 | `SetIfVersionAsync` | `Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)` | Atomic compare-and-set: writes only when the entry's current version equals `expectedVersion`. Returns `true` on success, `false` on version mismatch. Pass `HybridLogicalClock.Zero` for a key that must not exist. |
 | `GetOrSetAsync` | `Task<byte[]?> GetOrSetAsync(string key, byte[] value)` | Inserts `value` only when `key` is absent or tombstoned. Returns the existing value when live, or `null` when the new value was written. No read-then-write race. |
 | `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if the key was live. See [Tombstone Compaction](tombstone-compaction.md) for retention. |
-| `ApplyCrdtDeltaAsync` | `Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)` | Applies a producer-side typed CRDT delta to `key` under the declared `mode`. The owning leaf resolves the registered `CrdtShape`, folds the delta into the current state via the shape's `MergeDelta`, and appends a single WAL record carrying only the delta bytes. Returns the `HybridLogicalClock` stamped on the committed entry. CRDT merges are convergent, so this surface deliberately omits the optimistic-CAS guard `SetIfVersionAsync` carries. `LatticeMergeMode.OrMap` requires a per-tree shape registered via `ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName)`; the closed-shape modes (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`) resolve through the registry's global fallback without per-tree registration. `LatticeMergeMode.LwwRegister` is rejected with `ArgumentException` - use `SetAsync` for LWW. Typed accessors (`OrSetAccessor`, `PnCounterAccessor`, `MvRegisterAccessor`, `OrMapAccessor`) wrap this surface and are the recommended caller-facing seam; see [CRDT value-surface accessors](#crdt-value-surface-accessors). |
+| `ApplyCrdtDeltaAsync` | `Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)` | Applies a producer-side typed CRDT delta to `key` under the declared `mode`. The owning leaf resolves the registered `CrdtShape`, folds the delta into the current state via the shape's `MergeDelta`, and appends a single WAL record carrying only the delta bytes. Returns the `HybridLogicalClock` stamped on the committed entry. CRDT merges are convergent, so this surface deliberately omits the optimistic-CAS guard `SetIfVersionAsync` carries. `LatticeMergeMode.OrMap` requires a per-tree shape registered via `ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName)`; the closed-shape modes (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `Sequence`, `OrFlag`) resolve through the registry's global fallback without per-tree registration. `LatticeMergeMode.LwwRegister` is rejected with `ArgumentException` - use `SetAsync` for LWW. Typed accessors (`OrSetAccessor`, `PnCounterAccessor`, `MvRegisterAccessor`, `OrMapAccessor`, `OrFlagAccessor`) wrap this surface and are the recommended caller-facing seam; see [CRDT value-surface accessors](#crdt-value-surface-accessors). |
 
 Single-key operations transparently retry on topology-change
 exceptions (`StaleShardRoutingException`, `StaleTreeRoutingException`).
@@ -730,7 +730,7 @@ using (LatticeDeltaContext.With(new byte[] { 1, 2, 3 }))
 ```
 
 The CRDT value-surface accessors (`OrSet`, `PnCounter`,
-`VersionVector`, `MvRegister`, `OrMap<TKey, TValue>`, `Sequence<T>`) and the
+`VersionVector`, `MvRegister`, `OrMap<TKey, TValue>`, `Sequence<T>`, `OrFlag`) and the
 atomic-write saga set the context on the caller's behalf - the
 replication package's typed-delta receiver dispatch reads the
 stamped slot and applies via `MergeDelta` automatically.
@@ -1129,8 +1129,8 @@ Supporting public types: `LatticeTreeBatch` (per-tree slice: `TreeId`,
 ## CRDT value-surface accessors
 
 `ILattice.OrSet(key)`, `ILattice.PnCounter(key)`,
-`ILattice.VersionVector(key)`, `ILattice.MvRegister<T>(key)`, and
-`ILattice.OrMap<TKey, TValue>(key)` return lightweight,
+`ILattice.VersionVector(key)`, `ILattice.MvRegister<T>(key)`,
+`ILattice.OrMap<TKey, TValue>(key)`, and `ILattice.OrFlag(key)` return lightweight,
 allocation-free accessors that read and write a single key under
 optimistic concurrency. Each accessor exposes the primitive's
 natural mutation API - add/remove, increment/decrement, tick/merge,
@@ -1146,9 +1146,16 @@ order via the standard RGA descending `(Counter, ReplicaId)`
 tie-break, and removes tombstone the targeted node so a later
 re-insert against the same parent still resolves correctly.
 
+`ILattice.OrFlag(key)` adds an observed-remove (enable-wins) flag
+accessor - the single-element specialisation of the OR-Set. It
+tracks a single presence bit (enabled / disabled) that converges
+enable-wins under concurrent active-active enable and disable, and
+is the minimal observed-remove primitive for composite-key
+membership rows such as a tag/key secondary index.
+
 > See [`state-primitives.md`](state-primitives.md) for the
 > convergence semantics, merge rules, and example use cases of each
-> primitive (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`,
+> primitive (`OrSet`, `OrFlag`, `PnCounter`, `VersionVector`, `MvRegister`,
 > `OrMap`, `Rga`) - including when to prefer one primitive over
 > another and the recursive `ICrdt<TSelf>` contract that lets `OrMap`
 > nest other CRDTs as values.
@@ -1191,6 +1198,13 @@ var transcript = tree.Sequence<string>("chat:42");
 await transcript.InsertAtAsync(0, "siloA", "Hello");
 await transcript.InsertAtAsync(1, "siloA", "World");
 IReadOnlyList<string> lines = await transcript.ToListAsync();
+
+// Observed-remove (enable-wins) flag: a single presence bit that
+// converges enable-wins under concurrent enable / disable. Ideal
+// for composite-key membership rows (a tag/key secondary index).
+await tree.OrFlag("tag/urgent/order:42").EnableAsync(replicaId: "siloA");
+bool tagged = await tree.OrFlag("tag/urgent/order:42").IsEnabledAsync();
+await tree.OrFlag("tag/urgent/order:42").DisableAsync();
 ```
 
 | Accessor | Method | Description |
@@ -1225,6 +1239,11 @@ IReadOnlyList<string> lines = await transcript.ToListAsync();
 | `RgaAccessor<T>` | `Task RemoveAtAsync(int index)` | Tombstones the live node at the visible position `index`. |
 | `RgaAccessor<T>` | `Task RemoveAsync(OrSetDot dot)` | Tombstones the node identified by `dot`. A no-op when the dot is absent or already tombstoned. |
 | `RgaAccessor<T>` | `Task MergeAsync(Rga other)` | Merges `other` into the stored state under CAS. |
+| `OrFlagAccessor` | `Task<OrFlag> GetAsync()` | Reads the current flag state; returns a disabled `OrFlag` when absent or tombstoned. |
+| `OrFlagAccessor` | `Task<bool> IsEnabledAsync()` | Returns `true` when the flag is currently enabled. |
+| `OrFlagAccessor` | `Task EnableAsync(string replicaId)` | Enables the flag with a fresh causal dot. A concurrent enable on another replica survives a disable that did not observe it (enable-wins). |
+| `OrFlagAccessor` | `Task DisableAsync()` | Tombstones every enable dot currently observed. A no-op when the flag is not enabled. |
+| `OrFlagAccessor` | `Task MergeAsync(OrFlag other)` | Merges `other` into the stored state under CAS. |
 
 Mutating methods retry on CAS failure up to a per-call budget
 (default `OrSetAccessor.DefaultMaxAttempts` /
@@ -1232,7 +1251,8 @@ Mutating methods retry on CAS failure up to a per-call budget
 `VersionVectorAccessor.DefaultMaxAttempts` /
 `MvRegisterAccessor<T>.DefaultMaxAttempts` /
 `OrMapAccessor<TKey, TValue>.DefaultMaxAttempts` /
-`RgaAccessor<T>.DefaultMaxAttempts` = 16). When the budget is
+`RgaAccessor<T>.DefaultMaxAttempts` /
+`OrFlagAccessor.DefaultMaxAttempts` = 16). When the budget is
 exhausted the accessor throws `InvalidOperationException`; raise the
 budget or reduce contention. Values are JSON-serialized via
 `JsonLatticeSerializer<T>`, so the bytes are inspectable through

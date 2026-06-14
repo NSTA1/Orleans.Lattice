@@ -114,4 +114,27 @@ public enum LatticeMergeMode
     /// required.
     /// </summary>
     Sequence = 6,
+
+    /// <summary>
+    /// Observed-remove (enable-wins) flag. Each key carries an
+    /// <see cref="Orleans.Lattice.OrFlag"/> whose state is the set of
+    /// enable dots minus the set of observed-remove (disable) dots; the
+    /// flag is present when at least one enable dot survives. Receivers
+    /// fold the typed <see cref="OrFlagDelta"/> carried in
+    /// <see cref="WalRecord.Delta"/> into the loaded
+    /// <see cref="Orleans.Lattice.OrFlag"/> via its instance
+    /// <c>MergeDelta</c> method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.OrFlag(ILattice, string)"/>).
+    /// Concurrent active-active enable and disable of the same key from
+    /// different clusters converge add-wins with their causal dot context
+    /// preserved - a disable cancels only the enable dots it observed, so
+    /// a concurrent enable on another replica survives. This is the
+    /// minimal observed-remove primitive for composite-key membership
+    /// rows (e.g. a tag/key secondary index) where the meaningful bit is
+    /// the row's presence rather than its value, giving OR-Set-grade
+    /// semantics without carrying a singleton set's element payload. The
+    /// descriptor is a global closed shape, so no per-tree registration
+    /// is required.
+    /// </summary>
+    OrFlag = 7,
 }

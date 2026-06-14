@@ -22,6 +22,10 @@ public class LatticeMergeModeTests
             Assert.That((int)LatticeMergeMode.OrSet, Is.EqualTo(1));
             Assert.That((int)LatticeMergeMode.PnCounter, Is.EqualTo(2));
             Assert.That((int)LatticeMergeMode.VersionVector, Is.EqualTo(3));
+            Assert.That((int)LatticeMergeMode.MvRegister, Is.EqualTo(4));
+            Assert.That((int)LatticeMergeMode.OrMap, Is.EqualTo(5));
+            Assert.That((int)LatticeMergeMode.Sequence, Is.EqualTo(6));
+            Assert.That((int)LatticeMergeMode.OrFlag, Is.EqualTo(7));
         });
     }
 }
