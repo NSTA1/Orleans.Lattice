@@ -137,4 +137,28 @@ public enum LatticeMergeMode
     /// is required.
     /// </summary>
     OrFlag = 7,
+
+    /// <summary>
+    /// Remove-wins (disable-wins) flag - the inverse of
+    /// <see cref="OrFlag"/>. Each key carries a
+    /// <see cref="Orleans.Lattice.RwFlag"/> whose state is a set of enable
+    /// dots, a set of disable (remove) dots, and a set of observed-enable
+    /// tombstones cancelling disables; the flag is present only when at
+    /// least one enable dot exists and no disable dot survives. Receivers
+    /// fold the typed <see cref="RwFlagDelta"/> carried in
+    /// <see cref="WalRecord.Delta"/> into the loaded
+    /// <see cref="Orleans.Lattice.RwFlag"/> via its instance
+    /// <c>MergeDelta</c> method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.RwFlag(ILattice, string)"/>).
+    /// Concurrent active-active enable and disable of the same key from
+    /// different clusters converge remove-wins with their causal dot context
+    /// preserved - a disable an enable has not observed survives and keeps
+    /// the flag off, so a revoke is never silently resurrected by a
+    /// concurrent re-add. This is the remove-wins counterpart of
+    /// <see cref="OrFlag"/> for composite-key membership rows (e.g. a
+    /// tag/key secondary index, revocation list, or blocklist) where a
+    /// removal must win the tie. The descriptor is a global closed shape,
+    /// so no per-tree registration is required.
+    /// </summary>
+    RwFlag = 8,
 }

@@ -242,4 +242,35 @@ public class CrdtLatticeExtensionsTests
         var accessor = default(OrFlagAccessor);
         Assert.That(async () => await accessor.GetAsync(), Throws.InstanceOf<InvalidOperationException>());
     }
+
+    [Test]
+    public void RwFlag_returns_accessor_bound_to_lattice_and_key()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var accessor = lattice.RwFlag("k1");
+        Assert.That(accessor.Lattice, Is.SameAs(lattice));
+        Assert.That(accessor.Key, Is.EqualTo("k1"));
+    }
+
+    [Test]
+    public void RwFlag_throws_on_null_lattice()
+    {
+        ILattice lattice = null!;
+        Assert.That(() => lattice.RwFlag("k"), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void RwFlag_throws_on_empty_key()
+    {
+        var lattice = Substitute.For<ILattice>();
+        Assert.That(() => lattice.RwFlag(""), Throws.InstanceOf<ArgumentException>());
+        Assert.That(() => lattice.RwFlag(null!), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void Default_RwFlagAccessor_throws_InvalidOperationException_on_use()
+    {
+        var accessor = default(RwFlagAccessor);
+        Assert.That(async () => await accessor.GetAsync(), Throws.InstanceOf<InvalidOperationException>());
+    }
 }

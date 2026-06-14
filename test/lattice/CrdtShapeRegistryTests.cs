@@ -20,6 +20,7 @@ public class CrdtShapeRegistryTests
         Assert.That(r.TryGet("any", LatticeMergeMode.MvRegister), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.Sequence), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.OrFlag), Is.Not.Null);
+        Assert.That(r.TryGet("any", LatticeMergeMode.RwFlag), Is.Not.Null);
     }
 
     [Test]
@@ -255,7 +256,48 @@ public class CrdtShapeRegistryTests
         Assert.That(a.IsEnabled, Is.True);
     }
 
-    // --- OR-Map pre-ship delta coalescing -----------------------------------
+    [Test]
+    public void ForRwFlag_descriptor_roundtrips_delta_through_state()
+    {
+        var shape = CrdtShape.ForRwFlag();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.RwFlag));
+
+        var state = (RwFlag)shape.CreateEmpty();
+        Assert.That(state.IsBottom, Is.True);
+
+        var delta = new RwFlagDelta
+        {
+            Enables = new[] { new OrSetDot { ReplicaId = "A", Counter = 1 } },
+            Disables = Array.Empty<OrSetDot>(),
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+        var deltaBytes = JsonLatticeSerializer<RwFlagDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+        Assert.That(state.IsEnabled, Is.True);
+
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (RwFlag)shape.DeserializeState(stateBytes);
+        Assert.That(roundtripped.IsEnabled, Is.True);
+    }
+
+    [Test]
+    public void ForRwFlag_descriptor_merges_other_state_remove_wins()
+    {
+        var shape = CrdtShape.ForRwFlag();
+
+        // a enables then disables (observing its own enable dot); b enables
+        // concurrently with a dot that observes neither a's disable. The
+        // state merge must keep the flag disabled (remove-wins): a's disable
+        // dot is not tombstoned by b's enable, so it survives.
+        var a = (RwFlag)shape.CreateEmpty();
+        a.Enable("A", 1);
+        a.Disable("A", 2);
+        var b = (RwFlag)shape.CreateEmpty();
+        b.Enable("B", 1);
+
+        shape.MergeStates(a, b);
+        Assert.That(a.IsEnabled, Is.False);
+    }
 
     private static OrMapDeltaEntry<string, PnCounter> Add(string key, string replicaId, long counter, string incReplica, long amount)
     {

@@ -146,6 +146,28 @@ Because a `Disable()` only tombstones the dots the local replica has actually ob
 
 **Example use case:** a tag/key secondary index built on composite keys (`tag/{tag}/{key}`). Two sites concurrently associate a key with a tag while a third removes the association; the per-row `OrFlag` converges enable-wins so the association survives unless every observed enable has been disabled.
 
+## Remove-Wins Flag (RW-Flag)
+
+`RwFlag` is the **inverse of the OR-Flag**: a remove-wins (disable-wins) flag where a concurrent disable beats a concurrent enable. Like `OrFlag` it carries no element payload, but it tracks three grow-only dot lists rather than two:
+
+```
+RwFlag = {
+    Enables:    [OrSetDot(replicaId, counter)]   // each Enable() mints a fresh dot
+    Disables:   [OrSetDot(replicaId, counter)]   // each Disable() mints a fresh dot
+    Tombstones: [OrSetDot]                        // disable dots an observed Enable() has cancelled
+}
+liveDisable = Disables \ Tombstones
+IsEnabled   = Enables is non-empty AND liveDisable is empty
+```
+
+`Disable(replicaId, counter)` is **additive** - it mints a fresh disable dot and appends it to `Disables`. `Enable(replicaId, counter)` mints a fresh enable dot *and* tombstones every disable dot it currently observes. Merge is the pointwise union of all three lists on both sides, after which membership is recomputed - commutative, associative, and idempotent.
+
+Because an `Enable()` only tombstones the disables the local replica has actually observed, a concurrent `Disable()` from another replica that the enabler never saw stays in `liveDisable` and **suppresses** the flag - hence "remove-wins". Presence requires at least one enable dot *and* no surviving disable, so a fresh/empty flag reads disabled, matching the absent-key contract of the accessor surface. Ties (a concurrent enable and disable that never observed each other) resolve to disabled.
+
+Reach for `OrFlag` when a re-add should win a race against a concurrent removal (the common membership-index default); reach for `RwFlag` when the *safe* outcome of a conflict is the disabled/withdrawn state - e.g. a revocation, a kill-switch, or a consent/opt-out bit where a concurrent withdrawal must never be silently overridden by a stale enable.
+
+**Example use case:** a per-entity feature kill-switch or access-revocation flag replicated active-active. If one site re-enables access while another concurrently revokes it, `RwFlag` converges to *revoked* until an enable observes (and tombstones) that revocation - the conservative, fail-closed outcome.
+
 ## Positive-Negative Counter (PN-Counter)
 
 `PnCounter` is a **state-based counter** that supports concurrent increments and decrements without coordination by tracking per-replica cumulative components:

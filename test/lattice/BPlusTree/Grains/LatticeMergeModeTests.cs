@@ -26,6 +26,7 @@ public class LatticeMergeModeTests
             Assert.That((int)LatticeMergeMode.OrMap, Is.EqualTo(5));
             Assert.That((int)LatticeMergeMode.Sequence, Is.EqualTo(6));
             Assert.That((int)LatticeMergeMode.OrFlag, Is.EqualTo(7));
+            Assert.That((int)LatticeMergeMode.RwFlag, Is.EqualTo(8));
         });
     }
 }

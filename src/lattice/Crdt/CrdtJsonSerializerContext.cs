@@ -39,6 +39,8 @@ namespace Orleans.Lattice;
 [JsonSerializable(typeof(MvRegisterDelta))]
 [JsonSerializable(typeof(OrFlag))]
 [JsonSerializable(typeof(OrFlagDelta))]
+[JsonSerializable(typeof(RwFlag))]
+[JsonSerializable(typeof(RwFlagDelta))]
 internal sealed partial class CrdtJsonSerializerContext : JsonSerializerContext
 {
 }
