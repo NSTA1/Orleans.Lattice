@@ -848,4 +848,117 @@ public class CrdtAccessorIntegrationTests
         Assert.That(accessor.Lattice, Is.SameAs(tree));
         Assert.That(accessor.Key, Is.EqualTo("k"));
     }
+
+    // ── RwFlag ──────────────────────────────────────────────────
+
+    [Test]
+    public async Task RwFlag_GetAsync_returns_disabled_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        var flag = await tree.RwFlag("missing").GetAsync();
+        Assert.That(flag.IsEnabled, Is.False);
+    }
+
+    [Test]
+    public async Task RwFlag_IsEnabledAsync_returns_false_for_missing_key()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(await tree.RwFlag("missing").IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task RwFlag_EnableAsync_makes_flag_enabled()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.RwFlag("k");
+        await accessor.EnableAsync("r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task RwFlag_DisableAsync_after_enable_makes_flag_disabled()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.RwFlag("k");
+        await accessor.EnableAsync("r1");
+        await accessor.DisableAsync("r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task RwFlag_DisableAsync_on_missing_key_keeps_flag_disabled()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.RwFlag("k").DisableAsync("r1"), Throws.Nothing);
+        Assert.That(await tree.RwFlag("k").IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task RwFlag_EnableAsync_after_disable_re_enables()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.RwFlag("k");
+        await accessor.EnableAsync("r1");
+        await accessor.DisableAsync("r1");
+        await accessor.EnableAsync("r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task RwFlag_MergeAsync_unions_remote_state_remove_wins()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.RwFlag("k");
+        await accessor.EnableAsync("r1");
+
+        // Remote disabled with a dot the local replica's enable never
+        // observed; the merge must keep the flag disabled (remove-wins).
+        var remote = new RwFlag();
+        remote.Disable("r2", 1);
+        await accessor.MergeAsync(remote);
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task RwFlag_EnableAsync_throws_on_empty_replica_id()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.RwFlag("k").EnableAsync(""), Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task RwFlag_DisableAsync_throws_on_empty_replica_id()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.RwFlag("k").DisableAsync(""), Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task RwFlag_MergeAsync_throws_on_null_other()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(async () => await tree.RwFlag("k").MergeAsync(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task RwFlag_EnableAsync_throws_on_zero_max_attempts()
+    {
+        var tree = await CreateTreeAsync();
+        Assert.That(
+            async () => await tree.RwFlag("k").EnableAsync("r1", maxAttempts: 0),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task RwFlag_accessor_exposes_lattice_and_key_properties()
+    {
+        var tree = await CreateTreeAsync();
+        var accessor = tree.RwFlag("k");
+        Assert.That(accessor.Lattice, Is.SameAs(tree));
+        Assert.That(accessor.Key, Is.EqualTo("k"));
+    }
 }

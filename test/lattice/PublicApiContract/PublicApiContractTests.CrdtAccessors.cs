@@ -482,4 +482,110 @@ public partial class PublicApiContractTests
             async () => await accessor.GetAsync(),
             Throws.InstanceOf<InvalidOperationException>());
     }
+
+    // ── RwFlag factory + accessor ───────────────────────────────────────
+
+    [Test]
+    public void RwFlag_with_null_lattice_throws()
+    {
+        Assert.That(
+            () => CrdtLatticeExtensions.RwFlag(null!, "k"),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task RwFlag_with_empty_key_throws()
+    {
+        var tree = await _fixture.CreateSmallTreeAsync(
+            "pac-crdt-rwflag-emptykey-" + Guid.NewGuid().ToString("N")[..8], shardCount: 1);
+        Assert.That(() => tree.RwFlag(string.Empty), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task RwFlag_IsEnabledAsync_on_missing_key_returns_false()
+    {
+        var treeId = "pac-crdt-rwflag-empty-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        Assert.That(await tree.RwFlag("absent").IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task RwFlag_EnableAsync_makes_flag_enabled()
+    {
+        var treeId = "pac-crdt-rwflag-enable-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.RwFlag("flag");
+        await accessor.EnableAsync(replicaId: "r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task RwFlag_DisableAsync_makes_flag_disabled()
+    {
+        var treeId = "pac-crdt-rwflag-disable-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.RwFlag("flag");
+        await accessor.EnableAsync(replicaId: "r1");
+        await accessor.DisableAsync(replicaId: "r1");
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task RwFlag_EnableAsync_with_empty_replica_throws()
+    {
+        var treeId = "pac-crdt-rwflag-emptyrep-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.RwFlag("flag").EnableAsync(replicaId: string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task RwFlag_DisableAsync_with_empty_replica_throws()
+    {
+        var treeId = "pac-crdt-rwflag-disableemptyrep-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.RwFlag("flag").DisableAsync(replicaId: string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task RwFlag_MergeAsync_with_null_other_throws()
+    {
+        var treeId = "pac-crdt-rwflag-mergenull-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.RwFlag("flag").MergeAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task RwFlag_MergeAsync_unions_state_remove_wins()
+    {
+        var treeId = "pac-crdt-rwflag-merge-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        var accessor = tree.RwFlag("flag");
+        await accessor.EnableAsync(replicaId: "r1");
+
+        var other = new RwFlag();
+        other.Disable("r2", 1);
+        await accessor.MergeAsync(other);
+
+        Assert.That(await accessor.IsEnabledAsync(), Is.False);
+    }
+
+    [Test]
+    public void RwFlagAccessor_default_throws_on_use()
+    {
+        var accessor = default(RwFlagAccessor);
+        Assert.That(
+            async () => await accessor.GetAsync(),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
 }

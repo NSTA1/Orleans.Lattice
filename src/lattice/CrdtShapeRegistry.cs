@@ -176,6 +176,22 @@ public sealed class CrdtShape
             static (a, b) => CombineOrFlagDelta((OrFlagDelta)a, (OrFlagDelta)b));
     }
 
+    /// <summary>Factory for the <see cref="LatticeMergeMode.RwFlag"/> shape.</summary>
+    public static CrdtShape ForRwFlag()
+    {
+        var ctx = CrdtJsonSerializerContext.Default;
+        return new CrdtShape(
+            LatticeMergeMode.RwFlag,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.RwFlag)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.RwFlagDelta),
+            (state, delta) => ((RwFlag)state).MergeDelta((RwFlagDelta)delta),
+            (state, other) => ((RwFlag)state).MergeFrom((RwFlag)other),
+            () => new RwFlag(),
+            state => JsonSerializer.SerializeToUtf8Bytes((RwFlag)state, ctx.RwFlag),
+            delta => JsonSerializer.SerializeToUtf8Bytes((RwFlagDelta)delta, ctx.RwFlagDelta),
+            static (a, b) => CombineRwFlagDelta((RwFlagDelta)a, (RwFlagDelta)b));
+    }
+
     /// <summary>
     /// Factory for the <see cref="LatticeMergeMode.Sequence"/> shape. Uses
     /// the reflection serialiser (matching the receiver-side typed-delta
@@ -300,6 +316,15 @@ public sealed class CrdtShape
         // deltas' dot sets reproduces applying both in sequence.
         Enables = UnionOrSetDots(a.Enables, b.Enables),
         Disables = UnionOrSetDots(a.Disables, b.Disables),
+    };
+
+    private static RwFlagDelta CombineRwFlagDelta(RwFlagDelta a, RwFlagDelta b) => new()
+    {
+        // Enable / disable / tombstone dot sets are grow-only; the union of
+        // the two deltas' dot sets reproduces applying both in sequence.
+        Enables = UnionOrSetDots(a.Enables, b.Enables),
+        Disables = UnionOrSetDots(a.Disables, b.Disables),
+        Tombstones = UnionOrSetDots(a.Tombstones, b.Tombstones),
     };
 
     private static OrMapDelta<TKey, TValue> CombineOrMapDelta<TKey, TValue>(
@@ -600,6 +625,7 @@ public sealed class CrdtShapeRegistry
         _global[LatticeMergeMode.MvRegister] = CrdtShape.ForMvRegister();
         _global[LatticeMergeMode.Sequence] = CrdtShape.ForRga();
         _global[LatticeMergeMode.OrFlag] = CrdtShape.ForOrFlag();
+        _global[LatticeMergeMode.RwFlag] = CrdtShape.ForRwFlag();
     }
 
     /// <summary>

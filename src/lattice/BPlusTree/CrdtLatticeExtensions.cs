@@ -42,6 +42,26 @@ public static class CrdtLatticeExtensions
     }
 
     /// <summary>
+    /// Returns a typed accessor for a remove-wins (disable-wins) flag
+    /// stored under <paramref name="key"/> in <paramref name="lattice"/>.
+    /// The flag tracks presence ("enabled") rather than a value, converging
+    /// remove-wins under concurrent active-active enable / disable: a disable
+    /// an enable has not observed survives and keeps the flag off, so a
+    /// revoke is never silently resurrected by a concurrent re-add. It is the
+    /// remove-wins counterpart of <see cref="OrFlag(ILattice, string)"/> for
+    /// composite-key membership rows (e.g. a tag/key secondary index,
+    /// revocation list, or blocklist) where a removal must win the tie.
+    /// </summary>
+    /// <param name="lattice">The tree containing the flag.</param>
+    /// <param name="key">The key the flag is stored under.</param>
+    public static RwFlagAccessor RwFlag(this ILattice lattice, string key)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        return new RwFlagAccessor(lattice, key);
+    }
+
+    /// <summary>
     /// Returns a typed accessor for a positive-negative (PN) counter
     /// stored under <paramref name="key"/> in <paramref name="lattice"/>.
     /// </summary>
