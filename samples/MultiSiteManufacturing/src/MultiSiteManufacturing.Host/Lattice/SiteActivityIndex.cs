@@ -5,55 +5,71 @@ using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using Orleans.Lattice;
-using Orleans.Lattice.Primitives;
 
 namespace MultiSiteManufacturing.Host.Lattice;
 
 /// <summary>
-/// Maintains a lightweight secondary index on top of
-/// <see cref="ILattice"/>: every <see cref="Fact"/> routed through
-/// <see cref="FederationRouter"/> emits one entry keyed
-/// <c>{site}/{wallTicks:D20}/{counter:D10}/{serial}</c> whose value
-/// is a short UTF-8 activity label (e.g. "Step: Machining",
-/// "Inspection: CMM Pass", "MRB: UseAsIs"). The index tree is a pure
-/// B+ tree demo - its sole purpose is to answer "which parts are at
-/// site X right now?" via a native descending range scan over the
-/// site prefix.
+/// Maintains a "which parts are at site X?" view on top of the
+/// <see cref="ILatticeTagIndex">tag index</see>. Every <see cref="Fact"/>
+/// routed through <see cref="FederationRouter"/> writes one row to a
+/// <i>part-major</i> subject tree keyed <c>{serial}/{site}</c> whose
+/// value carries the fact's HLC and a short activity label (e.g.
+/// "Step: Machining", "Inspection: CMM Pass", "MRB: UseAsIs"); the same
+/// write tags that key with its <see cref="ProcessSite"/>.
+/// <see cref="ListAtSiteAsync"/> then answers the per-site query through
+/// the tag index instead of a hand-rolled range scan.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every fact inherits <see cref="Fact.Site"/>, so every fact type is
-/// a candidate - including inspections at sites like
-/// <c>StuttgartCmmLab</c> that never emit a
-/// <see cref="ProcessStepCompleted"/>. That is what lets the "Stuttgart
-/// CMM Lab" panel actually list its CMM inspections instead of
-/// appearing permanently empty.
+/// The subject key is part-major on purpose: <c>{serial}/{site}</c> means
+/// the site is <b>not</b> a usable key prefix, so a range scan can no
+/// longer answer "parts at site X". The tag index is the genuine access
+/// path - <see cref="ILatticeTagIndex.WithAnyTags"/> walks the posting
+/// list for the site tag and yields exactly the matching keys.
 /// </para>
 /// <para>
-/// Keys embed the fact's zero-padded HLC so a <c>reverse: true</c>
-/// lexicographic scan natively yields HLC-descending
-/// (most-recent-first) order - no in-memory sort needed. The serial
-/// is appended last so two facts recorded at the same instant don't
-/// collide. <see cref="ListAtSiteAsync"/> dedups by serial, keeping
-/// only the most recent activity per part.
+/// Because each <c>(serial, site)</c> pair maps to a single key, a newer
+/// fact overwrites the older row for that part at that site, so the
+/// per-site result already has one row per part - no in-memory dedup is
+/// required. An HLC guard on <see cref="AppendAsync"/> keeps the
+/// most-recent activity even when facts arrive out of order. The value
+/// carries the HLC (it is no longer embedded in the key), so
+/// <see cref="ListAtSiteAsync"/> sorts the small per-site result set
+/// most-recent-first in memory.
+/// </para>
+/// <para>
+/// Every fact inherits <see cref="Fact.Site"/>, so every fact type is a
+/// candidate - including inspections at sites like <c>StuttgartCmmLab</c>
+/// that never emit a <see cref="ProcessStepCompleted"/>. That is what
+/// lets the "Stuttgart CMM Lab" panel actually list its CMM inspections
+/// instead of appearing permanently empty.
 /// </para>
 /// <para>
 /// Every silo runs its own copy of the hosted service, so both silo A
-/// and silo B append to the shared index tree (the lattice tree
-/// itself is cluster-wide). Write failures are logged and swallowed -
-/// a transient storage hiccup on the index must not break the main
-/// fact pipeline.
+/// and silo B append to the shared trees (the lattice trees themselves
+/// are cluster-wide). Write failures are logged and swallowed - a
+/// transient storage hiccup on the index must not break the main fact
+/// pipeline.
 /// </para>
 /// </remarks>
 public sealed class SiteActivityIndex(
     IGrainFactory grainFactory,
+    ILatticeTagIndexFactory tagIndexFactory,
     FederationRouter router,
     ILogger<SiteActivityIndex> logger) : IHostedService
 {
-    /// <summary>Lattice tree id that holds the site-activity index.</summary>
-    public const string TreeId = "mfg-site-activity-index";
+    /// <summary>Lattice tree id that holds the part-major activity rows tagged by the index.</summary>
+    public const string TreeId = "mfg-site-activity";
+
+    /// <summary>Logical tag-index name; the membership tree is resolved as <c>tag-{IndexName}</c>.</summary>
+    public const string IndexName = "mfg-site";
+
+    /// <summary>Lattice tree id that holds the tag-index membership rows (<c>tag-{IndexName}</c>).</summary>
+    public const string IndexTreeId = "tag-" + IndexName;
 
     private ILattice Tree => grainFactory.GetGrain<ILattice>(TreeId);
+
+    private ILatticeTagIndex Index => tagIndexFactory.Create(Tree, IndexName);
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -71,27 +87,33 @@ public sealed class SiteActivityIndex(
 
     /// <summary>
     /// Returns every part that has recent activity at
-    /// <paramref name="site"/>, ordered <b>most-recent first</b> by
-    /// the fact's hybrid logical clock, with one row per part (the
-    /// latest activity for that part at that site). Implemented as a
-    /// native descending <see cref="ILattice"/> range scan over the
-    /// <c>{site}/</c> prefix - the zero-padded HLC embedded in each
-    /// key means a reverse lexicographic scan is already
-    /// HLC-descending; no post-sort is required.
+    /// <paramref name="site"/>, ordered <b>most-recent first</b> by the
+    /// fact's hybrid logical clock, with one row per part (the latest
+    /// activity for that part at that site). Implemented as a tag-index
+    /// union query over the site tag, reading each matched key's value
+    /// from the subject tree and sorting the result HLC-descending.
     /// </summary>
     public async Task<IReadOnlyList<SiteActivityIndexEntry>> ListAtSiteAsync(
         ProcessSite site, CancellationToken cancellationToken = default)
     {
-        var (start, end) = SitePrefixRange(site);
+        var tag = site.ToString();
+        var tree = Tree;
         var entries = new List<SiteActivityIndexEntry>();
-        var seen = new HashSet<PartSerialNumber>();
-        await foreach (var kvp in Tree.ScanEntriesAsync(start, end, reverse: true, cancellationToken: cancellationToken))
+        await foreach (var key in Index.WithAnyTags(tag).WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (TryParseEntry(kvp.Key, kvp.Value, out var entry) && seen.Add(entry.Serial))
+            var value = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            if (value is null)
+            {
+                // Orphaned membership row (key removed). Skip; a reconcile
+                // pass would prune it.
+                continue;
+            }
+            if (TryParseEntry(key, value, out var entry))
             {
                 entries.Add(entry);
             }
         }
+        entries.Sort(static (a, b) => b.Hlc.CompareTo(a.Hlc));
         return entries;
     }
 
@@ -99,13 +121,27 @@ public sealed class SiteActivityIndex(
     /// Writes the index entry for <paramref name="fact"/>. Called
     /// internally by <see cref="OnFactRouted"/>; exposed publicly so
     /// tests can append without setting up the full federation router.
+    /// A newer write wins: if a row already exists for this part at this
+    /// site with an equal-or-newer HLC, the stale append is skipped.
     /// </summary>
-    public Task AppendAsync(Fact fact, CancellationToken cancellationToken = default)
+    public async Task AppendAsync(Fact fact, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(fact);
-        var key = KeyFor(fact);
-        var value = Encoding.UTF8.GetBytes(DescribeActivity(fact));
-        return Tree.SetAsync(key, value, cancellationToken);
+        var site = fact.Site.ToString();
+        var key = KeyFor(fact.Serial, site);
+
+        var existing = await Tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+        if (existing is { Length: > 0 }
+            && TryParseValue(existing, out var existingHlc, out _)
+            && fact.Hlc.CompareTo(existingHlc) <= 0)
+        {
+            // A concurrent or newer fact already recorded this part's
+            // activity at this site; keep the most recent.
+            return;
+        }
+
+        var value = EncodeValue(fact);
+        await Index.SetValueWithTags(key, value, site).Eventual().CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private void OnFactRouted(object? sender, Fact fact)
@@ -119,7 +155,7 @@ public sealed class SiteActivityIndex(
     {
         try
         {
-            await AppendAsync(fact);
+            await AppendAsync(fact).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -135,8 +171,8 @@ public sealed class SiteActivityIndex(
     /// site - these render directly into the parts-by-site grid.
     /// Exposed so the dashboard broadcaster can build a
     /// <see cref="SiteActivityIndexEntry"/> for a live fact without
-    /// round-tripping through the lattice (the range scan writes the
-    /// same label under <see cref="AppendAsync"/>).
+    /// round-tripping through the lattice (the tag-index write stores
+    /// the same label under <see cref="AppendAsync"/>).
     /// </summary>
     public static string DescribeActivity(Fact fact) => fact switch
     {
@@ -149,45 +185,66 @@ public sealed class SiteActivityIndex(
         _ => fact.GetType().Name,
     };
 
-    private static string KeyFor(Fact fact) =>
-        string.Create(CultureInfo.InvariantCulture,
-            $"{fact.Site}/{fact.Hlc.WallClockTicks:D20}/{fact.Hlc.Counter:D10}/{fact.Serial.Value}");
+    // Part-major key: site is deliberately the suffix so it is not a
+    // usable range-scan prefix - the tag index is the only access path.
+    private static string KeyFor(PartSerialNumber serial, string site) =>
+        string.Concat(serial.Value, "/", site);
 
-    private static (string Start, string EndExclusive) SitePrefixRange(ProcessSite site)
-    {
-        var prefix = site + "/";
-        var end = site + "0";
-        return (prefix, end);
-    }
+    // Value layout: {wallTicks}/{counter}/{activity}. The HLC moves into
+    // the value because the part-major key no longer embeds it.
+    private static byte[] EncodeValue(Fact fact) =>
+        Encoding.UTF8.GetBytes(string.Create(
+            CultureInfo.InvariantCulture,
+            $"{fact.Hlc.WallClockTicks}/{fact.Hlc.Counter}/{DescribeActivity(fact)}"));
 
     private static bool TryParseEntry(string key, byte[] value, out SiteActivityIndexEntry entry)
     {
-        // {site}/{wallTicks:D20}/{counter:D10}/{serial}
-        var parts = key.Split('/', 4);
-        if (parts.Length != 4
-            || !Enum.TryParse<ProcessSite>(parts[0], out var site)
-            || !long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var wallTicks)
-            || !int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var counter))
+        entry = default;
+        // {serial}/{site}
+        var slash = key.IndexOf('/');
+        if (slash <= 0 || slash >= key.Length - 1)
         {
-            entry = default;
             return false;
         }
-        var hlc = new HybridLogicalClock { WallClockTicks = wallTicks, Counter = counter };
-        var activity = value is { Length: > 0 } ? Encoding.UTF8.GetString(value) : string.Empty;
-        entry = new SiteActivityIndexEntry(site, new PartSerialNumber(parts[3]), hlc, activity);
+        if (!Enum.TryParse<ProcessSite>(key.AsSpan(slash + 1), out var site))
+        {
+            return false;
+        }
+        if (!TryParseValue(value, out var hlc, out var activity))
+        {
+            return false;
+        }
+        entry = new SiteActivityIndexEntry(site, new PartSerialNumber(key[..slash]), hlc, activity);
+        return true;
+    }
+
+    private static bool TryParseValue(byte[] value, out HybridLogicalClock hlc, out string activity)
+    {
+        hlc = default;
+        activity = string.Empty;
+        if (value is not { Length: > 0 })
+        {
+            return false;
+        }
+        var text = Encoding.UTF8.GetString(value);
+        // {wallTicks}/{counter}/{activity}
+        var firstSlash = text.IndexOf('/');
+        if (firstSlash <= 0)
+        {
+            return false;
+        }
+        var secondSlash = text.IndexOf('/', firstSlash + 1);
+        if (secondSlash < 0)
+        {
+            return false;
+        }
+        if (!long.TryParse(text.AsSpan(0, firstSlash), NumberStyles.Integer, CultureInfo.InvariantCulture, out var wallTicks)
+            || !int.TryParse(text.AsSpan(firstSlash + 1, secondSlash - firstSlash - 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out var counter))
+        {
+            return false;
+        }
+        hlc = new HybridLogicalClock { WallClockTicks = wallTicks, Counter = counter };
+        activity = text[(secondSlash + 1)..];
         return true;
     }
 }
-
-/// <summary>
-/// One row from <see cref="SiteActivityIndex.ListAtSiteAsync"/> - the
-/// site, the part involved, the HLC at which the activity occurred
-/// (used for most-recent-first ordering and relative-time display),
-/// and a short label describing what happened.
-/// </summary>
-public readonly record struct SiteActivityIndexEntry(
-    ProcessSite Site,
-    PartSerialNumber Serial,
-    HybridLogicalClock Hlc,
-    string Activity);
-

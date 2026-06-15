@@ -145,7 +145,7 @@ flowchart LR
 
         subgraph lattice["Orleans.Lattice"]
             facts["mfg-facts"]
-            siteIdx["mfg-site-activity-index"]
+            siteIdx["mfg-site-activity<br/>+ tag-mfg-site (tag index)"]
             labels["mfg-part-labels (OrSet)"]
             opReg["mfg-part-operator (LWW)"]
         end
@@ -270,12 +270,14 @@ flowchart LR
     end
 
     subgraph derived["Derived / sibling"]
-        siteIdx["mfg-site-activity-index<br/>{site}/{wallTicks:D20}/{counter:D10}/{serial}<br/>→ fact id"]
+        siteIdx["mfg-site-activity<br/>{serial}/{site}<br/>→ HLC + activity label"]
+        siteTag["tag-mfg-site (tag index)<br/>site → {serial}/{site} keys"]
         labels["mfg-part-labels<br/>{serial} → OrSet&lt;label&gt;<br/>(typed CRDT - replicated)"]
         opReg["mfg-part-operator<br/>{serial} → operator id (LWW)<br/>(cluster-local)"]
     end
 
-    facts -->|"written together"| siteIdx
+    facts -->|"value + site tag written together"| siteIdx
+    siteIdx -->|"site tag posting"| siteTag
     facts -->|"labels written on raise / disposition"| labels
     facts -->|"operator stamped on each fact"| opReg
 ```
@@ -283,16 +285,20 @@ flowchart LR
 | Tree | Key shape | Role | Replicated |
 |---|---|---|---|
 | `mfg-facts` | `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` | Immutable per-part fact log. Forward range scan = HLC-ascending history. | Yes |
-| `mfg-site-activity-index` | `{site}/{wallTicks:D20}/{counter:D10}/{serial}` | Per-site reverse-chronological activity feed. | Yes |
+| `mfg-site-activity` | `{serial}/{site}` → HLC + activity label | Part-major activity rows; the per-site view reads them through the tag index. | Yes |
+| `tag-mfg-site` | tag-index membership (`tag \0 treeId \0 key`) | Posting list mapping each `ProcessSite` to its `{serial}/{site}` keys; powers `ListAtSiteAsync` via `WithAnyTags(site)`. | Yes |
 | `mfg-part-labels` | `{serial}` (one OrSet per serial) | Per-part label set (`damaged`, `awaiting-mrb`, `awaiting-rework`, `accepted`, `scrapped`, …). | Yes - `ReplicationMode.OrSet` (typed CRDT delta shipping) |
 | `mfg-part-operator` | `{serial}` (one LWW register per serial) | Per-part current operator id. | No (cluster-local) - LWW across clusters with disjoint HLCs is meaningless |
 
-Range-scan patterns:
+Access patterns:
 
-- Per-part history → forward scan of `mfg-facts` with prefix
+- Per-part history → forward range scan of `mfg-facts` with prefix
   `{serial}/`.
-- Per-site recent activity → reverse scan of
-  `mfg-site-activity-index` with prefix `{site}/`.
+- Per-site recent activity → tag-index union query
+  (`WithAnyTags(site)`) over the `tag-mfg-site` index, reading each
+  matched `{serial}/{site}` key's value from `mfg-site-activity`.
+  The site is deliberately the key *suffix*, so a range scan cannot
+  answer this query - the tag index is the access path.
 
 Cross-cluster shipping and WAL compaction are package concerns - see
 [`docs/lattice.replication/`](../../docs/lattice.replication/) for
@@ -310,7 +316,8 @@ sample's perspective the flow is opaque: a write on the US cluster
 lands in the local lattice, the package's WAL captures it, the
 shipper streams it to the EU cluster's gRPC service, and the EU
 applier merges it back into the local lattice using the appropriate
-CRDT semantics (LWW for `mfg-facts` and `mfg-site-activity-index`,
+CRDT semantics (LWW for `mfg-facts` and `mfg-site-activity`, OrFlag
+enable-wins membership for its `tag-mfg-site` membership tree,
 typed OrSet deltas for `mfg-part-labels`).
 
 ```mermaid

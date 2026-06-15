@@ -127,9 +127,10 @@ builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterNam
 // Cross-cluster replication is delegated end-to-end to
 // Orleans.Lattice.Replication: WAL, shipper, applier, dead-letter
 // handling, plus the gRPC push transport. Every replicated tree in
-// the sample ships through that package - `mfg-facts` and
-// `mfg-site-activity-index` as LwwRegister, `mfg-part-labels` as
-// OrSet (typed CRDT delta shipping). The `mfg-part-operator` tree
+// the sample ships through that package - `mfg-facts`,
+// `mfg-site-activity`, and its `tag-mfg-site` membership tree as
+// LwwRegister, `mfg-part-labels` as OrSet (typed CRDT delta
+// shipping). The `mfg-part-operator` tree
 // stays cluster-local because LWW across clusters with disjoint HLCs
 // is meaningless. See `docs/lattice.replication/` for the package's
 // wire format and bootstrap protocol.
@@ -233,8 +234,9 @@ builder.Host.UseOrleans(silo =>
 
         // Cross-cluster replication. The package's ReplicatedTrees map
         // covers every tree the sample wants replicated:
-        // `mfg-facts` (LWW), `mfg-site-activity-index` (LWW), and
-        // `mfg-part-labels` (OrSet - typed CRDT delta shipping). The
+        // `mfg-facts` (LWW), `mfg-site-activity` + its `tag-mfg-site`
+        // membership tree (LWW), and `mfg-part-labels` (OrSet - typed
+        // CRDT delta shipping). The
         // `mfg-part-operator` tree stays cluster-local because LWW
         // across clusters with disjoint HLCs is meaningless. Wired
         // only on the persistent-storage path because the package's
@@ -253,11 +255,20 @@ builder.Host.UseOrleans(silo =>
                     // from it; cross-cluster replication keeps both
                     // regions converged on the same fold result.
                     [LatticeFactBackend.FactTreeId] = LatticeMergeMode.LwwRegister,
-                    // Secondary index keyed by {site}/{HLC}/{serial}
-                    // for the "Inventory By Activity" tab. Same
-                    // shipping mode as the fact tree - entries are
-                    // append-only LWW writes.
+                    // Tag-index "parts at site" view. The part-major
+                    // subject tree (keyed {serial}/{site}) carries the
+                    // activity value as an LWW register; the sibling
+                    // tag-membership tree (tag-{IndexName}) carries the
+                    // site posting rows. Both replicate so the per-site
+                    // view stays answerable in either cluster. The
+                    // membership tree is OrFlag (enable-wins): under
+                    // active-active replication both clusters tag keys, so
+                    // the index authors flag-CRDT membership dots that
+                    // converge without a single-writer assumption - an LWW
+                    // membership tree would silently lose concurrently
+                    // authored postings.
                     [SiteActivityIndex.TreeId] = LatticeMergeMode.LwwRegister,
+                    [SiteActivityIndex.IndexTreeId] = LatticeMergeMode.OrFlag,
                     // Per-serial OR-Set of process labels. Typed
                     // CRDT delta shipping: the package transmits
                     // add/remove/merge operations rather than raw

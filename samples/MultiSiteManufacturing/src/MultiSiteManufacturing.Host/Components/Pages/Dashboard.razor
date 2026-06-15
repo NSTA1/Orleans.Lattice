@@ -136,7 +136,7 @@
                 </figure>
                 <small>
                     @_siteEntries.Count entr@(_siteEntries.Count == 1 ? "y" : "ies") ·
-                    range-scan result for <code>@_selectedSite/</code>.
+                    tag-index result for site <code>@_selectedSite</code>.
                 </small>
             }
         </div>
@@ -169,7 +169,7 @@
 
     /// <summary>
     /// Live entries that arrived on the activity subscription while the
-    /// initial range scan for <see cref="_selectedSite"/> was still in
+    /// initial activity lookup for <see cref="_selectedSite"/> was still in
     /// flight. Drained into <see cref="_siteEntries"/> after the scan
     /// lands so no per-fact updates are lost between
     /// <see cref="SelectSiteAsync"/> kick-off and result commit.
@@ -359,8 +359,8 @@
         }
         catch (Exception ex)
         {
-            Log.LogWarning(ex, "Range scan failed for site {Site}", site);
-            error = $"Range scan failed: {ex.Message}";
+            Log.LogWarning(ex, "Site activity lookup failed for site {Site}", site);
+            error = $"Site activity lookup failed: {ex.Message}";
             result = [];
         }
 
@@ -392,9 +392,9 @@
     /// Handler for a live site-activity entry pushed by the broadcaster.
     /// Routes the entry to the currently-selected site's view (merging
     /// into the committed result) or to the pending buffer if the
-    /// initial range scan hasn't landed yet. Entries for other sites
+    /// initial activity lookup hasn't landed yet. Entries for other sites
     /// or while the Activity tab is hidden are dropped - re-selecting
-    /// the site re-runs the full range scan.
+    /// the site re-runs the full activity lookup.
     /// </summary>
     private async Task OnActivityEntry(SiteActivityIndexEntry entry)
     {

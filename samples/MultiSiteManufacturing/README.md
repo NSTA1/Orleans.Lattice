@@ -24,11 +24,11 @@ the system behaves like a minimal MES/QMS slice backed by Lattice.
 | **Ordered fact log per entity** | Every domain event (`ProcessStepCompleted`, `InspectionRecorded`, `NonConformanceRaised`, `MRBDisposition`, `ReworkCompleted`, `FinalAcceptance`) is an immutable key in the `mfg-facts` tree, keyed `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` so a forward range scan yields HLC-ascending history. |
 | **HLC-ordered fold → convergent state** | `ComplianceFold.Fold` sorts facts by `(WallClockTicks, Counter, FactId)` before applying them, so concurrent producers across sites converge on the same `ComplianceState`. Contrasted live in the UI against a naïve arrival-order baseline running over the same fact stream. |
 | **Divergence visible under chaos** | Two backends (`baseline`, `lattice`) receive the same facts via a fan-out router. Chaos-induced reorder causes the arrival-order baseline to drift; the HLC-ordered lattice fold does not. Divergent rows surface in the dashboard organically - no scripted saga. |
-| **Secondary index as a second tree** | `mfg-site-activity-index` keys facts as `{site}/{wallTicks:D20}/{counter:D10}/{serial}` for reverse-chronological per-site activity feeds - a worked example of a secondary-index tree paired with a primary fact tree. |
+| **Tag-index secondary view** | `mfg-site-activity` keys facts part-major as `{serial}/{site}` and the built-in `Orleans.Lattice` tag index (opened through the injected `ILatticeTagIndexFactory`, membership tree `tag-mfg-site`) tags each key with its site. `ListAtSiteAsync` answers "parts at site X" via `WithAnyTags(site)` - the site is deliberately *not* a key prefix, so the tag index is the genuine access path. A worked example of the built-in tag index replacing a hand-rolled secondary-index tree. |
 | **Typed CRDT delta shipping** | `mfg-part-labels` is one OR-Set per serial, accessed through `lattice.OrSet(serial)` and replicated cross-cluster as `ReplicationMode.OrSet` - the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. The companion `mfg-part-operator` tree is a per-serial LWW register kept cluster-local - see *Per-tree replication policy* below for the rationale. |
 | **Partition tolerance via shadow prefixes** | During a simulated intra-cluster partition, `PartCrdtStore` writes to a shadow key prefix; `PartitionHealHostedService` promotes shadows back onto the canonical keys on heal. |
-| **Range scans as primitives** | The site-activity feed and the partition-heal sweep are plain half-open range scans over lex-ordered keys - no custom indexing layer. |
-| **Cross-cluster replication via the shipped package** | `Orleans.Lattice.Replication` provides the WAL, shipper, applier, and dead-letter handling; `Orleans.Lattice.Replication.Grpc` provides the push transport. Each tree opts in by `ReplicationMode` (`LwwRegister` for `mfg-facts` and `mfg-site-activity-index`, `OrSet` for `mfg-part-labels`); see [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol. |
+| **Range scans as primitives** | The per-part fact-history fold and the partition-heal sweep are plain half-open range scans over lex-ordered keys - no custom indexing layer. The per-site view instead uses the built-in tag index (see above). |
+| **Cross-cluster replication via the shipped package** | `Orleans.Lattice.Replication` provides the WAL, shipper, applier, and dead-letter handling; `Orleans.Lattice.Replication.Grpc` provides the push transport. Each tree opts in by `ReplicationMode` (`LwwRegister` for `mfg-facts` and `mfg-site-activity`; `OrFlag` for its `tag-mfg-site` membership tree; `OrSet` for `mfg-part-labels`); see [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol. |
 | **Receiver-side applier decoration** | `BaselineReplicationApplier` decorates the package's `IReplicationApplier` singleton; on every cross-cluster apply it mirrors `mfg-facts` writes into the local naive `BaselineFactBackend` and raises `FederationRouter.FactReplicated`, so the side-by-side divergence visualisation and the dashboard activity feed both update without polling. |
 | **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) persists to Azure Table Storage - restart the host and the system resumes exactly where it left off. The replication WAL and per-peer cursors are managed by `Orleans.Lattice.Replication` against the same storage account. |
 | **Idempotent bulk-load on startup** | `InventorySeeder` emits 5 representative parts (one per reachable `ComplianceState`) through the same router operators use. A singleton `IInventorySeedStateGrain` gates the seed so re-running against the same storage account preserves inventory and operator mutations. |
@@ -44,7 +44,8 @@ sample exists.
 | Tree | Replication mode | Rationale |
 |---|---|---|
 | `mfg-facts` | `LwwRegister` | Each fact key is `{serial}/{wallTicks:D20}/{counter:D10}/{factId}` - globally unique, so LWW per key never collides. |
-| `mfg-site-activity-index` | `LwwRegister` | Same shape: keys embed the HLC tuple, so writes never overwrite each other. |
+| `mfg-site-activity` | `LwwRegister` | Part-major activity rows keyed `{serial}/{site}`; the newest fact for a part at a site wins per key, so LWW converges. |
+| `tag-mfg-site` | `OrFlag` | Tag-index membership rows for the per-site view. Under active-active replication both clusters tag keys, so the index authors flag-CRDT (enable-wins) membership dots that converge without a single-writer assumption; an LWW membership tree would silently drop a posting written concurrently in the other cluster. |
 | `mfg-part-labels` | `OrSet` | Process labels are an additive set; typed OR-Set deltas (`add` / `remove` / `merge`) reconcile concurrent writes from any silo or cluster without conflict. |
 | `mfg-part-operator` | *not replicated (cluster-local by design)* | A bare LWW register over a key both clusters would write to - and HLCs from disjoint cluster ID spaces have no meaningful global order, so "last write wins" between US and EU is semantically arbitrary. The sample keeps the register cluster-local; a production system that genuinely needs cross-cluster operator handover would model it as an OR-Set of `(replica, operator)` tuples or as an explicit acquire/release token, and the part-detail UI labels the assign button **"Assign (local-only)"** so the choice is visible to the operator. |
 
@@ -111,9 +112,11 @@ you want edit rights). Under *Dashboards → Orleans.Lattice* you'll find:
   dead-letter churn, per-peer entries/bytes behind.
 
 > **Note** - every replicated tree in the sample ships through
-> `Orleans.Lattice.Replication`'s gRPC push transport: `mfg-facts`
-> and `mfg-site-activity-index` as `LwwRegister`, `mfg-part-labels`
-> as `OrSet` (typed CRDT delta shipping). The only sample-specific
+> `Orleans.Lattice.Replication`'s gRPC push transport: `mfg-facts` and
+> `mfg-site-activity` as `LwwRegister`, its `tag-mfg-site` membership
+> tree as `OrFlag` (enable-wins flag-CRDT membership), `mfg-part-labels`
+> as `OrSet` (typed CRDT delta
+> shipping). The only sample-specific
 > seam remaining is `BaselineReplicationApplier`, a decorator on the
 > package's `IReplicationApplier` that mirrors cross-cluster
 > `mfg-facts` writes into the divergence-visualisation backend.

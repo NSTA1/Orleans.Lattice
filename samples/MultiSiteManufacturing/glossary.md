@@ -65,7 +65,8 @@ Terms used throughout the sample. Split into the **domain** side
 | **Tree** | A named Lattice namespace (e.g. `mfg-facts`). Independent key space, independent persistence. |
 | **ILattice** | The public tree API - `GetAsync`, `SetAsync`, `DeleteAsync`, range scans. |
 | **HLC** | Hybrid Logical Clock. A `(wallClockTicks, counter)` pair that provides a monotonic, roughly-wall-clock-aligned ordering across distributed producers. |
-| **Range scan** | Half-open key-range iteration over a tree; the primitive behind per-part history, per-site activity, replog shipping, and janitor pruning. |
+| **Range scan** | Half-open key-range iteration over a tree; the primitive behind per-part history, replog shipping, and janitor pruning. |
+| **Tag index** | The built-in `Orleans.Lattice` secondary index (opened through the injected `ILatticeTagIndexFactory`). Associates tags with keys and answers `WithAnyTags` / `WithAllTags` queries from a sibling `tag-{name}` membership tree. Powers the sample's per-site "parts at site X" view over the part-major `mfg-site-activity` tree. |
 | **Lex order** | Lexicographic byte order of keys. Zero-padded HLC components (`D20`, `D10`) embedded in keys make lex order match HLC order. |
 
 ### CRDTs and convergence
@@ -91,9 +92,9 @@ and `Orleans.Lattice.Replication.Grpc` (HTTP/2 gRPC push transport).
 |---|---|
 | **WAL** | The package's per-tree write-ahead log of replicated mutations. Replaces the sample's earlier hand-rolled `_replog__{tree}` tree. |
 | **Shipper grain** | One package-managed grain per `(tree, peer-cluster)` pair. Drains the WAL, calls `IReplicationTransport.SendAsync`, advances its per-peer cursor on ack. |
-| **Applier** | Receiver-side package component that merges incoming batches into the local lattice using the tree's CRDT semantics (`LwwRegister` or `OrSet`). |
+| **Applier** | Receiver-side package component that merges incoming batches into the local lattice using the tree's CRDT semantics (`LwwRegister`, `OrFlag`, or `OrSet`). |
 | **Cursor** | The shipper's per-peer high-watermark - everything at or before this HLC has been successfully shipped to the peer. The package persists it in grain storage. |
-| **Replication mode** | Per-tree CRDT semantic chosen on opt-in. `LwwRegister` for write-once keys (`mfg-facts`, `mfg-site-activity-index`); `OrSet` for set-typed values (`mfg-part-labels`); unreplicated trees stay cluster-local. |
+| **Replication mode** | Per-tree CRDT semantic chosen on opt-in. `LwwRegister` for write-once keys (`mfg-facts`, `mfg-site-activity`); `OrFlag` for the `tag-mfg-site` membership tree (enable-wins flag-CRDT membership); `OrSet` for set-typed values (`mfg-part-labels`); unreplicated trees stay cluster-local. |
 | **Per-origin HWM** | The package's loop-break: each cluster tracks the highest HLC it has seen from each peer origin and short-circuits replicated applies before they re-enter its own WAL. Replaces the sample's earlier `RequestContext["lattice.replay"]` flag. |
 | **IReplicationApplier** | Package-side seam invoked once per cross-cluster apply. `BaselineReplicationApplier` (sample-side) decorates the package's singleton to mirror `mfg-facts` writes into the divergence-visualisation backend and raise `FederationRouter.FactReplicated`. |
 | **IReplicationTransport** | Single-method (`SendAsync`) seam between the shipper and the wire. `ChaosReplicationTransport` (sample-side, Tier 4b) decorates it; `GrpcPushTransport` (package-side, internal) is the concrete implementation. |
@@ -108,7 +109,7 @@ and `Orleans.Lattice.Replication.Grpc` (HTTP/2 gRPC push transport).
 |---|---|
 | **Azurite** | The local Azure Storage emulator. The sample ships two instances (one per cluster) under Docker Compose. |
 | **`msmfgGrainState`** | Azure Table holding Orleans grain state - chaos config, replicator cursors, seed flag, baseline part grains, inventory. |
-| **`msmfgLatticeFacts`** | Azure Table holding every Lattice tree - `mfg-facts`, `mfg-site-activity-index`, `mfg-part-labels`, `mfg-part-operator`. The package's replication WAL lives in a separate package-managed table. |
+| **`msmfgLatticeFacts`** | Azure Table holding every Lattice tree - `mfg-facts`, `mfg-site-activity`, `tag-mfg-site`, `mfg-part-labels`, `mfg-part-operator`. The package's replication WAL lives in a separate package-managed table. |
 
 ---
 
