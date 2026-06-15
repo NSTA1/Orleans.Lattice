@@ -229,6 +229,11 @@ internal static class TypeAliases
     internal const string TagReconcileReport = "ol.tgr";
     internal const string TagConsistency = "ol.tgc";
 
+    // Tag-index background reconciliation coordinator: persisted cursor state
+    // and its phase enum for the per-index digest-gated sweep coordinator.
+    internal const string TagIndexReconcileState = "ol.tir";
+    internal const string TagIndexReconcilePhase = "ol.tip";
+
     // Grain interfaces - each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.
@@ -249,6 +254,7 @@ internal static class TypeAliases
     internal const string ITreeShardSplitGrain = "ol.gss";
     internal const string ITreeSnapshotGrain = "ol.gsn";
     internal const string ITreeReshardGrain = "ol.gtx";
+    internal const string ITagIndexReconcileGrain = "ol.gti";
     internal const string ILatticeStats = "ol.gls";
     internal const string ILatticeStorageUsage = "ol.gsu";
     internal const string ILatticeWalUsage = "ol.gwu";

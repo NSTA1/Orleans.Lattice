@@ -25,7 +25,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
-- [F-103](https://github.com/NSTA1/Orleans.Lattice/issues/770) - Background reconciliation coordinator for tag indexes (digest-gated hourly sweeps, follow-on to #338)
 
 ### Shipped
 
@@ -112,6 +111,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-100](https://github.com/NSTA1/Orleans.Lattice/issues/676) - Expose Azure Table WAL compression savings (uncompressed vs stored bytes per tree) as counters on the `orleans.lattice` meter so compression effectiveness is observable without an external baseline
 - [F-101](https://github.com/NSTA1/Orleans.Lattice/issues/764) - Observed-remove flag (enable-wins) CRDT primitive + OrFlag merge mode
 - [F-102](https://github.com/NSTA1/Orleans.Lattice/issues/767) - Remove-wins flag CRDT primitive + RwFlag merge mode
+- [F-103](https://github.com/NSTA1/Orleans.Lattice/issues/770) - Background reconciliation coordinator for tag indexes (digest-gated hourly sweeps, follow-on to #338)
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down

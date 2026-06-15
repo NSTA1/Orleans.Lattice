@@ -58,6 +58,7 @@ public static class LatticeServiceCollectionExtensions
 
         configureStorage(builder, LatticeOptions.StorageProviderName);
         builder.Services.AddSingleton<IValidateOptions<LatticeOptions>, LatticeOptionsValidator>();
+        builder.Services.AddSingleton<IValidateOptions<LatticeTagIndexReconciliationOptions>, LatticeTagIndexReconciliationOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
         builder.Services.AddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
@@ -199,6 +200,37 @@ public static class LatticeServiceCollectionExtensions
         Action<LatticeOptions> configure)
     {
         builder.Services.Configure(treeName, configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures global <see cref="LatticeTagIndexReconciliationOptions"/> that
+    /// apply to every tag index unless a per-index override is registered.
+    /// </summary>
+    public static ISiloBuilder ConfigureLatticeTagIndexReconciliation(
+        this ISiloBuilder builder,
+        Action<LatticeTagIndexReconciliationOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.ConfigureAll(configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures <see cref="LatticeTagIndexReconciliationOptions"/> for a
+    /// specific tag index identified by <paramref name="indexName"/>. These
+    /// settings override the global defaults for that index only.
+    /// </summary>
+    public static ISiloBuilder ConfigureLatticeTagIndexReconciliation(
+        this ISiloBuilder builder,
+        string indexName,
+        Action<LatticeTagIndexReconciliationOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(indexName);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(indexName, configure);
         return builder;
     }
 
