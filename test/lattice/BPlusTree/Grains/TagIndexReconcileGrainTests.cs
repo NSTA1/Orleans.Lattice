@@ -35,9 +35,14 @@ public class TagIndexReconcileGrainTests
         options ??= new LatticeTagIndexReconciliationOptions();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         var state = existingState ?? new FakePersistentState<TagIndexReconcileState>();
+        var mergeModeResolver = Substitute.For<ILatticeMergeModeResolver>();
+        mergeModeResolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
+        var originClusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        originClusterIdResolver.Resolve(Arg.Any<string>()).Returns(string.Empty);
 
         var grain = new TagIndexReconcileGrain(
             context, grainFactory, reminderRegistry, optionsMonitor,
+            mergeModeResolver, originClusterIdResolver,
             new LoggerFactory().CreateLogger<TagIndexReconcileGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory);
     }

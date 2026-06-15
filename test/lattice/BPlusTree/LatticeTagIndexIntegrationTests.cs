@@ -1,4 +1,5 @@
 using Orleans.TestingHost;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -530,5 +531,100 @@ public class LatticeTagIndexIntegrationTests
         // tag-major rows, so a subsequent key lookup sees nothing.
         Assert.That(await idx.Key("d").GetAsync(), Is.Empty);
         Assert.That(await idx.WithAnyTags("red", "round").CountAsync(), Is.Zero);
+    }
+
+    // ── Flag membership single-cluster round-trips ───────────────────
+
+    [Test]
+    public async Task OrFlag_membership_add_query_and_remove_roundtrips()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        var idx = tree.TagIndex(
+            _cluster.GrainFactory, $"colors-{sfx}",
+            membershipMode: LatticeMergeMode.OrFlag, replicaId: "site-a");
+
+        await idx.Key("a").AddAsync(["red", "round"]);
+        Assert.That(await Collect(idx.WithAnyTags("red", "round")), Is.EqualTo(new[] { "a" }));
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "red", "round" }));
+
+        await idx.Key("a").RemoveAsync(["red"]);
+        // A disabled flag leaves a present-but-tombstoned row; the read path
+        // must decode flag state and treat it as absent.
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "round" }));
+        Assert.That(await idx.WithAnyTags("red").CountAsync(), Is.Zero);
+        Assert.That(await idx.WithAnyTags("round").CountAsync(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RwFlag_membership_add_query_and_remove_roundtrips()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        var idx = tree.TagIndex(
+            _cluster.GrainFactory, $"colors-{sfx}",
+            membershipMode: LatticeMergeMode.RwFlag, replicaId: "site-a");
+
+        await idx.Key("a").AddAsync(["red", "round"]);
+        Assert.That(await Collect(idx.WithAnyTags("red", "round")), Is.EqualTo(new[] { "a" }));
+
+        await idx.Key("a").RemoveAsync(["red"]);
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "round" }));
+        Assert.That(await idx.WithAnyTags("red").CountAsync(), Is.Zero);
+    }
+
+    [Test]
+    public async Task OrFlag_membership_reconcile_removes_orphan_rows()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("d", Bytes("1"));
+        var idx = tree.TagIndex(
+            _cluster.GrainFactory, $"colors-{sfx}",
+            membershipMode: LatticeMergeMode.OrFlag, replicaId: "site-a");
+        await idx.Key("d").AddAsync(["red", "round"]);
+
+        await tree.DeleteAsync("d");
+        var report = await idx.ReconcileAsync();
+
+        Assert.That(report.OrphanRowsRemoved, Is.GreaterThanOrEqualTo(1));
+        Assert.That(await idx.Key("d").GetAsync(), Is.Empty);
+        Assert.That(await idx.WithAnyTags("red", "round").CountAsync(), Is.Zero);
+    }
+
+    [Test]
+    public async Task OrFlag_membership_SetValueWithTags_eventual_writes_value_and_tags()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        var idx = tree.TagIndex(
+            _cluster.GrainFactory, $"colors-{sfx}",
+            membershipMode: LatticeMergeMode.OrFlag, replicaId: "site-a");
+
+        await idx.SetValueWithTags("c", Bytes("v"), "blue").CommitAsync();
+
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v")));
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue" }));
+        Assert.That(await Collect(idx.WithAllTags("blue")), Is.EqualTo(new[] { "c" }));
+    }
+
+    [Test]
+    public async Task OrFlag_membership_SetValueWithTags_atomic_degrades_to_eventual_but_writes_value_and_tags()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        var idx = tree.TagIndex(
+            _cluster.GrainFactory, $"colors-{sfx}",
+            membershipMode: LatticeMergeMode.OrFlag, replicaId: "site-a");
+
+        // Under a flag membership mode the cross-tree atomic saga cannot stage
+        // typed flag deltas, so Atomic() degrades to eventual; the value and
+        // tags must still both land.
+        await idx.SetValueWithTags("c", Bytes("v"), "blue", "small").Atomic().CommitAsync();
+
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v")));
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue", "small" }));
     }
 }

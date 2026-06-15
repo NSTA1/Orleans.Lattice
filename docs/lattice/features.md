@@ -126,7 +126,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-- [FX-040](https://github.com/NSTA1/Orleans.Lattice/issues/775) - Tag index never authors flag-CRDT membership deltas, so its documented active-active (multi-writer) convergence is unachievable
+_None._
 
 ### Shipped
 
@@ -167,6 +167,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-037](https://github.com/NSTA1/Orleans.Lattice/issues/639) - De-flake `DigestCoalescingWindow_eventually_publishes_aggregate_to_parent` (fixed 2s digest settle timeout times out under CI load)
 - [FX-038](https://github.com/NSTA1/Orleans.Lattice/issues/641) - set-many-atomic bench cohorts WEDGE on shutdown: in-flight-tail quiesce `WaitForHealthyAsync` 30s budget equalled systemd `TimeoutStopSec`, starving FINAL emission before SIGKILL
 - [FX-039](https://github.com/NSTA1/Orleans.Lattice/issues/651) - De-flake `Chaos_conditional_set_many_under_split_churn`: final completeness pass retries until no exception rather than until the completeness invariant holds, under-stamping a guard-matching key during post-split convergence
+- [FX-040](https://github.com/NSTA1/Orleans.Lattice/issues/775) - Tag index never authors flag-CRDT membership deltas, so its documented active-active (multi-writer) convergence is unachievable
 
 ## Gaps & potential additions
 

@@ -32,6 +32,8 @@ internal sealed class TagIndexReconcileGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeTagIndexReconciliationOptions> optionsMonitor,
+    ILatticeMergeModeResolver mergeModeResolver,
+    ILatticeOriginClusterIdResolver originClusterIdResolver,
     ILogger<TagIndexReconcileGrain> logger,
     [PersistentState("tag-index-reconcile", LatticeOptions.StorageProviderName)]
     IPersistentState<TagIndexReconcileState> state)
@@ -39,6 +41,7 @@ internal sealed class TagIndexReconcileGrain(
 {
     private const string ScheduleReminderName = "tag-index-reconcile-schedule";
     private const string TagIndexDimension = "index";
+    private const string IndexTreeIdPrefix = "tag-";
 
     private static readonly Counter<long> SweepsCounter =
         LatticeMetrics.Meter.CreateCounter<long>("orleans.lattice.tag_index.reconcile.sweeps", unit: "{sweep}",
@@ -64,6 +67,30 @@ internal sealed class TagIndexReconcileGrain(
 
     private string IndexName => Context.GrainId.Key.ToString()!;
     private LatticeTagIndexReconciliationOptions Options => optionsMonitor.Get(IndexName);
+
+    // Resolves the membership convergence mode for the sibling index tree
+    // (`tag-{indexName}`) and the dot-authoring replica id, so the coordinator's
+    // orphan cleanup authors flag disables - never plain deletes - whenever the
+    // operator declared the index tree under a flag merge mode. The mode comes
+    // from the same per-tree resolver the commit path uses; the replica id comes
+    // from the local origin-cluster-id seam (the index name is a stable
+    // non-empty fallback if no cluster id is configured). In LwwRegister mode
+    // the cleanup stays on the original plain-delete path.
+    private LatticeTagIndexContext CreateCoordinatorContext()
+    {
+        var indexTreeId = string.Concat(IndexTreeIdPrefix, IndexName);
+        var mode = mergeModeResolver.Resolve(indexTreeId);
+        if (mode is LatticeMergeMode.OrFlag or LatticeMergeMode.RwFlag)
+        {
+            var replicaId = originClusterIdResolver.Resolve(indexTreeId);
+            if (string.IsNullOrEmpty(replicaId))
+            {
+                replicaId = IndexName;
+            }
+            return LatticeTagIndexContext.CreateForCoordinator(grainFactory, IndexName, mode.Value, replicaId);
+        }
+        return LatticeTagIndexContext.CreateForCoordinator(grainFactory, IndexName);
+    }
 
     protected override string KeepaliveReminderName => "tag-index-reconcile-keepalive";
     protected override bool InProgress => state.State.InProgress;
@@ -159,7 +186,7 @@ internal sealed class TagIndexReconcileGrain(
     private async Task InitSweepStateAsync()
     {
         _sweepStartTimestamp = Stopwatch.GetTimestamp();
-        var ctx = LatticeTagIndexContext.CreateForCoordinator(grainFactory, IndexName);
+        var ctx = CreateCoordinatorContext();
         var covered = await ctx.GetCoveredTreesAsync(CancellationToken.None);
 
         PruneStaleBaselines(covered);
@@ -257,7 +284,7 @@ internal sealed class TagIndexReconcileGrain(
         var treeId = state.State.DirtyTrees[state.State.NextRepairIndex];
         state.State.NextRepairIndex++;
 
-        var ctx = LatticeTagIndexContext.CreateForCoordinator(grainFactory, IndexName);
+        var ctx = CreateCoordinatorContext();
         var report = await ctx.ReconcileSubjectAsync(treeId, null, null, CancellationToken.None);
         state.State.KeysScanned += report.KeysScanned;
         state.State.MembershipRowsScanned += report.MembershipRowsScanned;

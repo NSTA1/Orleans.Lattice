@@ -1546,7 +1546,7 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
 
 | Type | Role |
 |------|------|
-| `LatticeTagIndexExtensions` | `ILattice.TagIndex(grainFactory, indexName, allowedTrees?)` and `IGrainFactory.MultiTreeTagIndex(indexName, allowedTrees?)` entry points. |
+| `LatticeTagIndexExtensions` | `ILattice.TagIndex(grainFactory, indexName, allowedTrees?, membershipMode?, replicaId?)` and `IGrainFactory.MultiTreeTagIndex(indexName, allowedTrees?, membershipMode?, replicaId?)` entry points. |
 | `ILatticeTagIndex` | Single-tree surface: `Key`, `WithAllTags`, `WithAnyTags`, `SetValueWithTags`, `TagsAsync`, `ReconcileAsync`, `MultiTree`. |
 | `ILatticeKeyTags` | Per-key tag surface: `GetAsync`, `SetAsync` (replace), `AddAsync`, `RemoveAsync`. |
 | `ILatticeTagQuery` | Lazy `IAsyncEnumerable<string>` of matching keys with `CountAsync`. |
@@ -1567,10 +1567,32 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
 - **Additive `SetValueWithTags`.** It associates the supplied tags with
   the key; it does not remove previously-associated tags. Use
   `Key(key).SetAsync(tags)` for replace semantics.
-- **Active-active replication.** For convergent membership under
-  concurrent writes from multiple clusters, configure the index tree
-  with a membership-flag merge mode - `OrFlag` (enable-wins) is the
-  recommended default, `RwFlag` (remove-wins) for revocation facets.
+- **Active-active replication.** By default membership rows are
+  last-writer-wins (`membershipMode: LatticeMergeMode.LwwRegister`) -
+  correct and lossless for single-writer-per-key, add-mostly indexes, but
+  a concurrent add/remove of the same row across clusters resolves by
+  clock and can drop the add. For convergent membership under concurrent
+  writes from multiple clusters, open the index with a flag membership
+  mode and a per-cluster `replicaId`:
+  `tree.TagIndex(grainFactory, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: clusterId)`.
+  `OrFlag` (enable-wins) is the recommended default; `RwFlag`
+  (remove-wins) is for revocation / blocklist facets where a removal must
+  win the tie. A flag mode authors every membership, key-major mirror, and
+  covered-marker row as a typed flag-CRDT delta (an enable on add, a
+  disable on remove) so the shipped WAL record carries a real
+  `OrFlagDelta` / `RwFlagDelta`, and every read decodes flag state so a
+  disabled / tombstoned row reads as absent. The index tree
+  (`tag-{indexName}`) **must** be declared with the matching
+  `LatticeMergeMode` in `LatticeReplicationOptions.ReplicatedTrees`; the
+  background reconciliation coordinator auto-detects the same mode
+  server-side from the merge-mode resolver, so its orphan cleanup also
+  authors flag disables. Under a flag mode, `SetValueWithTags(...).Atomic()`
+  degrades to eventual coupling between the value and its tag rows (the
+  cross-tree saga stages plain value writes and cannot carry the typed
+  flag deltas), so the value is written durably first and the tag rows
+  follow as flag enables. Flag membership reads scan and decode row values
+  (the LWW path scans keys only), the documented cost of convergent
+  membership.
 - **Reserved characters.** Neither a tag nor a tree id may contain the
   NUL (`\0`) separator. The covered-tree set surfaced by the multi-tree
   view is an over-approximating set of idempotent marker rows on the

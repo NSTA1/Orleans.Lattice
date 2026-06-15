@@ -47,6 +47,20 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     private readonly ILattice _subjectTree;
     private readonly IReadOnlyCollection<string>? _allowlist;
 
+    // Membership convergence mode for the index tree (`tag-{indexName}`).
+    // LwwRegister (the default) keeps the original plain Set/Delete + presence
+    // read path with no extra cost. OrFlag / RwFlag author every membership,
+    // mirror, and covered-marker row as a typed flag-CRDT delta (enable on add,
+    // disable on remove) and decode flag state on every read so a disabled /
+    // tombstoned row reads as absent - the only configurations under which the
+    // index converges under concurrent active-active writes from multiple
+    // clusters. _replicaId is the dot-authoring identity required by the flag
+    // modes; it is null in LwwRegister mode.
+    private readonly LatticeMergeMode _membershipMode;
+    private readonly string? _replicaId;
+
+    private bool FlagMode => _membershipMode is LatticeMergeMode.OrFlag or LatticeMergeMode.RwFlag;
+
     // Per-context caches. The accepted-tree set memoises open-mode existence
     // checks; the hint cache memoises the covered-tree set.
     private readonly HashSet<string> _acceptedTrees = new(StringComparer.Ordinal);
@@ -59,7 +73,9 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         ILattice indexTree,
         string subjectTreeId,
         ILattice subjectTree,
-        IReadOnlyCollection<string>? allowlist)
+        IReadOnlyCollection<string>? allowlist,
+        LatticeMergeMode membershipMode,
+        string? replicaId)
     {
         _grainFactory = grainFactory;
         _indexName = indexName;
@@ -68,45 +84,84 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         _subjectTreeId = subjectTreeId;
         _subjectTree = subjectTree;
         _allowlist = allowlist;
+        _membershipMode = membershipMode;
+        _replicaId = replicaId;
+    }
+
+    // Validates the membership descriptor a public entry point resolved: the
+    // flag modes need a non-empty dot-authoring replica id, and only the three
+    // membership-capable modes are accepted (the index tree is a presence
+    // index, not an arbitrary CRDT value store).
+    internal static void ValidateMembership(LatticeMergeMode membershipMode, string? replicaId)
+    {
+        switch (membershipMode)
+        {
+            case LatticeMergeMode.LwwRegister:
+                return;
+            case LatticeMergeMode.OrFlag:
+            case LatticeMergeMode.RwFlag:
+                if (string.IsNullOrEmpty(replicaId))
+                {
+                    throw new ArgumentException(
+                        "A non-empty replicaId is required for OrFlag / RwFlag tag-index membership (it authors the flag-CRDT dots).",
+                        nameof(replicaId));
+                }
+                return;
+            default:
+                throw new ArgumentException(
+                    $"Tag-index membership supports only LwwRegister, OrFlag, or RwFlag, not '{membershipMode}'.",
+                    nameof(membershipMode));
+        }
     }
 
     internal static LatticeTagIndexContext Create(
         ILattice tree,
         IGrainFactory grainFactory,
         string indexName,
-        IReadOnlyCollection<string>? allowlist)
+        IReadOnlyCollection<string>? allowlist,
+        LatticeMergeMode membershipMode = LatticeMergeMode.LwwRegister,
+        string? replicaId = null)
     {
+        ValidateMembership(membershipMode, replicaId);
         var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
         var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
         var subjectTreeId = tree.GetPrimaryKeyString();
-        return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, subjectTreeId, tree, allowlist);
+        return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, subjectTreeId, tree, allowlist, membershipMode, replicaId);
     }
 
     internal static ILatticeMultiTreeTagIndex CreateMultiTree(
         IGrainFactory grainFactory,
         string indexName,
-        IReadOnlyCollection<string>? allowlist)
+        IReadOnlyCollection<string>? allowlist,
+        LatticeMergeMode membershipMode = LatticeMergeMode.LwwRegister,
+        string? replicaId = null)
     {
+        ValidateMembership(membershipMode, replicaId);
         var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
         var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
         // No subject is pre-bound; the index tree id stands in as a harmless
         // placeholder because the multi-tree surface never issues subject-only
         // operations against it (it ranges over discovered covered trees).
-        var ctx = new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, indexTreeId, indexTree, allowlist);
+        var ctx = new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, indexTreeId, indexTree, allowlist, membershipMode, replicaId);
         return new MultiTreeView(ctx);
     }
 
     // Builds a context for the background reconciliation coordinator. Like the
     // multi-tree view it pre-binds no subject (covered trees are discovered from
     // the marker rows), but it exposes the underlying context directly so the
-    // coordinator can call ReconcileSubjectAsync per covered tree.
+    // coordinator can call ReconcileSubjectAsync per covered tree. The
+    // coordinator supplies the membership descriptor it resolved server-side
+    // (from the merge-mode and origin-cluster-id seams) so its orphan cleanup
+    // authors flag disables - never plain DeleteAsync - under a flag mode.
     internal static LatticeTagIndexContext CreateForCoordinator(
         IGrainFactory grainFactory,
-        string indexName)
+        string indexName,
+        LatticeMergeMode membershipMode = LatticeMergeMode.LwwRegister,
+        string? replicaId = null)
     {
         var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
         var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
-        return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, indexTreeId, indexTree, allowlist: null);
+        return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, indexTreeId, indexTree, allowlist: null, membershipMode, replicaId);
     }
 
     private LatticeTagIndexContext ForSubject(string treeId)
@@ -114,7 +169,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         var subject = string.Equals(treeId, _subjectTreeId, StringComparison.Ordinal)
             ? _subjectTree
             : _grainFactory.GetGrain<ILattice>(treeId);
-        return new LatticeTagIndexContext(_grainFactory, _indexName, _indexTreeId, _indexTree, treeId, subject, _allowlist)
+        return new LatticeTagIndexContext(_grainFactory, _indexName, _indexTreeId, _indexTree, treeId, subject, _allowlist, _membershipMode, _replicaId)
         {
             _hintCache = _hintCache,
         };
@@ -194,11 +249,95 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         return tag.Length > 0;
     }
 
+    // ── Membership write / read strategy (mode-aware) ────────────────
+
+    // Authors a membership row presence. In LwwRegister mode this is a plain
+    // value write; in a flag mode it authors an enable delta so the shipped
+    // WAL record carries a real OrFlagDelta / RwFlagDelta (a plain Set would
+    // leave WalRecord.Delta null and fault the receiver's typed apply).
+    private Task WriteRowAsync(string rowKey, CancellationToken cancellationToken) => _membershipMode switch
+    {
+        LatticeMergeMode.OrFlag => _indexTree.OrFlag(rowKey).EnableAsync(_replicaId!, cancellationToken),
+        LatticeMergeMode.RwFlag => _indexTree.RwFlag(rowKey).EnableAsync(_replicaId!, cancellationToken),
+        _ => _indexTree.SetAsync(rowKey, Flag, cancellationToken),
+    };
+
+    // Removes a membership row. In LwwRegister mode this is a plain delete; in
+    // a flag mode it authors a disable delta (enable-wins under OrFlag,
+    // remove-wins under RwFlag) so removal also ships a typed delta.
+    private async Task RemoveRowAsync(string rowKey, CancellationToken cancellationToken)
+    {
+        switch (_membershipMode)
+        {
+            case LatticeMergeMode.OrFlag:
+                await _indexTree.OrFlag(rowKey).DisableAsync(cancellationToken).ConfigureAwait(false);
+                break;
+            case LatticeMergeMode.RwFlag:
+                await _indexTree.RwFlag(rowKey).DisableAsync(_replicaId!, cancellationToken).ConfigureAwait(false);
+                break;
+            default:
+                await _indexTree.DeleteAsync(rowKey, cancellationToken).ConfigureAwait(false);
+                break;
+        }
+    }
+
+    // Decodes whether a membership row is currently live from its stored value
+    // bytes. In LwwRegister mode a present row is live; in a flag mode the row
+    // value is the serialised flag state and liveness is its enabled bit, so a
+    // disabled / tombstoned row reads as absent.
+    private bool IsRowLive(byte[]? bytes) => _membershipMode switch
+    {
+        LatticeMergeMode.OrFlag => bytes is not null && JsonLatticeSerializer<OrFlag>.Default.Deserialize(bytes).IsEnabled,
+        LatticeMergeMode.RwFlag => bytes is not null && JsonLatticeSerializer<RwFlag>.Default.Deserialize(bytes).IsEnabled,
+        _ => bytes is not null,
+    };
+
+    // Tests membership presence for a single row. In LwwRegister mode this is a
+    // single ExistsAsync; in a flag mode it reads the row value and decodes the
+    // flag state (a present-but-disabled row is absent).
+    private async Task<bool> RowLiveAsync(string rowKey, CancellationToken cancellationToken)
+    {
+        if (!FlagMode)
+        {
+            return await _indexTree.ExistsAsync(rowKey, cancellationToken).ConfigureAwait(false);
+        }
+        var bytes = await _indexTree.GetAsync(rowKey, cancellationToken).ConfigureAwait(false);
+        return IsRowLive(bytes);
+    }
+
+    // Range scan over the index tree that yields only the keys of live
+    // membership rows. In LwwRegister mode this is the original key-only scan
+    // (no value bytes cross the wire); in a flag mode it scans entries and
+    // decodes each value, filtering out disabled / tombstoned rows in the same
+    // pass so no extra round-trip is issued.
+    private async IAsyncEnumerable<string> ScanLiveKeysAsync(
+        string? startInclusive,
+        string? endExclusive,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (!FlagMode)
+        {
+            await foreach (var rowKey in _indexTree.ScanKeysAsync(startInclusive, endExclusive, cancellationToken: cancellationToken).ConfigureAwait(false))
+            {
+                yield return rowKey;
+            }
+            yield break;
+        }
+        await foreach (var entry in _indexTree.ScanEntriesAsync(startInclusive, endExclusive, cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            if (IsRowLive(entry.Value))
+            {
+                yield return entry.Key;
+            }
+        }
+    }
+
+
     internal async IAsyncEnumerable<string> PostingListAsync(string treeId, string tag, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var prefix = PostingPrefix(tag, treeId);
         var end = PrefixEnd(prefix);
-        await foreach (var rowKey in _indexTree.ScanKeysAsync(prefix, end, cancellationToken: cancellationToken).ConfigureAwait(false))
+        await foreach (var rowKey in ScanLiveKeysAsync(prefix, end, cancellationToken).ConfigureAwait(false))
         {
             yield return rowKey[prefix.Length..];
         }
@@ -229,7 +368,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 var inAll = true;
                 for (var i = 1; i < tags.Length && inAll; i++)
                 {
-                    inAll = await _indexTree.ExistsAsync(RowKey(tags[i], treeId, key), cancellationToken).ConfigureAwait(false);
+                    inAll = await RowLiveAsync(RowKey(tags[i], treeId, key), cancellationToken).ConfigureAwait(false);
                 }
                 if (inAll)
                 {
@@ -262,7 +401,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         var headLen = KeyMajorPrefix.Length + treeId.Length + 1; // up to and incl. the treeId separator
         var end = PrefixEnd(prefix);
         var result = new List<string>();
-        await foreach (var rowKey in _indexTree.ScanKeysAsync(prefix, end, cancellationToken: cancellationToken).ConfigureAwait(false))
+        await foreach (var rowKey in ScanLiveKeysAsync(prefix, end, cancellationToken).ConfigureAwait(false))
         {
             // rowKey == `\0k\0{treeId}\0{fullKey}\0{tag}`; tag is the final
             // segment, fullKey is everything between the treeId separator and it.
@@ -297,7 +436,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     {
         string? currentTag = null;
         var emitted = false;
-        await foreach (var rowKey in _indexTree.ScanKeysAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
+        await foreach (var rowKey in ScanLiveKeysAsync(null, null, cancellationToken).ConfigureAwait(false))
         {
             if (rowKey.Length > 0 && rowKey[0] == Sep)
             {
@@ -335,8 +474,8 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         foreach (var tag in tags)
         {
             ValidateTag(tag);
-            await _indexTree.SetAsync(RowKey(tag, treeId, key), Flag, cancellationToken).ConfigureAwait(false);
-            await _indexTree.SetAsync(KeyRowKey(treeId, key, tag), Flag, cancellationToken).ConfigureAwait(false);
+            await WriteRowAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
+            await WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
         }
         await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
     }
@@ -346,8 +485,8 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         foreach (var tag in tags)
         {
             ValidateTag(tag);
-            await _indexTree.DeleteAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
-            await _indexTree.DeleteAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
+            await RemoveRowAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
+            await RemoveRowAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -393,11 +532,21 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     {
         var subject = SubjectTreeFor(treeId);
 
-        if (consistency == TagConsistency.Atomic && tags.Length > 0)
+        if (consistency == TagConsistency.Atomic && tags.Length > 0 && !FlagMode)
         {
             // The value write inside the saga registers the subject tree, so a
             // closed allowlist is still enforced but open-mode existence is not
             // pre-checked (the saga creates the tree atomically).
+            //
+            // Atomic value+tags coupling is available only in LwwRegister
+            // membership mode: the cross-tree saga stages plain value writes
+            // and cannot author the typed flag-CRDT deltas a flag membership
+            // mode requires (a plain Set would ship a null WAL delta and fault
+            // the receiver's typed apply). Under OrFlag / RwFlag this falls
+            // through to the eventual path below - the value is written
+            // durably first, then the membership rows are authored as flag
+            // enables - so a flag-mode value+tags write is eventual, never
+            // atomic.
             CheckAllowlist(treeId);
             var opId = "tagval-" + Guid.NewGuid().ToString("N");
             var builder = _grainFactory.BeginAtomicWrite(opId)
@@ -414,7 +563,8 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             return;
         }
 
-        // Eventual (or atomic with no tags): two independent durable writes.
+        // Eventual (or atomic with no tags, or any flag-membership mode): two
+        // independent durable writes.
         await subject.SetAsync(key, value, cancellationToken).ConfigureAwait(false);
         if (tags.Length > 0)
         {
@@ -436,7 +586,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
         var rowsScanned = 0;
         var orphans = 0;
-        await foreach (var rowKey in _indexTree.ScanKeysAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
+        await foreach (var rowKey in ScanLiveKeysAsync(null, null, cancellationToken).ConfigureAwait(false))
         {
             if (rowKey.Length > 0 && rowKey[0] == Sep)
             {
@@ -469,8 +619,11 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 {
                     continue;
                 }
-                await _indexTree.DeleteAsync(rowKey, cancellationToken).ConfigureAwait(false);
-                await _indexTree.DeleteAsync(KeyRowKey(rowTree, key, rowTag), cancellationToken).ConfigureAwait(false);
+                // In a flag membership mode this authors a disable delta (the
+                // scan already filtered out already-disabled rows), never a
+                // plain delete - so orphan cleanup also ships a typed delta.
+                await RemoveRowAsync(rowKey, cancellationToken).ConfigureAwait(false);
+                await RemoveRowAsync(KeyRowKey(rowTree, key, rowTag), cancellationToken).ConfigureAwait(false);
                 orphans++;
             }
         }
@@ -541,7 +694,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         }
         foreach (var treeId in set)
         {
-            await _indexTree.SetAsync(CoveredMarkerKey(treeId), Flag, cancellationToken).ConfigureAwait(false);
+            await WriteRowAsync(CoveredMarkerKey(treeId), cancellationToken).ConfigureAwait(false);
         }
         _hintCache = new HashSet<string>(set, StringComparer.Ordinal);
         return set.ToList();
@@ -556,7 +709,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             return;
         }
-        await _indexTree.SetAsync(CoveredMarkerKey(treeId), Flag, cancellationToken).ConfigureAwait(false);
+        await WriteRowAsync(CoveredMarkerKey(treeId), cancellationToken).ConfigureAwait(false);
         (_hintCache ??= new HashSet<string>(StringComparer.Ordinal)).Add(treeId);
 
         // First time this index covers a tree it is materialised: ensure the
