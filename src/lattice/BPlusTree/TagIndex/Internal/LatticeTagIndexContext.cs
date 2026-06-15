@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice;
 
@@ -28,6 +29,11 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     // Reserved prefix for key-major mirror rows (`\0k\0{treeId}\0{key}\0{tag}`).
     // Also NUL-led, so it shares the membership rows' reserved-row exclusion.
     private const string KeyMajorPrefix = "\0k\0";
+
+    // Prefix that maps a logical index name to its sibling index tree id
+    // (`tag-{indexName}`). Held as a constant so the id is produced with a
+    // single two-operand string.Concat allocation rather than the `+` operator.
+    private const string IndexTreeIdPrefix = "tag-";
 
     // Single shared flag value for every membership row. Never mutated, so it is
     // safe to reuse across all writes (avoids a per-row allocation).
@@ -70,7 +76,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         string indexName,
         IReadOnlyCollection<string>? allowlist)
     {
-        var indexTreeId = "tag-" + indexName;
+        var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
         var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
         var subjectTreeId = tree.GetPrimaryKeyString();
         return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, subjectTreeId, tree, allowlist);
@@ -81,13 +87,26 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         string indexName,
         IReadOnlyCollection<string>? allowlist)
     {
-        var indexTreeId = "tag-" + indexName;
+        var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
         var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
         // No subject is pre-bound; the index tree id stands in as a harmless
         // placeholder because the multi-tree surface never issues subject-only
         // operations against it (it ranges over discovered covered trees).
         var ctx = new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, indexTreeId, indexTree, allowlist);
         return new MultiTreeView(ctx);
+    }
+
+    // Builds a context for the background reconciliation coordinator. Like the
+    // multi-tree view it pre-binds no subject (covered trees are discovered from
+    // the marker rows), but it exposes the underlying context directly so the
+    // coordinator can call ReconcileSubjectAsync per covered tree.
+    internal static LatticeTagIndexContext CreateForCoordinator(
+        IGrainFactory grainFactory,
+        string indexName)
+    {
+        var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
+        var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
+        return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, indexTreeId, indexTree, allowlist: null);
     }
 
     private LatticeTagIndexContext ForSubject(string treeId)
@@ -539,6 +558,27 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         }
         await _indexTree.SetAsync(CoveredMarkerKey(treeId), Flag, cancellationToken).ConfigureAwait(false);
         (_hintCache ??= new HashSet<string>(StringComparer.Ordinal)).Add(treeId);
+
+        // First time this index covers a tree it is materialised: ensure the
+        // background reconciliation coordinator's schedule reminder. Idempotent
+        // and best-effort - a tagging write must never fail because the
+        // coordinator could not be scheduled (on-demand ReconcileAsync still
+        // works, and the next covered-tree write retries).
+        await EnsureReconcileScheduleAsync().ConfigureAwait(false);
+    }
+
+    private async Task EnsureReconcileScheduleAsync()
+    {
+        try
+        {
+            var coordinator = _grainFactory.GetGrain<ITagIndexReconcileGrain>(_indexName);
+            await coordinator.EnsureScheduleAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Swallowed by design: auto-enabling the background coordinator is a
+            // convenience, not a correctness requirement for the tagging write.
+        }
     }
 
     private static string CoveredMarkerKey(string treeId) => string.Concat(CoveredMarkerPrefix, treeId);

@@ -1584,3 +1584,48 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
   tree, since enumerating every distinct tag and visiting every row are
   inherently full passes - reserve them for occasional maintenance.
 
+### Background reconciliation
+
+`ReconcileAsync` is also driven automatically in the background, so an index
+stays clean without an operator scheduling a pass. The first time a tree is
+covered by an index, a per-index coordinator (keyed by `{indexName}`, built on
+the shared crash-/restart-safe coordinator machinery) registers a recurring
+schedule reminder and, on each firing, runs a **digest-gated** sweep.
+
+Orphan membership rows arise only from key deletions in a covered tree, and
+every such deletion folds a tombstone into that tree's `LeafProjectionDigest`.
+The sweep exploits this: it folds each covered tree's per-shard leaf-projection
+digests into a fingerprint and compares it to the baseline captured at the last
+successful reconcile. Trees whose fingerprint is unchanged are skipped with
+digest reads only - no scans, no writes - so **a clean index incurs only
+digest-probe cost**. Only trees whose digest diverged (or whose digest is
+unavailable) are deep-scanned and repaired through the same `ReconcileAsync`
+path, after which their baseline advances.
+
+Gating is tree-granular rather than sub-shard: a divergent tree is reconciled in
+full. The Merkle-walk machinery that would narrow a dirty tree to a key
+sub-range lives in the replication package and is not referenced by the core
+library, so it is intentionally not used here.
+
+Tune reconciliation per index with `LatticeTagIndexReconciliationOptions`,
+resolved via `IOptionsMonitor<LatticeTagIndexReconciliationOptions>.Get(indexName)`:
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `Enabled` | `true` | Whether the background coordinator runs. Setting it `false` unregisters any existing schedule. |
+| `Interval` | `1h` | Cadence between sweeps. Floored at the 1-minute Orleans reminder minimum. |
+| `ChunkSize` | `16` | Covered trees probed per phase tick, bounding per-activation work. |
+| `ProbeOnly` | `false` | When `true`, the sweep detects and reports dirty trees but never repairs them or advances the baseline. |
+
+```csharp verify
+siloBuilder.ConfigureLatticeTagIndexReconciliation("by-color", o =>
+{
+    o.Interval = TimeSpan.FromHours(6);
+    o.ProbeOnly = false;
+});
+```
+
+The digest probe reads each covered tree's `LeafProjectionDigest`, which
+requires `LatticeOptions.MaintainProjectionDigest` (enabled by default) on the
+covered trees.
+
