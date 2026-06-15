@@ -221,6 +221,14 @@ internal static class TypeAliases
     internal const string OrFlagDelta = "ol.ofd";
     internal const string RwFlagDelta = "ol.rwd";
 
+    // Tag index (associate tags with keys and query by tag). The membership
+    // rows live in an ordinary sibling Lattice tree resolved as
+    // tag-{indexName}; these aliases cover the public value/report types the
+    // tag-index surface returns.
+    internal const string TaggedKey = "ol.tgk";
+    internal const string TagReconcileReport = "ol.tgr";
+    internal const string TagConsistency = "ol.tgc";
+
     // Grain interfaces - each must be applied via [Alias(...)] on the
     // interface declaration so the Orleans manifest carries a stable,
     // short wire-format identity independent of CLR type names.

@@ -62,6 +62,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. | [Tree Deletion](docs/lattice/tree-deletion.md) |
 | **State model** | WAL is canonical; leaf state row holds topology + checkpoint only; CRDT keys use delta-only producer-side mutation. | [State Model](docs/lattice/state-model.md) |
 | **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent rebalancing. | [Consistency](docs/lattice/consistency.md) |
+| **Tag indexes** | Associate tags with the keys of any tree and query keys back by tag - intersection (`WithAllTags`) and union (`WithAnyTags`), per-key tag CRUD, combined value+tags writes (eventual or atomic), on-demand reconcile, and a multi-tree view yielding `TaggedKey`. | [API Reference](docs/lattice/api.md#tag-indexes) |
 | **Tombstone cleanup** | Background reaping of expired tombstones with crash-safe progress tracking. | [Tombstone Compaction](docs/lattice/tombstone-compaction.md) |
 | **Tree registry** | Built-in enumeration of all user trees and their per-tree config overrides - no external metadata store required. | [Tree Registry](docs/lattice/tree-registry.md) |
 | **TTL on `SetAsync`** | Per-entry time-to-live with absolute server-side expiry, preserved verbatim across splits, snapshots, resize, and replication. | [TTL](docs/lattice/ttl.md) |
