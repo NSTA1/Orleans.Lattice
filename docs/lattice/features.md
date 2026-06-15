@@ -126,7 +126,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-_None._
+- [FX-040](https://github.com/NSTA1/Orleans.Lattice/issues/775) - Tag index never authors flag-CRDT membership deltas, so its documented active-active (multi-writer) convergence is unachievable
 
 ### Shipped
 
