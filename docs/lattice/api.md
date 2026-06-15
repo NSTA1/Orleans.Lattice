@@ -1575,10 +1575,12 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
   NUL (`\0`) separator. The covered-tree set surfaced by the multi-tree
   view is an over-approximating set of idempotent marker rows on the
   index tree, self-healing from a full scan when absent.
-- **Query cost.** Tag-to-keys queries (`WithAllTags` / `WithAnyTags`) are
-  bounded prefix scans. Because membership rows are tag-major, the
-  inverse direction - `Key(key).GetAsync()`, `Key(key).SetAsync(...)`
-  (which diffs current tags), `TagsAsync()`, and `ReconcileAsync()` - scans
-  the whole index tree. Prefer the tag-to-keys direction on hot paths and
-  reserve the key-to-tags direction for occasional maintenance.
+- **Query cost.** Both directions are bounded prefix scans: tag-to-keys
+  (`WithAllTags` / `WithAnyTags`) over the tag-major rows, and key-to-tags
+  (`Key(key).GetAsync()` / `Key(key).SetAsync(...)`) over a key-major mirror
+  row maintained alongside each membership. The mirror roughly doubles
+  membership write and storage cost (the usual both-directions index
+  trade-off). `TagsAsync()` and `ReconcileAsync()` still scan the whole index
+  tree, since enumerating every distinct tag and visiting every row are
+  inherently full passes - reserve them for occasional maintenance.
 

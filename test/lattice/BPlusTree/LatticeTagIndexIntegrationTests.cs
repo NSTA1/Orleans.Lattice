@@ -478,4 +478,57 @@ public class LatticeTagIndexIntegrationTests
         var covered = await multi.CoveredTreesAsync();
         Assert.That(covered, Is.SupersetOf(ids));
     }
+
+    [Test]
+    public async Task Key_GetAsync_isolates_keys_that_share_a_prefix()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        await tree.SetAsync("ab", Bytes("1"));
+        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+
+        await idx.Key("a").AddAsync(["red"]);
+        await idx.Key("ab").AddAsync(["blue", "green"]);
+
+        // The key-major lookup for "a" must not leak the tags of "ab".
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "red" }));
+        Assert.That(await idx.Key("ab").GetAsync(), Is.EqualTo(new[] { "blue", "green" }));
+    }
+
+    [Test]
+    public async Task Key_GetAsync_isolates_a_key_that_embeds_the_separator()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        await tree.SetAsync("a\0b", Bytes("1"));
+        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+
+        await idx.Key("a").AddAsync(["red"]);
+        await idx.Key("a\0b").AddAsync(["blue"]);
+
+        // "a\0b" falls inside the prefix range for "a"; the exact full-key
+        // comparison must still keep their tag sets apart.
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "red" }));
+        Assert.That(await idx.Key("a\0b").GetAsync(), Is.EqualTo(new[] { "blue" }));
+    }
+
+    [Test]
+    public async Task Reconcile_removes_both_directions_so_key_lookup_is_clean()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("d", Bytes("1"));
+        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        await idx.Key("d").AddAsync(["red", "round"]);
+
+        await tree.DeleteAsync("d");
+        await idx.ReconcileAsync();
+
+        // The orphan sweep must drop the key-major mirror too, not just the
+        // tag-major rows, so a subsequent key lookup sees nothing.
+        Assert.That(await idx.Key("d").GetAsync(), Is.Empty);
+        Assert.That(await idx.WithAnyTags("red", "round").CountAsync(), Is.Zero);
+    }
 }

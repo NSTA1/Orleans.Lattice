@@ -25,6 +25,10 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     // a non-empty tag that cannot contain NUL.
     private const string CoveredMarkerPrefix = "\0covered\0";
 
+    // Reserved prefix for key-major mirror rows (`\0k\0{treeId}\0{key}\0{tag}`).
+    // Also NUL-led, so it shares the membership rows' reserved-row exclusion.
+    private const string KeyMajorPrefix = "\0k\0";
+
     // Single shared flag value for every membership row. Never mutated, so it is
     // safe to reuse across all writes (avoids a per-row allocation).
     private static readonly byte[] Flag = [1];
@@ -138,6 +142,17 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     private static string PostingPrefix(string tag, string treeId) =>
         string.Concat(tag, SepStr, treeId, SepStr);
 
+    // Key-major mirror of a membership row: `\0k \0 treeId \0 key \0 tag`. Written
+    // and deleted alongside the tag-major row so the inverse direction
+    // (key -> tags) is a bounded prefix scan rather than a full index scan. The
+    // `\0` prefix keeps mirrors out of the membership namespace, so every
+    // `rowKey[0] == Sep` guard and every tag/posting/marker prefix skips them.
+    private static string KeyRowKey(string treeId, string key, string tag) =>
+        string.Concat(KeyMajorPrefix, treeId, SepStr, key, SepStr, tag);
+
+    private static string KeyMajorPrefixFor(string treeId, string key) =>
+        string.Concat(KeyMajorPrefix, treeId, SepStr, key, SepStr);
+
     private static string PrefixEnd(string prefix)
     {
         // prefix ends with Sep ('\0'); the smallest string greater than every
@@ -221,20 +236,30 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
     internal async Task<IReadOnlyList<string>> GetTagsForKeyAsync(string treeId, string key, CancellationToken cancellationToken)
     {
-        var suffix = string.Concat(SepStr, treeId, SepStr, key);
+        // Bounded prefix scan over the key-major mirror rows. The range may
+        // over-match when keys share a `key\0...` prefix (only possible when a
+        // key itself contains NUL), so each row's full key is compared exactly.
+        var prefix = KeyMajorPrefixFor(treeId, key);
+        var headLen = KeyMajorPrefix.Length + treeId.Length + 1; // up to and incl. the treeId separator
+        var end = PrefixEnd(prefix);
         var result = new List<string>();
-        await foreach (var rowKey in _indexTree.ScanKeysAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
+        await foreach (var rowKey in _indexTree.ScanKeysAsync(prefix, end, cancellationToken: cancellationToken).ConfigureAwait(false))
         {
-            if (rowKey.Length > 0 && rowKey[0] == Sep)
-            {
-                continue; // reserved hint row
-            }
-            if (!rowKey.EndsWith(suffix, StringComparison.Ordinal))
+            // rowKey == `\0k\0{treeId}\0{fullKey}\0{tag}`; tag is the final
+            // segment, fullKey is everything between the treeId separator and it.
+            var body = rowKey[headLen..];
+            var lastSep = body.LastIndexOf(Sep);
+            if (lastSep < 0)
             {
                 continue;
             }
-            var tag = rowKey[..^suffix.Length];
-            if (tag.Length > 0 && !tag.Contains(Sep))
+            var fullKey = body[..lastSep];
+            if (!string.Equals(fullKey, key, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var tag = body[(lastSep + 1)..];
+            if (tag.Length > 0)
             {
                 result.Add(tag);
             }
@@ -292,6 +317,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             ValidateTag(tag);
             await _indexTree.SetAsync(RowKey(tag, treeId, key), Flag, cancellationToken).ConfigureAwait(false);
+            await _indexTree.SetAsync(KeyRowKey(treeId, key, tag), Flag, cancellationToken).ConfigureAwait(false);
         }
         await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
     }
@@ -302,6 +328,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             ValidateTag(tag);
             await _indexTree.DeleteAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
+            await _indexTree.DeleteAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -361,6 +388,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             {
                 ValidateTag(tag);
                 builder.Set(RowKey(tag, treeId, key), Flag);
+                builder.Set(KeyRowKey(treeId, key, tag), Flag);
             }
             await builder.CommitAsync(cancellationToken).ConfigureAwait(false);
             await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
@@ -395,7 +423,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             {
                 continue; // reserved hint row
             }
-            if (!TryParseRow(rowKey, out _, out var rowTree, out var key))
+            if (!TryParseRow(rowKey, out var rowTag, out var rowTree, out var key))
             {
                 continue;
             }
@@ -423,6 +451,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                     continue;
                 }
                 await _indexTree.DeleteAsync(rowKey, cancellationToken).ConfigureAwait(false);
+                await _indexTree.DeleteAsync(KeyRowKey(rowTree, key, rowTag), cancellationToken).ConfigureAwait(false);
                 orphans++;
             }
         }
