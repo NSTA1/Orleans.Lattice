@@ -10,7 +10,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 ### Planned / open
 
 - [F-012](https://github.com/NSTA1/Orleans.Lattice/issues/332) - Optionally pre-warm `LeafCacheGrain` activations for recently-accessed leaves after a silo restart to reduce cold-start read-latency spikes
-- [F-018](https://github.com/NSTA1/Orleans.Lattice/issues/338) - Associate tags with keys and query by tag
 - [F-021](https://github.com/NSTA1/Orleans.Lattice/issues/341) - Migration guide
 - [F-022](https://github.com/NSTA1/Orleans.Lattice/issues/342) - Troubleshooting guide (`docs/troubleshooting.md`)
 - [F-023](https://github.com/NSTA1/Orleans.Lattice/issues/343) - Sample applications (`samples/`)
@@ -45,6 +44,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-015](https://github.com/NSTA1/Orleans.Lattice/issues/335) - Tree events (Orleans Streams)
 - [F-016](https://github.com/NSTA1/Orleans.Lattice/issues/336) - TTL on `SetAsync`
 - [F-017](https://github.com/NSTA1/Orleans.Lattice/issues/337) - Compare-and-swap (CAS)
+- [F-018](https://github.com/NSTA1/Orleans.Lattice/issues/338) - Associate tags with keys and query by tag
 - [F-019](https://github.com/NSTA1/Orleans.Lattice/issues/339) - Online (non-blocking) resize
 - [F-020](https://github.com/NSTA1/Orleans.Lattice/issues/340) - Merge trees (`MergeAsync`)
 - [F-024](https://github.com/NSTA1/Orleans.Lattice/issues/344) - Parallel shard pre-fetch for `EntriesAsync`

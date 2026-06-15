@@ -1484,3 +1484,101 @@ tree deletion / merge / split, leaf-cache, leaf-replay coordinator,
 stats, and tx-registry grains) is declared `internal` and is not
 visible from consumer assemblies at all. The C# type system enforces
 that boundary at compile time.
+
+## Tag indexes
+
+A **tag index** associates string tags with the keys of a tree and lets
+you query keys back by tag. It is built entirely on the public
+`ILattice` surface: tag-membership rows live in a sibling ordinary
+Lattice tree resolved as `tag-{indexName}`, each keyed
+`tag \0 treeId \0 key` with a flag value. No standalone grain is
+introduced.
+
+Open an index by passing the grain factory (needed to resolve the
+sibling index tree and any other subject tree) and an index name. The
+subject tree stays the receiver - it supplies the tree segment of every
+membership row.
+
+```csharp verify
+var tagIndex = tree.TagIndex(grainFactory, "by-color");
+
+// Per-key tag CRUD. SetAsync replaces (read-modify-write diff); AddAsync /
+// RemoveAsync are additive / subtractive.
+await tagIndex.Key("item:1").AddAsync(["red", "round"], cancellationToken);
+_ = await tagIndex.Key("item:1").GetAsync(cancellationToken);
+
+// Intersection (every tag) and de-duplicated union (any tag). Each query is a
+// lazy IAsyncEnumerable<string> with CountAsync.
+await foreach (var key in tagIndex.WithAllTags("red", "round").WithCancellation(cancellationToken))
+{
+    _ = key;
+}
+_ = await tagIndex.WithAnyTags("red", "blue").CountAsync(cancellationToken);
+
+// Enumerate the distinct tags that currently have at least one member key.
+await foreach (var tag in tagIndex.TagsAsync(cancellationToken))
+{
+    _ = tag;
+}
+
+// Write a value and its tags together. Eventual by default (two independent
+// durable writes); .Atomic() lowers to the cross-tree atomic-write saga so the
+// value and its tag rows become visible together.
+await tagIndex.SetValueWithTags("item:2", "payload"u8.ToArray(), "blue")
+    .Atomic()
+    .CommitAsync(cancellationToken);
+
+// On-demand reconcile removes membership rows whose key no longer exists in the
+// primary tree, over an optional key range. Idempotent.
+TagReconcileReport report = await tagIndex.ReconcileAsync(cancellationToken: cancellationToken);
+_ = report.OrphanRowsRemoved;
+
+// The multi-tree view spans every covered tree, yielding TaggedKey, and
+// supports InTree(treeId) narrowing.
+var multi = grainFactory.MultiTreeTagIndex("by-color");
+await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellationToken))
+{
+    _ = (hit.TreeId, hit.Key);
+}
+```
+
+### Surface
+
+| Type | Role |
+|------|------|
+| `LatticeTagIndexExtensions` | `ILattice.TagIndex(grainFactory, indexName, allowedTrees?)` and `IGrainFactory.MultiTreeTagIndex(indexName, allowedTrees?)` entry points. |
+| `ILatticeTagIndex` | Single-tree surface: `Key`, `WithAllTags`, `WithAnyTags`, `SetValueWithTags`, `TagsAsync`, `ReconcileAsync`, `MultiTree`. |
+| `ILatticeKeyTags` | Per-key tag surface: `GetAsync`, `SetAsync` (replace), `AddAsync`, `RemoveAsync`. |
+| `ILatticeTagQuery` | Lazy `IAsyncEnumerable<string>` of matching keys with `CountAsync`. |
+| `ILatticeValueTagWrite` | Staged value+tags write: `Atomic()` / `Eventual()` / `CommitAsync()`. |
+| `ILatticeMultiTreeTagIndex` | Multi-tree view: `Tree(treeId)`, `WithAllTags`, `WithAnyTags`, `TagsAsync`, `CoveredTreesAsync`, `ReconcileAsync`. |
+| `ILatticeMultiTreeTagQuery` | Lazy `IAsyncEnumerable<TaggedKey>` with `InTree(treeId)` narrowing and `CountAsync`. |
+| `TaggedKey` | `(TreeId, Key)` pair yielded by multi-tree queries. |
+| `TagReconcileReport` | Counts from a reconcile pass: trees covered, keys scanned, rows scanned, orphan rows removed. |
+| `TagConsistency` | `Eventual` (default) or `Atomic` durability coupling for `SetValueWithTags`. |
+
+### Notes
+
+- **Producer-side acceptance.** In the default open mode a subject tree
+  must already be registered (have at least one write) before its keys
+  can be tagged; supplying a closed `allowedTrees` allowlist restricts
+  membership writes to the listed trees. Acceptance is validated on the
+  write path only - never as an apply-time gate.
+- **Additive `SetValueWithTags`.** It associates the supplied tags with
+  the key; it does not remove previously-associated tags. Use
+  `Key(key).SetAsync(tags)` for replace semantics.
+- **Active-active replication.** For convergent membership under
+  concurrent writes from multiple clusters, configure the index tree
+  with a membership-flag merge mode - `OrFlag` (enable-wins) is the
+  recommended default, `RwFlag` (remove-wins) for revocation facets.
+- **Reserved characters.** Neither a tag nor a tree id may contain the
+  NUL (`\0`) separator. The covered-tree set surfaced by the multi-tree
+  view is an over-approximating set of idempotent marker rows on the
+  index tree, self-healing from a full scan when absent.
+- **Query cost.** Tag-to-keys queries (`WithAllTags` / `WithAnyTags`) are
+  bounded prefix scans. Because membership rows are tag-major, the
+  inverse direction - `Key(key).GetAsync()`, `Key(key).SetAsync(...)`
+  (which diffs current tags), `TagsAsync()`, and `ReconcileAsync()` - scans
+  the whole index tree. Prefer the tag-to-keys direction on hot paths and
+  reserve the key-to-tags direction for occasional maintenance.
+
