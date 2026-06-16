@@ -24,6 +24,16 @@ internal sealed class TwoSiteClusterFixture
     private static readonly ConcurrentDictionary<string, LoopbackTransport> Transports = new();
     private static readonly ConcurrentDictionary<string, RecordingReplogSink> Sinks = new();
 
+    /// <summary>
+    /// Per-tree merge-mode overrides consulted by the silo merge-mode resolver.
+    /// Defaults to <see cref="LatticeMergeMode.LwwRegister"/> for any tree not
+    /// listed. Lets active-active tests declare a specific index tree (for
+    /// example a <c>tag-{indexName}</c> tree) under a flag merge mode without
+    /// re-deploying the cluster, because the test cluster runs in-process and
+    /// the silo resolver reads this same static map.
+    /// </summary>
+    public static readonly ConcurrentDictionary<string, LatticeMergeMode> TreeModeOverrides = new();
+
     /// <summary>The first site's two-silo test cluster.</summary>
     public TestCluster SiteA { get; private set; } = null!;
 
@@ -131,7 +141,8 @@ internal sealed class TwoSiteClusterFixture
 
     private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) =>
+            TreeModeOverrides.TryGetValue(treeId, out var mode) ? mode : LatticeMergeMode.LwwRegister;
     }
 
     private sealed class SiteASiloConfigurator : ISiloConfigurator

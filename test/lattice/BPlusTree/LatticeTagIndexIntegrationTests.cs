@@ -1,4 +1,6 @@
 using Orleans.TestingHost;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -30,6 +32,12 @@ public class LatticeTagIndexIntegrationTests
 
     private ILattice Tree(string id) => _cluster.GrainFactory.GetGrain<ILattice>(id);
 
+    private ILatticeTagIndex TagIndex(ILattice tree, string name) =>
+        new DefaultLatticeTagIndexFactory(_cluster.GrainFactory, FakeLatticeReplicationContext.Disabled).Create(tree, name);
+
+    private ILatticeMultiTreeTagIndex MultiTreeTagIndex(string name, IReadOnlyCollection<string>? allowedTrees = null) =>
+        new DefaultLatticeTagIndexFactory(_cluster.GrainFactory, FakeLatticeReplicationContext.Disabled).CreateMultiTree(name, allowedTrees);
+
     private static async Task<List<string>> Collect(ILatticeTagQuery query)
     {
         var list = new List<string>();
@@ -57,7 +65,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red"]);
 
@@ -71,7 +79,7 @@ public class LatticeTagIndexIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("b", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red", "round"]);
         await idx.Key("b").AddAsync(["red"]);
@@ -86,7 +94,7 @@ public class LatticeTagIndexIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("b", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red", "round"]);
         await idx.Key("b").AddAsync(["round"]);
@@ -100,7 +108,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["round", "red"]);
 
@@ -113,7 +121,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red", "round"]);
         await idx.Key("a").SetAsync(["green"]);
@@ -128,7 +136,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red", "round"]);
         await idx.Key("a").RemoveAsync(["red"]);
@@ -143,7 +151,7 @@ public class LatticeTagIndexIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("b", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red"]);
         await idx.Key("b").AddAsync(["red"]);
@@ -156,7 +164,7 @@ public class LatticeTagIndexIntegrationTests
     {
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.SetValueWithTags("c", Bytes("v"), "blue").CommitAsync();
 
@@ -170,7 +178,7 @@ public class LatticeTagIndexIntegrationTests
     {
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.SetValueWithTags("c", Bytes("v"), "blue", "small").Atomic().CommitAsync();
 
@@ -184,7 +192,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("d", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
         await idx.Key("d").AddAsync(["red"]);
 
         await tree.DeleteAsync("d");
@@ -200,7 +208,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
         await idx.Key("a").AddAsync(["red"]);
 
         await idx.ReconcileAsync();
@@ -222,10 +230,10 @@ public class LatticeTagIndexIntegrationTests
         await tree1.SetAsync("a", Bytes("1"));
         await tree2.SetAsync("b", Bytes("1"));
 
-        await tree1.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
-        await tree2.TagIndex(_cluster.GrainFactory, indexName).Key("b").AddAsync(["red"]);
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree2, indexName).Key("b").AddAsync(["red"]);
 
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(indexName);
+        var multi = MultiTreeTagIndex(indexName);
         var hits = await Collect(multi.WithAnyTags("red"));
 
         Assert.That(hits, Does.Contain(new TaggedKey(t1, "a")));
@@ -243,10 +251,10 @@ public class LatticeTagIndexIntegrationTests
         var tree2 = Tree(t2);
         await tree1.SetAsync("a", Bytes("1"));
         await tree2.SetAsync("b", Bytes("1"));
-        await tree1.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
-        await tree2.TagIndex(_cluster.GrainFactory, indexName).Key("b").AddAsync(["red"]);
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree2, indexName).Key("b").AddAsync(["red"]);
 
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(indexName);
+        var multi = MultiTreeTagIndex(indexName);
         var hits = await Collect(multi.WithAnyTags("red").InTree(t1));
 
         Assert.That(hits, Is.EqualTo(new[] { new TaggedKey(t1, "a") }));
@@ -260,9 +268,9 @@ public class LatticeTagIndexIntegrationTests
         var t1 = $"items1-{sfx}";
         var tree1 = Tree(t1);
         await tree1.SetAsync("a", Bytes("1"));
-        await tree1.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
 
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(indexName);
+        var multi = MultiTreeTagIndex(indexName);
         Assert.That(await multi.CoveredTreesAsync(), Does.Contain(t1));
     }
 
@@ -271,7 +279,7 @@ public class LatticeTagIndexIntegrationTests
     {
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
         Assert.That(() => idx.WithAllTags("bad\0tag"), Throws.InstanceOf<ArgumentException>());
     }
 
@@ -280,7 +288,7 @@ public class LatticeTagIndexIntegrationTests
     {
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"never-written-{sfx}");
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
         Assert.That(async () => await idx.Key("z").AddAsync(["red"]), Throws.InstanceOf<InvalidOperationException>());
     }
 
@@ -289,8 +297,9 @@ public class LatticeTagIndexIntegrationTests
     {
         var sfx = Guid.NewGuid().ToString("N");
         var treeId = $"items-{sfx}";
-        var tree = Tree(treeId);
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}", allowedTrees: new[] { "some-other-tree" });
+        Tree(treeId);
+        var idx = MultiTreeTagIndex($"colors-{sfx}", allowedTrees: new[] { "some-other-tree" })
+            .Tree(treeId);
         Assert.That(async () => await idx.Key("z").AddAsync(["red"]), Throws.InstanceOf<ArgumentException>());
     }
 
@@ -311,7 +320,7 @@ public class LatticeTagIndexIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("b", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red", "round"]);
         await idx.Key("b").AddAsync(["red", "blue"]);
@@ -330,10 +339,10 @@ public class LatticeTagIndexIntegrationTests
         var tree2 = Tree(t2);
         await tree1.SetAsync("a", Bytes("1"));
         await tree2.SetAsync("b", Bytes("1"));
-        await tree1.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
-        await tree2.TagIndex(_cluster.GrainFactory, indexName).Key("b").AddAsync(["green"]);
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree2, indexName).Key("b").AddAsync(["green"]);
 
-        Assert.That(await Collect(tree1.TagIndex(_cluster.GrainFactory, indexName).TagsAsync()), Is.EqualTo(new[] { "red" }));
+        Assert.That(await Collect(TagIndex(tree1, indexName).TagsAsync()), Is.EqualTo(new[] { "red" }));
     }
 
     [Test]
@@ -347,10 +356,10 @@ public class LatticeTagIndexIntegrationTests
         var tree2 = Tree(t2);
         await tree1.SetAsync("a", Bytes("1"));
         await tree2.SetAsync("b", Bytes("1"));
-        await tree1.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
-        await tree2.TagIndex(_cluster.GrainFactory, indexName).Key("b").AddAsync(["green"]);
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree2, indexName).Key("b").AddAsync(["green"]);
 
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(indexName);
+        var multi = MultiTreeTagIndex(indexName);
         var tags = await Collect(multi.TagsAsync());
         Assert.That(tags, Is.EqualTo(new[] { "green", "red" }));
     }
@@ -362,7 +371,7 @@ public class LatticeTagIndexIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("m", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
         await idx.Key("a").AddAsync(["red"]);
         await idx.Key("m").AddAsync(["red"]);
 
@@ -382,7 +391,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
         await idx.Key("a").AddAsync(["red"]);
 
         var report = await idx.ReconcileAsync();
@@ -402,10 +411,10 @@ public class LatticeTagIndexIntegrationTests
         var tree2 = Tree(t2);
         await tree1.SetAsync("a", Bytes("1"));
         await tree2.SetAsync("b", Bytes("1"));
-        await tree1.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
-        await tree2.TagIndex(_cluster.GrainFactory, indexName).Key("b").AddAsync(["red"]);
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree2, indexName).Key("b").AddAsync(["red"]);
 
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(indexName);
+        var multi = MultiTreeTagIndex(indexName);
         Assert.That(await multi.WithAnyTags("red").CountAsync(), Is.EqualTo(2));
     }
 
@@ -414,7 +423,7 @@ public class LatticeTagIndexIntegrationTests
     {
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.SetValueWithTags("c", Bytes("v"), "blue").Eventual().CommitAsync();
 
@@ -433,10 +442,10 @@ public class LatticeTagIndexIntegrationTests
         var tree2 = Tree(t2);
         await tree1.SetAsync("a", Bytes("1"));
         await tree2.SetAsync("b", Bytes("1"));
-        await tree1.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
-        await tree2.TagIndex(_cluster.GrainFactory, indexName).Key("b").AddAsync(["red"]);
+        await TagIndex(tree1, indexName).Key("a").AddAsync(["red"]);
+        await TagIndex(tree2, indexName).Key("b").AddAsync(["red"]);
 
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(indexName);
+        var multi = MultiTreeTagIndex(indexName);
         ILatticeTagIndex scoped = multi.Tree(t1);
         Assert.That(await Collect(scoped.WithAnyTags("red")), Is.EqualTo(new[] { "a" }));
     }
@@ -445,7 +454,7 @@ public class LatticeTagIndexIntegrationTests
     public void MultiTree_Tree_rejects_tree_id_containing_nul()
     {
         var sfx = Guid.NewGuid().ToString("N");
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex($"colors-{sfx}");
+        var multi = MultiTreeTagIndex($"colors-{sfx}");
         Assert.That(() => multi.Tree("bad\0tree"), Throws.InstanceOf<ArgumentException>());
     }
 
@@ -453,7 +462,7 @@ public class LatticeTagIndexIntegrationTests
     public void MultiTree_InTree_rejects_tree_id_containing_nul()
     {
         var sfx = Guid.NewGuid().ToString("N");
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex($"colors-{sfx}");
+        var multi = MultiTreeTagIndex($"colors-{sfx}");
         Assert.That(() => multi.WithAnyTags("red").InTree("bad\0tree"), Throws.InstanceOf<ArgumentException>());
     }
 
@@ -471,10 +480,10 @@ public class LatticeTagIndexIntegrationTests
         {
             var tree = Tree(id);
             await tree.SetAsync("a", Bytes("1"));
-            await tree.TagIndex(_cluster.GrainFactory, indexName).Key("a").AddAsync(["red"]);
+            await TagIndex(tree, indexName).Key("a").AddAsync(["red"]);
         }));
 
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(indexName);
+        var multi = MultiTreeTagIndex(indexName);
         var covered = await multi.CoveredTreesAsync();
         Assert.That(covered, Is.SupersetOf(ids));
     }
@@ -486,7 +495,7 @@ public class LatticeTagIndexIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("ab", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red"]);
         await idx.Key("ab").AddAsync(["blue", "green"]);
@@ -503,7 +512,7 @@ public class LatticeTagIndexIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("a\0b", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
 
         await idx.Key("a").AddAsync(["red"]);
         await idx.Key("a\0b").AddAsync(["blue"]);
@@ -520,7 +529,7 @@ public class LatticeTagIndexIntegrationTests
         var sfx = Guid.NewGuid().ToString("N");
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("d", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, $"colors-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
         await idx.Key("d").AddAsync(["red", "round"]);
 
         await tree.DeleteAsync("d");
@@ -530,5 +539,105 @@ public class LatticeTagIndexIntegrationTests
         // tag-major rows, so a subsequent key lookup sees nothing.
         Assert.That(await idx.Key("d").GetAsync(), Is.Empty);
         Assert.That(await idx.WithAnyTags("red", "round").CountAsync(), Is.Zero);
+    }
+
+    // ── Flag membership single-cluster round-trips ───────────────────
+
+    [Test]
+    public async Task OrFlag_membership_add_query_and_remove_roundtrips()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
+            .Create(tree, $"colors-{sfx}");
+
+        await idx.Key("a").AddAsync(["red", "round"]);
+        Assert.That(await Collect(idx.WithAnyTags("red", "round")), Is.EqualTo(new[] { "a" }));
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "red", "round" }));
+
+        await idx.Key("a").RemoveAsync(["red"]);
+        // A disabled flag leaves a present-but-tombstoned row; the read path
+        // must decode flag state and treat it as absent.
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "round" }));
+        Assert.That(await idx.WithAnyTags("red").CountAsync(), Is.Zero);
+        Assert.That(await idx.WithAnyTags("round").CountAsync(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RwFlag_membership_add_query_and_remove_roundtrips()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.RwFlag))
+            .Create(tree, $"colors-{sfx}");
+
+        await idx.Key("a").AddAsync(["red", "round"]);
+        Assert.That(await Collect(idx.WithAnyTags("red", "round")), Is.EqualTo(new[] { "a" }));
+
+        await idx.Key("a").RemoveAsync(["red"]);
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "round" }));
+        Assert.That(await idx.WithAnyTags("red").CountAsync(), Is.Zero);
+    }
+
+    [Test]
+    public async Task OrFlag_membership_reconcile_removes_orphan_rows()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("d", Bytes("1"));
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
+            .Create(tree, $"colors-{sfx}");
+        await idx.Key("d").AddAsync(["red", "round"]);
+
+        await tree.DeleteAsync("d");
+        var report = await idx.ReconcileAsync();
+
+        Assert.That(report.OrphanRowsRemoved, Is.GreaterThanOrEqualTo(1));
+        Assert.That(await idx.Key("d").GetAsync(), Is.Empty);
+        Assert.That(await idx.WithAnyTags("red", "round").CountAsync(), Is.Zero);
+    }
+
+    [Test]
+    public async Task OrFlag_membership_SetValueWithTags_eventual_writes_value_and_tags()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
+            .Create(tree, $"colors-{sfx}");
+
+        await idx.SetValueWithTags("c", Bytes("v"), "blue").CommitAsync();
+
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v")));
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue" }));
+        Assert.That(await Collect(idx.WithAllTags("blue")), Is.EqualTo(new[] { "c" }));
+    }
+
+    [Test]
+    public async Task OrFlag_membership_SetValueWithTags_atomic_degrades_to_eventual_but_writes_value_and_tags()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
+            .Create(tree, $"colors-{sfx}");
+
+        // Under a flag membership mode the cross-tree atomic saga cannot stage
+        // typed flag deltas, so Atomic() degrades to eventual; the value and
+        // tags must still both land.
+        await idx.SetValueWithTags("c", Bytes("v"), "blue", "small").Atomic().CommitAsync();
+
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v")));
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue", "small" }));
     }
 }

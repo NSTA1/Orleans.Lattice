@@ -35,9 +35,11 @@ public class TagIndexReconcileGrainTests
         options ??= new LatticeTagIndexReconciliationOptions();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         var state = existingState ?? new FakePersistentState<TagIndexReconcileState>();
+        var replicationContext = new DefaultLatticeReplicationContext();
 
         var grain = new TagIndexReconcileGrain(
             context, grainFactory, reminderRegistry, optionsMonitor,
+            replicationContext,
             new LoggerFactory().CreateLogger<TagIndexReconcileGrain>(), state);
         return (grain, state, reminderRegistry, grainFactory);
     }

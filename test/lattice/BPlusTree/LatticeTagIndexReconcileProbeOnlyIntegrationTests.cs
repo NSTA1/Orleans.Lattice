@@ -1,5 +1,6 @@
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Tests.Fakes;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -34,6 +35,9 @@ public class LatticeTagIndexReconcileProbeOnlyIntegrationTests
 
     private static byte[] Bytes(string s) => System.Text.Encoding.UTF8.GetBytes(s);
 
+    private ILatticeTagIndex TagIndex(ILattice tree, string name) =>
+        new DefaultLatticeTagIndexFactory(_cluster.GrainFactory, FakeLatticeReplicationContext.Disabled).Create(tree, name);
+
     [Test]
     public async Task RunSweepAsync_probe_only_detects_but_does_not_repair()
     {
@@ -41,7 +45,7 @@ public class LatticeTagIndexReconcileProbeOnlyIntegrationTests
         var index = $"colors-{sfx}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>($"items-{sfx}");
         await tree.SetAsync("d", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, index);
+        var idx = TagIndex(tree, index);
         await idx.Key("d").AddAsync(["red"]);
 
         await tree.DeleteAsync("d");

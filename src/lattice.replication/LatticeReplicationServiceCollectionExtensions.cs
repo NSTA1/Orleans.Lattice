@@ -154,6 +154,28 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         }
         builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, ConfiguredLatticeOriginClusterIdResolver>();
 
+        // Same swap protocol for the replication-configuration seam: remove the
+        // core's DefaultLatticeReplicationContext (reports replication disabled)
+        // when present, then TryAdd the configured context that exposes the
+        // ClusterId as the local replica id and delegates per-tree merge-mode
+        // resolution to the resolver above. A host-supplied context registered
+        // before this call is left untouched (TryAdd is a no-op).
+        for (var i = builder.Services.Count - 1; i >= 0; i--)
+        {
+            var d = builder.Services[i];
+            if (d.ServiceType == typeof(ILatticeReplicationContext)
+                && d.ImplementationType == typeof(DefaultLatticeReplicationContext))
+            {
+                builder.Services.RemoveAt(i);
+            }
+        }
+        builder.Services.TryAddSingleton<ILatticeReplicationContext, ConfiguredLatticeReplicationContext>();
+
+        // Fail fast at silo start when a flag-mode tree is declared without a
+        // configured replica id, rather than faulting on the first flag-CRDT
+        // membership write.
+        builder.Services.AddSingleton<IHostedService, LatticeReplicationMergeModeStartupValidator>();
+
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
 
         // Framing-tail compressor registry. Each algorithm-specific

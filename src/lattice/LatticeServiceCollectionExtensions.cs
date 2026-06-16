@@ -138,6 +138,19 @@ public static class LatticeServiceCollectionExtensions
         // package replaces this with ConfiguredLatticeOriginClusterIdResolver
         // (reads LatticeReplicationOptions.ClusterId) via services.Replace(...).
         builder.Services.TryAddSingleton<ILatticeOriginClusterIdResolver, DefaultLatticeOriginClusterIdResolver>();
+        // Single-cluster default for the replication-configuration seam. Reports
+        // "replication disabled", an empty local replica id, and a null merge
+        // mode for every tree, so core features (e.g. the tag index) use their
+        // single-writer path. The replication package replaces this with
+        // ConfiguredLatticeReplicationContext (backed by the replication
+        // options) via the same remove-Default-then-TryAdd swap it uses for the
+        // merge-mode and origin-cluster-id resolvers.
+        builder.Services.TryAddSingleton<ILatticeReplicationContext, DefaultLatticeReplicationContext>();
+        // Tag-index factory. Captures the replication-configuration seam so an
+        // injected tag index derives its membership mode and replica id from
+        // server config instead of per-call parameters; the TagIndex extension
+        // methods remain the single-cluster (last-writer-wins) convenience path.
+        builder.Services.TryAddSingleton<ILatticeTagIndexFactory, DefaultLatticeTagIndexFactory>();
 
         // In-library shutdown log demotion. During the host deactivation
         // window the Orleans runtime emits a Warning per in-flight grain

@@ -422,4 +422,172 @@ public class ReplicationApplyIntegrationTests
         Assert.That(merged, Is.EquivalentTo(new[] { "v-a", "v-b" }),
             "Both concurrent MV-Register dots must survive the merge.");
     }
+
+    // ------------------------------------------------------------------
+    // Tag-index active-active membership convergence
+    //
+    // The built-in tag index authors its membership rows as typed
+    // flag-CRDT deltas when the index tree is declared under a flag merge
+    // mode. These tests declare the `tag-{indexName}` tree under OrFlag /
+    // RwFlag, drive a local membership write on Site B and a concurrent
+    // membership write on Site A, replay Site A's captured index-tree WAL
+    // records into Site B's applier, and assert convergence semantics. The
+    // replay path also asserts every shipped index-tree WAL record carries a
+    // non-null typed delta - the regression that previously faulted the
+    // receiver's typed apply when an operator followed the documented config.
+    // ------------------------------------------------------------------
+
+    private static async Task<List<string>> CollectTagKeysAsync(IAsyncEnumerable<string> query)
+    {
+        var list = new List<string>();
+        await foreach (var key in query)
+        {
+            list.Add(key);
+        }
+        list.Sort(StringComparer.Ordinal);
+        return list;
+    }
+
+    private async Task<int> ReplayIndexEntriesIntoSiteBAsync(string indexTree, int expectedMin)
+    {
+        var applier = CreateSiteBApplier();
+        IReadOnlyList<WalRecord> entries = Array.Empty<WalRecord>();
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            entries = _fixture.SiteASink.Entries
+                .Where(e => e.TreeId == indexTree)
+                .ToList();
+            if (entries.Count >= expectedMin)
+            {
+                break;
+            }
+            await Task.Delay(50);
+        }
+
+        Assert.That(entries.Count, Is.GreaterThanOrEqualTo(expectedMin),
+            $"Expected at least {expectedMin} captured WAL records for index tree '{indexTree}'.");
+
+        foreach (var entry in entries)
+        {
+            // No-fault guarantee: under a flag membership mode every index-tree
+            // write is authored as a typed flag-CRDT delta, so the shipped WAL
+            // record must carry a non-null Delta. A plain LWW write would leave
+            // Delta null and fault the receiver's typed apply.
+            Assert.That(entry.Delta, Is.Not.Null,
+                $"Index-tree WAL record for key '{entry.Key}' must carry a typed flag delta.");
+            await applier.ApplyAsync(entry);
+        }
+        return entries.Count;
+    }
+
+    [Test]
+    public async Task TagIndex_or_flag_membership_concurrent_add_add_converges()
+    {
+        const string indexName = "aa-orflag-addadd";
+        const string indexTree = "tag-" + indexName;
+        const string subjectTree = "aa-items-addadd";
+        TwoSiteClusterFixture.TreeModeOverrides[indexTree] = LatticeMergeMode.OrFlag;
+
+        // Site A adds tag "red" to key "a".
+        var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
+        await aTree.SetAsync("a", new byte[] { 1 });
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.OrFlag)).Create(aTree, indexName);
+        await aIdx.Key("a").AddAsync(["red"]);
+
+        // Site B concurrently adds the same tag "red" to key "a".
+        var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
+        await bTree.SetAsync("a", new byte[] { 1 });
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.OrFlag)).Create(bTree, indexName);
+        await bIdx.Key("a").AddAsync(["red"]);
+
+        await ReplayIndexEntriesIntoSiteBAsync(indexTree, expectedMin: 2);
+
+        // Concurrent add/add converges: the key remains a single member of "red".
+        Assert.That(await CollectTagKeysAsync(bIdx.WithAnyTags("red")), Is.EqualTo(new[] { "a" }));
+    }
+
+    [Test]
+    public async Task TagIndex_or_flag_membership_concurrent_add_remove_is_enable_wins()
+    {
+        const string indexName = "aa-orflag-addremove";
+        const string indexTree = "tag-" + indexName;
+        const string subjectTree = "aa-items-orflag-ar";
+        TwoSiteClusterFixture.TreeModeOverrides[indexTree] = LatticeMergeMode.OrFlag;
+
+        // Site A adds then removes tag "red" (net: a remove this site never
+        // observed Site B's concurrent enable).
+        var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
+        await aTree.SetAsync("a", new byte[] { 1 });
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.OrFlag)).Create(aTree, indexName);
+        await aIdx.Key("a").AddAsync(["red"]);
+        await aIdx.Key("a").RemoveAsync(["red"]);
+
+        // Site B concurrently adds tag "red".
+        var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
+        await bTree.SetAsync("a", new byte[] { 1 });
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.OrFlag)).Create(bTree, indexName);
+        await bIdx.Key("a").AddAsync(["red"]);
+
+        // expectedMin covers Site A's enable + disable on the tag-major row.
+        await ReplayIndexEntriesIntoSiteBAsync(indexTree, expectedMin: 2);
+
+        // Enable-wins: Site B's concurrent enable survives Site A's remove.
+        Assert.That(await CollectTagKeysAsync(bIdx.WithAnyTags("red")), Is.EqualTo(new[] { "a" }));
+    }
+
+    [Test]
+    public async Task TagIndex_rw_flag_membership_concurrent_add_remove_is_remove_wins()
+    {
+        const string indexName = "aa-rwflag-addremove";
+        const string indexTree = "tag-" + indexName;
+        const string subjectTree = "aa-items-rwflag-ar";
+        TwoSiteClusterFixture.TreeModeOverrides[indexTree] = LatticeMergeMode.RwFlag;
+
+        // Site A adds then removes tag "red" (a remove-wins disable dot).
+        var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
+        await aTree.SetAsync("a", new byte[] { 1 });
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.RwFlag)).Create(aTree, indexName);
+        await aIdx.Key("a").AddAsync(["red"]);
+        await aIdx.Key("a").RemoveAsync(["red"]);
+
+        // Site B concurrently adds tag "red".
+        var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
+        await bTree.SetAsync("a", new byte[] { 1 });
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.RwFlag)).Create(bTree, indexName);
+        await bIdx.Key("a").AddAsync(["red"]);
+
+        await ReplayIndexEntriesIntoSiteBAsync(indexTree, expectedMin: 2);
+
+        // Remove-wins: Site A's concurrent disable dominates Site B's enable.
+        Assert.That(await CollectTagKeysAsync(bIdx.WithAnyTags("red")), Is.Empty);
+    }
+
+    [Test]
+    public async Task TagIndex_flag_membership_documented_config_does_not_fault_on_apply()
+    {
+        const string indexName = "aa-orflag-nofault";
+        const string indexTree = "tag-" + indexName;
+        const string subjectTree = "aa-items-nofault";
+        TwoSiteClusterFixture.TreeModeOverrides[indexTree] = LatticeMergeMode.OrFlag;
+
+        var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
+        await aTree.SetAsync("a", new byte[] { 1 });
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.OrFlag)).Create(aTree, indexName);
+        await aIdx.Key("a").AddAsync(["red", "round"]);
+
+        // Replaying every captured index-tree record through the receiver's
+        // typed apply must not throw (the helper asserts each Delta is
+        // non-null and applies it), which is the regression the fix closes:
+        // following the documented "declare the index tree under a flag merge
+        // mode" advice previously faulted because membership rows shipped a
+        // null delta.
+        Assert.That(
+            async () => await ReplayIndexEntriesIntoSiteBAsync(indexTree, expectedMin: 2),
+            Throws.Nothing);
+
+        // And the remote membership is now visible on Site B.
+        var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.OrFlag)).Create(bTree, indexName);
+        Assert.That(await CollectTagKeysAsync(bIdx.WithAnyTags("red")), Is.EqualTo(new[] { "a" }));
+    }
 }
