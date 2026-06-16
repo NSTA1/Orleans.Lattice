@@ -19,7 +19,7 @@ internal sealed partial class BPlusLeafGrain
     private Task PublishSetAsync(string key, LwwValue<byte[]> committed)
     {
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
-        var delta = LatticeDeltaContext.Current;
+        var delta = ResolvePublishDelta(key);
         var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
@@ -50,7 +50,7 @@ internal sealed partial class BPlusLeafGrain
     private Task PublishDeleteAsync(string key, LwwValue<byte[]> tombstone)
     {
         if (!mutationObservers.HasObservers) return Task.CompletedTask;
-        var delta = LatticeDeltaContext.Current;
+        var delta = ResolvePublishDelta(key);
         var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
@@ -70,5 +70,26 @@ internal sealed partial class BPlusLeafGrain
             ShardIndex = state.State.ShardIndex ?? 0,
         };
         return mutationObservers.PublishAsync(mutation);
+    }
+
+    /// <summary>
+    /// Resolves the author-delta to stamp onto the per-key mutation about to
+    /// be published. Prefers a per-entry delta supplied through
+    /// <see cref="LatticeAtomicBatchContext.CurrentDeltaMap"/> (the carry an
+    /// atomic-write saga uses to stamp a distinct typed CRDT delta on each
+    /// entry - for example a flag-CRDT membership row's enable-dot delta),
+    /// falling back to the saga-wide / single-write
+    /// <see cref="LatticeDeltaContext.Current"/> carry when no per-key delta
+    /// is present for <paramref name="key"/>. Keeps every non-saga and
+    /// saga-wide-only write byte-identical to the pre-existing behaviour.
+    /// </summary>
+    private static byte[]? ResolvePublishDelta(string key)
+    {
+        var deltaMap = LatticeAtomicBatchContext.CurrentDeltaMap;
+        if (deltaMap is not null && deltaMap.TryGetValue(key, out var perEntryDelta))
+        {
+            return perEntryDelta;
+        }
+        return LatticeDeltaContext.Current;
     }
 }

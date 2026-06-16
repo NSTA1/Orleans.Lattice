@@ -73,7 +73,7 @@ public static class LatticeAtomicBatchContext
     {
         var previous = Current;
         Current = batch;
-        return new Scope(previous, CurrentIndexMap, restoreMap: false);
+        return new Scope(previous, CurrentIndexMap, restoreMap: false, CurrentDeltaMap, restoreDeltaMap: false);
     }
 
     /// <summary>
@@ -125,13 +125,70 @@ public static class LatticeAtomicBatchContext
         var previousMap = CurrentIndexMap;
         Current = batch;
         CurrentIndexMap = indexMap;
-        return new Scope(previousBatch, previousMap, restoreMap: true);
+        return new Scope(previousBatch, previousMap, restoreMap: true, CurrentDeltaMap, restoreDeltaMap: false);
+    }
+
+    /// <summary>
+    /// Gets or sets the optional <c>key -> deltaBytes</c> map on the
+    /// ambient <see cref="RequestContext"/>. The map lets a single atomic
+    /// saga stamp a <em>different</em> author-delta onto each per-entry
+    /// emit, overriding the saga-wide <see cref="LatticeDeltaContext"/>
+    /// carry; the leaf publish helpers look each committed entry's key up
+    /// in this map and prefer its delta when present. Setting
+    /// <see langword="null"/> removes the key, matching the "no per-entry
+    /// delta" default under which the publish helpers read the saga-wide
+    /// <see cref="LatticeDeltaContext.Current"/> carry alone.
+    /// </summary>
+    public static IReadOnlyDictionary<string, byte[]>? CurrentDeltaMap
+    {
+        get => RequestContext.Get(LatticeEventConstants.AtomicBatchDeltaMapRequestContextKey)
+            as IReadOnlyDictionary<string, byte[]>;
+        set
+        {
+            if (value is null)
+            {
+                RequestContext.Remove(LatticeEventConstants.AtomicBatchDeltaMapRequestContextKey);
+            }
+            else
+            {
+                RequestContext.Set(
+                    LatticeEventConstants.AtomicBatchDeltaMapRequestContextKey,
+                    value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets <see cref="Current"/>, <see cref="CurrentIndexMap"/>, AND
+    /// <see cref="CurrentDeltaMap"/> for the lifetime of the returned
+    /// scope. Restores all three prior values on
+    /// <see cref="IDisposable.Dispose"/>. Used by the saga coordinator to
+    /// stamp the per-entry author-delta lookup table alongside the
+    /// <c>(Size, BaseIndex)</c> pair and the <c>key -> globalIndex</c> map
+    /// so the leaf commit path can stamp each entry's typed CRDT delta -
+    /// the carry flag-CRDT membership rows need to converge under a single
+    /// cross-tree atomic write.
+    /// </summary>
+    public static IDisposable With(
+        (int Size, int Index)? batch,
+        IReadOnlyDictionary<string, int>? indexMap,
+        IReadOnlyDictionary<string, byte[]>? deltaMap)
+    {
+        var previousBatch = Current;
+        var previousMap = CurrentIndexMap;
+        var previousDeltaMap = CurrentDeltaMap;
+        Current = batch;
+        CurrentIndexMap = indexMap;
+        CurrentDeltaMap = deltaMap;
+        return new Scope(previousBatch, previousMap, restoreMap: true, previousDeltaMap, restoreDeltaMap: true);
     }
 
     private sealed class Scope(
         (int Size, int Index)? previousBatch,
         IReadOnlyDictionary<string, int>? previousMap,
-        bool restoreMap) : IDisposable
+        bool restoreMap,
+        IReadOnlyDictionary<string, byte[]>? previousDeltaMap,
+        bool restoreDeltaMap) : IDisposable
     {
         private bool _disposed;
 
@@ -147,6 +204,10 @@ public static class LatticeAtomicBatchContext
             if (restoreMap)
             {
                 CurrentIndexMap = previousMap;
+            }
+            if (restoreDeltaMap)
+            {
+                CurrentDeltaMap = previousDeltaMap;
             }
         }
     }

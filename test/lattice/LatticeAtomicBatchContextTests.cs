@@ -16,6 +16,8 @@ public class LatticeAtomicBatchContextTests
     {
         // Clear any ambient value leaking from a previous test on this logical thread.
         LatticeAtomicBatchContext.Current = null;
+        LatticeAtomicBatchContext.CurrentIndexMap = null;
+        LatticeAtomicBatchContext.CurrentDeltaMap = null;
     }
 
     [Test]
@@ -132,5 +134,43 @@ public class LatticeAtomicBatchContextTests
         Assert.That(LatticeAtomicBatchContext.Current,
             Is.EqualTo(((int Size, int Index)?)(0, 0)));
         Assert.That(LatticeAtomicBatchContext.Current, Is.Not.Null);
+    }
+
+    [Test]
+    public void CurrentDeltaMap_defaults_to_null()
+    {
+        Assert.That(LatticeAtomicBatchContext.CurrentDeltaMap, Is.Null);
+    }
+
+    [Test]
+    public void With_delta_map_sets_and_restores_all_three_carries()
+    {
+        var indexMap = new Dictionary<string, int> { ["k"] = 7 };
+        var deltaMap = new Dictionary<string, byte[]> { ["k"] = [1, 2, 3] };
+
+        using (LatticeAtomicBatchContext.With((4, 1), indexMap, deltaMap))
+        {
+            Assert.That(LatticeAtomicBatchContext.Current,
+                Is.EqualTo(((int Size, int Index)?)(4, 1)));
+            Assert.That(LatticeAtomicBatchContext.CurrentIndexMap, Is.SameAs(indexMap));
+            Assert.That(LatticeAtomicBatchContext.CurrentDeltaMap, Is.SameAs(deltaMap));
+        }
+
+        Assert.That(LatticeAtomicBatchContext.Current, Is.Null);
+        Assert.That(LatticeAtomicBatchContext.CurrentIndexMap, Is.Null);
+        Assert.That(LatticeAtomicBatchContext.CurrentDeltaMap, Is.Null);
+    }
+
+    [Test]
+    public void With_null_delta_map_clears_the_carry_for_the_scope()
+    {
+        // A value-only saga passes a null delta map; the scope must remove the
+        // ambient key so the leaf publish helpers fall back to the saga-wide
+        // delta carry rather than reading a stale per-entry map.
+        using (LatticeAtomicBatchContext.With((2, 0), indexMap: null, deltaMap: null))
+        {
+            Assert.That(LatticeAtomicBatchContext.CurrentDeltaMap, Is.Null);
+        }
+        Assert.That(LatticeAtomicBatchContext.CurrentDeltaMap, Is.Null);
     }
 }

@@ -277,4 +277,50 @@ internal sealed class AtomicWriteState
     /// decodes to <see langword="null"/> (a standalone saga, no barrier).
     /// </summary>
     [Id(20)] public IReadOnlyList<string>? CrossTreeParticipants { get; set; }
+
+    /// <summary>
+    /// Optional per-entry author-delta carry aligned 1:1 with
+    /// <see cref="Entries"/>: <c>EntryDeltas[i]</c> is the opaque,
+    /// Orleans-serialised typed CRDT delta the producer staged for
+    /// <c>Entries[i]</c>, or <see langword="null"/> for that slot when the
+    /// entry was staged as a plain last-writer-wins value write (the common
+    /// case, and the only case the public <c>Set</c> / <c>SetWhere</c> builder
+    /// methods produce). The whole list is <see langword="null"/> when no
+    /// entry in the batch carried a delta.
+    /// <para>
+    /// Distinct from the saga-wide <see cref="Delta"/> (<c>Id</c>-10), which
+    /// stamps one identical delta onto <em>every</em> per-key emit. This slot
+    /// lets a single saga carry a <em>different</em> typed delta per entry,
+    /// which is what flag-CRDT membership rows need: each
+    /// <c>(tag, key)</c> row author its own enable-dot delta even though they
+    /// ride one cross-tree atomic write. The payload is opaque bytes (the
+    /// library never opens it); the receiver dispatches the apply on the
+    /// destination tree's <see cref="LatticeMergeMode"/>.
+    /// </para>
+    /// <para>
+    /// Capture-once: the deltas are minted by the producer before the saga
+    /// starts and persisted here on the first
+    /// <see cref="Grains.AtomicWriteGrain.PrepareForCoordinatorAsync"/>; a
+    /// reminder-driven replay reuses the persisted bytes verbatim and never
+    /// re-mints. When a per-entry delta is present the saga stamps it onto the
+    /// emitted <see cref="LatticeMutation.Delta"/> (overriding the saga-wide
+    /// <see cref="Delta"/>) so the entry's row converges by replaying the
+    /// author's intent rather than the post-merge bytes.
+    /// </para>
+    /// <para>
+    /// Compensation needs no byte-inverse for a minted flag enable: the
+    /// per-entry delta rides on a prepare-phase write (<c>IsPrepared</c>) that
+    /// is invisible to readers until the saga's terminal mark surfaces it, so
+    /// an aborting saga's <c>TxAbort</c> terminal drops the staged enable on
+    /// every cluster exactly as it drops the staged value write - the enable
+    /// dot never became visible and so requires no explicit disable.
+    /// </para>
+    /// <para>
+    /// Wire-compatible: a missing field on legacy persisted state decodes to
+    /// <see langword="null"/>, in which case every entry falls back to the
+    /// saga-wide <see cref="Delta"/> behaviour exactly as before this field
+    /// existed.
+    /// </para>
+    /// </summary>
+    [Id(21)] public List<byte[]?>? EntryDeltas { get; set; }
 }

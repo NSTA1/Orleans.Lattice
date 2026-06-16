@@ -550,21 +550,24 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     {
         var subject = SubjectTreeFor(treeId);
 
-        if (consistency == TagConsistency.Atomic && tags.Length > 0 && !FlagMode)
+        if (consistency == TagConsistency.Atomic && tags.Length > 0)
         {
             // The value write inside the saga registers the subject tree, so a
             // closed allowlist is still enforced but open-mode existence is not
             // pre-checked (the saga creates the tree atomically).
             //
-            // Atomic value+tags coupling is available only in LwwRegister
-            // membership mode: the cross-tree saga stages plain value writes
-            // and cannot author the typed flag-CRDT deltas a flag membership
-            // mode requires (a plain Set would ship a null WAL delta and fault
-            // the receiver's typed apply). Under OrFlag / RwFlag this falls
-            // through to the eventual path below - the value is written
-            // durably first, then the membership rows are authored as flag
-            // enables - so a flag-mode value+tags write is eventual, never
-            // atomic.
+            // Atomic value+tags coupling is honoured under every membership
+            // mode. In LwwRegister mode each membership row is staged as a
+            // plain value write (a null WAL delta is correct for the LWW
+            // presence path). In a flag membership mode (OrFlag / RwFlag) each
+            // membership row is staged with a freshly minted flag-enable delta:
+            // the staged value carries the merged flag state so a local read
+            // decodes presence without replaying the delta, while the attached
+            // typed delta rides the same atomic write so every other cluster
+            // converges the row by folding the author's enable dot (enable-wins
+            // under OrFlag, remove-wins under RwFlag). The value write on the
+            // subject tree stays a plain Set; only the index-tree membership
+            // rows carry deltas.
             CheckAllowlist(treeId);
             var opId = "tagval-" + Guid.NewGuid().ToString("N");
             var builder = _grainFactory.BeginAtomicWrite(opId)
@@ -573,21 +576,137 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             foreach (var tag in tags)
             {
                 ValidateTag(tag);
-                builder.Set(RowKey(tag, treeId, key), Flag);
-                builder.Set(KeyRowKey(treeId, key, tag), Flag);
+                var tagRow = RowKey(tag, treeId, key);
+                var keyRow = KeyRowKey(treeId, key, tag);
+                if (FlagMode)
+                {
+                    var (tagState, tagDelta) = await MintFlagEnableRowAsync(tagRow, cancellationToken).ConfigureAwait(false);
+                    var (keyState, keyDelta) = await MintFlagEnableRowAsync(keyRow, cancellationToken).ConfigureAwait(false);
+                    builder.SetWithDelta(tagRow, tagState, tagDelta);
+                    builder.SetWithDelta(keyRow, keyState, keyDelta);
+                }
+                else
+                {
+                    builder.Set(tagRow, Flag);
+                    builder.Set(keyRow, Flag);
+                }
             }
             await builder.CommitAsync(cancellationToken).ConfigureAwait(false);
             await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        // Eventual (or atomic with no tags, or any flag-membership mode): two
-        // independent durable writes.
+        // Eventual (or atomic with no tags): two independent durable writes.
         await subject.SetAsync(key, value, cancellationToken).ConfigureAwait(false);
         if (tags.Length > 0)
         {
             await AddTagsForKeyAsync(treeId, key, tags, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    // Mints a flag-enable for a single membership row under a flag membership
+    // mode, returning the pair (mergedStateBytes, enableDeltaBytes):
+    //  - mergedStateBytes is the serialised flag state after folding the freshly
+    //    minted enable dot into the row's current state, stored as the row's LWW
+    //    value so a local presence read decodes it without replaying the delta;
+    //  - enableDeltaBytes is the serialised typed OrFlagDelta / RwFlagDelta that
+    //    rides the atomic write so every other cluster converges the row by
+    //    folding the same enable dot.
+    // The enable dot is minted exactly once here and persisted verbatim on the
+    // saga's per-entry delta carry, so a reminder-driven saga replay reuses the
+    // identical dot and never authors a duplicate enable. An aborting saga drops
+    // the staged enable on every cluster exactly as it drops the staged value
+    // write (the enable never became visible), so a flag enable needs no
+    // byte-inverse disable for compensation.
+    private async Task<(byte[] State, byte[] Delta)> MintFlagEnableRowAsync(string rowKey, CancellationToken cancellationToken)
+    {
+        var replicaId = _replicaId!;
+        var bytes = await _indexTree.GetAsync(rowKey, cancellationToken).ConfigureAwait(false);
+        switch (_membershipMode)
+        {
+            case LatticeMergeMode.OrFlag:
+            {
+                var flag = bytes is null ? new OrFlag() : JsonLatticeSerializer<OrFlag>.Default.Deserialize(bytes);
+                var counter = NextOrFlagCounter(flag, replicaId);
+                var delta = new OrFlagDelta
+                {
+                    Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
+                    Disables = Array.Empty<OrSetDot>(),
+                };
+                flag.MergeDelta(delta);
+                return (
+                    JsonLatticeSerializer<OrFlag>.Default.Serialize(flag),
+                    JsonLatticeSerializer<OrFlagDelta>.Default.Serialize(delta));
+            }
+            case LatticeMergeMode.RwFlag:
+            {
+                var flag = bytes is null ? new RwFlag() : JsonLatticeSerializer<RwFlag>.Default.Deserialize(bytes);
+                var counter = NextRwFlagCounter(flag, replicaId);
+                var delta = new RwFlagDelta
+                {
+                    Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
+                    Disables = Array.Empty<OrSetDot>(),
+                    Tombstones = ObservedRwDisables(flag),
+                };
+                flag.MergeDelta(delta);
+                return (
+                    JsonLatticeSerializer<RwFlag>.Default.Serialize(flag),
+                    JsonLatticeSerializer<RwFlagDelta>.Default.Serialize(delta));
+            }
+            default:
+                throw new InvalidOperationException(
+                    $"MintFlagEnableRowAsync is only valid under a flag membership mode, not '{_membershipMode}'.");
+        }
+    }
+
+    // Highest counter observed for replicaId across an OrFlag's enable and
+    // tombstone dots, plus one. Mirrors OrFlagAccessor.NextCounter so an atomic
+    // enable mints the same monotonic dot the eventual path would.
+    private static long NextOrFlagCounter(OrFlag flag, string replicaId)
+    {
+        long max = 0;
+        foreach (var d in flag.Enables)
+        {
+            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
+        }
+        foreach (var d in flag.Tombstones)
+        {
+            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
+        }
+        return max + 1;
+    }
+
+    // Highest counter observed for replicaId across an RwFlag's enable, disable,
+    // and tombstone dots, plus one. Mirrors RwFlagAccessor.NextCounter.
+    private static long NextRwFlagCounter(RwFlag flag, string replicaId)
+    {
+        long max = 0;
+        foreach (var d in flag.Enables)
+        {
+            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
+        }
+        foreach (var d in flag.Disables)
+        {
+            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
+        }
+        foreach (var d in flag.Tombstones)
+        {
+            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
+        }
+        return max + 1;
+    }
+
+    // The currently observed disable dots an RwFlag enable cancels (remove-wins
+    // bookkeeping). Mirrors RwFlagAccessor.ObservedDisables.
+    private static OrSetDot[] ObservedRwDisables(RwFlag flag)
+    {
+        if (flag.Disables.Count == 0) return Array.Empty<OrSetDot>();
+        var observed = new OrSetDot[flag.Disables.Count];
+        for (var i = 0; i < flag.Disables.Count; i++)
+        {
+            observed[i] = flag.Disables[i];
+        }
+        return observed;
     }
 
     internal async Task<TagReconcileReport> ReconcileSubjectAsync(string treeId, string? startInclusive, string? endExclusive, CancellationToken cancellationToken)

@@ -25,7 +25,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
-- [F-104](https://github.com/NSTA1/Orleans.Lattice/issues/778) - Atomic value-plus-flag-membership coupling for tag indexes: additively honour `SetValueWithTags(...).Atomic()` under flag merge modes (per-entry saga deltas) so it no longer silently downgrades to eventual coupling
+- [F-105](https://github.com/NSTA1/Orleans.Lattice/issues/780) - Public generic CRDT-in-saga builder API: let any typed CRDT mutation ride a cross-tree atomic write (genericise F-104's per-entry delta carry)
 
 ### Shipped
 
@@ -113,6 +113,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-101](https://github.com/NSTA1/Orleans.Lattice/issues/764) - Observed-remove flag (enable-wins) CRDT primitive + OrFlag merge mode
 - [F-102](https://github.com/NSTA1/Orleans.Lattice/issues/767) - Remove-wins flag CRDT primitive + RwFlag merge mode
 - [F-103](https://github.com/NSTA1/Orleans.Lattice/issues/770) - Background reconciliation coordinator for tag indexes (digest-gated hourly sweeps, follow-on to #338)
+- [F-104](https://github.com/NSTA1/Orleans.Lattice/issues/778) - Atomic value-plus-flag-membership coupling for tag indexes: additively honour `SetValueWithTags(...).Atomic()` under flag merge modes (per-entry saga deltas) so it no longer silently downgrades to eventual coupling
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down
