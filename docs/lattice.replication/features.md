@@ -33,6 +33,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-152](https://github.com/NSTA1/Orleans.Lattice/issues/750) - DNS/SRV-backed replication peer discovery provider
 - [R-153](https://github.com/NSTA1/Orleans.Lattice/issues/751) - DANE/TLSA trust pinning for DNS-discovered replication peers
 - [R-154](https://github.com/NSTA1/Orleans.Lattice/issues/752) - Per-origin WAL record signing for relay authenticity
+- [R-155](https://github.com/NSTA1/Orleans.Lattice/issues/786) - Dedicated chaos coverage for CRDT-coupled cross-tree atomic writes (convergent-union under faults)
 
 ### Shipped
 
