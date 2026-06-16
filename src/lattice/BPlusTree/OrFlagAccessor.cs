@@ -69,15 +69,26 @@ public readonly record struct OrFlagAccessor
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         EnsureInitialised();
-        return MutateAsync(flag =>
-        {
-            var counter = NextCounter(flag, replicaId);
-            return new OrFlagDelta
-            {
-                Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
-                Disables = Array.Empty<OrSetDot>(),
-            };
-        }, cancellationToken, maxAttempts);
+        return MutateAsync(flag => EnableDelta(flag, replicaId), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages an enable as a <see cref="LatticeStagedCrdtWrite"/> for a
+    /// cross-tree atomic write instead of applying it now. The minted enable
+    /// dot is identical to <see cref="EnableAsync(string, CancellationToken, int)"/>'s;
+    /// add the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on an
+    /// OR-Flag-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="replicaId">The replica authoring the enable. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageEnableAsync(string replicaId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        return StageAsync(flag => EnableDelta(flag, replicaId), cancellationToken);
     }
 
     /// <summary>
@@ -88,27 +99,58 @@ public readonly record struct OrFlagAccessor
     public Task DisableAsync(CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         EnsureInitialised();
-        return MutateAsync(flag =>
+        return MutateAsync(DisableDelta, cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages a disable as a <see cref="LatticeStagedCrdtWrite"/> for a
+    /// cross-tree atomic write instead of applying it now. The tombstoned dots
+    /// are identical to <see cref="DisableAsync(CancellationToken, int)"/>'s;
+    /// add the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on an
+    /// OR-Flag-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageDisableAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureInitialised();
+        return StageAsync(DisableDelta, cancellationToken);
+    }
+
+    /// <summary>Mints the enable delta for <paramref name="replicaId"/> against <paramref name="flag"/>.</summary>
+    private static OrFlagDelta EnableDelta(OrFlag flag, string replicaId)
+    {
+        var counter = NextCounter(flag, replicaId);
+        return new OrFlagDelta
         {
-            OrSetDot[] observed;
-            if (flag.Enables.Count > 0)
+            Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
+            Disables = Array.Empty<OrSetDot>(),
+        };
+    }
+
+    /// <summary>Mints the disable delta tombstoning every enable dot observed in <paramref name="flag"/>.</summary>
+    private static OrFlagDelta DisableDelta(OrFlag flag)
+    {
+        OrSetDot[] observed;
+        if (flag.Enables.Count > 0)
+        {
+            observed = new OrSetDot[flag.Enables.Count];
+            for (var i = 0; i < flag.Enables.Count; i++)
             {
-                observed = new OrSetDot[flag.Enables.Count];
-                for (var i = 0; i < flag.Enables.Count; i++)
-                {
-                    observed[i] = flag.Enables[i];
-                }
+                observed[i] = flag.Enables[i];
             }
-            else
-            {
-                observed = Array.Empty<OrSetDot>();
-            }
-            return new OrFlagDelta
-            {
-                Enables = Array.Empty<OrSetDot>(),
-                Disables = observed,
-            };
-        }, cancellationToken, maxAttempts);
+        }
+        else
+        {
+            observed = Array.Empty<OrSetDot>();
+        }
+        return new OrFlagDelta
+        {
+            Enables = Array.Empty<OrSetDot>(),
+            Disables = observed,
+        };
     }
 
     /// <summary>
@@ -164,6 +206,23 @@ public readonly record struct OrFlagAccessor
 
     private static OrFlag Decode(byte[]? bytes) =>
         bytes is null ? new OrFlag() : JsonLatticeSerializer<OrFlag>.Default.Deserialize(bytes);
+
+    private async Task<LatticeStagedCrdtWrite> StageAsync(
+        Func<OrFlag, OrFlagDelta> mint,
+        CancellationToken cancellationToken)
+    {
+        // Mint-once: a single read of the current state mints the typed delta,
+        // folds it into the snapshot to produce the merged state, and serialises
+        // both. No ApplyCrdtDeltaAsync is issued here - the cross-tree saga
+        // performs the durable write and replays the persisted delta verbatim.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mint(snapshot);
+        snapshot.MergeDelta(delta);
+        var value = JsonLatticeSerializer<OrFlag>.Default.Serialize(snapshot);
+        var deltaBytes = JsonLatticeSerializer<OrFlagDelta>.Default.Serialize(delta);
+        return new LatticeStagedCrdtWrite(_key, value, deltaBytes);
+    }
 
     private void EnsureInitialised()
     {

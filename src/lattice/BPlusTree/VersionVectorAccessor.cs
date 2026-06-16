@@ -48,14 +48,36 @@ public readonly record struct VersionVectorAccessor
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         EnsureInitialised();
-        return MutateAsync(v =>
+        return MutateAsync(v => TickDelta(v, replicaId), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages a tick as a <see cref="LatticeStagedCrdtWrite"/> for a cross-tree
+    /// atomic write instead of applying it now. The advanced clock is identical
+    /// to <see cref="TickAsync(string, CancellationToken, int)"/>'s; add the
+    /// returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// version-vector-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="replicaId">The replica whose entry advances. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageTickAsync(string replicaId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        return StageAsync(v => TickDelta(v, replicaId), cancellationToken);
+    }
+
+    /// <summary>Mints the tick delta advancing <paramref name="replicaId"/>'s entry in <paramref name="v"/>.</summary>
+    private static VersionVectorDelta TickDelta(VersionVector v, string replicaId)
+    {
+        var clock = v.Tick(replicaId);
+        return new VersionVectorDelta
         {
-            var clock = v.Tick(replicaId);
-            return new VersionVectorDelta
-            {
-                Entries = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { [replicaId] = clock },
-            };
-        }, cancellationToken, maxAttempts);
+            Entries = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { [replicaId] = clock },
+        };
     }
 
     /// <summary>Merges <paramref name="other"/> into the stored state under CAS.</summary>
@@ -95,6 +117,25 @@ public readonly record struct VersionVectorAccessor
 
     private static VersionVector Decode(byte[]? bytes) =>
         bytes is null ? new VersionVector() : JsonLatticeSerializer<VersionVector>.Default.Deserialize(bytes);
+
+    private async Task<LatticeStagedCrdtWrite> StageAsync(
+        Func<VersionVector, VersionVectorDelta> mint,
+        CancellationToken cancellationToken)
+    {
+        // Mint-once: a single read mints the typed delta, folds it into the
+        // snapshot to produce the merged state, and serialises both. The mint
+        // closure advances the snapshot's entry and the delta carries the same
+        // clock, so the follow-up MergeDelta is an idempotent pointwise-max. No
+        // ApplyCrdtDeltaAsync is issued here - the cross-tree saga performs the
+        // durable write and replays the persisted delta verbatim.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mint(snapshot);
+        snapshot.MergeDelta(delta);
+        var value = JsonLatticeSerializer<VersionVector>.Default.Serialize(snapshot);
+        var deltaBytes = JsonLatticeSerializer<VersionVectorDelta>.Default.Serialize(delta);
+        return new LatticeStagedCrdtWrite(_key, value, deltaBytes);
+    }
 
     private void EnsureInitialised()
     {

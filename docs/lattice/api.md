@@ -1111,6 +1111,7 @@ commits them as one cross-tree saga:
 | `Set` | `LatticeAtomicWriteBuilder Set(string key, byte[] value)` |
 | `Set<T>` | `LatticeAtomicWriteBuilder Set<T>(string key, T value, ILatticeSerializer<T> serializer)` |
 | `Set<T>` (default serializer) | `LatticeAtomicWriteBuilder Set<T>(string key, T value)` |
+| `Set` (staged CRDT) | `LatticeAtomicWriteBuilder Set(LatticeStagedCrdtWrite staged)` |
 | `SetWhere<T>` | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer)` |
 | `SetWhere<T>` (default serializer) | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate)` |
 | `CommitAsync` | `Task<CrossTreeAtomicWriteOutcome> CommitAsync(CancellationToken = default)` |
@@ -1122,9 +1123,24 @@ when a guard failed and nothing committed on any tree. It throws
 `InvalidOperationException` if a write fails (after the saga compensates) or if
 the same `operationId` is re-submitted with a different tree-set or key-set.
 Supporting public types: `LatticeTreeBatch` (per-tree slice: `TreeId`,
-`Entries`, optional `Predicate`) and the `CrossTreeAtomicWriteOutcome` enum
-(`Committed`, `PreconditionFailed`). See
+`Entries`, optional `Predicate`), the `CrossTreeAtomicWriteOutcome` enum
+(`Committed`, `PreconditionFailed`), and `LatticeStagedCrdtWrite` (the
+client-side staging token a CRDT accessor's `Stage*` method returns; see
+[CRDT value-surface accessors](#crdt-value-surface-accessors)). See
 [Atomic Writes - Cross-tree atomic writes](atomic-writes.md#cross-tree-multi-tree-atomic-writes).
+
+The `Set(LatticeStagedCrdtWrite)` overload couples a typed CRDT mutation
+(prepared by a CRDT accessor's `Stage*` method) into the cross-tree saga
+so it commits all-or-nothing alongside sibling LWW writes. The
+`ForTree(...)` it is added under must be the same CRDT-mode tree the
+accessor was obtained from. The staged merged state is stored and
+replicated last-writer-wins by HLC; the prepared/terminal replication
+path does not yet fold the staged typed delta on the receiver, so
+concurrent same-key writes from multiple clusters reconcile by LWW of
+their merged states rather than by the per-replica union (use the live
+accessor mutators outside an atomic write when you need typed-delta
+convergence under concurrent multi-writer load). See
+[Atomic Writes - Coupling a CRDT mutation into an atomic write](atomic-writes.md#coupling-a-crdt-mutation-into-an-atomic-write).
 
 ## CRDT value-surface accessors
 
@@ -1264,6 +1280,38 @@ await tree.RwFlag("access/order:42").DisableAsync(replicaId: "siloB");
 | `RwFlagAccessor` | `Task EnableAsync(string replicaId)` | Mints a fresh enable dot and tombstones every disable dot currently observed. A concurrent disable the enabler never saw still suppresses the flag (remove-wins). |
 | `RwFlagAccessor` | `Task DisableAsync(string replicaId)` | Mints a fresh disable dot. Additive - the disable survives until an enable observes and tombstones it. |
 | `RwFlagAccessor` | `Task MergeAsync(RwFlag other)` | Merges `other` into the stored state under CAS. |
+
+Each accessor also exposes a `Stage*` counterpart for every live
+mutator. A `Stage*` method reads the key's current snapshot once, mints
+the typed CRDT delta **once** (the same dot-minting logic the live
+mutator uses), folds the delta into the snapshot to produce the merged
+state, and returns a `LatticeStagedCrdtWrite` carrying the key, the
+serialized merged state, and the serialized typed delta. It performs no
+durable write - hand the token to
+`LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)` under the
+matching CRDT-mode tree so the mutation rides a cross-tree atomic write.
+See [Atomic Writes - Coupling a CRDT mutation into an atomic write](atomic-writes.md#coupling-a-crdt-mutation-into-an-atomic-write).
+
+| Accessor | Staging method |
+|----------|----------------|
+| `OrSetAccessor` | `Task<LatticeStagedCrdtWrite> StageAddAsync(byte[] element, string replicaId, CancellationToken = default)` |
+| `OrSetAccessor` | `Task<LatticeStagedCrdtWrite> StageRemoveAsync(byte[] element, CancellationToken = default)` |
+| `PnCounterAccessor` | `Task<LatticeStagedCrdtWrite> StageIncrementAsync(string replicaId, long amount = 1, CancellationToken = default)` |
+| `PnCounterAccessor` | `Task<LatticeStagedCrdtWrite> StageDecrementAsync(string replicaId, long amount = 1, CancellationToken = default)` |
+| `VersionVectorAccessor` | `Task<LatticeStagedCrdtWrite> StageTickAsync(string replicaId, CancellationToken = default)` |
+| `MvRegisterAccessor<T>` | `Task<LatticeStagedCrdtWrite> StageSetAsync(T value, string replicaId, CancellationToken = default)` |
+| `RgaAccessor<T>` | `Task<LatticeStagedCrdtWrite> StageInsertAtAsync(int index, string replicaId, T value, CancellationToken = default)` |
+| `RgaAccessor<T>` | `Task<LatticeStagedCrdtWrite> StageInsertAfterAsync(OrSetDot parentDot, string replicaId, T value, CancellationToken = default)` |
+| `RgaAccessor<T>` | `Task<LatticeStagedCrdtWrite> StageRemoveAtAsync(int index, CancellationToken = default)` |
+| `RgaAccessor<T>` | `Task<LatticeStagedCrdtWrite> StageRemoveAsync(OrSetDot dot, CancellationToken = default)` |
+| `OrFlagAccessor` | `Task<LatticeStagedCrdtWrite> StageEnableAsync(string replicaId, CancellationToken = default)` |
+| `OrFlagAccessor` | `Task<LatticeStagedCrdtWrite> StageDisableAsync(CancellationToken = default)` |
+| `RwFlagAccessor` | `Task<LatticeStagedCrdtWrite> StageEnableAsync(string replicaId, CancellationToken = default)` |
+| `RwFlagAccessor` | `Task<LatticeStagedCrdtWrite> StageDisableAsync(string replicaId, CancellationToken = default)` |
+
+`LatticeStagedCrdtWrite` is a client-side staging token (`Key`,
+`Value`, `Delta`) consumed synchronously by the atomic-write builder. It
+never crosses the wire and is not an Orleans-serializable type.
 
 Mutating methods retry on CAS failure up to a per-call budget
 (default `OrSetAccessor.DefaultMaxAttempts` /

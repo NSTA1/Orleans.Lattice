@@ -63,19 +63,28 @@ public readonly record struct OrSetAccessor
         ArgumentNullException.ThrowIfNull(element);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         EnsureInitialised();
-        return MutateAsync(set =>
-        {
-            var counter = NextCounter(set, replicaId);
-            // Do not mutate the local snapshot - the leaf grain folds
-            // the typed delta authoritatively, and any local mutation
-            // here would be discarded after the ApplyCrdtDeltaAsync
-            // round trip.
-            return new OrSetDelta
-            {
-                Adds = new[] { new OrSetDeltaDot { Element = element, ReplicaId = replicaId, Counter = counter } },
-                Removes = Array.Empty<OrSetDeltaDot>(),
-            };
-        }, cancellationToken, maxAttempts);
+        return MutateAsync(set => AddDelta(set, element, replicaId), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages an add as a <see cref="LatticeStagedCrdtWrite"/> for a cross-tree
+    /// atomic write instead of applying it now. The minted add dot is identical
+    /// to <see cref="AddAsync(byte[], string, CancellationToken, int)"/>'s; add
+    /// the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on an
+    /// OR-Set-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="element">The element bytes to add. Must not be <c>null</c>.</param>
+    /// <param name="replicaId">The replica authoring the add. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageAddAsync(byte[] element, string replicaId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        return StageAsync(set => AddDelta(set, element, replicaId), cancellationToken);
     }
 
     /// <summary>
@@ -87,35 +96,66 @@ public readonly record struct OrSetAccessor
     {
         ArgumentNullException.ThrowIfNull(element);
         EnsureInitialised();
-        return MutateAsync(set =>
+        return MutateAsync(set => RemoveDelta(set, element), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages a remove as a <see cref="LatticeStagedCrdtWrite"/> for a cross-tree
+    /// atomic write instead of applying it now. The tombstoned dots are identical
+    /// to <see cref="RemoveAsync(byte[], CancellationToken, int)"/>'s; add the
+    /// returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on an
+    /// OR-Set-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="element">The element bytes to remove. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageRemoveAsync(byte[] element, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        EnsureInitialised();
+        return StageAsync(set => RemoveDelta(set, element), cancellationToken);
+    }
+
+    /// <summary>Mints the add delta for <paramref name="element"/> from <paramref name="replicaId"/> against <paramref name="set"/>.</summary>
+    private static OrSetDelta AddDelta(OrSet set, byte[] element, string replicaId)
+    {
+        var counter = NextCounter(set, replicaId);
+        return new OrSetDelta
         {
-            var key = Convert.ToBase64String(element);
-            OrSetDeltaDot[] observed;
-            if (set.Adds.TryGetValue(key, out var dots) && dots.Count > 0)
+            Adds = new[] { new OrSetDeltaDot { Element = element, ReplicaId = replicaId, Counter = counter } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+    }
+
+    /// <summary>Mints the remove delta tombstoning every dot observed for <paramref name="element"/> in <paramref name="set"/>.</summary>
+    private static OrSetDelta RemoveDelta(OrSet set, byte[] element)
+    {
+        var key = Convert.ToBase64String(element);
+        OrSetDeltaDot[] observed;
+        if (set.Adds.TryGetValue(key, out var dots) && dots.Count > 0)
+        {
+            observed = new OrSetDeltaDot[dots.Count];
+            for (var i = 0; i < dots.Count; i++)
             {
-                observed = new OrSetDeltaDot[dots.Count];
-                for (var i = 0; i < dots.Count; i++)
+                observed[i] = new OrSetDeltaDot
                 {
-                    observed[i] = new OrSetDeltaDot
-                    {
-                        Element = element,
-                        ReplicaId = dots[i].ReplicaId,
-                        Counter = dots[i].Counter,
-                    };
-                }
+                    Element = element,
+                    ReplicaId = dots[i].ReplicaId,
+                    Counter = dots[i].Counter,
+                };
             }
-            else
-            {
-                observed = Array.Empty<OrSetDeltaDot>();
-            }
-            // Do not mutate the local snapshot - the leaf grain folds
-            // the typed delta authoritatively.
-            return new OrSetDelta
-            {
-                Adds = Array.Empty<OrSetDeltaDot>(),
-                Removes = observed,
-            };
-        }, cancellationToken, maxAttempts);
+        }
+        else
+        {
+            observed = Array.Empty<OrSetDeltaDot>();
+        }
+        return new OrSetDelta
+        {
+            Adds = Array.Empty<OrSetDeltaDot>(),
+            Removes = observed,
+        };
     }
 
     /// <summary>Returns <c>true</c> when <paramref name="element"/> is currently a member of the set.</summary>
@@ -216,6 +256,23 @@ public readonly record struct OrSetAccessor
 
     private static OrSet Decode(byte[]? bytes) =>
         bytes is null ? new OrSet() : JsonLatticeSerializer<OrSet>.Default.Deserialize(bytes);
+
+    private async Task<LatticeStagedCrdtWrite> StageAsync(
+        Func<OrSet, OrSetDelta> mint,
+        CancellationToken cancellationToken)
+    {
+        // Mint-once: a single read mints the typed delta, folds it into the
+        // snapshot to produce the merged state, and serialises both. No
+        // ApplyCrdtDeltaAsync is issued here - the cross-tree saga performs the
+        // durable write and replays the persisted delta verbatim.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mint(snapshot);
+        snapshot.MergeDelta(delta);
+        var value = JsonLatticeSerializer<OrSet>.Default.Serialize(snapshot);
+        var deltaBytes = JsonLatticeSerializer<OrSetDelta>.Default.Serialize(delta);
+        return new LatticeStagedCrdtWrite(_key, value, deltaBytes);
+    }
 
     private void EnsureInitialised()
     {
