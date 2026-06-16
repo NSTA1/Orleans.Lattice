@@ -228,7 +228,7 @@ internal sealed class LatticeCrossTreeTxGrain(
             var p = participants[i];
             var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{p.TreeId}/{OperationId}");
             voteTasks[i] = saga.PrepareForCoordinatorAsync(
-                p.TreeId, p.Entries, p.Predicate, OperationId, participantTreeIds);
+                p.TreeId, p.Entries, p.Predicate, OperationId, participantTreeIds, p.EntryDeltas);
         }
 
         CrossTreePrepareVote[] votes;
@@ -378,11 +378,29 @@ internal sealed class LatticeCrossTreeTxGrain(
                 entries.Add(new KeyValuePair<string, byte[]>(key, (byte[])value.Clone()));
             }
 
+            // Carry the optional per-entry author-delta list (flag-CRDT
+            // membership rows) verbatim, aligned 1:1 with the cloned entries.
+            // Defensively copied so the persisted participant never aliases the
+            // caller's list/buffers. Null when the batch supplied no deltas
+            // (every plain Set / SetWhere batch), which keeps a value-only
+            // cross-tree write byte-identical to the pre-existing path.
+            List<byte[]?>? entryDeltas = null;
+            if (batch.EntryDeltas is { } sourceDeltas && sourceDeltas.Exists(static d => d is not null))
+            {
+                entryDeltas = new List<byte[]?>(entries.Count);
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    var delta = i < sourceDeltas.Count ? sourceDeltas[i] : null;
+                    entryDeltas.Add(delta is null ? null : (byte[])delta.Clone());
+                }
+            }
+
             result.Add(new CrossTreeParticipant
             {
                 TreeId = batch.TreeId,
                 Entries = entries,
                 Predicate = batch.Predicate,
+                EntryDeltas = entryDeltas,
             });
         }
 

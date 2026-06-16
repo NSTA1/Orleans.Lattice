@@ -34,4 +34,20 @@ internal sealed class CrossTreeParticipant
     /// <see langword="null"/> while the prepare dispatch is still in flight.
     /// </summary>
     [Id(3)] public CrossTreePrepareVote? Vote { get; set; }
+
+    /// <summary>
+    /// Optional per-entry author-delta carry aligned 1:1 with
+    /// <see cref="Entries"/>: <c>EntryDeltas[i]</c> is the opaque,
+    /// Orleans-serialised typed CRDT delta to stamp onto the per-key emit for
+    /// <c>Entries[i]</c>, or <see langword="null"/> for a plain
+    /// last-writer-wins value write. The whole list is <see langword="null"/>
+    /// when no entry on this slice carries a delta (the common case). A
+    /// defensive copy taken by the coordinator alongside <see cref="Entries"/>,
+    /// then forwarded to the per-tree sub-saga's
+    /// <see cref="Grains.AtomicWriteGrain.PrepareForCoordinatorAsync"/> so each
+    /// flag-CRDT membership row converges by replaying the author's enable-dot
+    /// delta. Wire-compatible: a missing field on legacy persisted state
+    /// decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(4)] public List<byte[]?>? EntryDeltas { get; set; }
 }

@@ -57,7 +57,30 @@ public sealed class LatticeAtomicWriteBuilder
     {
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
-        Current().Entries.Add(new KeyValuePair<string, byte[]>(key, value));
+        var slice = Current();
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, value));
+        slice.EntryDeltas.Add(null);
+        return this;
+    }
+
+    /// <summary>
+    /// Stages a raw <paramref name="value"/> write for <paramref name="key"/> on
+    /// the current tree, attaching an opaque, already-serialised typed CRDT
+    /// <paramref name="delta"/> that rides the atomic write alongside the value.
+    /// The receiver applies the delta to the addressed key by its merge mode
+    /// (the flag-CRDT membership-row path mints an enable-dot delta this way),
+    /// while the locally stored value carries the merged CRDT state so local
+    /// reads decode without replaying the delta. Internal: the public surface
+    /// stages value-only entries; only the built-in tag index attaches deltas.
+    /// </summary>
+    internal LatticeAtomicWriteBuilder SetWithDelta(string key, byte[] value, byte[] delta)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(delta);
+        var slice = Current();
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, value));
+        slice.EntryDeltas.Add(delta);
         return this;
     }
 
@@ -69,7 +92,9 @@ public sealed class LatticeAtomicWriteBuilder
     {
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(serializer);
-        Current().Entries.Add(new KeyValuePair<string, byte[]>(key, serializer.Serialize(value)));
+        var slice = Current();
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, serializer.Serialize(value)));
+        slice.EntryDeltas.Add(null);
         return this;
     }
 
@@ -103,6 +128,7 @@ public sealed class LatticeAtomicWriteBuilder
         }
         slice.Predicate = ir;
         slice.Entries.Add(new KeyValuePair<string, byte[]>(key, serializer.Serialize(value)));
+        slice.EntryDeltas.Add(null);
         return this;
     }
 
@@ -120,7 +146,14 @@ public sealed class LatticeAtomicWriteBuilder
         var batches = new List<LatticeTreeBatch>(_slices.Count);
         foreach (var slice in _slices)
         {
-            batches.Add(new LatticeTreeBatch(slice.TreeId, slice.Entries, slice.Predicate));
+            // Forward the per-entry delta carry only when at least one entry on
+            // the slice attached a typed CRDT delta (the flag-CRDT membership
+            // path). A value-only slice forwards a null carry so the cross-tree
+            // write stays byte-identical to the pre-existing path.
+            var entryDeltas = slice.EntryDeltas.Exists(static d => d is not null)
+                ? slice.EntryDeltas
+                : null;
+            batches.Add(new LatticeTreeBatch(slice.TreeId, slice.Entries, slice.Predicate, entryDeltas));
         }
         return _factory.SetManyAtomicAsync(batches, _operationId, cancellationToken);
     }
@@ -133,6 +166,7 @@ public sealed class LatticeAtomicWriteBuilder
     {
         public string TreeId { get; } = treeId;
         public List<KeyValuePair<string, byte[]>> Entries { get; } = [];
+        public List<byte[]?> EntryDeltas { get; } = [];
         public LatticePredicateNode? Predicate { get; set; }
     }
 }

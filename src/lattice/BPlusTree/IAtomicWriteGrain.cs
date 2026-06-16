@@ -86,12 +86,24 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     /// onto every per-shard terminal record (<see cref="WalRecord.CrossTreeParticipants"/>)
     /// so the receiver-side cross-tree visibility barrier can scope its wait set.
     /// </param>
+    /// <param name="entryDeltas">
+    /// Optional per-entry author-delta carry aligned 1:1 with
+    /// <paramref name="entries"/>: <c>entryDeltas[i]</c> is the opaque,
+    /// Orleans-serialised typed CRDT delta to stamp onto the per-key emit for
+    /// <c>entries[i]</c> (overriding the saga-wide delta carry), or
+    /// <see langword="null"/> for a plain last-writer-wins value write. The
+    /// whole argument is <see langword="null"/> when no entry carries a delta
+    /// (every <c>Set</c> / <c>SetWhere</c> batch). Captured once on the first
+    /// prepare and persisted so a reminder-driven replay reuses the bytes
+    /// verbatim without re-minting.
+    /// </param>
     Task<CrossTreePrepareVote> PrepareForCoordinatorAsync(
         string treeId,
         List<KeyValuePair<string, byte[]>> entries,
         LatticePredicateNode? predicate,
         string coordinatorKey,
-        IReadOnlyList<string> participants);
+        IReadOnlyList<string> participants,
+        List<byte[]?>? entryDeltas = null);
 
     /// <summary>
     /// Finalizes a sub-saga previously paused by

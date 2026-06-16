@@ -151,6 +151,23 @@ public static class LatticeEventConstants
     internal const string AtomicBatchIndexMapRequestContextKey = "ol.batch.idx";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry an optional
+    /// per-saga <c>key -> deltaBytes</c> map alongside the
+    /// <see cref="AtomicBatchRequestContextKey"/> <c>(Size, BaseIndex)</c>
+    /// pair. The map lets a single atomic-write saga stamp a
+    /// <em>different</em> author-delta onto each per-entry emit (overriding
+    /// the saga-wide <see cref="LatticeDeltaContext"/> carry) so flag-CRDT
+    /// membership rows can each ride one cross-tree atomic write with their
+    /// own enable-dot delta. The leaf-side publish helpers look each
+    /// committed entry's key up in this map and prefer the per-key delta when
+    /// present, falling back to the saga-wide carry otherwise. Absent on
+    /// non-saga writes and on saga writes whose entries all stage plain
+    /// last-writer-wins values. Internal - set through
+    /// <see cref="LatticeAtomicBatchContext"/>.
+    /// </summary>
+    internal const string AtomicBatchDeltaMapRequestContextKey = "ol.batch.delta";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the saga's
     /// authoritative touched-shard count from the
     /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator

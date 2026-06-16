@@ -1601,12 +1601,16 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
   `LatticeMergeMode` in `LatticeReplicationOptions.ReplicatedTrees`; the
   background reconciliation coordinator auto-detects the same mode
   server-side from the replication-configuration seam, so its orphan
-  cleanup also authors flag disables. Under a flag mode, `SetValueWithTags(...).Atomic()`
-  degrades to eventual coupling between the value and its tag rows (the
-  cross-tree saga stages plain value writes and cannot carry the typed
-  flag deltas), so the value is written durably first and the tag rows
-  follow as flag enables. Flag membership reads scan and decode row values
-  (the LWW path scans keys only), the documented cost of convergent
+  cleanup also authors flag disables. Under a flag mode,
+  `SetValueWithTags(...).Atomic()` honours the all-or-nothing coupling
+  between the value and its tag rows: the cross-tree saga stages each
+  membership row with a freshly minted flag-enable delta (and stores the
+  merged flag state as the row value), so the value and its membership
+  rows become visible together and every other cluster converges each row
+  by replaying the author's enable dot (enable-wins under `OrFlag`,
+  remove-wins under `RwFlag`). The value write on the subject tree stays a
+  plain last-writer-wins set. Flag membership reads scan and decode row
+  values (the LWW path scans keys only), the documented cost of convergent
   membership.
 - **Reserved characters.** Neither a tag nor a tree id may contain the
   NUL (`\0`) separator. The covered-tree set surfaced by the multi-tree

@@ -350,7 +350,8 @@ internal sealed class AtomicWriteGrain(
         List<KeyValuePair<string, byte[]>> entries,
         LatticePredicateNode? predicate,
         string coordinatorKey,
-        IReadOnlyList<string> participants)
+        IReadOnlyList<string> participants,
+        List<byte[]?>? entryDeltas = null)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entries);
@@ -401,6 +402,15 @@ internal sealed class AtomicWriteGrain(
             state.State.Guard = predicate;
             state.State.ExternalAuthorityKey = coordinatorKey;
             state.State.CrossTreeParticipants = participants.Count > 0 ? participants : null;
+            // Capture the per-entry author-delta carry (flag-CRDT membership
+            // rows) once, before Prepare, so a reminder-driven replay reuses
+            // the persisted, already-minted deltas verbatim and never re-mints.
+            // Stored only when at least one entry carried a delta; a value-only
+            // batch leaves the slot null and every entry falls back to the
+            // saga-wide delta carry.
+            state.State.EntryDeltas = entryDeltas is not null && entryDeltas.Exists(static d => d is not null)
+                ? entryDeltas
+                : null;
             await RegisterKeepaliveAsync();
             await PrepareAsync(treeId, entries);
         }
@@ -2298,11 +2308,26 @@ internal sealed class AtomicWriteGrain(
                 // LatticeGrain.SetManyAsync's shard-bucketing fan-out.
                 var slice = new List<KeyValuePair<string, byte[]>>(remaining);
                 var indexMap = new Dictionary<string, int>(remaining);
+                // Per-entry author-delta map (key -> deltaBytes), built only
+                // when the saga persisted per-entry deltas (flag-CRDT
+                // membership rows riding a cross-tree atomic write). Aligned
+                // 1:1 with Entries by global index; null slots (plain LWW
+                // value writes, the common case) are skipped so a value-only
+                // batch produces a null map and the leaf publish helpers fall
+                // back to the saga-wide delta carry exactly as before.
+                Dictionary<string, byte[]>? deltaMap = null;
+                var entryDeltas = state.State.EntryDeltas;
                 for (var i = startIndex; i < totalEntries; i++)
                 {
                     var entry = state.State.Entries[i];
                     slice.Add(entry);
                     indexMap[entry.Key] = i;
+                    if (entryDeltas is not null
+                        && i < entryDeltas.Count
+                        && entryDeltas[i] is { } perEntryDelta)
+                    {
+                        (deltaMap ??= new Dictionary<string, byte[]>(remaining, StringComparer.Ordinal))[entry.Key] = perEntryDelta;
+                    }
                 }
 
                 Exception? batchFailure = null;
@@ -2370,7 +2395,8 @@ internal sealed class AtomicWriteGrain(
                     // position does not equal saga-global position).
                     using (LatticeAtomicBatchContext.With(
                         (state.State.AtomicBatchSize, startIndex),
-                        indexMap))
+                        indexMap,
+                        deltaMap))
                     {
                         await lattice.SetManyAsync(slice).ConfigureAwait(true);
                     }

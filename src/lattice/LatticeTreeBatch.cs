@@ -14,8 +14,9 @@ namespace Orleans.Lattice;
 /// <para>
 /// <b>Mutability / safe-copy.</b> This type carries mutable reference-typed
 /// members (the <see cref="Entries"/> list, each entry's value <c>byte[]</c>,
-/// and the optional mutable <see cref="LatticePredicateNode"/>
-/// <see cref="Predicate"/>), so it is deliberately <b>not</b> marked
+/// the optional mutable <see cref="LatticePredicateNode"/>
+/// <see cref="Predicate"/>, and the optional <see cref="EntryDeltas"/> list of
+/// per-entry delta buffers), so it is deliberately <b>not</b> marked
 /// <c>[Immutable]</c>. Orleans elides the same-silo deep copy on any
 /// <c>[Immutable]</c> type, which would alias the caller's list and buffers
 /// straight into the coordinator grain's persisted state; leaving the type
@@ -23,10 +24,20 @@ namespace Orleans.Lattice;
 /// boundary. The non-aliasing contract is pinned by
 /// <c>ImmutableRecordCopyAliasingTests</c>.
 /// </para>
+/// <para>
+/// <b>Per-entry deltas.</b> <see cref="EntryDeltas"/> (when non-null) is
+/// aligned 1:1 with <see cref="Entries"/>: <c>EntryDeltas[i]</c> is the
+/// opaque, Orleans-serialised typed CRDT delta to ride the atomic write for
+/// <c>Entries[i]</c>, or <see langword="null"/> for a plain last-writer-wins
+/// value write. The public <c>Set</c> / <c>SetWhere</c> builder methods leave
+/// it <see langword="null"/>; only the internal flag-CRDT membership staging
+/// path populates it.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeTreeBatch)]
 public readonly record struct LatticeTreeBatch(
     [property: Id(0)] string TreeId,
     [property: Id(1)] List<KeyValuePair<string, byte[]>> Entries,
-    [property: Id(2)] LatticePredicateNode? Predicate = null);
+    [property: Id(2)] LatticePredicateNode? Predicate = null,
+    [property: Id(3)] List<byte[]?>? EntryDeltas = null);

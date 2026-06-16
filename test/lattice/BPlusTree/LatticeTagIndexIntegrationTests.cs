@@ -623,21 +623,169 @@ public class LatticeTagIndexIntegrationTests
     }
 
     [Test]
-    public async Task OrFlag_membership_SetValueWithTags_atomic_degrades_to_eventual_but_writes_value_and_tags()
+    public async Task OrFlag_membership_SetValueWithTags_atomic_couples_value_and_membership_rows()
     {
         var sfx = Guid.NewGuid().ToString("N");
-        var tree = Tree($"items-{sfx}");
+        var treeId = $"items-{sfx}";
+        var indexName = $"colors-{sfx}";
+        var tree = Tree(treeId);
         var idx = new DefaultLatticeTagIndexFactory(
             _cluster.GrainFactory,
             FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
-            .Create(tree, $"colors-{sfx}");
+            .Create(tree, indexName);
 
-        // Under a flag membership mode the cross-tree atomic saga cannot stage
-        // typed flag deltas, so Atomic() degrades to eventual; the value and
-        // tags must still both land.
+        // Under a flag membership mode the atomic value+tags write couples the
+        // value and its membership rows all-or-nothing: each membership row is
+        // staged with a freshly minted flag-enable delta rather than a plain
+        // presence write, so the value and tags land together.
         await idx.SetValueWithTags("c", Bytes("v"), "blue", "small").Atomic().CommitAsync();
 
         Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v")));
         Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue", "small" }));
+
+        // The atomic path took the flag-delta route, not a plain presence write:
+        // each membership row stores a serialised flag state carrying exactly one
+        // enable dot authored by the local replica.
+        var indexTree = Tree($"tag-{indexName}");
+        var blueRow = await indexTree.OrFlag($"blue\0{treeId}\0c").GetAsync();
+        Assert.That(blueRow.IsEnabled, Is.True);
+        Assert.That(blueRow.Enables, Has.Count.EqualTo(1));
+        Assert.That(blueRow.Enables[0].ReplicaId, Is.EqualTo("site-a"));
+        var smallRow = await indexTree.OrFlag($"small\0{treeId}\0c").GetAsync();
+        Assert.That(smallRow.IsEnabled, Is.True);
+        Assert.That(smallRow.Enables, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RwFlag_membership_SetValueWithTags_atomic_couples_value_and_membership_rows()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var treeId = $"items-{sfx}";
+        var indexName = $"colors-{sfx}";
+        var tree = Tree(treeId);
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.RwFlag))
+            .Create(tree, indexName);
+
+        await idx.SetValueWithTags("c", Bytes("v"), "blue", "small").Atomic().CommitAsync();
+
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v")));
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue", "small" }));
+
+        var indexTree = Tree($"tag-{indexName}");
+        var blueRow = await indexTree.RwFlag($"blue\0{treeId}\0c").GetAsync();
+        Assert.That(blueRow.IsEnabled, Is.True);
+        Assert.That(blueRow.Enables, Has.Count.EqualTo(1));
+        Assert.That(blueRow.Enables[0].ReplicaId, Is.EqualTo("site-a"));
+    }
+
+    [Test]
+    public async Task OrFlag_membership_atomic_then_remove_converges_enable_wins()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var treeId = $"items-{sfx}";
+        var indexName = $"colors-{sfx}";
+        var tree = Tree(treeId);
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
+            .Create(tree, indexName);
+
+        // An atomic enable followed by a removal of one tag: the removed tag's
+        // row decodes as absent (its enable dot is tombstoned) while the other
+        // tag survives, proving the atomic enable and the eventual disable share
+        // the same flag-CRDT lattice.
+        await idx.SetValueWithTags("c", Bytes("v"), "blue", "small").Atomic().CommitAsync();
+        await idx.Key("c").RemoveAsync(["blue"]);
+
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "small" }));
+        Assert.That(await idx.WithAnyTags("blue").CountAsync(), Is.Zero);
+        Assert.That(await idx.WithAnyTags("small").CountAsync(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task OrFlag_membership_concurrent_atomic_writers_converge_on_overlapping_tags()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var treeId = $"items-{sfx}";
+        var indexName = $"colors-{sfx}";
+        var tree = Tree(treeId);
+        var idxA = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
+            .Create(tree, indexName);
+        var idxB = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-b", LatticeMergeMode.OrFlag))
+            .Create(tree, indexName);
+
+        // Two writers author an overlapping tag ("shared") on the same key via
+        // independent atomic writes. Within this single cluster the value write
+        // is a plain last-writer-wins store, so the locally-retained "shared"
+        // row keeps one writer's enable dot; cross-cluster delta replication is
+        // what unions both replicas' dots in a real active-active deployment.
+        // The enable-wins invariant the test pins is the one observable here: an
+        // enable dot survives the race, so the membership row stays live and the
+        // key is returned. The two non-overlapping tags each land exactly once.
+        await Task.WhenAll(
+            idxA.SetValueWithTags("c", Bytes("va"), "shared", "a-only").Atomic().CommitAsync(),
+            idxB.SetValueWithTags("c", Bytes("vb"), "shared", "b-only").Atomic().CommitAsync());
+
+        Assert.That(await idxA.WithAnyTags("shared").CountAsync(), Is.EqualTo(1));
+        Assert.That(await idxA.Key("c").GetAsync(), Is.EqualTo(new[] { "a-only", "b-only", "shared" }));
+
+        var indexTree = Tree($"tag-{indexName}");
+        var sharedRow = await indexTree.OrFlag($"shared\0{treeId}\0c").GetAsync();
+        Assert.That(sharedRow.IsEnabled, Is.True);
+        Assert.That(sharedRow.Enables, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task OrFlag_membership_repeated_atomic_enable_does_not_accumulate_duplicate_dots()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var treeId = $"items-{sfx}";
+        var indexName = $"colors-{sfx}";
+        var tree = Tree(treeId);
+        var idx = new DefaultLatticeTagIndexFactory(
+            _cluster.GrainFactory,
+            FakeLatticeReplicationContext.Enabled("site-a", LatticeMergeMode.OrFlag))
+            .Create(tree, indexName);
+
+        // Each atomic enable mints a fresh monotonic dot from the local replica;
+        // re-asserting the same tag advances the counter but never leaves stale
+        // duplicate live dots once tombstones cancel superseded enables. The row
+        // stays enabled and the membership read is stable across repeats.
+        await idx.SetValueWithTags("c", Bytes("v1"), "blue").Atomic().CommitAsync();
+        await idx.SetValueWithTags("c", Bytes("v2"), "blue").Atomic().CommitAsync();
+
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v2")));
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue" }));
+        Assert.That(await idx.WithAnyTags("blue").CountAsync(), Is.EqualTo(1));
+
+        var indexTree = Tree($"tag-{indexName}");
+        var blueRow = await indexTree.OrFlag($"blue\0{treeId}\0c").GetAsync();
+        Assert.That(blueRow.IsEnabled, Is.True);
+        // Both enable dots are authored by the same replica with distinct
+        // monotonic counters; no two enable dots collide.
+        var distinctDots = blueRow.Enables.Distinct().Count();
+        Assert.That(distinctDots, Is.EqualTo(blueRow.Enables.Count));
+    }
+
+    [Test]
+    public async Task LwwRegister_membership_SetValueWithTags_atomic_is_unchanged()
+    {
+        // Regression: the LwwRegister (default) atomic path stages plain presence
+        // writes exactly as before - no flag deltas, value and tags couple.
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        var idx = TagIndex(tree, $"colors-{sfx}");
+
+        await idx.SetValueWithTags("c", Bytes("v"), "blue", "small").Atomic().CommitAsync();
+
+        Assert.That(await tree.GetAsync("c"), Is.EqualTo(Bytes("v")));
+        Assert.That(await idx.Key("c").GetAsync(), Is.EqualTo(new[] { "blue", "small" }));
+        Assert.That(await Collect(idx.WithAllTags("blue", "small")), Is.EqualTo(new[] { "c" }));
     }
 }
