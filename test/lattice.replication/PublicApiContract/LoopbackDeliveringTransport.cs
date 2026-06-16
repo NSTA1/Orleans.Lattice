@@ -182,7 +182,22 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
                 decoded[i] = walEncoder.Decode(segments[i].AsSpan(), batch.TreeName, encoded.Header.Mode);
             }
 
-            var result = await applier.ApplyBatchAsync(decoded, cancellationToken).ConfigureAwait(false);
+            // Marshal the destination apply off the *sending* grain's
+            // activation turn before invoking the destination cluster's
+            // applier. A real transport hands the batch to the receiving
+            // silo over a socket, so the receiver's apply (and the grain
+            // calls it fans out to on the destination cluster) runs on
+            // the receiver's own scheduler, fully decoupled from the
+            // sender's grain turn. Running the applier inline here would
+            // instead execute the destination cluster's grain-call chain
+            // while still pinned to the sender activation's task
+            // scheduler, which deadlocks the destination grain responses.
+            // Task.Run hops to a neutral thread-pool context (no ambient
+            // Orleans activation scheduler), reproducing the production
+            // decoupling.
+            var result = await Task.Run(
+                () => applier.ApplyBatchAsync(decoded, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
             Deliveries.Enqueue(new DeliveryRecord(
                 batch.TargetClusterId,
                 batch.TreeName,

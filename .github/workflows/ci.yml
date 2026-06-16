@@ -288,6 +288,12 @@ jobs:
       # `src/foo/` that has no `test/foo/`).
       - name: Test changed packages (chaos first - isolate flaky-prone surface)
         if: steps.filter.outputs.nonSample == 'true'
+        # See the deterministic step below for why the digest-settle
+        # convergence budget is widened on a loaded CI runner via
+        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS. The chaos digest suite leans on
+        # the same settle helper under even heavier fault-injection load.
+        env:
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
         run: |
           set -euo pipefail
           for name in ${{ steps.discover.outputs.to_test }}; do
@@ -306,6 +312,21 @@ jobs:
 
       - name: Test changed packages (deterministic)
         if: steps.filter.outputs.nonSample == 'true'
+        # The leaf-side projection-digest publish is coalesced behind a
+        # short one-shot grain timer, so the digest-settle integration
+        # oracles poll the chained-fold aggregate until it converges to
+        # the authoritative live count. Under full-suite parallel load a
+        # post-split aggregate can transiently overshoot (a new leaf's
+        # count folds in before the donor's corrective reduction is
+        # scheduled off the backlogged grain-call queue) and take longer
+        # than the 20s default to settle. The settle helper exposes
+        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS precisely so a saturated runner
+        # can grant a longer convergence budget; wire it here. This does
+        # not mask a real convergence bug - a digest that settles on a
+        # wrong value still fails, it only grants more wall-clock time for
+        # a correct-but-slow convergence on a loaded runner.
+        env:
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
         run: |
           set -euo pipefail
           for name in ${{ steps.discover.outputs.to_test }}; do
