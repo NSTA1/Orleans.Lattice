@@ -772,7 +772,26 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? splitResult = null;
         if (isPrepared)
         {
-            AddPreparedMutation(LatticeTransactionContext.Current, key, newEntry);
+            // Carry the typed CRDT delta (when present) and the tree's merge
+            // mode into the pending-tx delta side-map so the saga's terminal
+            // commit folds the delta into the receiver's current visible state
+            // rather than installing this prepared LWW value verbatim. The
+            // delta rides the ambient LatticeDeltaContext (the same source the
+            // WAL record's Delta slot reads above), and the mode is resolved
+            // through the per-tree resolver that also stamps WalRecord.Mode -
+            // so the foreground commit and the activation-time WAL replay
+            // reconstruct the side-map identically. Plain LWW prepared writes
+            // leave the ambient delta null and the side-map untouched.
+            var preparedDelta = LatticeDeltaContext.Current;
+            var preparedMode = preparedDelta is null
+                ? LatticeMergeMode.LwwRegister
+                : ResolveMergeMode();
+            AddPreparedMutation(
+                LatticeTransactionContext.Current,
+                key,
+                newEntry,
+                delta: preparedDelta,
+                mode: preparedMode);
         }
         else
         {
@@ -1073,6 +1092,15 @@ internal sealed partial class BPlusLeafGrain(
         var atomicBatchSize = atomicBatch?.Size ?? 0;
         var atomicBatchBaseIndex = atomicBatch?.Index ?? 0;
         var atomicBatchIndexMap = LatticeAtomicBatchContext.CurrentIndexMap;
+        // Per-entry author-delta carry. A cross-tree atomic write that
+        // stages a distinct typed CRDT delta per entry (public staged
+        // CRDT writes / flag-CRDT membership rows) supplies them through the
+        // atomic-batch delta map keyed by entry key. The durable WAL
+        // record is the source the replication shipper ships from, so the
+        // per-entry delta MUST be stamped here - falling back to the
+        // saga-wide / single-write carry when no per-key delta is present
+        // keeps every value-only and saga-wide-only write byte-identical.
+        var atomicBatchDeltaMap = LatticeAtomicBatchContext.CurrentDeltaMap;
 
         for (var i = 0; i < count; i++)
         {
@@ -1117,7 +1145,10 @@ internal sealed partial class BPlusLeafGrain(
                 VectorClock = lww.VectorClock,
                 TransactionId = transactionId,
                 Category = category,
-                Delta = delta,
+                Delta = atomicBatchDeltaMap is not null
+                    && atomicBatchDeltaMap.TryGetValue(key, out var perEntryWalDelta)
+                    ? perEntryWalDelta
+                    : delta,
                 AtomicBatchSize = atomicBatchSize,
                 AtomicBatchIndex = atomicBatchIndexForEntry,
                 IsPrepared = isPrepared,
@@ -1179,9 +1210,32 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? splitResult = null;
         if (isPrepared)
         {
+            // Per-entry CRDT-delta carry for the FOREGROUND saga. When the
+            // staged write supplies a per-entry typed delta, record it in the
+            // pending-tx side-map so the saga's terminal drain folds the delta
+            // into this leaf's current visible state instead of installing the
+            // pre-computed merged-state value last-writer-wins. Folding makes
+            // the foreground contribution commute with any concurrent
+            // replicated fold of a remote site's staged delta, so the two
+            // clusters converge on the per-replica union regardless of the
+            // order in which the local and replicated terminals drain.
+            var preparedMode = atomicBatchDeltaMap is not null
+                ? ResolveMergeMode()
+                : LatticeMergeMode.LwwRegister;
             for (var i = 0; i < count; i++)
             {
-                AddPreparedMutation(transactionId, entries[i].Key, values[i], count);
+                var key = entries[i].Key;
+                var perEntryDelta = atomicBatchDeltaMap is not null
+                    && atomicBatchDeltaMap.TryGetValue(key, out var d)
+                    ? d
+                    : null;
+                AddPreparedMutation(
+                    transactionId,
+                    key,
+                    values[i],
+                    count,
+                    delta: perEntryDelta,
+                    mode: perEntryDelta is not null ? preparedMode : LatticeMergeMode.LwwRegister);
             }
         }
         else

@@ -622,6 +622,14 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 TransactionId = entry.TransactionId,
                 AtomicBatchSize = entry.AtomicBatchSize,
                 AtomicBatchIndex = entry.AtomicBatchIndex,
+                // Carry the typed CRDT delta so a bootstrap-restored prepared
+                // CRDT entry folds its per-replica delta into the receiver's
+                // current visible state on the saga's terminal commit (the
+                // union) instead of installing the prepared LWW value. The
+                // tree's resolved mergeMode already routes the prepared apply
+                // through the fold; a plain LWW prepare carries Delta=null and
+                // stays on the unchanged path.
+                Delta = entry.Delta,
             };
             await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
 

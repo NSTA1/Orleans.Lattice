@@ -59,6 +59,32 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>>? _pendingTx;
 
     /// <summary>
+    /// Parallel side-map to <see cref="_pendingTx"/> recording, per
+    /// <c>(transactionId, key)</c>, the typed CRDT delta and merge mode a
+    /// prepared mutation carried (when it carried one - the common
+    /// last-writer-wins prepared write leaves no entry here). On the saga's
+    /// terminal <see cref="MutationKind.TxCommit"/> the drain folds the
+    /// recorded delta into the leaf's current visible state via the matching
+    /// primitive's <c>MergeDelta</c> instead of installing the prepared LWW
+    /// value verbatim, so two clusters that write the same CRDT key through
+    /// concurrent staged atomic writes converge by the per-replica typed-delta
+    /// union rather than last-writer-wins of their merged states.
+    /// <para>
+    /// Only populated for prepared mutations whose
+    /// <see cref="LatticeMergeMode"/> is a CRDT mode (not
+    /// <see cref="LatticeMergeMode.LwwRegister"/>) and that carry a non-null
+    /// delta payload; value-only sagas and single-writer LWW atomic writes
+    /// never touch it, so their terminal drain is byte-for-byte unchanged.
+    /// Strictly in-memory and rebuilt deterministically from WAL replay
+    /// exactly like <see cref="_pendingTx"/> (the prepared WAL record carries
+    /// both <see cref="WalRecord.Delta"/> and <see cref="WalRecord.Mode"/>).
+    /// Lazily allocated on the first prepared CRDT-mode apply for the same
+    /// activation-density rationale as <see cref="_pendingTx"/>.
+    /// </para>
+    /// </summary>
+    private Dictionary<Guid, Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>>? _pendingTxDeltas;
+
+    /// <summary>
     /// Per-(transaction, WAL partition) earliest offset of any prepared
     /// mutation recorded under that transaction id and partition pair.
     /// Populated when the replay coordinator drives
@@ -156,7 +182,13 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/> so the
     /// strictly-greater HLC always wins.
     /// </summary>
-    private void AddPreparedMutation(Guid transactionId, string key, in LwwValue<byte[]> incoming, int capacityHint = 1)
+    private void AddPreparedMutation(
+        Guid transactionId,
+        string key,
+        in LwwValue<byte[]> incoming,
+        int capacityHint = 1,
+        byte[]? delta = null,
+        LatticeMergeMode mode = LatticeMergeMode.LwwRegister)
     {
         if (transactionId == Guid.Empty)
         {
@@ -190,6 +222,30 @@ internal sealed partial class BPlusLeafGrain
         else
         {
             bucket[key] = incoming;
+        }
+
+        // CRDT-delta carry. A prepared mutation authored under a CRDT merge
+        // mode rides its typed delta alongside the merged-state value; record
+        // it in the parallel side-map so the terminal drain folds the delta
+        // into the receiver's current visible state (the per-replica union)
+        // instead of installing the prepared LWW value last-writer-wins.
+        // LwwRegister-mode entries and value-only writes carry no delta and
+        // leave the side-map untouched, so their terminal drain is unchanged.
+        if (delta is not null && mode != LatticeMergeMode.LwwRegister)
+        {
+            var pendingDeltas = _pendingTxDeltas ??=
+                new Dictionary<Guid, Dictionary<string, (byte[], LatticeMergeMode)>>();
+            if (!pendingDeltas.TryGetValue(transactionId, out var deltaBucket))
+            {
+                deltaBucket = new Dictionary<string, (byte[], LatticeMergeMode)>(capacityHint);
+                pendingDeltas[transactionId] = deltaBucket;
+            }
+            // Idempotent re-replay of the same (txid, key) overwrites with an
+            // identical (delta, mode) pair; a later strictly-greater HLC
+            // prepare for the same key is folded the same way (the typed
+            // delta join is commutative, associative, and idempotent), so
+            // last-write-here is safe under re-delivery.
+            deltaBucket[key] = (delta, mode);
         }
 
 #if LATTICE_DIAG
@@ -340,6 +396,15 @@ internal sealed partial class BPlusLeafGrain
         }
 #endif
 
+        // Drain the parallel CRDT-delta side-map for this transaction. A
+        // null bucket (the common case) means no prepared key under this
+        // saga carried a typed delta, so every drain below installs the
+        // prepared LWW value verbatim exactly as before. When present, a
+        // per-key (delta, mode) entry routes that key through the typed
+        // fold instead.
+        Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>? deltaBucket = null;
+        _pendingTxDeltas?.Remove(transactionId, out deltaBucket);
+
         // Branch on the persisted OriginClusterId signal. See the
         // method's XML doc for the full rationale and the replay
         // determinism argument.
@@ -364,8 +429,49 @@ internal sealed partial class BPlusLeafGrain
             // when this value wins.
             foreach (var kvp in bucket)
             {
-                StoreEntry(kvp.Key, kvp.Value);
-                AdvanceProjectionClock(kvp.Value.Timestamp);
+                var toStore = kvp.Value;
+                if (deltaBucket is not null
+                    && deltaBucket.TryGetValue(kvp.Key, out var dm))
+                {
+                    // CRDT-mode prepared entry: fold the typed delta into
+                    // this leaf's current visible state rather than installing
+                    // the prepared merged-state value last-writer-wins. The
+                    // fold is a join (commutative, associative, idempotent),
+                    // so two clusters' concurrent staged writes to the same
+                    // key converge on the per-replica union on both sides.
+                    var folded = FoldPreparedCrdtDelta(kvp.Key, dm.Delta, dm.Mode);
+
+                    // The folded value is the post-join full state, so it
+                    // must DOMINATE the entry currently in the cache: unlike
+                    // the verbatim-LWW path, preserving the source HLC here
+                    // would let StoreEntry's LWW merge discard the join when
+                    // the leaf's current value (e.g. this site's own
+                    // foreground staged write) carries a higher HLC, stranding
+                    // the two clusters at divergent values. Re-stamp with an
+                    // HLC strictly past the max of the prepared source stamp,
+                    // the existing entry's stamp, and the leaf clock so the
+                    // join always lands. Replay determinism holds: the same
+                    // ordered prepare/terminal stream reproduces the same
+                    // cache snapshot and therefore the same stamp.
+                    var dominateBase = kvp.Value.Timestamp;
+                    if (Cache.TryGetRow(kvp.Key, out var existingCrdt)
+                        && existingCrdt.Timestamp.CompareTo(dominateBase) > 0)
+                    {
+                        dominateBase = existingCrdt.Timestamp;
+                    }
+                    if (state.State.Clock.CompareTo(dominateBase) > 0)
+                    {
+                        dominateBase = state.State.Clock;
+                    }
+                    var foldStamp = new Orleans.Lattice.HybridLogicalClock
+                    {
+                        WallClockTicks = dominateBase.WallClockTicks,
+                        Counter = dominateBase.Counter + 1,
+                    };
+                    toStore = kvp.Value with { Value = folded, Timestamp = foldStamp };
+                }
+                StoreEntry(kvp.Key, toStore);
+                AdvanceProjectionClock(toStore.Timestamp);
             }
         }
         else
@@ -467,6 +573,24 @@ internal sealed partial class BPlusLeafGrain
             };
             foreach (var kvp in bucket)
             {
+                // CRDT-mode prepared entry: fold the typed delta into this
+                // leaf's current visible state and skip the LWW orphan-drain
+                // / migration-dominance guards entirely. Those guards exist to
+                // stop an older LWW value clobbering a newer one; a typed-delta
+                // fold is a join (commutative, associative, idempotent) and can
+                // never lose information, so folding into whatever the leaf
+                // currently holds is always safe and re-delivery-idempotent.
+                // The fold still re-stamps with the deterministic terminalStamp
+                // so the cache-delta filter delivers the folded value and
+                // subsequent LWW reads stay monotonic.
+                if (deltaBucket is not null
+                    && deltaBucket.TryGetValue(kvp.Key, out var dmFg))
+                {
+                    var foldedFg = FoldPreparedCrdtDelta(kvp.Key, dmFg.Delta, dmFg.Mode);
+                    StoreEntry(kvp.Key, kvp.Value with { Value = foldedFg, Timestamp = terminalStamp });
+                    continue;
+                }
+
                 // Orphan-drain guard. Under an online reshard, a saga's
                 // shadow-forwarded prepare can land on a destination
                 // leaf AFTER the saga's terminal broadcast already
@@ -557,6 +681,50 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Folds a prepared CRDT mutation's typed <paramref name="delta"/> into
+    /// this leaf's current visible state for <paramref name="key"/> under the
+    /// given <paramref name="mode"/>, returning the re-serialised post-fold
+    /// state bytes. Loads the existing visible value (or an empty primitive
+    /// when the key is absent / tombstoned), deserialises it via the
+    /// registered <see cref="CrdtShape"/>, applies the delta through the
+    /// primitive's instance <c>MergeDelta</c>, and re-serialises. The fold is
+    /// the terminal-commit complement of the producer-side
+    /// <see cref="ApplyCrdtDeltaAsync"/> path and uses the same type-erased
+    /// shape registry, so OrSet / PnCounter / VersionVector / MvRegister /
+    /// OrFlag / RwFlag / Sequence resolve through the global closed-shape
+    /// descriptors and OrMap through the per-tree registration.
+    /// </summary>
+    private byte[] FoldPreparedCrdtDelta(string key, byte[] delta, LatticeMergeMode mode)
+    {
+        var registry = ResolveCrdtShapeRegistry();
+        var shape = registry.TryGet(state.State.TreeId ?? string.Empty, mode)
+            ?? throw new InvalidOperationException(
+                "No CrdtShape is registered for tree '"
+                + (state.State.TreeId ?? string.Empty)
+                + "' at mode '"
+                + mode
+                + "'. A prepared CRDT-mode atomic write cannot fold its typed "
+                + "delta on the terminal commit without a shape descriptor; "
+                + "register the OR-Map pair via ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName) "
+                + "for OR-Map trees (closed-shape modes resolve through the global fallback).");
+
+        var typedDelta = shape.DeserializeDelta(delta);
+        object typedState;
+        if (Cache.TryGetRow(key, out var existing)
+            && !existing.IsTombstone
+            && existing.Value is { Length: > 0 } existingBytes)
+        {
+            typedState = shape.DeserializeState(existingBytes);
+        }
+        else
+        {
+            typedState = shape.CreateEmpty();
+        }
+        shape.MergeDelta(typedState, typedDelta);
+        return shape.SerializeState(typedState);
+    }
+
+    /// <summary>
     /// Drops every pending-tx entry under <paramref name="transactionId"/>
     /// without ever making it visible to readers - the saga's
     /// prepare-phase writes are undone in a single linearization step.
@@ -568,6 +736,11 @@ internal sealed partial class BPlusLeafGrain
             return;
 
         var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId);
+        // Drop the parallel CRDT-delta side-map entry for this saga so an
+        // aborted prepared CRDT write leaks no folded contribution; the
+        // staged delta never became visible, so the abort discards it exactly
+        // as it discards the pending LWW value.
+        _pendingTxDeltas?.Remove(transactionId);
         RemovePendingTxOffsetsForTransaction(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
 
@@ -963,6 +1136,23 @@ internal sealed partial class BPlusLeafGrain
                 if (Array.BinarySearch(sortedMovedSlots, slot) < 0)
                     continue;
 
+                // Carry the prepared mutation's typed CRDT delta + merge
+                // mode (when the parallel side-map recorded one) so the
+                // destination leaf's retroactive replay reconstructs the
+                // fold state and the resharded prepared CRDT entry still
+                // converges by the per-replica union on its terminal
+                // commit. A plain LWW prepared write has no side-map entry
+                // and snapshots Delta=null / Mode=LwwRegister.
+                byte[]? delta = null;
+                var mode = LatticeMergeMode.LwwRegister;
+                if (_pendingTxDeltas is not null
+                    && _pendingTxDeltas.TryGetValue(txid, out var deltaBucket)
+                    && deltaBucket.TryGetValue(key, out var dm))
+                {
+                    delta = dm.Delta;
+                    mode = dm.Mode;
+                }
+
                 result.Add(new PendingMutationSnapshot
                 {
                     TransactionId = txid,
@@ -974,6 +1164,8 @@ internal sealed partial class BPlusLeafGrain
                     OriginClusterId = value.OriginClusterId,
                     VectorClock = value.VectorClock,
                     WalOffset = walOffset,
+                    Delta = delta,
+                    Mode = mode,
                 });
             }
         }

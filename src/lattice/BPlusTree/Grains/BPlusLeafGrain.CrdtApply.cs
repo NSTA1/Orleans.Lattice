@@ -42,6 +42,33 @@ internal sealed partial class BPlusLeafGrain
             context.ActivationServices.GetService<CrdtShapeRegistry>()
             ?? FallbackCrdtShapeRegistry;
 
+    private ILatticeMergeModeResolver? _resolvedMergeModeResolver;
+    private bool _mergeModeResolverResolved;
+
+    /// <summary>
+    /// Resolves the declared <see cref="LatticeMergeMode"/> for this leaf's
+    /// tree via the DI-registered <see cref="ILatticeMergeModeResolver"/>,
+    /// falling back to <see cref="LatticeMergeMode.LwwRegister"/> when no
+    /// resolver is registered (single-cluster hosts) or the tree is not
+    /// replicated. Used by the prepared-commit path to record a CRDT-mode
+    /// prepared write's merge mode in the pending-tx delta side-map so the
+    /// terminal drain can fold its typed delta. The same resolver instance
+    /// stamps <see cref="WalRecord.Mode"/> at WAL-write time, so the
+    /// foreground commit and the activation-time replay derive an identical
+    /// mode and reconstruct the side-map deterministically.
+    /// </summary>
+    private LatticeMergeMode ResolveMergeMode()
+    {
+        if (!_mergeModeResolverResolved)
+        {
+            _resolvedMergeModeResolver =
+                context.ActivationServices.GetService<ILatticeMergeModeResolver>();
+            _mergeModeResolverResolved = true;
+        }
+        return _resolvedMergeModeResolver?.Resolve(state.State.TreeId ?? string.Empty)
+            ?? LatticeMergeMode.LwwRegister;
+    }
+
     /// <inheritdoc />
     public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
     {

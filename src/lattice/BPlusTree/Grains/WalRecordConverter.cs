@@ -115,6 +115,7 @@ internal static class WalRecordConverter
             Category = entry.Category,
             Delta = entry.Delta,
             IsPrepared = entry.IsPrepared,
+            Mode = entry.Mode,
             ShardIndex = entry.ShardIndex,
             AtomicShardCount = entry.AtomicShardCount,
             IsMerge = entry.IsMerge,
