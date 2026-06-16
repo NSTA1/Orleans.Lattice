@@ -16,6 +16,17 @@ namespace Orleans.Lattice;
 /// predicate against their pre-saga value, mirroring the single-tree guarded
 /// saga. A tree may have at most one predicate.
 /// </para>
+/// <para>
+/// A slice may also couple a typed CRDT mutation into the atomic write via
+/// <see cref="Set(LatticeStagedCrdtWrite)"/>, passing a token a CRDT accessor's
+/// <c>Stage*</c> method produced (for example
+/// <see cref="OrFlagAccessor.StageEnableAsync(string, CancellationToken)"/> or
+/// <see cref="PnCounterAccessor.StageIncrementAsync(string, long, CancellationToken)"/>).
+/// The staged value rides alongside sibling last-writer-wins <c>Set</c>/<c>SetWhere</c>
+/// writes and other staged CRDT writes, committing all-or-nothing; the tree it is
+/// added under must be configured with the matching CRDT merge mode. See
+/// <see cref="LatticeStagedCrdtWrite"/> for the full caller contract.
+/// </para>
 /// </summary>
 public sealed class LatticeAtomicWriteBuilder
 {
@@ -85,6 +96,30 @@ public sealed class LatticeAtomicWriteBuilder
     }
 
     /// <summary>
+    /// Couples a typed CRDT mutation prepared by a CRDT accessor's <c>Stage*</c>
+    /// method into the atomic write on the current tree. The staged
+    /// <see cref="LatticeStagedCrdtWrite.Value"/> (merged CRDT state) is written
+    /// last-writer-wins for local reads and the staged
+    /// <see cref="LatticeStagedCrdtWrite.Delta"/> rides alongside it so remote
+    /// clusters fold the typed delta and converge. The current tree must be
+    /// configured with the CRDT merge mode that matches the accessor the token
+    /// came from. See <see cref="LatticeStagedCrdtWrite"/> for the full caller
+    /// contract, including the single-cluster concurrent-writer caveat and the
+    /// drop-the-delta compensation behaviour on abort.
+    /// </summary>
+    /// <param name="staged">The staging token returned by a CRDT accessor's <c>Stage*</c> method.</param>
+    public LatticeAtomicWriteBuilder Set(LatticeStagedCrdtWrite staged)
+    {
+        ArgumentNullException.ThrowIfNull(staged.Key);
+        ArgumentNullException.ThrowIfNull(staged.Value);
+        ArgumentNullException.ThrowIfNull(staged.Delta);
+        var slice = Current();
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(staged.Key, staged.Value));
+        slice.EntryDeltas.Add(staged.Delta);
+        return this;
+    }
+
+    /// <summary>
     /// Serializes <paramref name="value"/> with <paramref name="serializer"/>
     /// and stages it for <paramref name="key"/> on the current tree.
     /// </summary>
@@ -148,8 +183,9 @@ public sealed class LatticeAtomicWriteBuilder
         {
             // Forward the per-entry delta carry only when at least one entry on
             // the slice attached a typed CRDT delta (the flag-CRDT membership
-            // path). A value-only slice forwards a null carry so the cross-tree
-            // write stays byte-identical to the pre-existing path.
+            // path or a public Set(LatticeStagedCrdtWrite) staged mutation). A
+            // value-only slice forwards a null carry so the cross-tree write
+            // stays byte-identical to the pre-existing path.
             var entryDeltas = slice.EntryDeltas.Exists(static d => d is not null)
                 ? slice.EntryDeltas
                 : null;

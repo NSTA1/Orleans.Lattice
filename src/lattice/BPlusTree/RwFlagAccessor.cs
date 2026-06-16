@@ -73,16 +73,7 @@ public readonly record struct RwFlagAccessor
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         EnsureInitialised();
-        return MutateAsync(flag =>
-        {
-            var counter = NextCounter(flag, replicaId);
-            return new RwFlagDelta
-            {
-                Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
-                Disables = Array.Empty<OrSetDot>(),
-                Tombstones = ObservedDisables(flag),
-            };
-        }, cancellationToken, maxAttempts);
+        return MutateAsync(flag => EnableDelta(flag, replicaId), cancellationToken, maxAttempts);
     }
 
     /// <summary>
@@ -98,16 +89,71 @@ public readonly record struct RwFlagAccessor
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         EnsureInitialised();
-        return MutateAsync(flag =>
+        return MutateAsync(flag => DisableDelta(flag, replicaId), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages an enable as a <see cref="LatticeStagedCrdtWrite"/> for a
+    /// cross-tree atomic write instead of applying it now. The minted enable dot
+    /// and cancelled disable dots are identical to
+    /// <see cref="EnableAsync(string, CancellationToken, int)"/>'s; add the
+    /// returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on an
+    /// RW-Flag-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="replicaId">The replica authoring the enable. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageEnableAsync(string replicaId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        return StageAsync(flag => EnableDelta(flag, replicaId), cancellationToken);
+    }
+
+    /// <summary>
+    /// Stages a disable as a <see cref="LatticeStagedCrdtWrite"/> for a
+    /// cross-tree atomic write instead of applying it now. The minted disable dot
+    /// is identical to <see cref="DisableAsync(string, CancellationToken, int)"/>'s;
+    /// add the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on an
+    /// RW-Flag-mode tree. A remove-wins disable mints a fresh causal dot, so it
+    /// requires <paramref name="replicaId"/> just as the live mutator does. See
+    /// <see cref="LatticeStagedCrdtWrite"/> for the merge-mode-matching,
+    /// single-cluster concurrent-writer, and compensation contract.
+    /// </summary>
+    /// <param name="replicaId">The replica authoring the disable. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageDisableAsync(string replicaId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        return StageAsync(flag => DisableDelta(flag, replicaId), cancellationToken);
+    }
+
+    /// <summary>Mints the remove-wins enable delta for <paramref name="replicaId"/> against <paramref name="flag"/>.</summary>
+    private static RwFlagDelta EnableDelta(RwFlag flag, string replicaId)
+    {
+        var counter = NextCounter(flag, replicaId);
+        return new RwFlagDelta
         {
-            var counter = NextCounter(flag, replicaId);
-            return new RwFlagDelta
-            {
-                Enables = Array.Empty<OrSetDot>(),
-                Disables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
-                Tombstones = Array.Empty<OrSetDot>(),
-            };
-        }, cancellationToken, maxAttempts);
+            Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
+            Disables = Array.Empty<OrSetDot>(),
+            Tombstones = ObservedDisables(flag),
+        };
+    }
+
+    /// <summary>Mints the remove-wins disable delta for <paramref name="replicaId"/> against <paramref name="flag"/>.</summary>
+    private static RwFlagDelta DisableDelta(RwFlag flag, string replicaId)
+    {
+        var counter = NextCounter(flag, replicaId);
+        return new RwFlagDelta
+        {
+            Enables = Array.Empty<OrSetDot>(),
+            Disables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
     }
 
     /// <summary>
@@ -179,6 +225,23 @@ public readonly record struct RwFlagAccessor
 
     private static RwFlag Decode(byte[]? bytes) =>
         bytes is null ? new RwFlag() : JsonLatticeSerializer<RwFlag>.Default.Deserialize(bytes);
+
+    private async Task<LatticeStagedCrdtWrite> StageAsync(
+        Func<RwFlag, RwFlagDelta> mint,
+        CancellationToken cancellationToken)
+    {
+        // Mint-once: a single read mints the typed delta, folds it into the
+        // snapshot to produce the merged state, and serialises both. No
+        // ApplyCrdtDeltaAsync is issued here - the cross-tree saga performs the
+        // durable write and replays the persisted delta verbatim.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mint(snapshot);
+        snapshot.MergeDelta(delta);
+        var value = JsonLatticeSerializer<RwFlag>.Default.Serialize(snapshot);
+        var deltaBytes = JsonLatticeSerializer<RwFlagDelta>.Default.Serialize(delta);
+        return new LatticeStagedCrdtWrite(_key, value, deltaBytes);
+    }
 
     private void EnsureInitialised()
     {

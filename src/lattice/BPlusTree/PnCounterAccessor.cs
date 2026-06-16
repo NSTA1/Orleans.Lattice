@@ -67,17 +67,29 @@ public readonly record struct PnCounterAccessor
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         EnsureInitialised();
-        return MutateAsync(c =>
-        {
-            c.Increment(replicaId, amount);
-            var inc = new Dictionary<string, long>(StringComparer.Ordinal);
-            if (c.Increments.TryGetValue(replicaId, out var value)) inc[replicaId] = value;
-            return new PnCounterDelta
-            {
-                Increments = inc,
-                Decrements = new Dictionary<string, long>(0, StringComparer.Ordinal),
-            };
-        }, cancellationToken, maxAttempts);
+        return MutateAsync(c => IncrementDelta(c, replicaId, amount), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages an increment as a <see cref="LatticeStagedCrdtWrite"/> for a
+    /// cross-tree atomic write instead of applying it now. The per-replica
+    /// component advance is identical to
+    /// <see cref="IncrementAsync(string, long, CancellationToken, int)"/>'s; add
+    /// the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// PN-counter-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="replicaId">The replica authoring the increment. Must be non-empty.</param>
+    /// <param name="amount">The non-negative amount to add to the positive component.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageIncrementAsync(string replicaId, long amount = 1, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfNegative(amount);
+        EnsureInitialised();
+        return StageAsync(c => IncrementDelta(c, replicaId, amount), cancellationToken);
     }
 
     /// <summary>
@@ -94,17 +106,55 @@ public readonly record struct PnCounterAccessor
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         EnsureInitialised();
-        return MutateAsync(c =>
+        return MutateAsync(c => DecrementDelta(c, replicaId, amount), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages a decrement as a <see cref="LatticeStagedCrdtWrite"/> for a
+    /// cross-tree atomic write instead of applying it now. The per-replica
+    /// component advance is identical to
+    /// <see cref="DecrementAsync(string, long, CancellationToken, int)"/>'s; add
+    /// the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// PN-counter-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="replicaId">The replica authoring the decrement. Must be non-empty.</param>
+    /// <param name="amount">The non-negative amount to add to the negative component.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageDecrementAsync(string replicaId, long amount = 1, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfNegative(amount);
+        EnsureInitialised();
+        return StageAsync(c => DecrementDelta(c, replicaId, amount), cancellationToken);
+    }
+
+    /// <summary>Mints the increment delta for <paramref name="replicaId"/> against <paramref name="c"/>.</summary>
+    private static PnCounterDelta IncrementDelta(PnCounter c, string replicaId, long amount)
+    {
+        c.Increment(replicaId, amount);
+        var inc = new Dictionary<string, long>(StringComparer.Ordinal);
+        if (c.Increments.TryGetValue(replicaId, out var value)) inc[replicaId] = value;
+        return new PnCounterDelta
         {
-            c.Decrement(replicaId, amount);
-            var dec = new Dictionary<string, long>(StringComparer.Ordinal);
-            if (c.Decrements.TryGetValue(replicaId, out var value)) dec[replicaId] = value;
-            return new PnCounterDelta
-            {
-                Increments = new Dictionary<string, long>(0, StringComparer.Ordinal),
-                Decrements = dec,
-            };
-        }, cancellationToken, maxAttempts);
+            Increments = inc,
+            Decrements = new Dictionary<string, long>(0, StringComparer.Ordinal),
+        };
+    }
+
+    /// <summary>Mints the decrement delta for <paramref name="replicaId"/> against <paramref name="c"/>.</summary>
+    private static PnCounterDelta DecrementDelta(PnCounter c, string replicaId, long amount)
+    {
+        c.Decrement(replicaId, amount);
+        var dec = new Dictionary<string, long>(StringComparer.Ordinal);
+        if (c.Decrements.TryGetValue(replicaId, out var value)) dec[replicaId] = value;
+        return new PnCounterDelta
+        {
+            Increments = new Dictionary<string, long>(0, StringComparer.Ordinal),
+            Decrements = dec,
+        };
     }
 
     /// <summary>Merges <paramref name="other"/> into the stored state under CAS.</summary>
@@ -151,6 +201,26 @@ public readonly record struct PnCounterAccessor
 
     private static PnCounter Decode(byte[]? bytes) =>
         bytes is null ? new PnCounter() : JsonLatticeSerializer<PnCounter>.Default.Deserialize(bytes);
+
+    private async Task<LatticeStagedCrdtWrite> StageAsync(
+        Func<PnCounter, PnCounterDelta> mint,
+        CancellationToken cancellationToken)
+    {
+        // Mint-once: a single read mints the typed delta, folds it into the
+        // snapshot to produce the merged state, and serialises both. The mint
+        // closure advances the snapshot's component and the delta carries the
+        // resulting per-replica total, so the follow-up MergeDelta is an
+        // idempotent pointwise-max. No ApplyCrdtDeltaAsync is issued here - the
+        // cross-tree saga performs the durable write and replays the persisted
+        // delta verbatim.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mint(snapshot);
+        snapshot.MergeDelta(delta);
+        var value = JsonLatticeSerializer<PnCounter>.Default.Serialize(snapshot);
+        var deltaBytes = JsonLatticeSerializer<PnCounterDelta>.Default.Serialize(delta);
+        return new LatticeStagedCrdtWrite(_key, value, deltaBytes);
+    }
 
     private void EnsureInitialised()
     {

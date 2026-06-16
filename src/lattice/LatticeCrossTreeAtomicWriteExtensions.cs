@@ -62,7 +62,11 @@ public static class LatticeCrossTreeAtomicWriteExtensions
     /// <see cref="LatticeAtomicWriteBuilder.Set(string, byte[])"/> /
     /// <see cref="LatticeAtomicWriteBuilder.Set{T}(string, T)"/> /
     /// <see cref="LatticeAtomicWriteBuilder.SetWhere{T}(string, T, Expression{Func{T, bool}})"/>,
-    /// then <see cref="LatticeAtomicWriteBuilder.CommitAsync"/>.
+    /// or couple a typed CRDT mutation prepared by a CRDT accessor's <c>Stage*</c>
+    /// method via <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/>
+    /// (the staged CRDT write rides the same all-or-nothing commit as its sibling
+    /// last-writer-wins writes), then
+    /// <see cref="LatticeAtomicWriteBuilder.CommitAsync"/>.
     /// </summary>
     /// <param name="factory">The grain factory / cluster client.</param>
     /// <param name="operationId">Required cross-tree idempotency key. Must not contain '/'.</param>

@@ -29,9 +29,11 @@ namespace Orleans.Lattice;
 /// aligned 1:1 with <see cref="Entries"/>: <c>EntryDeltas[i]</c> is the
 /// opaque, Orleans-serialised typed CRDT delta to ride the atomic write for
 /// <c>Entries[i]</c>, or <see langword="null"/> for a plain last-writer-wins
-/// value write. The public <c>Set</c> / <c>SetWhere</c> builder methods leave
-/// it <see langword="null"/>; only the internal flag-CRDT membership staging
-/// path populates it.
+/// value write. The plain <c>Set</c> / <c>SetWhere</c> builder methods leave
+/// it <see langword="null"/>; the internal flag-CRDT membership staging path
+/// and the public <c>Set(LatticeStagedCrdtWrite)</c> builder overload (which
+/// couples a typed CRDT mutation prepared by a CRDT accessor's <c>Stage*</c>
+/// method) populate it.
 /// </para>
 /// </summary>
 [GenerateSerializer]

@@ -119,24 +119,31 @@ public readonly record struct RgaAccessor<T>
         EnsureInitialised();
         var serializer = _serializer;
         var encoded = serializer.Serialize(value);
-        return ApplyInsertDeltaAsync(rga =>
-        {
-            var snapshot = rga.ToList();
-            if (index > snapshot.Count)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(index),
-                    $"Insert index {index} is beyond the resolved sequence length {snapshot.Count}.");
-            }
-            // Index N inserts after the live element at position N-1
-            // (or at the root when N == 0). Inserting at the count
-            // attaches under the last visible element. The parent dot is
-            // resolved here, at the call site, so the emitted delta
-            // captures the dot-explicit structural intent.
-            var parent = index == 0 ? Rga.Root : snapshot[index - 1].Dot;
-            var dot = rga.InsertAfter(parent, replicaId, encoded);
-            return (dot, SingleInsertDelta(dot, parent, encoded));
-        }, cancellationToken, maxAttempts);
+        return ApplyInsertDeltaAsync(rga => InsertAtMutate(rga, index, replicaId, encoded), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages an insert at the visible <paramref name="index"/> as a
+    /// <see cref="LatticeStagedCrdtWrite"/> for a cross-tree atomic write instead
+    /// of applying it now. The minted dot and resolved parent are identical to
+    /// <see cref="InsertAtAsync(int, string, T, CancellationToken, int)"/>'s; add
+    /// the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// sequence-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="index">The visible position to insert at. Must be in <c>[0, count]</c>.</param>
+    /// <param name="replicaId">The replica authoring the insert. Must be non-empty.</param>
+    /// <param name="value">The value to attach.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageInsertAtAsync(int index, string replicaId, T value, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        var encoded = _serializer.Serialize(value);
+        return StageAsync(rga => InsertAtMutate(rga, index, replicaId, encoded).Delta, cancellationToken);
     }
 
     /// <summary>
@@ -156,11 +163,30 @@ public readonly record struct RgaAccessor<T>
         EnsureInitialised();
         var serializer = _serializer;
         var encoded = serializer.Serialize(value);
-        return ApplyInsertDeltaAsync(rga =>
-        {
-            var dot = rga.InsertAfter(parentDot, replicaId, encoded);
-            return (dot, SingleInsertDelta(dot, parentDot, encoded));
-        }, cancellationToken, maxAttempts);
+        return ApplyInsertDeltaAsync(rga => InsertAfterMutate(rga, parentDot, replicaId, encoded), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages an insert under <paramref name="parentDot"/> as a
+    /// <see cref="LatticeStagedCrdtWrite"/> for a cross-tree atomic write instead
+    /// of applying it now. The minted dot is identical to
+    /// <see cref="InsertAfterAsync(OrSetDot, string, T, CancellationToken, int)"/>'s;
+    /// add the returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// sequence-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="parentDot">The parent dot to link under, or <see cref="Rga.Root"/> for a top-level insert.</param>
+    /// <param name="replicaId">The replica authoring the insert. Must be non-empty.</param>
+    /// <param name="value">The value to attach.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageInsertAfterAsync(OrSetDot parentDot, string replicaId, T value, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        var encoded = _serializer.Serialize(value);
+        return StageAsync(rga => InsertAfterMutate(rga, parentDot, replicaId, encoded).Delta, cancellationToken);
     }
 
     /// <summary>
@@ -175,22 +201,27 @@ public readonly record struct RgaAccessor<T>
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         EnsureInitialised();
-        return ApplyDeltaAsync(rga =>
-        {
-            var snapshot = rga.ToList();
-            if (index >= snapshot.Count)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(index),
-                    $"Remove index {index} is at or beyond the resolved sequence length {snapshot.Count}.");
-            }
-            var dot = snapshot[index].Dot;
-            return new RgaDelta
-            {
-                Inserts = Array.Empty<RgaDeltaNode>(),
-                Tombstones = new[] { dot },
-            };
-        }, cancellationToken, maxAttempts);
+        return ApplyDeltaAsync(rga => RemoveAtMutate(rga, index), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages a remove of the visible <paramref name="index"/> as a
+    /// <see cref="LatticeStagedCrdtWrite"/> for a cross-tree atomic write instead
+    /// of applying it now. The resolved tombstone dot is identical to
+    /// <see cref="RemoveAtAsync(int, CancellationToken, int)"/>'s; add the
+    /// returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// sequence-mode tree. See <see cref="LatticeStagedCrdtWrite"/> for the
+    /// merge-mode-matching, single-cluster concurrent-writer, and compensation
+    /// contract.
+    /// </summary>
+    /// <param name="index">The visible position to remove. Must be in <c>[0, count)</c>.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageRemoveAtAsync(int index, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        EnsureInitialised();
+        return StageAsync(rga => RemoveAtMutate(rga, index), cancellationToken);
     }
 
     /// <summary>
@@ -202,13 +233,77 @@ public readonly record struct RgaAccessor<T>
         EnsureInitialised();
         // The tombstone delta is fully determined by `dot`; there is no
         // need to read or deserialise the current sequence state here.
-        return ApplyDeltaNoReadAsync(
-            new RgaDelta
-            {
-                Inserts = Array.Empty<RgaDeltaNode>(),
-                Tombstones = new[] { dot },
-            }, cancellationToken, maxAttempts);
+        return ApplyDeltaNoReadAsync(TombstoneDelta(dot), cancellationToken, maxAttempts);
     }
+
+    /// <summary>
+    /// Stages a remove of the node identified by <paramref name="dot"/> as a
+    /// <see cref="LatticeStagedCrdtWrite"/> for a cross-tree atomic write instead
+    /// of applying it now. The tombstone is identical to
+    /// <see cref="RemoveAsync(OrSetDot, CancellationToken, int)"/>'s; add the
+    /// returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// sequence-mode tree. Unlike the live remove, staging reads the current
+    /// snapshot once so the staged <see cref="LatticeStagedCrdtWrite.Value"/>
+    /// carries the merged post-tombstone state for local reads. See
+    /// <see cref="LatticeStagedCrdtWrite"/> for the merge-mode-matching,
+    /// single-cluster concurrent-writer, and compensation contract.
+    /// </summary>
+    /// <param name="dot">The dot identifying the node to tombstone.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageRemoveAsync(OrSetDot dot, CancellationToken cancellationToken = default)
+    {
+        EnsureInitialised();
+        return StageAsync(_ => TombstoneDelta(dot), cancellationToken);
+    }
+
+    /// <summary>Resolves the visible <paramref name="index"/> to a dot-explicit insert delta against <paramref name="rga"/>.</summary>
+    private static (OrSetDot Dot, RgaDelta Delta) InsertAtMutate(Rga rga, int index, string replicaId, byte[] encoded)
+    {
+        var snapshot = rga.ToList();
+        if (index > snapshot.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(index),
+                $"Insert index {index} is beyond the resolved sequence length {snapshot.Count}.");
+        }
+        // Index N inserts after the live element at position N-1
+        // (or at the root when N == 0). Inserting at the count
+        // attaches under the last visible element. The parent dot is
+        // resolved here, at the call site, so the emitted delta
+        // captures the dot-explicit structural intent.
+        var parent = index == 0 ? Rga.Root : snapshot[index - 1].Dot;
+        var dot = rga.InsertAfter(parent, replicaId, encoded);
+        return (dot, SingleInsertDelta(dot, parent, encoded));
+    }
+
+    /// <summary>Mints a dot-explicit insert delta under <paramref name="parentDot"/> against <paramref name="rga"/>.</summary>
+    private static (OrSetDot Dot, RgaDelta Delta) InsertAfterMutate(Rga rga, OrSetDot parentDot, string replicaId, byte[] encoded)
+    {
+        var dot = rga.InsertAfter(parentDot, replicaId, encoded);
+        return (dot, SingleInsertDelta(dot, parentDot, encoded));
+    }
+
+    /// <summary>Resolves the visible <paramref name="index"/> to a tombstone delta against <paramref name="rga"/>.</summary>
+    private static RgaDelta RemoveAtMutate(Rga rga, int index)
+    {
+        var snapshot = rga.ToList();
+        if (index >= snapshot.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(index),
+                $"Remove index {index} is at or beyond the resolved sequence length {snapshot.Count}.");
+        }
+        return TombstoneDelta(snapshot[index].Dot);
+    }
+
+    /// <summary>Mints the tombstone delta for <paramref name="dot"/>.</summary>
+    private static RgaDelta TombstoneDelta(OrSetDot dot) =>
+        new()
+        {
+            Inserts = Array.Empty<RgaDeltaNode>(),
+            Tombstones = new[] { dot },
+        };
 
     /// <summary>
     /// Merges <paramref name="other"/> into the stored state. Useful for
@@ -315,6 +410,26 @@ public readonly record struct RgaAccessor<T>
 
     private static Rga Decode(byte[]? bytes) =>
         bytes is null ? new Rga() : JsonLatticeSerializer<Rga>.Default.Deserialize(bytes);
+
+    private async Task<LatticeStagedCrdtWrite> StageAsync(
+        Func<Rga, RgaDelta> mint,
+        CancellationToken cancellationToken)
+    {
+        // Mint-once: a single read mints the typed delta, folds it into the
+        // snapshot to produce the merged state, and serialises both. Insert mint
+        // closures advance the snapshot directly and the delta replays the same
+        // dot-explicit node, so the follow-up MergeDelta is idempotent; tombstone
+        // mint closures leave the snapshot untouched and MergeDelta folds the
+        // removal. No ApplyCrdtDeltaAsync is issued here - the cross-tree saga
+        // performs the durable write and replays the persisted delta verbatim.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mint(snapshot);
+        snapshot.MergeDelta(delta);
+        var value = JsonLatticeSerializer<Rga>.Default.Serialize(snapshot);
+        var deltaBytes = JsonLatticeSerializer<RgaDelta>.Default.Serialize(delta);
+        return new LatticeStagedCrdtWrite(_key, value, deltaBytes);
+    }
 
     private void EnsureInitialised()
     {

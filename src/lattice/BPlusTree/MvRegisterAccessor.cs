@@ -95,22 +95,47 @@ public readonly record struct MvRegisterAccessor<T>
         // does not need to close over `this` (forbidden inside a
         // struct method).
         var serializer = _serializer;
-        return MutateAsync(register =>
+        return MutateAsync(register => SetDelta(register, serializer, replicaId, value), cancellationToken, maxAttempts);
+    }
+
+    /// <summary>
+    /// Stages a write as a <see cref="LatticeStagedCrdtWrite"/> for a cross-tree
+    /// atomic write instead of applying it now. The minted dot and dropped
+    /// observed entries are identical to
+    /// <see cref="SetAsync(string, T, CancellationToken, int)"/>'s; add the
+    /// returned token to a builder slice via
+    /// <see cref="LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)"/> on a
+    /// multi-value-register-mode tree. See <see cref="LatticeStagedCrdtWrite"/>
+    /// for the merge-mode-matching, single-cluster concurrent-writer, and
+    /// compensation contract.
+    /// </summary>
+    /// <param name="value">The value to store. May be <c>null</c> only when <typeparamref name="T"/> permits it.</param>
+    /// <param name="replicaId">The replica authoring the write. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the snapshot read.</param>
+    public Task<LatticeStagedCrdtWrite> StageSetAsync(T value, string replicaId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        var serializer = _serializer;
+        return StageAsync(register => SetDelta(register, serializer, replicaId, value), cancellationToken);
+    }
+
+    /// <summary>Mints the write delta for <paramref name="replicaId"/> against <paramref name="register"/>.</summary>
+    private static MvRegisterDelta SetDelta(MvRegister register, ILatticeSerializer<T> serializer, string replicaId, T value)
+    {
+        var encoded = serializer.Serialize(value);
+        register.Set(replicaId, encoded);
+        var entry = new MvRegisterEntry
         {
-            var encoded = serializer.Serialize(value);
-            register.Set(replicaId, encoded);
-            var entry = new MvRegisterEntry
-            {
-                ReplicaId = replicaId,
-                Counter = register.Context[replicaId],
-                Value = encoded,
-            };
-            return new MvRegisterDelta
-            {
-                Entries = new[] { entry },
-                Context = new Dictionary<string, long>(register.Context, StringComparer.Ordinal),
-            };
-        }, cancellationToken, maxAttempts);
+            ReplicaId = replicaId,
+            Counter = register.Context[replicaId],
+            Value = encoded,
+        };
+        return new MvRegisterDelta
+        {
+            Entries = new[] { entry },
+            Context = new Dictionary<string, long>(register.Context, StringComparer.Ordinal),
+        };
     }
 
     /// <summary>
@@ -160,6 +185,25 @@ public readonly record struct MvRegisterAccessor<T>
 
     private static MvRegister Decode(byte[]? bytes) =>
         bytes is null ? new MvRegister() : JsonLatticeSerializer<MvRegister>.Default.Deserialize(bytes);
+
+    private async Task<LatticeStagedCrdtWrite> StageAsync(
+        Func<MvRegister, MvRegisterDelta> mint,
+        CancellationToken cancellationToken)
+    {
+        // Mint-once: a single read mints the typed delta, folds it into the
+        // snapshot to produce the merged state, and serialises both. The mint
+        // closure advances the snapshot's dot context and the delta replays the
+        // same entry, so the follow-up MergeDelta is idempotent. No
+        // ApplyCrdtDeltaAsync is issued here - the cross-tree saga performs the
+        // durable write and replays the persisted delta verbatim.
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = await GetAsync(cancellationToken).ConfigureAwait(false);
+        var delta = mint(snapshot);
+        snapshot.MergeDelta(delta);
+        var value = JsonLatticeSerializer<MvRegister>.Default.Serialize(snapshot);
+        var deltaBytes = JsonLatticeSerializer<MvRegisterDelta>.Default.Serialize(delta);
+        return new LatticeStagedCrdtWrite(_key, value, deltaBytes);
+    }
 
     private void EnsureInitialised()
     {

@@ -144,6 +144,82 @@ public class CrossTreeAtomicWriteIntegrationTests
     }
 
     [Test]
+    public async Task Builder_couples_staged_crdt_write_with_sibling_lww_and_commits_all()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var t1 = $"crdt1-{suffix}";
+        var t2 = $"lww1-{suffix}";
+        var crdtTree = _cluster.GrainFactory.GetGrain<ILattice>(t1);
+
+        var staged = await crdtTree.PnCounter("counter").StageIncrementAsync("r1", 5);
+
+        var outcome = await _cluster.GrainFactory.BeginAtomicWrite($"xcrdt-{suffix}")
+            .ForTree(t1).Set(staged)
+            .ForTree(t2).Set("sku:1", Bytes("X"))
+            .CommitAsync();
+
+        Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(await crdtTree.PnCounter("counter").ValueAsync(), Is.EqualTo(5),
+            "the merged CRDT state must be readable locally after the coupled commit");
+        Assert.That(await _cluster.GrainFactory.GetGrain<ILattice>(t2).GetAsync("sku:1"), Is.EqualTo(Bytes("X")));
+    }
+
+    [Test]
+    public async Task Builder_staged_crdt_write_rolls_back_when_a_sibling_guard_fails()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var t1 = $"crdtg-{suffix}";
+        var t2 = $"guardg-{suffix}";
+        var crdtTree = _cluster.GrainFactory.GetGrain<ILattice>(t1);
+        var guardTree = _cluster.GrainFactory.GetGrain<ILattice>(t2);
+
+        var serializer = JsonLatticeSerializer<Doc>.Default;
+        var seeded = serializer.Serialize(new Doc("old", 1));
+        await guardTree.SetAsync("guarded", seeded);
+
+        var staged = await crdtTree.PnCounter("counter").StageIncrementAsync("r1", 5);
+
+        var outcome = await _cluster.GrainFactory.BeginAtomicWrite($"xcrdtg-{suffix}")
+            .ForTree(t1).Set(staged)
+            .ForTree(t2).SetWhere("guarded", new Doc("new", 2), d => d.Score >= 100)
+            .CommitAsync();
+
+        Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.PreconditionFailed));
+        Assert.That(await crdtTree.GetAsync("counter"), Is.Null,
+            "the staged CRDT write must not commit when a sibling tree's guard fails");
+        Assert.That(await crdtTree.PnCounter("counter").ValueAsync(), Is.EqualTo(0));
+        Assert.That(await guardTree.GetAsync("guarded"), Is.EqualTo(seeded));
+    }
+
+    [Test]
+    public async Task Builder_staged_crdt_write_is_idempotent_by_operationId()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var t1 = $"crdti-{suffix}";
+        var t2 = $"lwwi-{suffix}";
+        var opId = $"xcrdti-{suffix}";
+        var crdtTree = _cluster.GrainFactory.GetGrain<ILattice>(t1);
+
+        // Mint the staged delta once; re-submitting the same operationId must
+        // replay the persisted delta rather than mint a second increment.
+        var staged = await crdtTree.PnCounter("counter").StageIncrementAsync("r1", 5);
+
+        var first = await _cluster.GrainFactory.BeginAtomicWrite(opId)
+            .ForTree(t1).Set(staged)
+            .ForTree(t2).Set("k", Bytes("v"))
+            .CommitAsync();
+        var second = await _cluster.GrainFactory.BeginAtomicWrite(opId)
+            .ForTree(t1).Set(staged)
+            .ForTree(t2).Set("k", Bytes("v"))
+            .CommitAsync();
+
+        Assert.That(first, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(second, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(await crdtTree.PnCounter("counter").ValueAsync(), Is.EqualTo(5),
+            "re-submitting the same operationId must not double-apply the staged increment");
+    }
+
+    [Test]
     public async Task Concurrent_reader_never_observes_a_partial_cross_tree_view()
     {
         var suffix = Guid.NewGuid().ToString("N");

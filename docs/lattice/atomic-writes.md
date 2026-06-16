@@ -669,6 +669,83 @@ CrossTreeAtomicWriteOutcome result =
     await grainFactory.SetManyAtomicAsync(batches, "fulfil:order-42", cancellationToken);
 ```
 
+### Coupling a CRDT mutation into an atomic write
+
+A staged CRDT write lets a typed CRDT mutation (an `OrSet` add, an
+`OrFlag` / `RwFlag` enable, a `PnCounter` increment, an `MvRegister`
+assign, an `Rga` insert, or a `VersionVector` tick) ride a cross-tree
+atomic write so it commits all-or-nothing alongside sibling
+last-writer-wins (LWW) writes on other trees.
+
+Each CRDT accessor exposes a `Stage*` counterpart for every live
+mutator. A `Stage*` call:
+
+1. reads the key's current snapshot once,
+2. mints the typed CRDT delta **once** (the same dot-minting logic the
+   live mutator uses),
+3. folds the delta into the snapshot to produce the merged state, and
+4. returns a `LatticeStagedCrdtWrite` carrying the key, the serialized
+   merged state (the **value**), and the serialized typed delta.
+
+It performs **no** durable write - the saga owns the commit. Hand the
+token to the builder's `Set(LatticeStagedCrdtWrite)` overload under the
+`ForTree(...)` whose configured merge mode matches the accessor's
+primitive (the accessor was obtained from that same tree).
+
+```csharp verify
+// Stage a PnCounter increment from a CRDT-mode tree's accessor. Staging
+// mints the typed delta once and folds it into a merged snapshot; it does
+// not write durably - the saga owns the commit.
+var metrics = grainFactory.GetGrain<ILattice>("metrics");
+LatticeStagedCrdtWrite staged =
+    await metrics.PnCounter("orders:placed")
+                 .StageIncrementAsync("replica-east", 1, cancellationToken);
+
+// Couple the staged CRDT mutation with a sibling LWW Set on another tree.
+// Either both land or neither does.
+var outcome = await grainFactory
+    .BeginAtomicWrite("place-order:1001")
+    .ForTree("metrics").Set(staged)
+    .ForTree("orders").Set("order:1001", new Order("1001", 250m))
+    .CommitAsync(cancellationToken);
+
+if (outcome == CrossTreeAtomicWriteOutcome.Committed)
+{
+    // The merged counter value is readable locally right away.
+}
+```
+
+**Convergence and consistency contract.** The merged value stored by the
+saga is computed from a stage-time snapshot and stored LWW by HLC. Reads
+on the authoring cluster see that merged value immediately, and it
+replicates to every peer through the cross-tree saga's prepared /
+terminal path. A single authoring cluster's staged CRDT write therefore
+converges everywhere on its merged value.
+
+Two concurrent staged CRDT writes to the **same key** - whether in the
+same cluster or on different clusters - reconcile by **last-writer-wins
+of their merged states**, not by the per-replica union the live
+(non-atomic) accessor path provides. This is because cross-tree atomic
+writes ride the two-phase prepared / terminal replication path, and that
+path applies the merged-state **value** on the receiver (LWW by HLC); it
+does **not** carry the staged typed delta to the receiver-side
+`MergeDelta` fold. The token still carries the delta (the saga persists
+and ships it), but the prepared receiver path does not yet fold it, so a
+counter written `+5` on one cluster and `+3` on another converges to
+either `5` or `3`, not `8`. If you need typed-delta convergence under
+concurrent multi-writer load on the same key, use the live accessor
+mutators (`IncrementAsync`, `AddAsync`, `EnableAsync`, …) outside an
+atomic write - those stamp the delta on the standard CRDT replication
+path, which the receiver folds. Folding staged deltas through the
+prepared path is tracked as a follow-up. The same caveat applies to the
+internal tag-index flag-membership rows, which use the same per-entry
+carry.
+
+**Compensation.** An aborting saga drops the staged value **and** the
+staged delta on every cluster (the prepare-phase write never became
+visible), so there is no byte-inverse compensation: abort means the
+mutation never happened.
+
 ### How it works - two-level saga
 
 A single **coordinator grain** keyed by `operationId` is the global
