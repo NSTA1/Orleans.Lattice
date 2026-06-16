@@ -8,9 +8,13 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v7.0.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v7.2.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+## [7.2.0] - 2026-06-16
+
+Minor release across the package family. The headline addition is a built-in **tag index** secondary-index surface (tag the keys of any tree and query them back by tag), with active-active multi-writer convergence built on two new flag CRDT primitives (`OrFlag` enable-wins and `RwFlag` remove-wins) and a self-healing background reconciliation coordinator. Cross-tree atomic writes can now couple a typed CRDT mutation into an all-or-nothing batch, converging by per-replica typed-delta union on every cluster. Two default-behaviour changes: the safe replication efficiency bundle (pre-ship last-writer-wins coalescing, content-hash dedup measurement, and dict-less Zstandard framing compression) now ships enabled out of the box for a stock `AddLatticeReplication` deployment, each part individually overridable; and tag indexes are now opened through the injected `ILatticeTagIndexFactory` rather than the former `tree.TagIndex(...)` / `grainFactory.MultiTreeTagIndex(...)` extension methods. Storage-usage metrics now report correctly across a multi-silo cluster, with an optional deep poll to keep the snapshot / leaf-state / total-bytes gauges live. See the per-section entries below.
 
 ### Added
 
@@ -507,7 +511,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.2.0...HEAD
+[7.2.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.1.0...v7.2.0
 [7.1.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.0.0...v7.1.0
 [7.0.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.4.0...v7.0.0
 [6.4.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.3.1...v6.4.0
