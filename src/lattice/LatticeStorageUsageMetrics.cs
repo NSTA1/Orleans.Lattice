@@ -12,9 +12,13 @@ namespace Orleans.Lattice;
 /// <c>storage.snapshot_bytes</c>, <c>storage.leaf_state_bytes</c>,
 /// <c>storage.total_bytes</c>, and the 0/1 <c>storage.policy.over_threshold</c>
 /// gauge - read from that last-known snapshot when a listener observes the
-/// meter. Registration is process-wide and idempotent; observation always
-/// reflects the most recently constructed instance, matching the DI singleton
-/// model used by <c>AddLattice</c>.
+/// meter. Registration is process-wide and idempotent; observation unions
+/// every live instance, so when more than one silo is co-hosted in a single
+/// process (for example an in-process multi-silo test cluster) each silo's
+/// DI singleton contributes its own published series rather than all but the
+/// most-recently-constructed sink being silently dropped. In the normal
+/// one-silo-per-process model there is a single instance and the union is
+/// that instance, matching the DI singleton model used by <c>AddLattice</c>.
 /// <para>
 /// Gauges are observable so they cost nothing when no OpenTelemetry listener
 /// is attached: the measurement callback only runs on scrape, and it reads a
@@ -27,10 +31,10 @@ namespace Orleans.Lattice;
 /// once a byte-pressure evaluation has observed it.
 /// </para>
 /// </summary>
-public sealed class LatticeStorageUsageMetrics
+public sealed class LatticeStorageUsageMetrics : IDisposable
 {
     private static readonly object RegistrationLock = new();
-    private static volatile LatticeStorageUsageMetrics? _current;
+    private static readonly List<LatticeStorageUsageMetrics> Instances = new();
     private static bool _gaugesRegistered;
 
     private readonly ConcurrentDictionary<string, (TreeStorageUsageReport Report, DateTimeOffset PublishedAt)> _reports = new(StringComparer.Ordinal);
@@ -72,12 +76,27 @@ public sealed class LatticeStorageUsageMetrics
         _time = timeProvider ?? TimeProvider.System;
         lock (RegistrationLock)
         {
-            _current = this;
+            Instances.Add(this);
             if (!_gaugesRegistered)
             {
                 RegisterGauges();
                 _gaugesRegistered = true;
             }
+        }
+    }
+
+    /// <summary>
+    /// Removes this sink instance from the process-wide observation set so its
+    /// published series stop contributing to the storage gauges. Called by the
+    /// DI container when the owning silo shuts down; the gauges themselves stay
+    /// registered on the shared meter (instruments cannot be unregistered) but
+    /// simply observe no measurements from a disposed instance.
+    /// </summary>
+    public void Dispose()
+    {
+        lock (RegistrationLock)
+        {
+            Instances.Remove(this);
         }
     }
 
@@ -87,33 +106,72 @@ public sealed class LatticeStorageUsageMetrics
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageWalBytesName,
-            static () => _current?.Observe(static r => r.WalRetainedBytes) ?? Array.Empty<Measurement<long>>(),
+            static () => ObserveAll(static r => r.WalRetainedBytes),
             unit: "By",
             description: "Retained WAL bytes for the tree.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageSnapshotBytesName,
-            static () => _current?.Observe(static r => r.SnapshotBytes) ?? Array.Empty<Measurement<long>>(),
+            static () => ObserveAll(static r => r.SnapshotBytes),
             unit: "By",
             description: "Snapshot blob bytes for the tree.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageLeafStateBytesName,
-            static () => _current?.Observe(static r => r.LeafStateBytes) ?? Array.Empty<Measurement<long>>(),
+            static () => ObserveAll(static r => r.LeafStateBytes),
             unit: "By",
             description: "Summed leaf/shard-root state bytes for the tree.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageTotalBytesName,
-            static () => _current?.Observe(static r => r.TotalBytes) ?? Array.Empty<Measurement<long>>(),
+            static () => ObserveAll(static r => r.TotalBytes),
             unit: "By",
             description: "Sum of the three storage surfaces for the tree.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StoragePolicyOverThresholdName,
-            static () => _current?.ObserveOverThreshold() ?? Array.Empty<Measurement<long>>(),
+            static () => ObserveAllOverThreshold(),
             unit: "{tree}",
             description: "1 when the tree's retained WAL bytes currently breach the advisory ceiling, else 0.");
+    }
+
+    /// <summary>
+    /// Unions the per-tree byte measurements of every live sink instance. A
+    /// tree's aggregator is a single cluster-wide activation, so within one
+    /// process a given tree is published through at most one instance and the
+    /// union never double-counts it; co-hosted silos each contribute the trees
+    /// they host.
+    /// </summary>
+    private static IEnumerable<Measurement<long>> ObserveAll(Func<TreeStorageUsageReport, long> selector)
+    {
+        LatticeStorageUsageMetrics[] snapshot;
+        lock (RegistrationLock)
+        {
+            snapshot = Instances.ToArray();
+        }
+        foreach (var instance in snapshot)
+        {
+            foreach (var measurement in instance.Observe(selector))
+            {
+                yield return measurement;
+            }
+        }
+    }
+
+    private static IEnumerable<Measurement<long>> ObserveAllOverThreshold()
+    {
+        LatticeStorageUsageMetrics[] snapshot;
+        lock (RegistrationLock)
+        {
+            snapshot = Instances.ToArray();
+        }
+        foreach (var instance in snapshot)
+        {
+            foreach (var measurement in instance.ObserveOverThreshold())
+            {
+                yield return measurement;
+            }
+        }
     }
 
     /// <summary>

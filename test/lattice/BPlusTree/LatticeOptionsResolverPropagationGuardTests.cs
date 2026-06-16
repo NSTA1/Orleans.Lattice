@@ -230,6 +230,24 @@ public class LatticeOptionsResolverPropagationGuardTests
         Assert.That(resolved.StorageUsagePollInterval, Is.EqualTo(configured));
     }
 
+    /// <summary>
+    /// Explicit, behaviour-named pin for the deep storage-usage poll interval:
+    /// the resolver must carry <see cref="LatticeOptions.StorageUsageDeepPollInterval"/>
+    /// through so the per-silo poller's deep loop observes the operator's
+    /// configured cadence rather than the inherited default.
+    /// </summary>
+    [Test]
+    public async Task ResolveAsync_propagates_StorageUsageDeepPollInterval()
+    {
+        var configured = TimeSpan.FromSeconds(90);
+        var baseOptions = new LatticeOptions { StorageUsageDeepPollInterval = configured };
+        var resolver = BuildResolverFor(baseOptions);
+
+        var resolved = await resolver.ResolveAsync("user-tree-storage-deep-poll");
+
+        Assert.That(resolved.StorageUsageDeepPollInterval, Is.EqualTo(configured));
+    }
+
     private static LatticeOptionsResolver BuildResolverFor(LatticeOptions options)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();

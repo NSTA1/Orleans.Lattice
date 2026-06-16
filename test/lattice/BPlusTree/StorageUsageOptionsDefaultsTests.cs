@@ -40,4 +40,12 @@ public sealed class StorageUsageOptionsDefaultsTests
         Assert.That(options.StorageUsagePollInterval, Is.EqualTo(TimeSpan.FromSeconds(15)));
         Assert.That(LatticeOptions.DefaultStorageUsagePollInterval, Is.EqualTo(TimeSpan.FromSeconds(15)));
     }
+
+    [Test]
+    public void StorageUsageDeepPollInterval_defaults_to_zero_disabling_the_deep_poll()
+    {
+        var options = new LatticeOptions();
+        Assert.That(options.StorageUsageDeepPollInterval, Is.EqualTo(TimeSpan.Zero));
+        Assert.That(LatticeOptions.DefaultStorageUsageDeepPollInterval, Is.EqualTo(TimeSpan.Zero));
+    }
 }

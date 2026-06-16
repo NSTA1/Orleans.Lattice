@@ -1090,6 +1090,32 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultStorageUsagePollInterval = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Optional cadence at which the background storage-usage poller also drives
+    /// the <i>deep</i> per-tree aggregator so the snapshot-bytes, leaf-state-bytes,
+    /// and total-bytes gauges populate without any caller invoking
+    /// <see cref="ILattice.GetStorageUsageAsync"/>. The cheap
+    /// <see cref="StorageUsagePollInterval"/> path refreshes only the WAL-bytes
+    /// surface (it touches only WAL partition grains); this deep path additionally
+    /// reads each shard root's incrementally-maintained byte totals (an O(1) read
+    /// per shard root that never walks the leaf chain), so it is heavier than the
+    /// WAL-only poll and activates each registered tree's shard roots. Defaults to
+    /// <see cref="TimeSpan.Zero"/> (disabled), which preserves the activation-light
+    /// poll: the deep gauges then populate only on demand via
+    /// <see cref="ILattice.GetStorageUsageAsync"/> or the operator-driven
+    /// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>. Set a positive value
+    /// (typically a small multiple of <see cref="StorageUsagePollInterval"/>) to
+    /// keep the deep gauges live on a dashboard. A value at or below
+    /// <see cref="TimeSpan.Zero"/> disables the deep poll. This is a global knob
+    /// read from the default (unnamed) options; per-tree overrides do not apply.
+    /// The deep poll never invokes the operator-driven force-refresh fan-out that
+    /// re-walks every leaf, so it cannot pin idle leaves resident.
+    /// </summary>
+    public TimeSpan StorageUsageDeepPollInterval { get; set; } = DefaultStorageUsageDeepPollInterval;
+
+    /// <summary>Default value for <see cref="StorageUsageDeepPollInterval"/> (<see cref="TimeSpan.Zero"/>, disabled).</summary>
+    public static readonly TimeSpan DefaultStorageUsageDeepPollInterval = TimeSpan.Zero;
+
+    /// <summary>
     /// Hard ceiling on how long a single outbound shard-to-shard write
     /// forward (the shadow-forward and cross-shard migration forwards a
     /// <c>ShardRootGrain</c> issues to a sibling shard while an adaptive

@@ -19,16 +19,23 @@ namespace Orleans.Lattice;
 /// cross-silo <c>sum by (tree)</c> counts it once, regardless of how many
 /// silos run this poller.
 /// <para>
-/// The poll path is intentionally activation-free for leaves, internal
+/// The WAL poll path is intentionally activation-free for leaves, internal
 /// nodes, snapshot storage grains, and shard roots: it touches only WAL
 /// partition grains. The previous design drove
 /// <see cref="ILatticeAdmin.GetTotalStorageUsageAsync"/> on every tick,
 /// which descended every shard's leaf chain and activated every per-leaf
 /// snapshot grain - pinning cold trees fully resident and defeating the
 /// activation-on-demand model. Snapshot, leaf-state, and total-bytes
-/// gauges now populate on demand via
+/// gauges populate on demand via
 /// <see cref="ILattice.GetStorageUsageAsync"/> and the operator-driven
-/// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>.
+/// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>, and - when
+/// <see cref="LatticeOptions.StorageUsageDeepPollInterval"/> is set to a
+/// positive value - on a separate, slower deep-poll cadence that calls the
+/// non-force <see cref="ILatticeAdmin.GetTotalStorageUsageAsync"/>. That deep
+/// read consumes each shard root's O(1) incrementally-maintained byte totals
+/// (it never walks the leaf chain), so it activates only the shard roots and
+/// never pins idle leaves resident. The deep poll defaults to disabled
+/// (<see cref="TimeSpan.Zero"/>) to preserve the activation-light poll.
 /// </para>
 /// <para>
 /// Running the poller on every silo is intentional and safe: redundant
@@ -42,8 +49,9 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// The poller sets the sink's staleness horizon to a small multiple of its
-/// poll interval so a series survives a few missed polls (a transient admin
-/// fan-out failure) but expires promptly after a real migration.
+/// slowest active poll cadence so a series survives a few missed polls (a
+/// transient admin fan-out failure) but expires promptly after a real
+/// migration.
 /// </para>
 /// </summary>
 internal sealed class LatticeStorageUsagePoller(
@@ -65,32 +73,81 @@ internal sealed class LatticeStorageUsagePoller(
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var interval = optionsMonitor.Get(Options.DefaultName).StorageUsagePollInterval;
-        if (interval <= TimeSpan.Zero)
+        var options = optionsMonitor.Get(Options.DefaultName);
+        var walInterval = options.StorageUsagePollInterval;
+        var deepInterval = options.StorageUsageDeepPollInterval;
+
+        var walEnabled = walInterval > TimeSpan.Zero;
+        var deepEnabled = deepInterval > TimeSpan.Zero;
+
+        if (!walEnabled && !deepEnabled)
         {
             // Poller disabled: the gauges populate only when the public API
             // is called. Leave the sink's default staleness horizon in place.
-            logger.LogDebug("Storage-usage poller disabled (StorageUsagePollInterval <= 0).");
+            logger.LogDebug(
+                "Storage-usage poller disabled (StorageUsagePollInterval and StorageUsageDeepPollInterval <= 0).");
             return;
         }
 
-        // Size the sink's staleness horizon off the poll cadence so a series
-        // survives a few missed polls but expires promptly after a real
-        // aggregator migration to a sibling silo.
-        var horizon = interval * StalenessHorizonPolls;
+        // Size the sink's staleness horizon off the slowest active cadence so a
+        // series survives a few missed polls but expires promptly after a real
+        // aggregator migration to a sibling silo. The deep gauges are refreshed
+        // only by the deep loop, so the horizon must outlast the deep cadence
+        // when it is the slower of the two.
+        var slowest = walEnabled ? walInterval : TimeSpan.Zero;
+        if (deepEnabled && deepInterval > slowest)
+        {
+            slowest = deepInterval;
+        }
+
+        var horizon = slowest * StalenessHorizonPolls;
         if (horizon < LatticeStorageUsageMetrics.DefaultStalenessHorizon)
         {
             horizon = LatticeStorageUsageMetrics.DefaultStalenessHorizon;
         }
         metrics.StalenessHorizon = horizon;
 
+        var loops = new List<Task>(2);
+        if (walEnabled)
+        {
+            loops.Add(RunPollLoopAsync(walInterval, deep: false, stoppingToken));
+        }
+        if (deepEnabled)
+        {
+            loops.Add(RunPollLoopAsync(deepInterval, deep: true, stoppingToken));
+        }
+
+        await Task.WhenAll(loops).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Drives one poll cadence. The <paramref name="deep"/> loop calls the
+    /// admin grain's non-force deep aggregator
+    /// (<see cref="ILatticeAdmin.GetTotalStorageUsageAsync"/>) so the
+    /// snapshot-bytes, leaf-state-bytes, and total-bytes gauges populate; the
+    /// WAL loop calls <see cref="ILatticeAdmin.PollWalUsageAsync"/>. Both fire
+    /// immediately, then on their own interval.
+    /// </summary>
+    private async Task RunPollLoopAsync(TimeSpan interval, bool deep, CancellationToken stoppingToken)
+    {
         using var timer = new PeriodicTimer(interval, _time);
         do
         {
             try
             {
                 var admin = grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey);
-                await admin.PollWalUsageAsync(stoppingToken).ConfigureAwait(false);
+                if (deep)
+                {
+                    // Non-force deep read: reads each shard root's O(1)
+                    // incrementally-maintained byte totals; it never walks the
+                    // leaf chain or activates per-leaf snapshot grains, so it
+                    // does not pin cold trees resident.
+                    await admin.GetTotalStorageUsageAsync(stoppingToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await admin.PollWalUsageAsync(stoppingToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -102,7 +159,10 @@ internal sealed class LatticeStorageUsagePoller(
                 // ready during startup) must not kill the poller; the next
                 // tick retries. The staleness horizon keeps the last-known
                 // series alive across a handful of these.
-                logger.LogDebug(ex, "Storage-usage poll failed; will retry on the next tick.");
+                logger.LogDebug(
+                    ex,
+                    "Storage-usage {Kind} poll failed; will retry on the next tick.",
+                    deep ? "deep" : "WAL");
             }
         }
         while (await SafeWaitAsync(timer, stoppingToken).ConfigureAwait(false));

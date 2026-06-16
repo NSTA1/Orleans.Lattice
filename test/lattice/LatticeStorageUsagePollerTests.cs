@@ -135,4 +135,90 @@ public sealed class LatticeStorageUsagePollerTests
 
         await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
     }
+
+    [Test]
+    public async Task ExecuteAsync_deep_interval_enabled_drives_the_non_force_deep_aggregator()
+    {
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
+            .Returns(new ClusterStorageUsageReport());
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
+
+        var poller = CreatePoller(
+            factory,
+            new LatticeOptions
+            {
+                StorageUsagePollInterval = TimeSpan.FromMilliseconds(25),
+                StorageUsageDeepPollInterval = TimeSpan.FromMilliseconds(25),
+            },
+            out _);
+
+        await poller.StartAsync(CancellationToken.None);
+        await Task.Delay(200);
+        await poller.StopAsync(CancellationToken.None);
+
+        await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
+        await admin.ReceivedWithAnyArgs().GetTotalStorageUsageAsync(default);
+        // The deep poll uses the non-force aggregator; it must never invoke the
+        // operator-driven force-refresh that re-walks every leaf.
+        await admin.DidNotReceive().RefreshStorageUsageAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_deep_only_polls_the_deep_path_without_the_wal_poll()
+    {
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
+            .Returns(new ClusterStorageUsageReport());
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
+
+        var poller = CreatePoller(
+            factory,
+            new LatticeOptions
+            {
+                StorageUsagePollInterval = TimeSpan.Zero,
+                StorageUsageDeepPollInterval = TimeSpan.FromMilliseconds(25),
+            },
+            out _);
+
+        await poller.StartAsync(CancellationToken.None);
+        await Task.Delay(200);
+        await poller.StopAsync(CancellationToken.None);
+
+        await admin.ReceivedWithAnyArgs().GetTotalStorageUsageAsync(default);
+        await admin.DidNotReceive().PollWalUsageAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_sizes_horizon_off_the_slower_deep_cadence()
+    {
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
+            .Returns(new ClusterStorageUsageReport());
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
+
+        // WAL 5s would floor the horizon at 60s, but the slower 30s deep
+        // cadence widens it to 4x30s = 120s so a deep series survives a few
+        // missed deep polls.
+        var poller = CreatePoller(
+            factory,
+            new LatticeOptions
+            {
+                StorageUsagePollInterval = TimeSpan.FromSeconds(5),
+                StorageUsageDeepPollInterval = TimeSpan.FromSeconds(30),
+            },
+            out var metrics);
+
+        await poller.StartAsync(CancellationToken.None);
+        await Task.Delay(100);
+        await poller.StopAsync(CancellationToken.None);
+
+        Assert.That(metrics.StalenessHorizon, Is.EqualTo(TimeSpan.FromSeconds(120)),
+            "the poller sizes the sink staleness horizon off the slower of the WAL and deep cadences");
+    }
 }
