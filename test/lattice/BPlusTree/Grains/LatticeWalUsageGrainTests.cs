@@ -19,7 +19,24 @@ public sealed class LatticeWalUsageGrainTests
 {
     private const string TreeId = "wal-usage-tree";
 
-    private static LatticeWalUsageGrain CreateGrain(
+    private readonly List<LatticeStorageUsageMetrics> _createdMetrics = new();
+
+    [TearDown]
+    public void DisposeCreatedMetrics()
+    {
+        // Each test builds its own sink instance, which registers in the
+        // process-wide LatticeStorageUsageMetrics registry the observable
+        // gauges union across. Disposing them after every test prevents one
+        // test's series (e.g. an over-threshold = 1 sample) from leaking
+        // into the next test's gauge read.
+        foreach (var metrics in _createdMetrics)
+        {
+            metrics.Dispose();
+        }
+        _createdMetrics.Clear();
+    }
+
+    private LatticeWalUsageGrain CreateGrain(
         IGrainFactory factory,
         out LatticeStorageUsageMetrics metrics,
         LatticeOptions? options = null)
@@ -36,6 +53,7 @@ public sealed class LatticeWalUsageGrainTests
 
         var resolver = TestOptionsResolver.ForFactory(factory, options);
         metrics = new LatticeStorageUsageMetrics();
+        _createdMetrics.Add(metrics);
         return new LatticeWalUsageGrain(
             context,
             factory,

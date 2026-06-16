@@ -12,6 +12,18 @@ namespace Orleans.Lattice.Tests;
 [TestFixture]
 public sealed class LatticeStorageUsagePollerTests
 {
+    private readonly List<LatticeStorageUsageMetrics> _createdMetrics = new();
+
+    [TearDown]
+    public void DisposeCreatedMetrics()
+    {
+        foreach (var metrics in _createdMetrics)
+        {
+            metrics.Dispose();
+        }
+        _createdMetrics.Clear();
+    }
+
     private static IOptionsMonitor<LatticeOptions> Monitor(LatticeOptions options)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
@@ -19,12 +31,13 @@ public sealed class LatticeStorageUsagePollerTests
         return monitor;
     }
 
-    private static LatticeStorageUsagePoller CreatePoller(
+    private LatticeStorageUsagePoller CreatePoller(
         IGrainFactory factory,
         LatticeOptions options,
         out LatticeStorageUsageMetrics metrics)
     {
         metrics = new LatticeStorageUsageMetrics();
+        _createdMetrics.Add(metrics);
         return new LatticeStorageUsagePoller(
             factory,
             metrics,
