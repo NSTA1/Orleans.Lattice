@@ -845,7 +845,7 @@
     {
       "id": 23,
       "title": "Storage footprint by tree",
-      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero.",
+      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. Each tree's footprint is published by a single per-tree aggregator on whichever one silo currently hosts it, so this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster - filtering by silo would hide every tree whose aggregator lives elsewhere.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -856,17 +856,17 @@
       "targets": [
         {
           "refId": "WAL",
-          "expr": "sum by (tree) (orleans_lattice_storage_wal_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum by (tree) (orleans_lattice_storage_wal_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "{{tree}} wal"
         },
         {
           "refId": "SNAP",
-          "expr": "sum by (tree) (orleans_lattice_storage_snapshot_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum by (tree) (orleans_lattice_storage_snapshot_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "{{tree}} snapshot"
         },
         {
           "refId": "LEAF",
-          "expr": "sum by (tree) (orleans_lattice_storage_leaf_state_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum by (tree) (orleans_lattice_storage_leaf_state_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "{{tree}} leaf-state"
         }
       ]
@@ -874,7 +874,7 @@
     {
       "id": 24,
       "title": "Cluster total retained bytes",
-      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces.",
+      "description": "Single stat summing orleans_lattice_storage_total_bytes across every tree and silo: the cluster-wide byte-accurate footprint of all Lattice storage surfaces. Storage gauges are emitted on exactly one silo per tree, so this stat ignores the $silo selector and sums across all silos in the selected cluster.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -885,7 +885,7 @@
       "targets": [
         {
           "refId": "TOTAL",
-          "expr": "sum(orleans_lattice_storage_total_bytes{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "expr": "sum(orleans_lattice_storage_total_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
           "legendFormat": "cluster total"
         }
       ]
@@ -893,7 +893,7 @@
     {
       "id": 25,
       "title": "Trees over advisory threshold",
-      "description": "Trees whose retained WAL bytes currently breach the advisory ceiling (LatticeOptions.WalMaxRetainedBytes). The 0/1 over_threshold gauge stays at 1 while a lagging consumer pins bytes the byte-pressure policy cannot safely reclaim - the breach is advisory and the durability invariant wins.",
+      "description": "Trees whose retained WAL bytes currently breach the advisory ceiling (LatticeOptions.WalMaxRetainedBytes). The 0/1 over_threshold gauge stays at 1 while a lagging consumer pins bytes the byte-pressure policy cannot safely reclaim - the breach is advisory and the durability invariant wins. The over_threshold gauge is published by the same single per-tree aggregator as the storage-footprint panels, so it lands on one silo per tree; this panel deliberately ignores the $silo selector and evaluates across all silos in the selected cluster, otherwise a breaching tree would be hidden whenever its aggregator is placed on an unselected silo.",
       "type": "table",
       "datasource": {
         "type": "prometheus",
@@ -904,7 +904,7 @@
       "targets": [
         {
           "refId": "OVER",
-          "expr": "max by (tree) (orleans_lattice_storage_policy_over_threshold{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) == 1",
+          "expr": "max by (tree) (orleans_lattice_storage_policy_over_threshold{tree=~\"$tree\",cluster=~\"$cluster\"}) == 1",
           "legendFormat": "{{tree}}",
           "format": "table",
           "instant": true
@@ -914,7 +914,7 @@
     {
       "id": 26,
       "title": "Byte-pressure trim activity",
-      "description": "Rate of advisory byte-pressure trim passes (policy.trim_triggered, reason=byte_pressure) and the WAL bytes those passes reclaimed (policy.bytes_reclaimed). A non-zero trigger rate with a flat reclaim rate means consumers are lagging and the bytes could not be safely freed.",
+      "description": "Rate of advisory byte-pressure trim passes (policy.trim_triggered, reason=byte_pressure) and the WAL bytes those passes reclaimed (policy.bytes_reclaimed). A non-zero trigger rate with a flat reclaim rate means consumers are lagging and the bytes could not be safely freed. These counters accrue in each tree's WAL partition grain - a single activation per partition - so they land on one silo per partition; this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster rather than tracking which silo currently hosts a partition grain.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -925,12 +925,12 @@
       "targets": [
         {
           "refId": "TRIG",
-          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_trim_triggered_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_trim_triggered_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} triggered/s"
         },
         {
           "refId": "RECLAIM",
-          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_bytes_reclaimed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum by (tree) (rate(orleans_lattice_storage_policy_bytes_reclaimed_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} reclaimed bytes/s"
         }
       ]
@@ -938,7 +938,7 @@
     {
       "id": 36,
       "title": "WAL compression savings ratio by tree",
-      "description": "Fraction of encoded WAL payload bytes saved by the Azure Table provider's per-row compression, per tree: 1 - rate(stored_bytes) / rate(uncompressed_bytes). 0 means no saving (every row stored verbatim); higher is better. Reads as no data for a tree with no WAL append traffic in the window, since the ratio is undefined with no bytes. Pair with the skips-by-reason panel to the right to explain a low ratio.",
+      "description": "Fraction of encoded WAL payload bytes saved by the Azure Table provider's per-row compression, per tree: 1 - rate(stored_bytes) / rate(uncompressed_bytes). 0 means no saving (every row stored verbatim); higher is better. Reads as no data for a tree with no WAL append traffic in the window, since the ratio is undefined with no bytes. Pair with the skips-by-reason panel to the right to explain a low ratio. The provider compression counters accrue in each tree's WAL partition grain (a single activation per partition), so they land on one silo per partition; this ratio deliberately ignores the $silo selector and is computed across all silos in the selected cluster - a per-silo view would only reflect which partition grains are currently placed there, not a per-silo compression property.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 6, "x": 12, "y": 75 },
@@ -946,7 +946,7 @@
       "targets": [
         {
           "refId": "RATIO",
-          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "1 - sum by (tree) (rate(orleans_lattice_storage_wal_stored_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m])) / sum by (tree) (rate(orleans_lattice_storage_wal_uncompressed_bytes_bytes_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} savings"
         }
       ]
@@ -954,7 +954,7 @@
     {
       "id": 37,
       "title": "WAL compression skips by reason",
-      "description": "Rate of WAL rows the Azure Table provider stored verbatim instead of compressed, by reason: below_threshold (payload shorter than CompressionMinPayloadBytes), inflation_guard (compressing did not shrink it), or disabled (compression off). A low savings ratio dominated by below_threshold is the cue to lower CompressionMinPayloadBytes; one dominated by inflation_guard means the payloads are incompressible and lowering it would only burn CPU.",
+      "description": "Rate of WAL rows the Azure Table provider stored verbatim instead of compressed, by reason: below_threshold (payload shorter than CompressionMinPayloadBytes), inflation_guard (compressing did not shrink it), or disabled (compression off). A low savings ratio dominated by below_threshold is the cue to lower CompressionMinPayloadBytes; one dominated by inflation_guard means the payloads are incompressible and lowering it would only burn CPU. Like the savings-ratio panel, these counters accrue in each tree's WAL partition grain (a single activation per partition), so they land on one silo per partition; this panel deliberately ignores the $silo selector and sums across all silos in the selected cluster rather than tracking partition-grain placement.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 6, "x": 18, "y": 75 },
@@ -962,7 +962,7 @@
       "targets": [
         {
           "refId": "SKIP",
-          "expr": "sum by (tree, reason) (rate(orleans_lattice_storage_wal_compression_skipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "expr": "sum by (tree, reason) (rate(orleans_lattice_storage_wal_compression_skipped_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))",
           "legendFormat": "{{tree}} {{reason}}"
         }
       ]

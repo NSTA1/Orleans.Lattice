@@ -100,6 +100,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |
 | [`StorageUsageCacheTtl`](#storageusagecachettl) | `TimeSpan` | 10 seconds | Yes |
 | [`StorageUsagePollInterval`](#storageusagepollinterval) | `TimeSpan` | 15 seconds | No (global; read from the default options) |
+| [`StorageUsageDeepPollInterval`](#storageusagedeeppollinterval) | `TimeSpan` | `TimeSpan.Zero` (disabled) | No (global; read from the default options) |
 | [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
 | [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
@@ -491,7 +492,7 @@ This option can be changed freely at any time.
 
 ### `StorageUsagePollInterval`
 
-Cadence at which every silo's background storage-usage poller calls `ILatticeAdmin.GetTotalStorageUsageAsync` so the byte-accurate storage gauges (`lattice.storage.*`) populate automatically, without any caller having to invoke `ILattice.GetStorageUsageAsync`. Default 15 seconds. The poll fans out to every registered tree's aggregator; because each aggregator is a single cluster-wide activation, its publish lands on its own host silo's metrics sink, so a tree contributes its series on exactly one silo and a cross-silo `sum by (tree)` counts it once. Running the poller on every silo is intentional - it needs no leader election, and the aggregator's `StorageUsageCacheTtl` coalesces redundant polls from sibling silos. When a tree's aggregator migrates to another silo, the old silo stops refreshing that series and it expires from its sink after a staleness horizon (four poll intervals, floored at 60 seconds), so the tree never double-counts across scrape targets.
+Cadence at which every silo's background storage-usage poller calls `ILatticeAdmin.PollWalUsageAsync` so the WAL-bytes and over-threshold storage gauges (`lattice.storage.wal_bytes`, `lattice.storage.policy.over_threshold`) populate automatically, without any caller having to invoke `ILattice.GetStorageUsageAsync`. Default 15 seconds. The poll path is **leaf-free**: it activates only WAL partition grains, so idle trees stay cold. The poll fans out to every registered tree's aggregator; because each aggregator is a single cluster-wide activation, its publish lands on its own host silo's metrics sink, so a tree contributes its series on exactly one silo and a cross-silo `sum by (tree)` counts it once. Running the poller on every silo is intentional - it needs no leader election, and the aggregator's `StorageUsageCacheTtl` coalesces redundant polls from sibling silos. When a tree's aggregator migrates to another silo, the old silo stops refreshing that series and it expires from its sink after a staleness horizon (four poll intervals, floored at 60 seconds), so the tree never double-counts across scrape targets. The snapshot-bytes, leaf-state-bytes, and total-bytes gauges are **not** refreshed by this poll; see [`StorageUsageDeepPollInterval`](#storageusagedeeppollinterval).
 
 This is a **global** knob read from the default (unnamed) options; per-tree overrides do not apply. Set to `TimeSpan.Zero` or a negative value to disable the poller - the gauges then populate only when the public storage-usage API is called.
 
@@ -501,6 +502,23 @@ siloBuilder.ConfigureLattice(o => o.StorageUsagePollInterval = TimeSpan.FromSeco
 
 // Disable the poller (gauges populate only on explicit API calls)
 siloBuilder.ConfigureLattice(o => o.StorageUsagePollInterval = TimeSpan.Zero);
+```
+
+This option is read once when the poller starts on each silo.
+
+### `StorageUsageDeepPollInterval`
+
+Optional cadence at which the same background poller *also* drives the **deep** storage gauges - `lattice.storage.snapshot_bytes`, `lattice.storage.leaf_state_bytes`, and `lattice.storage.total_bytes` - by calling the non-force `ILatticeAdmin.GetTotalStorageUsageAsync`. The faster [`StorageUsagePollInterval`](#storageusagepollinterval) poll refreshes only the WAL-bytes surface (it touches only WAL partition grains); this deep poll additionally reads each shard root's incrementally-maintained byte totals. That read is **O(1) per shard root** - it never walks the leaf chain or activates per-leaf snapshot grains - so it activates only the shard roots and never pins idle leaves resident. It never invokes the operator-only force-refresh (`ILatticeAdmin.RefreshStorageUsageAsync`) that re-walks every leaf.
+
+Defaults to `TimeSpan.Zero`, which **disables** the deep poll: the snapshot / leaf-state / total-bytes gauges then populate only on demand via `ILattice.GetStorageUsageAsync` or the operator-driven `ILatticeAdmin.RefreshStorageUsageAsync`. Set a positive value - typically a small multiple of `StorageUsagePollInterval` - to keep the deep gauges live on a dashboard. A value at or below `TimeSpan.Zero` disables it. Like `StorageUsagePollInterval`, this is a **global** knob read from the default (unnamed) options; per-tree overrides do not apply. The sink's staleness horizon is sized off the slower of the two cadences, so a deep series survives a few missed deep polls before expiring after a real migration.
+
+```csharp verify
+// Refresh the deep storage gauges once a minute (WAL bytes still refresh
+// on the faster StorageUsagePollInterval cadence).
+siloBuilder.ConfigureLattice(o => o.StorageUsageDeepPollInterval = TimeSpan.FromSeconds(60));
+
+// Leave disabled (default): deep gauges populate only on explicit API calls.
+siloBuilder.ConfigureLattice(o => o.StorageUsageDeepPollInterval = TimeSpan.Zero);
 ```
 
 This option is read once when the poller starts on each silo.

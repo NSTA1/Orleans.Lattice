@@ -52,11 +52,13 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// default cadence so an idle tree is never activated by polling.
     /// <para>
     /// Callers that need byte-accurate <i>leaf-state</i> or <i>snapshot</i>
-    /// totals use <see cref="GetTotalStorageUsageAsync"/> (on demand) or
-    /// <see cref="RefreshStorageUsageAsync"/> (operator-driven deep
-    /// refresh across every tree); both pay the activation cost of the
-    /// deep leaf-walk fan-out and should not be invoked on a polling
-    /// cadence.
+    /// totals use <see cref="GetTotalStorageUsageAsync"/>, which reads each
+    /// shard root's O(1) incrementally-maintained byte totals (it activates
+    /// shard roots but never walks the leaf chain) and is therefore safe to
+    /// drive on the slower, optional
+    /// <see cref="LatticeOptions.StorageUsageDeepPollInterval"/> cadence. Only
+    /// <see cref="RefreshStorageUsageAsync"/> pays the activation cost of the
+    /// deep leaf-walk fan-out and must not be invoked on a polling cadence.
     /// </para>
     /// <para>
     /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason

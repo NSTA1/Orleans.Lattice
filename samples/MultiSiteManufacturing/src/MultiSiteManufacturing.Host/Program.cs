@@ -158,6 +158,13 @@ builder.Host.UseOrleans(silo =>
         silo.AddMemoryGrainStorage("msmfgGrainState");
         silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
 
+        // Drive the deep storage gauges (snapshot / leaf-state / total bytes)
+        // on a slow cadence so the Grafana storage panels populate without an
+        // operator calling the storage-usage API. The deep read is O(1) per
+        // shard root (it never walks the leaf chain), so it does not pin idle
+        // trees resident. WAL-bytes still refresh on the faster default poll.
+        silo.ConfigureLattice(o => o.StorageUsageDeepPollInterval = TimeSpan.FromSeconds(60));
+
         // Dashboard broadcast stream - in-memory variant. This path is
         // only used by the single-silo quick-start so cluster-wide
         // fan-out is a no-op; the memory provider keeps the broadcaster
@@ -202,6 +209,14 @@ builder.Host.UseOrleans(silo =>
                 options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
             });
         });
+
+        // Drive the deep storage gauges (snapshot / leaf-state / total bytes)
+        // on a slow cadence so the Grafana storage panels populate across
+        // every silo without an operator calling the storage-usage API. The
+        // deep read is O(1) per shard root (it never walks the leaf chain),
+        // so it does not pin idle trees resident. WAL-bytes still refresh on
+        // the faster default poll.
+        silo.ConfigureLattice(o => o.StorageUsageDeepPollInterval = TimeSpan.FromSeconds(60));
 
         // Cluster-wide dashboard broadcast stream backed by Azure
         // Storage Queues. Every silo's DashboardBroadcaster publishes

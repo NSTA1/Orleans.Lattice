@@ -262,6 +262,45 @@ public sealed class LatticeStorageUsageMetricsTests
             "a stale over-threshold series must expire so a migrated tree is not reported by two silos");
     }
 
+    [Test]
+    public void Gauges_union_series_published_through_separate_instances()
+    {
+        // Models two co-hosted silos in one process: each silo's DI singleton
+        // is a distinct sink instance. A scrape of the process-wide gauge must
+        // surface trees published through either instance, not just the most
+        // recently constructed one.
+        var siloA = new LatticeStorageUsageMetrics();
+        var siloB = new LatticeStorageUsageMetrics();
+        var treeA = $"sg-{Guid.NewGuid():N}";
+        var treeB = $"sg-{Guid.NewGuid():N}";
+
+        siloA.Publish(Report(treeA, wal: 10, snap: 0, leaf: 0));
+        siloB.Publish(Report(treeB, wal: 20, snap: 0, leaf: 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageWalBytesName, treeA), Is.EqualTo(10),
+                "a tree published through the first instance must still be observed after a later instance is constructed");
+            Assert.That(Read(LatticeMetrics.StorageWalBytesName, treeB), Is.EqualTo(20),
+                "a tree published through the second instance must be observed too");
+        });
+    }
+
+    [Test]
+    public void Disposed_instance_stops_contributing_to_gauges()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25));
+        Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(100));
+
+        sut.Dispose();
+
+        Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.Null,
+            "a disposed sink must stop contributing its published series to the gauges");
+    }
+
     /// <summary>
     /// Minimal mutable <see cref="TimeProvider"/> for driving the sink's
     /// staleness horizon deterministically without a package dependency.
