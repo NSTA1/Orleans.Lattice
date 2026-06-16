@@ -28,6 +28,16 @@ public sealed class FederationTestClusterFixture
     /// <summary>Grain factory exposed by the cluster (use this to construct federation services in tests).</summary>
     public IGrainFactory GrainFactory => Cluster.GrainFactory;
 
+    /// <summary>
+    /// The primary silo's service provider. Unlike
+    /// <see cref="TestCluster.ServiceProvider"/> (the client provider), this
+    /// sees silo-side registrations such as the <see cref="ILatticeTagIndexFactory"/>
+    /// that <c>AddLattice</c> installs.
+    /// </summary>
+    public IServiceProvider SiloServices =>
+        System.Linq.Enumerable.First(
+            System.Linq.Enumerable.OfType<InProcessSiloHandle>(Cluster.Silos)).SiloHost.Services;
+
     /// <summary>Deploys a single-silo cluster with in-memory grain storage and Lattice.</summary>
     public async Task InitializeAsync()
     {

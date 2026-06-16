@@ -160,7 +160,7 @@ public sealed class BaselineReplicationApplierTests
     [Test]
     public async Task Entry_for_unrelated_tree_is_ignored_even_when_applied()
     {
-        // mfg-site-activity-index also replicates as LwwRegister; the
+        // mfg-site-activity also replicates as LwwRegister; the
         // decorator must not interpret its payload as a Fact.
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-99003");
         var fact = Nc(serial, tick: 3, ncNumber: "NC-A-3", NcSeverity.Minor, ProcessSite.ToulouseNdtLab);

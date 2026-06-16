@@ -154,7 +154,8 @@ The sample's contribution is the per-tree opt-in:
 | Tree | Replicated? | Mode | Why |
 |---|---|---|---|
 | `mfg-facts` | Yes | `LwwRegister` | Write-once immutable keys; double-apply is an idempotent merge. |
-| `mfg-site-activity-index` | Yes | `LwwRegister` | One entry per fact, never overwritten - same reasoning as `mfg-facts`. |
+| `mfg-site-activity` | Yes | `LwwRegister` | Part-major activity rows keyed `{serial}/{site}`; newest fact per part-at-site wins, so LWW converges. |
+| `tag-mfg-site` | Yes | `OrFlag` | Tag-index membership rows for the per-site view; under active-active both clusters tag keys, so flag-CRDT enable-wins membership converges where an LWW row would drop a concurrent posting. |
 | `mfg-part-labels` | Yes | `OrSet` | One OrSet per serial; the package ships typed `add` / `remove` / `merge` deltas instead of raw byte writes. |
 | `mfg-part-operator` | No (cluster-local) | n/a | Per-serial LWW register. LWW across clusters with disjoint HLCs is meaningless - concurrent cross-cluster writes would pick different winners on each side. |
 
