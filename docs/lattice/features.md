@@ -25,6 +25,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
+- [F-104](https://github.com/NSTA1/Orleans.Lattice/issues/778) - Atomic value-plus-flag-membership coupling for tag indexes: additively honour `SetValueWithTags(...).Atomic()` under flag merge modes (per-entry saga deltas) so it no longer silently downgrades to eventual coupling
 
 ### Shipped
 
