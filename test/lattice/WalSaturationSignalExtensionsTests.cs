@@ -18,54 +18,60 @@ public class WalSaturationSignalExtensionsTests
     [Test]
     public async Task ApplyBackPressureAsync_returns_immediately_on_Healthy()
     {
-        // Healthy fast-path must be synchronous (no allocation, one
-        // dictionary lookup). Assert via wall-clock that the call
-        // returned in well under the configured Throttled delay.
+        // Healthy fast-path must be the synchronous no-op path: it returns
+        // an already-completed task (one dictionary lookup, no delay, no
+        // park). Asserting synchronous completion is deterministic, unlike
+        // a wall-clock upper bound that trips under parallel CI load.
         var signal = Substitute.For<IWalSaturationSignal>();
         signal.GetCurrentState(TreeId).Returns(WalSaturationState.Healthy);
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await signal.ApplyBackPressureAsync(TreeId, TimeSpan.FromMilliseconds(500));
-        sw.Stop();
+        var task = signal.ApplyBackPressureAsync(TreeId, TimeSpan.FromMilliseconds(500));
 
-        Assert.That(sw.Elapsed, Is.LessThan(TimeSpan.FromMilliseconds(100)),
-            "Healthy fast-path must return immediately without applying the Throttled delay");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "Healthy fast-path must return an already-completed task without applying the Throttled delay");
+        await task;
         await signal.DidNotReceive().WaitForHealthyAsync(TreeId, Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task ApplyBackPressureAsync_delays_on_Throttled()
     {
-        // Throttled must apply the configured per-call delay. The
-        // canonical use case is per-line back-pressure on a TCP
-        // reader; the delay must actually happen so the producer's
-        // TCP window can shrink.
+        // Throttled must apply the configured per-call delay. The canonical
+        // use case is per-line back-pressure on a TCP reader; the delay must
+        // actually happen so the producer's TCP window can shrink. Asserted
+        // deterministically through an injected time provider: the call
+        // schedules a delay for exactly the configured duration and the
+        // returned task does not complete until that timer fires - no
+        // wall-clock measurement, so no parallel-load timing flakiness.
         var signal = Substitute.For<IWalSaturationSignal>();
         signal.GetCurrentState(TreeId).Returns(WalSaturationState.Throttled);
+        var time = new ManualDelayTimeProvider();
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await signal.ApplyBackPressureAsync(TreeId, TimeSpan.FromMilliseconds(50));
-        sw.Stop();
+        var task = signal.ApplyBackPressureAsync(TreeId, TimeSpan.FromMilliseconds(50), time);
 
-        Assert.That(sw.Elapsed, Is.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(40)),
-            "Throttled response must apply the configured per-call delay (the canonical back-pressure mechanism)");
+        Assert.That(task.IsCompleted, Is.False,
+            "Throttled response must await a real delay rather than completing synchronously");
+        Assert.That(time.LastScheduledDelay, Is.EqualTo(TimeSpan.FromMilliseconds(50)),
+            "Throttled response must schedule the configured per-call delay (the canonical back-pressure mechanism)");
+
+        time.FireDueTimers();
+        await task;
         await signal.DidNotReceive().WaitForHealthyAsync(TreeId, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task ApplyBackPressureAsync_skips_delay_on_Throttled_when_delay_is_Zero()
+    public void ApplyBackPressureAsync_skips_delay_on_Throttled_when_delay_is_Zero()
     {
-        // Zero delay disables the Throttled response (equivalent to
-        // the historical scheduler-yield pattern). Useful for
-        // operators that want to opt out of the per-call delay.
+        // Zero delay disables the Throttled response (equivalent to the
+        // historical scheduler-yield pattern). Useful for operators that want
+        // to opt out of the per-call delay. The Zero branch is the
+        // synchronous no-op path, so assert completion deterministically.
         var signal = Substitute.For<IWalSaturationSignal>();
         signal.GetCurrentState(TreeId).Returns(WalSaturationState.Throttled);
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await signal.ApplyBackPressureAsync(TreeId, TimeSpan.Zero);
-        sw.Stop();
+        var task = signal.ApplyBackPressureAsync(TreeId, TimeSpan.Zero);
 
-        Assert.That(sw.Elapsed, Is.LessThan(TimeSpan.FromMilliseconds(100)),
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
             "Zero throttled delay must disable the Throttled branch (no-op fast path)");
     }
 
@@ -92,21 +98,27 @@ public class WalSaturationSignalExtensionsTests
         // Default must actually delay so consumers that adopt the
         // convenience overload get meaningful back-pressure
         // out-of-the-box (this is the fix for "the bench's Throttled
-        // response was too soft because it rolled its own").
+        // response was too soft because it rolled its own"). Asserted
+        // deterministically through an injected time provider: the
+        // convenience overload schedules a delay for exactly
+        // DefaultThrottledDelay rather than completing synchronously -
+        // no wall-clock measurement, so no parallel-load timing flakiness.
         var signal = Substitute.For<IWalSaturationSignal>();
         signal.GetCurrentState(TreeId).Returns(WalSaturationState.Throttled);
+        var time = new ManualDelayTimeProvider();
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await signal.ApplyBackPressureAsync(TreeId);
-        sw.Stop();
+        var task = signal.ApplyBackPressureAsync(TreeId, time);
 
-        // The default is 1 ms; with CI scheduler variance, assert >= 0.5ms
-        // (proves the delay actually happened, not just a yield).
-        Assert.That(sw.Elapsed, Is.GreaterThanOrEqualTo(TimeSpan.FromMicroseconds(500)),
-            "default convenience overload must apply the DefaultThrottledDelay (1 ms)");
+        Assert.That(task.IsCompleted, Is.False,
+            "default convenience overload must apply a real delay, not complete synchronously");
+        Assert.That(time.LastScheduledDelay, Is.EqualTo(WalSaturationSignalExtensions.DefaultThrottledDelay),
+            "default convenience overload must schedule the DefaultThrottledDelay (1 ms)");
         Assert.That(WalSaturationSignalExtensions.DefaultThrottledDelay,
             Is.EqualTo(TimeSpan.FromMilliseconds(1)),
             "DefaultThrottledDelay must stay at 1 ms - the documented value the bench's per-line cost is sized against");
+
+        time.FireDueTimers();
+        await task;
     }
 
     [Test]
@@ -170,5 +182,89 @@ public class WalSaturationSignalExtensionsTests
         Assert.That(
             async () => await signal.ApplyBackPressureAsync(TreeId, TimeSpan.FromMilliseconds(500), cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    /// <summary>
+    /// Controllable <see cref="TimeProvider"/> for asserting the Throttled
+    /// delay deterministically. <c>Task.Delay(delay, provider, ct)</c> schedules
+    /// its completion through <see cref="CreateTimer"/>; this provider records
+    /// the requested due time and never fires a timer on its own, so a delay
+    /// stays pending until the test calls <see cref="FireDueTimers"/> - removing
+    /// the wall-clock dependency that made these tests flaky under parallel load.
+    /// </summary>
+    private sealed class ManualDelayTimeProvider : TimeProvider
+    {
+        private readonly List<ManualTimer> _timers = new();
+
+        /// <summary>The due time of the most recently scheduled timer.</summary>
+        public TimeSpan? LastScheduledDelay { get; private set; }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(callback, state, this);
+            lock (_timers)
+            {
+                _timers.Add(timer);
+            }
+            if (dueTime != Timeout.InfiniteTimeSpan)
+            {
+                LastScheduledDelay = dueTime;
+            }
+            return timer;
+        }
+
+        /// <summary>Fires every pending timer, completing any awaited delays.</summary>
+        public void FireDueTimers()
+        {
+            ManualTimer[] pending;
+            lock (_timers)
+            {
+                pending = _timers.FindAll(static t => !t.Fired).ToArray();
+            }
+            foreach (var timer in pending)
+            {
+                timer.Fire();
+            }
+        }
+
+        private void Remove(ManualTimer timer)
+        {
+            lock (_timers)
+            {
+                _timers.Remove(timer);
+            }
+        }
+
+        private sealed class ManualTimer(TimerCallback callback, object? state, ManualDelayTimeProvider owner) : ITimer
+        {
+            private TimerCallback? _callback = callback;
+
+            public bool Fired { get; private set; }
+
+            public void Fire()
+            {
+                if (Fired)
+                {
+                    return;
+                }
+                Fired = true;
+                _callback?.Invoke(state);
+            }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+                Fired = true;
+                _callback = null;
+                owner.Remove(this);
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 }

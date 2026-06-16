@@ -108,9 +108,27 @@ public static class WalSaturationSignalExtensions
         string treeId,
         TimeSpan throttledDelay,
         CancellationToken cancellationToken = default)
+        => ApplyBackPressureAsync(signal, treeId, throttledDelay, TimeProvider.System, cancellationToken);
+
+    /// <summary>
+    /// Time-provider seam behind the public
+    /// <see cref="ApplyBackPressureAsync(IWalSaturationSignal, string, TimeSpan, System.Threading.CancellationToken)"/>
+    /// overload. The public overload forwards <see cref="TimeProvider.System"/>,
+    /// so production behaviour is identical to <c>Task.Delay(throttledDelay, ct)</c>;
+    /// tests inject a controllable <see cref="TimeProvider"/> to assert the
+    /// Throttled delay deterministically instead of measuring wall-clock elapsed
+    /// time (which is timing-sensitive under parallel load).
+    /// </summary>
+    internal static Task ApplyBackPressureAsync(
+        this IWalSaturationSignal signal,
+        string treeId,
+        TimeSpan throttledDelay,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         if (throttledDelay < TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
@@ -122,7 +140,7 @@ public static class WalSaturationSignalExtensions
         return state switch
         {
             WalSaturationState.Saturated => signal.WaitForHealthyAsync(treeId, cancellationToken),
-            WalSaturationState.Throttled when throttledDelay > TimeSpan.Zero => Task.Delay(throttledDelay, cancellationToken),
+            WalSaturationState.Throttled when throttledDelay > TimeSpan.Zero => Task.Delay(throttledDelay, timeProvider, cancellationToken),
             _ => Task.CompletedTask,
         };
     }
@@ -146,5 +164,19 @@ public static class WalSaturationSignalExtensions
         this IWalSaturationSignal signal,
         string treeId,
         CancellationToken cancellationToken = default)
-        => ApplyBackPressureAsync(signal, treeId, DefaultThrottledDelay, cancellationToken);
+        => ApplyBackPressureAsync(signal, treeId, TimeProvider.System, cancellationToken);
+
+    /// <summary>
+    /// Time-provider seam behind the public convenience
+    /// <see cref="ApplyBackPressureAsync(IWalSaturationSignal, string, System.Threading.CancellationToken)"/>
+    /// overload. Forwards <see cref="DefaultThrottledDelay"/> so tests can assert,
+    /// deterministically through an injected <see cref="TimeProvider"/>, that the
+    /// convenience overload applies the default Throttled delay.
+    /// </summary>
+    internal static Task ApplyBackPressureAsync(
+        this IWalSaturationSignal signal,
+        string treeId,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken = default)
+        => ApplyBackPressureAsync(signal, treeId, DefaultThrottledDelay, timeProvider, cancellationToken);
 }
