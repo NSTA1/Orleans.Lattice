@@ -1133,13 +1133,13 @@ The `Set(LatticeStagedCrdtWrite)` overload couples a typed CRDT mutation
 (prepared by a CRDT accessor's `Stage*` method) into the cross-tree saga
 so it commits all-or-nothing alongside sibling LWW writes. The
 `ForTree(...)` it is added under must be the same CRDT-mode tree the
-accessor was obtained from. The staged merged state is stored and
-replicated last-writer-wins by HLC; the prepared/terminal replication
-path does not yet fold the staged typed delta on the receiver, so
-concurrent same-key writes from multiple clusters reconcile by LWW of
-their merged states rather than by the per-replica union (use the live
-accessor mutators outside an atomic write when you need typed-delta
-convergence under concurrent multi-writer load). See
+accessor was obtained from. The staged merged state is stored locally and
+replicated through the prepared/terminal path, which now also carries the
+staged typed delta and merge mode to the receiver: the receiver folds the
+delta into its current visible state on the saga's terminal commit, so
+concurrent same-key writes from multiple clusters converge by the
+per-replica typed-delta union (a `+5` and a `+3` reach `8` on both
+clusters), identical to the live accessor path. See
 [Atomic Writes - Coupling a CRDT mutation into an atomic write](atomic-writes.md#coupling-a-crdt-mutation-into-an-atomic-write).
 
 ## CRDT value-surface accessors

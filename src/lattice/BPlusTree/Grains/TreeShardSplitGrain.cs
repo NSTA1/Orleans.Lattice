@@ -910,6 +910,16 @@ internal sealed class TreeShardSplitGrain(
             using var originScope = LatticeOriginContext.With(snapshot.OriginClusterId);
             using var vcScope = LatticeVectorClockContext.With(snapshot.VectorClock);
             using var hlcScope = LatticeHlcOverrideContext.With(snapshot.Timestamp);
+            // Carry the typed CRDT delta so the destination leaf's prepared
+            // commit records it in its pending-tx delta side-map and folds it
+            // on the saga's terminal (the per-replica union) rather than
+            // installing the resharded LWW value verbatim. A plain LWW
+            // snapshot (Delta null / Mode LwwRegister) opens no scope and
+            // replays byte-for-byte as before.
+            using var deltaScope = snapshot.Mode != LatticeMergeMode.LwwRegister
+                    && snapshot.Delta is not null
+                ? LatticeDeltaContext.With(snapshot.Delta)
+                : null;
 
             if (snapshot.IsTombstone)
             {

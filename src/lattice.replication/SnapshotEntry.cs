@@ -152,4 +152,30 @@ public readonly record struct SnapshotEntry
     /// stamps the same TTL the source recorded.
     /// </summary>
     [Id(9)] public long ExpiresAtTicks { get; init; }
+
+    /// <summary>
+    /// The typed CRDT delta the prepared mutation carried, or
+    /// <see langword="null"/> for a plain last-writer-wins prepared
+    /// write. Mirrors <c>WalRecord.Delta</c>. When present (and
+    /// <see cref="Mode"/> is a CRDT mode) the receiver folds this delta
+    /// into its current visible state on the saga's terminal commit
+    /// instead of installing <see cref="Value"/> verbatim, so a
+    /// bootstrap-restored prepared CRDT entry converges by the
+    /// per-replica typed-delta union exactly as a steady-state prepared
+    /// entry does. Legacy senders that pre-date this widening leave the
+    /// slot at its default <see langword="null"/>, which decodes to the
+    /// byte-for-byte unchanged LWW prepared path.
+    /// </summary>
+    [Id(10)] public byte[]? Delta { get; init; }
+
+    /// <summary>
+    /// The merge mode of the prepared mutation's tree. Mirrors
+    /// <c>WalRecord.Mode</c>.
+    /// <see cref="Orleans.Lattice.LatticeMergeMode.LwwRegister"/> (the
+    /// default, and the decode value for legacy senders) keeps the entry
+    /// on the unchanged LWW path; any CRDT mode pairs with
+    /// <see cref="Delta"/> to route the receiver's terminal commit
+    /// through the typed-delta fold.
+    /// </summary>
+    [Id(11)] public Orleans.Lattice.LatticeMergeMode Mode { get; init; }
 }

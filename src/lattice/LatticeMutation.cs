@@ -331,4 +331,19 @@ public readonly record struct LatticeMutation
     /// persisted before this field existed.
     /// </summary>
     [Id(23)] public IReadOnlyList<string>? CrossTreeParticipants { get; init; }
+
+    /// <summary>
+    /// The declared convergence rule for this mutation, mirrored from the
+    /// <see cref="WalRecord.Mode"/> slot the commit-log writer stamps from
+    /// the per-tree <see cref="ILatticeMergeModeResolver"/>. Carried on the
+    /// mutation so the activation-time WAL replay path can reconstruct a
+    /// prepared CRDT mutation's typed-delta fold deterministically: the
+    /// terminal commit folds <see cref="Delta"/> into the receiver's current
+    /// visible state via the matching primitive's <c>MergeDelta</c> rather
+    /// than installing the prepared last-writer-wins value verbatim.
+    /// Defaults to <see cref="LatticeMergeMode.LwwRegister"/> for wire
+    /// compatibility with records persisted before this field existed, which
+    /// preserves the legacy last-writer-wins prepared-apply behaviour.
+    /// </summary>
+    [Id(24)] public LatticeMergeMode Mode { get; init; }
 }

@@ -723,23 +723,23 @@ terminal path. A single authoring cluster's staged CRDT write therefore
 converges everywhere on its merged value.
 
 Two concurrent staged CRDT writes to the **same key** - whether in the
-same cluster or on different clusters - reconcile by **last-writer-wins
-of their merged states**, not by the per-replica union the live
-(non-atomic) accessor path provides. This is because cross-tree atomic
-writes ride the two-phase prepared / terminal replication path, and that
-path applies the merged-state **value** on the receiver (LWW by HLC); it
-does **not** carry the staged typed delta to the receiver-side
-`MergeDelta` fold. The token still carries the delta (the saga persists
-and ships it), but the prepared receiver path does not yet fold it, so a
-counter written `+5` on one cluster and `+3` on another converges to
-either `5` or `3`, not `8`. If you need typed-delta convergence under
-concurrent multi-writer load on the same key, use the live accessor
-mutators (`IncrementAsync`, `AddAsync`, `EnableAsync`, …) outside an
-atomic write - those stamp the delta on the standard CRDT replication
-path, which the receiver folds. Folding staged deltas through the
-prepared path is tracked as a follow-up. The same caveat applies to the
-internal tag-index flag-membership rows, which use the same per-entry
-carry.
+same cluster or on different clusters - converge by the **per-replica
+typed-delta union**, identical to the live (non-atomic) accessor path.
+The cross-tree atomic write ships the staged typed delta and merge mode
+alongside the merged-state value on the two-phase prepared / terminal
+replication path, and the receiver **folds the typed delta into its
+current visible state** (the primitive's `MergeDelta`) on the saga's
+terminal commit rather than installing the prepared value
+last-writer-wins. So a counter written `+5` on one cluster and `+3` on
+another converges to `8` on **both** clusters, exactly as the live
+`IncrementAsync` accessor would. The same holds for the internal
+tag-index flag-membership rows, which use the same per-entry carry: an
+active-active membership add on each cluster converges to the union
+through the atomic (prepared) path, not only the eventual accessor path.
+
+Value-only sagas - a plain `Set(key, bytes)` slice with no staged CRDT
+delta - stay on the last-writer-wins prepared path unchanged: the highest
+HLC wins, because there is no typed delta to fold.
 
 **Compensation.** An aborting saga drops the staged value **and** the
 staged delta on every cluster (the prepare-phase write never became

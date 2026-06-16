@@ -323,7 +323,20 @@ internal sealed partial class BPlusLeafGrain
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
         };
-        AddPreparedMutation(mutation.TransactionId, mutation.Key, incoming);
+        // Carry the WAL-stamped typed CRDT delta and merge mode into the
+        // pending-tx delta side-map so the activation-time replay
+        // reconstructs the same fold state the foreground commit recorded.
+        // The prepared WAL record carries both Delta and Mode (see
+        // WalRecordConverter), and WalRecordConverter.FromWalRecord copies
+        // them onto the mutation, so an LWW prepared write (Mode ==
+        // LwwRegister, Delta == null) reconstructs no side-map entry and
+        // replays byte-for-byte as before.
+        AddPreparedMutation(
+            mutation.TransactionId,
+            mutation.Key,
+            incoming,
+            delta: mutation.Delta,
+            mode: mutation.Mode);
         AdvanceProjectionClock(mutation.Timestamp);
     }
 

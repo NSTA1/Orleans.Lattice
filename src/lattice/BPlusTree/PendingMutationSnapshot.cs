@@ -82,4 +82,27 @@ internal readonly record struct PendingMutationSnapshot
     /// its own WAL appends.
     /// </summary>
     [Id(8)] public long WalOffset { get; init; }
+
+    /// <summary>
+    /// The typed CRDT delta the prepared mutation carried, or <c>null</c>
+    /// for a plain last-writer-wins prepared write. Round-trips through
+    /// the retroactive shadow-forward replay so a resharded prepared
+    /// CRDT entry still folds its per-replica delta into the destination
+    /// leaf's current visible state on the saga's terminal commit
+    /// (the per-replica union) instead of installing the prepared LWW
+    /// value verbatim. Legacy snapshots authored before this field
+    /// existed decode to <c>null</c> = the byte-for-byte unchanged LWW
+    /// replay.
+    /// </summary>
+    [Id(9)] public byte[]? Delta { get; init; }
+
+    /// <summary>
+    /// The merge mode of the prepared mutation's tree.
+    /// <see cref="LatticeMergeMode.LwwRegister"/> (the default, and the
+    /// decode value for legacy snapshots) keeps the entry on the
+    /// unchanged LWW replay; any CRDT mode pairs with <see cref="Delta"/>
+    /// to route the destination's terminal commit through the typed-delta
+    /// fold.
+    /// </summary>
+    [Id(10)] public LatticeMergeMode Mode { get; init; }
 }
