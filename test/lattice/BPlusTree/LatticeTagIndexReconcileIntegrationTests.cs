@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Tests.Fakes;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -30,6 +31,12 @@ public class LatticeTagIndexReconcileIntegrationTests
 
     private ILattice Tree(string id) => _cluster.GrainFactory.GetGrain<ILattice>(id);
 
+    private ILatticeTagIndex TagIndex(ILattice tree, string name) =>
+        new DefaultLatticeTagIndexFactory(_cluster.GrainFactory, FakeLatticeReplicationContext.Disabled).Create(tree, name);
+
+    private ILatticeMultiTreeTagIndex MultiTreeTagIndex(string name) =>
+        new DefaultLatticeTagIndexFactory(_cluster.GrainFactory, FakeLatticeReplicationContext.Disabled).CreateMultiTree(name);
+
     private ITagIndexReconcileGrain Coordinator(string indexName)
         => _cluster.GrainFactory.GetGrain<ITagIndexReconcileGrain>(indexName);
 
@@ -40,7 +47,7 @@ public class LatticeTagIndexReconcileIntegrationTests
         var index = $"colors-{sfx}";
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("d", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, index);
+        var idx = TagIndex(tree, index);
         await idx.Key("d").AddAsync(["red"]);
 
         await tree.DeleteAsync("d");
@@ -57,7 +64,7 @@ public class LatticeTagIndexReconcileIntegrationTests
         var index = $"colors-{sfx}";
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, index);
+        var idx = TagIndex(tree, index);
         await idx.Key("a").AddAsync(["red"]);
 
         // First sweep establishes the baseline; second sweep should be a no-op.
@@ -75,7 +82,7 @@ public class LatticeTagIndexReconcileIntegrationTests
         var index = $"colors-{sfx}";
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, index);
+        var idx = TagIndex(tree, index);
         await idx.Key("a").AddAsync(["red"]);
 
         await Coordinator(index).RunSweepAsync();
@@ -91,7 +98,7 @@ public class LatticeTagIndexReconcileIntegrationTests
         var tree = Tree($"items-{sfx}");
         await tree.SetAsync("a", Bytes("1"));
         await tree.SetAsync("b", Bytes("2"));
-        var idx = tree.TagIndex(_cluster.GrainFactory, index);
+        var idx = TagIndex(tree, index);
         await idx.Key("a").AddAsync(["red"]);
         await idx.Key("b").AddAsync(["red"]);
 
@@ -116,8 +123,8 @@ public class LatticeTagIndexReconcileIntegrationTests
         var treeB = Tree($"itemsB-{sfx}");
         await treeA.SetAsync("a", Bytes("1"));
         await treeB.SetAsync("b", Bytes("2"));
-        var idxA = treeA.TagIndex(_cluster.GrainFactory, index);
-        var idxB = treeB.TagIndex(_cluster.GrainFactory, index);
+        var idxA = TagIndex(treeA, index);
+        var idxB = TagIndex(treeB, index);
         await idxA.Key("a").AddAsync(["red"]);
         await idxB.Key("b").AddAsync(["red"]);
 
@@ -127,7 +134,7 @@ public class LatticeTagIndexReconcileIntegrationTests
 
         Assert.That(report.OrphanRowsRemoved, Is.GreaterThanOrEqualTo(1));
         // The deleted key's row is gone, but tree B's live row survives.
-        var multi = _cluster.GrainFactory.MultiTreeTagIndex(index);
+        var multi = MultiTreeTagIndex(index);
         var remaining = new List<TaggedKey>();
         await foreach (var hit in multi.WithAnyTags("red"))
         {

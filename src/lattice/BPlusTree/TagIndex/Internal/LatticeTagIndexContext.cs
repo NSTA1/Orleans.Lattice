@@ -88,56 +88,74 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         _replicaId = replicaId;
     }
 
-    // Validates the membership descriptor a public entry point resolved: the
-    // flag modes need a non-empty dot-authoring replica id, and only the three
-    // membership-capable modes are accepted (the index tree is a presence
-    // index, not an arbitrary CRDT value store).
+    // Validates the membership descriptor a factory derived from the
+    // replication-configuration seam: a flag mode (OrFlag / RwFlag) needs a
+    // non-empty dot-authoring replica id to author its enable/disable dots.
+    // Under replication this is guaranteed by the startup config validator
+    // (flag-mode trees require a configured ClusterId); this stays as a
+    // defensive runtime check for a misconfigured or hand-rolled context.
     internal static void ValidateMembership(LatticeMergeMode membershipMode, string? replicaId)
     {
-        switch (membershipMode)
+        if (membershipMode is LatticeMergeMode.OrFlag or LatticeMergeMode.RwFlag
+            && string.IsNullOrEmpty(replicaId))
         {
-            case LatticeMergeMode.LwwRegister:
-                return;
-            case LatticeMergeMode.OrFlag:
-            case LatticeMergeMode.RwFlag:
-                if (string.IsNullOrEmpty(replicaId))
-                {
-                    throw new ArgumentException(
-                        "A non-empty replicaId is required for OrFlag / RwFlag tag-index membership (it authors the flag-CRDT dots).",
-                        nameof(replicaId));
-                }
-                return;
-            default:
-                throw new ArgumentException(
-                    $"Tag-index membership supports only LwwRegister, OrFlag, or RwFlag, not '{membershipMode}'.",
-                    nameof(membershipMode));
+            throw new InvalidOperationException(
+                $"Flag tag-index membership ('{membershipMode}') requires a non-empty local replica id "
+                + "to author its flag-CRDT dots. Configure a non-empty ClusterId on the host so the "
+                + "replication-configuration seam can supply one.");
         }
+    }
+
+    // Derives the membership descriptor for the sibling index tree from the
+    // replication-configuration seam. A single-cluster host (no context, or a
+    // context reporting replication disabled) and any non-flag declared mode
+    // both map to the plain LwwRegister presence path. Only a tree explicitly
+    // declared OrFlag / RwFlag activates flag-CRDT membership, using the seam's
+    // LocalReplicaId as the dot-authoring identity.
+    private static (LatticeMergeMode mode, string? replicaId) ResolveMembership(
+        ILatticeReplicationContext? replicationContext,
+        string indexTreeId)
+    {
+        if (replicationContext is null || !replicationContext.IsReplicationEnabled)
+        {
+            return (LatticeMergeMode.LwwRegister, null);
+        }
+
+        var mode = replicationContext.ResolveMergeMode(indexTreeId);
+        if (mode is LatticeMergeMode.OrFlag or LatticeMergeMode.RwFlag)
+        {
+            var replicaId = replicationContext.LocalReplicaId;
+            ValidateMembership(mode.Value, replicaId);
+            return (mode.Value, replicaId);
+        }
+
+        return (LatticeMergeMode.LwwRegister, null);
     }
 
     internal static LatticeTagIndexContext Create(
         ILattice tree,
         IGrainFactory grainFactory,
         string indexName,
-        IReadOnlyCollection<string>? allowlist,
-        LatticeMergeMode membershipMode = LatticeMergeMode.LwwRegister,
-        string? replicaId = null)
+        ILatticeReplicationContext? replicationContext = null)
     {
-        ValidateMembership(membershipMode, replicaId);
         var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
+        var (membershipMode, replicaId) = ResolveMembership(replicationContext, indexTreeId);
         var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
         var subjectTreeId = tree.GetPrimaryKeyString();
-        return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, subjectTreeId, tree, allowlist, membershipMode, replicaId);
+        // A single-tree index only ever writes to its bound subject tree, so a
+        // closed allowlist could only no-op or self-reject; closed views are
+        // created through CreateMultiTree instead.
+        return new LatticeTagIndexContext(grainFactory, indexName, indexTreeId, indexTree, subjectTreeId, tree, allowlist: null, membershipMode, replicaId);
     }
 
     internal static ILatticeMultiTreeTagIndex CreateMultiTree(
         IGrainFactory grainFactory,
         string indexName,
         IReadOnlyCollection<string>? allowlist,
-        LatticeMergeMode membershipMode = LatticeMergeMode.LwwRegister,
-        string? replicaId = null)
+        ILatticeReplicationContext? replicationContext = null)
     {
-        ValidateMembership(membershipMode, replicaId);
         var indexTreeId = string.Concat(IndexTreeIdPrefix, indexName);
+        var (membershipMode, replicaId) = ResolveMembership(replicationContext, indexTreeId);
         var indexTree = grainFactory.GetGrain<ILattice>(indexTreeId);
         // No subject is pre-bound; the index tree id stands in as a harmless
         // placeholder because the multi-tree surface never issues subject-only

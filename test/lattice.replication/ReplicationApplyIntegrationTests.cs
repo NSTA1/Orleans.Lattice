@@ -491,13 +491,13 @@ public class ReplicationApplyIntegrationTests
         // Site A adds tag "red" to key "a".
         var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
         await aTree.SetAsync("a", new byte[] { 1 });
-        var aIdx = aTree.TagIndex(_fixture.SiteA.Client, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: TwoSiteClusterFixture.SiteAClusterId);
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.OrFlag)).Create(aTree, indexName);
         await aIdx.Key("a").AddAsync(["red"]);
 
         // Site B concurrently adds the same tag "red" to key "a".
         var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
         await bTree.SetAsync("a", new byte[] { 1 });
-        var bIdx = bTree.TagIndex(_fixture.SiteB.Client, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: TwoSiteClusterFixture.SiteBClusterId);
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.OrFlag)).Create(bTree, indexName);
         await bIdx.Key("a").AddAsync(["red"]);
 
         await ReplayIndexEntriesIntoSiteBAsync(indexTree, expectedMin: 2);
@@ -518,14 +518,14 @@ public class ReplicationApplyIntegrationTests
         // observed Site B's concurrent enable).
         var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
         await aTree.SetAsync("a", new byte[] { 1 });
-        var aIdx = aTree.TagIndex(_fixture.SiteA.Client, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: TwoSiteClusterFixture.SiteAClusterId);
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.OrFlag)).Create(aTree, indexName);
         await aIdx.Key("a").AddAsync(["red"]);
         await aIdx.Key("a").RemoveAsync(["red"]);
 
         // Site B concurrently adds tag "red".
         var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
         await bTree.SetAsync("a", new byte[] { 1 });
-        var bIdx = bTree.TagIndex(_fixture.SiteB.Client, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: TwoSiteClusterFixture.SiteBClusterId);
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.OrFlag)).Create(bTree, indexName);
         await bIdx.Key("a").AddAsync(["red"]);
 
         // expectedMin covers Site A's enable + disable on the tag-major row.
@@ -546,14 +546,14 @@ public class ReplicationApplyIntegrationTests
         // Site A adds then removes tag "red" (a remove-wins disable dot).
         var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
         await aTree.SetAsync("a", new byte[] { 1 });
-        var aIdx = aTree.TagIndex(_fixture.SiteA.Client, indexName, membershipMode: LatticeMergeMode.RwFlag, replicaId: TwoSiteClusterFixture.SiteAClusterId);
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.RwFlag)).Create(aTree, indexName);
         await aIdx.Key("a").AddAsync(["red"]);
         await aIdx.Key("a").RemoveAsync(["red"]);
 
         // Site B concurrently adds tag "red".
         var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
         await bTree.SetAsync("a", new byte[] { 1 });
-        var bIdx = bTree.TagIndex(_fixture.SiteB.Client, indexName, membershipMode: LatticeMergeMode.RwFlag, replicaId: TwoSiteClusterFixture.SiteBClusterId);
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.RwFlag)).Create(bTree, indexName);
         await bIdx.Key("a").AddAsync(["red"]);
 
         await ReplayIndexEntriesIntoSiteBAsync(indexTree, expectedMin: 2);
@@ -572,7 +572,7 @@ public class ReplicationApplyIntegrationTests
 
         var aTree = _fixture.SiteA.Client.GetGrain<ILattice>(subjectTree);
         await aTree.SetAsync("a", new byte[] { 1 });
-        var aIdx = aTree.TagIndex(_fixture.SiteA.Client, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: TwoSiteClusterFixture.SiteAClusterId);
+        var aIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteA.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteAClusterId, LatticeMergeMode.OrFlag)).Create(aTree, indexName);
         await aIdx.Key("a").AddAsync(["red", "round"]);
 
         // Replaying every captured index-tree record through the receiver's
@@ -587,7 +587,7 @@ public class ReplicationApplyIntegrationTests
 
         // And the remote membership is now visible on Site B.
         var bTree = _fixture.SiteB.Client.GetGrain<ILattice>(subjectTree);
-        var bIdx = bTree.TagIndex(_fixture.SiteB.Client, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: TwoSiteClusterFixture.SiteBClusterId);
+        var bIdx = new DefaultLatticeTagIndexFactory(_fixture.SiteB.Client, new StubReplicationContext(TwoSiteClusterFixture.SiteBClusterId, LatticeMergeMode.OrFlag)).Create(bTree, indexName);
         Assert.That(await CollectTagKeysAsync(bIdx.WithAnyTags("red")), Is.EqualTo(new[] { "a" }));
     }
 }

@@ -1494,13 +1494,20 @@ Lattice tree resolved as `tag-{indexName}`, each keyed
 `tag \0 treeId \0 key` with a flag value. No standalone grain is
 introduced.
 
-Open an index by passing the grain factory (needed to resolve the
-sibling index tree and any other subject tree) and an index name. The
-subject tree stays the receiver - it supplies the tree segment of every
-membership row.
+Open an index through the injected `ILatticeTagIndexFactory` (registered by
+`AddLattice`). The factory sources the membership convergence mode and the
+local replica id from the host's replication configuration, so the same code
+runs single-cluster (last-writer-wins) and active-active (flag-CRDT). The
+subject tree supplied to `Create` stays the receiver - it supplies the tree
+segment of every membership row.
 
 ```csharp verify
-var tagIndex = tree.TagIndex(grainFactory, "by-color");
+using Microsoft.Extensions.DependencyInjection;
+
+// Inject ILatticeTagIndexFactory wherever you need an index; here it is resolved
+// from the client's service provider for illustration.
+var tagIndexFactory = client.ServiceProvider.GetRequiredService<ILatticeTagIndexFactory>();
+var tagIndex = tagIndexFactory.Create(tree, "by-color");
 
 // Per-key tag CRUD. SetAsync replaces (read-modify-write diff); AddAsync /
 // RemoveAsync are additive / subtractive.
@@ -1535,7 +1542,7 @@ _ = report.OrphanRowsRemoved;
 
 // The multi-tree view spans every covered tree, yielding TaggedKey, and
 // supports InTree(treeId) narrowing.
-var multi = grainFactory.MultiTreeTagIndex("by-color");
+var multi = tagIndexFactory.CreateMultiTree("by-color");
 await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellationToken))
 {
     _ = (hit.TreeId, hit.Key);
@@ -1546,7 +1553,7 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
 
 | Type | Role |
 |------|------|
-| `LatticeTagIndexExtensions` | `ILattice.TagIndex(grainFactory, indexName, allowedTrees?, membershipMode?, replicaId?)` and `IGrainFactory.MultiTreeTagIndex(indexName, allowedTrees?, membershipMode?, replicaId?)` entry points. |
+| `ILatticeTagIndexFactory` | The injected entry point for opening a tag index (`Create(tree, indexName)` / `CreateMultiTree(indexName, allowedTrees?)`). Pre-wires the index to the host's replication configuration, so the same call runs single-cluster (last-writer-wins) and active-active (flag-CRDT). Registered as a singleton by `AddLattice`. |
 | `ILatticeTagIndex` | Single-tree surface: `Key`, `WithAllTags`, `WithAnyTags`, `SetValueWithTags`, `TagsAsync`, `ReconcileAsync`, `MultiTree`. |
 | `ILatticeKeyTags` | Per-key tag surface: `GetAsync`, `SetAsync` (replace), `AddAsync`, `RemoveAsync`. |
 | `ILatticeTagQuery` | Lazy `IAsyncEnumerable<string>` of matching keys with `CountAsync`. |
@@ -1556,28 +1563,36 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
 | `TaggedKey` | `(TreeId, Key)` pair yielded by multi-tree queries. |
 | `TagReconcileReport` | Counts from a reconcile pass: trees covered, keys scanned, rows scanned, orphan rows removed. |
 | `TagConsistency` | `Eventual` (default) or `Atomic` durability coupling for `SetValueWithTags`. |
+| `ILatticeReplicationContext` | Injectable replication-configuration seam (root `Orleans.Lattice` namespace). Exposes `IsReplicationEnabled`, the `LocalReplicaId`, and `ResolveMergeMode(treeId)`. The `ILatticeTagIndexFactory` captures it to select flag-CRDT membership; the core default reports replication disabled, and `AddLatticeReplication` swaps in a configured implementation sourced from `LatticeReplicationOptions`. |
 
 ### Notes
 
 - **Producer-side acceptance.** In the default open mode a subject tree
   must already be registered (have at least one write) before its keys
-  can be tagged; supplying a closed `allowedTrees` allowlist restricts
-  membership writes to the listed trees. Acceptance is validated on the
-  write path only - never as an apply-time gate.
+  can be tagged; supplying a closed `allowedTrees` allowlist to
+  `MultiTreeTagIndex` restricts membership writes to the listed trees. A
+  single-tree index only ever writes to its bound subject tree, so it has
+  no allowlist. Acceptance is validated on the write path only - never as
+  an apply-time gate.
 - **Additive `SetValueWithTags`.** It associates the supplied tags with
   the key; it does not remove previously-associated tags. Use
   `Key(key).SetAsync(tags)` for replace semantics.
 - **Active-active replication.** By default membership rows are
-  last-writer-wins (`membershipMode: LatticeMergeMode.LwwRegister`) -
-  correct and lossless for single-writer-per-key, add-mostly indexes, but
-  a concurrent add/remove of the same row across clusters resolves by
-  clock and can drop the add. For convergent membership under concurrent
-  writes from multiple clusters, open the index with a flag membership
-  mode and a per-cluster `replicaId`:
-  `tree.TagIndex(grainFactory, indexName, membershipMode: LatticeMergeMode.OrFlag, replicaId: clusterId)`.
-  `OrFlag` (enable-wins) is the recommended default; `RwFlag`
-  (remove-wins) is for revocation / blocklist facets where a removal must
-  win the tie. A flag mode authors every membership, key-major mirror, and
+  last-writer-wins - correct and lossless for single-writer-per-key,
+  add-mostly indexes, but a concurrent add/remove of the same row across
+  clusters resolves by clock and can drop the add. For convergent
+  membership under concurrent writes from multiple clusters, the same
+  `tagIndexFactory.Create(tree, indexName)` call authors flag-CRDT
+  membership: the factory captures the `ILatticeReplicationContext` seam,
+  which is the single source of truth for both the membership mode
+  (resolved per index tree from `LatticeReplicationOptions.ReplicatedTrees`)
+  and the local replica id, so the caller never threads a `membershipMode`
+  / `replicaId` pair that could drift from server config.
+  Declaring the index tree (`tag-{indexName}`) under `OrFlag` (enable-wins,
+  the recommended default) or `RwFlag` (remove-wins, for revocation /
+  blocklist facets where a removal must win the tie) selects the mode; the
+  core default seam reports replication disabled and falls back to the LWW
+  path. A flag mode authors every membership, key-major mirror, and
   covered-marker row as a typed flag-CRDT delta (an enable on add, a
   disable on remove) so the shipped WAL record carries a real
   `OrFlagDelta` / `RwFlagDelta`, and every read decodes flag state so a
@@ -1585,8 +1600,8 @@ await foreach (var hit in multi.WithAnyTags("red").WithCancellation(cancellation
   (`tag-{indexName}`) **must** be declared with the matching
   `LatticeMergeMode` in `LatticeReplicationOptions.ReplicatedTrees`; the
   background reconciliation coordinator auto-detects the same mode
-  server-side from the merge-mode resolver, so its orphan cleanup also
-  authors flag disables. Under a flag mode, `SetValueWithTags(...).Atomic()`
+  server-side from the replication-configuration seam, so its orphan
+  cleanup also authors flag disables. Under a flag mode, `SetValueWithTags(...).Atomic()`
   degrades to eventual coupling between the value and its tag rows (the
   cross-tree saga stages plain value writes and cannot carry the typed
   flag deltas), so the value is written durably first and the tag rows

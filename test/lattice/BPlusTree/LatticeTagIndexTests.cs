@@ -1,11 +1,12 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// Unit coverage for the tag-index entry points
-/// (<see cref="LatticeTagIndexExtensions"/>) and value types
+/// Unit coverage for the tag-index entry point
+/// (<see cref="ILatticeTagIndexFactory"/>) and value types
 /// (<see cref="TagReconcileReport"/>, <see cref="TaggedKey"/>,
 /// <see cref="TagConsistency"/>): argument validation and value semantics that
 /// do not require a live cluster.
@@ -13,45 +14,6 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 [TestFixture]
 public class LatticeTagIndexTests
 {
-    [Test]
-    public void TagIndex_throws_on_null_tree()
-    {
-        ILattice tree = null!;
-        var factory = Substitute.For<IGrainFactory>();
-        Assert.That(() => tree.TagIndex(factory, "idx"), Throws.ArgumentNullException);
-    }
-
-    [Test]
-    public void TagIndex_throws_on_null_factory()
-    {
-        var tree = Substitute.For<ILattice>();
-        Assert.That(() => tree.TagIndex(null!, "idx"), Throws.ArgumentNullException);
-    }
-
-    [Test]
-    public void TagIndex_throws_on_empty_index_name()
-    {
-        var tree = Substitute.For<ILattice>();
-        var factory = Substitute.For<IGrainFactory>();
-        Assert.That(() => tree.TagIndex(factory, ""), Throws.InstanceOf<ArgumentException>());
-        Assert.That(() => tree.TagIndex(factory, null!), Throws.InstanceOf<ArgumentException>());
-    }
-
-    [Test]
-    public void MultiTreeTagIndex_throws_on_null_factory()
-    {
-        IGrainFactory factory = null!;
-        Assert.That(() => factory.MultiTreeTagIndex("idx"), Throws.ArgumentNullException);
-    }
-
-    [Test]
-    public void MultiTreeTagIndex_throws_on_empty_index_name()
-    {
-        var factory = Substitute.For<IGrainFactory>();
-        Assert.That(() => factory.MultiTreeTagIndex(""), Throws.InstanceOf<ArgumentException>());
-        Assert.That(() => factory.MultiTreeTagIndex(null!), Throws.InstanceOf<ArgumentException>());
-    }
-
     [Test]
     public void TagReconcileReport_Empty_is_all_zero()
     {
@@ -87,71 +49,95 @@ public class LatticeTagIndexTests
         Assert.That(default(TagConsistency), Is.EqualTo(TagConsistency.Eventual));
     }
 
-    // ── Flag membership descriptor validation ────────────────────────
+    // ── Flag membership descriptor validation (via the injected factory) ──
 
     [Test]
     public void TagIndex_or_flag_membership_without_replica_id_throws()
     {
         var tree = Substitute.For<ILattice>();
-        var factory = Substitute.For<IGrainFactory>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var ctx = FakeLatticeReplicationContext.Enabled(replicaId: string.Empty, mode: LatticeMergeMode.OrFlag);
+        var factory = new DefaultLatticeTagIndexFactory(grainFactory, ctx);
         Assert.That(
-            () => tree.TagIndex(factory, "idx", membershipMode: LatticeMergeMode.OrFlag),
-            Throws.InstanceOf<ArgumentException>());
+            () => factory.Create(tree, "idx"),
+            Throws.InstanceOf<InvalidOperationException>());
     }
 
     [Test]
     public void TagIndex_rw_flag_membership_with_empty_replica_id_throws()
     {
         var tree = Substitute.For<ILattice>();
-        var factory = Substitute.For<IGrainFactory>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var ctx = FakeLatticeReplicationContext.Enabled(replicaId: string.Empty, mode: LatticeMergeMode.RwFlag);
+        var factory = new DefaultLatticeTagIndexFactory(grainFactory, ctx);
         Assert.That(
-            () => tree.TagIndex(factory, "idx", membershipMode: LatticeMergeMode.RwFlag, replicaId: ""),
-            Throws.InstanceOf<ArgumentException>());
-    }
-
-    [Test]
-    public void TagIndex_unsupported_membership_mode_throws()
-    {
-        var tree = Substitute.For<ILattice>();
-        var factory = Substitute.For<IGrainFactory>();
-        Assert.That(
-            () => tree.TagIndex(factory, "idx", membershipMode: LatticeMergeMode.OrSet, replicaId: "site-a"),
-            Throws.InstanceOf<ArgumentException>());
+            () => factory.Create(tree, "idx"),
+            Throws.InstanceOf<InvalidOperationException>());
     }
 
     [Test]
     public void MultiTreeTagIndex_or_flag_membership_without_replica_id_throws()
     {
-        var factory = Substitute.For<IGrainFactory>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var ctx = FakeLatticeReplicationContext.Enabled(replicaId: string.Empty, mode: LatticeMergeMode.OrFlag);
+        var factory = new DefaultLatticeTagIndexFactory(grainFactory, ctx);
         Assert.That(
-            () => factory.MultiTreeTagIndex("idx", membershipMode: LatticeMergeMode.OrFlag),
-            Throws.InstanceOf<ArgumentException>());
+            () => factory.CreateMultiTree("idx"),
+            Throws.InstanceOf<InvalidOperationException>());
     }
 
     [Test]
-    public void MultiTreeTagIndex_unsupported_membership_mode_throws()
+    public void MultiTreeTagIndex_non_flag_declared_mode_falls_back_to_lww()
     {
-        var factory = Substitute.For<IGrainFactory>();
-        Assert.That(
-            () => factory.MultiTreeTagIndex("idx", membershipMode: LatticeMergeMode.PnCounter, replicaId: "site-a"),
-            Throws.InstanceOf<ArgumentException>());
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(Substitute.For<ILattice>());
+        var ctx = FakeLatticeReplicationContext.Enabled(replicaId: "site-a", mode: LatticeMergeMode.PnCounter);
+        var factory = new DefaultLatticeTagIndexFactory(grainFactory, ctx);
+        Assert.That(() => factory.CreateMultiTree("idx"), Throws.Nothing);
     }
 
     [Test]
     public void MultiTreeTagIndex_flag_membership_with_replica_id_is_accepted()
     {
-        var factory = Substitute.For<IGrainFactory>();
-        factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(Substitute.For<ILattice>());
-        var idx = factory.MultiTreeTagIndex("idx", membershipMode: LatticeMergeMode.OrFlag, replicaId: "site-a");
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(Substitute.For<ILattice>());
+        var ctx = FakeLatticeReplicationContext.Enabled(replicaId: "site-a", mode: LatticeMergeMode.OrFlag);
+        var factory = new DefaultLatticeTagIndexFactory(grainFactory, ctx);
+        var idx = factory.CreateMultiTree("idx");
         Assert.That(idx, Is.Not.Null);
     }
 
     [Test]
-    public void MultiTreeTagIndex_lww_membership_is_the_default()
+    public void MultiTreeTagIndex_disabled_replication_context_uses_lww()
     {
-        var factory = Substitute.For<IGrainFactory>();
-        factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(Substitute.For<ILattice>());
-        var idx = factory.MultiTreeTagIndex("idx");
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(Substitute.For<ILattice>());
+        var factory = new DefaultLatticeTagIndexFactory(grainFactory, FakeLatticeReplicationContext.Disabled);
+        var idx = factory.CreateMultiTree("idx");
         Assert.That(idx, Is.Not.Null);
+    }
+
+    [Test]
+    public void Factory_create_rejects_null_tree()
+    {
+        var factory = new DefaultLatticeTagIndexFactory(
+            Substitute.For<IGrainFactory>(), FakeLatticeReplicationContext.Disabled);
+        Assert.That(() => factory.Create(null!, "idx"), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Factory_create_rejects_empty_index_name()
+    {
+        var factory = new DefaultLatticeTagIndexFactory(
+            Substitute.For<IGrainFactory>(), FakeLatticeReplicationContext.Disabled);
+        Assert.That(() => factory.Create(Substitute.For<ILattice>(), ""), Throws.ArgumentException);
+    }
+
+    [Test]
+    public void Factory_create_multi_tree_rejects_empty_index_name()
+    {
+        var factory = new DefaultLatticeTagIndexFactory(
+            Substitute.For<IGrainFactory>(), FakeLatticeReplicationContext.Disabled);
+        Assert.That(() => factory.CreateMultiTree(""), Throws.ArgumentException);
     }
 }

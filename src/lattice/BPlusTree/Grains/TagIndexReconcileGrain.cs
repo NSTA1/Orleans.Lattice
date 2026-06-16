@@ -32,8 +32,7 @@ internal sealed class TagIndexReconcileGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeTagIndexReconciliationOptions> optionsMonitor,
-    ILatticeMergeModeResolver mergeModeResolver,
-    ILatticeOriginClusterIdResolver originClusterIdResolver,
+    ILatticeReplicationContext replicationContext,
     ILogger<TagIndexReconcileGrain> logger,
     [PersistentState("tag-index-reconcile", LatticeOptions.StorageProviderName)]
     IPersistentState<TagIndexReconcileState> state)
@@ -69,20 +68,20 @@ internal sealed class TagIndexReconcileGrain(
     private LatticeTagIndexReconciliationOptions Options => optionsMonitor.Get(IndexName);
 
     // Resolves the membership convergence mode for the sibling index tree
-    // (`tag-{indexName}`) and the dot-authoring replica id, so the coordinator's
-    // orphan cleanup authors flag disables - never plain deletes - whenever the
-    // operator declared the index tree under a flag merge mode. The mode comes
-    // from the same per-tree resolver the commit path uses; the replica id comes
-    // from the local origin-cluster-id seam (the index name is a stable
-    // non-empty fallback if no cluster id is configured). In LwwRegister mode
-    // the cleanup stays on the original plain-delete path.
+    // (`tag-{indexName}`) and the dot-authoring replica id from the
+    // replication-configuration seam, so the coordinator's orphan cleanup
+    // authors flag disables - never plain deletes - whenever the operator
+    // declared the index tree under a flag merge mode. Both the mode and the
+    // replica id come from the same seam the write path consults (the index
+    // name is a stable non-empty fallback if no replica id is configured). In
+    // LwwRegister mode the cleanup stays on the original plain-delete path.
     private LatticeTagIndexContext CreateCoordinatorContext()
     {
         var indexTreeId = string.Concat(IndexTreeIdPrefix, IndexName);
-        var mode = mergeModeResolver.Resolve(indexTreeId);
+        var mode = replicationContext.ResolveMergeMode(indexTreeId);
         if (mode is LatticeMergeMode.OrFlag or LatticeMergeMode.RwFlag)
         {
-            var replicaId = originClusterIdResolver.Resolve(indexTreeId);
+            var replicaId = replicationContext.LocalReplicaId;
             if (string.IsNullOrEmpty(replicaId))
             {
                 replicaId = IndexName;
