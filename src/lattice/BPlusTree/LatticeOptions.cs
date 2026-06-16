@@ -1072,17 +1072,25 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultStorageUsageCacheTtl = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Cadence at which the background storage-usage poller drives every
-    /// registered tree's aggregator so the observable storage gauges populate
-    /// without any caller invoking <see cref="ILattice.GetStorageUsageAsync"/>.
-    /// The poller runs once per cluster (it is gated on the per-silo poller
-    /// only acting when it can reach the registry) and fans the publish out to
-    /// whichever silo currently hosts each tree's aggregator, so the gauges
-    /// are populated cluster-wide. This is a global knob read from the default
-    /// (unnamed) options; per-tree overrides do not apply. Defaults to
-    /// <see cref="DefaultStorageUsagePollInterval"/> (15 seconds). Set to
-    /// <see cref="TimeSpan.Zero"/> or a negative value to disable the poller
-    /// (the gauges then only populate when the public API is called).
+    /// Cadence at which every silo's background storage-usage poller calls
+    /// <see cref="ILatticeAdmin.PollWalUsageAsync"/> so the WAL-bytes and
+    /// over-threshold storage gauges populate without any caller invoking
+    /// <see cref="ILattice.GetStorageUsageAsync"/>. The poll path is
+    /// activation-light: it touches only WAL partition grains, so idle trees
+    /// stay cold. The poller runs on every silo (no leader election); because
+    /// each tree's WAL-only aggregator is a single cluster-wide activation, its
+    /// publish lands on its own host silo's sink and the gauges union across
+    /// every live sink, so a tree contributes its series once cluster-wide.
+    /// The snapshot-bytes, leaf-state-bytes, and total-bytes gauges are not
+    /// refreshed by this poll; they populate on demand via
+    /// <see cref="ILattice.GetStorageUsageAsync"/> /
+    /// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>, or on the optional
+    /// <see cref="StorageUsageDeepPollInterval"/> cadence. This is a global
+    /// knob read from the default (unnamed) options; per-tree overrides do not
+    /// apply. Defaults to <see cref="DefaultStorageUsagePollInterval"/>
+    /// (15 seconds). Set to <see cref="TimeSpan.Zero"/> or a negative value to
+    /// disable the WAL poll (the gauges then only populate when the public API
+    /// is called).
     /// </summary>
     public TimeSpan StorageUsagePollInterval { get; set; } = DefaultStorageUsagePollInterval;
 
