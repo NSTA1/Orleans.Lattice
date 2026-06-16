@@ -31,7 +31,8 @@ internal sealed partial class ReplicationApplier(
     CrdtShapeRegistry? crdtShapes = null,
     ILogger<ReplicationApplier>? logger = null,
     ReplicationPeerStats? peerStats = null,
-    ReceiverAppliedContentIndex? appliedContentIndex = null) : IReplicationApplier
+    ReceiverAppliedContentIndex? appliedContentIndex = null,
+    ILatticeReplicationContext? replicationContext = null) : IReplicationApplier
 {
     private readonly ILogger<ReplicationApplier> _logger =
         logger ?? NullLogger<ReplicationApplier>.Instance;
@@ -49,6 +50,22 @@ internal sealed partial class ReplicationApplier(
     /// content-hash dedup master switch is off (the index stays empty).
     /// </summary>
     private readonly ReceiverAppliedContentIndex? _appliedContentIndex = appliedContentIndex;
+
+    /// <summary>
+    /// Optional injectable view of the host's replication configuration. When
+    /// non-<see langword="null"/> it is the canonical signal for whether a
+    /// participant tree is replicated on this receiver (see
+    /// <see cref="IsTreeReplicatedHere"/>): the production
+    /// <see cref="ConfiguredLatticeReplicationContext"/> reports a non-null
+    /// <see cref="ILatticeReplicationContext.ResolveMergeMode"/> for exactly
+    /// the trees that are replicated here (it delegates to the same per-tree
+    /// resolver the shipper, change feed, and bootstrap path consult), and a
+    /// host that opts trees in through a custom resolver is honoured too.
+    /// Optional so existing call sites that construct the applier without a
+    /// context continue to compile, falling back to the raw
+    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map.
+    /// </summary>
+    private readonly ILatticeReplicationContext? _replicationContext = replicationContext;
 
     /// <summary>
     /// Optional per-peer telemetry sink. When non-<see langword="null"/>
@@ -676,10 +693,15 @@ internal sealed partial class ReplicationApplier(
         // its per-tx pending bucket rather than flipping the visible
         // projection. The terminal record arriving subsequently via
         // ApplyTxTerminalAsync is the per-shard linearization point
-        // that flips pending into visible (or drops on abort). Only
-        // LwwRegister mode is supported - the saga surface
-        // (SetManyAtomicAsync) emits only Set/Delete in that mode;
-        // CRDT modes have no saga-prepared shape on the wire.
+        // that flips pending into visible (or drops on abort). Both
+        // plain LWW saga writes (the value-only SetManyAtomicAsync
+        // surface) AND staged-CRDT writes ride this seam: a CRDT-mode
+        // prepared entry carries its typed Delta + Mode through
+        // ApplyPreparedSetAsync so the receiver folds the per-replica
+        // delta into its current visible state on the terminal commit
+        // (the per-replica union) rather than installing the prepared
+        // merged-state value last-writer-wins. LWW-mode prepared entries
+        // leave Delta null and stay on the byte-for-byte unchanged path.
         if (entry.IsPrepared && entry.Op is MutationKind.Set or MutationKind.Delete)
         {
             return ApplyPreparedPointAsync(apply, entry);
@@ -799,7 +821,14 @@ internal sealed partial class ReplicationApplier(
                 entry.ExpiresAtTicks,
                 entry.TransactionId,
                 entry.AtomicBatchSize,
-                entry.AtomicBatchIndex);
+                entry.AtomicBatchIndex,
+                // Carry the typed CRDT delta + merge mode so the receiver
+                // folds the per-replica delta into its current visible state
+                // on the saga's terminal commit instead of installing the
+                // prepared LWW value verbatim. A null delta / LwwRegister mode
+                // (the common case) keeps the byte-for-byte unchanged LWW path.
+                entry.Delta,
+                entry.Mode);
         }
 
         return apply.ApplyPreparedDeleteAsync(
@@ -891,13 +920,21 @@ internal sealed partial class ReplicationApplier(
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="treeId"/> is opted into
-    /// replication on this receiver (its per-tree
-    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map contains
-    /// itself). Used to scope a cross-tree atomic write's receiver barrier to
-    /// the participant trees present on this cluster.
+    /// replication on this receiver. The canonical signal is the injected
+    /// <see cref="ILatticeReplicationContext"/> (a non-null
+    /// <see cref="ILatticeReplicationContext.ResolveMergeMode"/> result): the
+    /// production context reports a merge mode for exactly the trees that are
+    /// replicated here - delegating to the same per-tree resolver the shipper
+    /// and change feed consult - so this agrees with the data plane, while a
+    /// host that opts trees in through a custom resolver is honoured too.
+    /// Falls back to the raw <see cref="LatticeReplicationOptions.ReplicatedTrees"/>
+    /// map when no context was injected. Used to scope a cross-tree atomic
+    /// write's receiver barrier to the participant trees present on this
+    /// cluster.
     /// </summary>
     private bool IsTreeReplicatedHere(string treeId) =>
-        options.Get(treeId).ReplicatedTrees?.ContainsKey(treeId) == true;
+        _replicationContext?.ResolveMergeMode(treeId) is not null
+        || options.Get(treeId).ReplicatedTrees?.ContainsKey(treeId) == true;
 
     /// <summary>
     /// CAS retry budget for the read-merge-write loop used by typed CRDT

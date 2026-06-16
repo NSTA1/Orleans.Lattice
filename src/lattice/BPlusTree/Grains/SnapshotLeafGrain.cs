@@ -74,6 +74,29 @@ internal sealed class SnapshotLeafGrain(
     /// </summary>
     private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
 
+    /// <summary>
+    /// Parallel side-map to <see cref="_pendingTx"/> recording, per
+    /// <c>(transactionId, key)</c>, the typed CRDT delta and merge mode a
+    /// prepared mutation carried. On the saga's terminal
+    /// <see cref="MutationKind.TxCommit"/> the drain folds the recorded
+    /// delta into this snapshot's current visible state via the matching
+    /// primitive's <c>MergeDelta</c> instead of merging the prepared LWW
+    /// value, so the read-snapshot view of a CRDT key mid-saga matches the
+    /// live leaf's terminal-fold behaviour (the per-replica union) rather
+    /// than diverging to last-writer-wins. Only populated for prepared
+    /// CRDT-mode mutations; LWW prepares leave it untouched.
+    /// </summary>
+    private readonly Dictionary<Guid, Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>> _pendingTxDeltas = new();
+
+    private CrdtShapeRegistry? _resolvedCrdtShapeRegistry;
+
+    private CrdtShapeRegistry ResolveCrdtShapeRegistry() =>
+        _resolvedCrdtShapeRegistry ??=
+            context.ActivationServices.GetService(typeof(CrdtShapeRegistry)) as CrdtShapeRegistry
+            ?? throw new InvalidOperationException(
+                "No CrdtShapeRegistry is registered in the snapshot leaf's activation services. "
+                + "AddLattice registers it unconditionally; a missing registration indicates a host wiring bug.");
+
     /// <inheritdoc />
     public async Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, CancellationToken cancellationToken)
     {
@@ -339,7 +362,7 @@ internal sealed class SnapshotLeafGrain(
         {
             case MutationKind.Set:
                 if (mutation.IsPrepared)
-                    AddPreparedMutation(mutation.TransactionId, mutation.Key, BuildLww(mutation, isTombstone: mutation.IsTombstone));
+                    AddPreparedMutation(mutation.TransactionId, mutation.Key, BuildLww(mutation, isTombstone: mutation.IsTombstone), mutation.Delta, mutation.Mode);
                 else
                     MergeIntoEntries(mutation.Key, BuildLww(mutation, isTombstone: mutation.IsTombstone));
                 break;
@@ -390,7 +413,7 @@ internal sealed class SnapshotLeafGrain(
         }
     }
 
-    private void AddPreparedMutation(Guid txId, string key, LwwValue<byte[]> incoming)
+    private void AddPreparedMutation(Guid txId, string key, LwwValue<byte[]> incoming, byte[]? delta = null, LatticeMergeMode mode = LatticeMergeMode.LwwRegister)
     {
         if (!_pendingTx.TryGetValue(txId, out var bucket))
         {
@@ -398,6 +421,20 @@ internal sealed class SnapshotLeafGrain(
             _pendingTx[txId] = bucket;
         }
         bucket[key] = incoming;
+
+        // Record the typed CRDT delta + merge mode so the terminal drain
+        // folds it (the per-replica union) rather than merging the prepared
+        // LWW value, keeping the read-snapshot view consistent with the live
+        // leaf. LWW prepares carry no delta and leave the side-map untouched.
+        if (delta is not null && mode != LatticeMergeMode.LwwRegister)
+        {
+            if (!_pendingTxDeltas.TryGetValue(txId, out var deltaBucket))
+            {
+                deltaBucket = new Dictionary<string, (byte[], LatticeMergeMode)>(StringComparer.Ordinal);
+                _pendingTxDeltas[txId] = deltaBucket;
+            }
+            deltaBucket[key] = (delta, mode);
+        }
     }
 
     private void ApplyDeleteRange(in LatticeMutation mutation)
@@ -458,16 +495,64 @@ internal sealed class SnapshotLeafGrain(
 
     private void ApplyTxCommit(Guid txId)
     {
+        _pendingTxDeltas.Remove(txId, out var deltaBucket);
         if (!_pendingTx.Remove(txId, out var bucket))
             return;
         foreach (var (key, value) in bucket)
         {
-            MergeIntoEntries(key, value);
+            if (deltaBucket is not null && deltaBucket.TryGetValue(key, out var dm))
+            {
+                // CRDT-mode prepared entry: fold the typed delta into this
+                // snapshot's current visible state rather than merging the
+                // prepared LWW value, matching the live leaf's terminal-fold
+                // behaviour so the read snapshot converges by the per-replica
+                // union. The fold preserves the prepared entry's HLC so the
+                // snapshot's as-of ordering is unchanged.
+                var folded = FoldPreparedCrdtDelta(key, dm.Delta, dm.Mode);
+                MergeIntoEntries(key, value with { Value = folded });
+            }
+            else
+            {
+                MergeIntoEntries(key, value);
+            }
         }
+    }
+
+    /// <summary>
+    /// Folds a prepared CRDT mutation's typed <paramref name="delta"/> into
+    /// this snapshot's current visible state for <paramref name="key"/> under
+    /// <paramref name="mode"/>, returning the re-serialised post-fold state
+    /// bytes. Mirrors the live leaf's terminal-commit fold so a read snapshot
+    /// of a CRDT key mid-saga converges by the per-replica union.
+    /// </summary>
+    private byte[] FoldPreparedCrdtDelta(string key, byte[] delta, LatticeMergeMode mode)
+    {
+        var registry = ResolveCrdtShapeRegistry();
+        var shape = registry.TryGet(_treeId, mode)
+            ?? throw new InvalidOperationException(
+                $"No CrdtShape is registered for tree '{_treeId}' at mode '{mode}'. "
+                + "A prepared CRDT-mode entry cannot fold its typed delta on the snapshot "
+                + "leaf's terminal commit without a shape descriptor.");
+
+        var typedDelta = shape.DeserializeDelta(delta);
+        object typedState;
+        if (_entries.TryGetValue(key, out var existing)
+            && !existing.IsTombstone
+            && existing.Value is { Length: > 0 } existingBytes)
+        {
+            typedState = shape.DeserializeState(existingBytes);
+        }
+        else
+        {
+            typedState = shape.CreateEmpty();
+        }
+        shape.MergeDelta(typedState, typedDelta);
+        return shape.SerializeState(typedState);
     }
 
     private void ApplyTxAbort(Guid txId)
     {
+        _pendingTxDeltas.Remove(txId);
         _pendingTx.Remove(txId);
     }
 

@@ -189,6 +189,22 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <param name="transactionId">The source saga's transaction id; routes the entry into the receiver leaf's pending bucket. Must not be <see cref="Guid.Empty"/>.</param>
     /// <param name="atomicBatchSize">The source saga's batch size; stamped onto the receiver-side <see cref="LatticeMutation.AtomicBatchSize"/>.</param>
     /// <param name="atomicBatchIndex">The source saga's per-step batch index; stamped onto the receiver-side <see cref="LatticeMutation.AtomicBatchIndex"/>.</param>
+    /// <param name="delta">
+    /// The typed CRDT delta the source saga staged for this key, or
+    /// <see langword="null"/> for a plain last-writer-wins prepared write.
+    /// When present (and <paramref name="mode"/> is a CRDT mode), the
+    /// receiver folds this delta into its current visible state on the
+    /// saga's terminal commit instead of installing <paramref name="value"/>
+    /// verbatim, so two clusters writing the same CRDT key concurrently
+    /// through staged atomic writes converge by the per-replica typed-delta
+    /// union rather than by last-writer-wins of their merged states.
+    /// </param>
+    /// <param name="mode">
+    /// The source tree's merge mode for this key. <see cref="LatticeMergeMode.LwwRegister"/>
+    /// (the default) keeps the entry on the byte-for-byte unchanged LWW
+    /// prepared path; any CRDT mode routes the terminal commit through the
+    /// typed-delta fold.
+    /// </param>
     Task ApplyPreparedSetAsync(
         string key,
         byte[] value,
@@ -198,7 +214,9 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
         long expiresAtTicks,
         Guid transactionId,
         int atomicBatchSize,
-        int atomicBatchIndex);
+        int atomicBatchIndex,
+        byte[]? delta = null,
+        LatticeMergeMode mode = LatticeMergeMode.LwwRegister);
 
     /// <summary>
     /// Installs a single saga prepare-phase Delete authored on a remote

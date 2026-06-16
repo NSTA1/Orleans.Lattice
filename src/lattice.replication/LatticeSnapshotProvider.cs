@@ -311,6 +311,14 @@ internal sealed class LatticeSnapshotProvider(
                         IsTombstone = m.IsTombstone,
                         TransactionId = m.TransactionId,
                         ExpiresAtTicks = m.ExpiresAtTicks,
+                        // Carry the typed CRDT delta + merge mode so a
+                        // bootstrap-restored prepared CRDT entry folds its
+                        // per-replica delta on the receiver's terminal commit
+                        // (the union) instead of installing the prepared LWW
+                        // value. Plain LWW prepares carry Delta=null /
+                        // Mode=LwwRegister and stay on the unchanged path.
+                        Delta = m.Delta,
+                        Mode = m.Mode,
                     };
                 }
 

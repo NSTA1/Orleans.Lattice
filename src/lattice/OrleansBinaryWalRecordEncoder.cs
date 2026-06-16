@@ -46,7 +46,11 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         // (whose Value remains the canonical payload) and CRDT
         // entries that for whatever reason ship without a Delta (a
         // legacy producer, a hand-constructed entry in a test) keep
-        // Value verbatim. The producer's in-grain WalRecord instance
+        // Value verbatim. Prepared saga entries (IsPrepared) also keep
+        // Value: the receiver buckets the merged-state value into its
+        // per-tx pending bucket and folds the typed Delta into the
+        // visible state only on the terminal commit, so the prepared
+        // apply path requires a non-null Value on the wire. The producer's in-grain WalRecord instance
         // still carries Value in memory and the leaf store continues
         // to hold the canonical post-merge state; this strip is
         // scoped to the encoded bytes only.
@@ -60,7 +64,8 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         // below.
         var stripValue = record.Op == MutationKind.Set
             && record.Mode != LatticeMergeMode.LwwRegister
-            && record.Delta is not null;
+            && record.Delta is not null
+            && !record.IsPrepared;
         var stripTreeId = record.TreeId.Length != 0;
         if (!stripValue && !stripTreeId)
         {

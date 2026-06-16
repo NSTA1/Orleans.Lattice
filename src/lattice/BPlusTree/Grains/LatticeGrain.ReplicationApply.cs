@@ -319,7 +319,9 @@ internal sealed partial class LatticeGrain
         long expiresAtTicks,
         Guid transactionId,
         int atomicBatchSize,
-        int atomicBatchIndex)
+        int atomicBatchIndex,
+        byte[]? delta = null,
+        LatticeMergeMode mode = LatticeMergeMode.LwwRegister)
     {
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
@@ -335,7 +337,8 @@ internal sealed partial class LatticeGrain
 #if LATTICE_DIAG
         Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
             $"[DIAG xc-apply-prepared-set] tree={TreeId} key={key} tx={transactionId} hlc={sourceHlc} " +
-            $"origin={originClusterId} batchSize={atomicBatchSize} batchIndex={atomicBatchIndex}");
+            $"origin={originClusterId} batchSize={atomicBatchSize} batchIndex={atomicBatchIndex} " +
+            $"mode={mode} deltaLen={(delta?.Length ?? -1)}");
 #endif
 
         // Re-establish the same ambient-context stack the source-side
@@ -346,7 +349,14 @@ internal sealed partial class LatticeGrain
         //     (LatticeHlcOverrideContext);
         //   - persists OriginClusterId, VectorClock, AtomicBatchSize,
         //     AtomicBatchIndex, and TransactionId on the resulting
-        //     LatticeMutation verbatim.
+        //     LatticeMutation verbatim;
+        //   - records the typed CRDT delta + merge mode in the leaf's
+        //     pending-tx delta side-map (LatticeDeltaContext) so the
+        //     saga's terminal commit folds the per-replica delta into
+        //     the receiver's current visible state instead of installing
+        //     the source's merged LWW value verbatim. A null delta (plain
+        //     LWW prepared write) leaves the side-map untouched and keeps
+        //     the byte-for-byte unchanged LWW terminal-drain path.
         // The terminal mark that arrives subsequently via
         // ApplyTxTerminalAsync flips the pending bucket into the
         // visible projection.
@@ -357,6 +367,9 @@ internal sealed partial class LatticeGrain
         using (LatticeOriginContext.With(originClusterId))
         using (LatticeVectorClockContext.With(sourceVectorClock))
         using (LatticeHlcOverrideContext.With(sourceHlc))
+        using (mode != LatticeMergeMode.LwwRegister && delta is not null
+            ? LatticeDeltaContext.With(delta)
+            : null)
         {
             if (expiresAtTicks > 0)
             {
