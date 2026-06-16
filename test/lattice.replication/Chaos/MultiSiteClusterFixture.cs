@@ -29,6 +29,20 @@ internal sealed class MultiSiteClusterFixture
     private static readonly ConcurrentDictionary<string, LatticeMergeMode> Modes = new();
 
     /// <summary>
+    /// Optional per-tree merge-mode overrides shared across every site,
+    /// keyed by tree id. When a tree id is present here it takes precedence
+    /// over the fixture's single fallback <see cref="_mode"/> on both the
+    /// silo-side <see cref="ChaosModeResolver"/> and the client-side
+    /// resolver the <see cref="ChangeFeed"/> consumes. This lets a single
+    /// fixture couple, say, a <see cref="LatticeMergeMode.PnCounter"/> tree
+    /// with a <see cref="LatticeMergeMode.LwwRegister"/> sibling in one
+    /// cross-tree atomic write - the scenario the CRDT-coupled atomic chaos
+    /// test exercises. Cleared in <see cref="DisposeAsync"/> so overrides do
+    /// not leak into the next fixture.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, LatticeMergeMode> TreeModes = new();
+
+    /// <summary>
     /// Per-cluster silo-side <see cref="LatticeReplicationOptions"/>
     /// customisers. Keyed by the per-site cluster id so a single
     /// post-configure type can route every silo to the chaos test's
@@ -45,6 +59,7 @@ internal sealed class MultiSiteClusterFixture
     private readonly ReplicationApplier[] _appliers;
     private readonly ReplicationPeerStats[] _peerStats;
     private readonly LatticeMergeMode _mode;
+    private readonly IReadOnlyDictionary<string, LatticeMergeMode>? _treeModes;
     private readonly Action<LatticeReplicationOptions>? _siloCustomizer;
     private readonly Action<LatticeReplicationOptions>? _clientCustomizer;
 
@@ -53,7 +68,8 @@ internal sealed class MultiSiteClusterFixture
     /// tree on every silo (chaos tests exercise a single tree per fixture).
     /// </summary>
     /// <param name="mode">
-    /// Replication mode for every replicated tree on every silo.
+    /// Fallback replication mode for every replicated tree on every silo
+    /// that is not overridden by <paramref name="treeModes"/>.
     /// </param>
     /// <param name="siteCount">Number of independent silo clusters to spin up.</param>
     /// <param name="configureSilo">
@@ -77,11 +93,19 @@ internal sealed class MultiSiteClusterFixture
     /// configured symmetrically when receiver-side behaviour is
     /// being exercised.
     /// </param>
+    /// <param name="treeModes">
+    /// Optional per-tree merge-mode overrides, keyed by tree id. A tree id
+    /// present here resolves to its mapped mode on every site (overriding
+    /// <paramref name="mode"/>); any tree absent from the map falls back to
+    /// <paramref name="mode"/>. Use this to couple distinct merge modes -
+    /// e.g. a CRDT tree and an LWW sibling - in a single fixture.
+    /// </param>
     public MultiSiteClusterFixture(
         LatticeMergeMode mode,
         int siteCount = 3,
         Action<LatticeReplicationOptions>? configureSilo = null,
-        Action<LatticeReplicationOptions>? configureClient = null)
+        Action<LatticeReplicationOptions>? configureClient = null,
+        IReadOnlyDictionary<string, LatticeMergeMode>? treeModes = null)
     {
         if (siteCount < 2)
         {
@@ -89,6 +113,7 @@ internal sealed class MultiSiteClusterFixture
         }
 
         _mode = mode;
+        _treeModes = treeModes;
         SiteCount = siteCount;
         _sites = new TestCluster[siteCount];
         _changeFeeds = new IChangeFeed[siteCount];
@@ -154,6 +179,14 @@ internal sealed class MultiSiteClusterFixture
             }
         }
 
+        if (_treeModes is not null)
+        {
+            foreach (var (treeId, treeMode) in _treeModes)
+            {
+                TreeModes[treeId] = treeMode;
+            }
+        }
+
         for (var i = 0; i < SiteCount; i++)
         {
             _sites[i] = await BuildSiteAsync(ClusterIdFor(i));
@@ -169,13 +202,20 @@ internal sealed class MultiSiteClusterFixture
             options.Get(Arg.Any<string>()).Returns(perSiteOptions);
 
             // Client-side resolver mirrors the silo-side ChaosModeResolver:
-            // every tree on this fixture uses the same configured _mode, and
-            // ChangeFeed needs it to re-stamp WalRecord.Mode after the
-            // grain-RPC return path strips it (the property is marked
+            // a tree id present in the per-tree override map resolves to its
+            // mapped mode; every other tree uses the fixture's single _mode.
+            // ChangeFeed needs the resolver to re-stamp WalRecord.Mode after
+            // the grain-RPC return path strips it (the property is marked
             // [field: NonSerialized] so the canonical Orleans codec never
             // serialises it).
             var resolver = Substitute.For<ILatticeMergeModeResolver>();
-            resolver.Resolve(Arg.Any<string>()).Returns(_mode);
+            resolver.Resolve(Arg.Any<string>()).Returns(callInfo =>
+            {
+                var treeId = callInfo.Arg<string>();
+                return _treeModes is not null && _treeModes.TryGetValue(treeId, out var treeMode)
+                    ? treeMode
+                    : _mode;
+            });
 
             _changeFeeds[i] = new ChangeFeed(_sites[i].Client, options, resolver);
             _peerStats[i] = new ReplicationPeerStats();
@@ -218,6 +258,14 @@ internal sealed class MultiSiteClusterFixture
         {
             Modes.TryRemove(ClusterIdFor(i), out _);
             SiloCustomizers.TryRemove(ClusterIdFor(i), out _);
+        }
+
+        if (_treeModes is not null)
+        {
+            foreach (var treeId in _treeModes.Keys)
+            {
+                TreeModes.TryRemove(treeId, out _);
+            }
         }
     }
 
@@ -288,14 +336,21 @@ internal sealed class MultiSiteClusterFixture
     }
 
     /// <summary>
-    /// Returns the chaos test's configured mode for any tree, keyed off
-    /// the silo's own cluster id so a single configurator type works for
-    /// every site.
+    /// Resolves the merge mode for a tree. A tree id present in the
+    /// per-tree override map wins (so a single fixture can couple, e.g., a
+    /// CRDT tree with an LWW sibling); otherwise the chaos test's single
+    /// configured mode is returned, keyed off the silo's own cluster id so
+    /// one configurator type works for every site.
     /// </summary>
     private sealed class ChaosModeResolver(IOptionsMonitor<LatticeReplicationOptions> options) : ILatticeMergeModeResolver
     {
         public LatticeMergeMode? Resolve(string treeId)
         {
+            if (TreeModes.TryGetValue(treeId, out var treeMode))
+            {
+                return treeMode;
+            }
+
             var clusterId = options.CurrentValue.ClusterId;
             return Modes.TryGetValue(clusterId, out var mode) ? mode : null;
         }
