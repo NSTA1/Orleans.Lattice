@@ -1719,3 +1719,83 @@ The digest probe reads each covered tree's `LeafProjectionDigest`, which
 requires `LatticeOptions.MaintainProjectionDigest` (enabled by default) on the
 covered trees.
 
+## Materialised views
+
+A **materialised view** is an asynchronous, eventually-consistent projection of a
+source tree, maintained by tailing that tree's WAL. It needs a WAL-backed lattice
+(`AddLattice` + `AddWalCursorRegistry`) and `AddLatticeViews(...)`; it does **not**
+require the replication package's `AddLatticeReplication` (that is only for the
+cross-cluster `ShipView` mode). See [Materialised views](materialised-views.md)
+for the full guide and [configuration](configuration.md#materialised-view-options)
+for the per-view options.
+
+```csharp verify
+using Microsoft.Extensions.DependencyInjection;
+
+// ILatticeViewFactory is registered by AddLatticeViews; here it is resolved from
+// the service provider for illustration. Prefer constructor injection in practice.
+var viewFactory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
+var people = grainFactory.GetGrain<ILattice>("people");
+
+// Filter / re-project view.
+ILatticeView adults = viewFactory.Create(
+    people,
+    "adults",
+    new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+
+byte[]? row = await adults.GetAsync("alice", cancellationToken);
+long lag = await adults.GetLagAsync(cancellationToken);
+
+// Read-your-write barrier, then a content digest.
+await adults.WaitForSourceHeadAsync(TimeSpan.FromSeconds(5), cancellationToken);
+ViewDigest digest = await adults.ComputeDigestAsync(cancellationToken);
+
+// Aggregation view: one reduced value per group, decoded with LatticeAggregationValue.
+ILatticeView ageByName = viewFactory.Create(
+    people,
+    "age-sum-by-name",
+    new LatticeViewDefinition("age-sum-by-name", new AggregationLatticeViewProjection(
+        AggregationKind.Sum,
+        groupKeySelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Name,
+        selectorVersion: "sum-age-v1",
+        valueSelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Age)));
+
+byte[]? aggregate = await ageByName.GetAsync("Alice", cancellationToken);
+double total = aggregate is null ? 0 : LatticeAggregationValue.DecodeDouble(aggregate);
+```
+
+### Surface
+
+| Type | Role |
+|------|------|
+| `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, hosted maintainer, and the startup replication-mode validator. Declares startup views through the builder (`AddView` / `AddAggregationView`). |
+| `ConfigureLatticeView(viewName?, configure)` | Sets `LatticeViewOptions` defaults (no name) or per-view overrides. |
+| `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle. Registered as a singleton by `AddLatticeViews`. |
+| `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
+| `LatticeViewDefinition` | Pairs a view name with either an `ILatticeViewProjection` (filter / re-project) or an `ILatticeAggregationProjection` (aggregation). |
+| `ILatticeViewProjection` / `PredicateLatticeViewProjection` | Filter / re-project projection: a predicate, optional value transform, and optional injective key re-map. `ProjectionVersion` is a structural hash that drives rebuild-on-change. |
+| `ILatticeAggregationProjection` / `AggregationLatticeViewProjection` | Aggregation projection: an `AggregationKind`, group-key selector, selector-version tag, and the value / member selector the kind needs. |
+| `AggregationKind` | `Count`, `Sum`, `Min`, `Max`, `SetUnion`. |
+| `LatticeAggregationValue` | Decoder for materialised aggregate bytes: `DecodeDouble` (`Sum` / `Min` / `Max`) and `DecodeInt64` (`Count` / `SetUnion`). |
+| `ViewDigest` | Order-independent content fingerprint over the materialised `(key, value)` pairs, with an `EntryCount`. |
+| `LatticeViewOptions` | Per-view options resolved via `IOptionsMonitor<LatticeViewOptions>.Get(viewName)`. See [configuration](configuration.md#materialised-view-options). |
+| `LatticeViewReplicationMode` | `DeriveLocally` (default, single-cluster / full-replication) or `ShipView` (replicate the view tree to thin consumer clusters; requires the replication package). |
+
+### Notes
+
+- **No replication required.** A `DeriveLocally` view is fully local: it tails the
+  source WAL through the core commit-log reader registered by `AddLattice`.
+  `AddLatticeViews` ships in the `Orleans.Lattice.Replication` package, so a
+  single-cluster host references that package but never calls
+  `AddLatticeReplication`.
+- **Reminders.** The maintainer registers a keepalive reminder, so a reminder
+  provider must be configured on the silo.
+- **Read through the handle.** A rebuild can swap the live view tree, so prefer
+  the `ILatticeView` handle (which re-resolves the active tree) over binding a raw
+  `ILattice` grain by a fixed id.
+- **Atomic visibility.** A source atomic write (single-tree or cross-tree) is
+  surfaced atomically in the derived views; see
+  [Materialised views](materialised-views.md#atomic-write-visibility).
+
+

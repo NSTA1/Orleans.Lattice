@@ -748,6 +748,40 @@ mapping is tuned with the separate `WalSaturationReceiverFlowControlOptions`,
 documented in
 [Receiver flow control](../lattice.replication/receiver-flow-control.md#built-in-wal-saturation-policy).
 
+## Materialised view options
+
+Materialised views are configured per view name on a separate options type,
+`LatticeViewOptions`, not on `LatticeOptions`. Set defaults or per-view overrides
+with `ConfigureLatticeView` (the view-name overload targets one view; the
+no-name overload sets the default applied to every view):
+
+```csharp verify
+siloBuilder.ConfigureLatticeView("adults", options =>
+{
+    options.BatchSize = 512;
+    options.CoalesceWindow = TimeSpan.FromMilliseconds(100);
+});
+```
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. |
+| `CoalesceWindow` | 50 ms | Period of the background drain timer. |
+| `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. |
+| `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. |
+| `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. |
+| `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload before the backstop forces a rebuild. |
+| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id. Bounds the post-swap read-staleness window. |
+| `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl`. |
+| `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
+| `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. `ShipView` requires the replication package. |
+| `MaxLagBudget` | 0 | Maximum committed-but-unapplied source entries before the view is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
+| `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. Has no effect when `MaxLagBudget` is 0. |
+
+See [Materialised views](materialised-views.md) for the full behaviour of each
+option, including what registrations a view needs (`AddLattice` +
+`AddWalCursorRegistry` + `AddLatticeViews`).
+
 ## Full Example
 
 ```csharp verify

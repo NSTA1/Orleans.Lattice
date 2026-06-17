@@ -18,9 +18,15 @@ public static class LatticeViewsServiceCollectionExtensions
     /// validator, and the hosted activation service, and applies any startup view
     /// declarations from <paramref name="configure"/>.
     /// <para>
-    /// Must be called <i>after</i> <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>:
-    /// views tail the per-shard write-ahead log through the commit-log reader the
-    /// WAL provider registers, so a WAL provider must be present.
+    /// A view tails the per-shard write-ahead log through the commit-log reader,
+    /// so the host must register a WAL-backed lattice. For a single cluster that
+    /// means calling <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
+    /// (which registers the commit-log reader and the in-memory WAL baseline) and
+    /// <see cref="LatticeServiceCollectionExtensions.AddWalCursorRegistry"/> before
+    /// <c>AddLatticeViews</c>. <c>AddLatticeReplication</c> is <i>not</i> required
+    /// for a local (<see cref="LatticeViewReplicationMode.DeriveLocally"/>) view;
+    /// it is only needed when a view ships its tree across clusters
+    /// (<see cref="LatticeViewReplicationMode.ShipView"/>).
     /// </para>
     /// </summary>
     /// <param name="builder">The silo builder.</param>
