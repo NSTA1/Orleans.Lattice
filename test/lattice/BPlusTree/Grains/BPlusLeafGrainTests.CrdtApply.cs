@@ -338,4 +338,104 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("k", new byte[] { 0x00 });
         Assert.That(grain.TryGetTypedShadowForTest<OrSet>("k", out _), Is.False, "byte-level SetAsync must evict the typed shadow");
     }
+
+    // ── deferred-materialisation correctness (no commit-log writer) ──
+    //
+    // With no ICommitLogWriter wired (the unit-grain harness), the apply
+    // path defers the O(state) post-merge row re-serialisation: the typed
+    // shadow is authoritative, the digest is folded from a streaming
+    // buffer, and the byte[] row is materialised lazily. These tests pin
+    // the observable invariants that deferral must preserve.
+
+    private static byte[] AddDeltaBytes(string element, string replicaId, long counter)
+    {
+        var delta = new OrSetDelta
+        {
+            Adds = new[]
+            {
+                new OrSetDeltaDot { Element = Encoding.UTF8.GetBytes(element), ReplicaId = replicaId, Counter = counter },
+            },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+        return JsonLatticeSerializer<OrSetDelta>.Default.Serialize(delta);
+    }
+
+    [Test]
+    public async Task CrdtApply_deferred_incremental_digest_matches_full_recompute()
+    {
+        // The incremental projection-hash maintained by the deferred fold
+        // (fed from the streaming serialiser) must equal the from-scratch
+        // recompute over the materialised rows. A divergence between the
+        // streaming and array serialisers, or a fold bug, breaks this.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateCrdtGrain(state);
+
+        for (var i = 0; i < 6; i++)
+        {
+            await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, AddDeltaBytes("e-" + i, "r1", i + 1));
+        }
+        // Idempotent re-delivery of an already-applied delta.
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, AddDeltaBytes("e-0", "r1", 1));
+        // A second key so the fold spans more than one entry.
+        await grain.ApplyCrdtDeltaAsync("k2", LatticeMergeMode.OrSet, AddDeltaBytes("z", "r2", 1));
+
+        var incremental = state.State.ProjectionHash;
+        var oracle = grain.ComputeFullProjectionHashFromState();
+        Assert.That(incremental, Is.Not.Null);
+        Assert.That(incremental, Is.EqualTo(oracle),
+            "deferred incremental digest must equal the from-scratch recompute over materialised rows");
+    }
+
+    [Test]
+    public async Task CrdtApply_deferred_row_materialises_canonical_bytes_on_get()
+    {
+        // GetAsync reads the byte[] row; for a deferred CRDT key the row is
+        // materialised on demand and must return the canonical post-merge
+        // OrSet bytes, identical to deserialising the typed shadow.
+        var grain = CreateCrdtGrain();
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, AddDeltaBytes("apple", "r1", 1));
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, AddDeltaBytes("banana", "r1", 2));
+
+        var bytes = await grain.GetAsync("k");
+        Assert.That(bytes, Is.Not.Null);
+        var observed = JsonLatticeSerializer<OrSet>.Default.Deserialize(bytes!);
+        Assert.That(observed.Contains(Encoding.UTF8.GetBytes("apple")), Is.True);
+        Assert.That(observed.Contains(Encoding.UTF8.GetBytes("banana")), Is.True);
+
+        // The materialised row must byte-match the typed shadow's serialisation.
+        Assert.That(grain.TryGetTypedShadowForTest<OrSet>("k", out var shadow), Is.True);
+        Assert.That(bytes, Is.EqualTo(JsonLatticeSerializer<OrSet>.Default.Serialize(shadow)));
+    }
+
+    [Test]
+    public async Task CrdtApply_then_SetAsync_supersedes_deferred_row_and_keeps_digest_consistent()
+    {
+        // A byte-level LWW SetAsync after a deferred CRDT apply must
+        // supersede the deferred placeholder, and the incremental digest
+        // must still equal the from-scratch recompute.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateCrdtGrain(state);
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, AddDeltaBytes("a", "r1", 1));
+
+        await grain.SetAsync("k", Encoding.UTF8.GetBytes("override"));
+
+        var bytes = await grain.GetAsync("k");
+        Assert.That(bytes, Is.EqualTo(Encoding.UTF8.GetBytes("override")));
+        Assert.That(state.State.ProjectionHash, Is.EqualTo(grain.ComputeFullProjectionHashFromState()));
+    }
+
+    [Test]
+    public async Task CrdtApply_deferred_does_not_advance_state_bytes_beyond_serialized_length()
+    {
+        // The deferred row must account its post-merge serialised length in
+        // StateBytes even before materialisation, so a leaf-stats read does
+        // not under- or over-count the deferred key.
+        var grain = CreateCrdtGrain();
+        await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, AddDeltaBytes("apple", "r1", 1));
+
+        var canonical = JsonLatticeSerializer<OrSet>.Default.Serialize(
+            grain.TryGetTypedShadowForTest<OrSet>("k", out var shadow) ? shadow : new OrSet());
+        var stats = await grain.GetStatsAsync();
+        Assert.That(stats.StateBytes, Is.EqualTo(Encoding.UTF8.GetByteCount("k") + canonical.Length));
+    }
 }

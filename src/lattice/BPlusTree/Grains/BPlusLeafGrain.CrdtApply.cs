@@ -9,14 +9,35 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// seam so accessors (OrSet, PnCounter, etc.) can collapse the
 /// historical read-merge-write round trip into a single grain call.
 /// <para>
-/// Step-3 scope: the new path appends a CRDT-flavoured WAL record (the
-/// receiver's existing apply path already handles
-/// <see cref="WalRecord.Delta"/> on every CRDT mode) and re-serialises
-/// the post-merge typed state back into the legacy byte[] row so the
-/// observable read seam (<see cref="BPlusLeafGrain.GetAsync"/>) keeps
-/// returning the canonical state without re-tooling. Later steps swap
-/// the byte[] row for an in-grain typed-state cache plus WAL-replay
-/// rebuild; this method is the seam those steps extend.
+/// The apply folds the typed delta into the post-merge state and keeps
+/// the observable read seam (<see cref="BPlusLeafGrain.GetAsync"/>)
+/// returning the canonical post-merge bytes. It picks one of two paths
+/// per apply:
+/// </para>
+/// <para>
+/// <b>Eager path</b> (a commit-log writer is wired, or no streaming
+/// serialiser exists, or an existing row's stamp dominates): serialise
+/// the post-merge state once and re-use that array for the durable WAL
+/// record, the byte[] row, and the projection-digest fold, exactly as
+/// the historical path did. This is the only path silos with a durable
+/// WAL ever take, so production behaviour is unchanged.
+/// </para>
+/// <para>
+/// <b>Deferred path</b> (no commit-log writer consumes the bytes this
+/// apply, a streaming serialiser is available, and the new stamp wins):
+/// the post-merge byte[] row is <b>not</b> materialised. The typed
+/// shadow (<see cref="LeafEntryCache.StoreTyped"/>) is authoritative for
+/// the key; the projection-digest fold is fed from a reused streaming
+/// buffer so the per-apply allocation is O(delta) instead of O(state);
+/// and the canonical row bytes are produced lazily by serialising the
+/// shadow at the first consumer (a GetAsync read, snapshot/persist
+/// capture, split/projection, replication ship, observer publish, or any
+/// row enumeration), all of which funnel through
+/// <see cref="LeafEntryCache.TryGetRow"/> /
+/// <see cref="LeafEntryCache.EnumerateRows"/> /
+/// <see cref="LeafEntryCache.UnderlyingRows"/>. The streaming serialiser
+/// and the lazy array serialiser are byte-identical, so a materialised
+/// read matches the digest contribution already folded in.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
@@ -36,6 +57,17 @@ internal sealed partial class BPlusLeafGrain
     private static readonly CrdtShapeRegistry FallbackCrdtShapeRegistry = new();
 
     private CrdtShapeRegistry? _resolvedCrdtShapeRegistry;
+
+    /// <summary>
+    /// Per-activation reusable buffer that the deferred CRDT-apply path streams
+    /// the post-merge (and, on the steady-state hot path, the pre-merge) state
+    /// serialisation into so the projection-digest fold consumes the bytes
+    /// without allocating an O(state) <c>byte[]</c> row every apply. Reset via
+    /// <see cref="System.Buffers.ArrayBufferWriter{T}.ResetWrittenCount"/>
+    /// (which retains the backing array) between uses, so after warm-up the
+    /// per-apply allocation stays flat in the post-merge state size.
+    /// </summary>
+    private System.Buffers.ArrayBufferWriter<byte>? _crdtSerializeBuffer;
 
     private CrdtShapeRegistry ResolveCrdtShapeRegistry() =>
         _resolvedCrdtShapeRegistry ??=
@@ -96,35 +128,46 @@ internal sealed partial class BPlusLeafGrain
                 + "fallback automatically.");
         }
 
-        // step 1 (merge) - decode current state (or empty), fold the
-        // typed delta, re-serialise the post-merge state. The
-        // re-serialisation keeps the legacy byte[] row consistent so
-        // GetAsync continues to return the canonical post-merge bytes.
-        // The typed shadow short-circuits the existing-state decode on
-        // the consecutive-mutations-to-the-same-key hot path: when a
-        // post-merge typed instance is already in the cache (stored by
-        // the previous ApplyCrdtDeltaAsync commit under the matching
-        // shape's state type), re-use it instead of paying the
-        // DeserializeState pass.
+        // step 1 (merge) - resolve the current typed state (shadow, cold
+        // decode, or empty), then fold the typed delta. The typed shadow
+        // short-circuits the existing-state decode on the consecutive-
+        // mutations-to-the-same-key hot path: when a post-merge typed
+        // instance is already in the cache (stored by the previous
+        // ApplyCrdtDeltaAsync commit under the matching shape's state
+        // type), re-use it instead of paying the DeserializeState pass.
+        // The actual MergeDelta fold happens inside the path branch below
+        // because the deferred path must first re-stream the pre-merge
+        // state to fold the prior digest contribution out.
         var typedDelta = shape.DeserializeDelta(deltaBytes);
-        var hasExistingRow = Cache.TryGetRow(key, out var existing)
+        var hasExistingRow = Cache.TryPeekRow(key, out var existing, out var existingDeferred)
             && !existing.IsTombstone
-            && existing.Value is { Length: > 0 };
+            && (existingDeferred || existing.Value is { Length: > 0 });
         object typedState;
-        if (hasExistingRow && Cache.TryGetTyped<object>(key, out var shadowed))
+        if (Cache.TryGetTyped<object>(key, out var shadowed))
         {
+            // A live typed shadow is authoritative whenever present (and it is
+            // always present for a deferred row, whose canonical bytes are
+            // reproduced from it). Re-use it without touching the byte row.
             typedState = shadowed;
+        }
+        else if (hasExistingRow && !existingDeferred)
+        {
+            typedState = shape.DeserializeState(existing.Value!);
         }
         else if (hasExistingRow)
         {
+            // Defensive: a deferred row with no live shadow should not occur
+            // (defer always re-stores the shadow, and every shadow eviction
+            // also clears the deferred marker), but if it does, materialise
+            // the row and decode it so correctness never depends on the
+            // invariant holding.
+            Cache.TryGetRow(key, out existing);
             typedState = shape.DeserializeState(existing.Value!);
         }
         else
         {
             typedState = shape.CreateEmpty();
         }
-        shape.MergeDelta(typedState, typedDelta);
-        var postMergeBytes = shape.SerializeState(typedState);
 
         // step 2 (stamp) - advance the leaf HLC and publish the
         // Version[ReplicaId] advance for the cache filter, same shape
@@ -132,40 +175,133 @@ internal sealed partial class BPlusLeafGrain
         var stamp = AdvanceClockOrOverride();
         PublishVersionAdvance(stamp);
         BumpLocalRevision();
-        var postMergeEntry = LwwValue<byte[]>.Create(postMergeBytes, stamp) with
-        {
-            OriginClusterId = LatticeOriginContext.Current,
-            VectorClock = LatticeVectorClockContext.Current,
-        };
 
-        // step 3 (wal) - append a CRDT-flavoured Set whose Delta slot
-        // carries the producer's typed delta bytes verbatim. The
-        // canonical encoder strips Value on encode for CRDT modes so
-        // the wire stays delta-only; the in-grain instance retains
-        // both the typed delta and the post-merge state-row payload.
+        // step 3 (path select) - the post-merge full-state re-serialisation is
+        // only load-bearing for code that consumes the canonical byte[] row:
+        // the durable commit-log record, a GetAsync read, snapshot/persist
+        // capture, split/projection, replication digest, and shadow eviction.
+        // When no commit-log writer is wired (nothing durable consumes the
+        // bytes this apply), a streaming serialiser is available, and the new
+        // stamp dominates any existing row (so the row-level LWW keeps the new
+        // value), defer the O(state) row materialisation: feed the digest fold
+        // from a reused streaming buffer and store a placeholder row whose
+        // canonical bytes are produced lazily at the first read / enumerate /
+        // snapshot seam. The typed shadow is authoritative for the key until
+        // then. Otherwise take the historical eager path verbatim, which
+        // serialises once and re-uses that array for the WAL, the row, and the
+        // digest.
         var writer = ResolveCommitLogWriter();
-        if (writer is not null)
+        var canDefer = writer is null
+            && shape.SerializeStateInto is not null
+            && (!hasExistingRow || existing.Timestamp.CompareTo(stamp) < 0);
+
+        LwwValue<byte[]> postMergeEntry;
+        if (!canDefer)
         {
-            var record = WalRecordBuilder.ForCrdtDelta(
-                state.State.TreeId ?? string.Empty,
-                state.State.ShardIndex ?? 0,
-                key,
-                mode,
-                postMergeEntry,
-                deltaBytes);
-            await writer.AppendAsync(record);
+            shape.MergeDelta(typedState, typedDelta);
+            var postMergeBytes = shape.SerializeState(typedState);
+            postMergeEntry = LwwValue<byte[]>.Create(postMergeBytes, stamp) with
+            {
+                OriginClusterId = LatticeOriginContext.Current,
+                VectorClock = LatticeVectorClockContext.Current,
+            };
+
+            // step 4a (wal) - append a CRDT-flavoured Set whose Delta slot
+            // carries the producer's typed delta bytes verbatim. The
+            // canonical encoder strips Value on encode for CRDT modes so the
+            // wire stays delta-only; the in-grain instance retains both the
+            // typed delta and the post-merge state-row payload.
+            if (writer is not null)
+            {
+                var record = WalRecordBuilder.ForCrdtDelta(
+                    state.State.TreeId ?? string.Empty,
+                    state.State.ShardIndex ?? 0,
+                    key,
+                    mode,
+                    postMergeEntry,
+                    deltaBytes);
+                await writer.AppendAsync(record);
+            }
+
+            // step 5a (apply) - merge the post-merge state into the leaf
+            // projection through the standard StoreEntry funnel so the
+            // projection-digest XOR and per-key delivery sequence advance
+            // exactly as they would for an LWW Set. StoreEntry's byte write
+            // evicts any prior typed shadow for the key, so we re-store the
+            // freshly merged typed instance immediately afterwards to keep
+            // the shadow consistent with the row.
+            StoreEntry(key, postMergeEntry);
+            Cache.StoreTyped(key, typedState);
+        }
+        else
+        {
+            // Deferred path. postMergeEntry carries the canonical metadata with
+            // a null Value placeholder; the bytes are reproduced on demand from
+            // the typed shadow.
+            postMergeEntry = new LwwValue<byte[]>
+            {
+                Value = null,
+                Timestamp = stamp,
+                IsTombstone = false,
+                OriginClusterId = LatticeOriginContext.Current,
+                VectorClock = LatticeVectorClockContext.Current,
+            };
+
+            var buffer = _crdtSerializeBuffer ??= new System.Buffers.ArrayBufferWriter<byte>();
+            var serializeInto = shape.SerializeStateInto!;
+
+            if (_maintainProjectionDigest)
+            {
+                // Fold the prior contribution out before mutating the shadow:
+                // the pre-merge serialised bytes are exactly what the previous
+                // apply folded in for this key.
+                EnsureProjectionHashInitialized();
+                Span<byte> oldContribution = stackalloc byte[ProjectionHashSize];
+                var hasOld = false;
+                if (hasExistingRow)
+                {
+                    if (!existingDeferred && existing.Value is { Length: > 0 })
+                    {
+                        ComputeEntryContribution(key, in existing, existing.Value, hasValue: true, oldContribution);
+                    }
+                    else
+                    {
+                        // typedState is still pre-merge here; re-stream it.
+                        buffer.ResetWrittenCount();
+                        serializeInto(typedState, buffer);
+                        ComputeEntryContribution(key, in existing, buffer.WrittenSpan, hasValue: true, oldContribution);
+                    }
+                    hasOld = true;
+                }
+
+                shape.MergeDelta(typedState, typedDelta);
+
+                buffer.ResetWrittenCount();
+                serializeInto(typedState, buffer);
+                var serializedLength = buffer.WrittenSpan.Length;
+                Span<byte> newContribution = stackalloc byte[ProjectionHashSize];
+                ComputeEntryContribution(key, in postMergeEntry, buffer.WrittenSpan, hasValue: true, newContribution);
+                XorFoldContributionDelta(oldContribution, hasOld, newContribution, hasNew: true);
+
+                StoreDeferredCrdtRow(key, in postMergeEntry, shape, typedState, serializedLength);
+            }
+            else
+            {
+                // Digest maintenance disabled: no fold, but still record the
+                // serialised length for byte-accurate StateBytes accounting.
+                shape.MergeDelta(typedState, typedDelta);
+                buffer.ResetWrittenCount();
+                serializeInto(typedState, buffer);
+                StoreDeferredCrdtRow(key, in postMergeEntry, shape, typedState, buffer.WrittenSpan.Length);
+            }
+
+            // Mirror StoreEntry's per-key delivery-sequence advance so the
+            // delivery cursor and replication ship path observe the apply.
+            BumpDeliverySequenceFor(key);
+            Cache.StoreTyped(key, typedState);
         }
 
-        // step 4 (apply) - merge the post-merge state into the leaf
-        // projection through the standard StoreEntry funnel so the
-        // projection-digest XOR and per-key delivery sequence advance
-        // exactly as they would for an LWW Set. StoreEntry's byte
-        // write evicts any prior typed shadow for the key, so we
-        // re-store the freshly merged typed instance immediately
-        // afterwards to keep the shadow consistent with the row.
         var options = await GetOptionsAsync();
-        StoreEntry(key, postMergeEntry);
-        Cache.StoreTyped(key, typedState);
         SplitResult? splitResult = null;
         if (Cache.Count > options.MaxLeafKeys)
         {
@@ -179,7 +315,8 @@ internal sealed partial class BPlusLeafGrain
         // scope so mutation observers see LatticeMutation.Delta
         // populated with the typed delta payload (same contract the
         // legacy accessor's CAS-loop path provided via its outer
-        // LatticeDeltaContext scope).
+        // LatticeDeltaContext scope). Cache.TryGetRow materialises a
+        // deferred row on demand so observers always see canonical bytes.
         if (mutationObservers.HasObservers)
         {
             var published = Cache.TryGetRow(key, out var committed) ? committed : postMergeEntry;
@@ -195,5 +332,28 @@ internal sealed partial class BPlusLeafGrain
         await PublishDigestUpwardAsync();
 
         return new CrdtApplyResult { Version = stamp, Split = splitResult };
+    }
+
+    /// <summary>
+    /// Stores a deferred CRDT post-merge row whose canonical bytes are
+    /// reproduced lazily by serialising the captured typed shadow. The
+    /// materialiser uses <see cref="CrdtShape.SerializeState"/> (the array
+    /// serialiser), which is byte-identical to the streaming
+    /// <see cref="CrdtShape.SerializeStateInto"/> used to feed the digest fold,
+    /// so a later materialised read yields bytes whose digest contribution
+    /// matches the one already folded in.
+    /// </summary>
+    private void StoreDeferredCrdtRow(
+        string key,
+        in LwwValue<byte[]> metadataRow,
+        CrdtShape shape,
+        object typedState,
+        long serializedLength)
+    {
+        Cache.StoreDeferredRow(
+            key,
+            in metadataRow,
+            () => shape.SerializeState(typedState),
+            serializedLength);
     }
 }
