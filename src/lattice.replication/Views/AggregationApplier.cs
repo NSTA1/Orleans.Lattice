@@ -1,3 +1,5 @@
+using System.IO.Hashing;
+using System.Text;
 using static Orleans.Lattice.Replication.Views.AggregationRowCodec;
 
 namespace Orleans.Lattice.Replication.Views;
@@ -19,7 +21,18 @@ namespace Orleans.Lattice.Replication.Views;
 /// (set-union) for unbounded-cardinality groups.
 /// </para>
 /// <para>
-/// <b>Fanout.</b> Each group is sharded into <see cref="_fanout"/> accumulators
+/// <b>Crash idempotency.</b> WAL delivery is at-least-once and the maintainer
+/// checkpoints once per drain batch, so a silo crash mid-drain replays the whole
+/// batch. For <c>count</c> / <c>sum</c> the membership row and the affected
+/// accumulator slot(s) are therefore flipped to their final byte-state together
+/// in one all-or-nothing <see cref="IAggregationViewStore.SetManyAtomicAsync"/>,
+/// keyed by a deterministic operation id derived from the contribution identity:
+/// a replay either dedups the saga outright or recomputes a net-zero delta from
+/// the already-advanced membership pointer, so the numeric accumulator can never
+/// double-count. <c>min</c> / <c>max</c> / <c>set-union</c> mutate their inverse
+/// map by <c>map[sourceKey]=entry</c> / <c>map.Remove(sourceKey)</c>, which is
+/// already idempotent on replay, so they keep the simpler separate-write path.
+/// </para> Each group is sharded into <see cref="_fanout"/> accumulators
 /// hashed on the source key; a group's materialised value merges the shards. A
 /// fanout of 1 is a single accumulator (identical result).
 /// </para>
@@ -28,10 +41,14 @@ internal sealed class AggregationApplier(
     IAggregationViewStore store,
     AggregationKind kind,
     int fanout,
-    int maxGroupEntries)
+    int maxGroupEntries,
+    string operationEpoch)
 {
     private readonly int _fanout = fanout < 1 ? 1 : fanout;
     private readonly int _maxGroupEntries = maxGroupEntries;
+    private readonly string _operationEpoch = operationEpoch;
+
+    private bool IsNumeric => kind is AggregationKind.Count or AggregationKind.Sum;
 
     /// <summary>Applies a single contribution and re-materialises every group it touches.</summary>
     public async Task ApplyAsync(AggregationContribution contribution, CancellationToken cancellationToken = default)
@@ -42,7 +59,7 @@ internal sealed class AggregationApplier(
                 await ContributeAsync(contribution, cancellationToken);
                 return;
             case AggregationContributionKind.Retract:
-                await RetractAsync(contribution.SourceKey, cancellationToken);
+                await RetractAsync(contribution, cancellationToken);
                 return;
             default:
                 // RangeReconcile is resolved to a rebuild by the maintainer before
@@ -51,23 +68,179 @@ internal sealed class AggregationApplier(
         }
     }
 
-    private async Task ContributeAsync(AggregationContribution contribution, CancellationToken cancellationToken)
+    private Task ContributeAsync(AggregationContribution contribution, CancellationToken cancellationToken) =>
+        IsNumeric
+            ? ContributeNumericAsync(contribution, cancellationToken)
+            : ContributeInverseAsync(contribution, cancellationToken);
+
+    private Task RetractAsync(AggregationContribution contribution, CancellationToken cancellationToken) =>
+        IsNumeric
+            ? RetractNumericAsync(contribution, cancellationToken)
+            : RetractInverseAsync(contribution.SourceKey, cancellationToken);
+
+    // --- count / sum: crash-idempotent atomic membership + accumulator flip ---
+    //
+    // The membership row and the affected accumulator slot(s) are computed to
+    // their FINAL byte-state in memory, then flipped together in one
+    // all-or-nothing SetManyAtomicAsync keyed by a deterministic operationId
+    // derived from the contribution identity (rebuild generation + source key +
+    // source HLC). Because
+    // the flip moves membership and accumulators as a unit, a mid-drain crash
+    // plus a full-batch WAL replay is self-correcting:
+    //   * if the flip committed, membership shows the NEW contribution, so a
+    //     replay computes retract(new) + add(new) = a net-zero accumulator delta
+    //     (and the deterministic operationId dedups the saga outright); and
+    //   * if it did not commit, membership shows OLD and the first-time
+    //     computation is reproduced exactly.
+    // The non-atomic legacy path (increment, then write membership separately)
+    // could replay an increment whose membership write was lost mid-crash, which
+    // double-counted count/sum groups. min/max/set-union are unaffected (their
+    // inverse-map mutation map[k]=entry / map.Remove(k) is already replay
+    // idempotent), so they keep the simpler inverse path below.
+    private async Task ContributeNumericAsync(AggregationContribution contribution, CancellationToken cancellationToken)
+    {
+        var sourceKey = contribution.SourceKey;
+        var membershipKey = MembershipKey(sourceKey);
+        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
+        var newGroup = contribution.GroupKey;
+
+        // Accumulate every touched slot's final row in memory. The old-group slot
+        // and the new-group slot can be the same key (a same-group overwrite), so
+        // a dictionary both de-duplicates the atomic batch and folds the retract
+        // and add onto one row.
+        var slots = new Dictionary<string, AccumulatorRow>(StringComparer.Ordinal);
+
+        string? oldGroup = null;
+        if (prior is { } old)
+        {
+            oldGroup = old.GroupKey;
+            var oldKey = AccumulatorKey(old.GroupKey, Slot(sourceKey, _fanout));
+            var current = await ReadAccumulatorAsync(oldKey, cancellationToken) ?? new AccumulatorRow(0, 0);
+            slots[oldKey] = new AccumulatorRow(current.Count - 1, current.Sum - old.Numeric);
+        }
+
+        var newKey = AccumulatorKey(newGroup, Slot(sourceKey, _fanout));
+        var baseRow = slots.TryGetValue(newKey, out var pending)
+            ? pending
+            : await ReadAccumulatorAsync(newKey, cancellationToken) ?? new AccumulatorRow(0, 0);
+        slots[newKey] = new AccumulatorRow(baseRow.Count + 1, baseRow.Sum + contribution.Numeric);
+
+        var entries = BuildSlotEntries(slots);
+        entries.Add(new KeyValuePair<string, byte[]>(
+            membershipKey,
+            EncodeMembership(new MembershipRow(newGroup, contribution.Numeric, contribution.Member))));
+
+        await store.SetManyAtomicAsync(entries, OperationId(sourceKey, contribution.Timestamp), cancellationToken);
+
+        if (oldGroup is not null && !string.Equals(oldGroup, newGroup, StringComparison.Ordinal))
+        {
+            await MaterialiseAccumulatorAsync(oldGroup, cancellationToken);
+        }
+
+        await MaterialiseAccumulatorAsync(newGroup, cancellationToken);
+
+        // Opportunistic, idempotent cleanup of slots the flip emptied. The atomic
+        // batch could only flip an emptied slot to the empty sentinel; deleting it
+        // now keeps storage bounded without needing an atomic delete. Cleanup is
+        // driven by the store's actual value (not the computed row), so it is a
+        // safe no-op when the flip was deduped by a replay's saga re-attach.
+        foreach (var key in slots.Keys)
+        {
+            await CleanupIfEmptyAsync(key, cancellationToken);
+        }
+    }
+
+    private async Task RetractNumericAsync(AggregationContribution contribution, CancellationToken cancellationToken)
+    {
+        var sourceKey = contribution.SourceKey;
+        var membershipKey = MembershipKey(sourceKey);
+        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
+        if (prior is not { } old)
+        {
+            // Nothing recorded for this source key: idempotent no-op.
+            return;
+        }
+
+        var oldKey = AccumulatorKey(old.GroupKey, Slot(sourceKey, _fanout));
+        var current = await ReadAccumulatorAsync(oldKey, cancellationToken) ?? new AccumulatorRow(0, 0);
+        var next = new AccumulatorRow(current.Count - 1, current.Sum - old.Numeric);
+
+        // Flip the decremented slot and the retracted membership row together. The
+        // membership row vanishes via the empty sentinel (the atomic batch cannot
+        // delete); both are cleaned up after materialising.
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new(oldKey, next.Count <= 0 ? EmptyRow() : EncodeAccumulator(next)),
+            new(membershipKey, EmptyRow()),
+        };
+
+        await store.SetManyAtomicAsync(entries, OperationId(sourceKey, contribution.Timestamp), cancellationToken);
+
+        await MaterialiseAccumulatorAsync(old.GroupKey, cancellationToken);
+
+        // Opportunistic, idempotent cleanup of the sentinels the flip wrote (a
+        // store-state-driven no-op when the flip was deduped by a replay).
+        await CleanupIfEmptyAsync(oldKey, cancellationToken);
+        await CleanupIfEmptyAsync(membershipKey, cancellationToken);
+    }
+
+    private List<KeyValuePair<string, byte[]>> BuildSlotEntries(Dictionary<string, AccumulatorRow> slots)
+    {
+        var entries = new List<KeyValuePair<string, byte[]>>(slots.Count + 1);
+        foreach (var (key, row) in slots)
+        {
+            entries.Add(new KeyValuePair<string, byte[]>(key, row.Count <= 0 ? EmptyRow() : EncodeAccumulator(row)));
+        }
+
+        return entries;
+    }
+
+    private async Task CleanupIfEmptyAsync(string key, CancellationToken cancellationToken)
+    {
+        var bytes = await store.GetAsync(key, cancellationToken);
+        if (bytes is not null && IsEmpty(bytes))
+        {
+            await store.DeleteAsync(key, cancellationToken);
+        }
+    }
+
+    // A deterministic idempotency key for a contribution's atomic flip: identical
+    // across every replay of the same source mutation within a rebuild generation
+    // (so the saga dedups) yet distinct per source mutation, and freshened by the
+    // rebuild epoch so a post-rebuild flip never re-attaches to the completed saga
+    // of a row the rebuild deleted. Hashed so it is short and cannot contain the
+    // '/' the saga reserves as its grain-key separator. The view tree's grain id
+    // namespaces the saga ({treeId}/{operationId}), so per-contribution
+    // uniqueness within one view is sufficient.
+    private string OperationId(string sourceKey, HybridLogicalClock timestamp)
+    {
+        var payload = $"{_operationEpoch}\u0000{sourceKey}\u0000{timestamp.WallClockTicks}\u0000{timestamp.Counter}";
+        var hash = XxHash64.HashToUInt64(Encoding.UTF8.GetBytes(payload));
+        return "agg-" + hash.ToString("x16");
+    }
+
+    // --- min / max / set-union: inverse-row path (already replay idempotent) ---
+    private async Task ContributeInverseAsync(AggregationContribution contribution, CancellationToken cancellationToken)
     {
         var sourceKey = contribution.SourceKey;
         var membershipKey = MembershipKey(sourceKey);
         var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
 
         // Retract the prior contribution first (handles a value change and a
-        // re-group to a different group key).
+        // re-group to a different group key). The inverse mutation is
+        // map.Remove(sourceKey) / map[sourceKey]=entry, which is idempotent on
+        // replay, so this path needs no atomic flip.
         if (prior is { } old)
         {
-            await RemoveContributionAsync(old.GroupKey, sourceKey, old, cancellationToken);
+            await MutateInverseAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
         }
 
-        await AddContributionAsync(contribution.GroupKey, sourceKey, contribution, cancellationToken);
+        await MutateInverseAsync(
+            contribution.GroupKey,
+            sourceKey,
+            add: new MemberEntry(contribution.Numeric, contribution.Member),
+            cancellationToken);
 
-        // The membership row is the read-before-write pointer; write it after the
-        // accumulator move so a re-applied contribution recomputes a zero delta.
         await store.SetAsync(
             membershipKey,
             EncodeMembership(new MembershipRow(contribution.GroupKey, contribution.Numeric, contribution.Member)),
@@ -75,13 +248,13 @@ internal sealed class AggregationApplier(
 
         if (prior is { } o && !string.Equals(o.GroupKey, contribution.GroupKey, StringComparison.Ordinal))
         {
-            await MaterialiseAsync(o.GroupKey, cancellationToken);
+            await MaterialiseInverseAsync(o.GroupKey, cancellationToken);
         }
 
-        await MaterialiseAsync(contribution.GroupKey, cancellationToken);
+        await MaterialiseInverseAsync(contribution.GroupKey, cancellationToken);
     }
 
-    private async Task RetractAsync(string sourceKey, CancellationToken cancellationToken)
+    private async Task RetractInverseAsync(string sourceKey, CancellationToken cancellationToken)
     {
         var membershipKey = MembershipKey(sourceKey);
         var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
@@ -91,52 +264,9 @@ internal sealed class AggregationApplier(
             return;
         }
 
-        await RemoveContributionAsync(old.GroupKey, sourceKey, old, cancellationToken);
+        await MutateInverseAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
         await store.DeleteAsync(membershipKey, cancellationToken);
-        await MaterialiseAsync(old.GroupKey, cancellationToken);
-    }
-
-    private async Task AddContributionAsync(string groupKey, string sourceKey, AggregationContribution contribution, CancellationToken cancellationToken)
-    {
-        if (kind is AggregationKind.Count or AggregationKind.Sum)
-        {
-            var slot = Slot(sourceKey, _fanout);
-            var key = AccumulatorKey(groupKey, slot);
-            var row = await ReadAccumulatorAsync(key, cancellationToken) ?? new AccumulatorRow(0, 0);
-            row = new AccumulatorRow(row.Count + 1, row.Sum + contribution.Numeric);
-            await store.SetAsync(key, EncodeAccumulator(row), cancellationToken);
-            return;
-        }
-
-        await MutateInverseAsync(groupKey, sourceKey, add: new MemberEntry(contribution.Numeric, contribution.Member), cancellationToken);
-    }
-
-    private async Task RemoveContributionAsync(string groupKey, string sourceKey, MembershipRow old, CancellationToken cancellationToken)
-    {
-        if (kind is AggregationKind.Count or AggregationKind.Sum)
-        {
-            var slot = Slot(sourceKey, _fanout);
-            var key = AccumulatorKey(groupKey, slot);
-            var row = await ReadAccumulatorAsync(key, cancellationToken);
-            if (row is not { } existing)
-            {
-                return;
-            }
-
-            var next = new AccumulatorRow(existing.Count - 1, existing.Sum - old.Numeric);
-            if (next.Count <= 0)
-            {
-                await store.DeleteAsync(key, cancellationToken);
-            }
-            else
-            {
-                await store.SetAsync(key, EncodeAccumulator(next), cancellationToken);
-            }
-
-            return;
-        }
-
-        await MutateInverseAsync(groupKey, sourceKey, add: null, cancellationToken);
+        await MaterialiseInverseAsync(old.GroupKey, cancellationToken);
     }
 
     private async Task MutateInverseAsync(string groupKey, string sourceKey, MemberEntry? add, CancellationToken cancellationToken)
@@ -229,20 +359,6 @@ internal sealed class AggregationApplier(
         return largest;
     }
 
-    private async Task MaterialiseAsync(string groupKey, CancellationToken cancellationToken)
-    {
-        switch (kind)
-        {
-            case AggregationKind.Count:
-            case AggregationKind.Sum:
-                await MaterialiseAccumulatorAsync(groupKey, cancellationToken);
-                return;
-            default:
-                await MaterialiseInverseAsync(groupKey, cancellationToken);
-                return;
-        }
-    }
-
     private async Task MaterialiseAccumulatorAsync(string groupKey, CancellationToken cancellationToken)
     {
         long totalCount = 0;
@@ -316,12 +432,12 @@ internal sealed class AggregationApplier(
     private async Task<MembershipRow?> ReadMembershipAsync(string key, CancellationToken cancellationToken)
     {
         var bytes = await store.GetAsync(key, cancellationToken);
-        return bytes is null ? null : DecodeMembership(bytes);
+        return bytes is null || IsEmpty(bytes) ? null : DecodeMembership(bytes);
     }
 
     private async Task<AccumulatorRow?> ReadAccumulatorAsync(string key, CancellationToken cancellationToken)
     {
         var bytes = await store.GetAsync(key, cancellationToken);
-        return bytes is null ? null : DecodeAccumulator(bytes);
+        return bytes is null || IsEmpty(bytes) ? null : DecodeAccumulator(bytes);
     }
 }

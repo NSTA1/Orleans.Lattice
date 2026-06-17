@@ -18,4 +18,8 @@ internal sealed class LatticeViewStore(ILattice viewTree) : IAggregationViewStor
     /// <inheritdoc />
     public async Task DeleteAsync(string key, CancellationToken cancellationToken = default) =>
         await viewTree.DeleteAsync(key, cancellationToken);
+
+    /// <inheritdoc />
+    public Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default) =>
+        viewTree.SetManyAtomicAsync(entries, operationId, cancellationToken);
 }

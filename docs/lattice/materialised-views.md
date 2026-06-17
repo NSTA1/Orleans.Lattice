@@ -203,6 +203,38 @@ keys must not begin with NUL):
 These reserved rows are internal: the view-facing surface (`CountAsync`,
 `KeysAsync`, `EntriesAsync`) skips them, exposing only materialised group values.
 
+### Crash idempotency
+
+WAL delivery is at-least-once and the maintainer checkpoints once at the end of a
+drain batch, so a silo crash mid-drain replays the **whole** batch from the last
+checkpoint. The `Count` / `Sum` accumulator is a serialized read-modify-write
+increment, which is **not** idempotent: incrementing the accumulator and writing
+the membership pointer as two separate writes leaves a window where a replay can
+re-apply the increment whose membership write was lost, double-counting the
+group. (`Min` / `Max` / `SetUnion` are immune: their inverse mutation is
+`map[sourceKey] = entry` / `map.Remove(sourceKey)`, idempotent on replay.)
+
+The `Count` / `Sum` path closes that window by flipping the membership row and the
+affected accumulator slot(s) to their final byte-state **together** in one
+all-or-nothing atomic write (`ILattice.SetManyAtomicAsync`), keyed by a
+deterministic operation id derived from the contribution identity (the rebuild
+generation, source key, and source HLC). Replay is then self-correcting two ways:
+
+- If the flip committed, the membership row already shows the **new**
+  contribution, so a replay computes `retract(new) + add(new)` = a net-zero
+  accumulator delta - and the deterministic operation id re-attaches to the
+  completed saga and applies nothing at all.
+- If the flip did not commit, the membership row still shows the **old**
+  contribution, so the first-time computation is reproduced exactly.
+
+Because the atomic write can only `Set` (there is no atomic delete), a slot whose
+count reaches `0` or a membership row being retracted is flipped to a one-byte
+**empty sentinel** rather than deleted; the read path treats the sentinel as
+absent. After the flip, materialisation recomputes the bare group key from the
+internal rows (a pure idempotent recompute, kept outside the atomic batch), and
+the maintainer then opportunistically deletes the sentinel rows with a plain
+idempotent delete so storage stays bounded (a rebuild clears everything anyway).
+
 ### Hot-group fanout
 
 A group that funnels every member to one accumulator key is a write hotspot.
@@ -240,10 +272,12 @@ siloBuilder.ConfigureLatticeView("age-sum-by-name", options =>
 
 A rebuild clears the whole view tree - materialised values **and** reserved
 accumulator / inverse / membership rows - before re-scanning current source
-state, so aggregation state is reset and re-accumulated from scratch. An
-unconstrained source range delete (one with no matched-key set) escalates to a
-rebuild, because the deleted source keys' prior contributions cannot be retracted
-exactly without a reverse index.
+state, so aggregation state is reset and re-accumulated from scratch. A rebuild
+also bumps a durable rebuild generation that seeds the atomic-flip operation id,
+so the re-accumulation mints fresh sagas rather than re-attaching to the retained
+sagas of the rows it just deleted. An unconstrained source range delete (one with
+no matched-key set) escalates to a rebuild, because the deleted source keys' prior
+contributions cannot be retracted exactly without a reverse index.
 
 
 

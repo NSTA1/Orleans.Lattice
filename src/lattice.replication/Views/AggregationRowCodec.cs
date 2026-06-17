@@ -23,6 +23,35 @@ internal static class AggregationRowCodec
     internal const string ReservedPrefix = "\u0000";
 
     /// <summary>
+    /// The "logically empty" sentinel an internal row carries when it has been
+    /// retracted to nothing (an accumulator slot whose count reached 0, or a
+    /// retracted membership row). Because the all-or-nothing atomic flip
+    /// (<see cref="IAggregationViewStore.SetManyAtomicAsync"/>) can only
+    /// <c>Set</c> - it cannot delete - a row that needs to vanish atomically with
+    /// its siblings is instead flipped to this sentinel, and the read path
+    /// (<see cref="IsEmpty"/>) treats it as absent. A single byte (length 1) can
+    /// never collide with a real row: accumulator rows are exactly 16 bytes,
+    /// membership rows at least 10, and inverse rows at least 4. The applier
+    /// opportunistically deletes the sentinel after materialising, so it never
+    /// leaks past one drain pass. This value is append-only and wire-compatible
+    /// with the existing Phase 3 row formats (it is a new value family, not a
+    /// change to any existing layout).
+    /// </summary>
+    private static readonly byte[] EmptySentinel = [0x00];
+
+    /// <summary>Returns the "logically empty" sentinel value (see remarks on the codec's empty-row handling).</summary>
+    internal static byte[] EmptyRow() => [0x00];
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="bytes"/> is the
+    /// "logically empty" sentinel - a retracted accumulator slot or membership
+    /// row that the atomic flip flipped to empty rather than deleting. Callers
+    /// treat such a row as absent.
+    /// </summary>
+    internal static bool IsEmpty(byte[] bytes) =>
+        bytes.Length == EmptySentinel.Length && bytes[0] == EmptySentinel[0];
+
+    /// <summary>
     /// The lowest key a materialised group value can take: reads of the
     /// view-facing surface start here to skip the reserved-prefixed internal rows
     /// (all of which sort below this because NUL is the lowest character).

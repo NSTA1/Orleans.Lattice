@@ -41,4 +41,18 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(2)]
     public HybridLogicalClock HighestAppliedTimestamp { get; set; }
+
+    /// <summary>
+    /// Monotonic rebuild generation, bumped once per in-place rebuild. It seeds
+    /// the deterministic idempotency key of an aggregation view's atomic
+    /// membership + accumulator flip, so a crash-replay of a normal drain reuses
+    /// the same key (and dedups), while a rebuild - which clears the view tree
+    /// but not the completed sagas (they are retained for up to
+    /// <see cref="LatticeOptions.AtomicWriteRetention"/>) - mints fresh keys and
+    /// therefore re-applies from scratch rather than re-attaching to the
+    /// pre-rebuild sagas of the now-deleted rows. Unused by the filter /
+    /// re-project view kind.
+    /// </summary>
+    [Id(3)]
+    public long RebuildGeneration { get; set; }
 }

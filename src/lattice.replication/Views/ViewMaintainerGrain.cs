@@ -353,6 +353,18 @@ internal sealed partial class ViewMaintainerGrain(
             capturedOffsets[partition] = head - 1;
         }
 
+        // Bump and durably persist the rebuild generation BEFORE re-applying, so
+        // the aggregation flip's idempotency keys are freshened: the rebuild has
+        // cleared the view rows but the completed pre-rebuild sagas are retained,
+        // so re-using their operation ids would re-attach and apply nothing. A
+        // rebuild that crashes and retries persists yet another generation, so it
+        // never collides with a partially-applied previous attempt either.
+        if (registration.IsAggregation)
+        {
+            state.State.RebuildGeneration++;
+            await state.WriteStateAsync();
+        }
+
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
         var sourceTree = grainFactory.GetGrain<ILattice>(sourceTreeId);
 

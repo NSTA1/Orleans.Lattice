@@ -16,4 +16,17 @@ internal interface IAggregationViewStore
 
     /// <summary>Removes <paramref name="key"/> (an idempotent no-op when already absent).</summary>
     Task DeleteAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes <paramref name="entries"/> all-or-nothing across the listed keys,
+    /// idempotently keyed by <paramref name="operationId"/>: re-submitting the
+    /// same operation id re-attaches to the completed flip and returns without
+    /// re-applying. The flip can only <c>Set</c> (there is no atomic delete), so
+    /// a row that must vanish atomically with its siblings is written as the
+    /// <see cref="AggregationRowCodec.EmptyRow"/> sentinel and cleaned up
+    /// out-of-band afterwards. Used to move a contribution's membership row and
+    /// the affected accumulator slot(s) as a single unit, so a mid-drain crash
+    /// plus a full-batch WAL replay cannot double-count.
+    /// </summary>
+    Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default);
 }

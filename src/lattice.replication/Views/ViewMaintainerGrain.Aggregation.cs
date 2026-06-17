@@ -32,7 +32,8 @@ internal sealed partial class ViewMaintainerGrain
             new LatticeViewStore(viewTree),
             catalog.TryGet(ViewName)!.AggregationProjection!.Aggregation,
             fanout,
-            Math.Max(0, options.AggregationMaxGroupEntries));
+            Math.Max(0, options.AggregationMaxGroupEntries),
+            state.State.RebuildGeneration.ToString());
     }
 
     private async Task<int> DrainAggregationAsync(ViewRegistration registration, CancellationToken cancellationToken)
