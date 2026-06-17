@@ -112,4 +112,45 @@ public class LatticeViewOptionsValidatorTests
 
         Assert.That(result.Succeeded, Is.True);
     }
+
+    [Test]
+    public void Validate_rejects_non_positive_cross_tree_readiness_timeout()
+    {
+        var options = Valid();
+        options.CrossTreeReadinessTimeout = TimeSpan.Zero;
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeViewOptions.CrossTreeReadinessTimeout)));
+        });
+    }
+
+    [Test]
+    public void Validate_rejects_negative_cross_tree_readiness_timeout()
+    {
+        var options = Valid();
+        options.CrossTreeReadinessTimeout = TimeSpan.FromMilliseconds(-1);
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeViewOptions.CrossTreeReadinessTimeout)));
+        });
+    }
+
+    [Test]
+    public void Validate_accepts_default_cross_tree_readiness_timeout()
+    {
+        var options = Valid();
+        options.CrossTreeReadinessTimeout = LatticeViewOptions.DefaultCrossTreeReadinessTimeout;
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
 }

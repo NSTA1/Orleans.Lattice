@@ -514,6 +514,66 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 });
 ```
 
+### Cross-tree atomic visibility
+
+A source-side **cross-tree** atomic write (`IGrainFactory.SetManyAtomicAsync` /
+`BeginAtomicWrite`, see [atomic writes](atomic-writes.md))
+commits across several source trees all-or-nothing. The views derived from those
+source trees preserve that coupling: when the cross-tree batch commits, the
+participating views flip **jointly, all-or-nothing** - a reader never observes one
+participating view's slice committed while another participating view's slice is
+still pre-commit. This is the view-layer analogue of the receiver-side cross-tree
+visibility barrier.
+
+Each view tree is itself an ordinary `ILattice` tree, so no bespoke barrier is
+needed: the view layer reuses the same cross-tree atomic-write primitive to flip
+every participating view tree in a single cross-tree saga. The cross-tree sub-saga
+terminals carry the operation id and the canonical participant **source** tree-id
+set, which the maintainer captures when the staged batch completes. Instead of
+flipping its slice immediately, the maintainer:
+
+1. **Computes its slice** - the same coalesced upserts (and retraction deletes) the
+   single-tree path would produce - and resolves its own active-generation view
+   tree id locally.
+2. **Registers its readiness** with a view-side coordinator keyed by the cross-tree
+   operation id. The coordinator freezes its **view wait set** on the first
+   registration: the participant source trees that actually have a configured view
+   (the `participants intersect present` handling that mirrors the receiver's
+   partial-replication case - a participant source tree with no view contributes
+   nothing).
+3. **Keeps the batch staged** (holding the checkpoint back) while the joint decision
+   is pending, re-registering on each drain.
+
+When every present participant view has registered, the coordinator issues **one**
+cross-tree atomic write across the participant view trees, keyed deterministically
+by `mv-xt-{operationId}`, so view readers observe them flip together. The decision
+is persisted in two durable steps - the flip-intent before the idempotent joint
+write, then applied after - so a crash mid-apply is re-driven by a redelivered
+registration and never exposes a partial set of views. The cross-tree write can
+only `Set`, so each maintainer applies its own retraction deletes after observing
+the applied decision, exactly as the single-tree flush applies deletes after the
+atomic upsert.
+
+Aggregation views participate too: the aggregation slice (the net set of row writes
+the read-before-write membership + accumulator flip would produce) is materialised
+by replaying the batch's contributions through the existing aggregation applier over
+an in-memory buffering store that captures the writes without touching the live
+tree, then contributed as that view's slice in the joint flip.
+
+**Liveness.** The maintainer waits a bounded interval
+(`CrossTreeReadinessTimeout`, default 5 s) for every present participant view to
+become ready. If a participant view is permanently unavailable (cluster partition /
+crashed maintainer) the present view **degrades to per-tree-slice atomicity**: it
+flips its own slice atomically into its own view tree, increments
+`orleans.lattice.view.cross_tree_joint_violation`, and schedules a reconcile -
+choosing liveness over an indefinite WAL-pinning stall. Each present view then
+becomes eventually consistent for its own slice, and the scheduled reconcile heals
+any joint divergence. Because the join is deferred, a higher-HLC ordinary write to a
+key in a still-pending slice during the bounded wait can be superseded by the later
+joint flip; this is the same "atomic batch wins a same-pass ordinary write to the
+same key" ordering the single-tree path already applies, bounded by the readiness
+timeout and healed by reconcile.
+
 ## Configuration
 
 `LatticeViewOptions` is resolved per view name via
@@ -529,6 +589,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload (key + value) across all staged transactions before the backstop forces a rebuild. |
 | `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved active generation tree id before re-resolving it. Bounds the post-swap read-staleness window. |
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out generation tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
+| `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view to register readiness before degrading to per-tree-slice atomicity (flipping its own slice and scheduling a reconcile). Must be greater than zero. |
 
 Configure a single view with `ConfigureLatticeView`:
 

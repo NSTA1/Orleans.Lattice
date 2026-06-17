@@ -83,6 +83,14 @@ internal sealed class MaterialisedViewClusterFixture
             siloBuilder.Services.Configure<LatticeViewOptions>(
                 BackstopViewName,
                 o => o.MaxStagedTransactions = 1);
+
+            // A reserved view name with a deliberately tiny cross-tree readiness
+            // timeout so the joint-flip liveness path (degrade to per-tree-slice
+            // atomicity when a participant view never becomes ready) is exercised
+            // without a multi-second wait.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreeDegradeViewName,
+                o => o.CrossTreeReadinessTimeout = TimeSpan.FromMilliseconds(1));
         }
     }
 
@@ -91,4 +99,11 @@ internal sealed class MaterialisedViewClusterFixture
     /// bounded-buffer staging backstop fires on the second staged transaction.
     /// </summary>
     public const string BackstopViewName = "mv-atomic-backstop-view";
+
+    /// <summary>
+    /// View name pre-configured with a tiny <c>CrossTreeReadinessTimeout</c> so
+    /// the cross-tree joint-flip degrade-on-timeout path fires quickly when a
+    /// participant view never becomes ready.
+    /// </summary>
+    public const string CrossTreeDegradeViewName = "mv-xt-degrade-view";
 }

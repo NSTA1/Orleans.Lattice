@@ -147,6 +147,16 @@ internal sealed partial class ViewMaintainerGrain
             }
 
             tx.CommittedShards.Add(mutation.ShardIndex);
+
+            // Cross-tree coupling: a cross-tree atomic write stamps its
+            // coordinator key and canonical participant source-tree set on the
+            // sub-saga terminals. Capturing them here flags the batch for the
+            // joint-flip path instead of an immediate single-tree flip.
+            if (mutation.CrossTreeOperationId is not null)
+            {
+                tx.CrossTreeOperationId = mutation.CrossTreeOperationId;
+                tx.CrossTreeParticipants = mutation.CrossTreeParticipants;
+            }
         }
         else
         {
@@ -388,6 +398,32 @@ internal sealed partial class ViewMaintainerGrain
                 }
             }
 
+            if (upserts.Count == 0 && deletes.Count == 0 && tx.CrossTreeOperationId is null)
+            {
+                _staging.Remove(txId);
+                MarkResolved(txId);
+                continue;
+            }
+
+            // Cross-tree atomic batch: do not flip this slice into the view tree
+            // immediately - rendezvous with the view-side coordinator so every
+            // participant view flips jointly. A participant view with an empty
+            // slice still registers (empty upserts) so the coordinator is not left
+            // waiting on it. While the joint decision is pending the batch stays
+            // staged (holding the checkpoint back) and is retried on a later drain.
+            if (tx.CrossTreeOperationId is not null)
+            {
+                var resolved = await HandleCrossTreeBatchAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
+                if (resolved)
+                {
+                    applied += upserts.Count + deletes.Count;
+                    _staging.Remove(txId);
+                    MarkResolved(txId);
+                }
+
+                continue;
+            }
+
             if (upserts.Count > 0)
             {
                 await viewTree.SetManyAtomicAsync(upserts, ViewSagaOperationId(txId), cancellationToken);
@@ -447,6 +483,26 @@ internal sealed partial class ViewMaintainerGrain
 
         /// <summary><see langword="true"/> once at least one prepared entry is staged.</summary>
         public bool HasOldestPreparedHlc { get; private set; }
+
+        /// <summary>
+        /// The cross-tree atomic-write coordinator key carried by the batch's
+        /// terminals, or <see langword="null"/> for an ordinary single-tree batch.
+        /// Non-null routes the completed batch through the joint-flip path.
+        /// </summary>
+        public string? CrossTreeOperationId { get; set; }
+
+        /// <summary>
+        /// The canonical participant <i>source</i> tree-id set of the cross-tree
+        /// atomic write, used to compute this view's joint-flip wait set.
+        /// </summary>
+        public IReadOnlyList<string>? CrossTreeParticipants { get; set; }
+
+        /// <summary>
+        /// Wall-clock ticks at which this view first waited on the cross-tree
+        /// coordinator, bounding the readiness wait before degrading to
+        /// per-tree-slice atomicity; <c>0</c> until the first wait.
+        /// </summary>
+        public long CrossTreeFirstSeenTicks { get; set; }
 
         public void NoteOffset(int partition, long offset)
         {

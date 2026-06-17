@@ -2337,4 +2337,21 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewAtomicStagingBackstop =
         Meter.CreateCounter<long>("orleans.lattice.view.atomic_staging_backstop", unit: "{rebuild}",
             description: "Drain passes that abandoned atomic-batch staging and forced a rebuild because the staging buffer exceeded its bound or its blocked-floor pin would sink below WAL retention.");
+
+    /// <summary>
+    /// Counter of cross-tree joint-atomicity-violation degradations: a view
+    /// participating in a cross-tree atomic write waited the bounded
+    /// <see cref="LatticeViewOptions.CrossTreeReadinessTimeout"/> for every other
+    /// participant view to become ready, did not observe a joint flip, and so
+    /// degraded to per-tree-slice atomicity - flipping its own slice atomically
+    /// into its own view tree and scheduling a reconcile. Tagged with
+    /// <see cref="TagView"/>. A non-zero value means a participant view was
+    /// permanently unavailable (cluster partition / crashed maintainer) and the
+    /// participating views did not flip together for that batch; the views still
+    /// converge via the scheduled reconcile, but a reader could momentarily have
+    /// observed one view's slice without another's.
+    /// </summary>
+    public static readonly Counter<long> ViewCrossTreeJointViolation =
+        Meter.CreateCounter<long>("orleans.lattice.view.cross_tree_joint_violation", unit: "{degradation}",
+            description: "Cross-tree view batches that degraded to per-tree-slice atomicity because a participant view did not become ready within the bounded readiness timeout.");
 }

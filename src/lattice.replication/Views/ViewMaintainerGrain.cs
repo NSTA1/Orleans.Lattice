@@ -284,6 +284,11 @@ internal sealed partial class ViewMaintainerGrain(
             Applied.Add(appliedCount, ViewTag);
         }
 
+        // Run any reconcile a cross-tree degrade scheduled this pass, after the
+        // checkpoint is persisted so the rebuild does not clear the staging buffer
+        // under the flush loop.
+        await RunPendingCrossTreeReconcileAsync(cancellationToken);
+
         return appliedCount;
     }
 

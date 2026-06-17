@@ -181,4 +181,24 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the view maintainer's durable checkpoint state.</summary>
     internal const string ViewCheckpointState = "olr.vc";
 
+    // Materialised views (cross-tree atomic visibility): the view-side
+    // cross-tree coordinator grain that rendezvouses every participating view's
+    // ready slice and flips them jointly, its durable decision state, and the
+    // per-call readiness / decision / slice DTOs.
+
+    /// <summary>Alias for the view-side cross-tree coordinator grain interface.</summary>
+    internal const string IViewCrossTreeCoordinatorGrain = "olr.vx";
+
+    /// <summary>Alias for the view-side cross-tree coordinator's durable decision state.</summary>
+    internal const string ViewCrossTreeCoordinatorState = "olr.vs";
+
+    /// <summary>Alias for one participating view's cross-tree readiness registration.</summary>
+    internal const string ViewCrossTreeReadiness = "olr.vr";
+
+    /// <summary>Alias for the cross-tree coordinator's per-registration decision.</summary>
+    internal const string ViewCrossTreeDecision = "olr.vd";
+
+    /// <summary>Alias for one participating view's recorded ready slice.</summary>
+    internal const string ViewCrossTreeSlice = "olr.vl";
+
 }

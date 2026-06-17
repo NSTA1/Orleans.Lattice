@@ -50,6 +50,13 @@ public sealed class LatticeViewOptions
     public static readonly TimeSpan DefaultOldGenerationReclaimGrace = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// Default <see cref="CrossTreeReadinessTimeout"/> (5 seconds): how long a
+    /// view waits for every other participant view of a cross-tree atomic write
+    /// to become ready before it degrades to per-tree-slice atomicity.
+    /// </summary>
+    public static readonly TimeSpan DefaultCrossTreeReadinessTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Maximum number of source WAL entries the maintainer reads and applies in a
     /// single drain pass per source shard before checkpointing. Must be positive;
     /// the registered validator rejects a non-positive value at first resolve.
@@ -129,4 +136,18 @@ public sealed class LatticeViewOptions
     /// <see cref="DefaultOldGenerationReclaimGrace"/>.
     /// </summary>
     public TimeSpan OldGenerationReclaimGrace { get; set; } = DefaultOldGenerationReclaimGrace;
+
+    /// <summary>
+    /// Bounded interval a view's maintainer waits for every other participant
+    /// view of a cross-tree atomic write to register its ready slice before it
+    /// gives up on the joint all-or-nothing flip and degrades to per-tree-slice
+    /// atomicity (each present view flips its own slice atomically into its own
+    /// view tree, a joint-atomicity-violation metric is emitted, and a reconcile
+    /// is scheduled). The bound exists so a permanently-unavailable participant
+    /// view (cluster partition / crashed maintainer) cannot pin the source WAL
+    /// indefinitely: liveness is chosen over an indefinite stall. Must be greater
+    /// than zero; the registered validator rejects a non-positive value at first
+    /// resolve. The default is <see cref="DefaultCrossTreeReadinessTimeout"/>.
+    /// </summary>
+    public TimeSpan CrossTreeReadinessTimeout { get; set; } = DefaultCrossTreeReadinessTimeout;
 }

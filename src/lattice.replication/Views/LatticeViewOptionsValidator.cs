@@ -50,6 +50,11 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             failures.Add($"{nameof(LatticeViewOptions.ReadHandleCacheTtl)} must be greater than zero (was {options.ReadHandleCacheTtl}).");
         }
 
+        if (options.CrossTreeReadinessTimeout <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.CrossTreeReadinessTimeout)} must be greater than zero (was {options.CrossTreeReadinessTimeout}).");
+        }
+
         if (options.OldGenerationReclaimGrace <= options.ReadHandleCacheTtl)
         {
             failures.Add(
