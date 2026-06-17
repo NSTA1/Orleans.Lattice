@@ -172,4 +172,13 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.PeerHighWaterMarkResponse"/>.</summary>
     internal const string PeerHighWaterMarkResponse = "olr.hp";
 
+    // Materialised views (Phase 1): the view maintainer grain interface and
+    // its durable per-view checkpoint state.
+
+    /// <summary>Alias for the view maintainer grain interface.</summary>
+    internal const string IViewMaintainerGrain = "olr.vm";
+
+    /// <summary>Alias for the view maintainer's durable checkpoint state.</summary>
+    internal const string ViewCheckpointState = "olr.vc";
+
 }

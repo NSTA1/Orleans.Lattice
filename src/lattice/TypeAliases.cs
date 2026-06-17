@@ -343,4 +343,11 @@ internal static class TypeAliases
     internal const string WalMoveQuiesceResult = "ol.wqr";
     internal const string LatticeWalProviderMissing = "ol.wpm";
     internal const string LatticeWalQuiescing = "ol.wqx";
+
+    // Materialised views (Phase 1): the projected-write value type and its
+    // effect-kind enum are the core serializable surface; the view
+    // maintainer's durable checkpoint state lives in the replication package
+    // (see ReplicationTypeAliases).
+    internal const string ViewWrite = "ol.vw";
+    internal const string ViewWriteKind = "ol.vwk";
 }

@@ -1,0 +1,61 @@
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Hosting;
+using Orleans.Lattice.Replication;
+using Orleans.TestingHost;
+
+namespace Orleans.Lattice.Replication.Tests;
+
+/// <summary>
+/// Single-cluster integration harness for materialised views. Brings up one
+/// silo registering <c>AddLattice</c> (memory storage) + an in-memory reminder
+/// service + <c>AddLatticeReplication</c> + <c>AddLatticeViews</c>. The real
+/// write-ahead log is populated on every commit, so the view maintainer's
+/// <c>ICommitLogReader</c> tail sees committed source mutations.
+/// </summary>
+internal sealed class MaterialisedViewClusterFixture
+{
+    private const string ClusterId = "view-site";
+
+    /// <summary>The single-silo test cluster.</summary>
+    public TestCluster Cluster { get; private set; } = null!;
+
+    /// <summary>The silo's service provider, used to resolve the silo-side view factory.</summary>
+    public IServiceProvider SiloServices =>
+        Cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;
+
+    /// <summary>Stands up the cluster and waits for it to become ready.</summary>
+    public async Task InitializeAsync()
+    {
+        var builder = new TestClusterBuilder(initialSilosCount: 1);
+        builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        Cluster = builder.Build();
+        await Cluster.DeployAsync();
+    }
+
+    /// <summary>Stops and disposes the cluster.</summary>
+    public async Task DisposeAsync()
+    {
+        if (Cluster is not null)
+        {
+            await Cluster.StopAllSilosAsync();
+            await Cluster.DisposeAsync();
+        }
+    }
+
+    private sealed class SiloConfigurator : ISiloConfigurator
+    {
+        public void Configure(ISiloBuilder siloBuilder)
+        {
+            siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            siloBuilder.UseInMemoryReminderService();
+            siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
+            siloBuilder.AddLatticeViews();
+
+            // Pin a long coalesce window for every view so the maintainer's
+            // background drain timer stays dormant during the test and
+            // convergence is driven deterministically via explicit DrainAsync.
+            siloBuilder.Services.ConfigureAll<LatticeViewOptions>(
+                o => o.CoalesceWindow = TimeSpan.FromMinutes(5));
+        }
+    }
+}

@@ -2262,4 +2262,40 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagKind"/> = <c>bytes</c> (reservoir-fill total-bytes series).</summary>
     public static readonly KeyValuePair<string, object?> ReservoirFillBytesTag = new(TagKind, "bytes");
+
+    // --- Materialised-view instruments (view maintainer) -------------------------
+
+    /// <summary>
+    /// Identifies the materialised view a view-maintenance instrument relates to.
+    /// Value is the logical view name (the <c>view-{name}</c> tree's name).
+    /// </summary>
+    public const string TagView = "view";
+
+    /// <summary>
+    /// Histogram of view apply lag, recorded each drain pass as the number of
+    /// source WAL entries committed but not yet applied to the view at the start
+    /// of the pass. Tagged with <see cref="TagView"/>. A persistently high value
+    /// indicates the maintainer is falling behind the source write rate.
+    /// </summary>
+    public static readonly Histogram<long> ViewApplyLag =
+        Meter.CreateHistogram<long>("orleans.lattice.view.apply_lag", unit: "{entry}",
+            description: "Source WAL entries committed but not yet applied to the view, sampled per drain pass.");
+
+    /// <summary>
+    /// Histogram of the per-pass backlog depth: the number of source entries a
+    /// single drain pass read before reaching the source head (bounded by the
+    /// view's configured batch size). Tagged with <see cref="TagView"/>.
+    /// </summary>
+    public static readonly Histogram<long> ViewBacklogDepth =
+        Meter.CreateHistogram<long>("orleans.lattice.view.backlog_depth", unit: "{entry}",
+            description: "Source entries read in a single view drain pass before reaching the source head.");
+
+    /// <summary>
+    /// Counter of view writes applied to the view tree (post-coalesce upserts and
+    /// deletes). Tagged with <see cref="TagView"/>. Differentiating apply rate from
+    /// backlog depth distinguishes coalesce efficiency from raw source throughput.
+    /// </summary>
+    public static readonly Counter<long> ViewApplied =
+        Meter.CreateCounter<long>("orleans.lattice.view.applied", unit: "{write}",
+            description: "View writes applied to the view tree after per-batch last-writer-wins coalescing.");
 }
