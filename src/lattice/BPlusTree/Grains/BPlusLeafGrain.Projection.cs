@@ -9,10 +9,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// in-memory state using LWW semantics; persists the projection
 /// checkpoint offset alongside the leaf's existing storage row.
 /// <para>
-/// Ships dormant: today's foreground commit path is unchanged and no
-/// caller drives <see cref="ILeafProjection.Apply"/>. The seam is
-/// exercised exclusively by unit tests until the WAL-as-sole-commit-point
-/// promotion lands.
+/// This seam is live in production: the activation-time cold-rebuild
+/// path (<c>OnActivateAsync</c> -&gt; <c>ReplayWalSinceCheckpointAsync</c>
+/// -&gt; <c>ReplayPartitionAsync</c>) drives
+/// <see cref="ILeafProjection.Apply"/> over every WAL entry after the
+/// persisted checkpoint. Because CRDT-mode Set records are delta-only on
+/// the WAL (the encoder strips the post-merge <c>Value</c>), a
+/// non-prepared CRDT replay must fold the typed delta into the prior
+/// visible state rather than install <c>Value</c> verbatim - see
+/// <see cref="ApplySet"/>.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
@@ -293,6 +298,42 @@ internal sealed partial class BPlusLeafGrain
 
     private void ApplySet(in LatticeMutation mutation)
     {
+        // Non-prepared CRDT-mode Set records are delta-only on the WAL:
+        // the producer never materialises the post-merge state into
+        // WalRecord.Value and the canonical encoder strips the slot on
+        // encode, so a durable replay observes Value == null with the
+        // typed delta carried in mutation.Delta and the convergence rule
+        // in mutation.Mode. Fold the delta into this leaf's current
+        // visible state instead of installing the (null) Value verbatim.
+        // Folds compose incrementally across multiple replayed deltas for
+        // the same key because each fold reads the prior post-fold state
+        // back out of the cache and the WAL replays entries in offset
+        // order. LWW Sets (Mode == LwwRegister, Delta == null) skip the
+        // fold and replay byte-for-byte as before.
+        if (mutation.Mode != LatticeMergeMode.LwwRegister
+            && mutation.Delta is not null
+            && !mutation.IsPrepared)
+        {
+            // FoldPreparedCrdtDelta resolves the registered CrdtShape,
+            // deserialises the typed delta, loads the prior visible state
+            // (or an empty primitive when the key is absent / tombstoned),
+            // applies MergeDelta, and re-serialises the post-fold bytes -
+            // exactly the reconstruction this replay path needs.
+            var foldedBytes = FoldPreparedCrdtDelta(mutation.Key, mutation.Delta, mutation.Mode);
+            var folded = new LwwValue<byte[]>
+            {
+                Value = foldedBytes,
+                Timestamp = mutation.Timestamp,
+                IsTombstone = false,
+                ExpiresAtTicks = mutation.ExpiresAtTicks,
+                OriginClusterId = mutation.OriginClusterId,
+                VectorClock = mutation.VectorClock,
+            };
+            MergeIntoProjection(mutation.Key, folded);
+            AdvanceProjectionClock(mutation.Timestamp);
+            return;
+        }
+
         var incoming = new LwwValue<byte[]>
         {
             Value = mutation.IsTombstone ? null : mutation.Value,

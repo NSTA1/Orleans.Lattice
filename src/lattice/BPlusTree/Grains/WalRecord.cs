@@ -53,14 +53,21 @@ public readonly record struct WalRecord
     /// apply path dispatches every typed CRDT mode through
     /// <see cref="Delta"/> + the primitive's <c>MergeDelta</c>, so
     /// the full-state byte payload is pure overhead on both the
-    /// storage WAL and the cross-cluster wire. The producer's in-
-    /// grain <see cref="WalRecord"/> instance still carries the slot
-    /// in memory and the leaf store continues to hold the canonical
-    /// post-merge state; this strip is scoped to the encoded bytes
-    /// only. Receivers that decode an encoded entry observe
-    /// <see langword="null"/> for CRDT modes; <see cref="LatticeMergeMode.LwwRegister"/>
-    /// entries are unaffected and continue to carry the canonical
-    /// payload at both wire and storage layers.
+    /// storage WAL and the cross-cluster wire. The non-prepared
+    /// CRDT-delta producer no longer materialises the post-merge state
+    /// into this slot at all - <see cref="WalRecordBuilder.ForCrdtDelta"/>
+    /// leaves it <see langword="null"/> in the in-grain instance too, so
+    /// the durable writer path pays no O(state) post-merge serialisation
+    /// to feed a slot the encoder drops. Both the receiver-side apply and
+    /// the activation-time cold-rebuild replay reconstruct the post-fold
+    /// state by folding <see cref="Delta"/> into the current visible state.
+    /// Prepared saga entries (<see cref="IsPrepared"/>) are the exception:
+    /// they keep <see cref="Value"/> at both layers because the receiver
+    /// buckets the merged-state value into its per-tx pending bucket and
+    /// folds the typed <see cref="Delta"/> only on the terminal commit.
+    /// <see cref="LatticeMergeMode.LwwRegister"/> entries are unaffected
+    /// and continue to carry the canonical payload at both wire and
+    /// storage layers.
     /// </para>
     /// </summary>
     [Id(4)] public byte[]? Value { get; init; }
