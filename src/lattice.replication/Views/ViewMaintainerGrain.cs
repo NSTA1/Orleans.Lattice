@@ -63,6 +63,13 @@ internal sealed partial class ViewMaintainerGrain(
     // not drain, pin the WAL, or rebuild: the view tree is received via replication.
     private bool _shipViewSuppressed;
 
+    // Set once EnsureActiveAsync has run on this activation. A keepalive reminder
+    // can wake a freshly reactivated grain before any EnsureActiveAsync call; until
+    // activation has established the ShipView-suppression and projection-version
+    // state, the reminder routes through EnsureActiveAsync rather than draining with
+    // default (unsuppressed, unchecked) state.
+    private bool _activated;
+
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
 
@@ -103,6 +110,7 @@ internal sealed partial class ViewMaintainerGrain(
             && !await IsSourceLocallyReadableAsync(registration, cancellationToken))
         {
             _shipViewSuppressed = true;
+            _activated = true;
             logger.LogInformation(
                 "View '{ViewName}' is ShipView with no locally-readable source WAL; suppressing the maintainer on this consumer cluster (the view tree is received via replication).",
                 ViewName);
@@ -134,6 +142,7 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         StartTimer();
+        _activated = true;
         await DrainAsync(cancellationToken);
     }
 
@@ -519,14 +528,25 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
-        if (_timer is null)
-        {
-            StartTimer();
-        }
-
         try
         {
-            await DrainAsync(CancellationToken.None);
+            // A reminder can wake a cold-reactivated grain that never ran
+            // EnsureActiveAsync this activation; route through it once so ShipView
+            // suppression and projection-version re-evaluation are established
+            // before any drain, instead of draining with default state.
+            if (!_activated)
+            {
+                await EnsureActiveAsync(CancellationToken.None);
+            }
+            else
+            {
+                if (_timer is null)
+                {
+                    StartTimer();
+                }
+
+                await DrainAsync(CancellationToken.None);
+            }
         }
         catch (Exception ex)
         {
