@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Process-wide registry mapping a view name to its <see cref="ViewRegistration"/>.

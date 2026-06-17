@@ -2,9 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Orleans.Lattice.Replication.Views;
+using Orleans.Lattice.Views;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Extension methods for configuring asynchronous materialised views on an
@@ -48,13 +48,6 @@ public static class LatticeViewsServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeViewFactory, LatticeViewFactory>();
         builder.Services.TryAddSingleton<IReadOnlyList<StartupViewRegistration>>(
             _ => registrationBuilder.Registrations);
-
-        // Fail fast at silo start when a view's replication mode is inconsistent
-        // with the replicated-trees configuration (DeriveLocally + view tree
-        // replicated = two writers; ShipView + view tree not replicated = consumers
-        // never receive it). Registered before the activation service below so the
-        // throw lands before a maintainer can act on a misconfigured view.
-        builder.Services.AddSingleton<IHostedService, LatticeViewReplicationStartupValidator>();
 
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ViewActivationService>());

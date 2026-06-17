@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// A startup-time materialised-view registration captured by

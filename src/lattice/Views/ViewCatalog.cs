@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Thread-safe in-memory <see cref="IViewCatalog"/>. Backed by a

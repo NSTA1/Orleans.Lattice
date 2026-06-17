@@ -1,6 +1,5 @@
-using Orleans.Lattice.Replication;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// View-side coordinator for a cross-tree atomic write's joint visibility flip.
@@ -37,7 +36,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// flip without a call back into the registering grain.
 /// </para>
 /// </summary>
-[Alias(ReplicationTypeAliases.IViewCrossTreeCoordinatorGrain)]
+[Alias(TypeAliases.IViewCrossTreeCoordinatorGrain)]
 internal interface IViewCrossTreeCoordinatorGrain : IGrainWithStringKey
 {
     /// <summary>

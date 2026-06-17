@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Default <see cref="ILatticeView"/>. Query methods resolve the maintainer's

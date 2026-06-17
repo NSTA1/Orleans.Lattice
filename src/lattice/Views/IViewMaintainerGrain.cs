@@ -1,6 +1,6 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Per-view maintainer grain, keyed by the view name. A single cluster-wide
@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// <c>view-{name}</c> tree, advances and persists the checkpoint, and reports its
 /// applied cursor to the WAL garbage collector.
 /// </summary>
-[Alias(ReplicationTypeAliases.IViewMaintainerGrain)]
+[Alias(TypeAliases.IViewMaintainerGrain)]
 internal interface IViewMaintainerGrain : IGrainWithStringKey
 {
     /// <summary>

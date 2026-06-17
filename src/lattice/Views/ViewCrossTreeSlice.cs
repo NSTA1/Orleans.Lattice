@@ -1,6 +1,5 @@
-using Orleans.Lattice.Replication;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// One participating view's recorded ready slice, held in the
@@ -10,7 +9,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// the coalesced upsert entries to flip into that tree.
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.ViewCrossTreeSlice)]
+[Alias(TypeAliases.ViewCrossTreeSlice)]
 internal sealed record ViewCrossTreeSlice
 {
     /// <summary>The participating view's logical name.</summary>

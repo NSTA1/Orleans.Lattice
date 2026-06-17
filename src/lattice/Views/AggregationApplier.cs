@@ -1,8 +1,8 @@
 using System.IO.Hashing;
 using System.Text;
-using static Orleans.Lattice.Replication.Views.AggregationRowCodec;
+using static Orleans.Lattice.Views.AggregationRowCodec;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Folds <see cref="AggregationContribution"/>s into an aggregation view's

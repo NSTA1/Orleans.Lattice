@@ -7,7 +7,7 @@ using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 using Orleans.Timers;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Default <see cref="IViewMaintainerGrain"/>. One cluster-wide activation per

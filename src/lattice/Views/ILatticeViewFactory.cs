@@ -6,13 +6,14 @@ namespace Orleans.Lattice;
 /// <para>
 /// This is the entry point for opening a materialised view. The factory captures
 /// the injectable <see cref="ILatticeReplicationContext"/> seam (views require a
-/// WAL provider, which the replication package supplies), so the underlying
-/// maintainer, commit-log reader, and cursor registry are sourced from server
-/// configuration rather than threaded through every call site.
+/// WAL provider, registered by <c>AddLattice</c> and optionally backed by a
+/// durable provider), so the underlying maintainer, commit-log reader, and cursor
+/// registry are sourced from server configuration rather than threaded through
+/// every call site.
 /// </para>
 /// <para>
 /// Registered as a singleton by <c>ISiloBuilder.AddLatticeViews(...)</c> in the
-/// <c>Orleans.Lattice.Replication</c> package.
+/// core <c>Orleans.Lattice</c> package.
 /// </para>
 /// </summary>
 public interface ILatticeViewFactory

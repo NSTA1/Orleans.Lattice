@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Atomic-write staging path of the view maintainer (Phase 4). Restores the

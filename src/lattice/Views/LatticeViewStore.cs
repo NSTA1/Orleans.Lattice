@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// <see cref="IAggregationViewStore"/> adapter over a view <see cref="ILattice"/>

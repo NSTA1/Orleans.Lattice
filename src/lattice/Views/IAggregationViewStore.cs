@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// The minimal key-value surface the <see cref="AggregationApplier"/> needs over

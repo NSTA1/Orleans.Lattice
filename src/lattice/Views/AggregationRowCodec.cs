@@ -1,7 +1,7 @@
 using System.IO.Hashing;
 using System.Text;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Reserved-key layout and binary (de)serialisation for an aggregation view's

@@ -1,6 +1,5 @@
-using Orleans.Lattice.Replication;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Durable decision state of the view-side cross-tree coordinator. Persisted
@@ -10,7 +9,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// <c>CrossTreeReceiverState</c> discipline).
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.ViewCrossTreeCoordinatorState)]
+[Alias(TypeAliases.ViewCrossTreeCoordinatorState)]
 internal sealed class ViewCrossTreeCoordinatorState
 {
     /// <summary>

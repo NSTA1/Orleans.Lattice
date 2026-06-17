@@ -1,4 +1,4 @@
-using Orleans.Lattice.Replication.Views;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Replication.Tests.Views;
 

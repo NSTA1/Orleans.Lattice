@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Immutable binding of a materialised view's logical name to the source tree it

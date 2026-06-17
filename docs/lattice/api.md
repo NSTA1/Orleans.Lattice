@@ -1769,7 +1769,7 @@ double total = aggregate is null ? 0 : LatticeAggregationValue.DecodeDouble(aggr
 
 | Type | Role |
 |------|------|
-| `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, hosted maintainer, and the startup replication-mode validator. Declares startup views through the builder (`AddView` / `AddAggregationView`). |
+| `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, and hosted maintainer. Part of the core `Orleans.Lattice` package. Declares startup views through the builder (`AddView` / `AddAggregationView`). |
 | `ConfigureLatticeView(viewName?, configure)` | Sets `LatticeViewOptions` defaults (no name) or per-view overrides. |
 | `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle. Registered as a singleton by `AddLatticeViews`. |
 | `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
@@ -1784,11 +1784,13 @@ double total = aggregate is null ? 0 : LatticeAggregationValue.DecodeDouble(aggr
 
 ### Notes
 
-- **No replication required.** A `DeriveLocally` view is fully local: it tails the
-  source WAL through the core commit-log reader registered by `AddLattice`.
-  `AddLatticeViews` ships in the `Orleans.Lattice.Replication` package, so a
-  single-cluster host references that package but never calls
-  `AddLatticeReplication`.
+- **No replication required.** Materialised views are part of the core
+  `Orleans.Lattice` package. A `DeriveLocally` view is fully local: it tails the
+  source WAL through the core commit-log reader registered by `AddLattice`, and a
+  single-cluster host never references `Orleans.Lattice.Replication` at all. Only
+  the cross-cluster `ShipView` mode pulls in the replication package (its
+  `AddLatticeReplication` ships the view tree to consumer clusters and registers
+  the startup mode validator).
 - **Reminders.** The maintainer registers a keepalive reminder, so a reminder
   provider must be configured on the silo.
 - **Read through the handle.** A rebuild can swap the live view tree, so prefer

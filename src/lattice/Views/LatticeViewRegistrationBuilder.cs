@@ -1,6 +1,6 @@
-using Orleans.Lattice.Replication.Views;
+using Orleans.Lattice.Views;
 
-namespace Orleans.Lattice.Replication;
+namespace Orleans.Lattice;
 
 /// <summary>
 /// Fluent builder used by <c>AddLatticeViews</c> to declare the materialised

@@ -1,6 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
-using Orleans.Lattice.Replication.Views;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -46,11 +47,29 @@ public class LatticeViewReplicationStartupValidatorTests
     }
 
     private static Task StartAsync(
-        IReadOnlyList<StartupViewRegistration> registrations,
+        IReadOnlyList<StartupViewRegistration>? registrations,
         IOptionsMonitor<LatticeViewOptions> viewOptions,
-        IOptionsMonitor<LatticeReplicationOptions> replicationOptions) =>
-        new LatticeViewReplicationStartupValidator(registrations, viewOptions, replicationOptions)
+        IOptionsMonitor<LatticeReplicationOptions> replicationOptions)
+    {
+        var services = new ServiceCollection();
+        if (registrations is not null)
+        {
+            services.AddSingleton(registrations);
+        }
+
+        return new LatticeViewReplicationStartupValidator(
+                services.BuildServiceProvider(), viewOptions, replicationOptions)
             .StartAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public void Start_is_noop_when_no_views_are_registered()
+    {
+        var viewOptions = ViewOptions();
+        var replicationOptions = ReplicationOptions();
+
+        Assert.DoesNotThrowAsync(() => StartAsync(null, viewOptions, replicationOptions));
+    }
 
     [Test]
     public void Start_throws_when_derive_locally_view_tree_is_replicated()

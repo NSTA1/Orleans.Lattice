@@ -1,12 +1,12 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Default <see cref="ILatticeViewFactory"/>. Captures the grain factory, the
 /// view catalog, and the injectable <see cref="ILatticeReplicationContext"/> seam
-/// (views require a WAL provider, which the replication package supplies). Each
+/// (views require a WAL provider, registered by <c>AddLattice</c>). Each
 /// <see cref="Create"/> call registers the view in the catalog so the maintainer
 /// grain can resolve the source tree id and projection, then ensures the
 /// maintainer is active.
@@ -28,7 +28,8 @@ internal sealed class LatticeViewFactory(
         // replicationContext is captured to mirror the tag-index factory's
         // pre-wiring; Phase 1 views derive their WAL seams from it implicitly
         // (the maintainer resolves ICommitLogReader, which is only non-null when
-        // the WAL provider the replication package registers is present).
+        // a WAL provider - the in-memory baseline from AddLattice, a durable
+        // provider, or replication - is present).
         _ = replicationContext;
 
         var sourceTreeId = source.GetPrimaryKeyString();

@@ -2,7 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication;
-using Orleans.Lattice.Replication.Views;
+using Orleans.Lattice.Views;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Replication.Tests;

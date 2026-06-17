@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Options;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Validates <see cref="LatticeViewOptions"/> at first resolve: the per-pass

@@ -176,6 +176,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // membership write.
         builder.Services.AddSingleton<IHostedService, LatticeReplicationMergeModeStartupValidator>();
 
+        // Fail fast at silo start when a materialised view's replication mode is
+        // inconsistent with the replicated-trees configuration (DeriveLocally +
+        // view tree replicated = two writers; ShipView + view tree not replicated
+        // = consumers never receive it). Only meaningful when replication is
+        // configured, so it lives here rather than in AddLatticeViews; it no-ops
+        // when no startup views are declared.
+        builder.Services.AddSingleton<IHostedService, LatticeViewReplicationStartupValidator>();
+
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
 
         // Framing-tail compressor registry. Each algorithm-specific

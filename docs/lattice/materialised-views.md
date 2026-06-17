@@ -44,11 +44,10 @@ a durable provider in production). For a durable commit log, register a WAL
 provider such as the Azure Table package (`AddAzureTableWalStorage(...)`) - that
 is a storage concern, independent of views.
 
-> `AddLatticeViews` ships in the `Orleans.Lattice.Replication` package (the same
-> package that hosts the maintainer implementation), so a single-cluster host
-> references that package but does **not** call `AddLatticeReplication`.
-> `AddLatticeReplication` is only needed when a view ships its tree across
-> clusters (see [Replication modes](#replication-modes)).
+> `AddLatticeViews` and the whole view maintenance implementation are part of the
+> core `Orleans.Lattice` package, so a single-cluster host needs no reference to
+> `Orleans.Lattice.Replication` at all. `AddLatticeReplication` is only needed when
+> a view ships its tree across clusters (see [Replication modes](#replication-modes)).
 
 ## Reading a view
 
@@ -371,7 +370,7 @@ projection at a uniform version across clusters.
 on the producer, the view tree is replicated, and consumer clusters receive the
 view through the ordinary replication path. `ShipView` requires
 `AddLatticeReplication` and an entry for the view tree in the replication
-`ReplicatedTrees` map. `AddLatticeViews` registers a startup guard that fails the
+`ReplicatedTrees` map. When replication is configured, a startup guard fails the
 silo fast on an inconsistent pairing (a `DeriveLocally` view whose tree is
 replicated - two writers; or a `ShipView` view whose tree is not replicated -
 consumers never receive it).

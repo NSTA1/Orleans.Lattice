@@ -1,6 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Orleans.Lattice.Replication.Views;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Replication;
 
@@ -33,13 +34,19 @@ namespace Orleans.Lattice.Replication;
 /// </list>
 /// </summary>
 internal sealed class LatticeViewReplicationStartupValidator(
-    IReadOnlyList<StartupViewRegistration> registrations,
+    IServiceProvider services,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
     IOptionsMonitor<LatticeReplicationOptions> replicationOptions) : IHostedService
 {
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        var registrations = services.GetService<IReadOnlyList<StartupViewRegistration>>();
+        if (registrations is null || registrations.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
         var trees = replicationOptions.CurrentValue.ReplicatedTrees;
 
         foreach (var registration in registrations)

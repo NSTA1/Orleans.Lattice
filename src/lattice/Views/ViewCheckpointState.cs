@@ -1,6 +1,6 @@
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Durable per-view checkpoint persisted by the view maintainer grain. Records,
@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// </para>
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.ViewCheckpointState)]
+[Alias(TypeAliases.ViewCheckpointState)]
 internal sealed class ViewCheckpointState
 {
     /// <summary>

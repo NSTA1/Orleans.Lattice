@@ -3,7 +3,7 @@ using System.IO.Hashing;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Shadow-swap rebuild, view anti-entropy (<see cref="ReconcileAsync"/>), and the

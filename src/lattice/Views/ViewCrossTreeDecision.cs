@@ -1,7 +1,7 @@
 using Orleans.Concurrency;
-using Orleans.Lattice.Replication;
 
-namespace Orleans.Lattice.Replication.Views;
+
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// The result of <see cref="IViewCrossTreeCoordinatorGrain.RegisterReadyAsync"/>
@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// </summary>
 [GenerateSerializer]
 [Immutable]
-[Alias(ReplicationTypeAliases.ViewCrossTreeDecision)]
+[Alias(TypeAliases.ViewCrossTreeDecision)]
 internal sealed record ViewCrossTreeDecision
 {
     /// <summary>

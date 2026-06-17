@@ -363,4 +363,30 @@ internal static class TypeAliases
     // view's drift digest / ReconcileAsync compares between the live view and a
     // fresh source re-projection.
     internal const string ViewDigest = "ol.vdg";
+    // Materialised views: the view maintainer grain interface and its durable
+    // per-view checkpoint state; plus the view-side cross-tree coordinator grain
+    // that rendezvouses every participating view's ready slice and flips them
+    // jointly, its durable decision state, and the per-call readiness / decision
+    // / slice DTOs. Values keep the "olr.v*" wire form they were introduced with.
+
+    /// <summary>Alias for the view maintainer grain interface.</summary>
+    internal const string IViewMaintainerGrain = "olr.vm";
+
+    /// <summary>Alias for the view maintainer's durable checkpoint state.</summary>
+    internal const string ViewCheckpointState = "olr.vc";
+
+    /// <summary>Alias for the view-side cross-tree coordinator grain interface.</summary>
+    internal const string IViewCrossTreeCoordinatorGrain = "olr.vx";
+
+    /// <summary>Alias for the view-side cross-tree coordinator's durable decision state.</summary>
+    internal const string ViewCrossTreeCoordinatorState = "olr.vs";
+
+    /// <summary>Alias for one participating view's cross-tree readiness registration.</summary>
+    internal const string ViewCrossTreeReadiness = "olr.vr";
+
+    /// <summary>Alias for the cross-tree coordinator's per-registration decision.</summary>
+    internal const string ViewCrossTreeDecision = "olr.vd";
+
+    /// <summary>Alias for one participating view's recorded ready slice.</summary>
+    internal const string ViewCrossTreeSlice = "olr.vl";
 }

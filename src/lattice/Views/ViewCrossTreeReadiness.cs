@@ -1,6 +1,5 @@
-using Orleans.Lattice.Replication;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// One participating view's cross-tree readiness registration, handed to
@@ -9,7 +8,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// own active view tree id.
 /// </summary>
 [GenerateSerializer]
-[Alias(ReplicationTypeAliases.ViewCrossTreeReadiness)]
+[Alias(TypeAliases.ViewCrossTreeReadiness)]
 internal sealed record ViewCrossTreeReadiness
 {
     /// <summary>The cross-tree operation id (the coordinator's key).</summary>

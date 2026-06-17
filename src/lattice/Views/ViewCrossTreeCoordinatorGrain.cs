@@ -5,7 +5,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Runtime;
 using Orleans.Timers;
 
-namespace Orleans.Lattice.Replication.Views;
+namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Default <see cref="IViewCrossTreeCoordinatorGrain"/>. One activation per
