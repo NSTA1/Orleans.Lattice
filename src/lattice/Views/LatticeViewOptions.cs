@@ -23,6 +23,14 @@ public sealed class LatticeViewOptions
     public const int DefaultAggregationFanout = 1;
 
     /// <summary>
+    /// Default <see cref="MaxLagBudget"/> (<c>0</c>): the lag-budget eviction is
+    /// disabled, so a view pins the source WAL for as long as it needs and is never
+    /// force-evicted for chronic lag. Opt in by setting a positive entry-count
+    /// budget.
+    /// </summary>
+    public const long DefaultMaxLagBudget = 0;
+
+    /// <summary>
     /// Default <see cref="MaxStagedTransactions"/> (1024 in-flight atomic
     /// batches buffered before the maintainer falls back to a rebuild).
     /// </summary>
@@ -150,4 +158,34 @@ public sealed class LatticeViewOptions
     /// resolve. The default is <see cref="DefaultCrossTreeReadinessTimeout"/>.
     /// </summary>
     public TimeSpan CrossTreeReadinessTimeout { get; set; } = DefaultCrossTreeReadinessTimeout;
+
+    /// <summary>
+    /// How this view's tree is made available across replicating clusters. The
+    /// default <see cref="LatticeViewReplicationMode.DeriveLocally"/> runs the
+    /// maintainer on every cluster and never replicates the view's data;
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> runs the maintainer only on
+    /// the producer cluster(s) that host the source locally and replicates the view
+    /// tree to thin consumer clusters. A <see cref="LatticeViewReplicationMode.ShipView"/>
+    /// view's <c>view-{name}</c> tree must be declared in the replication
+    /// configuration's replicated-trees map (so consumers receive it), and a
+    /// <see cref="LatticeViewReplicationMode.DeriveLocally"/> view's tree must
+    /// <i>not</i> be (it would create a second writer); the registered startup
+    /// validator rejects either misconfiguration at silo start.
+    /// </summary>
+    public LatticeViewReplicationMode ReplicationMode { get; set; } = LatticeViewReplicationMode.DeriveLocally;
+
+    /// <summary>
+    /// Opt-in upper bound, in committed-but-unapplied source entries, on how far a
+    /// view may fall behind the source before the maintainer force-evicts it: it
+    /// unpins the source WAL (so the WAL garbage collector is no longer held by a
+    /// chronically-slow or crashed view) and re-onboards the view via a rebuild
+    /// from current committed source state, which re-pins at the rebuilt head. This
+    /// bounds WAL retention regardless of view health and doubles as
+    /// dead-maintainer detection. The default <see cref="DefaultMaxLagBudget"/>
+    /// (<c>0</c>) disables eviction (unbounded lag). Must not be negative; the
+    /// registered validator rejects a negative value at first resolve. Size
+    /// <c>LatticeOptions.WalRetention</c> at or above the expected steady-state
+    /// view lag so the budget is a hard backstop rather than a routine trigger.
+    /// </summary>
+    public long MaxLagBudget { get; set; } = DefaultMaxLagBudget;
 }

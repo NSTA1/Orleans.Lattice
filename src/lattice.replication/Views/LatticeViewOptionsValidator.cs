@@ -62,6 +62,11 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
                 $"{nameof(LatticeViewOptions.ReadHandleCacheTtl)} ({options.ReadHandleCacheTtl}) so a stale reader's cached generation is never reclaimed under it.");
         }
 
+        if (options.MaxLagBudget < 0)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.MaxLagBudget)} must not be negative (was {options.MaxLagBudget}; 0 disables lag-budget eviction).");
+        }
+
         return failures.Count > 0 ? ValidateOptionsResult.Fail(failures) : ValidateOptionsResult.Success;
     }
 }

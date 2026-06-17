@@ -153,4 +153,41 @@ public class LatticeViewOptionsValidatorTests
 
         Assert.That(result.Succeeded, Is.True);
     }
+
+    [Test]
+    public void Validate_rejects_negative_max_lag_budget()
+    {
+        var options = Valid();
+        options.MaxLagBudget = -1;
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeViewOptions.MaxLagBudget)));
+        });
+    }
+
+    [Test]
+    public void Validate_accepts_zero_max_lag_budget_disabled()
+    {
+        var options = Valid();
+        options.MaxLagBudget = LatticeViewOptions.DefaultMaxLagBudget;
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_accepts_positive_max_lag_budget()
+    {
+        var options = Valid();
+        options.MaxLagBudget = 4096;
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
 }

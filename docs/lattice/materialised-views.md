@@ -412,8 +412,11 @@ live tree matches a digest taken over a fresh source re-projection when, and onl
 when, their materialised content agrees.
 
 `ReconcileAsync` assumes a **local source** (the default `DeriveLocally`
-topology). A ship-view consumer has no local source to re-derive from and cannot
-reconcile; reconcile support for that topology is a later phase.
+topology). A `ShipView` consumer has no local source to re-derive from, so
+`ReconcileAsync` is a producer-only no-op there (it returns `false`); drift on a
+consumer's replicated view tree is repaired by the ordinary replication
+anti-entropy against the producer rather than a local reconcile. See
+[Replication modes and lifecycle](#replication-modes-and-lifecycle) below.
 
 
 
@@ -574,6 +577,74 @@ joint flip; this is the same "atomic batch wins a same-pass ordinary write to th
 same key" ordering the single-tree path already applies, bounded by the readiness
 timeout and healed by reconcile.
 
+## Replication modes and lifecycle
+
+Each view declares, through `LatticeViewOptions.ReplicationMode`, how its tree is
+made available across replicating clusters:
+
+| Mode | Who runs the maintainer | View tree replicated? |
+|------|-------------------------|-----------------------|
+| `DeriveLocally` (default) | Every cluster | No - only the projection code and configuration are deployed; each cluster derives the view from its local copy of the replicated source. |
+| `ShipView` (opt-in) | Only the producer cluster(s) that host the source locally | Yes - the `view-{name}` tree is replicated to thin consumer clusters that want the view but not the full base tree. |
+
+`DeriveLocally` is fully backward compatible: every single-cluster and
+full-replication deployment already has the source locally and runs the
+maintainer, exactly as before. It assumes a deterministic projection at a uniform
+version across clusters.
+
+`ShipView` is for source-less / thin consumer clusters. The maintainer runs only
+on the producer (a single writer for the replicated view tree), the view tree is
+replicated, and consumer clusters suppress their maintainer and receive the view
+through the ordinary replication bootstrap / catch-up / apply path.
+
+### Startup validation
+
+`AddLatticeViews` registers a startup guard that refuses to start the silo on
+either unsafe misconfiguration:
+
+- **`DeriveLocally` + the view tree replicated.** If `view-{name}` (or any of its
+  generation-suffixed family `view-{name}#g*`) is declared in the replication
+  `ReplicatedTrees` map while the view is `DeriveLocally`, the maintainer runs on
+  every cluster *and* the tree is replicated in - two writers on the same tree.
+  Rejected.
+- **`ShipView` + the view tree not replicated.** If `view-{name}` is absent from
+  `ReplicatedTrees` while the view is `ShipView`, the maintainer runs only on the
+  producer and the tree is never shipped, so consumer clusters would never receive
+  the view. Rejected.
+
+### Producer designation and consumer suppression
+
+A cluster is the **producer** for a `ShipView` view when the view's source tree
+WAL is locally readable there. A thin consumer that registered the view but has
+no local source WAL **suppresses its maintainer** at activation: it does not
+drain, pin the source WAL, register a keepalive reminder, or rebuild. The view
+tree is maintained entirely by replication on a consumer; reads still serve from
+the replicated `view-{name}` tree.
+
+A `ShipView` producer rebuilds **in place** on the stable generation-0
+`view-{name}` tree (no shadow-swap generation cycling), so the replicated tree id
+is stable and matches the operator's `ReplicatedTrees` entry. The transient
+divergence of an in-place rebuild on the producer is acceptable under the
+best-effort contract and heals on consumers through replication anti-entropy.
+(`DeriveLocally` views keep the shadow-swap rebuild described above.)
+
+### Lag budget and dead-view eviction
+
+A view pins the source WAL only up to a per-view `MaxLagBudget`
+(committed-but-unapplied source entries; default `0` disables it). A view that
+exceeds the budget - chronically slow, or a crashed maintainer that only
+reactivated on a keepalive tick - is **force-evicted**: the maintainer unpins the
+source WAL (so a chronically-lagging or dead view can no longer hold WAL
+retention) and re-onboards the view via a rebuild from current committed source
+state, which re-pins the cursor at the rebuilt head. This bounds WAL retention
+regardless of view health and doubles as dead-maintainer detection. Eviction is
+emitted on the `orleans.lattice.view.lag_budget_eviction` counter.
+
+Size `LatticeOptions.WalRetention` at or above the expected steady-state view lag
+so the budget is a hard backstop rather than a routine trigger. Eviction is
+skipped on a suppressed `ShipView` consumer (it has no local source to rebuild
+from).
+
 ## Configuration
 
 `LatticeViewOptions` is resolved per view name via
@@ -590,6 +661,8 @@ timeout and healed by reconcile.
 | `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved active generation tree id before re-resolving it. Bounds the post-swap read-staleness window. |
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out generation tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view to register readiness before degrading to per-tree-slice atomicity (flipping its own slice and scheduling a reconcile). Must be greater than zero. |
+| `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. `DeriveLocally` runs the maintainer everywhere and never replicates the view; `ShipView` runs the maintainer only on the producer and replicates the view tree to consumers. See [Replication modes and lifecycle](#replication-modes-and-lifecycle). |
+| `MaxLagBudget` | 0 | Upper bound, in committed-but-unapplied source entries, on how far the view may fall behind before it is force-evicted (WAL unpinned and rebuilt). 0 disables eviction (unbounded lag). Must not be negative. |
 
 Configure a single view with `ConfigureLatticeView`:
 
@@ -614,6 +687,8 @@ meter, each tagged with the view name:
 | `orleans.lattice.view.key_collisions` | Counter | Distinct source keys that re-mapped to one view key in a drain batch (injectivity violation). |
 | `orleans.lattice.view.aggregation_applied` | Counter | Aggregation contributions folded into the view (count / sum / min / max / set-union). |
 | `orleans.lattice.view.atomic_staging_backstop` | Counter | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
+| `orleans.lattice.view.cross_tree_joint_violation` | Counter | Cross-tree view batches that degraded to per-tree-slice atomicity because a participant view did not become ready within the readiness timeout. |
+| `orleans.lattice.view.lag_budget_eviction` | Counter | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
 
 ## Limitations
 
@@ -625,8 +700,8 @@ meter, each tagged with the view name:
   without a reverse index. Predicate-filtered range deletes (which carry
   `MatchedKeys`) retract exactly and do not rebuild. The rebuild is a shadow-swap,
   so readers never see a partial view during it.
-- **Single-projection filter and aggregation views.** Cross-tree atomic
-  visibility and replication-aware modes are later phases.
+- **Single-projection filter and aggregation views.** Each view is maintained by
+  one filter / re-project or aggregation projection.
 - **Atomic apply does not carry TTL.** The view-side atomic primitive takes
   key/value pairs without an expiry, so a committed atomic batch's view entries
   are written without a TTL even when the source prepared entries had one.

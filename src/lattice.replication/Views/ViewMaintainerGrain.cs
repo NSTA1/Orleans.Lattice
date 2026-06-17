@@ -54,9 +54,15 @@ internal sealed partial class ViewMaintainerGrain(
     private static readonly Counter<long> Applied = LatticeMetrics.ViewApplied;
     private static readonly Counter<long> KeyCollisions = LatticeMetrics.ViewKeyCollisions;
     private static readonly Counter<long> ViewAtomicStagingBackstop = LatticeMetrics.ViewAtomicStagingBackstop;
+    private static readonly Counter<long> LagBudgetEviction = LatticeMetrics.ViewLagBudgetEviction;
 
     private IGrainTimer? _timer;
     private string? _consumerId;
+
+    // Set in EnsureActiveAsync when this view is ShipView and the source WAL is not
+    // locally readable here (a thin consumer cluster). A suppressed maintainer does
+    // not drain, pin the WAL, or rebuild: the view tree is received via replication.
+    private bool _shipViewSuppressed;
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
@@ -86,6 +92,25 @@ internal sealed partial class ViewMaintainerGrain(
             logger.LogWarning("View '{ViewName}' has no registration; maintainer cannot start.", ViewName);
             return;
         }
+
+        // ShipView producer designation (ASSUMPTION - Decision A): a cluster is the
+        // producer for a ShipView view iff the view's source tree WAL is locally
+        // readable here. A thin consumer that registered the view but has no local
+        // source WAL suppresses its maintainer entirely - no reminder, no timer, no
+        // drain, no cursor pin - and receives the view tree through replication.
+        // DeriveLocally (the default, and every existing deployment) always has the
+        // source locally and is never suppressed.
+        if (Options.ReplicationMode == LatticeViewReplicationMode.ShipView
+            && !await IsSourceLocallyReadableAsync(registration, cancellationToken))
+        {
+            _shipViewSuppressed = true;
+            logger.LogInformation(
+                "View '{ViewName}' is ShipView with no locally-readable source WAL; suppressing the maintainer on this consumer cluster (the view tree is received via replication).",
+                ViewName);
+            return;
+        }
+
+        _shipViewSuppressed = false;
 
         await reminderRegistry.RegisterOrUpdateReminder(
             callingGrainId: context.GrainId,
@@ -122,10 +147,27 @@ internal sealed partial class ViewMaintainerGrain(
             return 0;
         }
 
+        // ShipView consumer (Decision A): the maintainer is suppressed, so a drain
+        // is a no-op. The view tree is maintained by replication, not this grain.
+        if (_shipViewSuppressed)
+        {
+            return 0;
+        }
+
         // Reclaim a swapped-out generation tree once its post-swap reader grace has
         // elapsed; runs on the regular drain cadence so reclamation is crash-safe
         // (durable) and never blocks the swap itself.
         await TryReclaimPendingGenerationAsync(cancellationToken);
+
+        // Lag-budget eviction (the GC contract): a view that has fallen further
+        // behind than its configured MaxLagBudget - chronically slow, or a crashed
+        // maintainer reactivated on a keepalive tick - unpins the source WAL and
+        // re-onboards via rebuild so it can no longer pin WAL retention. Disabled
+        // (zero overhead) when the budget is 0 (the default).
+        if (await TryEvictForLagBudgetAsync(registration, cancellationToken))
+        {
+            return 0;
+        }
 
         if (registration.IsAggregation)
         {
@@ -389,11 +431,84 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
-        // Build a complete new generation in the background, then atomically swap
-        // it in (see ViewMaintainerGrain.ShadowSwap). Readers never observe a
-        // half-built view.
+        // ShipView (ASSUMPTION - Decision B): pin the stable generation-0
+        // view-{name} tree id and rebuild in place so the replicated tree id is
+        // stable and matches the operator's replicated-trees entry. Transient
+        // divergence on a producer rebuild is acceptable per the best-effort
+        // contract and heals on consumers via replication anti-entropy.
+        if (Options.ReplicationMode == LatticeViewReplicationMode.ShipView)
+        {
+            await InPlaceRebuildAsync(registration, cancellationToken);
+            return;
+        }
+
+        // DeriveLocally: build a complete new generation in the background, then
+        // atomically swap it in (see ViewMaintainerGrain.ShadowSwap). Readers never
+        // observe a half-built view.
         var built = await BuildShadowAsync(registration, cancellationToken);
         await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
+    }
+
+    /// <summary>
+    /// Returns whether the view's source tree WAL is locally readable on this
+    /// cluster - the ShipView producer-designation probe (Decision A). True when any
+    /// source partition has a head offset greater than zero. A view whose source has
+    /// never been written here (a thin consumer cluster, or - as a documented
+    /// edge case - a producer that has not yet received its first source write) reads
+    /// as not locally readable.
+    /// </summary>
+    private async Task<bool> IsSourceLocallyReadableAsync(ViewRegistration registration, CancellationToken cancellationToken)
+    {
+        var sourceTreeId = registration.SourceTreeId;
+        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            if (await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken) > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Force-evicts the view when its lag exceeds the configured
+    /// <see cref="LatticeViewOptions.MaxLagBudget"/>: unpins the source WAL (so a
+    /// chronically-slow or dead view stops holding WAL garbage collection) and
+    /// re-onboards the view via <see cref="RebuildAsync"/> from current committed
+    /// source state, which re-pins the cursor at the rebuilt head. Returns whether
+    /// an eviction happened. A budget of zero (the default) disables eviction and
+    /// short-circuits before any extra WAL reads. Crash-safe and idempotent: the
+    /// rebuild owns the checkpoint and cursor, so a crash mid-eviction simply
+    /// re-evicts on the next drain.
+    /// </summary>
+    private async Task<bool> TryEvictForLagBudgetAsync(ViewRegistration registration, CancellationToken cancellationToken)
+    {
+        var budget = Options.MaxLagBudget;
+        if (budget <= 0)
+        {
+            return false;
+        }
+
+        var sourceTreeId = registration.SourceTreeId;
+        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+        var lag = await ComputeLagAsync(sourceTreeId, partitions, cancellationToken);
+        if (lag <= budget)
+        {
+            return false;
+        }
+
+        logger.LogWarning(
+            "View '{ViewName}' lag {Lag} exceeded MaxLagBudget {Budget}; force-evicting (unpinning the source WAL and rebuilding from current source state).",
+            ViewName, lag, budget);
+        LagBudgetEviction.Add(1, ViewTag);
+
+        // Unpin the source WAL before rebuilding so the GC is released even if the
+        // rebuild is slow; the rebuild re-pins at the rebuilt head.
+        await cursorRegistry.UnregisterAsync(sourceTreeId, ConsumerId, cancellationToken);
+        await RebuildAsync(cancellationToken);
+        return true;
     }
 
     /// <inheritdoc />

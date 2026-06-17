@@ -2354,4 +2354,20 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewCrossTreeJointViolation =
         Meter.CreateCounter<long>("orleans.lattice.view.cross_tree_joint_violation", unit: "{degradation}",
             description: "Cross-tree view batches that degraded to per-tree-slice atomicity because a participant view did not become ready within the bounded readiness timeout.");
+
+    /// <summary>
+    /// Counter of lag-budget evictions: a view exceeded its per-view
+    /// <see cref="LatticeViewOptions.MaxLagBudget"/> (chronically slow, or a crashed
+    /// maintainer that only reactivated on a keepalive tick) and was force-evicted -
+    /// the maintainer unpinned the source WAL (so a chronically-lagging or dead view
+    /// can no longer hold the WAL garbage collector) and re-onboarded the view via a
+    /// rebuild from current committed source state, which re-pins at the rebuilt
+    /// head. Tagged with <see cref="TagView"/>. A non-zero value means the view fell
+    /// further behind than its configured budget at least once; the view still
+    /// converges via the rebuild, but the bounded backlog was dropped rather than
+    /// tail-replayed.
+    /// </summary>
+    public static readonly Counter<long> ViewLagBudgetEviction =
+        Meter.CreateCounter<long>("orleans.lattice.view.lag_budget_eviction", unit: "{eviction}",
+            description: "Views force-evicted (WAL unpinned and rebuilt) because they exceeded their configured MaxLagBudget.");
 }

@@ -91,6 +91,38 @@ internal sealed class MaterialisedViewClusterFixture
             siloBuilder.Services.Configure<LatticeViewOptions>(
                 CrossTreeDegradeViewName,
                 o => o.CrossTreeReadinessTimeout = TimeSpan.FromMilliseconds(1));
+
+            // Phase 7: a view with a small lag budget and a one-entry batch so a
+            // backlog larger than the budget force-evicts (unpin + rebuild) in a
+            // single drain rather than catching up incrementally.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                LagBudgetEvictionViewName,
+                o =>
+                {
+                    o.MaxLagBudget = 3;
+                    o.BatchSize = 1;
+                });
+
+            // Phase 7 control: the lag budget disabled (0) with the same one-entry
+            // batch, so an over-budget backlog is NOT evicted and only catches up
+            // incrementally.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                LagBudgetDisabledViewName,
+                o =>
+                {
+                    o.MaxLagBudget = 0;
+                    o.BatchSize = 1;
+                });
+
+            // Phase 7: ShipView views. Producer / consumer designation is decided at
+            // activation by whether the source WAL is locally readable, so the same
+            // option suffices for both the producer and consumer test cases.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewProducerViewName,
+                o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewConsumerViewName,
+                o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
         }
     }
 
@@ -106,4 +138,23 @@ internal sealed class MaterialisedViewClusterFixture
     /// participant view never becomes ready.
     /// </summary>
     public const string CrossTreeDegradeViewName = "mv-xt-degrade-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxLagBudget = 3</c> and <c>BatchSize = 1</c>
+    /// so a backlog larger than the budget force-evicts (unpin + rebuild) in a
+    /// single drain.
+    /// </summary>
+    public const string LagBudgetEvictionViewName = "mv-lag-evict-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxLagBudget = 0</c> (eviction disabled) and
+    /// <c>BatchSize = 1</c> so an over-budget backlog is never evicted.
+    /// </summary>
+    public const string LagBudgetDisabledViewName = "mv-lag-noevict-view";
+
+    /// <summary>View name pre-configured with <c>ReplicationMode = ShipView</c>, used for the producer case (source present).</summary>
+    public const string ShipViewProducerViewName = "mv-shipview-producer";
+
+    /// <summary>View name pre-configured with <c>ReplicationMode = ShipView</c>, used for the consumer case (source absent).</summary>
+    public const string ShipViewConsumerViewName = "mv-shipview-consumer";
 }

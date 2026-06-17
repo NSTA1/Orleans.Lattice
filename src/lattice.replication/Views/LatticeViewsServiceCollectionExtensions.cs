@@ -43,6 +43,13 @@ public static class LatticeViewsServiceCollectionExtensions
         builder.Services.TryAddSingleton<IReadOnlyList<StartupViewRegistration>>(
             _ => registrationBuilder.Registrations);
 
+        // Fail fast at silo start when a view's replication mode is inconsistent
+        // with the replicated-trees configuration (DeriveLocally + view tree
+        // replicated = two writers; ShipView + view tree not replicated = consumers
+        // never receive it). Registered before the activation service below so the
+        // throw lands before a maintainer can act on a misconfigured view.
+        builder.Services.AddSingleton<IHostedService, LatticeViewReplicationStartupValidator>();
+
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ViewActivationService>());
 

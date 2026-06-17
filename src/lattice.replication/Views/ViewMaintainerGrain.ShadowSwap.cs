@@ -82,6 +82,15 @@ internal sealed partial class ViewMaintainerGrain
             return false;
         }
 
+        // ShipView consumer (Decision A): a suppressed consumer has no local source
+        // to re-derive from, so source-digest drift repair is producer-only. Drift
+        // on a consumer's replicated view tree is repaired by the existing
+        // replication anti-entropy against the producer, not by a local reconcile.
+        if (_shipViewSuppressed)
+        {
+            return false;
+        }
+
         await TryReclaimPendingGenerationAsync(cancellationToken);
 
         // Digest the live active view before touching anything. The shadow build
@@ -106,6 +115,106 @@ internal sealed partial class ViewMaintainerGrain
         // Drift: the freshly-built shadow is the repaired view; swap it in.
         await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
         return true;
+    }
+
+    /// <summary>
+    /// In-place rebuild for a <see cref="LatticeViewReplicationMode.ShipView"/> view
+    /// (Decision B): reprojects current committed source state directly into the
+    /// stable generation-0 <c>view-{name}</c> tree, keeping the active generation at
+    /// <c>0</c> so the replicated tree id never cycles and matches the operator's
+    /// replicated-trees entry. Unlike the shadow-swap rebuild it clears and
+    /// re-derives the live tree in place (a brief transient divergence on the
+    /// producer that heals on consumers via replication anti-entropy), then advances
+    /// the durable checkpoint and re-pins the source WAL cursor at the rebuilt head
+    /// in a single state write.
+    /// </summary>
+    private async Task InPlaceRebuildAsync(ViewRegistration registration, CancellationToken cancellationToken)
+    {
+        var sourceTreeId = registration.SourceTreeId;
+        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+
+        // A rebuild reconverges from current committed source state, so abandon any
+        // partially-staged atomic batch (its uncommitted prepares are not part of
+        // committed source state).
+        _staging.Clear();
+
+        // Capture the source head per partition BEFORE scanning so any source
+        // mutation committed during the build is picked up by the resumed tail.
+        var capturedOffsets = new Dictionary<int, long>();
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var head = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
+            capturedOffsets[partition] = head - 1;
+        }
+
+        // Freshen the aggregation idempotency keys (see BuildShadowAsync) so the
+        // re-accumulation mints fresh sagas rather than re-attaching to the retained
+        // sagas of the now-cleared rows.
+        if (registration.IsAggregation)
+        {
+            state.State.RebuildGeneration++;
+            await state.WriteStateAsync();
+        }
+
+        var viewTree = grainFactory.GetGrain<ILattice>(GenerationTreeId(0));
+        await ClearTreeAsync(viewTree, cancellationToken);
+
+        var sourceTree = grainFactory.GetGrain<ILattice>(sourceTreeId);
+        var highest = HybridLogicalClock.Zero;
+        var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(viewTree) : null;
+
+        await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
+        {
+            var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
+            if (versioned.Value is null)
+            {
+                continue;
+            }
+
+            var synthetic = new LatticeMutation
+            {
+                TreeId = sourceTreeId,
+                Kind = MutationKind.Set,
+                Key = key,
+                Value = versioned.Value,
+                Timestamp = versioned.Version,
+                ExpiresAtTicks = versioned.ExpiresAtTicks,
+                Category = MutationCategory.User,
+            };
+
+            if (aggregationApplier is not null)
+            {
+                foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
+                {
+                    await aggregationApplier.ApplyAsync(contribution, cancellationToken);
+                }
+            }
+            else
+            {
+                foreach (var write in registration.Projection!.Project(synthetic))
+                {
+                    await ApplyAsync(viewTree, write, cancellationToken);
+                }
+            }
+
+            if (versioned.Version > highest)
+            {
+                highest = versioned.Version;
+            }
+        }
+
+        // Keep the active generation at 0 (stable tree id) and advance the resume
+        // checkpoint to the captured source heads in one durable write.
+        state.State.ActiveGeneration = 0;
+        state.State.AppliedOffsets = capturedOffsets;
+        state.State.HighestAppliedTimestamp = highest;
+        state.State.ProjectionVersion = registration.ProjectionVersion;
+        await state.WriteStateAsync();
+
+        if (highest > HybridLogicalClock.Zero)
+        {
+            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, cancellationToken);
+        }
     }
 
     /// <summary>
