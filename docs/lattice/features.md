@@ -25,6 +25,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
+- [F-106](https://github.com/NSTA1/Orleans.Lattice/issues/794) - Asynchronous materialised views: WAL-consumer-driven, eventually-consistent filter/re-project and aggregation views over a source tree, derived locally per cluster
+- [F-107](https://github.com/NSTA1/Orleans.Lattice/issues/795) - Reusable log-tailing WAL subscriber abstraction; migrate the replication producer from the inline mutation observer to a log-first delivery model
 
 ### Shipped
 
