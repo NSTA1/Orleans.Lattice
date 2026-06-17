@@ -158,6 +158,40 @@ public class LatticeMicroBenchmarks
     private Dictionary<int, string> _crdtGrowStateKeys = null!;
     private byte[] _crdtGrowStateAddDelta = null!;
 
+    // ===== CRDT grow-state apply instrument WITH commit-log writer wired =====
+    // Identical to the CrdtApplyGrowstate fixture EXCEPT the leaf backing the
+    // measured keys resolves a NON-null ICommitLogWriter (a no-op in-memory
+    // double) from its grain context, so the apply takes the durable WRITER
+    // path. Pre the "extend lazy CRDT row materialisation to the durable
+    // writer path" change, a writer-wired leaf serialises the entire O(state)
+    // post-merge OrSet on every apply (eager path: shape.SerializeState), so
+    // _alloc_b grows O(N). With the change, the writer-wired leaf defers to
+    // the O(delta) streaming fold even with a writer present, so _alloc_b
+    // flattens. The existing CrdtApplyGrowstate leaf resolves a NULL writer
+    // (NSubstitute auto-substitute IServiceProvider yields null for
+    // GetService(ICommitLogWriter)), so it already defers on both main and
+    // the branch and is structurally blind to the gate lift - this writer-
+    // wired variant is the only lane that can see the term.
+    //
+    // The writer-wired keys live on a DEDICATED tree (WriterTreeName) so the
+    // writer leaf is isolated from the shared single-shard leaf every other
+    // workload (point_read / point_write / point_apply_crdt_delta) routes
+    // through. The shared leaf keeps resolving a null writer, so the guard
+    // cohorts stay on the writerless path and are not perturbed by this
+    // fixture. Surfaced as microbench_crdt_apply_growstate_writer_<N>_alloc_b
+    // (primary) and microbench_crdt_apply_growstate_writer_<N>_mean_ns.
+    private const string WriterTreeName = "microbench-crdt-writer-tree";
+    private ILattice _crdtGrowStateWriterLattice = null!;
+    private Dictionary<int, string> _crdtGrowStateWriterKeys = null!;
+    // Setup-only flag: when true, GetOrCreateLeaf wires the no-op commit-log
+    // writer into every leaf it constructs. Set true only while seeding the
+    // WriterTreeName fixture (whose leaf must take the writer path) and reset
+    // immediately after, so no other tree's leaf inherits a writer. Leaves are
+    // cached on first construction, so the benchmark's later calls reuse the
+    // already-writer-wired leaf without re-reading the flag.
+    private bool _wireWriterForNewLeaves;
+    private readonly NoOpCommitLogWriter _noOpCommitLogWriter = new();
+
     // ===== Predicate push-down scan instrument (predicate Utf8JsonReader fast-path) =====
     // A dedicated keyspace seeded with small JSON documents. The predicate
     // evaluator parses each candidate value as a JSON document, so the
@@ -642,6 +676,7 @@ public class LatticeMicroBenchmarks
         BuildOrMapFixture();
         BuildLeafQueueFixture();
         BuildCrdtGrowStateFixture();
+        BuildCrdtGrowStateWriterFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -702,6 +737,16 @@ public class LatticeMicroBenchmarks
         if (_leaves.TryGetValue(id, out var existing)) return existing;
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("leaf", id.ToString("N")));
+        // Setup-only: the CRDT writer-path fixture flips this flag while
+        // seeding so its leaf resolves a non-null ICommitLogWriter and takes
+        // the durable writer path. Every other leaf (and every benchmark not
+        // under that fixture) leaves it false, so ResolveCommitLogWriter()
+        // yields null exactly as before - the auto-substitute IServiceProvider
+        // returns null for an unstubbed GetService(ICommitLogWriter).
+        if (_wireWriterForNewLeaves)
+        {
+            ctx.ActivationServices.GetService(typeof(ICommitLogWriter)).Returns(_noOpCommitLogWriter);
+        }
         var state = new FakePersistentState<LeafNodeState>();
         var leaf = new BPlusLeafGrain(ctx, state, _grainFactory, _optionsResolver, _observers, new DefaultLatticeOriginClusterIdResolver());
         _leaves[id] = leaf;
@@ -1072,6 +1117,36 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// Writer-path counterpart to <see cref="CrdtApplyGrowstate"/>. Identical
+    /// per-iteration apply (one fixed OrSet add-delta against a key pre-seeded
+    /// with <paramref name="n"/> distinct dot-tagged elements) EXCEPT the leaf
+    /// backing the key resolves a non-null <see cref="ICommitLogWriter"/> from
+    /// its grain context, so the apply takes the durable WRITER path.
+    /// <para>
+    /// This is the empirical lane for the "extend lazy CRDT post-merge row
+    /// materialisation to the durable writer path" change. On the pre-change
+    /// production code a writer-wired leaf serialises the whole O(state)
+    /// post-merge OrSet on every apply (<c>shape.SerializeState</c>), so
+    /// <c>_alloc_b</c> grows O(N); on the changed code the writer-wired leaf
+    /// defers to the O(delta) streaming fold, so <c>_alloc_b</c> flattens.
+    /// The writerless <see cref="CrdtApplyGrowstate"/> already deferred on
+    /// both code versions and so cannot see the term. Surfaced as
+    /// <c>microbench_crdt_apply_growstate_writer_&lt;N&gt;_alloc_b</c> (primary)
+    /// and <c>microbench_crdt_apply_growstate_writer_&lt;N&gt;_mean_ns</c>
+    /// (secondary).
+    /// </para>
+    /// </summary>
+    [Benchmark(Description = "Crdt apply growstate writer")]
+    [Arguments(64)]
+    [Arguments(512)]
+    [Arguments(4096)]
+    public Task CrdtApplyGrowstateWriter(int n)
+    {
+        var key = _crdtGrowStateWriterKeys[n];
+        return _crdtGrowStateWriterLattice.ApplyCrdtDeltaAsync(key, LatticeMergeMode.OrSet, _crdtGrowStateAddDelta);
+    }
+
+    /// <summary>
     /// Builds the <see cref="CrdtApplyGrowstate"/> fixture: for each N in
     /// <see cref="CrdtGrowStateSizes"/>, seeds a dedicated key's OrSet state
     /// with N distinct dot-tagged elements via the public apply surface (the
@@ -1134,6 +1209,112 @@ public class LatticeMicroBenchmarks
                     .GetAwaiter().GetResult();
             }
         }
+    }
+
+    /// <summary>
+    /// Builds the <see cref="CrdtApplyGrowstateWriter"/> fixture: a dedicated
+    /// single-shard, root-is-leaf <see cref="ILattice"/> rooted at
+    /// <see cref="WriterTreeName"/> whose leaf resolves a non-null no-op
+    /// <see cref="ICommitLogWriter"/> (so the CRDT apply takes the durable
+    /// writer path), and one pre-seeded key per N in
+    /// <see cref="CrdtGrowStateSizes"/> whose OrSet state holds N distinct
+    /// dot-tagged elements. Mirrors <see cref="BuildCrdtGrowStateFixture"/>
+    /// element-for-element (same probe delta reused via
+    /// <see cref="_crdtGrowStateAddDelta"/>, same per-element seed shape) so
+    /// the only difference between the writerless and writer-wired lanes is
+    /// the resolved commit-log writer. The writer is wired by flipping
+    /// <see cref="_wireWriterForNewLeaves"/> only while this fixture's leaf is
+    /// constructed, so no other tree's leaf inherits it.
+    /// </summary>
+    private void BuildCrdtGrowStateWriterFixture()
+    {
+        _crdtGrowStateWriterKeys = new Dictionary<int, string>(CrdtGrowStateSizes.Length);
+
+        // Register the dedicated tree's structural pin (single shard,
+        // root-is-leaf, MaxLeafKeys high enough that the 3 seeded keys never
+        // trigger a split mid-seed), mirroring BuildCrossTreeParticipant.
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(WriterTreeName);
+        registry.GetEntryAsync(WriterTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = _maxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = 1,
+            }));
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("lattice", WriterTreeName));
+        var serviceProvider = Substitute.For<IServiceProvider>();
+        var lattice = new LatticeGrain(
+            context,
+            _grainFactory,
+            _optionsMonitor,
+            _optionsResolver,
+            serviceProvider,
+            NullLogger<LatticeGrain>.Instance);
+        _grainFactory.GetGrain<ILattice>(WriterTreeName).Returns(lattice);
+        _crdtGrowStateWriterLattice = lattice;
+
+        // Flip the writer-wiring flag for the duration of the seed phase only,
+        // so the leaf this tree lazily creates resolves the no-op writer and
+        // every apply (seed + measured) takes the durable writer path. The
+        // leaf is cached on first construction, so resetting the flag after
+        // seeding does not affect the benchmark's later calls.
+        _wireWriterForNewLeaves = true;
+        try
+        {
+            foreach (var n in CrdtGrowStateSizes)
+            {
+                var key = "crdt-grow-writer-" + n.ToString("D8", CultureInfo.InvariantCulture);
+                _crdtGrowStateWriterKeys[n] = key;
+
+                for (var i = 0; i < n; i++)
+                {
+                    var seedDelta = new OrSetDelta
+                    {
+                        Adds = new[]
+                        {
+                            new OrSetDeltaDot
+                            {
+                                Element = System.Text.Encoding.UTF8.GetBytes(
+                                    "seed-" + i.ToString("D8", CultureInfo.InvariantCulture)),
+                                ReplicaId = "bench-seed",
+                                Counter = i + 1,
+                            },
+                        },
+                        Removes = Array.Empty<OrSetDeltaDot>(),
+                    };
+                    var seedBytes = JsonLatticeSerializer<OrSetDelta>.Default.Serialize(seedDelta);
+                    _crdtGrowStateWriterLattice.ApplyCrdtDeltaAsync(key, LatticeMergeMode.OrSet, seedBytes)
+                        .GetAwaiter().GetResult();
+                }
+            }
+        }
+        finally
+        {
+            _wireWriterForNewLeaves = false;
+        }
+    }
+
+    /// <summary>
+    /// No-op in-memory <see cref="ICommitLogWriter"/> double used by the
+    /// <see cref="CrdtApplyGrowstateWriter"/> fixture so the leaf resolves a
+    /// non-null writer and takes the durable writer path WITHOUT performing
+    /// any real WAL I/O. <see cref="AppendAsync"/> returns a cached completed
+    /// task (the apply path discards the offset), so the writer contributes
+    /// no per-apply allocation that could mask the O(state)-vs-O(delta)
+    /// difference under measurement.
+    /// </summary>
+    private sealed class NoOpCommitLogWriter : ICommitLogWriter
+    {
+        private static readonly Task<long> CompletedZero = Task.FromResult(0L);
+
+        public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
+            => CompletedZero;
+
+        public Task<IReadOnlyList<long>> AppendManyAsync(
+            IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<long>>(new long[entries.Count]);
     }
 
     /// <summary>
