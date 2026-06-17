@@ -148,7 +148,7 @@ internal sealed partial class ViewMaintainerGrain
         // Fold every atomic batch that completed this pass into the group
         // accumulators through the SAME aggregation applier (its per-group
         // atomic membership+accumulator flip), after the ordinary contributions.
-        applied += await FlushCompletedAggregationBatchesAsync(applier, viewTree, registration, completedTransactions, cancellationToken);
+        applied += await FlushCompletedAggregationBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
@@ -195,24 +195,20 @@ internal sealed partial class ViewMaintainerGrain
 
     /// <summary>
     /// Folds every aggregation atomic batch in <paramref name="completed"/> that
-    /// is still staged into the group accumulators: projects each prepared entry
-    /// through the aggregation projection and applies the contributions in
-    /// ascending source-HLC order through the existing per-group atomic
-    /// membership+accumulator flip (which is itself crash-idempotent), then
-    /// evicts the batch from the staging buffer.
-    /// <para>
-    /// A cross-tree atomic batch is not folded into the live tree immediately:
-    /// its contributions are replayed through a <see cref="BufferingAggregationViewStore"/>
-    /// layered over the live tree so the net row writes its read-before-write
-    /// flip would produce are <i>captured</i> without mutating the tree, then the
-    /// captured slice is contributed to the view-side coordinator for a joint
-    /// flip across every participant view tree (degrading to a per-tree-slice flip
-    /// of the captured slice on a readiness timeout). Until the joint decision is
-    /// observed the batch stays staged and is retried on a later drain.
-    /// </para>
+    /// is still staged into the group accumulators. Each batch's contributions are
+    /// projected, applied in ascending source-HLC order through a
+    /// <see cref="BufferingAggregationViewStore"/> layered over the live tree so
+    /// the net row writes (accumulators + fanout rows) its read-before-write flip
+    /// would produce are <i>captured</i> without mutating the tree, then the
+    /// captured slice is flipped <b>atomically</b> - a single-tree atomic write for
+    /// a single-tree batch (so the whole batch becomes visible together rather than
+    /// member-by-member), or contributed to the view-side coordinator for a joint
+    /// cross-tree flip across every participant view tree (degrading to a
+    /// per-tree-slice flip of the captured slice on a readiness timeout). Until a
+    /// cross-tree joint decision is observed the batch stays staged and is retried
+    /// on a later drain; resolved batches are evicted from the staging buffer.
     /// </summary>
     private async Task<int> FlushCompletedAggregationBatchesAsync(
-        AggregationApplier applier,
         ILattice viewTree,
         ViewRegistration registration,
         List<Guid> completed,
@@ -249,19 +245,23 @@ internal sealed partial class ViewMaintainerGrain
             // read-before-write retraction applies in commit order.
             contributions.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
+            // Capture the net row writes this batch's atomic flip would produce
+            // (accumulators + fanout rows) without mutating the live tree, so the
+            // whole batch flips atomically - all group accumulator changes visible
+            // together - rather than member-by-member. Mirrors the cross-tree path.
+            var buffering = new BufferingAggregationViewStore(new LatticeViewStore(viewTree));
+            var capturing = CreateAggregationApplierOver(buffering);
+            foreach (var contribution in contributions)
+            {
+                await capturing.ApplyAsync(contribution, cancellationToken);
+            }
+
+            var (upserts, deletes) = buffering.Capture();
+
             if (tx.CrossTreeOperationId is not null)
             {
-                // Capture this aggregation view's slice (the net row writes its
-                // atomic flip would produce) without touching the live tree, then
-                // rendezvous it for the joint cross-tree flip.
-                var buffering = new BufferingAggregationViewStore(new LatticeViewStore(viewTree));
-                var capturing = CreateAggregationApplierOver(buffering);
-                foreach (var contribution in contributions)
-                {
-                    await capturing.ApplyAsync(contribution, cancellationToken);
-                }
-
-                var (upserts, deletes) = buffering.Capture();
+                // Rendezvous this view's captured slice for the joint cross-tree
+                // flip across every participant view tree.
                 var resolved = await HandleCrossTreeBatchAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
                 if (resolved)
                 {
@@ -274,12 +274,12 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
-            foreach (var contribution in contributions)
-            {
-                await applier.ApplyAsync(contribution, cancellationToken);
-                applied++;
-            }
-
+            // Single-tree atomic batch: flip the captured net slice atomically into
+            // the view tree (upserts in one atomic op keyed by the deterministic
+            // view-saga id so a replay re-attaches, then retraction deletes) so the
+            // whole batch becomes visible together.
+            await FlipLocalSliceAsync(viewTree, txId, upserts, deletes, cancellationToken);
+            applied += upserts.Count + deletes.Count;
             ReleaseStagedKeys(tx);
             _staging.Remove(txId);
             MarkResolved(txId);

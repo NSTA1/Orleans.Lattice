@@ -164,4 +164,50 @@ public class MaterialisedViewAggregationIntegrationTests
             Assert.That(SumValue(await viewTree.GetAsync("blue")), Is.EqualTo(9));
         });
     }
+
+    [Test]
+    public async Task Single_tree_atomic_batch_folds_onto_an_existing_group_atomically()
+    {
+        const string tree = "agg-atomic-onto-existing-src";
+        const string view = "agg-atomic-onto-existing-view";
+        const string origin = "remote-origin";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        _ = CreateView(tree, view, AggregationKind.Sum);
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        await maintainer.EnsureActiveAsync();
+
+        HybridLogicalClock Hlc(long t) => new() { WallClockTicks = t };
+        int ShardOf(string key) => LatticeSharding.GetShardIndex(key, LatticeConstants.DefaultShardCount);
+
+        // Seed an existing "red" group accumulator with an ordinary contribution
+        // (lower HLC than the atomic batch, so it is never superseded).
+        await apply.ApplySetAsync("p1", Record("red", 3), Hlc(50), origin, null, 0);
+        await DrainToZeroAsync(view);
+        var viewTree = await _fixture.ActiveViewTreeAsync(view);
+        Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(3), "the existing group folds the ordinary contribution.");
+
+        // A single-tree atomic batch adds two more contributions to the same group.
+        var txId = Guid.NewGuid();
+        await apply.ApplyPreparedSetAsync("x", Record("red", 4), Hlc(100), origin, null, 0, txId, 2, 0);
+        await apply.ApplyPreparedSetAsync("y", Record("red", 6), Hlc(101), origin, null, 0, txId, 2, 1);
+
+        // Pre-commit: the staged batch must not move the existing accumulator.
+        await maintainer.DrainAsync();
+        await maintainer.DrainAsync();
+        viewTree = await _fixture.ActiveViewTreeAsync(view);
+        Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(3),
+            "an uncommitted atomic batch must not fold onto the existing group.");
+
+        // Commit: the batch flips the accumulator atomically (3 -> 13), read back
+        // through the same captured-then-atomic flip the single-tree path uses.
+        var shards = new[] { "x", "y" }.Select(ShardOf).Distinct().ToArray();
+        var ticks = 1000L;
+        foreach (var shard in shards)
+        {
+            await apply.ApplyTxTerminalAsync(txId, true, shard, Hlc(ticks++), origin, atomicShardCount: shards.Length);
+        }
+
+        viewTree = await DrainToZeroAsync(view);
+        Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(13), "red = 3 + 4 + 6 after the atomic batch folds in.");
+    }
 }
