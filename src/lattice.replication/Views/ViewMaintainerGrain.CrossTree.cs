@@ -31,8 +31,11 @@ namespace Orleans.Lattice.Replication.Views;
 /// path does), and the maintainer re-registers on each drain. If the joint flip
 /// has not committed within
 /// <see cref="LatticeViewOptions.CrossTreeReadinessTimeout"/> the maintainer
-/// degrades to per-tree-slice atomicity: it flips its own slice atomically into
-/// its own view tree, emits the
+/// degrades to per-tree-slice atomicity: it notifies the coordinator (which
+/// terminally records the degrade so it never issues a late joint flip that could
+/// clobber a degraded participant's local flip - unless the joint flip already
+/// committed, in which case the late-degrading maintainer applies that result
+/// instead), flips its own slice atomically into its own view tree, emits the
 /// <see cref="LatticeMetrics.ViewCrossTreeJointViolation"/> metric, and schedules
 /// a reconcile - choosing liveness over an indefinite WAL-pinning stall when a
 /// participant view is permanently unavailable.
@@ -137,11 +140,16 @@ internal sealed partial class ViewMaintainerGrain
             // The coordinator flipped this view's upserts jointly across every
             // participant view tree. Apply our own retractions (the cross-tree
             // write only sets) and resolve.
-            foreach (var key in deletes)
-            {
-                await viewTree.DeleteAsync(key, cancellationToken);
-            }
+            await ApplyRetractionsAsync(viewTree, deletes, cancellationToken);
+            return true;
+        }
 
+        if (decision.Degraded)
+        {
+            // Another participant already terminally degraded this operation: flip
+            // our own slice locally too (the coordinator will never issue a joint
+            // flip), so every participant converges on per-tree-slice atomicity.
+            await DegradeLocallyAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
             return true;
         }
 
@@ -160,16 +168,58 @@ internal sealed partial class ViewMaintainerGrain
         }
 
         // Bounded wait elapsed: a participant view is permanently unavailable.
-        // Degrade to per-tree-slice atomicity - flip this view's own slice
-        // atomically, emit the joint-atomicity-violation metric, and schedule a
-        // reconcile - choosing liveness over an indefinite WAL-pinning stall.
+        // Tell the coordinator we are degrading so it terminally records the
+        // degrade and never issues a late joint flip that could clobber our local
+        // flip. If the joint flip raced in just before our timeout, the coordinator
+        // reports it committed and we apply the joint result instead.
+        var degradeDecision = await coordinator.RegisterDegradedAsync(ViewName);
+        if (degradeDecision.Applied)
+        {
+            await ApplyRetractionsAsync(viewTree, deletes, cancellationToken);
+            return true;
+        }
+
+        await DegradeLocallyAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
+        return true;
+    }
+
+    /// <summary>
+    /// Applies this view's retraction deletes after observing an applied joint
+    /// flip (the cross-tree atomic write only sets, so retractions are applied
+    /// out-of-band, exactly as the single-tree flush applies deletes after the
+    /// atomic upsert).
+    /// </summary>
+    private static async Task ApplyRetractionsAsync(
+        ILattice viewTree,
+        List<string> deletes,
+        CancellationToken cancellationToken)
+    {
+        foreach (var key in deletes)
+        {
+            await viewTree.DeleteAsync(key, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Degrades a cross-tree batch to per-tree-slice atomicity: flips this view's
+    /// own slice atomically into its own tree, emits the joint-atomicity-violation
+    /// metric, and schedules a reconcile - choosing liveness over an indefinite
+    /// WAL-pinning stall when a participant view is permanently unavailable.
+    /// </summary>
+    private async Task DegradeLocallyAsync(
+        ILattice viewTree,
+        Guid txId,
+        StagedTransaction tx,
+        List<KeyValuePair<string, byte[]>> upserts,
+        List<string> deletes,
+        CancellationToken cancellationToken)
+    {
         await FlipLocalSliceAsync(viewTree, txId, upserts, deletes, cancellationToken);
         ViewCrossTreeJointViolation.Add(1, ViewTag);
         _pendingCrossTreeReconcile = true;
         logger.LogWarning(
             "View '{ViewName}' degraded cross-tree operation '{OperationId}' to per-tree-slice atomicity after waiting {Timeout} for participant readiness; scheduling a reconcile.",
-            ViewName, tx.CrossTreeOperationId, timeout);
-        return true;
+            ViewName, tx.CrossTreeOperationId, CrossTreeReadinessTimeout);
     }
 
     /// <summary>

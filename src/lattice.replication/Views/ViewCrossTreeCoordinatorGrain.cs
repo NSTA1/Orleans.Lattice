@@ -78,6 +78,13 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             return ViewCrossTreeDecision.Committed;
         }
 
+        // Terminally degraded by an earlier participant timeout: no joint flip
+        // will ever be issued, so this registrant flips its own slice locally.
+        if (state.State.Degraded)
+        {
+            return ViewCrossTreeDecision.DegradedResult;
+        }
+
         if (state.State.WaitSet.Count == 0)
         {
             // First registration: freeze the (canonicalised) wait set.
@@ -188,6 +195,32 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
                 await grainFactory.SetManyAtomicAsync(batches, JointOperationId);
                 return;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<ViewCrossTreeDecision> RegisterDegradedAsync(string viewName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+
+        // The joint flip already committed (a late degrade lost the race): tell the
+        // caller it is committed so it applies the joint result rather than
+        // double-writing its slice locally.
+        if (state.State.Applied)
+        {
+            return ViewCrossTreeDecision.Committed;
+        }
+
+        // Terminally degrade: no joint flip will ever be issued. Persist before
+        // returning so a redelivery (or another participant's registration) sees
+        // the terminal decision and also flips locally - never jointly.
+        if (!state.State.Degraded)
+        {
+            state.State.Degraded = true;
+            await state.WriteStateAsync();
+            await SlideTtlAsync();
+        }
+
+        return ViewCrossTreeDecision.DegradedResult;
     }
 
     /// <summary>

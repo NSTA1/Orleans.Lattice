@@ -322,4 +322,80 @@ public class MaterialisedViewCrossTreeVisibilityTests
             Assert.That(await maintainerB.GetLagAsync(), Is.EqualTo(0));
         });
     }
+
+    [Test]
+    public async Task Coordinator_terminal_degrade_makes_late_registrants_flip_locally_not_jointly()
+    {
+        // A participant times out and degrades before the wait set completes. The
+        // coordinator must terminally degrade so a *late* registration of the
+        // missing participant flips locally (Degraded) rather than triggering a
+        // joint flip that could clobber the already-degraded participant's local
+        // flip.
+        var op = $"mvxtdegradeterminal{Guid.NewGuid():N}";
+        var viewA = $"view-a-{op}";
+        var viewB = $"view-b-{op}";
+        var waitSet = new List<string> { viewA, viewB };
+        waitSet.Sort(StringComparer.Ordinal);
+        var coordinator = _fixture.Cluster.Client.GetGrain<IViewCrossTreeCoordinatorGrain>(op);
+
+        var first = await coordinator.RegisterReadyAsync(Readiness(op, viewA, waitSet, $"vt-a-{op}"));
+        var degraded = await coordinator.RegisterDegradedAsync(viewA);
+        var late = await coordinator.RegisterReadyAsync(Readiness(op, viewB, waitSet, $"vt-b-{op}"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Applied, Is.False, "the wait set is incomplete on the first registration");
+            Assert.That(first.Degraded, Is.False);
+            Assert.That(degraded.Degraded, Is.True, "the timed-out participant terminally degrades the operation");
+            Assert.That(degraded.Applied, Is.False);
+            Assert.That(late.Degraded, Is.True, "a late registrant on a degraded operation flips locally, never jointly");
+            Assert.That(late.Applied, Is.False, "no joint flip is ever issued once the operation has degraded");
+        });
+    }
+
+    [Test]
+    public async Task Coordinator_degrade_after_joint_flip_committed_returns_committed()
+    {
+        // The joint flip commits, then a participant degrades after the fact (it
+        // lost the race to its own timeout). The coordinator must report the
+        // committed decision so the late-degrading maintainer applies the joint
+        // result instead of double-writing its slice locally.
+        var op = $"mvxtdegradelate{Guid.NewGuid():N}";
+        var viewA = $"view-a-{op}";
+        var viewB = $"view-b-{op}";
+        var treeViewA = $"vt-a-{op}";
+        var treeViewB = $"vt-b-{op}";
+        var waitSet = new List<string> { viewA, viewB };
+        waitSet.Sort(StringComparer.Ordinal);
+        var coordinator = _fixture.Cluster.Client.GetGrain<IViewCrossTreeCoordinatorGrain>(op);
+
+        await coordinator.RegisterReadyAsync(Readiness(op, viewA, waitSet, treeViewA, ("ka", Person(20, "a"))));
+        var completed = await coordinator.RegisterReadyAsync(Readiness(op, viewB, waitSet, treeViewB, ("kb", Person(21, "b"))));
+        var lateDegrade = await coordinator.RegisterDegradedAsync(viewA);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(completed.Applied, Is.True, "the second registration completes the wait set and applies the joint flip");
+            Assert.That(lateDegrade.Applied, Is.True, "a degrade after the joint flip committed sees the committed decision");
+            Assert.That(lateDegrade.Degraded, Is.False, "an already-committed operation is never degraded");
+        });
+
+        // The joint flip durably wrote each participant view tree's slice.
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await _fixture.Cluster.Client.GetGrain<ILattice>(treeViewA).GetAsync("ka"), Is.EqualTo(Person(20, "a")));
+            Assert.That(await _fixture.Cluster.Client.GetGrain<ILattice>(treeViewB).GetAsync("kb"), Is.EqualTo(Person(21, "b")));
+        });
+    }
+
+    private static ViewCrossTreeReadiness Readiness(
+        string op, string viewName, List<string> waitSet, string viewTreeId, params (string Key, byte[] Value)[] upserts)
+        => new()
+        {
+            OperationId = op,
+            ViewName = viewName,
+            WaitSet = waitSet,
+            ViewTreeId = viewTreeId,
+            Upserts = [.. upserts.Select(u => new KeyValuePair<string, byte[]>(u.Key, u.Value))],
+        };
 }
