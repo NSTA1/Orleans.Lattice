@@ -165,6 +165,36 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     Task ApplyMergeManyAsync(IReadOnlyList<ApplyMergeItem> items);
 
     /// <summary>
+    /// Installs a batch of non-prepared typed-CRDT delta mutations
+    /// authored on remote clusters in a single grain RPC, collapsing what
+    /// would otherwise be one read-merge-write (optimistic-concurrency)
+    /// apply per item into a single round-trip that folds every delta into
+    /// the receiver's current visible state inside one grain turn. Each
+    /// item carries its own authoring metadata
+    /// (<see cref="ApplyCrdtDeltaItem.SourceHlc"/>,
+    /// <see cref="ApplyCrdtDeltaItem.OriginClusterId"/>,
+    /// <see cref="ApplyCrdtDeltaItem.SourceVectorClock"/>) and its typed
+    /// delta + <see cref="ApplyCrdtDeltaItem.Mode"/>, so the folded
+    /// <see cref="LwwValue{T}"/> matches the per-entry CRDT apply path
+    /// bit-identically.
+    /// <para>
+    /// Because the grain is single-threaded and non-reentrant, the whole
+    /// batch folds without interleaving any other apply or local write to
+    /// this tree, so the per-entry optimistic-concurrency retry loop the
+    /// historical path required is unnecessary. CRDT folds are commutative,
+    /// associative, and idempotent, so the batch is equivalent to invoking
+    /// the per-entry CRDT apply for each item in order, with the per-item
+    /// grain round-trip and full-state read-merge-write elided.
+    /// </para>
+    /// </summary>
+    /// <param name="items">
+    /// The remote typed-CRDT deltas to fold. Every item's
+    /// <see cref="ApplyCrdtDeltaItem.Mode"/> must be a CRDT mode (never
+    /// <see cref="LatticeMergeMode.LwwRegister"/>).
+    /// </param>
+    Task ApplyCrdtDeltaManyAsync(IReadOnlyList<ApplyCrdtDeltaItem> items);
+
+    /// <summary>
     /// Installs a single saga prepare-phase Set authored on a remote
     /// cluster into this tree's per-leaf pending-transaction map. The
     /// receiver leaf sees the same ambient context stack the source

@@ -192,6 +192,27 @@ public class LatticeMicroBenchmarks
     private bool _wireWriterForNewLeaves;
     private readonly NoOpCommitLogWriter _noOpCommitLogWriter = new();
 
+    // ===== Receiver-side CRDT batch-apply A/B instrument =====
+    // Side-by-side lanes for the receiver's typed-CRDT delta-apply path,
+    // applying N OrSet add-deltas to N distinct keys per iteration:
+    //   * PerEntry (baseline) faithfully reproduces the historical receiver
+    //     path - for each entry GetWithVersionAsync -> deserialise the full
+    //     OrSet state -> MergeDelta -> reserialise -> SetIfVersionAsync
+    //     (the optimistic read-merge-write the applier ran per entry).
+    //   * Batched (candidate) folds all N deltas server-side in a single
+    //     IReplicationApplyGrain.ApplyCrdtDeltaManyAsync grain turn.
+    // Both lanes run on a DEDICATED single-shard root-is-leaf tree, on
+    // DISJOINT key sets, with a FIXED idempotent add-delta so the per-key
+    // OrSet state is pinned at one element across all iterations. Surfaced
+    // as microbench_crdt_receiver_apply_per_entry_<N>_{mean_ns,alloc_b} and
+    // microbench_crdt_receiver_apply_batched_<N>_{mean_ns,alloc_b}.
+    private static readonly int[] CrdtReceiverBatchSizes = [16, 64, 256];
+    private const string ReceiverBatchTreeName = "microbench-crdt-receiver-batch-tree";
+    private ILattice _crdtReceiverBatchLattice = null!;
+    private OrSetDelta _crdtReceiverAddDelta;
+    private Dictionary<int, string[]> _crdtReceiverPerEntryKeys = null!;
+    private Dictionary<int, ApplyCrdtDeltaItem[]> _crdtReceiverBatchItems = null!;
+
     // ===== Predicate push-down scan instrument (predicate Utf8JsonReader fast-path) =====
     // A dedicated keyspace seeded with small JSON documents. The predicate
     // evaluator parses each candidate value as a JSON document, so the
@@ -677,6 +698,7 @@ public class LatticeMicroBenchmarks
         BuildLeafQueueFixture();
         BuildCrdtGrowStateFixture();
         BuildCrdtGrowStateWriterFixture();
+        BuildCrdtReceiverBatchFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -1295,6 +1317,139 @@ public class LatticeMicroBenchmarks
             _wireWriterForNewLeaves = false;
         }
     }
+
+    /// <summary>
+    /// Builds the receiver CRDT batch-apply A/B fixture: a dedicated
+    /// single-shard, root-is-leaf <see cref="ILattice"/> rooted at
+    /// <see cref="ReceiverBatchTreeName"/>, plus, for each N in
+    /// <see cref="CrdtReceiverBatchSizes"/>, two DISJOINT N-key sets (one per
+    /// lane) and the pre-built batched-apply item list. A single fixed
+    /// idempotent OrSet add-delta is reused for every key so re-application
+    /// leaves the per-key state pinned at one element, keeping both lanes
+    /// allocation-stable across measurement iterations. Both lanes' keys are
+    /// seeded once here (outside the measured window) so the first measured
+    /// iteration matches steady state.
+    /// </summary>
+    private void BuildCrdtReceiverBatchFixture()
+    {
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(ReceiverBatchTreeName);
+        registry.GetEntryAsync(ReceiverBatchTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = _maxLeafKeys,
+                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+                ShardCount = 1,
+            }));
+
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("lattice", ReceiverBatchTreeName));
+        var serviceProvider = Substitute.For<IServiceProvider>();
+        var lattice = new LatticeGrain(
+            context,
+            _grainFactory,
+            _optionsMonitor,
+            _optionsResolver,
+            serviceProvider,
+            NullLogger<LatticeGrain>.Instance);
+        _grainFactory.GetGrain<ILattice>(ReceiverBatchTreeName).Returns(lattice);
+        _crdtReceiverBatchLattice = lattice;
+
+        // The single fixed, idempotent add-delta both lanes apply per key.
+        _crdtReceiverAddDelta = new OrSetDelta
+        {
+            Adds = new[]
+            {
+                new OrSetDeltaDot
+                {
+                    Element = System.Text.Encoding.UTF8.GetBytes("receiver-batch-probe-element"),
+                    ReplicaId = "bench-receiver",
+                    Counter = 1,
+                },
+            },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+        var deltaBytes = JsonLatticeSerializer<OrSetDelta>.Default.Serialize(_crdtReceiverAddDelta);
+        var sourceHlc = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+
+        _crdtReceiverPerEntryKeys = new Dictionary<int, string[]>(CrdtReceiverBatchSizes.Length);
+        _crdtReceiverBatchItems = new Dictionary<int, ApplyCrdtDeltaItem[]>(CrdtReceiverBatchSizes.Length);
+        var applyGrain = (IReplicationApplyGrain)lattice;
+
+        foreach (var n in CrdtReceiverBatchSizes)
+        {
+            var perEntryKeys = new string[n];
+            var batchItems = new ApplyCrdtDeltaItem[n];
+            for (var i = 0; i < n; i++)
+            {
+                var slot = i.ToString("D8", CultureInfo.InvariantCulture);
+                perEntryKeys[i] = "rcv-pe-" + n.ToString("D8", CultureInfo.InvariantCulture) + "-" + slot;
+                batchItems[i] = new ApplyCrdtDeltaItem
+                {
+                    Key = "rcv-ba-" + n.ToString("D8", CultureInfo.InvariantCulture) + "-" + slot,
+                    Mode = LatticeMergeMode.OrSet,
+                    Delta = deltaBytes,
+                    SourceHlc = sourceHlc,
+                    OriginClusterId = "bench-origin",
+                    SourceVectorClock = null,
+                };
+            }
+
+            _crdtReceiverPerEntryKeys[n] = perEntryKeys;
+            _crdtReceiverBatchItems[n] = batchItems;
+
+            // Seed both lanes once so steady state is established before the
+            // first measured iteration.
+            ApplyCrdtReceiverPerEntry(n).GetAwaiter().GetResult();
+            applyGrain.ApplyCrdtDeltaManyAsync(batchItems).GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>
+    /// Baseline lane: applies N OrSet add-deltas to N distinct keys via the
+    /// historical per-entry receiver path - one
+    /// <see cref="ILattice.GetWithVersionAsync(string, CancellationToken)"/> +
+    /// client-side OrSet deserialise/<see cref="OrSet.MergeDelta"/>/reserialise
+    /// + <see cref="ILattice.SetIfVersionAsync(string, byte[], HybridLogicalClock, CancellationToken)"/>
+    /// round trip each. Surfaced as
+    /// <c>microbench_crdt_receiver_apply_per_entry_&lt;N&gt;_{mean_ns,alloc_b}</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt receiver apply per entry")]
+    [Arguments(16)]
+    [Arguments(64)]
+    [Arguments(256)]
+    public Task CrdtReceiverApplyPerEntry(int n) => ApplyCrdtReceiverPerEntry(n);
+
+    private async Task ApplyCrdtReceiverPerEntry(int n)
+    {
+        var keys = _crdtReceiverPerEntryKeys[n];
+        var stateSerializer = JsonLatticeSerializer<OrSet>.Default;
+        for (var i = 0; i < keys.Length; i++)
+        {
+            var key = keys[i];
+            var versioned = await _crdtReceiverBatchLattice.GetWithVersionAsync(key);
+            var existing = versioned.Value is null
+                ? new OrSet()
+                : stateSerializer.Deserialize(versioned.Value);
+            existing.MergeDelta(_crdtReceiverAddDelta);
+            var bytes = stateSerializer.Serialize(existing);
+            await _crdtReceiverBatchLattice.SetIfVersionAsync(key, bytes, versioned.Version);
+        }
+    }
+
+    /// <summary>
+    /// Candidate lane: folds the same N OrSet add-deltas into N distinct keys
+    /// in a single
+    /// <see cref="IReplicationApplyGrain.ApplyCrdtDeltaManyAsync"/> grain turn,
+    /// eliminating the per-entry optimistic read-merge-write round trips.
+    /// Surfaced as
+    /// <c>microbench_crdt_receiver_apply_batched_&lt;N&gt;_{mean_ns,alloc_b}</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt receiver apply batched")]
+    [Arguments(16)]
+    [Arguments(64)]
+    [Arguments(256)]
+    public Task CrdtReceiverApplyBatched(int n) =>
+        ((IReplicationApplyGrain)_crdtReceiverBatchLattice).ApplyCrdtDeltaManyAsync(_crdtReceiverBatchItems[n]);
 
     /// <summary>
     /// No-op in-memory <see cref="ICommitLogWriter"/> double used by the
