@@ -132,6 +132,8 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
+- [FX-042](https://github.com/NSTA1/Orleans.Lattice/issues/803) - Atomic re-key retraction in materialised views needs a core atomic set+delete primitive
+
 ### Shipped
 
 - [FX-001](https://github.com/NSTA1/Orleans.Lattice/issues/401) - Leaf split publish ordering
