@@ -1,5 +1,4 @@
 using System.Diagnostics.Metrics;
-using System.Linq;
 using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.Replication.Views;
@@ -83,6 +82,7 @@ internal sealed partial class ViewMaintainerGrain
                 switch (Classify(mutation, out var terminalCommit, out var terminalAbort))
                 {
                     case StagingDisposition.Apply:
+                        RecordOrdinaryOverStagedKey(mutation);
                         foreach (var contribution in registration.AggregationProjection!.Project(mutation))
                         {
                             contributions.Add(contribution);
@@ -138,9 +138,8 @@ internal sealed partial class ViewMaintainerGrain
         // retraction folds in source-commit order (a source key lives on one
         // partition, so this is exact for that key).
         var applied = 0;
-        foreach (var contribution in contributions
-            .OrderBy(static c => c.Timestamp.WallClockTicks)
-            .ThenBy(static c => c.Timestamp.Counter))
+        contributions.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
+        foreach (var contribution in contributions)
         {
             await applier.ApplyAsync(contribution, cancellationToken);
             applied++;
@@ -153,7 +152,7 @@ internal sealed partial class ViewMaintainerGrain
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
-        ApplyCheckpointHoldBack(advancedOffsets);
+        ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;
         foreach (var (partition, offset) in advancedOffsets)
@@ -230,11 +229,25 @@ internal sealed partial class ViewMaintainerGrain
             var contributions = new List<AggregationContribution>();
             foreach (var prepared in tx.PreparesByIndex.Values)
             {
+                // Supersession skip (see FlushCompletedFilterBatchesAsync): a
+                // higher-HLC ordinary write to this source key, seen while the
+                // batch was staged, is the source last-writer; dropping the
+                // prepared entry keeps the group accumulator convergent with the
+                // source instead of folding in a superseded atomic contribution.
+                if (IsSupersededByOrdinary(prepared))
+                {
+                    continue;
+                }
+
                 foreach (var contribution in registration.AggregationProjection!.Project(prepared))
                 {
                     contributions.Add(contribution);
                 }
             }
+
+            // Fold in ascending source-HLC order so each source key's
+            // read-before-write retraction applies in commit order.
+            contributions.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
             if (tx.CrossTreeOperationId is not null)
             {
@@ -243,9 +256,7 @@ internal sealed partial class ViewMaintainerGrain
                 // rendezvous it for the joint cross-tree flip.
                 var buffering = new BufferingAggregationViewStore(new LatticeViewStore(viewTree));
                 var capturing = CreateAggregationApplierOver(buffering);
-                foreach (var contribution in contributions
-                    .OrderBy(static c => c.Timestamp.WallClockTicks)
-                    .ThenBy(static c => c.Timestamp.Counter))
+                foreach (var contribution in contributions)
                 {
                     await capturing.ApplyAsync(contribution, cancellationToken);
                 }
@@ -255,6 +266,7 @@ internal sealed partial class ViewMaintainerGrain
                 if (resolved)
                 {
                     applied += upserts.Count + deletes.Count;
+                    ReleaseStagedKeys(tx);
                     _staging.Remove(txId);
                     MarkResolved(txId);
                 }
@@ -262,14 +274,13 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
-            foreach (var contribution in contributions
-                .OrderBy(static c => c.Timestamp.WallClockTicks)
-                .ThenBy(static c => c.Timestamp.Counter))
+            foreach (var contribution in contributions)
             {
                 await applier.ApplyAsync(contribution, cancellationToken);
                 applied++;
             }
 
+            ReleaseStagedKeys(tx);
             _staging.Remove(txId);
             MarkResolved(txId);
         }

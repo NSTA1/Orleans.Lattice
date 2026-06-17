@@ -1,5 +1,4 @@
 using System.Diagnostics.Metrics;
-using System.Linq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -219,6 +218,7 @@ internal sealed partial class ViewMaintainerGrain(
                 switch (Classify(mutation, out var terminalCommit, out var terminalAbort))
                 {
                     case StagingDisposition.Apply:
+                        RecordOrdinaryOverStagedKey(mutation);
                         foreach (var write in registration.Projection!.Project(mutation))
                         {
                             collected.Add(write);
@@ -292,7 +292,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
-        ApplyCheckpointHoldBack(advancedOffsets);
+        ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;
         foreach (var (partition, offset) in advancedOffsets)
@@ -575,9 +575,8 @@ internal sealed partial class ViewMaintainerGrain(
         // last-writer-wins outcome regardless of which source partition each
         // write arrived on.
         var appliedOrdered = 0;
-        foreach (var write in collected
-            .OrderBy(static w => w.Timestamp.WallClockTicks)
-            .ThenBy(static w => w.Timestamp.Counter))
+        collected.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
+        foreach (var write in collected)
         {
             await ApplyAsync(viewTree, write, cancellationToken);
             appliedOrdered++;

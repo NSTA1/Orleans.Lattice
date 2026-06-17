@@ -133,19 +133,35 @@ internal sealed partial class ViewMaintainerGrain
         var sourceTreeId = registration.SourceTreeId;
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
 
-        // A rebuild reconverges from current committed source state, so abandon any
-        // partially-staged atomic batch (its uncommitted prepares are not part of
-        // committed source state).
-        _staging.Clear();
-
-        // Capture the source head per partition BEFORE scanning so any source
-        // mutation committed during the build is picked up by the resumed tail.
+        // Capture the source head per partition BEFORE clearing/scanning so any
+        // source mutation committed during the build is picked up by the resumed
+        // tail. Hold each partition's resume floor back below the lowest
+        // still-staged offset (computed while staging is still populated) so an
+        // in-flight (committed-but-not-yet-flushed) atomic batch whose prepares sit
+        // below head is re-read and re-staged by the resumed tail rather than
+        // skipped past - otherwise its committed batch would be permanently lost
+        // until a later reconcile.
         var capturedOffsets = new Dictionary<int, long>();
         for (var partition = 0; partition < partitions; partition++)
         {
             var head = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
-            capturedOffsets[partition] = head - 1;
+            var floor = head - 1;
+            var stagedFloor = HeldFloorForPartition(partition);
+            if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
+            {
+                floor = stagedFloor - 1;
+            }
+
+            capturedOffsets[partition] = floor;
         }
+
+        // A rebuild reconverges from current committed source state, so abandon any
+        // partially-staged atomic batch (its uncommitted prepares are not part of
+        // committed source state); an in-flight batch held back above is re-staged
+        // by the resumed tail when it commits.
+        _staging.Clear();
+        _stagedSourceKeyRefCount.Clear();
+        _ordinaryHlcOverStagedKey.Clear();
 
         // Freshen the aggregation idempotency keys (see BuildShadowAsync) so the
         // re-accumulation mints fresh sagas rather than re-attaching to the retained
@@ -232,21 +248,37 @@ internal sealed partial class ViewMaintainerGrain
         var sourceTreeId = registration.SourceTreeId;
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
 
-        // A rebuild reconverges the view from current committed source state, so
-        // any partially-staged atomic batch is abandoned: its uncommitted prepares
-        // are not part of committed source state and must not leak into the view;
-        // a committed batch is re-derived from the source rows.
-        _staging.Clear();
-
-        // Capture the source head per partition BEFORE scanning so any source
-        // mutation committed during the build is picked up by the resumed tail
-        // (and re-applied idempotently if it was also seen in the scan).
+        // Capture the source head per partition BEFORE clearing/scanning so any
+        // source mutation committed during the build is picked up by the resumed
+        // tail (and re-applied idempotently if it was also seen in the scan). Hold
+        // each partition's resume floor back below the lowest still-staged offset
+        // (computed while staging is still populated) so an in-flight atomic batch
+        // whose prepares sit below head is re-read and re-staged by the resumed
+        // tail rather than skipped past - otherwise a committed batch whose
+        // terminal had not yet arrived at scan time would be permanently lost until
+        // a later reconcile.
         var capturedOffsets = new Dictionary<int, long>();
         for (var partition = 0; partition < partitions; partition++)
         {
             var head = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
-            capturedOffsets[partition] = head - 1;
+            var floor = head - 1;
+            var stagedFloor = HeldFloorForPartition(partition);
+            if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
+            {
+                floor = stagedFloor - 1;
+            }
+
+            capturedOffsets[partition] = floor;
         }
+
+        // A rebuild reconverges the view from current committed source state, so
+        // any partially-staged atomic batch is abandoned: its uncommitted prepares
+        // are not part of committed source state and must not leak into the view;
+        // a committed batch is re-derived from the source rows (and an in-flight
+        // batch held back above is re-staged by the resumed tail when it commits).
+        _staging.Clear();
+        _stagedSourceKeyRefCount.Clear();
+        _ordinaryHlcOverStagedKey.Clear();
 
         // Bump and durably persist the rebuild generation BEFORE re-applying so the
         // aggregation flip's idempotency keys are freshened: re-using the prior

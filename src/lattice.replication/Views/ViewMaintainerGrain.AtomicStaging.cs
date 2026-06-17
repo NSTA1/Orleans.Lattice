@@ -1,4 +1,3 @@
-using System.Linq;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
@@ -49,6 +48,16 @@ internal sealed partial class ViewMaintainerGrain
     // abort terminal) is dropped rather than re-staged into a phantom batch.
     private readonly HashSet<Guid> _resolved = new();
     private readonly Queue<Guid> _resolvedOrder = new();
+
+    // Per still-staged SOURCE key: how many staged transactions reference it, and
+    // the highest HLC of any ordinary (non-prepared) source write seen for that
+    // key while it is staged. At flush time a staged prepare whose source key has
+    // a recorded ordinary HLC strictly greater than the prepare's own HLC is
+    // dropped, reproducing the source-side last-writer-wins outcome (a committed
+    // prepared Set installs under its prepare-time HLC, so a higher-HLC ordinary
+    // write dominates it at the source and must dominate it in the view too).
+    private readonly Dictionary<string, int> _stagedSourceKeyRefCount = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HybridLogicalClock> _ordinaryHlcOverStagedKey = new(StringComparer.Ordinal);
 
     /// <summary>How a source mutation is dispositioned by the drain loop.</summary>
     private enum StagingDisposition
@@ -125,7 +134,12 @@ internal sealed partial class ViewMaintainerGrain
             // The batch is never exposed: discard any staged prepares and
             // remember the id so a sibling prepare read later in this pass (or
             // re-read after a restart) is not re-staged into a phantom batch.
-            _staging.Remove(txId);
+            if (_staging.TryGetValue(txId, out var aborted))
+            {
+                ReleaseStagedKeys(aborted);
+                _staging.Remove(txId);
+            }
+
             MarkResolved(txId);
             return;
         }
@@ -161,6 +175,14 @@ internal sealed partial class ViewMaintainerGrain
         else
         {
             tx.StagePrepare(mutation);
+
+            // Refcount the source key so an ordinary write to it seen while it is
+            // staged can be recorded for supersession; the per-tx StagedSourceKeys
+            // set keeps re-staging the same key (replay) from double-counting.
+            if (tx.StagedSourceKeys.Add(mutation.Key))
+            {
+                _stagedSourceKeyRefCount[mutation.Key] = _stagedSourceKeyRefCount.GetValueOrDefault(mutation.Key) + 1;
+            }
         }
 
         if (IsComplete(tx) && !completed.Contains(txId))
@@ -208,6 +230,67 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>
+    /// Drops <paramref name="tx"/>'s contribution to the staged source-key
+    /// refcount; when a key's last staged transaction is released its recorded
+    /// ordinary-supersession HLC is forgotten too. Must be called with the live
+    /// <see cref="StagedTransaction"/> reference before it is removed from
+    /// <see cref="_staging"/>.
+    /// </summary>
+    private void ReleaseStagedKeys(StagedTransaction tx)
+    {
+        foreach (var key in tx.StagedSourceKeys)
+        {
+            if (!_stagedSourceKeyRefCount.TryGetValue(key, out var count))
+            {
+                continue;
+            }
+
+            if (count <= 1)
+            {
+                _stagedSourceKeyRefCount.Remove(key);
+                _ordinaryHlcOverStagedKey.Remove(key);
+            }
+            else
+            {
+                _stagedSourceKeyRefCount[key] = count - 1;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records an ordinary (non-prepared, applicable) source write as a candidate
+    /// to supersede a still-staged prepare for the same source key, keeping the
+    /// highest such HLC. A source key lives on one WAL partition, so a prepare and
+    /// any ordinary write to it are read in offset (HLC) order: an ordinary write
+    /// read after the prepare is staged necessarily carries a higher HLC and so
+    /// correctly supersedes it; one read before the prepare is not yet refcounted
+    /// (and carries a lower HLC), so the prepare correctly wins.
+    /// </summary>
+    private void RecordOrdinaryOverStagedKey(in LatticeMutation mutation)
+    {
+        if (!_stagedSourceKeyRefCount.ContainsKey(mutation.Key))
+        {
+            return;
+        }
+
+        if (!_ordinaryHlcOverStagedKey.TryGetValue(mutation.Key, out var prev)
+            || mutation.Timestamp.CompareTo(prev) > 0)
+        {
+            _ordinaryHlcOverStagedKey[mutation.Key] = mutation.Timestamp;
+        }
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when a recorded ordinary write to
+    /// <paramref name="prepared"/>'s source key carries a strictly higher HLC than
+    /// the prepare itself, meaning the ordinary write is the source last-writer and
+    /// the prepared entry must be skipped at flush time (a lost-write otherwise).
+    /// </summary>
+    private bool IsSupersededByOrdinary(in LatticeMutation prepared)
+        => _ordinaryHlcOverStagedKey.TryGetValue(prepared.Key, out var oh)
+            && oh.CompareTo(prepared.Timestamp) > 0;
+
+    /// <summary>
     /// Lowest offset, across every still-staged transaction, of any entry that
     /// landed on <paramref name="partition"/>; <see cref="long.MaxValue"/> when
     /// nothing is staged on the partition. The persisted resume offset is held
@@ -232,17 +315,22 @@ internal sealed partial class ViewMaintainerGrain
     /// <paramref name="advancedOffsets"/>: each partition's persisted offset is
     /// clamped to one below the lowest still-staged offset on that partition.
     /// </summary>
-    private void ApplyCheckpointHoldBack(Dictionary<int, long> advancedOffsets)
+    private void ApplyCheckpointHoldBack(Dictionary<int, long> advancedOffsets, int partitions)
     {
         if (_staging.Count == 0)
         {
             return;
         }
 
-        foreach (var partition in advancedOffsets.Keys.ToList())
+        for (var partition = 0; partition < partitions; partition++)
         {
+            if (!advancedOffsets.TryGetValue(partition, out var advanced))
+            {
+                continue;
+            }
+
             var floor = HeldFloorForPartition(partition);
-            if (floor != long.MaxValue && floor - 1 < advancedOffsets[partition])
+            if (floor != long.MaxValue && floor - 1 < advanced)
             {
                 advancedOffsets[partition] = floor - 1;
             }
@@ -336,6 +424,8 @@ internal sealed partial class ViewMaintainerGrain
     {
         ViewAtomicStagingBackstop.Add(1, ViewTag);
         _staging.Clear();
+        _stagedSourceKeyRefCount.Clear();
+        _ordinaryHlcOverStagedKey.Clear();
         return true;
     }
 
@@ -373,6 +463,16 @@ internal sealed partial class ViewMaintainerGrain
             var writes = new List<ViewWrite>();
             foreach (var prepared in tx.PreparesByIndex.Values)
             {
+                // Supersession skip: an ordinary write to this source key with a
+                // higher HLC arrived while the batch was staged, so it is the
+                // source last-writer; dropping the prepared entry reproduces the
+                // source LWW outcome (otherwise apply-order alone would resurrect
+                // the lower-HLC atomic value as a permanent lost write).
+                if (IsSupersededByOrdinary(prepared))
+                {
+                    continue;
+                }
+
                 foreach (var write in registration.Projection!.Project(prepared))
                 {
                     writes.Add(write);
@@ -400,6 +500,7 @@ internal sealed partial class ViewMaintainerGrain
 
             if (upserts.Count == 0 && deletes.Count == 0 && tx.CrossTreeOperationId is null)
             {
+                ReleaseStagedKeys(tx);
                 _staging.Remove(txId);
                 MarkResolved(txId);
                 continue;
@@ -417,6 +518,7 @@ internal sealed partial class ViewMaintainerGrain
                 if (resolved)
                 {
                     applied += upserts.Count + deletes.Count;
+                    ReleaseStagedKeys(tx);
                     _staging.Remove(txId);
                     MarkResolved(txId);
                 }
@@ -436,6 +538,7 @@ internal sealed partial class ViewMaintainerGrain
                 applied++;
             }
 
+            ReleaseStagedKeys(tx);
             _staging.Remove(txId);
             MarkResolved(txId);
         }
@@ -459,6 +562,9 @@ internal sealed partial class ViewMaintainerGrain
     {
         /// <summary>Prepared entries keyed by <see cref="LatticeMutation.AtomicBatchIndex"/> (re-stage replaces, so replay is idempotent).</summary>
         public Dictionary<int, LatticeMutation> PreparesByIndex { get; } = new();
+
+        /// <summary>Distinct source keys this transaction has staged a prepare for, so the maintainer's per-key staged refcount is replay-safe (re-staging the same key by the same tx must not double-count).</summary>
+        public HashSet<string> StagedSourceKeys { get; } = new(StringComparer.Ordinal);
 
         /// <summary>Distinct committed shard indices observed via <see cref="MutationKind.TxCommit"/> terminals.</summary>
         public HashSet<int> CommittedShards { get; } = new();
