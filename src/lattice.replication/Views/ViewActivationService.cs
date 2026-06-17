@@ -39,8 +39,7 @@ internal sealed class ViewActivationService(
         var pending = new List<string>();
         foreach (var registration in registrations)
         {
-            var projection = registration.ProjectionFactory(services);
-            catalog.Register(new ViewRegistration(registration.ViewName, registration.SourceTreeId, projection));
+            catalog.Register(registration.Resolve(services));
             pending.Add(registration.ViewName);
         }
 

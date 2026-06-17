@@ -2310,4 +2310,14 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewKeyCollisions =
         Meter.CreateCounter<long>("orleans.lattice.view.key_collisions", unit: "{collision}",
             description: "View keys produced by more than one distinct source key under an injective re-map, per drain batch.");
+
+    /// <summary>
+    /// Counter of aggregation contributions applied to an aggregation view's group
+    /// accumulators (folds and retractions). Tagged with <see cref="TagView"/>.
+    /// Distinguishes aggregation apply throughput from the filter / re-project
+    /// <see cref="ViewApplied"/> upsert/delete counter.
+    /// </summary>
+    public static readonly Counter<long> ViewAggregationApplied =
+        Meter.CreateCounter<long>("orleans.lattice.view.aggregation_applied", unit: "{contribution}",
+            description: "Aggregation contributions (folds and retractions) applied to an aggregation view's group accumulators.");
 }

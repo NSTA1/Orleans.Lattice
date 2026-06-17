@@ -45,4 +45,36 @@ public sealed class LatticeViewRegistrationBuilder
         _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, projectionFactory));
         return this;
     }
+
+    /// <summary>
+    /// Declares an aggregation view (a grouped reduce) maintained by the supplied
+    /// projection instance.
+    /// </summary>
+    /// <param name="viewName">The logical view name; the view tree is <c>view-{viewName}</c>.</param>
+    /// <param name="sourceTreeId">The source tree id whose WAL the view tails.</param>
+    /// <param name="projection">The aggregation projection that maintains the view.</param>
+    public LatticeViewRegistrationBuilder AddAggregationView(string viewName, string sourceTreeId, ILatticeAggregationProjection projection)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        ArgumentNullException.ThrowIfNull(projection);
+        _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, ProjectionFactory: null, _ => projection));
+        return this;
+    }
+
+    /// <summary>
+    /// Declares an aggregation view whose projection is resolved from the service
+    /// provider at startup, allowing the projection to take service dependencies.
+    /// </summary>
+    /// <param name="viewName">The logical view name; the view tree is <c>view-{viewName}</c>.</param>
+    /// <param name="sourceTreeId">The source tree id whose WAL the view tails.</param>
+    /// <param name="projectionFactory">Resolves the aggregation projection from the service provider.</param>
+    public LatticeViewRegistrationBuilder AddAggregationView(string viewName, string sourceTreeId, Func<IServiceProvider, ILatticeAggregationProjection> projectionFactory)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        ArgumentNullException.ThrowIfNull(projectionFactory);
+        _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, ProjectionFactory: null, projectionFactory));
+        return this;
+    }
 }

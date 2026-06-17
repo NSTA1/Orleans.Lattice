@@ -30,7 +30,10 @@ internal sealed class LatticeViewFactory(
         _ = replicationContext;
 
         var sourceTreeId = source.GetPrimaryKeyString();
-        catalog.Register(new ViewRegistration(viewName, sourceTreeId, definition.Projection));
+        var registration = definition.AggregationProjection is { } aggregation
+            ? new ViewRegistration(viewName, sourceTreeId, Projection: null, aggregation)
+            : new ViewRegistration(viewName, sourceTreeId, definition.Projection);
+        catalog.Register(registration);
 
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
         var viewTree = grainFactory.GetGrain<ILattice>($"view-{viewName}");
@@ -41,7 +44,7 @@ internal sealed class LatticeViewFactory(
         // EnsureActiveAsync with retry/backoff for startup-registered views.
         _ = EnsureActiveAsync(maintainer, viewName);
 
-        return new LatticeView(viewName, viewTree, maintainer);
+        return new LatticeView(viewName, viewTree, maintainer, registration.IsAggregation);
     }
 
     private async Task EnsureActiveAsync(IViewMaintainerGrain maintainer, string viewName)

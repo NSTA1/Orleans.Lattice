@@ -350,4 +350,12 @@ internal static class TypeAliases
     // (see ReplicationTypeAliases).
     internal const string ViewWrite = "ol.vw";
     internal const string ViewWriteKind = "ol.vwk";
+
+    // Materialised views (Phase 3): the aggregation contribution value type and
+    // its discriminator enums. Aggregation projections are services (never
+    // serialized), but the contribution value carries serializer metadata for
+    // forward compatibility and convention parity with ViewWrite.
+    internal const string AggregationKind = "ol.agk";
+    internal const string AggregationContribution = "ol.agc";
+    internal const string AggregationContributionKind = "ol.ack";
 }

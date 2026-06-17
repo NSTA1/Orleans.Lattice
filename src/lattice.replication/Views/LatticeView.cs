@@ -7,8 +7,14 @@ namespace Orleans.Lattice.Replication.Views;
 /// <c>view-{name}</c> <see cref="ILattice"/>; lag and rebuild delegate to the
 /// per-view <see cref="IViewMaintainerGrain"/>.
 /// </summary>
-internal sealed class LatticeView(string viewName, ILattice viewTree, IViewMaintainerGrain maintainer) : ILatticeView
+internal sealed class LatticeView(string viewName, ILattice viewTree, IViewMaintainerGrain maintainer, bool isAggregation = false) : ILatticeView
 {
+    // Aggregation views keep internal accumulator / inverse / membership rows
+    // under the reserved NUL prefix (see AggregationRowCodec). The view-facing
+    // surface starts every unbounded scan above that range so readers see only
+    // the materialised group values, never the internal rows.
+    private string? ReservedFloor => isAggregation ? AggregationRowCodec.FirstNonReservedKey : null;
+
     /// <inheritdoc />
     public string ViewName { get; } = viewName;
 
@@ -20,16 +26,31 @@ internal sealed class LatticeView(string viewName, ILattice viewTree, IViewMaint
     }
 
     /// <inheritdoc />
-    public Task<int> CountAsync(CancellationToken cancellationToken = default) =>
-        viewTree.CountAsync(cancellationToken);
+    public async Task<int> CountAsync(CancellationToken cancellationToken = default)
+    {
+        if (!isAggregation)
+        {
+            return await viewTree.CountAsync(cancellationToken);
+        }
+
+        // Count only the materialised group values, excluding the reserved
+        // internal rows, so a group's accumulator shards never inflate the count.
+        var count = 0;
+        await foreach (var _ in viewTree.KeysAsync(ReservedFloor, cancellationToken: cancellationToken))
+        {
+            count++;
+        }
+
+        return count;
+    }
 
     /// <inheritdoc />
     public IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, CancellationToken cancellationToken = default) =>
-        viewTree.KeysAsync(startInclusive, endExclusive, cancellationToken: cancellationToken);
+        viewTree.KeysAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken);
 
     /// <inheritdoc />
     public IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, CancellationToken cancellationToken = default) =>
-        viewTree.EntriesAsync(startInclusive, endExclusive, cancellationToken: cancellationToken);
+        viewTree.EntriesAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken);
 
     /// <inheritdoc />
     public Task<long> GetLagAsync(CancellationToken cancellationToken = default) =>

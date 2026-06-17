@@ -1,0 +1,175 @@
+using Orleans.Lattice.Primitives;
+
+namespace Orleans.Lattice;
+
+/// <summary>
+/// A single effect an <see cref="ILatticeAggregationProjection"/> wants folded
+/// into an aggregation view, derived from one source
+/// <see cref="LatticeMutation"/>. Unlike a filter/re-project
+/// <see cref="ViewWrite"/> (which targets a view key directly), a contribution
+/// describes how a <see cref="SourceKey"/> participates in the group named by
+/// <see cref="GroupKey"/>; the maintainer resolves the per-source-key prior
+/// contribution (the "read before write") and applies the convergent delta.
+/// <para>
+/// A <see cref="AggregationContributionKind.Retract"/> contribution carries only
+/// the <see cref="SourceKey"/> and <see cref="Timestamp"/>: the group and the
+/// prior contributed value are recovered from the maintainer's stored
+/// contribution row, because a source delete carries no value to derive them
+/// from.
+/// </para>
+/// </summary>
+[GenerateSerializer]
+[Alias(TypeAliases.AggregationContribution)]
+[Immutable]
+public readonly record struct AggregationContribution
+{
+    /// <summary>How the maintainer folds this contribution into the view.</summary>
+    [Id(0)] public AggregationContributionKind Kind { get; init; }
+
+    /// <summary>
+    /// The group the source key contributes to for a
+    /// <see cref="AggregationContributionKind.Contribute"/>; ignored for a
+    /// <see cref="AggregationContributionKind.Retract"/> (the group is recovered
+    /// from the stored contribution row). For a
+    /// <see cref="AggregationContributionKind.RangeReconcile"/> this is the
+    /// inclusive start of the affected source range.
+    /// </summary>
+    [Id(1)] public string GroupKey { get; init; }
+
+    /// <summary>The source key that produces this contribution.</summary>
+    [Id(2)] public string SourceKey { get; init; }
+
+    /// <summary>
+    /// The numeric the source key contributes for a
+    /// <see cref="AggregationKind.Sum"/>, <see cref="AggregationKind.Min"/>, or
+    /// <see cref="AggregationKind.Max"/> view; <c>0</c> and unused for
+    /// <see cref="AggregationKind.Count"/> and <see cref="AggregationKind.SetUnion"/>.
+    /// </summary>
+    [Id(3)] public double Numeric { get; init; }
+
+    /// <summary>
+    /// The member the source key contributes to a
+    /// <see cref="AggregationKind.SetUnion"/> view's distinct-member set;
+    /// <see langword="null"/> for every other kind.
+    /// </summary>
+    [Id(4)] public string? Member { get; init; }
+
+    /// <summary>
+    /// The source entry's <see cref="HybridLogicalClock"/>, used to order the
+    /// contributions in a drain batch so per-source-key read-before-write applies
+    /// in source-commit order.
+    /// </summary>
+    [Id(5)] public HybridLogicalClock Timestamp { get; init; }
+
+    /// <summary>
+    /// Exclusive upper bound of the affected source range for a
+    /// <see cref="AggregationContributionKind.RangeReconcile"/>;
+    /// <see langword="null"/> otherwise.
+    /// </summary>
+    [Id(6)] public string? EndKey { get; init; }
+
+    /// <summary>
+    /// Creates a <see cref="AggregationContributionKind.Contribute"/> over a
+    /// numeric value (sum / min / max).
+    /// </summary>
+    /// <param name="groupKey">The group the source key contributes to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKey">The contributing source key. Must not be <see langword="null"/>.</param>
+    /// <param name="numeric">The numeric contributed.</param>
+    /// <param name="timestamp">The source entry HLC.</param>
+    public static AggregationContribution OfNumeric(string groupKey, string sourceKey, double numeric, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(groupKey);
+        ArgumentNullException.ThrowIfNull(sourceKey);
+        return new AggregationContribution
+        {
+            Kind = AggregationContributionKind.Contribute,
+            GroupKey = groupKey,
+            SourceKey = sourceKey,
+            Numeric = numeric,
+            Timestamp = timestamp,
+        };
+    }
+
+    /// <summary>
+    /// Creates a <see cref="AggregationContributionKind.Contribute"/> that adds
+    /// the source key to a group (count) with no numeric or member payload.
+    /// </summary>
+    /// <param name="groupKey">The group the source key contributes to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKey">The contributing source key. Must not be <see langword="null"/>.</param>
+    /// <param name="timestamp">The source entry HLC.</param>
+    public static AggregationContribution Membership(string groupKey, string sourceKey, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(groupKey);
+        ArgumentNullException.ThrowIfNull(sourceKey);
+        return new AggregationContribution
+        {
+            Kind = AggregationContributionKind.Contribute,
+            GroupKey = groupKey,
+            SourceKey = sourceKey,
+            Timestamp = timestamp,
+        };
+    }
+
+    /// <summary>
+    /// Creates a <see cref="AggregationContributionKind.Contribute"/> that adds
+    /// the source key's <paramref name="member"/> to a set-union group.
+    /// </summary>
+    /// <param name="groupKey">The group the source key contributes to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKey">The contributing source key. Must not be <see langword="null"/>.</param>
+    /// <param name="member">The member added to the group's distinct-member set. Must not be <see langword="null"/>.</param>
+    /// <param name="timestamp">The source entry HLC.</param>
+    public static AggregationContribution SetMember(string groupKey, string sourceKey, string member, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(groupKey);
+        ArgumentNullException.ThrowIfNull(sourceKey);
+        ArgumentNullException.ThrowIfNull(member);
+        return new AggregationContribution
+        {
+            Kind = AggregationContributionKind.Contribute,
+            GroupKey = groupKey,
+            SourceKey = sourceKey,
+            Member = member,
+            Timestamp = timestamp,
+        };
+    }
+
+    /// <summary>
+    /// Creates a <see cref="AggregationContributionKind.Retract"/> removing a
+    /// source key's contribution (a delete, tombstone, or filter exit).
+    /// </summary>
+    /// <param name="sourceKey">The source key whose contribution is retracted. Must not be <see langword="null"/>.</param>
+    /// <param name="timestamp">The source entry HLC.</param>
+    public static AggregationContribution Retract(string sourceKey, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(sourceKey);
+        return new AggregationContribution
+        {
+            Kind = AggregationContributionKind.Retract,
+            GroupKey = string.Empty,
+            SourceKey = sourceKey,
+            Timestamp = timestamp,
+        };
+    }
+
+    /// <summary>
+    /// Creates a <see cref="AggregationContributionKind.RangeReconcile"/> asking
+    /// the maintainer to rebuild the affected source range
+    /// <c>[<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)</c>.
+    /// </summary>
+    /// <param name="startInclusive">Inclusive lower bound of the affected source range. Must not be <see langword="null"/>.</param>
+    /// <param name="endExclusive">Exclusive upper bound of the affected source range. Must not be <see langword="null"/>.</param>
+    /// <param name="timestamp">The source HLC of the range delete that triggered the reconcile.</param>
+    public static AggregationContribution RangeReconcile(string startInclusive, string endExclusive, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        return new AggregationContribution
+        {
+            Kind = AggregationContributionKind.RangeReconcile,
+            GroupKey = startInclusive,
+            SourceKey = string.Empty,
+            EndKey = endExclusive,
+            Timestamp = timestamp,
+        };
+    }
+}

@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Replication.Views;
 /// is idempotent.
 /// </para>
 /// </summary>
-internal sealed class ViewMaintainerGrain(
+internal sealed partial class ViewMaintainerGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
@@ -92,16 +92,16 @@ internal sealed class ViewMaintainerGrain(
         // A projection-version change means the view's logic is no longer the one
         // that built the persisted state; rebuild from current source state.
         if (!string.IsNullOrEmpty(state.State.ProjectionVersion)
-            && !string.Equals(state.State.ProjectionVersion, registration.Projection.ProjectionVersion, StringComparison.Ordinal))
+            && !string.Equals(state.State.ProjectionVersion, registration.ProjectionVersion, StringComparison.Ordinal))
         {
             logger.LogInformation(
                 "View '{ViewName}' projection version changed ({Old} -> {New}); rebuilding.",
-                ViewName, state.State.ProjectionVersion, registration.Projection.ProjectionVersion);
+                ViewName, state.State.ProjectionVersion, registration.ProjectionVersion);
             await RebuildAsync(cancellationToken);
         }
         else if (string.IsNullOrEmpty(state.State.ProjectionVersion))
         {
-            state.State.ProjectionVersion = registration.Projection.ProjectionVersion;
+            state.State.ProjectionVersion = registration.ProjectionVersion;
             await state.WriteStateAsync();
         }
 
@@ -116,6 +116,11 @@ internal sealed class ViewMaintainerGrain(
         if (registration is null)
         {
             return 0;
+        }
+
+        if (registration.IsAggregation)
+        {
+            return await DrainAggregationAsync(registration, cancellationToken);
         }
 
         var options = Options;
@@ -161,7 +166,7 @@ internal sealed class ViewMaintainerGrain(
 
                 if (IsApplicable(mutation))
                 {
-                    foreach (var write in registration.Projection.Project(mutation))
+                    foreach (var write in registration.Projection!.Project(mutation))
                     {
                         collected.Add(write);
                     }
@@ -215,7 +220,7 @@ internal sealed class ViewMaintainerGrain(
         }
 
         state.State.HighestAppliedTimestamp = highest;
-        state.State.ProjectionVersion = registration.Projection.ProjectionVersion;
+        state.State.ProjectionVersion = registration.ProjectionVersion;
 
         if (offsetsAdvanced || appliedCount > 0)
         {
@@ -367,6 +372,7 @@ internal sealed class ViewMaintainerGrain(
         }
 
         var highest = HybridLogicalClock.Zero;
+        var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(viewTree) : null;
         await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
         {
             var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
@@ -389,9 +395,19 @@ internal sealed class ViewMaintainerGrain(
                 Category = MutationCategory.User,
             };
 
-            foreach (var write in registration.Projection.Project(synthetic))
+            if (aggregationApplier is not null)
             {
-                await ApplyAsync(viewTree, write, cancellationToken);
+                foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
+                {
+                    await aggregationApplier.ApplyAsync(contribution, cancellationToken);
+                }
+            }
+            else
+            {
+                foreach (var write in registration.Projection!.Project(synthetic))
+                {
+                    await ApplyAsync(viewTree, write, cancellationToken);
+                }
             }
 
             if (versioned.Version > highest)
@@ -402,7 +418,7 @@ internal sealed class ViewMaintainerGrain(
 
         state.State.AppliedOffsets = capturedOffsets;
         state.State.HighestAppliedTimestamp = highest;
-        state.State.ProjectionVersion = registration.Projection.ProjectionVersion;
+        state.State.ProjectionVersion = registration.ProjectionVersion;
         await state.WriteStateAsync();
 
         if (highest > HybridLogicalClock.Zero)

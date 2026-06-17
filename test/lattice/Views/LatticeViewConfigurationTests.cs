@@ -43,7 +43,7 @@ public class LatticeViewConfigurationTests
     public void Definition_null_projection_throws()
     {
         Assert.That(
-            () => new LatticeViewDefinition("v", null!),
+            () => new LatticeViewDefinition("v", (ILatticeViewProjection)null!),
             Throws.ArgumentNullException);
     }
 }

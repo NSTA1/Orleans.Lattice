@@ -110,8 +110,8 @@ var projection = new PredicateLatticeViewProjection(
 ```
 
 The re-map must be **injective**: two distinct source keys mapping to one view
-key is a configuration error (legitimate many-to-one is the aggregation view
-kind, a later phase). The maintainer detects such a collision within a drain
+key is a configuration error (legitimate many-to-one is the
+[aggregation view kind](#aggregation-views)). The maintainer detects such a collision within a drain
 batch, records it on the `orleans.lattice.view.key_collisions` counter, logs a
 warning, and falls back to source-HLC last-writer-wins so the view stays
 well-defined - but the colliding keys' resolution no longer reflects intent.
@@ -131,7 +131,121 @@ drain batch contains a range delete, the maintainer applies that batch's writes
 in ascending source-HLC order rather than coalescing, so a point write that is
 newer than the range delete survives it and an older one is removed by it.
 
-## Read-your-writes barrier
+## Aggregation views
+
+An **aggregation view** is a grouped reduce: each source entry is mapped to a
+**group key** (a legitimate many-to-one mapping, unlike the injective filter /
+re-project re-key), and the view materialises one reduced value per group. Five
+reduces are supported through `AggregationKind`:
+
+| Kind | Materialised value | Selector required |
+|------|--------------------|-------------------|
+| `Count` | Number of live source keys in the group (`long`) | group key only |
+| `Sum` | Sum of each member's numeric contribution (`double`) | value selector |
+| `Min` | Smallest live contribution (`double`) | value selector |
+| `Max` | Largest live contribution (`double`) | value selector |
+| `SetUnion` | Distinct-member cardinality (`long`) | member selector |
+
+Declare one with `AggregationLatticeViewProjection`: a group-key selector, a
+stable selector-version tag (the selectors are delegates and cannot be
+structurally hashed, so the tag drives rebuild-on-change), and the value or
+member selector the kind needs.
+
+```csharp verify
+siloBuilder.AddLatticeViews(views => views.AddAggregationView(
+    viewName: "age-sum-by-name",
+    sourceTreeId: "people",
+    projection: new AggregationLatticeViewProjection(
+        AggregationKind.Sum,
+        groupKeySelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Name,
+        selectorVersion: "sum-age-v1",
+        valueSelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Age)));
+```
+
+### Reading an aggregate
+
+The maintainer materialises each group's reduced value under its **bare group
+key**, so readers are oblivious to the internal accumulator layout. Decode the
+bytes with `LatticeAggregationValue` for the view's kind (a `null` read means the
+group has no live members):
+
+```csharp verify
+var sums = grainFactory.GetGrain<ILattice>("view-age-sum-by-name");
+byte[]? raw = await sums.GetAsync("Alice", cancellationToken);
+double total = raw is null ? 0 : LatticeAggregationValue.DecodeDouble(raw);
+```
+
+`Count` and `SetUnion` store a `long` (decode with `DecodeInt64`); `Sum`, `Min`,
+and `Max` store a `double` (decode with `DecodeDouble`).
+
+### Retraction
+
+A WAL entry carries only the **new** value, but an overwrite or a delete must
+retract the source key's **prior** contribution to its group. The maintainer is
+a single cluster-wide activation per view, so it does this race-free with a
+read-before-write against state it keeps in the view tree under a reserved NUL
+(`\u0000`) prefix that can never collide with a materialised group key (group
+keys must not begin with NUL):
+
+- **Every source key has one membership row** (`\u0000m{sourceKey}`) recording
+  the group and value it last contributed - the read-before-write pointer. On a
+  `Set` the maintainer reads it, retracts the prior contribution (handling a
+  re-group to a different group key), adds the new contribution, and rewrites the
+  row. On a delete it retracts and removes the row. Re-applying the same entry
+  recomputes a zero delta, so the apply is idempotent in steady state.
+- **`Count` / `Sum`** keep only a per-group running count and sum
+  (`\u0000a{groupKey}\u0000{slot}`), so no unbounded multiset is retained.
+- **`Min` / `Max` / `SetUnion`** inherently need the full multiset, so they keep
+  an exact per-group inverse row of `sourceKey -> contribution`
+  (`\u0000i{groupKey}\u0000{slot}`); deleting the current extremum removes that
+  source key's entry and re-derives the aggregate from the survivors.
+
+These reserved rows are internal: the view-facing surface (`CountAsync`,
+`KeysAsync`, `EntriesAsync`) skips them, exposing only materialised group values.
+
+### Hot-group fanout
+
+A group that funnels every member to one accumulator key is a write hotspot.
+`AggregationFanout` (default 1) shards each group into `group#0..#P`
+sub-accumulators hashed on the **source key**; a read merges the shards
+(summing counts/sums, taking the extremum, or unioning members). A fanout of 1
+is a single accumulator and produces an identical result.
+
+```csharp verify
+siloBuilder.ConfigureLatticeView("age-sum-by-name", options =>
+{
+    options.AggregationFanout = 8;
+});
+```
+
+### Approximate mode
+
+`Min`, `Max`, and `SetUnion` keep an exact inverse row whose size is the group's
+cardinality. For unbounded-cardinality groups, set
+`AggregationMaxGroupEntries` to bound each shard's inverse row: `Min` / `Max`
+keep a top-K (evicting the least useful extreme, so the surviving extremum stays
+exact until more than K deletes), and `SetUnion` keeps a bounded distinct sample.
+This is a bounded top-K / sample estimator; a true HyperLogLog cardinality
+estimator for `SetUnion` is a documented stub left for a later phase. Leaving the
+option at its `0` default keeps every group exact.
+
+```csharp verify
+siloBuilder.ConfigureLatticeView("age-sum-by-name", options =>
+{
+    options.AggregationMaxGroupEntries = 1024;
+});
+```
+
+### Rebuild
+
+A rebuild clears the whole view tree - materialised values **and** reserved
+accumulator / inverse / membership rows - before re-scanning current source
+state, so aggregation state is reset and re-accumulated from scratch. An
+unconstrained source range delete (one with no matched-key set) escalates to a
+rebuild, because the deleted source keys' prior contributions cannot be retracted
+exactly without a reverse index.
+
+
 
 The default contract is best-effort lag, but a caller that needs to observe its
 own write can opt into a barrier. `WaitForSourceHeadAsync` captures the current
@@ -174,6 +288,8 @@ of shard count.
 |--------|---------|---------|
 | `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. |
 | `CoalesceWindow` | 50 ms | Period of the background drain timer. |
+| `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. 1 is a single accumulator. |
+| `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard's inverse row to this many entries (approximate mode). 0 keeps every group exact. |
 
 Configure a single view with `ConfigureLatticeView`:
 
@@ -196,6 +312,7 @@ meter, each tagged with the view name:
 | `orleans.lattice.view.backlog_depth` | Histogram | WAL entries read in the drain pass. |
 | `orleans.lattice.view.applied` | Counter | View writes applied to the view tree. |
 | `orleans.lattice.view.key_collisions` | Counter | Distinct source keys that re-mapped to one view key in a drain batch (injectivity violation). |
+| `orleans.lattice.view.aggregation_applied` | Counter | Aggregation contributions folded into the view (count / sum / min / max / set-union). |
 
 ## Limitations
 
@@ -212,5 +329,8 @@ meter, each tagged with the view name:
   because the deleted source keys' scattered view keys cannot be recovered
   without a reverse index. Predicate-filtered range deletes (which carry
   `MatchedKeys`) retract exactly and do not rebuild.
-- **Single-projection filter views.** Aggregation, atomic-write staging,
+- **Single-projection filter and aggregation views.** Atomic-write staging,
   cross-tree visibility, and replication-aware modes are later phases.
+- **Approximate set-union cardinality is a bounded sample, not HyperLogLog.**
+  `AggregationMaxGroupEntries` bounds `SetUnion` with a distinct sample; a true
+  HyperLogLog estimator is a later phase.

@@ -6,8 +6,9 @@ namespace Orleans.Lattice;
 /// how replication resolves <c>LatticeReplicationOptions</c> per tree. The
 /// unnamed (default) instance applies to every view that has no named override.
 /// <para>
-/// Phase 1 reads <see cref="BatchSize"/> and <see cref="CoalesceWindow"/>; the
-/// remaining members are reserved for later phases and are accepted but unused.
+/// <see cref="BatchSize"/> and <see cref="CoalesceWindow"/> apply to every view;
+/// <see cref="AggregationFanout"/> and <see cref="AggregationMaxGroupEntries"/>
+/// apply only to aggregation views.
 /// </para>
 /// </summary>
 public sealed class LatticeViewOptions
@@ -17,6 +18,9 @@ public sealed class LatticeViewOptions
 
     /// <summary>Default <see cref="CoalesceWindow"/> (50 ms between idle poll passes).</summary>
     public static readonly TimeSpan DefaultCoalesceWindow = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>Default <see cref="AggregationFanout"/> (a single accumulator per group).</summary>
+    public const int DefaultAggregationFanout = 1;
 
     /// <summary>
     /// Maximum number of source WAL entries the maintainer reads and applies in a
@@ -32,4 +36,28 @@ public sealed class LatticeViewOptions
     /// last-writer-wins coalescing. Must be greater than zero.
     /// </summary>
     public TimeSpan CoalesceWindow { get; set; } = DefaultCoalesceWindow;
+
+    /// <summary>
+    /// Number of sub-accumulators an aggregation view shards each group into,
+    /// hashed on the source key (<c>group#0..#P-1</c>), to spread the write load
+    /// of a hot group whose members would otherwise all fold into one view key.
+    /// Reads of a group's aggregate merge the sub-accumulators. Must be at least
+    /// 1; the default <c>1</c> is a single accumulator (identical behaviour to no
+    /// sharding). Ignored by filter / re-project views.
+    /// </summary>
+    public int AggregationFanout { get; set; } = DefaultAggregationFanout;
+
+    /// <summary>
+    /// Opt-in bound on the per-group exact state an aggregation view keeps for the
+    /// kinds that inherently need the full multiset
+    /// (<see cref="AggregationKind.Min"/>, <see cref="AggregationKind.Max"/>,
+    /// <see cref="AggregationKind.SetUnion"/>). When greater than <c>0</c> the
+    /// inverse-contribution rows are capped at this many entries per group shard
+    /// (a bounded top-K for min / max; a bounded distinct sample for set-union),
+    /// trading exactness for bounded storage on unbounded-cardinality groups. The
+    /// default <c>0</c> keeps exact state. Ignored by
+    /// <see cref="AggregationKind.Count"/> and <see cref="AggregationKind.Sum"/>,
+    /// which never keep per-member state.
+    /// </summary>
+    public int AggregationMaxGroupEntries { get; set; }
 }

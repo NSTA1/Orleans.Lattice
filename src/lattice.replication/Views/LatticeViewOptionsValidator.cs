@@ -25,6 +25,16 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             failures.Add($"{nameof(LatticeViewOptions.CoalesceWindow)} must be greater than zero (was {options.CoalesceWindow}).");
         }
 
+        if (options.AggregationFanout < 1)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.AggregationFanout)} must be at least 1 (was {options.AggregationFanout}).");
+        }
+
+        if (options.AggregationMaxGroupEntries < 0)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.AggregationMaxGroupEntries)} must not be negative (was {options.AggregationMaxGroupEntries}).");
+        }
+
         return failures.Count > 0 ? ValidateOptionsResult.Fail(failures) : ValidateOptionsResult.Success;
     }
 }
