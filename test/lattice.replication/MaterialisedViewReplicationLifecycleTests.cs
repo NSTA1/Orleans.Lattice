@@ -91,6 +91,44 @@ public class MaterialisedViewReplicationLifecycleTests
     }
 
     [Test]
+    public async Task Drain_does_not_re_evict_within_the_lag_eviction_cooldown()
+    {
+        const string tree = "mv-lag-cooldown-src";
+        var view = MaterialisedViewClusterFixture.LagEvictionCooldownViewName;
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        RegisterView(view, tree);
+
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+
+        // First over-budget backlog: one drain evicts and rebuilds the whole backlog.
+        const int firstBatch = 40;
+        for (var i = 0; i < firstBatch; i++)
+        {
+            await source.SetAsync($"a{i:D2}", Person(30));
+        }
+
+        await maintainer.DrainAsync();
+        Assert.That(await maintainer.GetLagAsync(), Is.Zero, "the first over-budget drain should evict and catch the view up");
+
+        // A second over-budget backlog within the (default 30s) cooldown must NOT
+        // trigger another eviction rebuild - it drains only one entry (BatchSize=1)
+        // and stays behind, proving the cooldown prevents rebuild thrashing.
+        const int secondBatch = 40;
+        for (var i = 0; i < secondBatch; i++)
+        {
+            await source.SetAsync($"b{i:D2}", Person(30));
+        }
+
+        await maintainer.DrainAsync();
+
+        Assert.That(
+            await maintainer.GetLagAsync(),
+            Is.GreaterThan(0),
+            "within the lag-eviction cooldown a one-entry-batch drain cannot catch up to a fresh over-budget backlog, so the view must stay behind rather than re-evicting");
+    }
+
+
+    [Test]
     public async Task Drain_does_not_evict_when_budget_disabled()
     {
         const string tree = "mv-lag-noevict-src";

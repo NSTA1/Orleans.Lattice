@@ -640,6 +640,11 @@ state, which re-pins the cursor at the rebuilt head. This bounds WAL retention
 regardless of view health and doubles as dead-maintainer detection. Eviction is
 emitted on the `orleans.lattice.view.lag_budget_eviction` counter.
 
+After an eviction the maintainer observes a `LagEvictionCooldown` (default 30 s)
+before it will force-evict again. A view kept chronically over budget by sustained
+writes therefore drains normally between evictions and is rebuilt at most once per
+cooldown, rather than thrashing on a rebuild every drain.
+
 Size `LatticeOptions.WalRetention` at or above the expected steady-state view lag
 so the budget is a hard backstop rather than a routine trigger. Eviction is
 skipped on a suppressed `ShipView` consumer (it has no local source to rebuild
@@ -663,6 +668,7 @@ from).
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view to register readiness before degrading to per-tree-slice atomicity (flipping its own slice and scheduling a reconcile). Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. `DeriveLocally` runs the maintainer everywhere and never replicates the view; `ShipView` runs the maintainer only on the producer and replicates the view tree to consumers. See [Replication modes and lifecycle](#replication-modes-and-lifecycle). |
 | `MaxLagBudget` | 0 | Upper bound, in committed-but-unapplied source entries, on how far the view may fall behind before it is force-evicted (WAL unpinned and rebuilt). 0 disables eviction (unbounded lag). Must not be negative. |
+| `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget force-evictions of the same maintainer, so a view kept chronically over budget drains normally between evictions instead of thrashing on a rebuild every drain. A non-positive value falls back to the default. Has no effect when `MaxLagBudget` is 0. |
 
 Configure a single view with `ConfigureLatticeView`:
 

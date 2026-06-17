@@ -65,6 +65,15 @@ public sealed class LatticeViewOptions
     public static readonly TimeSpan DefaultCrossTreeReadinessTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// Default <see cref="LagEvictionCooldown"/> (30 seconds): the minimum interval
+    /// between two lag-budget force-evictions of the same maintainer, so a view
+    /// kept chronically over budget by sustained writes is not rebuilt on every
+    /// drain (thrashing) but at most once per cooldown, draining normally in
+    /// between.
+    /// </summary>
+    public static readonly TimeSpan DefaultLagEvictionCooldown = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Maximum number of source WAL entries the maintainer reads and applies in a
     /// single drain pass per source shard before checkpointing. Must be positive;
     /// the registered validator rejects a non-positive value at first resolve.
@@ -188,4 +197,16 @@ public sealed class LatticeViewOptions
     /// view lag so the budget is a hard backstop rather than a routine trigger.
     /// </summary>
     public long MaxLagBudget { get; set; } = DefaultMaxLagBudget;
+
+    /// <summary>
+    /// The minimum interval between two consecutive lag-budget force-evictions of
+    /// the same maintainer. Once a view is evicted (unpinned + rebuilt) for
+    /// exceeding <see cref="MaxLagBudget"/>, it will not be force-evicted again
+    /// until this cooldown elapses; in the meantime it keeps draining normally, so
+    /// a view held chronically over budget by sustained writes is not rebuilt on
+    /// every drain (thrashing). A non-positive value falls back to
+    /// <see cref="DefaultLagEvictionCooldown"/>. Has no effect when
+    /// <see cref="MaxLagBudget"/> is <c>0</c> (eviction disabled).
+    /// </summary>
+    public TimeSpan LagEvictionCooldown { get; set; } = DefaultLagEvictionCooldown;
 }

@@ -63,6 +63,11 @@ internal sealed partial class ViewMaintainerGrain(
     // not drain, pin the WAL, or rebuild: the view tree is received via replication.
     private bool _shipViewSuppressed;
 
+    // UTC ticks of the last lag-budget force-eviction this activation (0 = none).
+    // Gates re-eviction so a view kept chronically over budget by sustained writes
+    // is rebuilt at most once per LagEvictionCooldown rather than on every drain.
+    private long _lastLagEvictionTicks;
+
     // Set once EnsureActiveAsync has run on this activation. A keepalive reminder
     // can wake a freshly reactivated grain before any EnsureActiveAsync call; until
     // activation has established the ShipView-suppression and projection-version
@@ -488,9 +493,12 @@ internal sealed partial class ViewMaintainerGrain(
     /// re-onboards the view via <see cref="RebuildAsync"/> from current committed
     /// source state, which re-pins the cursor at the rebuilt head. Returns whether
     /// an eviction happened. A budget of zero (the default) disables eviction and
-    /// short-circuits before any extra WAL reads. Crash-safe and idempotent: the
-    /// rebuild owns the checkpoint and cursor, so a crash mid-eviction simply
-    /// re-evicts on the next drain.
+    /// short-circuits before any extra WAL reads. After an eviction the maintainer
+    /// observes a <see cref="LatticeViewOptions.LagEvictionCooldown"/> before it
+    /// will force-evict again, so a view kept chronically over budget by sustained
+    /// writes drains normally between evictions rather than thrashing on a rebuild
+    /// every drain. Crash-safe and idempotent: the rebuild owns the checkpoint and
+    /// cursor, so a crash mid-eviction simply re-evicts on the next drain.
     /// </summary>
     private async Task<bool> TryEvictForLagBudgetAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
@@ -508,10 +516,27 @@ internal sealed partial class ViewMaintainerGrain(
             return false;
         }
 
+        // Post-eviction cooldown (hysteresis): once evicted, do not rebuild again
+        // until the cooldown elapses. Under sustained over-budget writes the view
+        // keeps draining normally in between rather than thrashing on a rebuild
+        // every drain.
+        var cooldown = Options.LagEvictionCooldown;
+        if (cooldown <= TimeSpan.Zero)
+        {
+            cooldown = LatticeViewOptions.DefaultLagEvictionCooldown;
+        }
+
+        var nowTicks = DateTime.UtcNow.Ticks;
+        if (_lastLagEvictionTicks != 0 && nowTicks - _lastLagEvictionTicks < cooldown.Ticks)
+        {
+            return false;
+        }
+
         logger.LogWarning(
             "View '{ViewName}' lag {Lag} exceeded MaxLagBudget {Budget}; force-evicting (unpinning the source WAL and rebuilding from current source state).",
             ViewName, lag, budget);
         LagBudgetEviction.Add(1, ViewTag);
+        _lastLagEvictionTicks = nowTicks;
 
         // Unpin the source WAL before rebuilding so the GC is released even if the
         // rebuild is slow; the rebuild re-pins at the rebuilt head.

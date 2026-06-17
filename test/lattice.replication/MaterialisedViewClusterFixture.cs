@@ -114,6 +114,18 @@ internal sealed class MaterialisedViewClusterFixture
                     o.BatchSize = 1;
                 });
 
+            // Phase 7: same small budget and one-entry batch as the eviction view,
+            // but with a long eviction cooldown so a second over-budget backlog
+            // within the cooldown does NOT trigger a second eviction rebuild.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                LagEvictionCooldownViewName,
+                o =>
+                {
+                    o.MaxLagBudget = 3;
+                    o.BatchSize = 1;
+                    o.LagEvictionCooldown = TimeSpan.FromMinutes(10);
+                });
+
             // Phase 7: ShipView views. Producer / consumer designation is decided at
             // activation by whether the source WAL is locally readable, so the same
             // option suffices for both the producer and consumer test cases.
@@ -151,6 +163,13 @@ internal sealed class MaterialisedViewClusterFixture
     /// <c>BatchSize = 1</c> so an over-budget backlog is never evicted.
     /// </summary>
     public const string LagBudgetDisabledViewName = "mv-lag-noevict-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxLagBudget = 3</c>, <c>BatchSize = 1</c>
+    /// and a long <c>LagEvictionCooldown</c> so a second over-budget backlog within
+    /// the cooldown does not trigger a second eviction rebuild.
+    /// </summary>
+    public const string LagEvictionCooldownViewName = "mv-lag-cooldown-view";
 
     /// <summary>View name pre-configured with <c>ReplicationMode = ShipView</c>, used for the producer case (source present).</summary>
     public const string ShipViewProducerViewName = "mv-shipview-producer";
