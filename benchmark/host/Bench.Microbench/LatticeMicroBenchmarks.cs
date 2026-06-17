@@ -141,6 +141,23 @@ public class LatticeMicroBenchmarks
     // mode whose delta payload survives leaf-side JSON decode.
     private byte[] _crdtDeltaPayload = null!;
 
+    // ===== CRDT grow-state apply instrument (O(state) re-serialise) =====
+    // Per-N pre-seeded OrSet keys whose post-merge state holds ~N
+    // dot-tagged elements. The CrdtApplyGrowstate benchmark applies a
+    // single fixed OrSet add-delta per iteration; the leaf apply path
+    // re-serialises the WHOLE post-merge OrSet state on every call
+    // (BPlusLeafGrain.CrdtApply.cs: `shape.SerializeState(typedState)`,
+    // O(state)). Allocated-bytes-per-op therefore scales O(N), which is
+    // exactly the term the existing PointApplyCrdtDelta benchmark - a
+    // constant-size single-replica PnCounter - is structurally blind to.
+    // The [Arguments(64/512/4096)] sweep is scoped to this one method so
+    // the rest of the suite's benchmark matrix is NOT multiplied (a
+    // class-level [Params] would inflate every workload 3x; BDN
+    // [Arguments] is per-method).
+    private static readonly int[] CrdtGrowStateSizes = [64, 512, 4096];
+    private Dictionary<int, string> _crdtGrowStateKeys = null!;
+    private byte[] _crdtGrowStateAddDelta = null!;
+
     // ===== Predicate push-down scan instrument (predicate Utf8JsonReader fast-path) =====
     // A dedicated keyspace seeded with small JSON documents. The predicate
     // evaluator parses each candidate value as a JSON document, so the
@@ -624,6 +641,7 @@ public class LatticeMicroBenchmarks
         BuildVersionVectorFixture();
         BuildOrMapFixture();
         BuildLeafQueueFixture();
+        BuildCrdtGrowStateFixture();
 
         // Last step in setup: open the optional EventPipe profile session.
         // We do this AFTER seeding so the multi-thousand pre-seed writes
@@ -1017,6 +1035,105 @@ public class LatticeMicroBenchmarks
         var i = unchecked(_crdtDeltaCursor++) & int.MaxValue;
         var key = _crdtDeltaKeys[i % _crdtDeltaKeys.Length];
         return _lattice.ApplyCrdtDeltaAsync(key, LatticeMergeMode.PnCounter, _crdtDeltaPayload);
+    }
+
+    /// <summary>
+    /// Single <see cref="ILattice.ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>
+    /// in <see cref="LatticeMergeMode.OrSet"/> against a key whose state was
+    /// pre-seeded during <see cref="GlobalSetup"/> with <paramref name="n"/>
+    /// distinct dot-tagged elements. Each iteration applies one fixed
+    /// single-element add-delta; the leaf apply path re-serialises the entire
+    /// post-merge OrSet state on every call
+    /// (<c>BPlusLeafGrain.CrdtApply.cs</c>: <c>shape.SerializeState(typedState)</c>),
+    /// so allocated-bytes-per-op grows O(N) with the seeded element count.
+    /// <para>
+    /// This is the empirical lane for the "defer per-apply full CRDT-state
+    /// re-serialisation" hypothesis: unlike <see cref="PointApplyCrdtDelta"/>
+    /// (a constant-size single-replica PnCounter whose re-serialise cost is
+    /// O(1) and therefore cannot see the term), the growing OrSet makes the
+    /// O(state) re-serialise dominate, so a candidate that elides or defers
+    /// it has a metric that can move. The probe element's dot is
+    /// identity-stable, so re-applying it is idempotent and the seeded state
+    /// stays at ~N elements across every measurement iteration regardless of
+    /// iteration count - keeping <c>_alloc_b</c> a clean function of N rather
+    /// than of cursor drift. Surfaced as
+    /// <c>microbench_crdt_apply_growstate_&lt;N&gt;_alloc_b</c> (primary) and
+    /// <c>microbench_crdt_apply_growstate_&lt;N&gt;_mean_ns</c> (secondary).
+    /// </para>
+    /// </summary>
+    [Benchmark(Description = "Crdt apply growstate")]
+    [Arguments(64)]
+    [Arguments(512)]
+    [Arguments(4096)]
+    public Task<HybridLogicalClock> CrdtApplyGrowstate(int n)
+    {
+        var key = _crdtGrowStateKeys[n];
+        return _lattice.ApplyCrdtDeltaAsync(key, LatticeMergeMode.OrSet, _crdtGrowStateAddDelta);
+    }
+
+    /// <summary>
+    /// Builds the <see cref="CrdtApplyGrowstate"/> fixture: for each N in
+    /// <see cref="CrdtGrowStateSizes"/>, seeds a dedicated key's OrSet state
+    /// with N distinct dot-tagged elements via the public apply surface (the
+    /// seeding re-serialise cost is incurred here, inside
+    /// <see cref="GlobalSetup"/>, and is excluded from the measured window).
+    /// Also pre-builds the single fixed add-delta the benchmark applies each
+    /// iteration. The add-delta's element and dot are identity-stable so the
+    /// per-iteration merge is idempotent after the first apply, pinning the
+    /// measured state size at ~N.
+    /// </summary>
+    private void BuildCrdtGrowStateFixture()
+    {
+        _crdtGrowStateKeys = new Dictionary<int, string>(CrdtGrowStateSizes.Length);
+
+        // The per-iteration delta: a single OrSet add of a FIXED element with
+        // a FIXED dot. Idempotent re-application keeps the seeded state stable
+        // at ~N across all measurement iterations.
+        var probeDelta = new OrSetDelta
+        {
+            Adds = new[]
+            {
+                new OrSetDeltaDot
+                {
+                    Element = System.Text.Encoding.UTF8.GetBytes("growstate-probe-element"),
+                    ReplicaId = "bench-probe",
+                    Counter = 1,
+                },
+            },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        };
+        _crdtGrowStateAddDelta = JsonLatticeSerializer<OrSetDelta>.Default.Serialize(probeDelta);
+
+        foreach (var n in CrdtGrowStateSizes)
+        {
+            var key = "crdt-grow-" + n.ToString("D8", CultureInfo.InvariantCulture);
+            _crdtGrowStateKeys[n] = key;
+
+            // Seed N distinct dot-tagged elements so the key's post-merge OrSet
+            // state holds N live elements. Each add is its own delta so the
+            // leaf folds them one at a time, mirroring how the state would have
+            // grown under real active-active OrSet traffic.
+            for (var i = 0; i < n; i++)
+            {
+                var seedDelta = new OrSetDelta
+                {
+                    Adds = new[]
+                    {
+                        new OrSetDeltaDot
+                        {
+                            Element = System.Text.Encoding.UTF8.GetBytes(
+                                "seed-" + i.ToString("D8", CultureInfo.InvariantCulture)),
+                            ReplicaId = "bench-seed",
+                            Counter = i + 1,
+                        },
+                    },
+                    Removes = Array.Empty<OrSetDeltaDot>(),
+                };
+                var seedBytes = JsonLatticeSerializer<OrSetDelta>.Default.Serialize(seedDelta);
+                _lattice.ApplyCrdtDeltaAsync(key, LatticeMergeMode.OrSet, seedBytes)
+                    .GetAwaiter().GetResult();
+            }
+        }
     }
 
     /// <summary>
