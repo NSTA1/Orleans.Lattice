@@ -15,29 +15,36 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// per apply:
 /// </para>
 /// <para>
-/// <b>Eager path</b> (a commit-log writer is wired, or no streaming
-/// serialiser exists, or an existing row's stamp dominates): serialise
-/// the post-merge state once and re-use that array for the durable WAL
-/// record, the byte[] row, and the projection-digest fold, exactly as
-/// the historical path did. This is the only path silos with a durable
-/// WAL ever take, so production behaviour is unchanged.
+/// <b>Eager path</b> (no streaming serialiser exists for the shape, or
+/// an existing row's stamp dominates): serialise the post-merge state
+/// once and re-use that array for the byte[] row and the
+/// projection-digest fold, exactly as the historical path did. The
+/// durable WAL record itself never carries the post-merge bytes - it is
+/// delta-only (the encoder strips <see cref="WalRecord.Value"/> for this
+/// record shape) - so the eager serialisation is load-bearing only for
+/// the in-memory row and digest, not for the log.
 /// </para>
 /// <para>
-/// <b>Deferred path</b> (no commit-log writer consumes the bytes this
-/// apply, a streaming serialiser is available, and the new stamp wins):
-/// the post-merge byte[] row is <b>not</b> materialised. The typed
-/// shadow (<see cref="LeafEntryCache.StoreTyped"/>) is authoritative for
-/// the key; the projection-digest fold is fed from a reused streaming
-/// buffer so the per-apply allocation is O(delta) instead of O(state);
-/// and the canonical row bytes are produced lazily by serialising the
-/// shadow at the first consumer (a GetAsync read, snapshot/persist
-/// capture, split/projection, replication ship, observer publish, or any
-/// row enumeration), all of which funnel through
+/// <b>Deferred path</b> (a streaming serialiser is available and the new
+/// stamp wins): the post-merge byte[] row is <b>not</b> materialised,
+/// <i>even when a commit-log writer is present</i>. The typed shadow
+/// (<see cref="LeafEntryCache.StoreTyped"/>) is authoritative for the
+/// key; the projection-digest fold is fed from a reused streaming buffer
+/// so the per-apply allocation is O(delta) instead of O(state); the
+/// delta-only WAL record is still appended (it never needed the
+/// post-merge bytes); and the canonical row bytes are produced lazily by
+/// serialising the shadow at the first consumer (a GetAsync read,
+/// snapshot/persist capture, split/projection, replication ship, observer
+/// publish, or any row enumeration), all of which funnel through
 /// <see cref="LeafEntryCache.TryGetRow"/> /
 /// <see cref="LeafEntryCache.EnumerateRows"/> /
 /// <see cref="LeafEntryCache.UnderlyingRows"/>. The streaming serialiser
 /// and the lazy array serialiser are byte-identical, so a materialised
-/// read matches the digest contribution already folded in.
+/// read matches the digest contribution already folded in. Because the
+/// WAL record is delta-only, a cold-rebuild replay reconstructs the
+/// post-fold state by folding the WAL delta into the prior visible state
+/// (see <c>ApplySet</c>), so the deferred producer path leaves no state
+/// row that replay needs to read back.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
@@ -178,21 +185,24 @@ internal sealed partial class BPlusLeafGrain
 
         // step 3 (path select) - the post-merge full-state re-serialisation is
         // only load-bearing for code that consumes the canonical byte[] row:
-        // the durable commit-log record, a GetAsync read, snapshot/persist
-        // capture, split/projection, replication digest, and shadow eviction.
-        // When no commit-log writer is wired (nothing durable consumes the
-        // bytes this apply), a streaming serialiser is available, and the new
-        // stamp dominates any existing row (so the row-level LWW keeps the new
-        // value), defer the O(state) row materialisation: feed the digest fold
-        // from a reused streaming buffer and store a placeholder row whose
-        // canonical bytes are produced lazily at the first read / enumerate /
-        // snapshot seam. The typed shadow is authoritative for the key until
-        // then. Otherwise take the historical eager path verbatim, which
-        // serialises once and re-uses that array for the WAL, the row, and the
-        // digest.
+        // a GetAsync read, snapshot/persist capture, split/projection,
+        // replication digest, and shadow eviction. The durable commit-log
+        // record is delta-only (the encoder strips Value for this record
+        // shape), so it never needs the post-merge bytes. When a streaming
+        // serialiser is available and the new stamp dominates any existing row
+        // (so the row-level LWW keeps the new value), defer the O(state) row
+        // materialisation even when a commit-log writer is wired: feed the
+        // digest fold from a reused streaming buffer, append the delta-only WAL
+        // record, and store a placeholder row whose canonical bytes are
+        // produced lazily at the first read / enumerate / snapshot seam. The
+        // typed shadow is authoritative for the key until then; a cold-rebuild
+        // replay reconstructs the post-fold state by folding the WAL delta
+        // (see ApplySet), so the deferred path leaves no state row replay needs.
+        // Otherwise take the eager path, which serialises once and re-uses that
+        // array for the in-memory row and the digest (the WAL stays delta-only
+        // on both paths).
         var writer = ResolveCommitLogWriter();
-        var canDefer = writer is null
-            && shape.SerializeStateInto is not null
+        var canDefer = shape.SerializeStateInto is not null
             && (!hasExistingRow || existing.Timestamp.CompareTo(stamp) < 0);
 
         LwwValue<byte[]> postMergeEntry;
@@ -207,10 +217,12 @@ internal sealed partial class BPlusLeafGrain
             };
 
             // step 4a (wal) - append a CRDT-flavoured Set whose Delta slot
-            // carries the producer's typed delta bytes verbatim. The
-            // canonical encoder strips Value on encode for CRDT modes so the
-            // wire stays delta-only; the in-grain instance retains both the
-            // typed delta and the post-merge state-row payload.
+            // carries the producer's typed delta bytes verbatim. The record is
+            // delta-only: WalRecordBuilder.ForCrdtDelta leaves Value null and
+            // the canonical encoder strips it on encode for CRDT modes, so the
+            // wire and the in-memory record both stay delta-only. The eager
+            // post-merge serialisation below feeds only the in-grain byte[] row
+            // and the projection digest, not the log.
             if (writer is not null)
             {
                 var record = WalRecordBuilder.ForCrdtDelta(
@@ -246,6 +258,25 @@ internal sealed partial class BPlusLeafGrain
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
             };
+
+            // step 4b (wal) - append the same delta-only CRDT Set the eager
+            // path appends. The post-merge state is never serialised for this
+            // record: WalRecordBuilder.ForCrdtDelta leaves Value null and the
+            // canonical encoder strips it regardless, so the record carries the
+            // typed delta bytes verbatim. A cold-rebuild replay folds those
+            // bytes back into the prior visible state (see ApplySet), so the
+            // null row placeholder this path stores is never read by replay.
+            if (writer is not null)
+            {
+                var record = WalRecordBuilder.ForCrdtDelta(
+                    state.State.TreeId ?? string.Empty,
+                    state.State.ShardIndex ?? 0,
+                    key,
+                    mode,
+                    postMergeEntry,
+                    deltaBytes);
+                await writer.AppendAsync(record);
+            }
 
             var buffer = _crdtSerializeBuffer ??= new System.Buffers.ArrayBufferWriter<byte>();
             var serializeInto = shape.SerializeStateInto!;

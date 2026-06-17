@@ -169,7 +169,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task CrdtApply_appends_WAL_record_carrying_mode_and_delta_payload()
+    public async Task CrdtApply_appends_WAL_record_carrying_mode_and_delta_only()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var commitLog = new FakeCommitLogWriter();
@@ -192,7 +192,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(record.Key, Is.EqualTo("v"));
         Assert.That(record.Mode, Is.EqualTo(LatticeMergeMode.VersionVector));
         Assert.That(record.Delta, Is.EqualTo(deltaBytes));
-        Assert.That(record.Value, Is.Not.Null, "CRDT WAL record must also carry the post-merge snapshot so projection rebuild does not require a separate state row");
+        Assert.That(record.Value, Is.Null, "CRDT WAL record is delta-only: the post-merge state row is never materialised onto the record (a cold-rebuild replay folds the delta back instead)");
     }
 
     [Test]

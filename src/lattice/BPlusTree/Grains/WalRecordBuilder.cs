@@ -133,11 +133,17 @@ internal static class WalRecordBuilder
     /// Builds a <see cref="WalRecord"/> for a producer-side typed CRDT
     /// delta-apply commit. Unlike <see cref="ForSet"/>, the delta-apply
     /// path carries the typed delta bytes in <see cref="WalRecord.Delta"/>
-    /// and a post-merge full-state snapshot in <see cref="WalRecord.Value"/>;
-    /// the post-merge snapshot keeps the producer-side read seam
-    /// (<c>GetAsync</c> -&gt; <c>byte[]</c>) observably-consistent while
-    /// receivers continue to dispatch on <see cref="WalRecord.Delta"/>
-    /// via the canonical encoder strip. The merge mode is stamped onto
+    /// and leaves <see cref="WalRecord.Value"/> <see langword="null"/>:
+    /// the post-merge full state is never materialised into the WAL
+    /// record. The canonical encoder already strips
+    /// <see cref="WalRecord.Value"/> for non-prepared CRDT-mode Set
+    /// records, so the persisted/wire bytes are unchanged; leaving the
+    /// in-memory slot null as well means the durable writer path no
+    /// longer pays an O(state) post-merge serialisation solely to feed a
+    /// slot that is dropped on encode. Receivers (and the cold-rebuild
+    /// replay path) reconstruct the post-fold state by folding
+    /// <see cref="WalRecord.Delta"/> into their current visible state via
+    /// the registered <c>CrdtShape</c>. The merge mode is stamped onto
     /// the in-memory record so the leaf-side dispatch can dispatch on
     /// <paramref name="mode"/> without re-resolving it; the wire-time
     /// encoder re-stamps from the per-tree resolver.
@@ -156,7 +162,11 @@ internal static class WalRecordBuilder
             TreeId = treeId,
             Op = MutationKind.Set,
             Key = key,
-            Value = postMerge.Value,
+            // Delta-only on the wire: the post-merge state row is never
+            // carried here. The encoder strips Value for this record
+            // shape regardless, and the replay/receiver fold reconstructs
+            // the state from Delta. See the method docstring.
+            Value = null,
             Timestamp = postMerge.Timestamp,
             IsTombstone = false,
             ExpiresAtTicks = postMerge.ExpiresAtTicks,
