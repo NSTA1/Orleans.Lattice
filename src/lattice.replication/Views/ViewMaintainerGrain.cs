@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -45,9 +46,12 @@ internal sealed class ViewMaintainerGrain(
 {
     private const string KeepaliveReminderName = "view-maintainer-keepalive";
 
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(20);
+
     private static readonly Histogram<long> ApplyLag = LatticeMetrics.ViewApplyLag;
     private static readonly Histogram<long> BacklogDepth = LatticeMetrics.ViewBacklogDepth;
     private static readonly Counter<long> Applied = LatticeMetrics.ViewApplied;
+    private static readonly Counter<long> KeyCollisions = LatticeMetrics.ViewKeyCollisions;
 
     private IGrainTimer? _timer;
     private string? _consumerId;
@@ -161,11 +165,16 @@ internal sealed class ViewMaintainerGrain(
                     {
                         collected.Add(write);
                     }
+                }
 
-                    if (mutation.Timestamp > highest)
-                    {
-                        highest = mutation.Timestamp;
-                    }
+                // Advance the consumed-HLC high-water mark for every entry read
+                // past, applicable or not. It pins WAL GC to what has been
+                // consumed and is the position the read-your-writes barrier waits
+                // on, so a skipped maintenance / transaction-terminal entry at the
+                // source head must not leave it stuck below a non-applicable head.
+                if (mutation.Timestamp > highest)
+                {
+                    highest = mutation.Timestamp;
                 }
 
                 if (readThisPartition >= batchSize)
@@ -177,14 +186,23 @@ internal sealed class ViewMaintainerGrain(
             advancedOffsets[partition] = lastOffset;
         }
 
-        var survivors = ViewWriteCoalescer.Coalesce(collected);
-        var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
-        var appliedCount = 0;
-        foreach (var write in survivors)
+        // A re-keyed unconstrained range delete cannot be lowered to exact view
+        // writes; the projection emits a RangeReconcile asking us to re-derive the
+        // affected range from source. The conservative, always-correct realisation
+        // is a full rebuild (it reads current source state and re-advances the
+        // checkpoint to head), so do that and let the rebuild own this pass.
+        if (collected.Exists(static w => w.Kind == ViewWriteKind.RangeReconcile))
         {
-            await ApplyAsync(viewTree, write, cancellationToken);
-            appliedCount++;
+            logger.LogInformation(
+                "View '{ViewName}' observed an unconstrained range delete on a re-keyed projection; rebuilding to reconcile the affected range.",
+                ViewName);
+            await RebuildAsync(cancellationToken);
+            return 0;
         }
+
+        var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
+        DetectAndReportCollisions(collected);
+        var appliedCount = await ApplySurvivorsAsync(viewTree, collected, cancellationToken);
 
         var offsetsAdvanced = false;
         foreach (var (partition, offset) in advancedOffsets)
@@ -231,6 +249,81 @@ internal sealed class ViewMaintainerGrain(
 
         var partitions = await optionsResolver.GetWalPartitionsAsync(registration.SourceTreeId);
         return await ComputeLagAsync(registration.SourceTreeId, partitions, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        if (target <= HybridLogicalClock.Zero)
+        {
+            // Nothing committed at or before zero to wait for.
+            return;
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (state.State.HighestAppliedTimestamp >= target)
+            {
+                return;
+            }
+
+            await DrainAsync(cancellationToken);
+
+            if (state.State.HighestAppliedTimestamp >= target)
+            {
+                return;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"View '{ViewName}' did not apply source HLC {target} within {timeout}.");
+            }
+
+            var remaining = deadline - DateTime.UtcNow;
+            var delay = remaining < PollInterval ? remaining : PollInterval;
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<HybridLogicalClock> CaptureSourceHeadHlcAsync(CancellationToken cancellationToken = default)
+    {
+        var registration = catalog.TryGet(ViewName);
+        if (registration is null)
+        {
+            return HybridLogicalClock.Zero;
+        }
+
+        var sourceTreeId = registration.SourceTreeId;
+        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+        var head = HybridLogicalClock.Zero;
+
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var headOffset = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
+            if (headOffset <= 0)
+            {
+                continue;
+            }
+
+            // Read only the tail entry (offset headOffset - 1) by starting the
+            // cursored read two below the head; its HLC is this partition's head.
+            await foreach (var (_, mutation) in commitLogReader
+                .ReadAsync(sourceTreeId, partition, headOffset - 2, cancellationToken))
+            {
+                if (mutation.Timestamp > head)
+                {
+                    head = mutation.Timestamp;
+                }
+            }
+        }
+
+        return head;
     }
 
     /// <inheritdoc />
@@ -359,6 +452,55 @@ internal sealed class ViewMaintainerGrain(
         return lag;
     }
 
+    private async Task<int> ApplySurvivorsAsync(ILattice viewTree, List<ViewWrite> collected, CancellationToken cancellationToken)
+    {
+        if (!collected.Exists(static w => w.Kind == ViewWriteKind.RangeDelete))
+        {
+            // Fast path: only point writes. Coalesce by view key (LWW on the
+            // source HLC) and apply each survivor.
+            var applied = 0;
+            foreach (var write in ViewWriteCoalescer.Coalesce(collected))
+            {
+                await ApplyAsync(viewTree, write, cancellationToken);
+                applied++;
+            }
+
+            return applied;
+        }
+
+        // Range path: a range delete cannot be globally coalesced by view key
+        // against point writes, and its outcome interleaves with point writes by
+        // source HLC. Apply every collected write in ascending source-HLC order
+        // (stable), so a point write with a higher HLC than a range delete
+        // survives it and a lower one is removed by it - the convergent
+        // last-writer-wins outcome regardless of which source partition each
+        // write arrived on.
+        var appliedOrdered = 0;
+        foreach (var write in collected
+            .OrderBy(static w => w.Timestamp.WallClockTicks)
+            .ThenBy(static w => w.Timestamp.Counter))
+        {
+            await ApplyAsync(viewTree, write, cancellationToken);
+            appliedOrdered++;
+        }
+
+        return appliedOrdered;
+    }
+
+    private void DetectAndReportCollisions(IEnumerable<ViewWrite> collected)
+    {
+        var collisions = ViewKeyCollisionDetector.Detect(collected);
+        if (collisions.Count == 0)
+        {
+            return;
+        }
+
+        KeyCollisions.Add(collisions.Count, ViewTag);
+        logger.LogWarning(
+            "View '{ViewName}' detected {Count} re-key collision(s) in a drain batch (e.g. view key '{Example}' produced by multiple distinct source keys); the key re-map is not injective. Resolving by source-HLC last-writer-wins.",
+            ViewName, collisions.Count, collisions[0]);
+    }
+
     private static bool IsApplicable(in LatticeMutation mutation)
     {
         // Skip background maintenance entries (compaction tombstones et al), the
@@ -406,9 +548,16 @@ internal sealed class ViewMaintainerGrain(
                 await viewTree.DeleteAsync(write.Key, cancellationToken);
                 return;
 
+            case ViewWriteKind.RangeDelete:
+                // Key-preserving range retraction: the view key equals the source
+                // key, so removing the view's slice of [Key, EndKey) is exact.
+                await viewTree.DeleteRangeAsync(write.Key, write.EndKey!, cancellationToken);
+                return;
+
             default:
-                // ViewWriteKind.CrdtDelta is reserved for a later phase and is
-                // never emitted by a Phase 1 projection.
+                // ViewWriteKind.CrdtDelta is reserved for a later phase, and
+                // ViewWriteKind.RangeReconcile is resolved to a rebuild before
+                // apply; neither is ever applied here.
                 return;
         }
     }

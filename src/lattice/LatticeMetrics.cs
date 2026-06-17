@@ -2298,4 +2298,16 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewApplied =
         Meter.CreateCounter<long>("orleans.lattice.view.applied", unit: "{write}",
             description: "View writes applied to the view tree after per-batch last-writer-wins coalescing.");
+
+    /// <summary>
+    /// Counter of re-key collisions detected in a view drain batch: a view key
+    /// produced by two or more distinct source keys under an injective re-map (a
+    /// configuration error). Tagged with <see cref="TagView"/>. A non-zero value
+    /// means the projection's key re-map is not injective; the maintainer falls
+    /// back to source-HLC last-writer-wins so the view stays well-defined, but the
+    /// colliding keys' resolution is non-deterministic with respect to intent.
+    /// </summary>
+    public static readonly Counter<long> ViewKeyCollisions =
+        Meter.CreateCounter<long>("orleans.lattice.view.key_collisions", unit: "{collision}",
+            description: "View keys produced by more than one distinct source key under an injective re-map, per drain batch.");
 }

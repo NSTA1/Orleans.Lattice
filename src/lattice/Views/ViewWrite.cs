@@ -43,13 +43,34 @@ public readonly record struct ViewWrite
     [Id(4)] public HybridLogicalClock Timestamp { get; init; }
 
     /// <summary>
+    /// Exclusive upper bound of the affected key range for a
+    /// <see cref="ViewWriteKind.RangeDelete"/> or
+    /// <see cref="ViewWriteKind.RangeReconcile"/> write (the range is
+    /// <c>[<see cref="Key"/>, <see cref="EndKey"/>)</c>); <see langword="null"/>
+    /// for a point <see cref="ViewWriteKind.Upsert"/> or
+    /// <see cref="ViewWriteKind.Delete"/>.
+    /// </summary>
+    [Id(5)] public string? EndKey { get; init; }
+
+    /// <summary>
+    /// The source key that produced this write, when known. Used by the
+    /// maintainer to detect re-key collisions (two distinct source keys mapping
+    /// to one view key under an injective re-map, a configuration error). The
+    /// built-in <see cref="PredicateLatticeViewProjection"/> stamps it on every
+    /// point write; <see langword="null"/> when a projection does not attribute a
+    /// write to a single source key, in which case collision detection skips it.
+    /// </summary>
+    [Id(6)] public string? SourceKey { get; init; }
+
+    /// <summary>
     /// Creates an <see cref="ViewWriteKind.Upsert"/> write.
     /// </summary>
     /// <param name="key">The view-tree key. Must not be <see langword="null"/>.</param>
     /// <param name="value">The value to store. Must not be <see langword="null"/>.</param>
     /// <param name="timestamp">The source HLC used for last-writer-wins ordering.</param>
     /// <param name="expiresAtTicks">Absolute UTC expiry tick, or <c>0</c> for no expiry.</param>
-    public static ViewWrite Upsert(string key, byte[] value, HybridLogicalClock timestamp, long expiresAtTicks = 0)
+    /// <param name="sourceKey">The originating source key, for re-key collision detection. Optional.</param>
+    public static ViewWrite Upsert(string key, byte[] value, HybridLogicalClock timestamp, long expiresAtTicks = 0, string? sourceKey = null)
     {
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -60,6 +81,7 @@ public readonly record struct ViewWrite
             Value = value,
             ExpiresAtTicks = expiresAtTicks,
             Timestamp = timestamp,
+            SourceKey = sourceKey,
         };
     }
 
@@ -68,13 +90,64 @@ public readonly record struct ViewWrite
     /// </summary>
     /// <param name="key">The view-tree key to remove. Must not be <see langword="null"/>.</param>
     /// <param name="timestamp">The source HLC used for last-writer-wins ordering.</param>
-    public static ViewWrite Delete(string key, HybridLogicalClock timestamp)
+    /// <param name="sourceKey">The originating source key, for re-key collision detection. Optional.</param>
+    public static ViewWrite Delete(string key, HybridLogicalClock timestamp, string? sourceKey = null)
     {
         ArgumentNullException.ThrowIfNull(key);
         return new ViewWrite
         {
             Kind = ViewWriteKind.Delete,
             Key = key,
+            Value = null,
+            ExpiresAtTicks = 0,
+            Timestamp = timestamp,
+            SourceKey = sourceKey,
+        };
+    }
+
+    /// <summary>
+    /// Creates a <see cref="ViewWriteKind.RangeDelete"/> write covering the
+    /// half-open view-key range <c>[<paramref name="startInclusive"/>,
+    /// <paramref name="endExclusive"/>)</c>. Valid only for a key-preserving
+    /// projection, where the view key equals the source key.
+    /// </summary>
+    /// <param name="startInclusive">Inclusive lower bound of the range. Must not be <see langword="null"/>.</param>
+    /// <param name="endExclusive">Exclusive upper bound of the range. Must not be <see langword="null"/>.</param>
+    /// <param name="timestamp">The source HLC used for last-writer-wins ordering.</param>
+    public static ViewWrite RangeDelete(string startInclusive, string endExclusive, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        return new ViewWrite
+        {
+            Kind = ViewWriteKind.RangeDelete,
+            Key = startInclusive,
+            EndKey = endExclusive,
+            Value = null,
+            ExpiresAtTicks = 0,
+            Timestamp = timestamp,
+        };
+    }
+
+    /// <summary>
+    /// Creates a <see cref="ViewWriteKind.RangeReconcile"/> write asking the
+    /// maintainer to re-derive the view over the affected source range
+    /// <c>[<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)</c>
+    /// from current source state. Emitted by a re-keyed projection for an
+    /// unconstrained range delete it cannot lower to exact per-key writes.
+    /// </summary>
+    /// <param name="startInclusive">Inclusive lower bound of the affected source range. Must not be <see langword="null"/>.</param>
+    /// <param name="endExclusive">Exclusive upper bound of the affected source range. Must not be <see langword="null"/>.</param>
+    /// <param name="timestamp">The source HLC of the range delete that triggered the reconcile.</param>
+    public static ViewWrite RangeReconcile(string startInclusive, string endExclusive, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        return new ViewWrite
+        {
+            Kind = ViewWriteKind.RangeReconcile,
+            Key = startInclusive,
+            EndKey = endExclusive,
             Value = null,
             ExpiresAtTicks = 0,
             Timestamp = timestamp,

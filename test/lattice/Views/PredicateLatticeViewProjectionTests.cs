@@ -164,7 +164,71 @@ public class PredicateLatticeViewProjectionTests
     }
 
     [Test]
-    public void Project_delete_range_without_matched_keys_emits_nothing()
+    public void Project_set_attributes_source_key_on_upsert()
+    {
+        var projection = new PredicateLatticeViewProjection(
+            keySelector: src => $"view:{src}",
+            keySelectorVersion: "v1");
+
+        var writes = projection.Project(Set("k", [1], Clock(1))).ToList();
+
+        Assert.That(writes[0].Key, Is.EqualTo("view:k"));
+        Assert.That(writes[0].SourceKey, Is.EqualTo("k"));
+    }
+
+    [Test]
+    public void Project_delete_with_key_remap_recomputes_view_key_from_source_key()
+    {
+        // The re-key is a pure function of the source key, so a value-less delete
+        // recomputes the same view key the matching upsert produced.
+        var projection = new PredicateLatticeViewProjection(
+            keySelector: src => $"view:{src}",
+            keySelectorVersion: "v1");
+
+        var mutation = new LatticeMutation
+        {
+            TreeId = "src",
+            Kind = MutationKind.Delete,
+            Key = "k",
+            Timestamp = Clock(9),
+            Category = MutationCategory.User,
+        };
+
+        var writes = projection.Project(mutation).ToList();
+
+        Assert.That(writes, Has.Count.EqualTo(1));
+        Assert.That(writes[0].Kind, Is.EqualTo(ViewWriteKind.Delete));
+        Assert.That(writes[0].Key, Is.EqualTo("view:k"));
+        Assert.That(writes[0].SourceKey, Is.EqualTo("k"));
+    }
+
+    [Test]
+    public void Project_delete_range_with_matched_keys_and_remap_maps_each_key()
+    {
+        var projection = new PredicateLatticeViewProjection(
+            keySelector: src => $"view:{src}",
+            keySelectorVersion: "v1");
+
+        var mutation = new LatticeMutation
+        {
+            TreeId = "src",
+            Kind = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "z",
+            MatchedKeys = ["a", "b"],
+            Timestamp = Clock(9),
+            Category = MutationCategory.User,
+        };
+
+        var writes = projection.Project(mutation).ToList();
+
+        Assert.That(writes.Select(w => w.Key), Is.EqualTo(new[] { "view:a", "view:b" }));
+        Assert.That(writes.Select(w => w.SourceKey), Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(writes, Has.All.Matches<ViewWrite>(w => w.Kind == ViewWriteKind.Delete));
+    }
+
+    [Test]
+    public void Project_delete_range_without_matched_keys_key_preserving_emits_range_delete()
     {
         var projection = new PredicateLatticeViewProjection();
         var mutation = new LatticeMutation
@@ -173,6 +237,53 @@ public class PredicateLatticeViewProjectionTests
             Kind = MutationKind.DeleteRange,
             Key = "a",
             EndExclusiveKey = "z",
+            Timestamp = Clock(9),
+            Category = MutationCategory.User,
+        };
+
+        var writes = projection.Project(mutation).ToList();
+
+        Assert.That(writes, Has.Count.EqualTo(1));
+        Assert.That(writes[0].Kind, Is.EqualTo(ViewWriteKind.RangeDelete));
+        Assert.That(writes[0].Key, Is.EqualTo("a"));
+        Assert.That(writes[0].EndKey, Is.EqualTo("z"));
+    }
+
+    [Test]
+    public void Project_delete_range_without_matched_keys_rekeyed_emits_range_reconcile()
+    {
+        var projection = new PredicateLatticeViewProjection(
+            keySelector: src => $"view:{src}",
+            keySelectorVersion: "v1");
+
+        var mutation = new LatticeMutation
+        {
+            TreeId = "src",
+            Kind = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = "z",
+            Timestamp = Clock(9),
+            Category = MutationCategory.User,
+        };
+
+        var writes = projection.Project(mutation).ToList();
+
+        Assert.That(writes, Has.Count.EqualTo(1));
+        Assert.That(writes[0].Kind, Is.EqualTo(ViewWriteKind.RangeReconcile));
+        Assert.That(writes[0].Key, Is.EqualTo("a"));
+        Assert.That(writes[0].EndKey, Is.EqualTo("z"));
+    }
+
+    [Test]
+    public void Project_delete_range_without_matched_keys_or_end_emits_nothing()
+    {
+        var projection = new PredicateLatticeViewProjection();
+        var mutation = new LatticeMutation
+        {
+            TreeId = "src",
+            Kind = MutationKind.DeleteRange,
+            Key = "a",
+            EndExclusiveKey = null,
             Timestamp = Clock(9),
             Category = MutationCategory.User,
         };

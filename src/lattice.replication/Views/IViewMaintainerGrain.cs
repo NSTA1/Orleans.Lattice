@@ -1,3 +1,5 @@
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice.Replication.Views;
 
 /// <summary>
@@ -41,4 +43,18 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// a projection-version change.
     /// </summary>
     Task RebuildAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-your-writes barrier: drives drains until the highest applied source
+    /// HLC reaches <paramref name="target"/>, or throws
+    /// <see cref="TimeoutException"/> once <paramref name="timeout"/> elapses.
+    /// </summary>
+    Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the current source head HLC: the highest committed source HLC
+    /// across every source WAL partition, or <see cref="HybridLogicalClock.Zero"/>
+    /// when the source is empty. Used to capture a write-then-wait target.
+    /// </summary>
+    Task<HybridLogicalClock> CaptureSourceHeadHlcAsync(CancellationToken cancellationToken = default);
 }

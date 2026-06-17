@@ -26,9 +26,28 @@ namespace Orleans.Lattice;
 /// selector tag changes the version and triggers a rebuild.
 /// </para>
 /// <para>
-/// Collision handling for a non-injective key re-map is a later-phase concern;
-/// in Phase 1 two source keys that map to the same view key resolve by
-/// last-writer-wins on the source HLC.
+/// <b>Re-key rule.</b> The key re-map is a pure function of the <i>source key</i>
+/// (<c>Func&lt;string, string&gt;</c>), never the value. This is what makes a
+/// delete re-keyable: a <see cref="MutationKind.Delete"/> / tombstone carries the
+/// source key but not the value, so the view key is recomputed directly from the
+/// source key. The value selector still transforms the stored <i>value</i>;
+/// value-derived keying (secondary indexes, aggregation) is a separate view
+/// kind and out of scope here. The re-map must also be <b>injective</b> - two
+/// source keys mapping to one view key is a configuration error the maintainer
+/// surfaces via a collision metric, falling back to source-HLC last-writer-wins
+/// so the view stays well-defined. Every point write is stamped with its
+/// originating <see cref="ViewWrite.SourceKey"/> so the maintainer can detect
+/// such collisions.
+/// </para>
+/// <para>
+/// <b>Range deletes.</b> A <see cref="MutationKind.DeleteRange"/> that carries
+/// <see cref="LatticeMutation.MatchedKeys"/> (predicate-filtered deletes do) is
+/// lowered to one exact per-key <see cref="ViewWriteKind.Delete"/> per matched
+/// source key, re-keyed as usual. An unconstrained range delete (no matched
+/// keys) is lowered to a single <see cref="ViewWriteKind.RangeDelete"/> for a
+/// key-preserving view - the view's slice of the range is exactly the affected
+/// entries - or a <see cref="ViewWriteKind.RangeReconcile"/> for a re-keyed
+/// view, whose scattered view keys cannot be recovered without a reverse index.
 /// </para>
 /// </summary>
 public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
@@ -108,7 +127,7 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
                     // must be removed from the view, otherwise an update that moves
                     // a key out of the predicate would leave a stale entry. Deleting
                     // a view key the view never held is an idempotent no-op.
-                    yield return ViewWrite.Delete(MapKey(mutation.Key), mutation.Timestamp);
+                    yield return ViewWrite.Delete(MapKey(mutation.Key), mutation.Timestamp, mutation.Key);
                     yield break;
                 }
 
@@ -117,33 +136,59 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
                 {
                     // A value selector that drops the entry (returns null) retracts
                     // the view key for the same convergence reason as a filter miss.
-                    yield return ViewWrite.Delete(MapKey(mutation.Key), mutation.Timestamp);
+                    yield return ViewWrite.Delete(MapKey(mutation.Key), mutation.Timestamp, mutation.Key);
                     yield break;
                 }
 
-                yield return ViewWrite.Upsert(MapKey(mutation.Key), value, mutation.Timestamp, mutation.ExpiresAtTicks);
+                yield return ViewWrite.Upsert(MapKey(mutation.Key), value, mutation.Timestamp, mutation.ExpiresAtTicks, mutation.Key);
                 break;
 
             case MutationKind.Delete:
             case MutationKind.Tombstone:
                 // Deletes and tombstone reaps propagate unconditionally: removing
                 // a key the view never held is an idempotent no-op, and the
-                // filter cannot be evaluated against a value-less tombstone.
-                yield return ViewWrite.Delete(MapKey(mutation.Key), mutation.Timestamp);
+                // filter cannot be evaluated against a value-less tombstone. The
+                // view key is recomputed from the source key (the re-key rule),
+                // which is exactly why a re-keyed delete is resolvable.
+                yield return ViewWrite.Delete(MapKey(mutation.Key), mutation.Timestamp, mutation.Key);
                 break;
 
             case MutationKind.DeleteRange:
-                // A predicate-filtered range delete records the exact matched keys
-                // so the view can tombstone precisely the affected view keys with
-                // no predicate re-evaluation. An unconditional range delete (no
-                // matched-key set) cannot be lowered to per-key view writes in
-                // Phase 1 and is left to the rebuild path.
+                // A range delete that records the exact matched keys (the
+                // predicate-filtered case) lowers to one precise per-key delete
+                // per matched source key, re-keyed as usual - exact for any view
+                // shape, no predicate re-evaluation.
                 if (mutation.MatchedKeys is { Count: > 0 } matched)
                 {
                     foreach (var key in matched)
                     {
-                        yield return ViewWrite.Delete(MapKey(key), mutation.Timestamp);
+                        yield return ViewWrite.Delete(MapKey(key), mutation.Timestamp, key);
                     }
+
+                    yield break;
+                }
+
+                // An unconstrained range delete (no matched-key set) needs the
+                // whole range removed. EndExclusiveKey is required to bound it;
+                // without it there is nothing actionable.
+                if (string.IsNullOrEmpty(mutation.EndExclusiveKey))
+                {
+                    yield break;
+                }
+
+                if (_keySelector is null)
+                {
+                    // Key-preserving: the view key equals the source key, so the
+                    // view's slice of [start, end) is exactly the affected
+                    // entries. A single view-side range delete is exact.
+                    yield return ViewWrite.RangeDelete(mutation.Key, mutation.EndExclusiveKey, mutation.Timestamp);
+                }
+                else
+                {
+                    // Re-keyed: the deleted source keys' view keys are scattered
+                    // and unrecoverable without a reverse index, so ask the
+                    // maintainer to reconcile (rebuild) the affected range.
+                    yield return ViewWrite.RangeReconcile(mutation.Key, mutation.EndExclusiveKey, mutation.Timestamp);
                 }
 
                 break;

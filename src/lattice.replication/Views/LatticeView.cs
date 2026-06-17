@@ -1,3 +1,5 @@
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice.Replication.Views;
 
 /// <summary>
@@ -36,4 +38,15 @@ internal sealed class LatticeView(string viewName, ILattice viewTree, IViewMaint
     /// <inheritdoc />
     public Task RebuildAsync(CancellationToken cancellationToken = default) =>
         maintainer.RebuildAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+        maintainer.WaitForSourceHlcAsync(target, timeout, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var head = await maintainer.CaptureSourceHeadHlcAsync(cancellationToken);
+        await maintainer.WaitForSourceHlcAsync(head, timeout, cancellationToken);
+    }
 }
