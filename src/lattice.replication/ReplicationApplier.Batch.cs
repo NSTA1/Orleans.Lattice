@@ -531,6 +531,77 @@ internal sealed partial class ReplicationApplier
         List<(int EntryIndex, long StartTs)>? pendingApplies = null;
         IReplicationApplyGrain? applyGrain = null;
 
+        // Pending batched typed-CRDT delta items. Mirror of pendingItems
+        // for non-prepared CRDT-mode Set entries: each passes the same
+        // classification gauntlet (HWM dedup, shadow-forward dedup, causal
+        // park) and is deferred into a single ApplyCrdtDeltaManyAsync at
+        // end of run, which folds every delta inside one grain turn (no
+        // per-entry read-merge-write round trip). A tree resolves to a
+        // single merge mode, so in practice only one of the two pending
+        // buckets is ever populated within a run; the cross-bucket flushes
+        // below keep the invariant explicit so the two batches are never
+        // reordered relative to each other on a (hypothetical) mixed run.
+        List<ApplyCrdtDeltaItem>? pendingCrdtItems = null;
+        List<(int EntryIndex, long StartTs)>? pendingCrdtApplies = null;
+
+        async Task FlushPendingCrdtAsync()
+        {
+            if (pendingCrdtItems is null || pendingCrdtItems.Count == 0)
+            {
+                return;
+            }
+
+            applyGrain ??= grainFactory.GetGrain<IReplicationApplyGrain>(treeId);
+
+            var dispatchItems = pendingCrdtItems;
+            var dispatchApplies = pendingCrdtApplies!;
+            pendingCrdtItems = null;
+            pendingCrdtApplies = null;
+
+            try
+            {
+                await applyGrain.ApplyCrdtDeltaManyAsync(dispatchItems).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Mirror FlushPendingAsync: record OutcomeFailure for each
+                // deferred entry and roll back its shadow-forward cache
+                // reservation so the transport's retry path readmits it.
+                foreach (var (deferredIdx, deferredStartTs) in dispatchApplies)
+                {
+                    RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                    dedupeCache.Remove(entries[deferredIdx]);
+                }
+                throw;
+            }
+
+            for (var p = 0; p < dispatchApplies.Count; p++)
+            {
+                var (deferredIdx, deferredStartTs) = dispatchApplies[p];
+                var deferredEntry = entries[deferredIdx];
+                RecordApplyLag(deferredEntry);
+                RecordAppliedContentForIndex(in deferredEntry, resolved);
+                if (!bootstrapMode)
+                {
+                    RecordFifoState(deferredEntry);
+                }
+                RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeSuccess);
+
+                if (deferredEntry.Timestamp.CompareTo(runningHwm) > 0)
+                {
+                    runningHwm = deferredEntry.Timestamp;
+                }
+                if (deferredEntry.Timestamp.CompareTo(highestApplied) > 0)
+                {
+                    highestApplied = deferredEntry.Timestamp;
+                }
+            }
+
+            anyApplied = true;
+            advancedAtAll = true;
+            localVcDirty = true;
+        }
+
         async Task FlushPendingAsync()
         {
             if (pendingItems is null || pendingItems.Count == 0)
@@ -715,14 +786,16 @@ internal sealed partial class ReplicationApplier
                     }
                 }
 
-                // Classify: only LWW-register Set/Delete entries are
-                // batchable. Typed-CRDT modes (OrSet, PnCounter,
-                // VersionVector) need per-entry CAS loops on the
-                // shard-root and stay on the per-entry path.
+                // Classify: LWW-register Set/Delete entries batch through
+                // ApplyMergeManyAsync; non-prepared typed-CRDT Set entries
+                // batch through ApplyCrdtDeltaManyAsync (folded server-side
+                // in a single grain turn). All other entries (range
+                // deletes, CRDT deletes, prepared/saga entries) stay on the
+                // per-entry path.
                 //
                 // Saga prepare-phase entries (IsPrepared==true) are
-                // explicitly excluded from the batched LWW path: the
-                // batched path collapses the per-entry route through
+                // explicitly excluded from both batched paths: the batched
+                // LWW path collapses the per-entry route through
                 // ApplyMergeManyAsync, which calls into the shard-root's
                 // generic LWW merge primitive without honouring
                 // IsPrepared / TransactionId. Routing a prepared
@@ -746,9 +819,27 @@ internal sealed partial class ReplicationApplier
                     && (entry.Op == MutationKind.Set || entry.Op == MutationKind.Delete)
                     && !entry.IsPrepared;
 
-                if (!batchable)
+                // Non-prepared typed-CRDT Set entries carry their post-merge
+                // contribution exclusively via Delta and fold idempotently,
+                // so a run of them collapses into a single
+                // ApplyCrdtDeltaManyAsync. A CRDT Set arriving with a null
+                // Delta is a hard wire error; route it to the per-entry path
+                // so ApplyPointAsync's typed-delta dispatch raises the same
+                // ArgumentException it always has. OrMap is intentionally
+                // excluded: its receiver path is the generic-shaped
+                // ApplyOrMapDeltaAsync seam (resolved from the host-registered
+                // (TKey,TValue) shape), so it stays on its proven per-entry
+                // path rather than the closed-shape batch fold.
+                var crdtBatchable = entry.Mode != LatticeMergeMode.LwwRegister
+                    && entry.Mode != LatticeMergeMode.OrMap
+                    && entry.Op == MutationKind.Set
+                    && entry.Delta is not null
+                    && !entry.IsPrepared;
+
+                if (!batchable && !crdtBatchable)
                 {
                     await FlushPendingAsync().ConfigureAwait(false);
+                    await FlushPendingCrdtAsync().ConfigureAwait(false);
                     await ApplyPointAsync(entry).ConfigureAwait(false);
                     // Successful apply: clear local rollback
                     // responsibility. The cache reservation is retained
@@ -780,7 +871,40 @@ internal sealed partial class ReplicationApplier
                     continue;
                 }
 
-                // Batched path. Validate Set's value-non-null contract
+                if (crdtBatchable)
+                {
+                    // Defer into the CRDT bucket. Flush any pending LWW
+                    // batch first so the two batches are never reordered
+                    // relative to each other (a no-op in practice because a
+                    // tree resolves to a single merge mode, but it keeps the
+                    // ordering invariant explicit).
+                    await FlushPendingAsync().ConfigureAwait(false);
+
+                    pendingCrdtItems ??= new List<ApplyCrdtDeltaItem>();
+                    pendingCrdtApplies ??= new List<(int, long)>();
+                    pendingCrdtItems.Add(new ApplyCrdtDeltaItem
+                    {
+                        Key = entry.Key,
+                        Mode = entry.Mode,
+                        Delta = entry.Delta!,
+                        SourceHlc = entry.Timestamp,
+                        OriginClusterId = entry.OriginClusterId!,
+                        SourceVectorClock = null,
+                    });
+                    pendingCrdtApplies.Add((k, startTs));
+                    // Ownership of the cache reservation transfers to
+                    // pendingCrdtApplies; FlushPendingCrdtAsync's failure
+                    // path rolls it back if the eventual flush throws.
+                    cacheReservedForCurrent = false;
+                    deferred = true;
+                    continue;
+                }
+
+                // Batched LWW path. Flush any pending CRDT batch first so
+                // the two batches are never reordered (see above).
+                await FlushPendingCrdtAsync().ConfigureAwait(false);
+
+                // Validate Set's value-non-null contract
                 // here so the ArgumentException surface matches the
                 // per-entry path (ApplyPointAsync raises the same).
                 if (entry.Op == MutationKind.Set && entry.Value is null)
@@ -846,6 +970,18 @@ internal sealed partial class ReplicationApplier
                     pendingItems = null;
                     pendingApplies = null;
                 }
+
+                // Same rollback for any deferred CRDT batch (see above).
+                if (pendingCrdtApplies is { Count: > 0 })
+                {
+                    foreach (var (deferredIdx, deferredStartTs) in pendingCrdtApplies)
+                    {
+                        RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeFailure);
+                        dedupeCache.Remove(entries[deferredIdx]);
+                    }
+                    pendingCrdtItems = null;
+                    pendingCrdtApplies = null;
+                }
                 throw;
             }
             finally
@@ -859,6 +995,7 @@ internal sealed partial class ReplicationApplier
 
         // End-of-run flush of any remaining deferred items.
         await FlushPendingAsync().ConfigureAwait(false);
+        await FlushPendingCrdtAsync().ConfigureAwait(false);
 
         if (advancedAtAll && !bootstrapMode)
         {

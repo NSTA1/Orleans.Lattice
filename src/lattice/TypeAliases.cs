@@ -272,6 +272,9 @@ internal static class TypeAliases
     // Replication apply DTO (batch path)
     internal const string ApplyMergeItem = "ol.ami";
 
+    // Replication apply DTO (typed-CRDT delta batch path)
+    internal const string ApplyCrdtDeltaItem = "ol.acd";
+
     // Leaf-projection replay coordinator slice DTO
     internal const string CommitLogSliceEntry = "ol.cls";
 

@@ -310,6 +310,55 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
+    public async Task ApplyCrdtDeltaManyAsync(IReadOnlyList<ApplyCrdtDeltaItem> items)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(items);
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        // Fold every delta inside this single grain turn. The grain is
+        // non-reentrant, so no other apply or local write to this tree
+        // interleaves between the per-item folds - that is what lets the
+        // batch avoid the per-entry optimistic-concurrency retry loop the
+        // applier-side read-merge-write path required. Each item routes
+        // through the same producer-side ApplyCrdtDeltaAsync seam (which
+        // resolves the registered CrdtShape, folds the typed delta into the
+        // current visible state, and appends the delta-only WAL record),
+        // wrapped in the source-cluster ambient scopes so the receiver
+        // stamps the origin id, vector-clock frontier, and HLC verbatim
+        // (LatticeHlcOverrideContext makes AdvanceClockOrOverride re-stamp
+        // the source HLC instead of advancing the local clock). Items are
+        // folded in arrival order; CRDT commutativity makes the converged
+        // state independent of that order, and same-key deltas compose
+        // because each fold reads the prior post-fold state back out.
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            ArgumentNullException.ThrowIfNull(item.Key);
+            ArgumentNullException.ThrowIfNull(item.Delta);
+            ArgumentException.ThrowIfNullOrEmpty(item.OriginClusterId);
+            if (item.Mode == LatticeMergeMode.LwwRegister)
+            {
+                throw new ArgumentException(
+                    "ApplyCrdtDeltaManyAsync does not accept LatticeMergeMode.LwwRegister items; "
+                    + "LWW Set/Delete writes ride ApplyMergeManyAsync instead.",
+                    nameof(items));
+            }
+
+            using (LatticeOriginContext.With(item.OriginClusterId))
+            using (LatticeVectorClockContext.With(item.SourceVectorClock))
+            using (LatticeHlcOverrideContext.With(item.SourceHlc))
+            {
+                await ApplyCrdtDeltaAsync(item.Key, item.Mode, item.Delta);
+            }
+        }
+    }
+
+    /// <inheritdoc />
     public async Task ApplyPreparedSetAsync(
         string key,
         byte[] value,
