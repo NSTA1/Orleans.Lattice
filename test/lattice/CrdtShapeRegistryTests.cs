@@ -492,4 +492,99 @@ public class CrdtShapeRegistryTests
         Assert.That(combined.Adds, Has.Count.EqualTo(1));
         Assert.That(combined.Tombstones, Is.Empty);
     }
+
+    // ── streaming state serialiser (deferred CRDT-apply digest lane) ──
+    //
+    // The deferred CRDT-apply path feeds the projection-digest fold from
+    // SerializeStateInto and later materialises the byte[] row from
+    // SerializeState. The two lanes MUST be byte-identical or a materialised
+    // read's digest contribution would diverge from the one already folded
+    // in, corrupting cross-silo digest convergence. These tests pin that
+    // invariant for every closed shape that wires the streaming lane.
+
+    private static byte[] StreamState(CrdtShape shape, object state)
+    {
+        Assert.That(shape.SerializeStateInto, Is.Not.Null,
+            "shape under test must wire the streaming serialiser");
+        var writer = new System.Buffers.ArrayBufferWriter<byte>();
+        shape.SerializeStateInto!(state, writer);
+        return writer.WrittenSpan.ToArray();
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_OrSet()
+    {
+        var shape = CrdtShape.ForOrSet();
+        var state = (OrSet)shape.CreateEmpty();
+        for (var i = 0; i < 32; i++)
+        {
+            state.Add(System.Text.Encoding.UTF8.GetBytes("e-" + i), "R", i + 1);
+        }
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_PnCounter()
+    {
+        var shape = CrdtShape.ForPnCounter();
+        var state = (PnCounter)shape.CreateEmpty();
+        state.Increment("A", 7);
+        state.Decrement("B", 3);
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_VersionVector()
+    {
+        var shape = CrdtShape.ForVersionVector();
+        var state = (VersionVector)shape.CreateEmpty();
+        state.Tick("A");
+        state.Tick("B");
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_MvRegister()
+    {
+        var shape = CrdtShape.ForMvRegister();
+        var state = (MvRegister)shape.CreateEmpty();
+        state.Set("A", new byte[] { 1, 2, 3 });
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_OrFlag()
+    {
+        var shape = CrdtShape.ForOrFlag();
+        var state = (OrFlag)shape.CreateEmpty();
+        state.Enable("A", 1);
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_RwFlag()
+    {
+        var shape = CrdtShape.ForRwFlag();
+        var state = (RwFlag)shape.CreateEmpty();
+        state.Enable("A", 1);
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_empty_OrSet()
+    {
+        var shape = CrdtShape.ForOrSet();
+        var state = shape.CreateEmpty();
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_is_null_for_reflection_shapes()
+    {
+        // Sequence (Rga) and OR-Map use the reflection serialiser and do not
+        // expose a streaming lane; the deferred apply path falls back to the
+        // eager re-serialise for these shapes.
+        Assert.That(CrdtShape.ForRga().SerializeStateInto, Is.Null);
+        Assert.That(CrdtShape.ForOrMap<string, PnCounter>().SerializeStateInto, Is.Null);
+    }
 }

@@ -341,6 +341,43 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// XOR-folds a pair of pre-computed 16-byte contributions into the running
+    /// projection hash: <paramref name="oldContribution"/> is XOR'd out (when
+    /// <paramref name="hasOld"/>), <paramref name="newContribution"/> is XOR'd
+    /// in (when <paramref name="hasNew"/>). This is the precomputed-span
+    /// equivalent of <see cref="UpdateProjectionHash(string, in LwwValue{byte[]}?, in LwwValue{byte[]}?)"/>,
+    /// used by the deferred CRDT-apply path which computes both contributions
+    /// directly from streaming serialisation buffers (one of which - the
+    /// post-merge value - is never materialised into a row). Applies the same
+    /// no-op self-cancel fast path and sets <c>_digestDirty</c> identically, so
+    /// the upward-publish elision behaves the same as the row-based funnel.
+    /// Caller must have invoked <see cref="EnsureProjectionHashInitialized"/>.
+    /// </summary>
+    private void XorFoldContributionDelta(
+        ReadOnlySpan<byte> oldContribution,
+        bool hasOld,
+        ReadOnlySpan<byte> newContribution,
+        bool hasNew)
+    {
+        if (hasOld && hasNew && oldContribution.SequenceEqual(newContribution))
+        {
+            return;
+        }
+
+        var hash = state.State.ProjectionHash!;
+        if (hasOld)
+        {
+            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= oldContribution[i];
+        }
+        if (hasNew)
+        {
+            for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= newContribution[i];
+        }
+
+        _digestDirty = true;
+    }
+
+    /// <summary>
     /// Walks the current <see cref="Entries"/> and produces the XOR-fold of
     /// every entry's contribution. Used for lazy backfill of legacy state
     /// and exposed (internal) as the regression-test oracle for the
@@ -371,6 +408,36 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void ComputeEntryContribution(string key, in LwwValue<byte[]> lww, Span<byte> dest16)
     {
+        var hasValue = !lww.IsTombstone && lww.Value is not null;
+        ComputeEntryContribution(
+            key,
+            in lww,
+            hasValue ? lww.Value : ReadOnlySpan<byte>.Empty,
+            hasValue,
+            dest16);
+    }
+
+    /// <summary>
+    /// Value-span overload of <see cref="ComputeEntryContribution(string, in LwwValue{byte[]}, Span{byte})"/>
+    /// that takes the entry's serialised value bytes as a
+    /// <see cref="ReadOnlySpan{T}"/> rather than reading them from
+    /// <paramref name="lww"/>. All non-value metadata (timestamp, tombstone
+    /// flag, expiry, origin, vector clock) still comes from
+    /// <paramref name="lww"/>; only <paramref name="value"/> /
+    /// <paramref name="hasValue"/> supply the value field. Used by the deferred
+    /// CRDT-apply path to fold the post-merge contribution directly from a
+    /// reused streaming buffer without first allocating a <c>byte[]</c> row.
+    /// The contribution is byte-identical to the array overload for the same
+    /// metadata and value bytes, so a key folded through this overload and
+    /// later materialised through the array overload produces the same digest.
+    /// </summary>
+    private void ComputeEntryContribution(
+        string key,
+        in LwwValue<byte[]> lww,
+        ReadOnlySpan<byte> value,
+        bool hasValue,
+        Span<byte> dest16)
+    {
         _entryHasher ??= new XxHash128();
         var hasher = _entryHasher;
         Span<byte> scratch = stackalloc byte[8];
@@ -399,11 +466,11 @@ internal sealed partial class BPlusLeafGrain
         FeedVectorClock(hasher, lww.VectorClock, scratch);
 
         // (value) - only for live, non-tombstone entries; tombstones encode -1.
-        if (!lww.IsTombstone && lww.Value is not null)
+        if (!lww.IsTombstone && hasValue)
         {
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], lww.Value.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], value.Length);
             hasher.Append(scratch[..4]);
-            hasher.Append(lww.Value);
+            hasher.Append(value);
         }
         else
         {

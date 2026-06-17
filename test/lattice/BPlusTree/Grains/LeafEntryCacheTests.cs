@@ -360,4 +360,107 @@ public sealed class LeafEntryCacheTests
 
         Assert.That(cache.StateBytes, Is.EqualTo(99L));
     }
+
+    // ── deferred CRDT row materialisation ──────────────────────
+
+    private static LwwValue<byte[]> Metadata(long ticks = 5)
+        => new()
+        {
+            Value = null,
+            Timestamp = new HybridLogicalClock { WallClockTicks = ticks, Counter = 0 },
+            IsTombstone = false,
+        };
+
+    [Test]
+    public void StoreDeferredRow_materialises_on_TryGetRow()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        var calls = 0;
+        cache.StoreDeferredRow("k", Metadata(), () => { calls++; return new byte[] { 9, 8, 7 }; }, 3);
+
+        // Peek must NOT materialise.
+        Assert.That(cache.TryPeekRow("k", out var peeked, out var deferred), Is.True);
+        Assert.That(deferred, Is.True);
+        Assert.That(peeked.Value, Is.Null);
+        Assert.That(calls, Is.Zero);
+
+        // TryGetRow materialises exactly once and memoises.
+        Assert.That(cache.TryGetRow("k", out var row), Is.True);
+        Assert.That(row.Value, Is.EqualTo(new byte[] { 9, 8, 7 }));
+        Assert.That(cache.TryGetRow("k", out _), Is.True);
+        Assert.That(calls, Is.EqualTo(1));
+
+        // After materialisation the row is no longer deferred.
+        Assert.That(cache.TryPeekRow("k", out _, out var stillDeferred), Is.True);
+        Assert.That(stillDeferred, Is.False);
+    }
+
+    [Test]
+    public void StoreDeferredRow_accounts_serialized_length_in_StateBytes()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreDeferredRow("k", Metadata(), () => new byte[] { 1, 2, 3, 4 }, 4);
+
+        // utf8("k") + serializedLength(4) == 5, even though the row Value is null.
+        Assert.That(cache.StateBytes, Is.EqualTo(5L));
+
+        // Materialising must not change the running total (length is identical).
+        Assert.That(cache.TryGetRow("k", out _), Is.True);
+        Assert.That(cache.StateBytes, Is.EqualTo(5L));
+    }
+
+    [Test]
+    public void StoreRow_supersedes_deferred_marker_and_accounting()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreDeferredRow("k", Metadata(), () => new byte[] { 1, 2, 3, 4 }, 4);
+
+        // A byte-level write supersedes the placeholder without materialising it.
+        cache.StoreRow("k", Row(new byte[] { 7 }, ticks: 6));
+
+        Assert.That(cache.TryPeekRow("k", out var row, out var deferred), Is.True);
+        Assert.That(deferred, Is.False);
+        Assert.That(row.Value, Is.EqualTo(new byte[] { 7 }));
+        // utf8("k")=1 + value length 1 == 2.
+        Assert.That(cache.StateBytes, Is.EqualTo(2L));
+    }
+
+    [Test]
+    public void Remove_clears_deferred_marker_and_accounting()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreDeferredRow("k", Metadata(), () => new byte[] { 1, 2, 3, 4 }, 4);
+
+        Assert.That(cache.Remove("k"), Is.True);
+        Assert.That(cache.TryPeekRow("k", out _, out _), Is.False);
+        Assert.That(cache.StateBytes, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void EnumerateRows_drains_deferred_rows()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreDeferredRow("k", Metadata(), () => new byte[] { 5, 5 }, 2);
+
+        var rows = cache.EnumerateRows().ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].Value.Value, Is.EqualTo(new byte[] { 5, 5 }));
+        // Drained rows are no longer deferred.
+        Assert.That(cache.TryPeekRow("k", out _, out var deferred), Is.True);
+        Assert.That(deferred, Is.False);
+    }
+
+    [Test]
+    public void Clear_drops_deferred_rows()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreDeferredRow("k", Metadata(), () => new byte[] { 1 }, 1);
+
+        cache.Clear();
+
+        Assert.That(cache.Count, Is.Zero);
+        Assert.That(cache.StateBytes, Is.Zero);
+        Assert.That(cache.TryPeekRow("k", out _, out _), Is.False);
+    }
 }

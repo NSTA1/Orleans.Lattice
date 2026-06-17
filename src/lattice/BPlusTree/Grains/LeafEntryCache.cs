@@ -34,6 +34,24 @@ internal sealed class LeafEntryCache
     // matching typed entry to preserve that invariant.
     private Dictionary<string, object>? _typedShadows;
 
+    // Lazily allocated; null until the first StoreDeferredRow call. A key is
+    // present here only while its byte row in <see cref="_rows"/> carries a
+    // null Value placeholder whose canonical bytes can be reproduced on demand
+    // by invoking the stored materialiser (which serialises the live typed
+    // shadow). The deferred state lets the CRDT delta-apply hot path skip the
+    // O(state) re-serialisation of the post-merge row when nothing has yet
+    // consumed the bytes: the digest fold is fed from a reused streaming
+    // buffer instead, and the durable row is materialised lazily at the first
+    // read / enumerate / snapshot seam. Invariant: a deferred key always has a
+    // live typed shadow (the materialiser captures it), and every
+    // <see cref="StoreRow"/> / <see cref="Remove"/> / <see cref="Clear"/> call
+    // clears the deferred marker so a byte-level write supersedes the
+    // placeholder. <see cref="_deferredLengths"/> records the post-merge
+    // serialised length so <see cref="StateBytes"/> accounting stays exact
+    // while the bytes are absent from the row.
+    private Dictionary<string, Func<byte[]>>? _deferredMaterializers;
+    private Dictionary<string, long>? _deferredLengths;
+
     /// <summary>
     /// Wraps an existing sorted dictionary of leaf rows. The cache does not copy
     /// the dictionary; mutations through the cache are visible to the underlying
@@ -87,6 +105,62 @@ internal sealed class LeafEntryCache
         => EntryBytes(key, row.IsTombstone ? null : row.Value);
 
     /// <summary>
+    /// Per-entry <see cref="StateBytes"/> contribution that accounts for a
+    /// deferred row's not-yet-materialised payload via its recorded serialised
+    /// length, falling back to the row's live value length otherwise.
+    /// </summary>
+    private long AccountedRowBytes(string key, in LwwValue<byte[]> row)
+    {
+        if (_deferredLengths is not null && _deferredLengths.TryGetValue(key, out var len))
+        {
+            return EntryBytes(key, null) + len;
+        }
+        return RowBytes(key, row);
+    }
+
+    /// <summary>
+    /// Materialises the deferred payload for <paramref name="key"/> in place
+    /// (invokes the stored materialiser, writes the bytes back into the row,
+    /// and drops the deferred markers) when one is pending. No-op otherwise.
+    /// The serialised length recorded at defer time equals the materialised
+    /// value length (the streaming and array serialisers are byte-identical),
+    /// so <see cref="_stateBytes"/> needs no adjustment.
+    /// </summary>
+    private void MaterializeDeferred(string key)
+    {
+        if (_deferredMaterializers is null
+            || !_deferredMaterializers.TryGetValue(key, out var materialize))
+        {
+            return;
+        }
+        if (_rows.TryGetValue(key, out var row))
+        {
+            _rows[key] = row with { Value = materialize() };
+        }
+        _deferredMaterializers.Remove(key);
+        _deferredLengths?.Remove(key);
+    }
+
+    /// <summary>Materialises every pending deferred row. Used before any seam
+    /// that hands out the backing rows by reference.</summary>
+    private void DrainDeferred()
+    {
+        if (_deferredMaterializers is null || _deferredMaterializers.Count == 0)
+        {
+            return;
+        }
+        foreach (var key in _deferredMaterializers.Keys.ToArray())
+        {
+            if (_rows.TryGetValue(key, out var row))
+            {
+                _rows[key] = row with { Value = _deferredMaterializers[key]() };
+            }
+        }
+        _deferredMaterializers.Clear();
+        _deferredLengths?.Clear();
+    }
+
+    /// <summary>
     /// Attempts to retrieve the canonical byte row for <paramref name="key"/>.
     /// </summary>
     /// <param name="key">The entry key.</param>
@@ -95,7 +169,62 @@ internal sealed class LeafEntryCache
     internal bool TryGetRow(string key, out LwwValue<byte[]> row)
     {
         ArgumentNullException.ThrowIfNull(key);
+        MaterializeDeferred(key);
         return _rows.TryGetValue(key, out row);
+    }
+
+    /// <summary>
+    /// Reads the raw row for <paramref name="key"/> <b>without</b> materialising
+    /// a deferred payload, reporting via <paramref name="isDeferred"/> whether
+    /// the row currently carries a null-value placeholder backed by a
+    /// materialiser. Used by the CRDT delta-apply hot path, which already holds
+    /// the live typed shadow and must not trigger the O(state) materialisation
+    /// it is deferring. The returned row's <see cref="LwwValue{T}.Value"/> is
+    /// <see langword="null"/> when <paramref name="isDeferred"/> is
+    /// <see langword="true"/>; all other metadata (timestamp, origin, vector
+    /// clock, tombstone flag) is the canonical post-merge metadata.
+    /// </summary>
+    internal bool TryPeekRow(string key, out LwwValue<byte[]> row, out bool isDeferred)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!_rows.TryGetValue(key, out row))
+        {
+            isDeferred = false;
+            return false;
+        }
+        isDeferred = _deferredMaterializers is not null
+            && _deferredMaterializers.ContainsKey(key);
+        return true;
+    }
+
+    /// <summary>
+    /// Stores a CRDT post-merge row whose canonical bytes are deferred: the
+    /// row carries the full metadata (<paramref name="metadataRow"/>, with a
+    /// null Value) and the bytes are reproduced on demand by
+    /// <paramref name="materialize"/> (which serialises the live typed shadow).
+    /// <paramref name="serializedLength"/> is the post-merge serialised byte
+    /// length, recorded so <see cref="StateBytes"/> stays exact while the bytes
+    /// are absent. The caller must re-store the matching typed shadow via
+    /// <see cref="StoreTyped"/> immediately afterwards (the materialiser and
+    /// the deferred invariant both depend on it); unlike <see cref="StoreRow"/>
+    /// this method does <b>not</b> evict the shadow.
+    /// </summary>
+    internal void StoreDeferredRow(
+        string key,
+        in LwwValue<byte[]> metadataRow,
+        Func<byte[]> materialize,
+        long serializedLength)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(materialize);
+        if (_rows.TryGetValue(key, out var existing))
+        {
+            _stateBytes -= AccountedRowBytes(key, existing);
+        }
+        _stateBytes += EntryBytes(key, null) + serializedLength;
+        _rows[key] = metadataRow;
+        (_deferredMaterializers ??= new Dictionary<string, Func<byte[]>>(StringComparer.Ordinal))[key] = materialize;
+        (_deferredLengths ??= new Dictionary<string, long>(StringComparer.Ordinal))[key] = serializedLength;
     }
 
     /// <summary>Returns <c>true</c> if <paramref name="key"/> is present.</summary>
@@ -118,8 +247,10 @@ internal sealed class LeafEntryCache
         ArgumentNullException.ThrowIfNull(key);
         if (_rows.TryGetValue(key, out var existing))
         {
-            _stateBytes -= RowBytes(key, existing);
+            _stateBytes -= AccountedRowBytes(key, existing);
         }
+        _deferredMaterializers?.Remove(key);
+        _deferredLengths?.Remove(key);
         _stateBytes += RowBytes(key, row);
         _rows[key] = row;
         _typedShadows?.Remove(key);
@@ -138,8 +269,10 @@ internal sealed class LeafEntryCache
         _typedShadows?.Remove(key);
         if (_rows.TryGetValue(key, out var existing))
         {
-            _stateBytes -= RowBytes(key, existing);
+            _stateBytes -= AccountedRowBytes(key, existing);
         }
+        _deferredMaterializers?.Remove(key);
+        _deferredLengths?.Remove(key);
         return _rows.Remove(key);
     }
 
@@ -148,6 +281,8 @@ internal sealed class LeafEntryCache
     {
         _rows.Clear();
         _typedShadows?.Clear();
+        _deferredMaterializers?.Clear();
+        _deferredLengths?.Clear();
         _stateBytes = 0;
     }
 
@@ -207,12 +342,23 @@ internal sealed class LeafEntryCache
     /// view over the backing dictionary; callers that mutate the cache during
     /// enumeration must materialise the sequence first.
     /// </summary>
-    internal IEnumerable<KeyValuePair<string, LwwValue<byte[]>>> EnumerateRows() => _rows;
+    internal IEnumerable<KeyValuePair<string, LwwValue<byte[]>>> EnumerateRows()
+    {
+        DrainDeferred();
+        return _rows;
+    }
 
     /// <summary>
     /// Exposes the backing sorted dictionary. Used by sub-step 6.1 call sites that
     /// have not yet been migrated to the cache surface. Removed in a later sub-step
     /// once every call site reads/writes exclusively through the cache.
     /// </summary>
-    internal SortedDictionary<string, LwwValue<byte[]>> UnderlyingRows => _rows;
+    internal SortedDictionary<string, LwwValue<byte[]>> UnderlyingRows
+    {
+        get
+        {
+            DrainDeferred();
+            return _rows;
+        }
+    }
 }

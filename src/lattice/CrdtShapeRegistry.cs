@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -40,6 +41,21 @@ public sealed class CrdtShape
 
     /// <summary>Serialises a typed state instance back to bytes for snapshot capture.</summary>
     public Func<object, byte[]> SerializeState { get; }
+
+    /// <summary>
+    /// Streams the full-state serialisation of a typed instance into a
+    /// caller-supplied <see cref="IBufferWriter{T}"/>, producing bytes
+    /// byte-identical to <see cref="SerializeState"/> but without
+    /// allocating an intermediate <c>byte[]</c>. <see langword="null"/>
+    /// for shapes whose serialiser does not expose a streaming lane
+    /// (currently the reflection-based <see cref="LatticeMergeMode.Sequence"/>
+    /// and <see cref="LatticeMergeMode.OrMap"/> shapes); callers fall back
+    /// to <see cref="SerializeState"/> in that case. Used by the leaf
+    /// grain's deferred CRDT-apply path to feed the projection-digest fold
+    /// from a reused buffer so the per-apply allocation stays flat in the
+    /// post-merge state size instead of scaling with it.
+    /// </summary>
+    internal Action<object, IBufferWriter<byte>>? SerializeStateInto { get; init; }
 
     /// <summary>
     /// Serialises a typed delta instance back to bytes, the inverse of
@@ -109,7 +125,14 @@ public sealed class CrdtShape
             () => new OrSet(),
             state => JsonSerializer.SerializeToUtf8Bytes((OrSet)state, ctx.OrSet),
             delta => JsonSerializer.SerializeToUtf8Bytes((OrSetDelta)delta, ctx.OrSetDelta),
-            static (a, b) => CombineOrSetDelta((OrSetDelta)a, (OrSetDelta)b));
+            static (a, b) => CombineOrSetDelta((OrSetDelta)a, (OrSetDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (OrSet)state, CrdtJsonSerializerContext.Default.OrSet);
+            },
+        };
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.PnCounter"/> shape.</summary>
@@ -125,7 +148,14 @@ public sealed class CrdtShape
             () => new PnCounter(),
             state => JsonSerializer.SerializeToUtf8Bytes((PnCounter)state, ctx.PnCounter),
             delta => JsonSerializer.SerializeToUtf8Bytes((PnCounterDelta)delta, ctx.PnCounterDelta),
-            static (a, b) => CombinePnCounterDelta((PnCounterDelta)a, (PnCounterDelta)b));
+            static (a, b) => CombinePnCounterDelta((PnCounterDelta)a, (PnCounterDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (PnCounter)state, CrdtJsonSerializerContext.Default.PnCounter);
+            },
+        };
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.VersionVector"/> shape.</summary>
@@ -141,7 +171,14 @@ public sealed class CrdtShape
             () => new VersionVector(),
             state => JsonSerializer.SerializeToUtf8Bytes((VersionVector)state, ctx.VersionVector),
             delta => JsonSerializer.SerializeToUtf8Bytes((VersionVectorDelta)delta, ctx.VersionVectorDelta),
-            static (a, b) => CombineVersionVectorDelta((VersionVectorDelta)a, (VersionVectorDelta)b));
+            static (a, b) => CombineVersionVectorDelta((VersionVectorDelta)a, (VersionVectorDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (VersionVector)state, CrdtJsonSerializerContext.Default.VersionVector);
+            },
+        };
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.MvRegister"/> shape.</summary>
@@ -157,7 +194,14 @@ public sealed class CrdtShape
             () => new MvRegister(),
             state => JsonSerializer.SerializeToUtf8Bytes((MvRegister)state, ctx.MvRegister),
             delta => JsonSerializer.SerializeToUtf8Bytes((MvRegisterDelta)delta, ctx.MvRegisterDelta),
-            static (a, b) => CombineMvRegisterDelta((MvRegisterDelta)a, (MvRegisterDelta)b));
+            static (a, b) => CombineMvRegisterDelta((MvRegisterDelta)a, (MvRegisterDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (MvRegister)state, CrdtJsonSerializerContext.Default.MvRegister);
+            },
+        };
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.OrFlag"/> shape.</summary>
@@ -173,7 +217,14 @@ public sealed class CrdtShape
             () => new OrFlag(),
             state => JsonSerializer.SerializeToUtf8Bytes((OrFlag)state, ctx.OrFlag),
             delta => JsonSerializer.SerializeToUtf8Bytes((OrFlagDelta)delta, ctx.OrFlagDelta),
-            static (a, b) => CombineOrFlagDelta((OrFlagDelta)a, (OrFlagDelta)b));
+            static (a, b) => CombineOrFlagDelta((OrFlagDelta)a, (OrFlagDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (OrFlag)state, CrdtJsonSerializerContext.Default.OrFlag);
+            },
+        };
     }
 
     /// <summary>Factory for the <see cref="LatticeMergeMode.RwFlag"/> shape.</summary>
@@ -189,7 +240,14 @@ public sealed class CrdtShape
             () => new RwFlag(),
             state => JsonSerializer.SerializeToUtf8Bytes((RwFlag)state, ctx.RwFlag),
             delta => JsonSerializer.SerializeToUtf8Bytes((RwFlagDelta)delta, ctx.RwFlagDelta),
-            static (a, b) => CombineRwFlagDelta((RwFlagDelta)a, (RwFlagDelta)b));
+            static (a, b) => CombineRwFlagDelta((RwFlagDelta)a, (RwFlagDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (RwFlag)state, CrdtJsonSerializerContext.Default.RwFlag);
+            },
+        };
     }
 
     /// <summary>
