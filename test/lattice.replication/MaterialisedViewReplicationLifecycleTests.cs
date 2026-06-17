@@ -205,4 +205,38 @@ public class MaterialisedViewReplicationLifecycleTests
             Assert.That(await maintainer.ReconcileAsync(), Is.False, "reconcile is producer-only and a no-op on a suppressed consumer");
         });
     }
+
+    [Test]
+    public async Task ShipView_producer_unsuppresses_when_the_source_becomes_readable_later()
+    {
+        const string tree = "mv-shipview-late-source-src";
+        var view = MaterialisedViewClusterFixture.ShipViewLateSourceViewName;
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        RegisterView(view, tree);
+
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+
+        // Activate over a still-empty source: the producer cannot yet tell it is the
+        // producer (no locally-readable source WAL), so it suppresses itself.
+        await maintainer.EnsureActiveAsync();
+        Assert.That(
+            await HasCursorPinAsync(tree, view),
+            Is.False,
+            "a ShipView maintainer over a still-empty source should be suppressed and pin nothing");
+
+        // The source is written later. The keepalive re-routes a suppressed maintainer
+        // through EnsureActiveAsync, which re-probes readability and un-suppresses.
+        await source.SetAsync("a", Person(30));
+        await source.SetAsync("b", Person(40));
+        await source.SetAsync("c", Person(10)); // filtered out
+
+        await maintainer.EnsureActiveAsync();
+        await maintainer.DrainAsync();
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await HasCursorPinAsync(tree, view), Is.True, "once the source becomes readable the producer must un-suppress and pin the source WAL");
+            Assert.That(await ViewKeyCountAsync(view), Is.EqualTo(2), "the un-suppressed producer should derive the filtered view");
+        });
+    }
 }

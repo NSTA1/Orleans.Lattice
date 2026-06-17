@@ -559,7 +559,14 @@ internal sealed partial class ViewMaintainerGrain(
             // EnsureActiveAsync this activation; route through it once so ShipView
             // suppression and projection-version re-evaluation are established
             // before any drain, instead of draining with default state.
-            if (!_activated)
+            //
+            // A ShipView producer that activated over a still-empty source was
+            // suppressed (the source was not yet locally readable). Re-route a
+            // suppressed maintainer through EnsureActiveAsync on every keepalive so
+            // it re-probes source readability and un-suppresses (starts draining and
+            // pinning) once the source has since become locally readable - otherwise
+            // a fresh producer would stay suppressed until restart.
+            if (!_activated || _shipViewSuppressed)
             {
                 await EnsureActiveAsync(CancellationToken.None);
             }

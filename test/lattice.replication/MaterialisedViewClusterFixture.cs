@@ -135,6 +135,9 @@ internal sealed class MaterialisedViewClusterFixture
             siloBuilder.Services.Configure<LatticeViewOptions>(
                 ShipViewConsumerViewName,
                 o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewLateSourceViewName,
+                o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
         }
     }
 
@@ -176,4 +179,11 @@ internal sealed class MaterialisedViewClusterFixture
 
     /// <summary>View name pre-configured with <c>ReplicationMode = ShipView</c>, used for the consumer case (source absent).</summary>
     public const string ShipViewConsumerViewName = "mv-shipview-consumer";
+
+    /// <summary>
+    /// View name pre-configured with <c>ReplicationMode = ShipView</c>, used for the
+    /// late-source case: a producer that activated over a still-empty source and must
+    /// un-suppress on a later keepalive once the source becomes locally readable.
+    /// </summary>
+    public const string ShipViewLateSourceViewName = "mv-shipview-late-source";
 }

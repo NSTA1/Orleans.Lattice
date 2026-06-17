@@ -621,6 +621,13 @@ drain, pin the source WAL, register a keepalive reminder, or rebuild. The view
 tree is maintained entirely by replication on a consumer; reads still serve from
 the replicated `view-{name}` tree.
 
+A producer that activates before its source tree has any locally-readable WAL
+(an empty source) cannot yet tell it is the producer, so it suppresses itself like
+a consumer. It re-probes source readability on each keepalive tick and
+**un-suppresses** - starting to drain, pin, and derive - as soon as the source
+becomes locally readable, so a fresh producer does not stay suppressed until
+restart.
+
 A `ShipView` producer rebuilds **in place** on the stable generation-0
 `view-{name}` tree (no shadow-swap generation cycling), so the replicated tree id
 is stable and matches the operator's `ReplicatedTrees` entry. The transient
