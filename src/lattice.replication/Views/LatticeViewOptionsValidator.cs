@@ -35,6 +35,16 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             failures.Add($"{nameof(LatticeViewOptions.AggregationMaxGroupEntries)} must not be negative (was {options.AggregationMaxGroupEntries}).");
         }
 
+        if (options.MaxStagedTransactions < 1)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.MaxStagedTransactions)} must be at least 1 (was {options.MaxStagedTransactions}).");
+        }
+
+        if (options.MaxStagedBytes < 1)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.MaxStagedBytes)} must be at least 1 (was {options.MaxStagedBytes}).");
+        }
+
         return failures.Count > 0 ? ValidateOptionsResult.Fail(failures) : ValidateOptionsResult.Success;
     }
 }

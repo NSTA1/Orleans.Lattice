@@ -23,6 +23,18 @@ public sealed class LatticeViewOptions
     public const int DefaultAggregationFanout = 1;
 
     /// <summary>
+    /// Default <see cref="MaxStagedTransactions"/> (1024 in-flight atomic
+    /// batches buffered before the maintainer falls back to a rebuild).
+    /// </summary>
+    public const int DefaultMaxStagedTransactions = 1024;
+
+    /// <summary>
+    /// Default <see cref="MaxStagedBytes"/> (64 MiB of buffered prepared-entry
+    /// payload before the maintainer falls back to a rebuild).
+    /// </summary>
+    public const long DefaultMaxStagedBytes = 64L * 1024 * 1024;
+
+    /// <summary>
     /// Maximum number of source WAL entries the maintainer reads and applies in a
     /// single drain pass per source shard before checkpointing. Must be positive;
     /// the registered validator rejects a non-positive value at first resolve.
@@ -60,4 +72,26 @@ public sealed class LatticeViewOptions
     /// which never keep per-member state.
     /// </summary>
     public int AggregationMaxGroupEntries { get; set; }
+
+    /// <summary>
+    /// Upper bound on the number of in-flight atomic-write transactions the
+    /// maintainer stages (prepared-but-not-yet-committed batches buffered by
+    /// <see cref="LatticeMutation.TransactionId"/>) before it abandons
+    /// incremental staging and falls back to a full rebuild from current
+    /// source state. Bounds maintainer memory and the WAL-GC blocked-floor pin
+    /// when a flood of atomic writes is in flight or a saga terminal is lost.
+    /// Must be at least 1; the default is
+    /// <see cref="DefaultMaxStagedTransactions"/>.
+    /// </summary>
+    public int MaxStagedTransactions { get; set; } = DefaultMaxStagedTransactions;
+
+    /// <summary>
+    /// Upper bound, in bytes, on the total prepared-entry payload (key plus
+    /// value octets) the maintainer buffers across every in-flight atomic-write
+    /// transaction before it abandons incremental staging and falls back to a
+    /// full rebuild. Complements <see cref="MaxStagedTransactions"/> for the
+    /// few-but-huge-batch shape. Must be at least 1; the default is
+    /// <see cref="DefaultMaxStagedBytes"/>.
+    /// </summary>
+    public long MaxStagedBytes { get; set; } = DefaultMaxStagedBytes;
 }

@@ -56,6 +56,19 @@ internal sealed class MaterialisedViewClusterFixture
             // convergence is driven deterministically via explicit DrainAsync.
             siloBuilder.Services.ConfigureAll<LatticeViewOptions>(
                 o => o.CoalesceWindow = TimeSpan.FromMinutes(5));
+
+            // A reserved view name with a deliberately tiny atomic-staging cap so
+            // the bounded-buffer backstop can be exercised: a second concurrent
+            // un-terminated atomic transaction trips the cap and forces a rebuild.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                BackstopViewName,
+                o => o.MaxStagedTransactions = 1);
         }
     }
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c> so the
+    /// bounded-buffer staging backstop fires on the second staged transaction.
+    /// </summary>
+    public const string BackstopViewName = "mv-atomic-backstop-view";
 }

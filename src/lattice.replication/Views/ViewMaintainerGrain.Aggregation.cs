@@ -61,6 +61,7 @@ internal sealed partial class ViewMaintainerGrain
         var contributions = new List<AggregationContribution>();
         var advancedOffsets = new Dictionary<int, long>();
         var highest = state.State.HighestAppliedTimestamp;
+        var completedTransactions = new List<Guid>();
         long backlogRead = 0;
 
         for (var partition = 0; partition < partitions; partition++)
@@ -76,12 +77,23 @@ internal sealed partial class ViewMaintainerGrain
                 readThisPartition++;
                 backlogRead++;
 
-                if (IsApplicable(mutation))
+                switch (Classify(mutation, out var terminalCommit, out var terminalAbort))
                 {
-                    foreach (var contribution in registration.AggregationProjection!.Project(mutation))
-                    {
-                        contributions.Add(contribution);
-                    }
+                    case StagingDisposition.Apply:
+                        foreach (var contribution in registration.AggregationProjection!.Project(mutation))
+                        {
+                            contributions.Add(contribution);
+                        }
+
+                        break;
+
+                    case StagingDisposition.Stage:
+                        HandleStagingEntry(mutation, partition, offset, terminalCommit, terminalAbort, completedTransactions);
+                        break;
+
+                    case StagingDisposition.Skip:
+                    default:
+                        break;
                 }
 
                 if (mutation.Timestamp > highest)
@@ -96,6 +108,13 @@ internal sealed partial class ViewMaintainerGrain
             }
 
             advancedOffsets[partition] = lastOffset;
+        }
+
+        // Bounded-buffer / retention backstop, identical to the filter path.
+        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(sourceTreeId)))
+        {
+            await RebuildAsync(cancellationToken);
+            return 0;
         }
 
         // An unconstrained range delete cannot be lowered to exact retractions; a
@@ -124,6 +143,15 @@ internal sealed partial class ViewMaintainerGrain
             applied++;
         }
 
+        // Fold every atomic batch that completed this pass into the group
+        // accumulators through the SAME aggregation applier (its per-group
+        // atomic membership+accumulator flip), after the ordinary contributions.
+        applied += await FlushCompletedAggregationBatchesAsync(applier, registration, completedTransactions, cancellationToken);
+
+        // Hold the persisted resume offset back below the lowest still-staged
+        // entry so a restart re-reads and re-stages an incomplete batch.
+        ApplyCheckpointHoldBack(advancedOffsets);
+
         var offsetsAdvanced = false;
         foreach (var (partition, offset) in advancedOffsets)
         {
@@ -142,9 +170,10 @@ internal sealed partial class ViewMaintainerGrain
             await state.WriteStateAsync();
         }
 
-        if (highest > HybridLogicalClock.Zero)
+        var blockedAtHlc = ComputeBlockedAtHlc();
+        if (highest > HybridLogicalClock.Zero || blockedAtHlc is not null)
         {
-            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, cancellationToken);
+            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken);
         }
 
         ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag);
@@ -152,6 +181,52 @@ internal sealed partial class ViewMaintainerGrain
         if (applied > 0)
         {
             AggregationApplied.Add(applied, ViewTag);
+        }
+
+        return applied;
+    }
+
+    /// <summary>
+    /// Folds every aggregation atomic batch in <paramref name="completed"/> that
+    /// is still staged into the group accumulators: projects each prepared entry
+    /// through the aggregation projection and applies the contributions in
+    /// ascending source-HLC order through the existing per-group atomic
+    /// membership+accumulator flip (which is itself crash-idempotent), then
+    /// evicts the batch from the staging buffer.
+    /// </summary>
+    private async Task<int> FlushCompletedAggregationBatchesAsync(
+        AggregationApplier applier,
+        ViewRegistration registration,
+        List<Guid> completed,
+        CancellationToken cancellationToken)
+    {
+        var applied = 0;
+        foreach (var txId in completed)
+        {
+            if (!_staging.TryGetValue(txId, out var tx))
+            {
+                continue;
+            }
+
+            var contributions = new List<AggregationContribution>();
+            foreach (var prepared in tx.PreparesByIndex.Values)
+            {
+                foreach (var contribution in registration.AggregationProjection!.Project(prepared))
+                {
+                    contributions.Add(contribution);
+                }
+            }
+
+            foreach (var contribution in contributions
+                .OrderBy(static c => c.Timestamp.WallClockTicks)
+                .ThenBy(static c => c.Timestamp.Counter))
+            {
+                await applier.ApplyAsync(contribution, cancellationToken);
+                applied++;
+            }
+
+            _staging.Remove(txId);
+            MarkResolved(txId);
         }
 
         return applied;

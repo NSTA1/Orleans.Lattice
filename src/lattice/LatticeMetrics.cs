@@ -2320,4 +2320,21 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewAggregationApplied =
         Meter.CreateCounter<long>("orleans.lattice.view.aggregation_applied", unit: "{contribution}",
             description: "Aggregation contributions (folds and retractions) applied to an aggregation view's group accumulators.");
+
+    /// <summary>
+    /// Counter of atomic-write staging backstop fall-backs: a drain pass
+    /// abandoned incremental atomic-batch staging and forced a rebuild because
+    /// the in-flight staging buffer exceeded its configured bound
+    /// (<see cref="LatticeViewOptions.MaxStagedTransactions"/> /
+    /// <see cref="LatticeViewOptions.MaxStagedBytes"/>) or an un-terminated
+    /// batch's blocked-floor pin would sink below the source WAL retention
+    /// ceiling. Tagged with <see cref="TagView"/>. A non-zero value means a
+    /// saga terminal was lost or the maintainer fell behind the atomic-write
+    /// rate; the view still converges via the rebuild, but the
+    /// not-visible-until-committed batch was reassembled from current source
+    /// state rather than the staged prepares.
+    /// </summary>
+    public static readonly Counter<long> ViewAtomicStagingBackstop =
+        Meter.CreateCounter<long>("orleans.lattice.view.atomic_staging_backstop", unit: "{rebuild}",
+            description: "Drain passes that abandoned atomic-batch staging and forced a rebuild because the staging buffer exceeded its bound or its blocked-floor pin would sink below WAL retention.");
 }

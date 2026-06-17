@@ -40,6 +40,7 @@ internal sealed partial class ViewMaintainerGrain(
     IWalCursorRegistry cursorRegistry,
     LatticeOptionsResolver optionsResolver,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
+    IOptionsMonitor<LatticeOptions> latticeOptions,
     [PersistentState("view-checkpoint", LatticeOptions.StorageProviderName)]
     IPersistentState<ViewCheckpointState> state)
     : IGrainBase, IRemindable, IViewMaintainerGrain
@@ -52,6 +53,7 @@ internal sealed partial class ViewMaintainerGrain(
     private static readonly Histogram<long> BacklogDepth = LatticeMetrics.ViewBacklogDepth;
     private static readonly Counter<long> Applied = LatticeMetrics.ViewApplied;
     private static readonly Counter<long> KeyCollisions = LatticeMetrics.ViewKeyCollisions;
+    private static readonly Counter<long> ViewAtomicStagingBackstop = LatticeMetrics.ViewAtomicStagingBackstop;
 
     private IGrainTimer? _timer;
     private string? _consumerId;
@@ -148,6 +150,7 @@ internal sealed partial class ViewMaintainerGrain(
         var collected = new List<ViewWrite>();
         var advancedOffsets = new Dictionary<int, long>();
         var highest = state.State.HighestAppliedTimestamp;
+        var completedTransactions = new List<Guid>();
         long backlogRead = 0;
 
         for (var partition = 0; partition < partitions; partition++)
@@ -164,12 +167,23 @@ internal sealed partial class ViewMaintainerGrain(
                 readThisPartition++;
                 backlogRead++;
 
-                if (IsApplicable(mutation))
+                switch (Classify(mutation, out var terminalCommit, out var terminalAbort))
                 {
-                    foreach (var write in registration.Projection!.Project(mutation))
-                    {
-                        collected.Add(write);
-                    }
+                    case StagingDisposition.Apply:
+                        foreach (var write in registration.Projection!.Project(mutation))
+                        {
+                            collected.Add(write);
+                        }
+
+                        break;
+
+                    case StagingDisposition.Stage:
+                        HandleStagingEntry(mutation, partition, offset, terminalCommit, terminalAbort, completedTransactions);
+                        break;
+
+                    case StagingDisposition.Skip:
+                    default:
+                        break;
                 }
 
                 // Advance the consumed-HLC high-water mark for every entry read
@@ -191,6 +205,17 @@ internal sealed partial class ViewMaintainerGrain(
             advancedOffsets[partition] = lastOffset;
         }
 
+        // Bounded-buffer / retention backstop: if staging would grow without
+        // bound or an un-terminated batch can no longer be held under the WAL
+        // retention ceiling, abandon incremental staging and rebuild from
+        // current committed source state (which excludes the uncommitted
+        // prepares). The rebuild owns the checkpoint and cursor for this pass.
+        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(sourceTreeId)))
+        {
+            await RebuildAsync(cancellationToken);
+            return 0;
+        }
+
         // A re-keyed unconstrained range delete cannot be lowered to exact view
         // writes; the projection emits a RangeReconcile asking us to re-derive the
         // affected range from source. The conservative, always-correct realisation
@@ -208,6 +233,17 @@ internal sealed partial class ViewMaintainerGrain(
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
         DetectAndReportCollisions(collected);
         var appliedCount = await ApplySurvivorsAsync(viewTree, collected, cancellationToken);
+
+        // Flush every atomic batch that completed this pass through the view
+        // tree's atomic primitive, after the ordinary survivors so a committed
+        // batch wins a same-pass non-atomic write to the same key. Each batch is
+        // projected through the SAME filter / re-key projection as ordinary
+        // writes - staging only defers WHEN they are applied, not HOW.
+        appliedCount += await FlushCompletedFilterBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
+
+        // Hold the persisted resume offset back below the lowest still-staged
+        // entry so a restart re-reads and re-stages an incomplete batch.
+        ApplyCheckpointHoldBack(advancedOffsets);
 
         var offsetsAdvanced = false;
         foreach (var (partition, offset) in advancedOffsets)
@@ -227,9 +263,10 @@ internal sealed partial class ViewMaintainerGrain(
             await state.WriteStateAsync();
         }
 
-        if (highest > HybridLogicalClock.Zero)
+        var blockedAtHlc = ComputeBlockedAtHlc();
+        if (highest > HybridLogicalClock.Zero || blockedAtHlc is not null)
         {
-            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, cancellationToken)
+            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken)
                 ;
         }
 
@@ -342,6 +379,12 @@ internal sealed partial class ViewMaintainerGrain(
 
         var sourceTreeId = registration.SourceTreeId;
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+
+        // A rebuild reconverges the view from current committed source state, so
+        // any partially-staged atomic batch is abandoned (its uncommitted
+        // prepares are not part of committed source state and must not leak into
+        // the view; a committed batch is re-derived from the source rows).
+        _staging.Clear();
 
         // Capture the source head per partition BEFORE scanning so any source
         // mutation committed during the rebuild is picked up by the resumed tail
@@ -527,25 +570,6 @@ internal sealed partial class ViewMaintainerGrain(
         logger.LogWarning(
             "View '{ViewName}' detected {Count} re-key collision(s) in a drain batch (e.g. view key '{Example}' produced by multiple distinct source keys); the key re-map is not injective. Resolving by source-HLC last-writer-wins.",
             ViewName, collisions.Count, collisions[0]);
-    }
-
-    private static bool IsApplicable(in LatticeMutation mutation)
-    {
-        // Skip background maintenance entries (compaction tombstones et al), the
-        // prepared (uncommitted) half of an atomic write, and transaction
-        // terminals. The atomic-write staging path is a later phase; for Phase 1
-        // we simply never expose uncommitted or transactional state to the view.
-        if (mutation.Category == MutationCategory.Maintenance)
-        {
-            return false;
-        }
-
-        if (mutation.IsPrepared)
-        {
-            return false;
-        }
-
-        return mutation.Kind is not (MutationKind.TxCommit or MutationKind.TxAbort);
     }
 
     private static async Task ApplyAsync(ILattice viewTree, ViewWrite write, CancellationToken cancellationToken)

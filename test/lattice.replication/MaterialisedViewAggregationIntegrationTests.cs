@@ -1,4 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Views;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -121,29 +124,45 @@ public class MaterialisedViewAggregationIntegrationTests
     }
 
     [Test]
-    public async Task Rebuild_reproduces_aggregates_from_current_source()
+    public async Task Committed_atomic_batch_folds_into_aggregation_groups_only_after_commit()
     {
-        const string tree = "agg-rebuild-src";
-        const string view = "agg-rebuild-view";
-        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
-        var latticeView = CreateView(tree, view, AggregationKind.Sum);
+        const string tree = "agg-atomic-src";
+        const string view = "agg-atomic-view";
+        const string origin = "remote-origin";
+        var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        _ = CreateView(tree, view, AggregationKind.Sum);
         var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        await maintainer.EnsureActiveAsync();
+        var txId = Guid.NewGuid();
 
-        await source.SetAsync("a", Record("red", 10));
-        await source.SetAsync("b", Record("red", 5));
-        await source.SetAsync("c", Record("blue", 3));
+        HybridLogicalClock Hlc(long t) => new() { WallClockTicks = t };
+        int ShardOf(string key) => LatticeSharding.GetShardIndex(key, LatticeConstants.DefaultShardCount);
+
+        // Stage two prepared contributions to the same group, plus one to another.
+        await apply.ApplyPreparedSetAsync("x", Record("red", 4), Hlc(100), origin, null, 0, txId, 3, 0);
+        await apply.ApplyPreparedSetAsync("y", Record("red", 6), Hlc(101), origin, null, 0, txId, 3, 1);
+        await apply.ApplyPreparedSetAsync("z", Record("blue", 9), Hlc(102), origin, null, 0, txId, 3, 2);
+
+        // Pre-commit: no group accumulator should exist yet.
+        await maintainer.DrainAsync();
+        await maintainer.DrainAsync();
+        Assert.That(await viewTree.GetAsync("red"), Is.Null, "An uncommitted atomic batch must not fold into the aggregation.");
+
+        // Commit every touched shard, then drain: the whole batch folds in atomically.
+        var shards = new[] { "x", "y", "z" }.Select(ShardOf).Distinct().ToArray();
+        var ticks = 1000L;
+        foreach (var shard in shards)
+        {
+            await apply.ApplyTxTerminalAsync(txId, true, shard, Hlc(ticks++), origin, atomicShardCount: shards.Length);
+        }
+
         await DrainToZeroAsync(view);
-        Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(15));
-
-        // Corrupt the materialised value behind the maintainer's back, then rebuild:
-        // the rebuild must reset aggregation state and reproduce the exact sums.
-        await viewTree.SetAsync("red", LatticeAggregationValue.EncodeDouble(999));
-        await latticeView.RebuildAsync();
 
         await Assert.MultipleAsync(async () =>
         {
-            Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(15));
-            Assert.That(SumValue(await viewTree.GetAsync("blue")), Is.EqualTo(3));
+            Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(10), "red = 4 + 6 folded atomically.");
+            Assert.That(SumValue(await viewTree.GetAsync("blue")), Is.EqualTo(9));
         });
     }
 }

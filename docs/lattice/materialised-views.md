@@ -313,6 +313,71 @@ source HLC across the view's shard cursors; for a single source shard this is
 exact, and `WaitForSourceHeadAsync` is the exact write-then-wait form regardless
 of shard count.
 
+## Atomic-write visibility
+
+A source `ILattice.SetManyAtomicAsync` batch is all-or-nothing and is not visible
+to source readers until it commits. The maintainer preserves that guarantee
+**inside the view**: a prepared-but-uncommitted batch never appears, a committed
+batch appears atomically (no partial-batch is ever observable), and an aborted
+batch is never surfaced.
+
+The source writes each batch key to the WAL with `IsPrepared = true` under a
+shared `TransactionId` **before** the per-shard `TxCommit` / `TxAbort` terminals.
+The maintainer (one cluster-wide activation tailing every WAL partition) routes
+those records through a staging buffer keyed by `TransactionId` instead of
+applying them:
+
+- **Prepared entry** - buffered (key, value, source HLC, WAL offset) under its
+  `TransactionId`; not applied.
+- **`TxCommit` terminal** - tallies the distinct committed shard and raises the
+  expected shard count to `max(seen, AtomicShardCount)` (late-discovered shards
+  make the count non-decreasing). When every expected shard terminal has arrived
+  **and** the staged prepares satisfy `AtomicBatchSize`, the whole batch is
+  projected through the same filter / re-key (or aggregation) path as ordinary
+  writes and applied to the view tree atomically through
+  `SetManyAtomicAsync(entries, operationId)`. The `operationId` is derived
+  deterministically from the source `TransactionId`, so a replay or redelivery
+  re-attaches to the completed view saga and applies nothing.
+- **`TxAbort` terminal** - discards the buffered batch; its writes are never
+  surfaced.
+
+Because a terminal's HLC is strictly greater than every prepare's HLC on its
+shard chain and the maintainer reads each partition fully per pass, a completed
+terminal always finds its shard's prepares already staged. When a terminal
+carries no shard count (`AtomicShardCount == 0`), the gate falls back to
+"complete on the first terminal", which is still safe because prepare
+completeness independently proves every key arrived.
+
+**Checkpoint invariant.** The persisted per-partition resume offset is held back
+to `min(contiguous-applied offset, lowest-still-staged offset - 1)`, so a restart
+re-reads and re-stages an incomplete batch and can never skip an un-applied
+prepared entry. The staging buffer itself is not persisted; it is rebuilt
+idempotently from the held-back replay (re-staging is keyed by batch index, and
+an already-resolved transaction is dropped on re-read).
+
+**WAL-GC pin.** While a batch is staged, the maintainer reports `BlockedAtHlc` =
+the HLC of the oldest still-staged prepared entry via the blocked-floor
+`ReportCursorAsync` overload, so the source WAL is not trimmed under the staged
+prepares. The pin is cleared (reported as `null`) once nothing is staged.
+
+**Bounded buffer + retention backstop.** Staging is bounded by
+`MaxStagedTransactions` and `MaxStagedBytes`. If staging would exceed either cap,
+or an un-terminated batch's pin would sink below the source `WalRetention`
+ceiling (so it can no longer complete before the log trims under it), the
+maintainer abandons incremental staging and forces a rebuild from current
+committed source state (which excludes the still-uncommitted prepares). Each
+backstop trip increments `orleans.lattice.view.atomic_staging_backstop`.
+
+Tune the staging caps per view alongside the other options:
+
+```csharp verify
+siloBuilder.ConfigureLatticeView("adults", options =>
+{
+    options.MaxStagedTransactions = 2048;
+    options.MaxStagedBytes = 128L * 1024 * 1024;
+});
+```
+
 ## Configuration
 
 `LatticeViewOptions` is resolved per view name via
@@ -324,6 +389,8 @@ of shard count.
 | `CoalesceWindow` | 50 ms | Period of the background drain timer. |
 | `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. 1 is a single accumulator. |
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard's inverse row to this many entries (approximate mode). 0 keeps every group exact. |
+| `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions the staging buffer holds before the bounded-buffer backstop forces a rebuild. |
+| `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload (key + value) across all staged transactions before the backstop forces a rebuild. |
 
 Configure a single view with `ConfigureLatticeView`:
 
@@ -347,6 +414,7 @@ meter, each tagged with the view name:
 | `orleans.lattice.view.applied` | Counter | View writes applied to the view tree. |
 | `orleans.lattice.view.key_collisions` | Counter | Distinct source keys that re-mapped to one view key in a drain batch (injectivity violation). |
 | `orleans.lattice.view.aggregation_applied` | Counter | Aggregation contributions folded into the view (count / sum / min / max / set-union). |
+| `orleans.lattice.view.atomic_staging_backstop` | Counter | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
 
 ## Limitations
 
@@ -363,8 +431,15 @@ meter, each tagged with the view name:
   because the deleted source keys' scattered view keys cannot be recovered
   without a reverse index. Predicate-filtered range deletes (which carry
   `MatchedKeys`) retract exactly and do not rebuild.
-- **Single-projection filter and aggregation views.** Atomic-write staging,
-  cross-tree visibility, and replication-aware modes are later phases.
+- **Single-projection filter and aggregation views.** Cross-tree atomic
+  visibility and replication-aware modes are later phases.
+- **Atomic apply does not carry TTL.** The view-side atomic primitive takes
+  key/value pairs without an expiry, so a committed atomic batch's view entries
+  are written without a TTL even when the source prepared entries had one.
+- **Cross-batch ordering between a concurrent non-atomic write and an atomic
+  batch to the same key resolves by apply order**, not source HLC: within a drain
+  pass a committed atomic batch is applied after the ordinary survivors, so it
+  wins a same-pass non-atomic write to the same key.
 - **Approximate set-union cardinality is a bounded sample, not HyperLogLog.**
   `AggregationMaxGroupEntries` bounds `SetUnion` with a distinct sample; a true
   HyperLogLog estimator is a later phase.
