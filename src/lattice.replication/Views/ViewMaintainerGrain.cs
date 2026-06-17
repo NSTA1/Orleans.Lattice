@@ -57,7 +57,6 @@ internal sealed partial class ViewMaintainerGrain(
 
     private IGrainTimer? _timer;
     private string? _consumerId;
-    private string? _viewTreeId;
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
@@ -65,11 +64,14 @@ internal sealed partial class ViewMaintainerGrain(
     private string ViewName => context.GrainId.Key.ToString()!;
 
     // Cached per-activation: ViewName is fixed for the lifetime of the grain, so
-    // the derived cursor-consumer id and view-tree id are interpolated once
-    // rather than on every drain / rebuild pass.
+    // the derived cursor-consumer id is interpolated once rather than on every
+    // drain / rebuild pass.
     private string ConsumerId => _consumerId ??= $"view:{ViewName}";
 
-    private string ViewTreeId => _viewTreeId ??= $"view-{ViewName}";
+    // The live view tree is generation-addressed: the active generation is durable
+    // maintainer state advanced only by a shadow-swap. Resolved fresh each call
+    // because a rebuild can flip the active generation within an activation.
+    private string ViewTreeId => GenerationTreeId(state.State.ActiveGeneration);
 
     private LatticeViewOptions Options => viewOptions.Get(ViewName);
 
@@ -119,6 +121,11 @@ internal sealed partial class ViewMaintainerGrain(
         {
             return 0;
         }
+
+        // Reclaim a swapped-out generation tree once its post-swap reader grace has
+        // elapsed; runs on the regular drain cadence so reclamation is crash-safe
+        // (durable) and never blocks the swap itself.
+        await TryReclaimPendingGenerationAsync(cancellationToken);
 
         if (registration.IsAggregation)
         {
@@ -377,110 +384,11 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
-        var sourceTreeId = registration.SourceTreeId;
-        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
-
-        // A rebuild reconverges the view from current committed source state, so
-        // any partially-staged atomic batch is abandoned (its uncommitted
-        // prepares are not part of committed source state and must not leak into
-        // the view; a committed batch is re-derived from the source rows).
-        _staging.Clear();
-
-        // Capture the source head per partition BEFORE scanning so any source
-        // mutation committed during the rebuild is picked up by the resumed tail
-        // (and re-applied idempotently if it was also seen in the scan).
-        var capturedOffsets = new Dictionary<int, long>();
-        for (var partition = 0; partition < partitions; partition++)
-        {
-            var head = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
-            capturedOffsets[partition] = head - 1;
-        }
-
-        // Bump and durably persist the rebuild generation BEFORE re-applying, so
-        // the aggregation flip's idempotency keys are freshened: the rebuild has
-        // cleared the view rows but the completed pre-rebuild sagas are retained,
-        // so re-using their operation ids would re-attach and apply nothing. A
-        // rebuild that crashes and retries persists yet another generation, so it
-        // never collides with a partially-applied previous attempt either.
-        if (registration.IsAggregation)
-        {
-            state.State.RebuildGeneration++;
-            await state.WriteStateAsync();
-        }
-
-        var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
-        var sourceTree = grainFactory.GetGrain<ILattice>(sourceTreeId);
-
-        // In-place rebuild: clear the current view, then re-project current source
-        // state. Phase 1 has no shadow tree / atomic swap, so there is a brief
-        // window where the view is partially populated. A later phase replaces
-        // this with a shadow-swap rebuild.
-        var existingKeys = new List<string>();
-        await foreach (var key in viewTree.KeysAsync(cancellationToken: cancellationToken))
-        {
-            existingKeys.Add(key);
-        }
-
-        foreach (var key in existingKeys)
-        {
-            await viewTree.DeleteAsync(key, cancellationToken);
-        }
-
-        var highest = HybridLogicalClock.Zero;
-        var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(viewTree) : null;
-        await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
-        {
-            var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
-            if (versioned.Value is null)
-            {
-                continue;
-            }
-
-            // Synthesize a Set mutation so the rebuild reuses the exact projection
-            // logic the tail path uses. ExpiresAtTicks is not recoverable from the
-            // value-with-version read, so rebuilt entries lose any TTL (Phase 1
-            // limitation; documented).
-            var synthetic = new LatticeMutation
-            {
-                TreeId = sourceTreeId,
-                Kind = MutationKind.Set,
-                Key = key,
-                Value = versioned.Value,
-                Timestamp = versioned.Version,
-                Category = MutationCategory.User,
-            };
-
-            if (aggregationApplier is not null)
-            {
-                foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
-                {
-                    await aggregationApplier.ApplyAsync(contribution, cancellationToken);
-                }
-            }
-            else
-            {
-                foreach (var write in registration.Projection!.Project(synthetic))
-                {
-                    await ApplyAsync(viewTree, write, cancellationToken);
-                }
-            }
-
-            if (versioned.Version > highest)
-            {
-                highest = versioned.Version;
-            }
-        }
-
-        state.State.AppliedOffsets = capturedOffsets;
-        state.State.HighestAppliedTimestamp = highest;
-        state.State.ProjectionVersion = registration.ProjectionVersion;
-        await state.WriteStateAsync();
-
-        if (highest > HybridLogicalClock.Zero)
-        {
-            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, cancellationToken)
-                ;
-        }
+        // Build a complete new generation in the background, then atomically swap
+        // it in (see ViewMaintainerGrain.ShadowSwap). Readers never observe a
+        // half-built view.
+        var built = await BuildShadowAsync(registration, cancellationToken);
+        await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
     }
 
     /// <inheritdoc />

@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Views;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -32,7 +34,18 @@ internal sealed class MaterialisedViewClusterFixture
         await Cluster.DeployAsync();
     }
 
-    /// <summary>Stops and disposes the cluster.</summary>
+    /// <summary>
+    /// Resolves the maintainer's currently-active view tree. Because a rebuild
+    /// performs a shadow-swap to a new generation tree id, callers must re-resolve
+    /// the active tree after any drain that may have rebuilt rather than caching a
+    /// fixed <c>view-{name}</c> grain (which is the legacy generation-0 id only).
+    /// </summary>
+    public async Task<ILattice> ActiveViewTreeAsync(string viewName)
+    {
+        var maintainer = Cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
+        var treeId = await maintainer.GetActiveTreeIdAsync();
+        return Cluster.Client.GetGrain<ILattice>(treeId);
+    }
     public async Task DisposeAsync()
     {
         if (Cluster is not null)
@@ -54,8 +67,15 @@ internal sealed class MaterialisedViewClusterFixture
             // Pin a long coalesce window for every view so the maintainer's
             // background drain timer stays dormant during the test and
             // convergence is driven deterministically via explicit DrainAsync.
-            siloBuilder.Services.ConfigureAll<LatticeViewOptions>(
-                o => o.CoalesceWindow = TimeSpan.FromMinutes(5));
+            // Shrink the read-handle cache TTL and old-generation reclaim grace so
+            // generation reclamation is observable within a test without long waits
+            // (the grace must stay above the cache TTL - see the validator).
+            siloBuilder.Services.ConfigureAll<LatticeViewOptions>(o =>
+            {
+                o.CoalesceWindow = TimeSpan.FromMinutes(5);
+                o.ReadHandleCacheTtl = TimeSpan.FromMilliseconds(50);
+                o.OldGenerationReclaimGrace = TimeSpan.FromMilliseconds(200);
+            });
 
             // A reserved view name with a deliberately tiny atomic-staging cap so
             // the bounded-buffer backstop can be exercised: a second concurrent

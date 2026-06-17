@@ -38,7 +38,7 @@ public class MaterialisedViewPhase2IntegrationTests
     private static PredicateLatticeViewProjection PrefixRekey() =>
         new(keySelector: src => $"v:{src}", keySelectorVersion: "prefix-v1");
 
-    private async Task DrainToZeroAsync(string viewName)
+    private async Task<ILattice> DrainToZeroAsync(string viewName)
     {
         var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
         await maintainer.EnsureActiveAsync();
@@ -47,13 +47,14 @@ public class MaterialisedViewPhase2IntegrationTests
             await maintainer.DrainAsync();
             if (await maintainer.GetLagAsync() == 0)
             {
-                return;
+                return await _fixture.ActiveViewTreeAsync(viewName);
             }
 
             await Task.Delay(20);
         }
 
         Assert.Fail($"View '{viewName}' did not catch up to the source head.");
+        return await _fixture.ActiveViewTreeAsync(viewName);
     }
 
     [Test]
@@ -63,11 +64,10 @@ public class MaterialisedViewPhase2IntegrationTests
         const string view = "mv2-rekey-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         _ = CreateView(tree, view, PrefixRekey());
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
 
         await source.SetAsync("a", Bytes("a1"));
         await source.SetAsync("b", Bytes("b1"));
-        await DrainToZeroAsync(view);
+        var viewTree = await DrainToZeroAsync(view);
 
         await Assert.MultipleAsync(async () =>
         {
@@ -79,12 +79,12 @@ public class MaterialisedViewPhase2IntegrationTests
 
         // Update: the re-keyed entry tracks the new value.
         await source.SetAsync("a", Bytes("a2"));
-        await DrainToZeroAsync(view);
+        viewTree = await DrainToZeroAsync(view);
         Assert.That(await viewTree.GetAsync("v:a"), Is.EqualTo(Bytes("a2")));
 
         // Delete: the view key is recomputed from the source key and removed.
         await source.DeleteAsync("a");
-        await DrainToZeroAsync(view);
+        viewTree = await DrainToZeroAsync(view);
         Assert.That(await viewTree.GetAsync("v:a"), Is.Null);
     }
 
@@ -95,18 +95,17 @@ public class MaterialisedViewPhase2IntegrationTests
         const string view = "mv2-rekey-range-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         _ = CreateView(tree, view, PrefixRekey());
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
 
         await source.SetAsync("a", Bytes("a1"));
         await source.SetAsync("b", Bytes("b1"));
         await source.SetAsync("c", Bytes("c1"));
-        await DrainToZeroAsync(view);
+        var viewTree = await DrainToZeroAsync(view);
         Assert.That(await viewTree.CountAsync(), Is.EqualTo(3));
 
         // Unfiltered range delete populates no MatchedKeys, but a re-keyed view
         // resolves it through a reconcile (rebuild) and converges all the same.
         await source.DeleteRangeAsync("a", "c");
-        await DrainToZeroAsync(view);
+        viewTree = await DrainToZeroAsync(view);
 
         await Assert.MultipleAsync(async () =>
         {
@@ -124,7 +123,6 @@ public class MaterialisedViewPhase2IntegrationTests
         const string view = "mv2-kp-range-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         _ = CreateView(tree, view, new PredicateLatticeViewProjection());
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
 
         await source.SetAsync("a", Bytes("a1"));
         await source.SetAsync("b", Bytes("b1"));
@@ -132,7 +130,7 @@ public class MaterialisedViewPhase2IntegrationTests
         await DrainToZeroAsync(view);
 
         await source.DeleteRangeAsync("a", "c");
-        await DrainToZeroAsync(view);
+        var viewTree = await DrainToZeroAsync(view);
 
         await Assert.MultipleAsync(async () =>
         {
@@ -167,9 +165,8 @@ public class MaterialisedViewPhase2IntegrationTests
         await source.SetAsync("b", Bytes("b1"));
 
         _ = CreateView(tree, view, projection);
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
 
-        await DrainToZeroAsync(view);
+        var viewTree = await DrainToZeroAsync(view);
 
         await Assert.MultipleAsync(async () =>
         {
@@ -197,7 +194,7 @@ public class MaterialisedViewPhase2IntegrationTests
 
         await latticeView.WaitForSourceHlcAsync(head, TimeSpan.FromSeconds(10));
 
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
+        var viewTree = await _fixture.ActiveViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("k"), Is.EqualTo(Bytes("v1")));
     }
 

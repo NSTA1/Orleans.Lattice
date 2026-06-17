@@ -358,4 +358,9 @@ internal static class TypeAliases
     internal const string AggregationKind = "ol.agk";
     internal const string AggregationContribution = "ol.agc";
     internal const string AggregationContributionKind = "ol.ack";
+
+    // Materialised views (Phase 5): the order-independent content fingerprint a
+    // view's drift digest / ReconcileAsync compares between the live view and a
+    // fresh source re-projection.
+    internal const string ViewDigest = "ol.vdg";
 }

@@ -55,4 +55,47 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(3)]
     public long RebuildGeneration { get; set; }
+
+    /// <summary>
+    /// The durable, monotonically-increasing <em>active generation</em> of the
+    /// view tree. The live view tree id is generation-addressed: generation
+    /// <c>0</c> maps to the legacy <c>view-{name}</c> id (so an already-materialised
+    /// view keeps its tree across an upgrade), and every generation greater than
+    /// <c>0</c> is suffixed <c>view-{name}#g{N}</c>. A shadow-swap rebuild builds
+    /// into generation <c>N+1</c> and, on completion, flips this field to
+    /// <c>N+1</c> in the same durable write that advances the checkpoint - the
+    /// atomic swap. Readers resolve the view tree through this field, so they flip
+    /// from the old fully-built tree to the new one with no empty window. A crash
+    /// before the swap leaves the prior generation active and the orphaned shadow
+    /// is overwritten by the next rebuild attempt.
+    /// </summary>
+    [Id(4)]
+    public long ActiveGeneration { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> when an old generation's tree is awaiting reclamation
+    /// after a swap. The reclamation is deferred (rather than performed inline with
+    /// the swap) so a reader still holding the prior generation's cached tree id
+    /// during the brief post-swap staleness window reads a fully-built - if
+    /// slightly stale - tree, never a deleted one.
+    /// </summary>
+    [Id(5)]
+    public bool HasPendingReclaim { get; set; }
+
+    /// <summary>
+    /// The generation whose tree is awaiting reclamation when
+    /// <see cref="HasPendingReclaim"/> is set. Resolved to a tree id through the
+    /// same generation-addressing scheme as <see cref="ActiveGeneration"/>.
+    /// </summary>
+    [Id(6)]
+    public long PendingReclaimGeneration { get; set; }
+
+    /// <summary>
+    /// Absolute UTC tick at or after which the <see cref="PendingReclaimGeneration"/>
+    /// tree may be deleted. Set on swap to <c>now + reclaim-grace</c>, where the
+    /// grace comfortably exceeds the read handle's active-tree cache lifetime so no
+    /// reader can still be resolving the reclaimed generation.
+    /// </summary>
+    [Id(7)]
+    public long ReclaimEligibleAtTicks { get; set; }
 }

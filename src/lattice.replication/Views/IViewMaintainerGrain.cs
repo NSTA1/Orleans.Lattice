@@ -38,11 +38,37 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     Task<long> GetLagAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Rebuilds the view in place from the current source state and resumes
-    /// tailing from the captured source head. Used on a fall-off-log condition or
-    /// a projection-version change.
+    /// Rebuilds the view from current source state using a shadow-swap: builds a
+    /// complete new generation tree, then atomically flips the active generation
+    /// (and the resume checkpoint) over in a single durable commit, so readers
+    /// never observe a half-built view. Used on a fall-off-log condition or a
+    /// projection-version change.
     /// </summary>
     Task RebuildAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// View anti-entropy for a locally-derived view: builds the expected view from
+    /// current source state into a shadow generation, compares it against the live
+    /// view via a <see cref="ViewDigest"/>, and swaps the shadow in (repairing the
+    /// view) only when they diverge. Returns <see langword="true"/> when drift was
+    /// detected and repaired, <see langword="false"/> when the view already
+    /// matched the source.
+    /// </summary>
+    Task<bool> ReconcileAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Computes a deterministic, order-independent <see cref="ViewDigest"/> over
+    /// the active generation's materialised (key, value) entries (excluding any
+    /// reserved aggregation internal rows).
+    /// </summary>
+    Task<ViewDigest> ComputeViewDigestAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the grain id of the view tree currently serving reads: the
+    /// generation-addressed id for the durable active generation. The read handle
+    /// caches this to resolve queries without a grain hop per read.
+    /// </summary>
+    Task<string> GetActiveTreeIdAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Read-your-writes barrier: drives drains until the highest applied source

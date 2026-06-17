@@ -25,8 +25,10 @@ Register `AddLatticeViews` **after** `AddLatticeReplication`.
   translates range deletes per matched key (see [Range deletes](#range-deletes)).
 - Persists the checkpoint and reports its applied cursor to the WAL garbage
   collector so source entries are not trimmed before the view has consumed them.
-- Rebuilds in place from current source state on a fall-off-log condition or a
-  projection-version change.
+- Rebuilds from current source state on a fall-off-log condition or a
+  projection-version change by building a **shadow generation tree** and
+  atomically swapping it in, so readers never observe a half-built or empty view
+  (see [Shadow-swap rebuild](#shadow-swap-rebuild)).
 
 ## Registering a view at startup
 
@@ -45,18 +47,37 @@ satisfies `Age >= 18`, under the same key, in the `view-adults` tree.
 
 ## Reading a view
 
-A view is read through its backing tree. The view name `adults` is served by the
-tree `view-adults`:
+A view is read through its `ILatticeView` handle, which resolves the active
+generation tree for you (see [Generation tree ids](#generation-tree-ids-and-the-read-staleness-window)).
+Prefer the handle over binding a raw `ILattice` grain, because a rebuild swaps
+the live tree to a new generation id:
 
 ```csharp verify
-var adults = grainFactory.GetGrain<ILattice>("view-adults");
-byte[]? alice = await adults.GetAsync("alice", cancellationToken);
+public sealed class AdultsReader(ILatticeViewFactory views, IGrainFactory grains)
+{
+    public async Task<byte[]?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        var source = grains.GetGrain<ILattice>("people");
+        ILatticeView adults = views.Create(
+            source,
+            "adults",
+            new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
+                LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+
+        return await adults.GetAsync(key, cancellationToken);
+    }
+}
 ```
+
+A never-yet-rebuilt view is served by the legacy tree id `view-{name}` (generation
+0), so reading `grainFactory.GetGrain<ILattice>("view-adults")` directly still
+works until the first rebuild. After a rebuild the active tree id changes, so a
+raw-grain reader must re-resolve it (the handle does this transparently).
 
 ## Creating a view at runtime and observing lag
 
 Inject `ILatticeViewFactory` to create a view handle, query its apply lag (the
-count of committed-but-unapplied source entries), or force an in-place rebuild:
+count of committed-but-unapplied source entries), or force a shadow-swap rebuild:
 
 ```csharp verify
 public sealed class AdultsViewService(ILatticeViewFactory views, IGrainFactory grains)
@@ -270,14 +291,129 @@ siloBuilder.ConfigureLatticeView("age-sum-by-name", options =>
 
 ### Rebuild
 
-A rebuild clears the whole view tree - materialised values **and** reserved
-accumulator / inverse / membership rows - before re-scanning current source
-state, so aggregation state is reset and re-accumulated from scratch. A rebuild
-also bumps a durable rebuild generation that seeds the atomic-flip operation id,
-so the re-accumulation mints fresh sagas rather than re-attaching to the retained
-sagas of the rows it just deleted. An unconstrained source range delete (one with
-no matched-key set) escalates to a rebuild, because the deleted source keys' prior
-contributions cannot be retracted exactly without a reverse index.
+A rebuild re-projects current source state. It never mutates the live view tree
+in place; instead it builds a **shadow generation tree** and atomically swaps it
+in (see [Shadow-swap rebuild](#shadow-swap-rebuild)). The shadow build clears the
+shadow tree's materialised values **and** reserved accumulator / inverse /
+membership rows, so aggregation state is reset and re-accumulated from scratch. A
+rebuild also bumps a durable rebuild generation that seeds the atomic-flip
+operation id, so the re-accumulation mints fresh sagas rather than re-attaching to
+retained sagas. An unconstrained source range delete (one with no matched-key set)
+escalates to a rebuild, because the deleted source keys' prior contributions
+cannot be retracted exactly without a reverse index.
+
+## Shadow-swap rebuild
+
+A rebuild must never expose a half-built or empty view to readers. Rather than
+clearing the live tree and re-filling it, the maintainer:
+
+1. Resolves the live tree through the **active generation** held in durable
+   maintainer state, then targets the next generation as the shadow.
+2. Snapshots each source partition's head offset as the resume floor **before**
+   scanning, range-scans current source state, and re-projects every surviving
+   entry into the shadow through the same filter / re-key / aggregation path.
+   The scan carries each entry's `ExpiresAtTicks` through, so **rebuilt entries
+   keep their TTL** rather than reverting to no-expiry.
+3. **Atomically swaps** by advancing the active generation and setting the
+   resume offsets to the snapshotted heads in a **single** durable state write.
+   Readers resolving the active generation flip from the old fully-built tree to
+   the new fully-built tree with no empty window in between.
+4. Reclaims the old generation's tree after a short grace period (see
+   `OldGenerationReclaimGrace`), so its keys do not linger.
+
+**Single-commit atomicity and crash safety.** The swap is exactly one
+`WriteStateAsync`: it advances the active generation, records the new resume
+offsets, and schedules the old generation for reclamation together. A crash
+*before* the swap leaves the old generation active and fully built - the shadow
+is simply orphaned, and the next rebuild attempt clears and reuses that shadow
+generation id before scanning. A crash *after* the swap leaves the new generation
+active; the deferred reclamation of the old generation is idempotent and retried
+on the next drain. There is no window in which a reader can resolve a
+partially-built tree.
+
+### Generation tree ids and the read staleness window
+
+The live view tree is generation-addressed:
+
+- Generation 0 maps to the legacy id `view-{name}` (so an already-materialised
+  view keeps its existing tree with no migration).
+- Generation `N > 0` maps to `view-{name}#g{N}`.
+
+The active generation advances only on a successful swap; a shadow build always
+targets `active + 1`. The `ILatticeView` handle caches the resolved active tree
+id for a short TTL (`ReadHandleCacheTtl`, default 1s) to avoid a maintainer grain
+hop on every read, and refreshes it on expiry or after an explicit rebuild /
+reconcile through the handle.
+
+**Staleness window.** During the brief window between a swap and the handle's
+cache refresh (at most `ReadHandleCacheTtl`), a reader may serve the **prior**
+generation - which is fully built and only slightly stale - but never a
+half-built or empty tree. The old generation is retained for
+`OldGenerationReclaimGrace` (default 5s, and required to exceed
+`ReadHandleCacheTtl`) precisely so a reader holding a stale cached id still reads
+a live tree until every handle has refreshed.
+
+## Reconcile and drift detection
+
+`ReconcileAsync` is the view's anti-entropy: it re-derives the expected view from
+**current source state** and compares it against the live view through a
+content digest. If they diverge, it repairs the view through a shadow-swap
+rebuild and returns `true`; if they already agree it discards the freshly-built
+shadow and returns `false`.
+
+```csharp verify
+public sealed class ViewRepairService(ILatticeViewFactory views, IGrainFactory grains)
+{
+    public async Task<bool> RepairAsync(CancellationToken cancellationToken)
+    {
+        var source = grains.GetGrain<ILattice>("people");
+        ILatticeView adults = views.Create(
+            source,
+            "adults",
+            new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
+                LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+
+        // Returns true if drift was detected and repaired, false if already in sync.
+        return await adults.ReconcileAsync(cancellationToken);
+    }
+}
+```
+
+`ComputeDigestAsync` exposes the same digest used by reconcile so divergence is
+observable and testable:
+
+```csharp verify
+public sealed class ViewDigestService(ILatticeViewFactory views, IGrainFactory grains)
+{
+    public async Task<long> EntryCountAsync(CancellationToken cancellationToken)
+    {
+        var source = grains.GetGrain<ILattice>("people");
+        ILatticeView adults = views.Create(
+            source,
+            "adults",
+            new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
+                LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+
+        ViewDigest digest = await adults.ComputeDigestAsync(cancellationToken);
+        return digest.EntryCount;
+    }
+}
+```
+
+The digest is an **order-independent** content fingerprint over the materialised
+`(key, value)` pairs only: each pair is hashed and the per-pair hashes are
+XOR-folded, then combined with the entry count. Order independence means two
+trees that hold the same logical content compare equal regardless of scan order.
+For aggregation views the digest covers the materialised group values and
+excludes the reserved accumulator / inverse / membership rows. The digest is a
+content fingerprint and deliberately does not fold per-entry replication metadata
+(hybrid logical clock, origin, vector clock) or TTL, so a digest taken over the
+live tree matches a digest taken over a fresh source re-projection when, and only
+when, their materialised content agrees.
+
+`ReconcileAsync` assumes a **local source** (the default `DeriveLocally`
+topology). A ship-view consumer has no local source to re-derive from and cannot
+reconcile; reconcile support for that topology is a later phase.
 
 
 
@@ -391,6 +527,8 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard's inverse row to this many entries (approximate mode). 0 keeps every group exact. |
 | `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions the staging buffer holds before the bounded-buffer backstop forces a rebuild. |
 | `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload (key + value) across all staged transactions before the backstop forces a rebuild. |
+| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved active generation tree id before re-resolving it. Bounds the post-swap read-staleness window. |
+| `OldGenerationReclaimGrace` | 5 s | How long a swapped-out generation tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
 
 Configure a single view with `ConfigureLatticeView`:
 
@@ -420,17 +558,12 @@ meter, each tagged with the view name:
 
 - **WAL provider required.** Views tail the commit log, so a WAL provider must be
   registered (the replication package supplies one).
-- **In-place rebuild.** A rebuild clears the view and re-projects current source
-  state; there is no shadow tree / atomic swap yet, so a rebuild has a brief
-  window where the view is partially populated.
-- **TTL not recovered on rebuild.** A rebuilt entry loses any source TTL because
-  the value-with-version read used by the rebuild does not expose the expiry.
-  Tail-applied entries preserve TTL.
 - **Unconstrained range delete on a re-keyed view rebuilds.** A `DeleteRange`
   without `MatchedKeys` against a re-keyed view escalates to a full rebuild,
   because the deleted source keys' scattered view keys cannot be recovered
   without a reverse index. Predicate-filtered range deletes (which carry
-  `MatchedKeys`) retract exactly and do not rebuild.
+  `MatchedKeys`) retract exactly and do not rebuild. The rebuild is a shadow-swap,
+  so readers never see a partial view during it.
 - **Single-projection filter and aggregation views.** Cross-tree atomic
   visibility and replication-aware modes are later phases.
 - **Atomic apply does not carry TTL.** The view-side atomic primitive takes

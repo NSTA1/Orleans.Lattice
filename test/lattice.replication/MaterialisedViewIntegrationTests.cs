@@ -43,7 +43,7 @@ public class MaterialisedViewIntegrationTests
         return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
     }
 
-    private async Task DrainToZeroAsync(string viewName)
+    private async Task<ILattice> DrainToZeroAsync(string viewName)
     {
         var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
         await maintainer.EnsureActiveAsync();
@@ -52,13 +52,14 @@ public class MaterialisedViewIntegrationTests
             await maintainer.DrainAsync();
             if (await maintainer.GetLagAsync() == 0)
             {
-                return;
+                return await _fixture.ActiveViewTreeAsync(viewName);
             }
 
             await Task.Delay(20);
         }
 
         Assert.Fail($"View '{viewName}' did not catch up to the source head.");
+        return await _fixture.ActiveViewTreeAsync(viewName);
     }
 
     [Test]
@@ -75,7 +76,7 @@ public class MaterialisedViewIntegrationTests
 
         await DrainToZeroAsync(view);
 
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
+        var viewTree = await _fixture.ActiveViewTreeAsync(view);
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(await viewTree.GetAsync("a"), Is.EqualTo(Person(30, "a1")));
@@ -98,7 +99,7 @@ public class MaterialisedViewIntegrationTests
         await source.SetAsync("k", Person(31, "new"));
         await DrainToZeroAsync(view);
 
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
+        var viewTree = await _fixture.ActiveViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("k"), Is.EqualTo(Person(31, "new")));
     }
 
@@ -113,12 +114,13 @@ public class MaterialisedViewIntegrationTests
         await source.SetAsync("k", Person(30, "adult"));
         await DrainToZeroAsync(view);
 
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
+        var viewTree = await _fixture.ActiveViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("k"), Is.Not.Null);
 
         await source.SetAsync("k", Person(5, "minor"));
         await DrainToZeroAsync(view);
 
+        viewTree = await _fixture.ActiveViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("k"), Is.Null);
     }
 
@@ -133,12 +135,13 @@ public class MaterialisedViewIntegrationTests
         await source.SetAsync("k", Person(30, "v"));
         await DrainToZeroAsync(view);
 
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
+        var viewTree = await _fixture.ActiveViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("k"), Is.Not.Null);
 
         await source.DeleteAsync("k");
         await DrainToZeroAsync(view);
 
+        viewTree = await _fixture.ActiveViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("k"), Is.Null);
     }
 
@@ -175,18 +178,22 @@ public class MaterialisedViewIntegrationTests
         await source.SetAsync("b", Person(40, "b"));
         await DrainToZeroAsync(view);
 
-        // Simulate drift: delete an entry directly from the view tree behind the
-        // maintainer's back, then rebuild from current source state.
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
-        await viewTree.DeleteAsync("a");
-        Assert.That(await viewTree.GetAsync("a"), Is.Null);
+        // Simulate drift: delete an entry directly from the active view tree behind
+        // the maintainer's back, then rebuild from current source state. After a
+        // shadow-swap rebuild the active generation advances, so assertions read
+        // through the handle (which resolves the active generation) rather than a
+        // fixed gen-0 tree id.
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        var activeTree = _fixture.Cluster.Client.GetGrain<ILattice>(await maintainer.GetActiveTreeIdAsync());
+        await activeTree.DeleteAsync("a");
+        Assert.That(await activeTree.GetAsync("a"), Is.Null);
 
         await latticeView.RebuildAsync();
 
         await Assert.MultipleAsync(async () =>
         {
-            Assert.That(await viewTree.GetAsync("a"), Is.EqualTo(Person(30, "a")));
-            Assert.That(await viewTree.GetAsync("b"), Is.EqualTo(Person(40, "b")));
+            Assert.That(await latticeView.GetAsync("a"), Is.EqualTo(Person(30, "a")));
+            Assert.That(await latticeView.GetAsync("b"), Is.EqualTo(Person(40, "b")));
         });
     }
 }

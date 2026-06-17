@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Replication.Views;
 
@@ -14,6 +15,7 @@ internal sealed class LatticeViewFactory(
     IGrainFactory grainFactory,
     IViewCatalog catalog,
     ILatticeReplicationContext replicationContext,
+    IOptionsMonitor<LatticeViewOptions> viewOptions,
     ILogger<LatticeViewFactory> logger) : ILatticeViewFactory
 {
     /// <inheritdoc />
@@ -36,7 +38,6 @@ internal sealed class LatticeViewFactory(
         catalog.Register(registration);
 
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
-        var viewTree = grainFactory.GetGrain<ILattice>($"view-{viewName}");
 
         // Lazy activation (Phase 1): kick the maintainer online in the background.
         // Faults are observed and logged rather than surfaced through the sync
@@ -44,7 +45,15 @@ internal sealed class LatticeViewFactory(
         // EnsureActiveAsync with retry/backoff for startup-registered views.
         _ = EnsureActiveAsync(maintainer, viewName);
 
-        return new LatticeView(viewName, viewTree, maintainer, registration.IsAggregation);
+        var options = viewOptions.Get(viewName);
+        var cacheTtl = options.ReadHandleCacheTtl > TimeSpan.Zero
+            ? options.ReadHandleCacheTtl
+            : LatticeViewOptions.DefaultReadHandleCacheTtl;
+
+        // The read handle resolves the active-generation tree through the
+        // maintainer (cached for cacheTtl) rather than binding a fixed tree id, so
+        // queries follow a shadow-swap rebuild automatically.
+        return new LatticeView(viewName, grainFactory, maintainer, cacheTtl, registration.IsAggregation);
     }
 
     private async Task EnsureActiveAsync(IViewMaintainerGrain maintainer, string viewName)

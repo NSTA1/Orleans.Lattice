@@ -45,6 +45,18 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             failures.Add($"{nameof(LatticeViewOptions.MaxStagedBytes)} must be at least 1 (was {options.MaxStagedBytes}).");
         }
 
+        if (options.ReadHandleCacheTtl <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.ReadHandleCacheTtl)} must be greater than zero (was {options.ReadHandleCacheTtl}).");
+        }
+
+        if (options.OldGenerationReclaimGrace <= options.ReadHandleCacheTtl)
+        {
+            failures.Add(
+                $"{nameof(LatticeViewOptions.OldGenerationReclaimGrace)} ({options.OldGenerationReclaimGrace}) must exceed " +
+                $"{nameof(LatticeViewOptions.ReadHandleCacheTtl)} ({options.ReadHandleCacheTtl}) so a stale reader's cached generation is never reclaimed under it.");
+        }
+
         return failures.Count > 0 ? ValidateOptionsResult.Fail(failures) : ValidateOptionsResult.Success;
     }
 }

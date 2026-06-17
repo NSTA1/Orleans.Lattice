@@ -50,7 +50,7 @@ public class MaterialisedViewAggregationIntegrationTests
         return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
     }
 
-    private async Task DrainToZeroAsync(string viewName)
+    private async Task<ILattice> DrainToZeroAsync(string viewName)
     {
         var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
         await maintainer.EnsureActiveAsync();
@@ -59,13 +59,14 @@ public class MaterialisedViewAggregationIntegrationTests
             await maintainer.DrainAsync();
             if (await maintainer.GetLagAsync() == 0)
             {
-                return;
+                return await _fixture.ActiveViewTreeAsync(viewName);
             }
 
             await Task.Delay(20);
         }
 
         Assert.Fail($"View '{viewName}' did not catch up to the source head.");
+        return await _fixture.ActiveViewTreeAsync(viewName);
     }
 
     private static double? SumValue(byte[]? bytes) =>
@@ -78,12 +79,11 @@ public class MaterialisedViewAggregationIntegrationTests
         const string view = "agg-sum-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         _ = CreateView(tree, view, AggregationKind.Sum);
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
 
         await source.SetAsync("a", Record("red", 10));
         await source.SetAsync("b", Record("red", 5));
         await source.SetAsync("c", Record("blue", 7));
-        await DrainToZeroAsync(view);
+        var viewTree = await DrainToZeroAsync(view);
 
         await Assert.MultipleAsync(async () =>
         {
@@ -93,12 +93,12 @@ public class MaterialisedViewAggregationIntegrationTests
 
         // Overwrite a's score (10 -> 2): red must drop to 7, not accumulate.
         await source.SetAsync("a", Record("red", 2));
-        await DrainToZeroAsync(view);
+        viewTree = await DrainToZeroAsync(view);
         Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(7));
 
         // Delete b: red drops to 2.
         await source.DeleteAsync("b");
-        await DrainToZeroAsync(view);
+        viewTree = await DrainToZeroAsync(view);
         Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(2));
     }
 
@@ -109,17 +109,16 @@ public class MaterialisedViewAggregationIntegrationTests
         const string view = "agg-min-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
         _ = CreateView(tree, view, AggregationKind.Min);
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
 
         await source.SetAsync("a", Record("red", 5));
         await source.SetAsync("b", Record("red", 2));
         await source.SetAsync("c", Record("red", 9));
-        await DrainToZeroAsync(view);
+        var viewTree = await DrainToZeroAsync(view);
         Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(2));
 
         // Delete the current minimum: min must re-derive to the next survivor (5).
         await source.DeleteAsync("b");
-        await DrainToZeroAsync(view);
+        viewTree = await DrainToZeroAsync(view);
         Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(5));
     }
 
@@ -131,7 +130,6 @@ public class MaterialisedViewAggregationIntegrationTests
         const string origin = "remote-origin";
         var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
         _ = CreateView(tree, view, AggregationKind.Sum);
-        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
         var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
         await maintainer.EnsureActiveAsync();
         var txId = Guid.NewGuid();
@@ -147,6 +145,7 @@ public class MaterialisedViewAggregationIntegrationTests
         // Pre-commit: no group accumulator should exist yet.
         await maintainer.DrainAsync();
         await maintainer.DrainAsync();
+        var viewTree = await _fixture.ActiveViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("red"), Is.Null, "An uncommitted atomic batch must not fold into the aggregation.");
 
         // Commit every touched shard, then drain: the whole batch folds in atomically.
@@ -157,7 +156,7 @@ public class MaterialisedViewAggregationIntegrationTests
             await apply.ApplyTxTerminalAsync(txId, true, shard, Hlc(ticks++), origin, atomicShardCount: shards.Length);
         }
 
-        await DrainToZeroAsync(view);
+        viewTree = await DrainToZeroAsync(view);
 
         await Assert.MultipleAsync(async () =>
         {

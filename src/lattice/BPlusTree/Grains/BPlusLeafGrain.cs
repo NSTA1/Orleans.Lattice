@@ -375,7 +375,7 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
         {
-            return Task.FromResult(new VersionedValue { Value = lww.Value, Version = lww.Timestamp });
+            return Task.FromResult(new VersionedValue { Value = lww.Value, Version = lww.Timestamp, ExpiresAtTicks = lww.ExpiresAtTicks });
         }
 
         return Task.FromResult(new VersionedValue());
@@ -398,17 +398,17 @@ internal sealed partial class BPlusLeafGrain(
                     if (Cache.TryGetRow(key, out var entriesLww)
                         && !entriesLww.IsTombstone
                         && !entriesLww.IsExpired(nowTicks))
-                        return new VersionedValue { Value = entriesLww.Value, Version = entriesLww.Timestamp };
+                        return new VersionedValue { Value = entriesLww.Value, Version = entriesLww.Timestamp, ExpiresAtTicks = entriesLww.ExpiresAtTicks };
                     return new VersionedValue();
                 }
                 if (pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks))
                     return new VersionedValue();
-                return new VersionedValue { Value = pendingValue.Value, Version = pendingValue.Timestamp };
+                return new VersionedValue { Value = pendingValue.Value, Version = pendingValue.Timestamp, ExpiresAtTicks = pendingValue.ExpiresAtTicks };
             default:
                 // InFlight or Aborted - surface the pre-saga value.
                 // See GetWithPendingAsync for the rationale.
                 if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
-                    return new VersionedValue { Value = lww.Value, Version = lww.Timestamp };
+                    return new VersionedValue { Value = lww.Value, Version = lww.Timestamp, ExpiresAtTicks = lww.ExpiresAtTicks };
                 return new VersionedValue();
         }
     }

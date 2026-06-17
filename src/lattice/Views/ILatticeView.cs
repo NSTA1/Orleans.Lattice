@@ -2,8 +2,9 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// A read handle over a materialised view maintained asynchronously off a source
-/// tree's write-ahead log. Query methods delegate to the underlying
-/// <c>view-{name}</c> <see cref="ILattice"/>; the view converges toward the
+/// tree's write-ahead log. Query methods delegate to the underlying view tree's
+/// <see cref="ILattice"/>, resolved through the maintainer's <em>active
+/// generation</em> (see <see cref="RebuildAsync"/>); the view converges toward the
 /// source as the maintainer applies projected writes, so reads are
 /// read-your-writes only after the relevant source mutations have been applied
 /// (use <see cref="GetLagAsync"/> to observe how far behind the view is).
@@ -33,12 +34,41 @@ public interface ILatticeView
     Task<long> GetLagAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Rebuilds the view in place by scanning the current source entries through
-    /// the projection and applying the resulting writes. Phase 1 performs an
-    /// in-place rebuild (no shadow tree / atomic swap); concurrent live entries
-    /// that are superseded by a later source mutation resolve by source HLC.
+    /// Rebuilds the view from the current source state using a <em>shadow-swap</em>:
+    /// the maintainer builds a complete new generation of the view tree in the
+    /// background (re-projecting every current source entry, preserving each
+    /// entry's time-to-live), then atomically swaps the active generation over in a
+    /// single durable commit. Readers never observe a half-built or empty view -
+    /// they continue to serve the prior fully-built generation until the swap, then
+    /// flip to the rebuilt one. Used on a fall-off-log condition, a
+    /// projection-version change, or an explicit caller request.
     /// </summary>
     Task RebuildAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// View anti-entropy (producer / locally-derived views only): re-derives the
+    /// expected view from current source state, compares it against the live view
+    /// via a <see cref="ViewDigest"/>, and - if they diverge - repairs the view
+    /// through a shadow-swap rebuild (see <see cref="RebuildAsync"/>). Returns
+    /// <see langword="true"/> when drift was detected and repaired,
+    /// <see langword="false"/> when the view already matched the source.
+    /// <para>
+    /// This is the manual analogue of replication anti-entropy for a view derived
+    /// locally from its source. It has no effect for a view shipped to a
+    /// source-less consumer cluster (whose drift is instead repaired by the normal
+    /// replication anti-entropy against the producer).
+    /// </para>
+    /// </summary>
+    Task<bool> ReconcileAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Computes a deterministic, order-independent <see cref="ViewDigest"/> over
+    /// the live view's materialised (key, value) entries, so divergence between
+    /// the view and its source - or between two points in time - is detectable.
+    /// Aggregation views fold only their materialised group values, excluding the
+    /// reserved internal accumulator / inverse / membership rows.
+    /// </summary>
+    Task<ViewDigest> ComputeDigestAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Read-your-writes barrier: completes once the maintainer has applied every

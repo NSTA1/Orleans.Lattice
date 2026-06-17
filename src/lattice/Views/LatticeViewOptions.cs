@@ -35,6 +35,21 @@ public sealed class LatticeViewOptions
     public const long DefaultMaxStagedBytes = 64L * 1024 * 1024;
 
     /// <summary>
+    /// Default <see cref="ReadHandleCacheTtl"/> (1 second): how long a view read
+    /// handle reuses its cached active-generation tree id before re-resolving it
+    /// from the maintainer.
+    /// </summary>
+    public static readonly TimeSpan DefaultReadHandleCacheTtl = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Default <see cref="OldGenerationReclaimGrace"/> (5 seconds): how long a
+    /// swapped-out view generation tree is retained before it is reclaimed.
+    /// Comfortably exceeds <see cref="DefaultReadHandleCacheTtl"/> so a reader on
+    /// the stale prior generation has refreshed before its tree is deleted.
+    /// </summary>
+    public static readonly TimeSpan DefaultOldGenerationReclaimGrace = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Maximum number of source WAL entries the maintainer reads and applies in a
     /// single drain pass per source shard before checkpointing. Must be positive;
     /// the registered validator rejects a non-positive value at first resolve.
@@ -94,4 +109,24 @@ public sealed class LatticeViewOptions
     /// <see cref="DefaultMaxStagedBytes"/>.
     /// </summary>
     public long MaxStagedBytes { get; set; } = DefaultMaxStagedBytes;
+
+    /// <summary>
+    /// How long a view read handle reuses its cached active-generation tree id
+    /// before re-resolving it from the maintainer. After a shadow-swap rebuild a
+    /// reader may serve the prior (fully-built, slightly stale) generation for up
+    /// to this window before it observes the swap; it never serves a half-built or
+    /// empty tree. Must be greater than zero; the default is
+    /// <see cref="DefaultReadHandleCacheTtl"/>.
+    /// </summary>
+    public TimeSpan ReadHandleCacheTtl { get; set; } = DefaultReadHandleCacheTtl;
+
+    /// <summary>
+    /// How long a swapped-out view generation tree is retained after a
+    /// shadow-swap before the maintainer reclaims (deletes) it. Must exceed
+    /// <see cref="ReadHandleCacheTtl"/> so a reader still holding the prior
+    /// generation's cached tree id has refreshed before its tree is deleted; the
+    /// registered validator rejects a value that does not. The default is
+    /// <see cref="DefaultOldGenerationReclaimGrace"/>.
+    /// </summary>
+    public TimeSpan OldGenerationReclaimGrace { get; set; } = DefaultOldGenerationReclaimGrace;
 }

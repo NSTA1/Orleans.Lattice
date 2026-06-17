@@ -67,8 +67,8 @@ public class MaterialisedViewAtomicVisibilityTests
     private IReplicationApplyGrain Apply(string tree) =>
         _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
 
-    private ILattice ViewTree(string viewName) =>
-        _fixture.Cluster.Client.GetGrain<ILattice>($"view-{viewName}");
+    private Task<ILattice> ViewTreeAsync(string viewName) =>
+        _fixture.ActiveViewTreeAsync(viewName);
 
     private async Task<IViewMaintainerGrain> MaintainerAsync(string viewName)
     {
@@ -133,7 +133,7 @@ public class MaterialisedViewAtomicVisibilityTests
 
         await DrainAsync(maintainer, times: 3);
 
-        var viewTree = ViewTree(view);
+        var viewTree = await ViewTreeAsync(view);
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(await viewTree.GetAsync("p"), Is.Null, "A prepared-but-uncommitted entry must not be visible.");
@@ -160,7 +160,7 @@ public class MaterialisedViewAtomicVisibilityTests
 
         // Before any terminal: nothing visible.
         await DrainAsync(maintainer, times: 2);
-        var viewTree = ViewTree(view);
+        var viewTree = await ViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync("ca"), Is.Null, "Pre-commit the batch must be invisible.");
 
         // Commit every distinct shard the batch touched.
@@ -173,6 +173,7 @@ public class MaterialisedViewAtomicVisibilityTests
 
         await DrainToZeroAsync(maintainer);
 
+        viewTree = await ViewTreeAsync(view);
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(await viewTree.GetAsync("ca"), Is.EqualTo(Person(30, "a1")));
@@ -200,7 +201,7 @@ public class MaterialisedViewAtomicVisibilityTests
 
         await DrainToZeroAsync(maintainer);
 
-        var viewTree = ViewTree(view);
+        var viewTree = await ViewTreeAsync(view);
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(await viewTree.GetAsync("xa"), Is.Null, "An aborted batch must never be surfaced.");
@@ -235,13 +236,14 @@ public class MaterialisedViewAtomicVisibilityTests
         }
 
         await DrainAsync(maintainer, times: 2);
-        var viewTree = ViewTree(view);
+        var viewTree = await ViewTreeAsync(view);
         Assert.That(await viewTree.GetAsync(keys[0]), Is.Null, "A partially-committed multi-shard batch must stay invisible.");
 
         // Commit the final shard: the whole batch reassembles and appears.
         await CommitShardAsync(tree, txId, shards[^1], ticks, shards.Length);
         await DrainToZeroAsync(maintainer);
 
+        viewTree = await ViewTreeAsync(view);
         await Assert.MultipleAsync(async () =>
         {
             for (var i = 0; i < keys.Length; i++)
@@ -265,7 +267,7 @@ public class MaterialisedViewAtomicVisibilityTests
 
         // Re-drain several times while uncommitted: each pass re-reads and
         // re-stages the prepares from the held-back checkpoint. Nothing leaks.
-        var viewTree = ViewTree(view);
+        var viewTree = await ViewTreeAsync(view);
         for (var i = 0; i < 4; i++)
         {
             await maintainer.DrainAsync();
@@ -280,6 +282,7 @@ public class MaterialisedViewAtomicVisibilityTests
         await DrainToZeroAsync(maintainer);
         await DrainAsync(maintainer, times: 3);
 
+        viewTree = await ViewTreeAsync(view);
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(await viewTree.GetAsync("ra"), Is.EqualTo(Person(30, "a1")));
@@ -322,7 +325,6 @@ public class MaterialisedViewAtomicVisibilityTests
         var view = MaterialisedViewClusterFixture.BackstopViewName;
         _ = CreateAdultView(tree, view);
         var maintainer = await MaintainerAsync(view);
-        var viewTree = ViewTree(view);
 
         using var backstop = new MeterCollector<long>(
             LatticeMetrics.MeterName, "orleans.lattice.view.atomic_staging_backstop");
@@ -341,6 +343,7 @@ public class MaterialisedViewAtomicVisibilityTests
 
         Assert.That(backstop.Measurements.Count, Is.GreaterThanOrEqualTo(1), "The bounded-buffer backstop metric must fire.");
 
+        var viewTree = await ViewTreeAsync(view);
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(await viewTree.GetAsync("committed-adult"), Is.EqualTo(Person(50, "ok")), "The rebuild must reproduce committed source state.");

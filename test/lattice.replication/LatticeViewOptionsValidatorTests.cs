@@ -69,4 +69,47 @@ public class LatticeViewOptionsValidatorTests
 
         Assert.That(result.Succeeded, Is.True);
     }
+
+    [Test]
+    public void Validate_rejects_non_positive_read_handle_cache_ttl()
+    {
+        var options = Valid();
+        options.ReadHandleCacheTtl = TimeSpan.Zero;
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeViewOptions.ReadHandleCacheTtl)));
+        });
+    }
+
+    [Test]
+    public void Validate_rejects_reclaim_grace_not_exceeding_cache_ttl()
+    {
+        var options = Valid();
+        options.ReadHandleCacheTtl = TimeSpan.FromSeconds(2);
+        options.OldGenerationReclaimGrace = TimeSpan.FromSeconds(2);
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeViewOptions.OldGenerationReclaimGrace)));
+        });
+    }
+
+    [Test]
+    public void Validate_accepts_reclaim_grace_above_cache_ttl()
+    {
+        var options = Valid();
+        options.ReadHandleCacheTtl = TimeSpan.FromMilliseconds(50);
+        options.OldGenerationReclaimGrace = TimeSpan.FromMilliseconds(200);
+
+        var result = new LatticeViewOptionsValidator().Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
 }
