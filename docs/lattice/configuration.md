@@ -780,7 +780,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 
 See [Materialised views](materialised-views.md) for the full behaviour of each
 option, including what registrations a view needs (`AddLattice` +
-`AddWalCursorRegistry` + `AddLatticeViews`).
+`AddLatticeViews`, the latter folding in `AddWalCursorRegistry`).
 
 ## Full Example
 

@@ -9,10 +9,10 @@ namespace Orleans.Lattice.Replication.Tests.PublicApiContract;
 /// Single-cluster fixture for the materialised-view public API contract suite.
 /// Brings up one silo registering <b>only</b> the public surface a local
 /// materialised view needs - <c>AddLattice</c> (the WAL provider + commit-log
-/// reader), <c>AddWalCursorRegistry</c> (cursor pinning), and
-/// <c>AddLatticeViews</c> - and deliberately <b>does not</b> call
-/// <c>AddLatticeReplication</c>. This both exercises the public view API and
-/// proves that replication is not a runtime prerequisite for a
+/// reader) and <c>AddLatticeViews</c> (which folds in the cursor registry) - and
+/// deliberately <b>does not</b> call <c>AddLatticeReplication</c>. This both
+/// exercises the public view API and proves that replication is not a runtime
+/// prerequisite for a
 /// <see cref="LatticeViewReplicationMode.DeriveLocally"/> view: a single-cluster
 /// deployment needs a WAL provider, not a replicated cluster.
 /// <para>
@@ -101,9 +101,10 @@ internal sealed class MaterialisedViewPublicApiContractFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             // NO AddLatticeReplication: only the public WAL + view surface.
+            // AddLatticeViews folds in AddWalCursorRegistry, so a single-cluster
+            // view needs only AddLattice + AddLatticeViews.
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddWalCursorRegistry();
             siloBuilder.AddLatticeViews(views =>
             {
                 views.AddView(FilterViewName, FilterSourceTreeId, AdultFilter());

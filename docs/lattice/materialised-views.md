@@ -16,18 +16,17 @@ surface or, preferably, through the `ILatticeView` handle.
 ## What you need to register
 
 Materialised views run on top of a WAL-backed lattice; they do **not** require
-a replicated cluster. A single-silo deployment registers three things:
+a replicated cluster. A single-silo deployment registers two things:
 
 - `AddLattice(...)` - the lattice itself, which also registers the commit-log
   reader and an in-memory WAL baseline.
-- `AddWalCursorRegistry()` - lets a view pin the source WAL so entries are not
-  trimmed before the view has consumed them.
-- `AddLatticeViews(...)` - the view catalog, factory, and maintainer.
+- `AddLatticeViews(...)` - the view catalog, factory, and maintainer. This also
+  folds in `AddWalCursorRegistry()` (idempotent) so a view can pin the source WAL
+  and entries are not trimmed before the view has consumed them.
 
 ```csharp verify
 siloBuilder
     .AddLattice((silo, name) => silo.AddMemoryGrainStorage(name))
-    .AddWalCursorRegistry()
     .AddLatticeViews(views => views.AddView(
         viewName: "adults",
         sourceTreeId: "people",

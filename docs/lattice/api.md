@@ -1723,11 +1723,12 @@ covered trees.
 
 A **materialised view** is an asynchronous, eventually-consistent projection of a
 source tree, maintained by tailing that tree's WAL. It needs a WAL-backed lattice
-(`AddLattice` + `AddWalCursorRegistry`) and `AddLatticeViews(...)`; it does **not**
-require the replication package's `AddLatticeReplication` (that is only for the
-cross-cluster `ShipView` mode). See [Materialised views](materialised-views.md)
-for the full guide and [configuration](configuration.md#materialised-view-options)
-for the per-view options.
+(`AddLattice`) and `AddLatticeViews(...)` (which folds in `AddWalCursorRegistry()`
+so the view can pin the source WAL); it does **not** require the replication
+package's `AddLatticeReplication` (that is only for the cross-cluster `ShipView`
+mode). See [Materialised views](materialised-views.md) for the full guide and
+[configuration](configuration.md#materialised-view-options) for the per-view
+options.
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;

@@ -19,13 +19,17 @@ public static class LatticeViewsServiceCollectionExtensions
     /// declarations from <paramref name="configure"/>.
     /// <para>
     /// A view tails the per-shard write-ahead log through the commit-log reader,
-    /// so the host must register a WAL-backed lattice. For a single cluster that
-    /// means calling <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
-    /// (which registers the commit-log reader and the in-memory WAL baseline) and
-    /// <see cref="LatticeServiceCollectionExtensions.AddWalCursorRegistry"/> before
-    /// <c>AddLatticeViews</c>. <c>AddLatticeReplication</c> is <i>not</i> required
-    /// for a local (<see cref="LatticeViewReplicationMode.DeriveLocally"/>) view;
-    /// it is only needed when a view ships its tree across clusters
+    /// so the host must register a WAL-backed lattice by calling
+    /// <see cref="LatticeServiceCollectionExtensions.AddLattice"/> (which registers
+    /// the commit-log reader and the in-memory WAL baseline) before
+    /// <c>AddLatticeViews</c>. The view maintainer pins the source WAL through the
+    /// consumer-cursor registry, so this call folds in
+    /// <see cref="LatticeServiceCollectionExtensions.AddWalCursorRegistry"/> (the
+    /// in-memory default plus the leaf-cursor reporter); the call is idempotent, so
+    /// a host that wired its own cursor registry up first is unaffected.
+    /// <c>AddLatticeReplication</c> is <i>not</i> required for a local
+    /// (<see cref="LatticeViewReplicationMode.DeriveLocally"/>) view; it is only
+    /// needed when a view ships its tree across clusters
     /// (<see cref="LatticeViewReplicationMode.ShipView"/>).
     /// </para>
     /// </summary>
@@ -39,6 +43,12 @@ public static class LatticeViewsServiceCollectionExtensions
 
         var registrationBuilder = new LatticeViewRegistrationBuilder();
         configure?.Invoke(registrationBuilder);
+
+        // The maintainer pins the source WAL GC against its applied frontier via
+        // the consumer-cursor registry, so views require it. Fold in the in-memory
+        // default (plus the leaf-cursor reporter) the same way AddLatticeReplication
+        // does; idempotent, so a host that registered its own registry first wins.
+        builder.AddWalCursorRegistry();
 
         builder.Services.AddOptions<LatticeViewOptions>();
         builder.Services.TryAddEnumerable(
