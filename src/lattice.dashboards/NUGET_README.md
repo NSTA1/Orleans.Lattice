@@ -1,6 +1,6 @@
 # Orleans.Lattice.Dashboards
 
-Pre-built Grafana dashboards for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) telemetry. Bundles three ready-to-import JSON dashboards covering every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters.
+Pre-built Grafana dashboards for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) telemetry. Bundles five ready-to-import JSON dashboards covering every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters.
 
 ## Quick start
 

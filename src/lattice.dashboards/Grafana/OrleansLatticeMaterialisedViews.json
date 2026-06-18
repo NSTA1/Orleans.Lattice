@@ -1,0 +1,324 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source scraping the orleans.lattice meter.",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "11.3.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Lag-budget evictions",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "enable": true,
+        "iconColor": "rgba(255, 96, 96, 1)",
+        "expr": "sum by (view) (increase(orleans_lattice_view_lag_budget_eviction_total{view=~\"$view\",cluster=~\"$cluster\"}[5m]))",
+        "titleFormat": "evicted {{view}}"
+      }
+    ]
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "orleans",
+    "lattice",
+    "materialised-views"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "view",
+        "label": "View",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_view_apply_lag_bucket, view)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "regex": "",
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_view_apply_lag_bucket, cluster)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Orleans.Lattice - Materialised Views",
+  "uid": "orleans-lattice-materialised-views",
+  "version": 1,
+  "description": "Cluster-wide health of asynchronous materialised views. A view's maintainer is a single grain activation that Orleans places on - and migrates between - whichever silo currently hosts it, so these panels intentionally aggregate across the whole cluster and offer no per-silo filter: slicing by silo would fragment one view's lag and throughput across hosts and blank out whenever the activation moves. Scope instead by view name (every instrument carries a 'view' tag) and, where deployments span clusters, by cluster.",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Apply lag (entries) p50/p95/p99",
+      "description": "How far behind the source each view is, sampled at the start of every drain pass as the number of source WAL entries committed but not yet applied to the view. This is the headline freshness SLI: a low, flat band means the view is keeping pace with source writes; a rising p95/p99 means the maintainer is falling behind the source write rate (check the source throughput, the view's batch size, and whether the maintainer is being throttled). Persistently unbounded lag eventually trips the lag-budget eviction below.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "P50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_view_apply_lag_bucket{view=~\"$view\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_view_apply_lag_bucket{view=~\"$view\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_view_apply_lag_bucket{view=~\"$view\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Apply lag p95 by view (entries)",
+      "description": "The same apply-lag p95 broken out per view, so one chronically-lagging view stands out against the fleet. Use this to find which view is dragging before drilling into its source write rate or projection cost.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, view) (rate(orleans_lattice_view_apply_lag_bucket{view=~\"$view\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Drain backlog depth (entries) p50/p95/p99",
+      "description": "Source entries read in a single drain pass before reaching the source head, bounded by the view's configured batch size. Distinguishes a one-off catch-up burst (a tall, transient backlog that clears) from sustained pressure (backlog pinned at the batch-size ceiling pass after pass, which means the maintainer cannot drain a pass faster than the source fills it). When this rides the ceiling while apply lag also climbs, the view is genuinely under-provisioned for the source rate.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "P50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_view_backlog_depth_bucket{view=~\"$view\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "P95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_view_backlog_depth_bucket{view=~\"$view\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "P99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_view_backlog_depth_bucket{view=~\"$view\",cluster=~\"$cluster\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "View writes applied (rate)",
+      "description": "Filter / re-project upserts and deletes applied to the view tree per second, after per-batch last-writer-wins coalescing, by view. Comparing this against the source write rate shows coalesce efficiency: a view that applies far fewer writes than its source receives is collapsing repeated updates to the same key within a pass. A sudden drop to zero while the source is still being written indicates a stalled maintainer.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view) (rate(orleans_lattice_view_applied_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Aggregation contributions applied (rate)",
+      "description": "Aggregation folds and retractions applied to an aggregation view's group accumulators per second, by view. This is the aggregation-view counterpart to the filter / re-project applied counter above: it tracks throughput for count / sum / min / max / set-union views. Zero for a view simply means it is a filter / re-project view rather than an aggregation view.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view) (rate(orleans_lattice_view_aggregation_applied_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Lag-budget evictions (rate)",
+      "description": "Views force-evicted per second because they exceeded their configured MaxLagBudget: the maintainer unpinned the source WAL (so a chronically-lagging or dead view can no longer hold the WAL garbage collector) and re-onboarded the view via a rebuild from current committed source state. Any non-zero value is notable - the view still converges via the rebuild, but its bounded backlog was dropped rather than tail-replayed, so readers briefly saw stale state and the WAL was momentarily pinned by a lagging view. Correlate spikes with the apply-lag panel; a view evicting repeatedly is under-provisioned or its maintainer is unhealthy.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.0001 } ] },
+          "color": { "mode": "fixed", "fixedColor": "red" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view) (rate(orleans_lattice_view_lag_budget_eviction_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Re-key collisions (rate)",
+      "description": "Distinct source keys that re-mapped onto a single view key within a drain batch, per second, by view. A non-zero value is a configuration warning: the projection's key re-map is not injective, so the colliding keys are resolved last-writer-wins by source HLC and the view stays well-defined but the winner is not the one the operator likely intended. A steady non-zero floor means the re-map needs a unique key component; a one-off blip can be a transient overlap. Zero for an identity / filter view (the common case).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.0001 } ] },
+          "color": { "mode": "fixed", "fixedColor": "yellow" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view) (rate(orleans_lattice_view_key_collisions_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Atomic-staging backstop fall-backs (rate)",
+      "description": "Drain passes per second that abandoned incremental atomic-batch staging and forced a rebuild because the in-flight staging buffer exceeded its bound (MaxStagedTransactions / MaxStagedBytes) or an un-terminated batch's blocked-floor pin would have sunk below the source WAL retention ceiling, by view. Any non-zero value means a saga terminal was lost or the maintainer fell behind the atomic-write rate; the view still converges via the rebuild, but the not-visible-until-committed batch was reassembled from current source state rather than the staged prepares. Recurrent fall-backs for a view under heavy atomic-write load suggest raising its staging bounds.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.0001 } ] },
+          "color": { "mode": "fixed", "fixedColor": "yellow" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view) (rate(orleans_lattice_view_atomic_staging_backstop_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Cross-tree joint-atomicity violations (rate)",
+      "description": "Cross-tree view batches per second that degraded to per-tree-slice atomicity because a participant view did not become ready within the bounded CrossTreeReadinessTimeout, by view. A non-zero value means a participant view was unavailable (cluster partition or crashed maintainer) and the participating views did not flip together for that batch: the views still converge via a scheduled reconcile, but a reader could momentarily have observed one view's slice without another's. Investigate the health of the participating views' maintainers when this is non-zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.0001 } ] },
+          "color": { "mode": "fixed", "fixedColor": "red" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view) (rate(orleans_lattice_view_cross_tree_joint_violation_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}}"
+        }
+      ]
+    }
+  ]
+}

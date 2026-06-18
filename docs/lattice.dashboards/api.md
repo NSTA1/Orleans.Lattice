@@ -30,6 +30,7 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | `CommitPath` | `orleans.lattice` | WAL-first commit pipeline: per-step commit latency, storage-provider write latency, compaction latency, and activation-time replay duration and entries by recovery outcome. |
 | `Replication` | `orleans.lattice.replication` | Cross-cluster operator view: ship / apply / lag durations, WAL append vs trim throughput, dead-letter churn, apply FIFO and causal violations, fall-off-log events, and per-peer cursor lag. Useful only when the replication package is registered on the silo. |
 | `AtomicWrites` | `orleans.lattice` | `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration and batch-size percentiles, per-tree committed throughput, and a dedicated saga-failure-rate panel. |
+| `MaterialisedViews` | `orleans.lattice` | Cluster-wide materialised-view health: apply-lag and drain-backlog-depth percentiles, filter / re-project and aggregation apply throughput, and warning panels for lag-budget evictions, re-key collisions, atomic-staging backstop fall-backs, and cross-tree joint-atomicity violations. Keyed by view name (and cluster); no per-silo filter, because a view's maintainer is a single grain activation that migrates between silos. Does not require the replication package. |
 
 ## Enumerating every dashboard
 

@@ -9,21 +9,21 @@ A dashboard only charts data if the matching meter is exported to the backend Gr
 ```csharp
 builder.Services.AddOpenTelemetry()
     .WithMetrics(b => b
-        .AddMeter("orleans.lattice")              // Overview, CommitPath, AtomicWrites
+        .AddMeter("orleans.lattice")              // Overview, CommitPath, AtomicWrites, MaterialisedViews
         .AddMeter("orleans.lattice.replication")  // Replication (only if the replication package is registered)
         .AddPrometheusExporter());
 ```
 
 | Meter | Emitted by | Dashboards that need it |
 |---|---|---|
-| `orleans.lattice` | the core library, always | `Overview`, `CommitPath`, `AtomicWrites` |
+| `orleans.lattice` | the core library, always | `Overview`, `CommitPath`, `AtomicWrites`, `MaterialisedViews` |
 | `orleans.lattice.replication` | the replication package, only when registered on the silo | `Replication` |
 
 If you do not register the replication package, omit the replication meter and do not import the `Replication` dashboard - its panels would resolve to no data.
 
 ## 2. Choose which dashboards to surface
 
-Retrieve only the kinds relevant to a deployment. A local-only silo typically imports `Overview`, `CommitPath`, and `AtomicWrites`; a multi-cluster deployment adds `Replication`.
+Retrieve only the kinds relevant to a deployment. A local-only silo typically imports `Overview`, `CommitPath`, and `AtomicWrites` (and `MaterialisedViews` if it registers any views); a multi-cluster deployment adds `Replication`.
 
 ```csharp
 using Orleans.Lattice.Dashboards;
@@ -33,6 +33,7 @@ var kinds = new[]
     LatticeDashboardKind.Overview,
     LatticeDashboardKind.CommitPath,
     LatticeDashboardKind.AtomicWrites,
+    LatticeDashboardKind.MaterialisedViews, // add when materialised views are registered
     // LatticeDashboardKind.Replication, // add when replication is registered
 };
 

@@ -55,4 +55,19 @@ public enum LatticeDashboardKind
     /// transitions). Sources the <c>orleans.lattice</c> meter only.
     /// </summary>
     AtomicWrites = 3,
+
+    /// <summary>
+    /// Cluster-wide health of asynchronous materialised views: apply lag and
+    /// drain-backlog-depth percentiles, filter / re-project and aggregation
+    /// apply throughput, and the operator warnings - lag-budget evictions,
+    /// re-key collisions, atomic-staging backstop fall-backs, and cross-tree
+    /// joint-atomicity violations. Every panel is keyed by view name (and,
+    /// where deployments span clusters, by cluster); because a view's
+    /// maintainer is a single grain activation that migrates between silos,
+    /// the dashboard deliberately offers no per-silo filter and aggregates
+    /// across the whole cluster. Sources the <c>orleans.lattice</c> meter
+    /// only; the instruments are emitted whenever a WAL-backed view is
+    /// registered and do not require the replication package.
+    /// </summary>
+    MaterialisedViews = 4,
 }

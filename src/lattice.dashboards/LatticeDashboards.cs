@@ -63,6 +63,7 @@ public static class LatticeDashboards
         LatticeDashboardKind.CommitPath => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeCommitPath.json",
         LatticeDashboardKind.Replication => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeReplication.json",
         LatticeDashboardKind.AtomicWrites => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeAtomicWrites.json",
+        LatticeDashboardKind.MaterialisedViews => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeMaterialisedViews.json",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown dashboard kind."),
     };
 }
