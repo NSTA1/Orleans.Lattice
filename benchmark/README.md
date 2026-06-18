@@ -525,6 +525,7 @@ drifts. Prose around the markers stays hand-editable.
 ./benchmark/performance-report.ps1 -DryRun                          # re-render doc from latest state.json
 ./benchmark/performance-report.ps1 -DryRun -Diff                    # show planned doc, do not write
 ./benchmark/performance-report.ps1 -KeepVm -ReuseVm prdeadbee       # debug session against an existing VM
+./benchmark/performance-report.ps1 -Layer 2 -Workloads 'set-point,set-point-mv' -CaptureCounters  # + per-cohort dotnet-counters trace
 ```
 
 Like `azure-throughput`, this script is **not** driven through `./benchmark.ps1`
@@ -532,5 +533,9 @@ and does **not** push to the local history VictoriaMetrics stack: results land
 under `benchmark/.run/performance-report/<prefix>/` as a per-prefix `state.json`
 sidecar plus the underlying microbench `results.json` files and silo journals.
 See the script's `Get-Help -Full` output for the complete parameter reference
-(including `-Fidelity`, `-N`, `-VmSize`, `-Rung`, `-BatchSize`, `-SkipDocUpdate`).
+(including `-Fidelity`, `-N`, `-VmSize`, `-Rung`, `-BatchSize`, `-SkipDocUpdate`,
+and the diagnostic `-CaptureCounters`, which records a per-cohort
+`dotnet-counters` trace - `System.Runtime` + `System.Net.Http` at 1 s cadence -
+from the silo into `counters-<cohort>.csv` for thread-pool / lock-contention /
+HTTP-pool investigation).
 

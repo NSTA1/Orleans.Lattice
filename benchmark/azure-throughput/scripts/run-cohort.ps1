@@ -25,6 +25,13 @@
 	reaches zero, so a generous cap costs nothing for a cohort that drains
 	quickly; it only matters as a ceiling for the rare straggler. Default
 	60. Set 0 to skip the wait.
+.PARAMETER CaptureCounters
+	Diagnostic only. Attach dotnet-counters to the silo process for the
+	duration of the cohort and record System.Runtime + System.Net.Http
+	EventCounters at 1 s cadence into counters-<cohort>.csv (alongside the
+	silo log). Off by default. Use to investigate thread-pool / lock-
+	contention / HTTP-pool bottlenecks. Best-effort: a missing tool or a
+	silo that never starts simply yields no counters file.
 
 .EXAMPLE
 	./run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45
@@ -39,7 +46,8 @@ param(
 	[hashtable] $ExtraSiloEnv = @{},
 	[string] $ParametersFile,
 	[string] $NamePrefix,
-	[int] $QuiesceTimeoutSec = 60
+	[int] $QuiesceTimeoutSec = 60,
+	[switch] $CaptureCounters
 )
 
 $ErrorActionPreference = 'Stop'
@@ -255,6 +263,51 @@ try {
 } finally { Remove-Item $tmpSampler.FullName -Force -ErrorAction SilentlyContinue }
 Invoke-Ssh 'rm -f /tmp/cohort-sampler.csv; chmod +x /tmp/cohort-sampler.sh; nohup bash /tmp/cohort-sampler.sh >/tmp/cohort-sampler.out 2>&1 &'
 
+# Optional dotnet-counters capture (diagnostic only; -CaptureCounters). Attaches
+# to the running silo process and records System.Runtime + System.Net.Http
+# EventCounters at 1 s cadence for the lifetime of the producer, so the operator
+# can inspect thread-pool queue length, lock-contention and HTTP-pool pressure
+# alongside the throughput verdict. The VM's bootstrap.sh already installs
+# dotnet-counters globally and the silo runs as the SSH admin user, so the
+# attach needs no sudo. Best-effort: a missing tool or a silo that never
+# materialises a PID just yields no counters file, never failing the cohort.
+if ($CaptureCounters) {
+	$countersCmd = @'
+#!/usr/bin/env bash
+set -uo pipefail
+OUT=/tmp/cohort-counters
+DC="$(command -v dotnet-counters || echo "$HOME/.dotnet/tools/dotnet-counters")"
+if [ ! -x "$DC" ] && ! command -v dotnet-counters >/dev/null 2>&1; then
+  echo "dotnet-counters not found" >&2; exit 0
+fi
+pid=0
+for i in $(seq 1 30); do
+  pid=$(systemctl show -p MainPID --value lattice-silo 2>/dev/null || echo 0)
+  if [ "$pid" != "0" ] && [ -n "$pid" ]; then break; fi
+  sleep 1
+done
+if [ "$pid" = "0" ] || [ -z "$pid" ]; then echo "no silo pid" >&2; exit 0; fi
+"$DC" collect --process-id "$pid" --refresh-interval 1 --format csv --output "$OUT" \
+  --counters System.Runtime,System.Net.Http &
+dc=$!
+while systemctl is-active --quiet lattice-producer; do sleep 1; done
+sleep 2
+kill -INT "$dc" 2>/dev/null || true
+wait "$dc" 2>/dev/null || true
+'@
+	$tmpCounters = New-TemporaryFile
+	try {
+		[System.IO.File]::WriteAllText($tmpCounters.FullName, ($countersCmd -replace "`r`n","`n"))
+		$cexit = _ScpExec -Source $tmpCounters.FullName -Dest "${sshTarget}:/tmp/cohort-counters.sh" -TimeoutSec 30
+		if ($cexit -ne 0) { Write-Host "  counters script scp returned exit $cexit (skipping capture)" -ForegroundColor Yellow }
+		else {
+			Invoke-Ssh 'rm -f /tmp/cohort-counters.csv; chmod +x /tmp/cohort-counters.sh; nohup bash /tmp/cohort-counters.sh >/tmp/cohort-counters.out 2>&1 &'
+			Write-Host 'dotnet-counters capture armed (System.Runtime + System.Net.Http).' -ForegroundColor Cyan
+		}
+	} catch { Write-Host "  counters capture launch failed: $_" -ForegroundColor Yellow }
+	finally { Remove-Item $tmpCounters.FullName -Force -ErrorAction SilentlyContinue }
+}
+
 # Poll for producer exit.
 $deadline = (Get-Date).AddSeconds($DurationSec + 30)
 while ((Get-Date) -lt $deadline) {
@@ -354,6 +407,7 @@ if (-not $sawFinal) { Write-Host '  no FINAL line seen within 60s; silo may be w
 # runs first so a producer-log stall does not lose the cohort sample.
 Write-Host 'Extracting journals + sampler...' -ForegroundColor Cyan
 $samplerLog = Join-Path $logDir "sampler-$cohortName.csv"
+$countersLog = Join-Path $logDir "counters-$cohortName.csv"
 
 function Save-Remote([string]$remoteCmd, [string]$localPath, [int]$TimeoutSec = 60) {
 	$tmp = "$localPath.tmp"
@@ -387,6 +441,16 @@ try {
 	$samplerExit = _ScpExec -Source "${sshTarget}:/tmp/cohort-sampler.csv" -Dest $samplerLog -TimeoutSec 60
 	if ($samplerExit -ne 0) { Write-Host "  sampler fetch returned exit $samplerExit" -ForegroundColor Yellow }
 } catch { Write-Host "  sampler fetch failed: $_" -ForegroundColor Yellow }
+
+# Counters CSV: only present when -CaptureCounters was passed. Best-effort like
+# the sampler - a missing file (tool absent, or silo never came up) is benign.
+if ($CaptureCounters) {
+	try {
+		$countersExit = _ScpExec -Source "${sshTarget}:/tmp/cohort-counters.csv" -Dest $countersLog -TimeoutSec 60
+		if ($countersExit -ne 0) { Write-Host "  counters fetch returned exit $countersExit (no capture file?)" -ForegroundColor Yellow }
+		elseif (Test-Path $countersLog) { Write-Host "  counters CSV: $countersLog" -ForegroundColor Green }
+	} catch { Write-Host "  counters fetch failed: $_" -ForegroundColor Yellow }
+}
 
 Invoke-Ssh 'sudo systemctl stop lattice-producer 2>/dev/null || true'
 
@@ -636,6 +700,7 @@ Write-Host ("Verdict      : {0}{1}" -f $verdictState, $verdictDetail) -Foregroun
 Write-Host "Logs         : $siloLog"
 Write-Host "             : $prodLog"
 Write-Host "             : $samplerLog"
+if ($CaptureCounters -and (Test-Path $countersLog)) { Write-Host "             : $countersLog" }
 
 # Persist the computed verdict into the silo log so downstream consumers
 # (performance-report.ps1's Read-SiloLogStats, which parses '^Verdict\s*:'

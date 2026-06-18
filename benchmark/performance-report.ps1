@@ -157,6 +157,12 @@ param(
 	[string] $ReuseVm,
 	[switch] $SkipDocUpdate,
 
+	# Diagnostic only: capture a per-cohort dotnet-counters trace (System.Runtime
+	# + System.Net.Http) from the benchmark silo process while each Layer 2 cohort
+	# runs. Off by default; pulls a counters-<cohort>.csv next to the silo log.
+	# Use to investigate thread-pool / lock-contention / HTTP-pool bottlenecks.
+	[switch] $CaptureCounters,
+
 	[ValidateSet('dry','quick','full')]
 	[string] $Fidelity = 'quick',
 
@@ -904,7 +910,8 @@ function Invoke-Layer2Cohorts {
 		[int] $ResponseTimeoutSec = 180,
 		[int] $WalPartitions = 8,
 		[int] $WalMaxPendingBatches = 16,
-		[int] $BatchSize = 4096
+		[int] $BatchSize = 4096,
+		[switch] $CaptureCounters
 	)
 	$rows = @($Layer2Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
 	if ($rows.Count -eq 0) {
@@ -962,6 +969,7 @@ function Invoke-Layer2Cohorts {
 				-DurationSec $rowRung.DurationSec `
 				-NamePrefix  $Prefix `
 				-ParametersFile $ParametersFilePath `
+				-CaptureCounters:$CaptureCounters `
 				-ExtraSiloEnv $extraEnv | Out-Host
 			if ($LASTEXITCODE -ne 0) {
 				Write-Warning "[layer2] cohort $i/$N (mode=$mode): run-cohort.ps1 exited $LASTEXITCODE; skipping"
@@ -1821,7 +1829,7 @@ function Main {
 		if ($Layer -in 'all','2') {
 			$l2Ids = Resolve-WorkloadIds -LayerRows $Layer2Rows -WorkloadsSpec $Workloads
 			Write-Host "[main] Layer 2 workloads: $($l2Ids -join ',')" -ForegroundColor Cyan
-			$l2CohortsByMode = Invoke-Layer2Cohorts -Prefix $prefix -WorkloadIds $l2Ids -Rung $rungHt -N $N -ParametersFilePath $paramFile -ResponseTimeoutSec $state.responseTimeoutSec -WalPartitions $state.walPartitions -WalMaxPendingBatches $state.walMaxPendingBatches -BatchSize $BatchSize
+			$l2CohortsByMode = Invoke-Layer2Cohorts -Prefix $prefix -WorkloadIds $l2Ids -Rung $rungHt -N $N -ParametersFilePath $paramFile -ResponseTimeoutSec $state.responseTimeoutSec -WalPartitions $state.walPartitions -WalMaxPendingBatches $state.walMaxPendingBatches -BatchSize $BatchSize -CaptureCounters:$CaptureCounters
 			foreach ($mode in $l2CohortsByMode.Keys) { $state.layer2.cohorts[$mode] = $l2CohortsByMode[$mode] }
 			$l2Rows = Aggregate-Layer2Cells -CohortsByMode $l2CohortsByMode
 			foreach ($k in $l2Rows.Keys) { $state.layer2.rows[$k] = $l2Rows[$k] }
