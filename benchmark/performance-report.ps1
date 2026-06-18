@@ -557,7 +557,15 @@ function Test-PreflightOrThrow {
 	# 3. ssh + scp + gh available? (gh is not actually used by this script;
 	# only ssh + scp matter, both used transitively by the azure-throughput
 	# scripts. We probe ssh as a representative.)
-	$null = & ssh -V 2>&1
+	#
+	# Discard ssh's stderr with `2>$null` rather than merging it with `2>&1`:
+	# `ssh -V` writes its version banner to stderr (exit code is still 0), and
+	# under Windows PowerShell 5.1 with $ErrorActionPreference='Stop' a native
+	# command writing to a merged stderr stream is raised as a terminating
+	# NativeCommandError - which would abort the whole preflight even though ssh
+	# is present and working. Suppressing stderr keeps the probe keyed on the
+	# exit code, which is what we actually care about.
+	$null = & ssh -V 2>$null
 	if ($LASTEXITCODE -ne 0) {
 		throw "ssh not found in PATH. The script needs ssh + scp (used by the azure-throughput scripts) to drive the VM."
 	}
