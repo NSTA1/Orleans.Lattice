@@ -825,7 +825,6 @@ internal sealed class TcpIngestService(
     IHostApplicationLifetime lifetime,
     IWalSaturationSignal saturationSignal,
     BenchSaturationLogger saturationLogger,
-    IServiceProvider services,
     ILogger<TcpIngestService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1378,33 +1377,25 @@ internal sealed class TcpIngestService(
         // when the silo is saturated.
         long discardedTotal = 0;
 
-        // set-point-mv only: open a read handle over the asynchronous
-        // materialised view attached to this tree at startup, so the reporter
-        // can surface the view's apply lag (source WAL entries committed but not
-        // yet applied to the view) on each progress line and at FINAL. The handle
-        // resolves the maintainer by view name; GetLagAsync is a cheap
-        // checkpoint-vs-head read that runs off the foreground write path, so
-        // sampling it never perturbs the point-write numbers the set-point-mv
-        // cohort exists to compare against the plain set-point cohort. A bounded
-        // non-zero lag while writes flow, draining to zero after they stop, is
-        // the operator-visible evidence that the view is maintained
-        // asynchronously without taxing the primary tree.
-        ILatticeView? mvView = null;
+        // set-point-mv only: observe the asynchronous materialised view's apply
+        // lag (source WAL entries committed but not yet applied to the view) on
+        // each progress line and at FINAL. The maintainer already records this
+        // onto the public orleans.lattice meter once per drain pass, so the
+        // reporter reads the last published sample via a passive MeterListener
+        // rather than calling ILatticeView.GetLagAsync on its cadence. That
+        // matters: a polling grain RPC would add traffic to the very tree the
+        // cohort is measuring (and, on a saturated silo, time out and pollute
+        // the cohort's exception tally), defeating the A/B comparison against
+        // the plain set-point cohort. A bounded non-zero lag while writes flow,
+        // draining to zero after they stop, is the operator-visible evidence
+        // that the view is maintained asynchronously without taxing the primary
+        // tree. The view itself is attached at startup via AddLatticeViews; this
+        // probe is read-only observability over its metrics.
+        ViewLagMeterProbe? mvLagProbe = null;
         if (settings.WorkloadMode == BenchWorkloadMode.SetPointMv)
         {
-            var viewFactory = services.GetService<ILatticeViewFactory>();
-            if (viewFactory is not null)
-            {
-                mvView = viewFactory.Create(
-                    lattice,
-                    "bench",
-                    new LatticeViewDefinition("bench", new PredicateLatticeViewProjection()));
-                Console.WriteLine($"[silo] mv: materialised view 'bench' (view-bench) attached to treeId={settings.TreeId}; apply lag reported as mvLag=N on each progress line and at MV-FINAL.");
-            }
-            else
-            {
-                Console.WriteLine("[silo] mv: WARNING workload=set-point-mv but no ILatticeViewFactory is registered; mvLag will not be reported.");
-            }
+            mvLagProbe = new ViewLagMeterProbe("bench");
+            Console.WriteLine($"[silo] mv: materialised view 'bench' (view-bench) attached to treeId={settings.TreeId}; apply lag read from orleans.lattice.view.apply_lag and reported as mvLag=N on each progress line and at MV-FINAL.");
         }
 
         using var flushGate = new SemaphoreSlim(settings.FlushConcurrency, settings.FlushConcurrency);
@@ -1495,21 +1486,14 @@ internal sealed class TcpIngestService(
                     var elapsed = (now - startedAt) / (double)Stopwatch.Frequency;
                     var failedTag = failed > 0 ? $" failed={failed,8:N0}" : string.Empty;
                     var mvLagTag = string.Empty;
-                    if (mvView is not null)
+                    if (mvLagProbe is not null)
                     {
-                        try
-                        {
-                            // Bound the grain call so a momentarily-busy
-                            // maintainer cannot stall the progress cadence; the
-                            // lag is a best-effort observability signal, not a
-                            // measured quantity on the hot path.
-                            var lag = await mvView.GetLagAsync(reporterCts.Token)
-                                .WaitAsync(TimeSpan.FromSeconds(2), reporterCts.Token)
-                                .ConfigureAwait(false);
-                            mvLagTag = $" mvLag={lag,8:N0}";
-                        }
-                        catch (OperationCanceledException) when (reporterCts.IsCancellationRequested) { throw; }
-                        catch (Exception ex) { mvLagTag = $" mvLag=err({ex.GetType().Name})"; }
+                        // Read the maintainer's last published apply-lag sample
+                        // off the metrics surface - no grain RPC, so the reporter
+                        // cadence cannot perturb the tree under test. -1 means the
+                        // maintainer has not published a sample yet this run.
+                        var lag = mvLagProbe.LatestApplyLag;
+                        mvLagTag = lag < 0 ? "      mvLag=     n/a" : $" mvLag={lag,8:N0}";
                     }
                     Console.WriteLine($"[silo] t={elapsed,7:0.0}s ops={totalNow,12:N0} ops/sec={rate,10:N0} inFlight={inFlightNow,3}{failedTag}{mvLagTag}");
                     lastReport = now;
@@ -1764,20 +1748,23 @@ internal sealed class TcpIngestService(
         // the asynchronous view maintainer should catch up to the source head,
         // so a lag trending to zero here is the closeout evidence that the view
         // is eventually-consistent off the hot path rather than blocking it.
-        // Best-effort and bounded: the host is on its way down, so a failed or
-        // slow read is logged but never blocks FINAL.
-        if (mvView is not null)
+        // Read from the metrics surface (the maintainer's last published
+        // apply_lag sample) - no grain RPC, so the closeout can neither add
+        // shutdown-path load to the silo nor throw a shutdown-race exception
+        // that would inflate the cohort's exception tally.
+        if (mvLagProbe is not null)
         {
-            try
+            var lagAtStop = mvLagProbe.LatestApplyLag;
+            if (lagAtStop < 0)
             {
-                using var lagCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                var lagAtStop = await mvView.GetLagAsync(lagCts.Token).ConfigureAwait(false);
+                Console.WriteLine("[silo] MV-FINAL view=bench lagAtStop=n/a (the maintainer published no apply_lag sample this run)");
+            }
+            else
+            {
                 Console.WriteLine($"[silo] MV-FINAL view=bench lagAtStop={lagAtStop:N0} (0 = the asynchronous materialised view has fully caught up to the source head)");
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[silo] MV-FINAL view=bench lag read failed: {ex.GetType().Name}: {Truncate(ex.Message, 160)}");
-            }
+
+            mvLagProbe.Dispose();
         }
 
         Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0}");

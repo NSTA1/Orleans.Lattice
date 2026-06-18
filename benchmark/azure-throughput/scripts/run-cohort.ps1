@@ -391,11 +391,18 @@ try {
 Invoke-Ssh 'sudo systemctl stop lattice-producer 2>/dev/null || true'
 
 # Parse summaries.
-$prodSummary = Select-String -Path $prodLog -Pattern '\[producer\] DONE' -SimpleMatch | Select-Object -First 1
+$prodSummary = Select-String -Path $prodLog -Pattern '\[producer\] DONE' | Select-Object -First 1
 $siloFinal   = Select-String -Path $siloLog -Pattern 'FINAL (ops|written)=' | Select-Object -First 1
-$watchdog    = @(Select-String -Path $siloLog -Pattern '\[stall-watchdog\]' -SimpleMatch).Count
-$walSlot     = @(Select-String -Path $siloLog -Pattern '\[wal-slot\]' -SimpleMatch).Count
-$walAppend   = @(Select-String -Path $siloLog -Pattern '\[wal-append\]' -SimpleMatch).Count
+# Wedge diagnostics. These three counters feed the DEGRADED rule in
+# Resolve-CohortVerdict. The token-matching lives in
+# Measure-CohortWedgeDiagnostics (in _run-cohort-helpers.ps1) so it is
+# unit-tested against literal log fixtures rather than only against a live VM -
+# see that function's comment for the -SimpleMatch and token-family pitfalls it
+# guards against (both previously scored genuine wedges as all-zero).
+$wedgeDiag   = Measure-CohortWedgeDiagnostics -SiloLogPath $siloLog
+$watchdog    = $wedgeDiag.Watchdog
+$walSlot     = $wedgeDiag.WalSlot
+$walAppend   = $wedgeDiag.WalAppend
 $siloTail    = @(Select-String -Path $siloLog -Pattern '^\[silo\] t=') | Select-Object -Last 1
 
 # Section 27.1: the runner-printed FINAL `active avg` is corrupted by

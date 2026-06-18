@@ -373,3 +373,44 @@ function Resolve-CohortVerdict {
 
 	return @{ State = $byRank[$rank]; Reasons = $reasons }
 }
+
+<#
+.SYNOPSIS
+	Counts the stall-watchdog / WAL wedge-diagnostic signals in a silo log.
+
+.DESCRIPTION
+	Pure scrape function extracted from run-cohort.ps1 so the token-matching
+	is unit-testable against literal log fixtures (Test-CohortVerdict.ps1)
+	rather than only ever exercised against a live VM's log. The runner feeds
+	the returned counts straight into Resolve-CohortVerdict's DEGRADED rule.
+
+	Two regressions this function exists to prevent recurring:
+	  - The patterns are regex-escaped ('\[...\]'). They MUST NOT be passed
+	    with -SimpleMatch: SimpleMatch treats the pattern as a literal string,
+	    so '\[stall-watchdog\]' would search for a backslash character that
+	    never appears in the log and always return 0 - silently scoring every
+	    genuine wedge as watchdog=0 wal-slot=0 wal-append=0.
+	  - The stall-watchdog dumps a large multi-line burst (every line prefixed
+	    '[stall-watchdog] '); counting raw prefix lines reports dump verbosity,
+	    not wedge events, and is fragile under journald burst rate-limiting.
+	    Count the single canonical 'WEDGE DETECTED' header - the true per-fire
+	    signal. The wal-slot / wal-append introspection uses a family of tokens
+	    ('[wal-slot]', '[wal-slot-grain]', '[wal-slot-debug]', '[wal-slot-probe]'
+	    and '[wal-append]', '[wal-append-tracker]', '[wal-append-debug]'), so
+	    anchor on the '[wal-slot' / '[wal-append' prefix, not the bare token.
+
+.OUTPUTS
+	Hashtable with integer keys: Watchdog, WalSlot, WalAppend.
+#>
+function Measure-CohortWedgeDiagnostics {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [string] $SiloLogPath
+	)
+
+	return @{
+		Watchdog  = @(Select-String -Path $SiloLogPath -Pattern '\[stall-watchdog\] WEDGE DETECTED').Count
+		WalSlot   = @(Select-String -Path $SiloLogPath -Pattern '\[wal-slot').Count
+		WalAppend = @(Select-String -Path $SiloLogPath -Pattern '\[wal-append').Count
+	}
+}

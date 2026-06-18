@@ -388,6 +388,66 @@ _Assert -Name 'a benign tail does not mask a concurrent FAILED' `
 	-Detail "got state=$($vFQ.State) reasons=$($vFQ.Reasons -join '; ')"
 
 Write-Host ''
+Write-Host 'Measure-CohortWedgeDiagnostics' -ForegroundColor Cyan
+
+# Fixture: a wedged silo log. The stall-watchdog fires ONCE (one
+# 'WEDGE DETECTED' header) but dumps many '[stall-watchdog] ' prefixed lines,
+# and its introspection emits the wal-slot / wal-append token *families*. This
+# is the exact shape that the pre-fix scanner (escaped pattern + -SimpleMatch)
+# scored as watchdog=0 wal-slot=0 wal-append=0.
+$wedgeLog = New-TemporaryFile
+try {
+	Set-Content -Path $wedgeLog -Encoding utf8 -Value @(
+		'[silo] t=  10.0s ops=     12,000 ops/sec=     1,200 inFlight=  2'
+		'[stall-watchdog] WEDGE DETECTED writtenTotal=12,369 inFlight=2 failedTotal=0 failedDelta=0 armedBy=inFlight pid=16914 - capturing in-process async/thread state'
+		'[stall-watchdog] ==== suspended async state machines (in-process dumpasync) ===='
+		'[stall-watchdog] count=   598  Orleans.Lattice.Storage.AzureTable.SaturationAwareRetryPolicy+<ProcessAsync>d__8 @ await#0'
+		'[wal-slot-grain] tree=t shard=0 inFlight.count=1 head.IsNull=False'
+		'[wal-slot-debug] tree=t shard=0 first item type=PendingSlot hasStageField=True'
+		'[wal-slot] tree=t shard=0 slot=[40,60) stage=SentToShard stuck=6815ms'
+		'[wal-append-tracker] tree=t partition=4 inFlight.count=1 head.IsNull=False'
+		'[wal-append] tree=t partition=4 entries=100 bytes=204800 stage=SentToShard stuck=6815ms'
+		'[silo] FINAL ops=19,964 failed=0 discarded=0 elapsed=140.6s'
+	)
+	$wd = Measure-CohortWedgeDiagnostics -SiloLogPath $wedgeLog
+	# One genuine wedge event, NOT the raw count of '[stall-watchdog] ' lines (4).
+	_Assert -Name 'watchdog counts WEDGE DETECTED events, not dump lines' `
+		-Condition ($wd.Watchdog -eq 1) `
+		-Detail "got Watchdog=$($wd.Watchdog) (expected 1)"
+	# The whole '[wal-slot' family: grain + debug + the bare stuck line.
+	_Assert -Name 'wal-slot counts the [wal-slot family' `
+		-Condition ($wd.WalSlot -eq 3) `
+		-Detail "got WalSlot=$($wd.WalSlot) (expected 3)"
+	# The whole '[wal-append' family: tracker + the bare stuck line.
+	_Assert -Name 'wal-append counts the [wal-append family' `
+		-Condition ($wd.WalAppend -eq 2) `
+		-Detail "got WalAppend=$($wd.WalAppend) (expected 2)"
+	# The core regression guard: a genuine wedge must NOT score all-zero (the
+	# -SimpleMatch-on-an-escaped-pattern bug always returned 0).
+	_Assert -Name 'a genuine wedge is not silently scored all-zero' `
+		-Condition (($wd.Watchdog + $wd.WalSlot + $wd.WalAppend) -gt 0) `
+		-Detail "got Watchdog=$($wd.Watchdog) WalSlot=$($wd.WalSlot) WalAppend=$($wd.WalAppend)"
+} finally {
+	Remove-Item -Path $wedgeLog -Force -ErrorAction SilentlyContinue
+}
+
+# Fixture: a healthy silo log with none of the wedge tokens scores all-zero.
+$healthyLog = New-TemporaryFile
+try {
+	Set-Content -Path $healthyLog -Encoding utf8 -Value @(
+		'[silo] t=  10.0s ops=     12,000 ops/sec=     1,200 inFlight=  1'
+		'[phaseA] t=10.0s instrument=set.duration tree=t shard=0 phase=- status=- count=1200 p50=1.4ms'
+		'[silo] FINAL ops=22,400 failed=0 discarded=0 elapsed=60.0s'
+	)
+	$wh = Measure-CohortWedgeDiagnostics -SiloLogPath $healthyLog
+	_Assert -Name 'a clean log scores watchdog=wal-slot=wal-append=0' `
+		-Condition ($wh.Watchdog -eq 0 -and $wh.WalSlot -eq 0 -and $wh.WalAppend -eq 0) `
+		-Detail "got Watchdog=$($wh.Watchdog) WalSlot=$($wh.WalSlot) WalAppend=$($wh.WalAppend)"
+} finally {
+	Remove-Item -Path $healthyLog -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
 $summaryColor = if ($script:_FailCount -eq 0) { 'Green' } else { 'Red' }
 Write-Host ("Total: {0} passed, {1} failed" -f $script:_PassCount, $script:_FailCount) `
 	-ForegroundColor $summaryColor

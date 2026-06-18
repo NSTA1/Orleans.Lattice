@@ -228,6 +228,14 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         // "back-pressure exceeded the deadline".
         "orleans.lattice.wal.writer.append.admission_timeouts",
         "orleans.lattice.wal.writer.append.admission_wait",
+        // set-point-mv view-lag observability. The materialised-view maintainer
+        // records its apply lag (source WAL entries committed but not yet
+        // applied to the view) and per-pass backlog depth once per drain pass.
+        // Surfacing them on the standard [phaseA] line gives the operator the
+        // full p50/p99 lag distribution straight off the metrics surface, with
+        // no extra grain RPC against the tree the set-point-mv cohort measures.
+        "orleans.lattice.view.apply_lag",
+        "orleans.lattice.view.backlog_depth",
     };
 
     /// <summary>
