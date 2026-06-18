@@ -44,6 +44,23 @@ internal static class LatticeConstants
     public const string QueueTreePrefix = "_lattice_queue_";
 
     /// <summary>
+    /// Reserved tree-name prefix for the materialised-view trees the view
+    /// maintainer owns, named <c>view-{name}</c> (generation 0) and
+    /// <c>view-{name}#g{N}</c> (generation N &gt; 0).
+    /// <para>
+    /// Unlike <see cref="SystemTreePrefix"/> and its subsumed prefixes, this is
+    /// <b>not</b> a silo-internal name: it is the user-facing tree a view is read
+    /// through. It is reserved only against direct <em>writes</em> - the public
+    /// <see cref="ILattice"/> mutating surface rejects writes to any
+    /// <c>view-*</c> tree that do not originate from the view maintainer (see the
+    /// view-write capability), because a materialised view is derived state owned
+    /// by its maintainer and a direct write would corrupt the view's drift digest
+    /// and trigger a spurious rebuild. Reads remain unrestricted.
+    /// </para>
+    /// </summary>
+    public const string ViewTreePrefix = "view-";
+
+    /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized

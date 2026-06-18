@@ -214,8 +214,14 @@ public class MaterialisedViewShadowSwapTests
         Assert.That(await latticeView.ReconcileAsync(), Is.False, "An in-sync view must report no drift.");
 
         // Introduce drift directly on the active tree behind the maintainer's back.
+        // A direct public write to a view tree is normally rejected; the maintainer
+        // capability scope authorises this intentional corruption to simulate the
+        // drift (a maintainer-internal bug / replication race) that reconcile repairs.
         var activeTree = ViewGrain(await maintainer.GetActiveTreeIdAsync());
-        await activeTree.DeleteAsync("a");
+        using (ViewWriteContext.BeginScope())
+        {
+            await activeTree.DeleteAsync("a");
+        }
         Assert.That(await latticeView.GetAsync("a"), Is.Null);
 
         // Reconcile detects and repairs.
@@ -249,9 +255,14 @@ public class MaterialisedViewShadowSwapTests
         var inSync = await latticeView.ComputeDigestAsync();
         Assert.That(inSync.EntryCount, Is.EqualTo(2));
 
-        // Mutate the active tree out-of-band: the digest must change.
+        // Mutate the active tree out-of-band: the digest must change. The maintainer
+        // capability scope authorises this otherwise-forbidden direct view write so
+        // the test can simulate drift.
         var activeTree = ViewGrain(await maintainer.GetActiveTreeIdAsync());
-        await activeTree.SetAsync("a", Person(31, "tampered"));
+        using (ViewWriteContext.BeginScope())
+        {
+            await activeTree.SetAsync("a", Person(31, "tampered"));
+        }
         var drifted = await latticeView.ComputeDigestAsync();
         Assert.That(inSync.ContentEquals(drifted), Is.False, "Digest must change after an out-of-band mutation.");
 
@@ -280,9 +291,13 @@ public class MaterialisedViewShadowSwapTests
 
         // Simulate a crashed shadow build: write a bogus partial entry into the
         // next generation's tree without ever swapping. The active generation is
-        // unchanged, so reads keep serving the old fully-built tree.
+        // unchanged, so reads keep serving the old fully-built tree. The maintainer
+        // capability scope authorises this otherwise-forbidden direct view write.
         var shadowId = $"{activeId}#g1";
-        await ViewGrain(shadowId).SetAsync("orphan", Person(99, "orphan"));
+        using (ViewWriteContext.BeginScope())
+        {
+            await ViewGrain(shadowId).SetAsync("orphan", Person(99, "orphan"));
+        }
 
         await Assert.MultipleAsync(async () =>
         {
@@ -340,8 +355,12 @@ public class MaterialisedViewShadowSwapTests
             "Aggregation digest excludes reserved rows and must be rebuild-stable.");
 
         // Drift a materialised group value out-of-band, then reconcile repairs it.
+        // The maintainer capability scope authorises this otherwise-forbidden write.
         var activeTree = ViewGrain(await maintainer.GetActiveTreeIdAsync());
-        await activeTree.SetAsync("red", LatticeAggregationValue.EncodeDouble(999));
+        using (ViewWriteContext.BeginScope())
+        {
+            await activeTree.SetAsync("red", LatticeAggregationValue.EncodeDouble(999));
+        }
         Assert.That(await latticeView.ReconcileAsync(), Is.True, "Out-of-band group drift must be detected and repaired.");
         Assert.That(Sum(await latticeView.GetAsync("red")), Is.EqualTo(15));
     }

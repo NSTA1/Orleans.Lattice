@@ -97,6 +97,10 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task EnsureActiveAsync(CancellationToken cancellationToken = default)
     {
+        // Authorise this turn's view-tree writes (rebuild + initial drain). The flag
+        // flows on RequestContext to every nested view-tree call, so a direct user
+        // write - which never opens this scope - is rejected by the ILattice guard.
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
@@ -154,6 +158,7 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task<int> DrainAsync(CancellationToken cancellationToken = default)
     {
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
@@ -364,6 +369,7 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         if (target <= HybridLogicalClock.Zero)
         {
             // Nothing committed at or before zero to wait for.
@@ -439,6 +445,7 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task RebuildAsync(CancellationToken cancellationToken = default)
     {
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
@@ -548,6 +555,7 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         if (reminderName != KeepaliveReminderName)
         {
             return;
@@ -708,6 +716,7 @@ internal sealed partial class ViewMaintainerGrain(
 
     private async Task OnTimerTickAsync(CancellationToken cancellationToken)
     {
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         try
         {
             await DrainAsync(cancellationToken);

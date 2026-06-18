@@ -182,10 +182,15 @@ public class MaterialisedViewIntegrationTests
         // the maintainer's back, then rebuild from current source state. After a
         // shadow-swap rebuild the active generation advances, so assertions read
         // through the handle (which resolves the active generation) rather than a
-        // fixed gen-0 tree id.
+        // fixed gen-0 tree id. A direct public write to a view tree is normally
+        // rejected; the maintainer capability scope authorises this intentional
+        // corruption so the test can simulate the drift that rebuild repairs.
         var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
         var activeTree = _fixture.Cluster.Client.GetGrain<ILattice>(await maintainer.GetActiveTreeIdAsync());
-        await activeTree.DeleteAsync("a");
+        using (ViewWriteContext.BeginScope())
+        {
+            await activeTree.DeleteAsync("a");
+        }
         Assert.That(await activeTree.GetAsync("a"), Is.Null);
 
         await latticeView.RebuildAsync();

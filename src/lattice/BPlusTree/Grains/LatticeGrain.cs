@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Views;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -160,6 +161,27 @@ internal sealed partial class LatticeGrain(
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             throw new InvalidOperationException(
                 $"Tree ID '{TreeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
+    }
+
+    /// <summary>
+    /// Rejects a direct public <see cref="ILattice"/> <em>write</em> to a
+    /// materialised-view tree (any id starting with
+    /// <see cref="LatticeConstants.ViewTreePrefix"/>) that does not originate from
+    /// the view maintainer. A view tree is derived state owned by its maintainer;
+    /// a direct user write would corrupt the view's drift digest and trigger a
+    /// spurious rebuild, so only writes carrying the maintainer's view-write
+    /// capability (<see cref="ViewWriteContext"/>) are admitted. Reads are
+    /// unaffected (this guard is invoked only from mutating methods), and the
+    /// replication apply path (<see cref="IReplicationApplyGrain"/>) bypasses it
+    /// via explicit interface implementation so a ShipView consumer still receives
+    /// its replicated view tree.
+    /// </summary>
+    private void ThrowIfProtectedView()
+    {
+        if (TreeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal)
+            && !ViewWriteContext.IsAuthorised)
+            throw new InvalidOperationException(
+                $"Tree ID '{TreeId}' is a materialised view and is read-only through the public ILattice surface. A view's contents are maintained from its source tree; write to the source instead. Choose a tree name that does not start with '{LatticeConstants.ViewTreePrefix}' for directly-writable trees.");
     }
 
     private IHostApplicationLifetime? _lifetime;
@@ -781,6 +803,7 @@ internal sealed partial class LatticeGrain(
     public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
@@ -946,6 +969,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -992,6 +1016,7 @@ internal sealed partial class LatticeGrain(
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -1022,6 +1047,7 @@ internal sealed partial class LatticeGrain(
     public async Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
@@ -1052,6 +1078,7 @@ internal sealed partial class LatticeGrain(
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
@@ -1083,6 +1110,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1233,6 +1261,7 @@ internal sealed partial class LatticeGrain(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1332,6 +1361,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1374,6 +1404,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
@@ -1425,6 +1456,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1449,6 +1481,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
@@ -1464,6 +1497,7 @@ internal sealed partial class LatticeGrain(
     public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
@@ -1498,6 +1532,7 @@ internal sealed partial class LatticeGrain(
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
@@ -1516,6 +1551,7 @@ internal sealed partial class LatticeGrain(
     public async Task<int> DeleteRangeWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);

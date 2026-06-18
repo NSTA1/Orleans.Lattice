@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.BPlusTree.Grains;
+﻿namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Bulk-load, tree deletion, recovery, and purge operations.
@@ -8,6 +8,7 @@ internal sealed partial class LatticeGrain
     public async Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
@@ -65,6 +66,7 @@ internal sealed partial class LatticeGrain
     public async Task DeleteTreeAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
@@ -75,6 +77,7 @@ internal sealed partial class LatticeGrain
     public async Task RecoverTreeAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
@@ -85,6 +88,7 @@ internal sealed partial class LatticeGrain
     public async Task PurgeTreeAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
@@ -95,6 +99,7 @@ internal sealed partial class LatticeGrain
     public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
@@ -105,6 +110,7 @@ internal sealed partial class LatticeGrain
     public async Task UndoResizeAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
@@ -156,6 +162,7 @@ internal sealed partial class LatticeGrain
     public async Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(

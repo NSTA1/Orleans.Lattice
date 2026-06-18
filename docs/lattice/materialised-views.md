@@ -74,6 +74,15 @@ public sealed class AdultsReader(ILatticeViewFactory views, IGrainFactory grains
 `ILatticeView` exposes the usual reads - `GetAsync`, `CountAsync`, `KeysAsync`,
 `EntriesAsync` - over the materialised content.
 
+A view is **read-only**. Its contents are derived from the source tree and owned
+by the maintainer, so the underlying `view-{name}` tree rejects direct writes
+through the public `ILattice` surface: binding `GetGrain<ILattice>("view-adults")`
+and calling `SetAsync` / `DeleteAsync` / `SetManyAtomicAsync` (or any other
+mutating method) throws `InvalidOperationException`. Reads of the view tree are
+unaffected. To change a view's contents, write to its **source** tree and let the
+view converge. (For this reason, `view-` is a reserved tree-name prefix: don't
+name a directly-writable data tree `view-something`.)
+
 ## Observing lag and forcing a rebuild
 
 Inject `ILatticeViewFactory` to create a view handle, query its apply lag (the

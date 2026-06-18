@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Views;
@@ -49,7 +50,9 @@ internal sealed partial class ViewMaintainerGrain
     /// generations are suffixed <c>#g{N}</c>.
     /// </summary>
     private string GenerationTreeId(long generation) =>
-        generation <= 0 ? $"view-{ViewName}" : $"view-{ViewName}#g{generation}";
+        generation <= 0
+            ? $"{LatticeConstants.ViewTreePrefix}{ViewName}"
+            : $"{LatticeConstants.ViewTreePrefix}{ViewName}#g{generation}";
 
     private TimeSpan ReclaimGrace
     {
@@ -76,6 +79,7 @@ internal sealed partial class ViewMaintainerGrain
     /// <inheritdoc />
     public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
     {
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {

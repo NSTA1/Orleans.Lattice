@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.BPlusTree.Grains;
+﻿namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Stateful cursor forwarding. Each <c>ILattice</c> cursor method
@@ -299,6 +299,7 @@ internal sealed partial class LatticeGrain
     private async Task<string> OpenDeleteRangeCursorCoreAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
@@ -339,6 +340,7 @@ internal sealed partial class LatticeGrain
     public Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(string cursorId, int maxToDelete, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
         ArgumentNullException.ThrowIfNull(cursorId);
         cancellationToken.ThrowIfCancellationRequested();
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));

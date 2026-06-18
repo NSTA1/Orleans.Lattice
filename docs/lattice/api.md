@@ -1797,6 +1797,11 @@ double total = aggregate is null ? 0 : LatticeAggregationValue.DecodeDouble(aggr
 - **Read through the handle.** A rebuild can swap the live view tree, so prefer
   the `ILatticeView` handle (which re-resolves the active tree) over binding a raw
   `ILattice` grain by a fixed id.
+- **Views are read-only.** The `view-{name}` tree is derived state owned by the
+  maintainer; the public `ILattice` mutating surface rejects direct writes to any
+  `view-*` tree with `InvalidOperationException` (reads are unaffected). Write to
+  the source tree and let the view converge. `view-` is therefore a reserved
+  tree-name prefix for directly-writable trees.
 - **Atomic visibility.** A source atomic write (single-tree or cross-tree) is
   surfaced atomically in the derived views; see
   [Materialised views](materialised-views.md#atomic-write-visibility).

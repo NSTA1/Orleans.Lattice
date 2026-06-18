@@ -169,6 +169,9 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     /// </summary>
     private async Task IssueJointFlipAsync()
     {
+        // Authorise the joint flip's writes to participant view trees (propagates
+        // through the cross-tree atomic-write saga via RequestContext).
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         var batches = new List<LatticeTreeBatch>(state.State.Slices.Count);
         foreach (var slice in state.State.Slices.Values)
         {

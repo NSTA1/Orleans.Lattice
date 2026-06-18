@@ -146,6 +146,58 @@ public class MaterialisedViewPublicApiContractTests
     }
 
     [Test]
+    public async Task Direct_user_writes_to_a_view_tree_are_rejected_while_reads_and_the_maintainer_still_work()
+    {
+        const string tree = "people-readonly";
+        const string viewName = "adults-readonly";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await source.SetAsync("p1", MaterialisedViewPublicApiContractFixture.PersonBytes(40));
+
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var view = factory.Create(
+            source,
+            viewName,
+            new LatticeViewDefinition(viewName, MaterialisedViewPublicApiContractFixture.AdultFilter()));
+        await view.WaitForSourceHeadAsync(Barrier);
+
+        // A caller could discover the underlying view tree id (view-{name}) and grab
+        // its ILattice grain reference directly. Every public mutating call must be
+        // rejected - the view is derived state owned by its maintainer.
+        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>("view-" + viewName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => viewTree.SetAsync("p1", MaterialisedViewPublicApiContractFixture.PersonBytes(99)),
+                "a direct SetAsync to a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => viewTree.DeleteAsync("p1"),
+                "a direct DeleteAsync to a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => viewTree.SetManyAtomicAsync(
+                    new List<KeyValuePair<string, byte[]>> { new("p1", MaterialisedViewPublicApiContractFixture.PersonBytes(1)) },
+                    "op"),
+                "a direct atomic write to a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => viewTree.DeleteRangeAsync("a", "z"),
+                "a direct DeleteRange to a view tree must be rejected");
+        });
+
+        // Reads against the view tree are unaffected, and the rejected writes left
+        // the view untouched.
+        Assert.That(await viewTree.GetAsync("p1"), Is.Not.Null, "reads on a view tree must remain allowed");
+
+        // The maintainer still owns the view: a fresh source write converges normally.
+        await source.SetAsync("p2", MaterialisedViewPublicApiContractFixture.PersonBytes(55));
+        await view.WaitForSourceHeadAsync(Barrier);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await view.GetAsync("p2"), Is.Not.Null, "the maintainer must still apply source writes after a rejected direct write");
+            Assert.That(await view.CountAsync(), Is.EqualTo(2), "the view should hold exactly the maintainer-applied keys");
+        });
+    }
+
+    [Test]
     public async Task Aggregation_view_materialises_group_values_through_the_public_handle()
     {
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(MaterialisedViewPublicApiContractFixture.AggregationSourceTreeId);

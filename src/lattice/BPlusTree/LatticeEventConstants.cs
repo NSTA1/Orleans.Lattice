@@ -310,4 +310,16 @@ public static class LatticeEventConstants
     /// set through <see cref="LatticeCrossTreeTerminalContext"/>.
     /// </summary>
     internal const string CrossTreeTerminalRequestContextKey = "ol.xt";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key set by the materialised-view maintainer
+    /// (and the view cross-tree coordinator) for the duration of a turn that
+    /// writes to a view tree, marking those writes as maintainer-authorised so the
+    /// public <see cref="ILattice"/> write guard admits them while still rejecting
+    /// direct user writes to <c>view-*</c> trees. Internal - set through
+    /// <see cref="Views.ViewWriteContext"/>. The flag propagates across grain calls
+    /// (including the cross-tree atomic-write saga) because <c>RequestContext</c>
+    /// flows automatically on outgoing calls.
+    /// </summary>
+    internal const string ViewWriteRequestContextKey = "ol.vw";
 }
