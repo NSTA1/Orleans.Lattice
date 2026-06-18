@@ -93,6 +93,15 @@ $outs = $outsJson | ConvertFrom-Json
 $tableEndpoint = $outs.storageTableEndpoint.value
 $blobEndpoint  = $outs.storageBlobEndpoint.value
 $storageAcct   = $outs.storageAccountName.value
+# All WAL table endpoints (index 0 == primary). Accounts 1.. become the silo's
+# BENCH_WAL_EXTRA_ACCOUNT_URIS so the bench can spread WAL partitions across
+# accounts. Older deployments without this output degrade to a single account.
+$allTableEndpoints = @()
+if ($outs.PSObject.Properties.Name -contains 'storageTableEndpointsAll') {
+	$allTableEndpoints = @($outs.storageTableEndpointsAll.value)
+}
+$extraTableEndpoints = if ($allTableEndpoints.Count -gt 1) { $allTableEndpoints[1..($allTableEndpoints.Count - 1)] } else { @() }
+$walExtraAccountUris = ($extraTableEndpoints -join ';')
 
 $sshTarget = "$adminUser@$fqdn"
 $sshOpts = @(
@@ -117,6 +126,7 @@ function Invoke-SshQuiet {
 
 Write-Host "VM         : $vmName ($publicIp / $fqdn)" -ForegroundColor Green
 Write-Host "Storage    : $storageAcct" -ForegroundColor Green
+Write-Host "WAL accts  : $($allTableEndpoints.Count) (extra: $walExtraAccountUris)" -ForegroundColor Green
 Write-Host "SSH        : $sshTarget" -ForegroundColor Green
 
 # --- 1. wait for cloud-init to finish (no-op on subsequent runs) ---
@@ -151,6 +161,7 @@ if (-not $SkipUnitSync) {
 			-replace '__ADMIN_USER__', $adminUser `
 			-replace '__TABLE_ENDPOINT__', $tableEndpoint `
 			-replace '__BLOB_ENDPOINT__', $blobEndpoint `
+			-replace '__WAL_EXTRA_ACCOUNT_URIS__', $walExtraAccountUris `
 			-replace '__STORAGE_ACCOUNT__', $storageAcct
 		$tmp = New-TemporaryFile
 		try {

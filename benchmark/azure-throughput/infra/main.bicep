@@ -42,6 +42,11 @@ param osDiskSizeGB int = 64
 @description('Optional cloud-init / custom-data payload (base64-encoded). Empty = no custom-data.')
 param customDataBase64 string = ''
 
+@description('Number of WAL storage accounts to provision (1..8). The bench silo spreads WAL partitions across these accounts to test whether the single-account write ceiling is account/endpoint-bound. Account 0 also backs the Orleans grain-state table.')
+@minValue(1)
+@maxValue(8)
+param walAccountCount int = 1
+
 var vmName = '${namePrefix}-vm'
 var nicName = '${namePrefix}-nic'
 var pipName = '${namePrefix}-pip'
@@ -52,7 +57,9 @@ var dnsLabel = toLower('${namePrefix}-${uniqueString(resourceGroup().id)}')
 
 // Storage account name: 3-24 chars, lowercase + digits only, globally unique.
 // uniqueString() always returns 13 chars, so 'st' + first 22 = 24-char safe name.
-var storageAccountName = take(toLower('st${replace(namePrefix, '-', '')}${uniqueString(resourceGroup().id)}'), 24)
+// Per-account uniqueness comes from seeding uniqueString with the account index
+// so the multi-account loop produces distinct, stable names within one RG.
+var storageAccountNames = [for i in range(0, walAccountCount): take(toLower('st${replace(namePrefix, '-', '')}${uniqueString(resourceGroup().id, string(i))}'), 24)]
 
 // Built-in role definition IDs.
 // Storage Table Data Contributor: 0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3
@@ -212,10 +219,12 @@ resource autoShutdown 'Microsoft.DevTestLab/schedules@2018-09-15' = {
   }
 }
 
-// Storage account for WAL / bench artefacts. Accessed from the VM via the
-// system-assigned managed identity (no keys, no connection strings).
-resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
-  name: storageAccountName
+// Storage accounts for WAL / bench artefacts. Accessed from the VM via the
+// system-assigned managed identity (no keys, no connection strings). The bench
+// silo spreads WAL partitions across all walAccountCount accounts; index 0 also
+// backs the Orleans grain-state table.
+resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = [for i in range(0, walAccountCount): {
+  name: storageAccountNames[i]
   location: location
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
@@ -231,46 +240,49 @@ resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
 	  bypass: 'AzureServices'
 	}
   }
-}
+}]
 
 // Grant the VM's system-assigned identity data-plane access to Tables, Blobs,
-// and Queues on this storage account. Scoped to this account only.
-resource raTable 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, vm.id, roleDefIdTableContributor)
-  scope: storage
+// and Queues on every storage account. Scoped to each account individually.
+resource raTable 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for i in range(0, walAccountCount): {
+  name: guid(storage[i].id, vm.id, roleDefIdTableContributor)
+  scope: storage[i]
   properties: {
 	principalId: vm.identity.principalId
 	principalType: 'ServicePrincipal'
 	roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleDefIdTableContributor)
   }
-}
+}]
 
-resource raBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, vm.id, roleDefIdBlobContributor)
-  scope: storage
+resource raBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for i in range(0, walAccountCount): {
+  name: guid(storage[i].id, vm.id, roleDefIdBlobContributor)
+  scope: storage[i]
   properties: {
 	principalId: vm.identity.principalId
 	principalType: 'ServicePrincipal'
 	roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleDefIdBlobContributor)
   }
-}
+}]
 
-resource raQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, vm.id, roleDefIdQueueContributor)
-  scope: storage
+resource raQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for i in range(0, walAccountCount): {
+  name: guid(storage[i].id, vm.id, roleDefIdQueueContributor)
+  scope: storage[i]
   properties: {
 	principalId: vm.identity.principalId
 	principalType: 'ServicePrincipal'
 	roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleDefIdQueueContributor)
   }
-}
+}]
 
 output vmName string = vm.name
 output publicIp string = pip.properties.ipAddress
 output fqdn string = pip.properties.dnsSettings.fqdn
 output adminUsername string = adminUsername
 output sshCommand string = 'ssh ${adminUsername}@${pip.properties.dnsSettings.fqdn}'
-output storageAccountName string = storage.name
-output storageTableEndpoint string = storage.properties.primaryEndpoints.table
-output storageBlobEndpoint string = storage.properties.primaryEndpoints.blob
+output storageAccountName string = storage[0].name
+output storageTableEndpoint string = storage[0].properties.primaryEndpoints.table
+output storageBlobEndpoint string = storage[0].properties.primaryEndpoints.blob
+// All WAL table endpoints in account-index order (index 0 == storageTableEndpoint).
+// update.ps1 wires index 1.. into the silo as BENCH_WAL_EXTRA_ACCOUNT_URIS.
+output storageTableEndpointsAll array = [for i in range(0, walAccountCount): storage[i].properties.primaryEndpoints.table]
 output vmPrincipalId string = vm.identity.principalId

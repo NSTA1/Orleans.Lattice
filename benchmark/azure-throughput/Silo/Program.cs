@@ -181,10 +181,12 @@ using Azure.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Storage.AzureTable;
+using Orleans.Serialization;
 using VehicleFleetSimulator.Abstractions;
 using VehicleFleetSimulator.AzureThroughput.Silo;
 
@@ -217,6 +219,17 @@ var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
+// Multi-account WAL fan-out (experiment knobs). BENCH_WAL_EXTRA_ACCOUNT_URIS is
+// a ';'-delimited list of additional storage-account table endpoints wired in
+// by update.ps1 (accounts 1..N-1; account 0 is BENCH_STORAGE_URI). Each becomes
+// a keyed WAL provider acct1, acct2, ... BENCH_WAL_ACCOUNTS selects how many
+// accounts (including the default at index 0) the tree's WAL partitions are
+// spread across before load. Clamped to the number actually provisioned, so an
+// over-specified arm degrades to "use all available" rather than failing.
+var walExtraAccountUris = (Environment.GetEnvironmentVariable("BENCH_WAL_EXTRA_ACCOUNT_URIS") ?? string.Empty)
+    .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+var walAccountsRequested = ReadInt("BENCH_WAL_ACCOUNTS", 1);
+var walAccounts = Math.Clamp(walAccountsRequested, 1, 1 + walExtraAccountUris.Length);
 // Connection-REUSE transport (cloud-NAT socket hygiene; originally
 // attributed to ACI but the same long-lived-connection failure mode applies
 // to any cloud-side SNAT including a VM behind an Azure load balancer or
@@ -370,7 +383,7 @@ var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
 // it later does the override path must update these tokens too.
 var walAppendDispatchTimeoutBanner = $"default({LatticeOptions.DefaultWalAppendDispatchTimeout.TotalSeconds:0.##}s)";
 var walFlushPreflightTimeoutBanner = $"default({LatticeOptions.DefaultWalFlushPreflightTimeout.TotalSeconds:0.##}s)";
-Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire}");
+Console.WriteLine($"[silo] treeId={treeId} walTable={walTable} tcpPort={tcpPort} batch={batchSize} flushMs={flushMs} flushConcurrency={flushConcurrency} walPartitions={walPartitions} walMaxPending={walMaxPending} shardCountOverride={shardCountOverride} pipelinePhase2={pipelinePhase2} eliminateCandidateRow={eliminateCandidateRow} phase2CoalescingMs={phaseTwoCoalescingMs} walNetworkTimeoutSec={walNetworkTimeoutSec} walPhase2CommitTimeout={walPhase2CommitTimeoutBanner} walAppendDispatchTimeout={walAppendDispatchTimeoutBanner} walFlushPreflightTimeout={walFlushPreflightTimeoutBanner} totalDurationSec={totalDurationSec} responseTimeoutSec={responseTimeoutSec} leafStorageKind={leafStorageKind} leafStorageTable={leafStorageTable} leafStorageNumGrains={leafStorageNumGrains} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(workloadMode)} atomicBatchSize={atomicBatchSize} preseedKeyCount={preseedKeyCount} preseedWillFire={preseedWillFire} walAccounts={walAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length}");
 Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-identity {storageUri}" : "connection-string")}");
 // F-086: echo the saturation knobs so the cohort log shows the exact
 // values the TCP-read gating + the silo's sampler use. A "default"
@@ -427,7 +440,7 @@ builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.Pha
 builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
 builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
     sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts));
 
 builder.UseOrleans(silo =>
 {
@@ -569,6 +582,43 @@ builder.UseOrleans(silo =>
         Console.WriteLine("[silo] BENCH_DISABLE_STORAGE_USAGE_POLLER=1 -> StorageUsagePollInterval=Zero (poller disabled)");
     }
 
+    // Shared per-provider WAL tuning, applied identically to the default
+    // account and to every keyed multi-account provider below, so a
+    // multi-account experiment arm differs from the single-account baseline
+    // only in the number of backing storage accounts - never in provider
+    // config.
+    void ApplyCommonWalTuning(AzureTableWalStorageOptions walOptions)
+    {
+        walOptions.TableName = walTable;
+        walOptions.PipelinePhaseTwoCommits = pipelinePhase2;
+        walOptions.EliminateCandidateRowOnHotPath = eliminateCandidateRow;
+        walOptions.PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(phaseTwoCoalescingMs);
+        if (walNetworkTimeoutSec > 0)
+        {
+            walOptions.RetryNetworkTimeout = TimeSpan.FromSeconds(walNetworkTimeoutSec);
+        }
+        if (walPhaseTwoCommitTimeoutSec is { } phase2TimeoutSec)
+        {
+            walOptions.PhaseTwoCommitTimeout = phase2TimeoutSec > 0
+                ? TimeSpan.FromSeconds(phase2TimeoutSec)
+                : null;
+        }
+        if (walConnectionReuse)
+        {
+            walOptions.ConfigureClientOptions = clientOptions =>
+            {
+                var handler = new SocketsHttpHandler
+                {
+                    PooledConnectionLifetime = TimeSpan.FromSeconds(walConnLifetimeSec),
+                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(walConnLifetimeSec),
+                    ConnectTimeout = TimeSpan.FromSeconds(15),
+                    EnableMultipleHttp2Connections = false,
+                };
+                clientOptions.Transport = new HttpClientTransport(new HttpClient(handler));
+            };
+        }
+    }
+
     silo.AddAzureTableWalStorage(o =>
     {
         if (!string.IsNullOrWhiteSpace(storageConn))
@@ -580,88 +630,40 @@ builder.UseOrleans(silo =>
             o.ServiceUri = new Uri(storageUri!);
             o.TokenCredential = new DefaultAzureCredential();
         }
-        o.TableName = walTable;
-        o.PipelinePhaseTwoCommits = pipelinePhase2;
-        // Elide the phase-0 candidate-row write. Default inherits the
-        // library default (AzureTableWalStorageOptions
-        // .DefaultEliminateCandidateRowOnHotPath = true); the C-row
-        // contends with the per-shard PhaseTwoWorker on the shared
-        // manifest partition, so eliding it removes a server-side-
-        // serialised round-trip from every batch's hot path.
-        o.EliminateCandidateRowOnHotPath = eliminateCandidateRow;
-        // Default inherits AzureTableWalStorageOptions
-        // .DefaultPhaseTwoCoalescingWindow (5 ms). A small positive
-        // window lets the per-shard PhaseTwoWorker wait briefly after
-        // the first arrival so additional commits coalesce into the
-        // same Azure Tables transaction; without it,
-        // provider.phase2.batch_size stays pinned at 1.00 whenever
-        // per-partition arrival inter-spacing exceeds the commit's own
-        // duration.
-        o.PhaseTwoCoalescingWindow = TimeSpan.FromMilliseconds(phaseTwoCoalescingMs);
-        // Wedge fix part 1: bound every individual HTTP attempt. Without a
-        // finite per-attempt timeout, a request dispatched onto a
-        // cloud-NAT-killed socket hangs at TableClient.AddEntityAsync forever,
-        // holds a WalMaxPendingBatches slot, and the back-pressure await in
-        // WalShardGrain deadlocks the whole pipeline at inFlight=cap. A
-        // finite RetryNetworkTimeout turns that hang into a per-attempt
-        // failure the retry policy can recover from, releasing the slot.
-        if (walNetworkTimeoutSec > 0)
-        {
-            o.RetryNetworkTimeout = TimeSpan.FromSeconds(walNetworkTimeoutSec);
-        }
-        // Wedge fix part 2: bound the per-shard PhaseTwoWorker's whole
-        // manifest commit, not just each HTTP attempt. RetryNetworkTimeout
-        // caps a single attempt, but the worker's background drain loop
-        // commits phase-2 transactions one coalesced group at a time and
-        // the next group cannot start until the current commit returns -
-        // so a commit that keeps re-issuing past the network timeout (or
-        // parks in a state the SDK never surfaces) still wedges every later
-        // commit on the shard. PhaseTwoCommitTimeout is the finite deadline
-        // covering the whole commit; on expiry the worker faults the batch
-        // and every later pending commit (recovered by the sticky-failure
-        // resync path) and increments
-        // orleans.lattice.provider.phase2.commit.timeouts so the fix is
-        // directly observable pre/post. Only overridden when the operator
-        // supplied BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC; absent leaves the
-        // library default (DefaultPhaseTwoCommitTimeout). A supplied 0 maps
-        // to null (explicitly unbounded); a supplied > 0 sets that deadline.
-        if (walPhaseTwoCommitTimeoutSec is { } phase2TimeoutSec)
-        {
-            o.PhaseTwoCommitTimeout = phase2TimeoutSec > 0
-                ? TimeSpan.FromSeconds(phase2TimeoutSec)
-                : null;
-        }
-        // Connection-reuse transport. When BENCH_WAL_CONNECTION_REUSE
-        // is set, replace the default Azure.Core transport with one that reuses
-        // connections (dodging the SNAT establishment stall) but with a FINITE
-        // lifetime/idle timeout so cloud-NAT-killed sockets are recycled rather
-        // than reused into a hang. BuildServiceClient honours this callback only
-        // in connection-string / credential mode (the path this silo uses); the
-        // provider re-attaches RetryAttemptTrackingPolicy afterwards so
-        // provider.retry.attempts{status=...} still records.
-        if (walConnectionReuse)
-        {
-            o.ConfigureClientOptions = clientOptions =>
-            {
-                var handler = new SocketsHttpHandler
-                {
-                    // Wedge fix part 2: FINITE lifetime/idle so a cloud-NAT-
-                    // killed socket is torn down and re-established on next use
-                    // instead of being reused into a request that hangs forever.
-                    PooledConnectionLifetime = TimeSpan.FromSeconds(walConnLifetimeSec),
-                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(walConnLifetimeSec),
-                    // Bound connection establishment too, so a wedged handshake
-                    // fails fast rather than parking a request indefinitely.
-                    ConnectTimeout = TimeSpan.FromSeconds(15),
-                    // Multiplex concurrent requests over a single HTTP/2
-                    // connection per server rather than fanning out onto a
-                    // connection-per-request.
-                    EnableMultipleHttp2Connections = false,
-                };
-                clientOptions.Transport = new HttpClientTransport(new HttpClient(handler));
-            };
-        }
+        ApplyCommonWalTuning(o);
     });
+
+    // Multi-account WAL fan-out. Register each additional storage account
+    // (BENCH_WAL_EXTRA_ACCOUNT_URIS, semicolon-delimited) as a keyed WAL
+    // provider 'acct1', 'acct2', ... so the placement-spread step in
+    // TcpIngestService can route WAL partitions to them when
+    // BENCH_WAL_ACCOUNTS > 1. Every account uses managed-identity auth and the
+    // exact same per-provider tuning as the default account, so the only
+    // variable across the multi-account experiment arms is how many backing
+    // accounts the partitions are spread over. Registration is lazy - the
+    // catalog only constructs a provider the first time a partition pinned to
+    // its key activates - so registering every available account is free for
+    // arms that use fewer.
+    for (var accountIndex = 0; accountIndex < walExtraAccountUris.Length; accountIndex++)
+    {
+        var accountUri = walExtraAccountUris[accountIndex];
+        var providerKey = $"acct{accountIndex + 1}";
+        silo.AddLatticeWalStorageProvider(providerKey, sp =>
+        {
+            var keyedOptions = new AzureTableWalStorageOptions
+            {
+                ServiceUri = new Uri(accountUri),
+                TokenCredential = new DefaultAzureCredential(),
+            };
+            ApplyCommonWalTuning(keyedOptions);
+            return new AzureTableWalStorageProvider(
+                Options.Create(keyedOptions),
+                sp.GetRequiredService<Serializer<WalRecord>>(),
+                sp.GetService<IWalSaturationSignal>(),
+                sp.GetServices<ILatticeCompressor>());
+        });
+    }
+
 
     // set-point-mv cohort only: attach an asynchronous materialised view to the
     // target tree. The view is a key-preserving passthrough (no filter, no
@@ -774,7 +776,7 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
 // TcpIngestService class methods. Top-level local functions cannot
 // be referenced from non-top-level types per CS8801.
 
-internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount, int WalMaxPendingBatches, int ResponseTimeoutSec);
+internal sealed record IngestSettings(string TreeId, int TcpPort, int BatchSize, TimeSpan FlushInterval, TimeSpan ReportInterval, int FlushConcurrency, int ShardCountOverride, BenchWorkloadMode WorkloadMode, int AtomicBatchSize, int PreseedKeyCount, int WalMaxPendingBatches, int ResponseTimeoutSec, int WalPartitions, int WalAccounts);
 
 /// <summary>
 /// Selects which <c>ILattice</c> operation the benchmark silo dispatches
@@ -1065,6 +1067,55 @@ internal sealed class TcpIngestService(
             var msg = $"[silo] ERROR warmup treeId={settings.TreeId} ABORTED after {warmUpAttempt} attempt(s) elapsedMs={warmUpSw.Elapsed.TotalMilliseconds:F0}: {detail}.";
             Console.WriteLine(msg);
             throw new InvalidOperationException(msg, lastWarmUpException);
+        }
+
+        // Multi-account WAL placement spread (experiment independent variable).
+        // When BENCH_WAL_ACCOUNTS > 1, redistribute the tree's WAL partitions
+        // across the keyed providers acct1..acct{N-1} - partition p routes to
+        // acct(p % N), with p % N == 0 staying on the default account - before
+        // the TCP listener opens. The tree is freshly warmed and empty here, so
+        // each move is a cheap placement-pin flip with no retained tail to copy.
+        // Arms differ only in how many accounts back the same WAL partitions.
+        if (settings.WalAccounts > 1)
+        {
+            // Source of truth: Orleans.Lattice LatticeConstants.AdminGrainKey
+            // (internal to the library; hardcoded here because the bench silo
+            // assembly has no InternalsVisibleTo grant).
+            const string adminGrainKey = "_lattice_admin";
+            var admin = grainFactory.GetGrain<ILatticeAdmin>(adminGrainKey);
+            var moves = new List<(int Partition, string TargetProviderKey)>();
+            for (var p = 0; p < settings.WalPartitions; p++)
+            {
+                var accountIndex = p % settings.WalAccounts;
+                if (accountIndex != 0)
+                {
+                    moves.Add((p, $"acct{accountIndex}"));
+                }
+            }
+            if (moves.Count > 0)
+            {
+                try
+                {
+                    await admin.ExecuteWalMoveAsync(settings.TreeId, moves, null, stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[silo] ERROR wal-placement-spread treeId={settings.TreeId} accounts={settings.WalAccounts} partitions={settings.WalPartitions} moves={moves.Count} FAILED: {ex.GetType().Name}: {Truncate(ex.Message, 240)}");
+                    throw;
+                }
+            }
+            try
+            {
+                var placement = await admin.GetWalPlacementAsync(settings.TreeId, stoppingToken).ConfigureAwait(false);
+                var summary = string.Join(",", placement.Partitions.Select(pp => $"{pp.Partition}:{pp.ProviderKey}"));
+                Console.WriteLine($"[silo] wal-placement treeId={settings.TreeId} accounts={settings.WalAccounts} partitions={settings.WalPartitions} version={placement.Version} -> {summary}");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[silo] WARN wal-placement read treeId={settings.TreeId} failed: {ex.GetType().Name}: {Truncate(ex.Message, 160)}");
+            }
         }
 
         // Cross-tree warm-up: the cross-tree atomic-write modes commit across

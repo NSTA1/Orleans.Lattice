@@ -27,7 +27,9 @@
 param(
 	[string] $ParametersFile,
 	[string] $NamePrefix,
-	[string] $VmSize
+	[string] $VmSize,
+	[ValidateRange(1, 8)]
+	[int] $WalAccountCount = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,6 +122,7 @@ $result = az deployment group create `
 		autoShutdownTime=$($p.AutoShutdownTime) `
 		osDiskSizeGB=$($p.OsDiskSizeGB) `
 		customDataBase64="$customDataB64" `
+		walAccountCount=$WalAccountCount `
 	--output json | ConvertFrom-Json
 
 $out = $result.properties.outputs

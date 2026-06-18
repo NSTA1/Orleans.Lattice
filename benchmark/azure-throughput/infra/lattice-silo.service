@@ -29,6 +29,11 @@ Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 Environment=DOTNET_NOLOGO=1
 Environment=BENCH_STORAGE_URI=__TABLE_ENDPOINT__
 Environment=AZURE_STORAGE_ACCOUNT=__STORAGE_ACCOUNT__
+# Semicolon-delimited list of additional WAL storage-account table endpoints
+# (accounts 1..N-1; account 0 is BENCH_STORAGE_URI). The silo registers each as
+# a keyed WAL provider (acct1, acct2, ...) so BENCH_WAL_ACCOUNTS can spread WAL
+# partitions across accounts. Empty on single-account deployments.
+Environment=BENCH_WAL_EXTRA_ACCOUNT_URIS=__WAL_EXTRA_ACCOUNT_URIS__
 # Hint DefaultAzureCredential to skip interactive/Visual Studio chains.
 Environment=AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential
 
