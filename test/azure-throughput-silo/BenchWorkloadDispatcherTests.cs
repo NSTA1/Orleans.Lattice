@@ -111,6 +111,33 @@ public class BenchWorkloadDispatcherTests
     }
 
     [Test]
+    public async Task SetPointMv_dispatches_one_SetAsync_per_entry_identically_to_SetPoint()
+    {
+        // set-point-mv must drive the exact same foreground write path as
+        // set-point - one SetAsync per key, key/value passed through unchanged.
+        // The materialised view it attaches is a silo-startup concern that the
+        // dispatcher never sees, so the two modes are indistinguishable here.
+        var lattice = Substitute.For<ILattice>();
+        var batch = BuildBatch();
+
+        var ops = await BenchWorkloadDispatcher.DispatchAsync(
+            BenchWorkloadMode.SetPointMv, lattice, batch,
+            atomicBatchSize: 64, parallelism: 8, ct: default);
+
+        Assert.That(ops, Is.EqualTo(BatchCount));
+        await lattice.Received(BatchCount).SetAsync(
+            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        var firstKey = batch[0].Key;
+        var firstVal = batch[0].Value;
+        var lastKey = batch[batch.Count - 1].Key;
+        var lastVal = batch[batch.Count - 1].Value;
+        await lattice.Received(1).SetAsync(firstKey, firstVal, Arg.Any<CancellationToken>());
+        await lattice.Received(1).SetAsync(lastKey, lastVal, Arg.Any<CancellationToken>());
+        await lattice.DidNotReceiveWithAnyArgs().SetManyAsync(default!, default(CancellationToken));
+        await lattice.DidNotReceiveWithAnyArgs().GetAsync(default!, default(CancellationToken));
+    }
+
+    [Test]
     public async Task GetPoint_dispatches_one_GetAsync_per_entry()
     {
         var lattice = Substitute.For<ILattice>();
@@ -231,6 +258,7 @@ public class BenchWorkloadDispatcherTests
             Assert.That(BenchWorkloadMetadata.FormatWorkloadMode(BenchWorkloadMode.SetMany), Is.EqualTo("set-many"));
             Assert.That(BenchWorkloadMetadata.FormatWorkloadMode(BenchWorkloadMode.SetManyAtomic), Is.EqualTo("set-many-atomic"));
             Assert.That(BenchWorkloadMetadata.FormatWorkloadMode(BenchWorkloadMode.SetPoint), Is.EqualTo("set-point"));
+            Assert.That(BenchWorkloadMetadata.FormatWorkloadMode(BenchWorkloadMode.SetPointMv), Is.EqualTo("set-point-mv"));
             Assert.That(BenchWorkloadMetadata.FormatWorkloadMode(BenchWorkloadMode.GetPoint), Is.EqualTo("get-point"));
             Assert.That(BenchWorkloadMetadata.FormatWorkloadMode(BenchWorkloadMode.GetMany), Is.EqualTo("get-many"));
         });

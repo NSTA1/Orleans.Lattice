@@ -662,6 +662,23 @@ builder.UseOrleans(silo =>
             };
         }
     });
+
+    // set-point-mv cohort only: attach an asynchronous materialised view to the
+    // target tree. The view is a key-preserving passthrough (no filter, no
+    // re-key) so it mirrors the source 1:1 and the maintainer performs real,
+    // representative WAL-tailing work for every committed write - but entirely
+    // off the foreground SetAsync hot path. This is the A/B partner of the
+    // plain set-point cohort: if the materialised view is truly asynchronous,
+    // the primary tree's point-write throughput/latency must be statistically
+    // indistinguishable between the two cohorts. AddLatticeViews folds in the
+    // WAL consumer-cursor registry; the commit-log reader the maintainer tails
+    // comes from AddLattice above, so no replication package is involved (the
+    // view is local-derive only).
+    if (workloadMode == BenchWorkloadMode.SetPointMv)
+    {
+        silo.AddLatticeViews(views =>
+            views.AddView("bench", treeId, new PredicateLatticeViewProjection()));
+    }
 });
 
 var host = builder.Build();
@@ -743,6 +760,7 @@ static BenchWorkloadMode ParseWorkloadMode(string? raw) =>
         "set-many-atomic-2" or "setmanyatomic2" => BenchWorkloadMode.SetManyAtomic2,
         "cross-tree-atomic-2" or "crosstreeatomic2" => BenchWorkloadMode.CrossTreeAtomic2,
         "cross-tree-atomic-64" or "crosstreeatomic64" => BenchWorkloadMode.CrossTreeAtomic64,
+        "set-point-mv" or "setpointmv" => BenchWorkloadMode.SetPointMv,
         "set-point" or "setpoint" or "set" => BenchWorkloadMode.SetPoint,
         "get-point" or "getpoint" or "get" => BenchWorkloadMode.GetPoint,
         "get-many" or "getmany" => BenchWorkloadMode.GetMany,
@@ -787,6 +805,18 @@ public enum BenchWorkloadMode
     SetManyAtomic2,
     CrossTreeAtomic2,
     CrossTreeAtomic64,
+
+    // set-point-mv: the exact same write path as SetPoint (one SetAsync per
+    // key against the target tree), but the silo additionally attaches an
+    // asynchronous materialised view derived from that tree (a key-preserving
+    // passthrough view registered via AddLatticeViews). It exists only as the
+    // A/B partner of set-point: the primary tree's foreground write path is
+    // untouched, so comparing the two cohorts shows whether maintaining a
+    // materialised view perturbs the source tree's point-write throughput and
+    // latency. It should not - the view maintainer tails the WAL off the hot
+    // path, so the asynchronous derivation must not appear on the writer's
+    // critical path.
+    SetPointMv,
 }
 
 internal sealed class TcpIngestService(
@@ -795,6 +825,7 @@ internal sealed class TcpIngestService(
     IHostApplicationLifetime lifetime,
     IWalSaturationSignal saturationSignal,
     BenchSaturationLogger saturationLogger,
+    IServiceProvider services,
     ILogger<TcpIngestService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1347,6 +1378,35 @@ internal sealed class TcpIngestService(
         // when the silo is saturated.
         long discardedTotal = 0;
 
+        // set-point-mv only: open a read handle over the asynchronous
+        // materialised view attached to this tree at startup, so the reporter
+        // can surface the view's apply lag (source WAL entries committed but not
+        // yet applied to the view) on each progress line and at FINAL. The handle
+        // resolves the maintainer by view name; GetLagAsync is a cheap
+        // checkpoint-vs-head read that runs off the foreground write path, so
+        // sampling it never perturbs the point-write numbers the set-point-mv
+        // cohort exists to compare against the plain set-point cohort. A bounded
+        // non-zero lag while writes flow, draining to zero after they stop, is
+        // the operator-visible evidence that the view is maintained
+        // asynchronously without taxing the primary tree.
+        ILatticeView? mvView = null;
+        if (settings.WorkloadMode == BenchWorkloadMode.SetPointMv)
+        {
+            var viewFactory = services.GetService<ILatticeViewFactory>();
+            if (viewFactory is not null)
+            {
+                mvView = viewFactory.Create(
+                    lattice,
+                    "bench",
+                    new LatticeViewDefinition("bench", new PredicateLatticeViewProjection()));
+                Console.WriteLine($"[silo] mv: materialised view 'bench' (view-bench) attached to treeId={settings.TreeId}; apply lag reported as mvLag=N on each progress line and at MV-FINAL.");
+            }
+            else
+            {
+                Console.WriteLine("[silo] mv: WARNING workload=set-point-mv but no ILatticeViewFactory is registered; mvLag will not be reported.");
+            }
+        }
+
         using var flushGate = new SemaphoreSlim(settings.FlushConcurrency, settings.FlushConcurrency);
         var flushTasks = new HashSet<Task>();
         var firstDispatchLogged = 0;
@@ -1434,7 +1494,24 @@ internal sealed class TcpIngestService(
                     var rate = written / Math.Max(0.001, sinceLocal / (double)Stopwatch.Frequency);
                     var elapsed = (now - startedAt) / (double)Stopwatch.Frequency;
                     var failedTag = failed > 0 ? $" failed={failed,8:N0}" : string.Empty;
-                    Console.WriteLine($"[silo] t={elapsed,7:0.0}s ops={totalNow,12:N0} ops/sec={rate,10:N0} inFlight={inFlightNow,3}{failedTag}");
+                    var mvLagTag = string.Empty;
+                    if (mvView is not null)
+                    {
+                        try
+                        {
+                            // Bound the grain call so a momentarily-busy
+                            // maintainer cannot stall the progress cadence; the
+                            // lag is a best-effort observability signal, not a
+                            // measured quantity on the hot path.
+                            var lag = await mvView.GetLagAsync(reporterCts.Token)
+                                .WaitAsync(TimeSpan.FromSeconds(2), reporterCts.Token)
+                                .ConfigureAwait(false);
+                            mvLagTag = $" mvLag={lag,8:N0}";
+                        }
+                        catch (OperationCanceledException) when (reporterCts.IsCancellationRequested) { throw; }
+                        catch (Exception ex) { mvLagTag = $" mvLag=err({ex.GetType().Name})"; }
+                    }
+                    Console.WriteLine($"[silo] t={elapsed,7:0.0}s ops={totalNow,12:N0} ops/sec={rate,10:N0} inFlight={inFlightNow,3}{failedTag}{mvLagTag}");
                     lastReport = now;
                 }
             }
@@ -1682,6 +1759,27 @@ internal sealed class TcpIngestService(
         // residual backlog. The token is suffix-appended and does not
         // affect the existing `ops=` / `failed=` regex parses in
         // run-cohort.ps1.
+        // set-point-mv: a final apply-lag reading after the producer has
+        // stopped and the foreground backlog has drained. With writes quiesced
+        // the asynchronous view maintainer should catch up to the source head,
+        // so a lag trending to zero here is the closeout evidence that the view
+        // is eventually-consistent off the hot path rather than blocking it.
+        // Best-effort and bounded: the host is on its way down, so a failed or
+        // slow read is logged but never blocks FINAL.
+        if (mvView is not null)
+        {
+            try
+            {
+                using var lagCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var lagAtStop = await mvView.GetLagAsync(lagCts.Token).ConfigureAwait(false);
+                Console.WriteLine($"[silo] MV-FINAL view=bench lagAtStop={lagAtStop:N0} (0 = the asynchronous materialised view has fully caught up to the source head)");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[silo] MV-FINAL view=bench lag read failed: {ex.GetType().Name}: {Truncate(ex.Message, 160)}");
+            }
+        }
+
         Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0}");
     }
 
@@ -1952,6 +2050,7 @@ public static class BenchWorkloadMetadata
         BenchWorkloadMode.CrossTreeAtomic2 => "cross-tree-atomic-2",
         BenchWorkloadMode.CrossTreeAtomic64 => "cross-tree-atomic-64",
         BenchWorkloadMode.SetPoint => "set-point",
+        BenchWorkloadMode.SetPointMv => "set-point-mv",
         BenchWorkloadMode.GetPoint => "get-point",
         BenchWorkloadMode.GetMany => "get-many",
         _ => mode.ToString(),
@@ -2067,7 +2166,13 @@ public static class BenchWorkloadDispatcher
                 await DispatchCrossTreeAsync(grainFactory, treeId, batch, keysPerSaga: 64, ct).ConfigureAwait(false);
                 return batch.Count;
 
+            // set-point-mv shares the identical foreground write path as
+            // set-point (one SetAsync per key); the only difference is the
+            // silo-side materialised view attached at startup, which the
+            // maintainer derives asynchronously off this hot path. Keeping the
+            // dispatch identical is what makes the two cohorts a clean A/B.
             case BenchWorkloadMode.SetPoint:
+            case BenchWorkloadMode.SetPointMv:
                 await FanOutAsync(
                     batch,
                     parallelism,

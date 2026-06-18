@@ -47,7 +47,7 @@
 						cross-tree-atomic-64
 		Layer 2 values: set-many, set-many-atomic, set-many-atomic-2,
 						cross-tree-atomic-2, cross-tree-atomic-64, set-point,
-						get-point, get-many
+						set-point-mv, get-point, get-many
 	Pass 'all' (or omit) to run every workload for the layer.
 
 .PARAMETER N
@@ -327,6 +327,24 @@ $Layer2Rows = @(
 		# saturation offered load, not the saturation ceiling (the account
 		# ceiling is discussed in docs/lattice/throughput.md).
 		# 100 veh x 5 Hz = 500 keys/s offered.
+		Rung = '100:5:45';
+	},
+	@{
+		Label = '`SetAsync` (point write + async materialised view, 100 veh/5 Hz)';
+		WorkloadId = 'set-point-mv';
+		WorkloadMode = 'set-point-mv';
+		ThroughputUnit = 'keys/s';
+		# A/B partner of the `set-point` row. The silo runs the identical
+		# point-write workload but additionally attaches an asynchronous
+		# materialised view derived from the same tree (a key-preserving
+		# passthrough view; see the azure-throughput Silo's SetPointMv
+		# workload mode). The view maintainer tails the WAL off the foreground
+		# write hot path, so this cohort's throughput and per-call latency
+		# should be statistically indistinguishable from the plain `set-point`
+		# cohort - that equality is the evidence the materialised view is fully
+		# asynchronous and does not tax the primary tree's write path. The
+		# offered rung matches `set-point` exactly so the comparison is
+		# like-for-like. 100 veh x 5 Hz = 500 keys/s offered.
 		Rung = '100:5:45';
 	},
 	@{
@@ -1037,6 +1055,7 @@ function Read-SiloLogStats {
 		'cross-tree-atomic-2'  { @('saga.broadcast.duration', 'set_many.duration') }
 		'cross-tree-atomic-64' { @('saga.broadcast.duration', 'set_many.duration') }
 		'set-point'       { @('set.duration') }
+		'set-point-mv'    { @('set.duration') }
 		'get-point'       { @('get.duration') }
 		'get-many'        { @('get_many.duration') }
 		default           { @() }
@@ -1429,7 +1448,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
 		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
+		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
 	}
 	return $meta
 }
