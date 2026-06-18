@@ -548,11 +548,31 @@ $exceptionCrossCohort = [int]$exceptionCounts.Excluded
 # back-pressure failure the FX-035/036 work should be measured by.
 # Excluding only this exact exception class keeps the filter
 # conservative - any other warn/error during drain still counts.
+#
+# A second benign shutdown-race class comes from the asynchronous
+# materialised-view maintainer. The maintainer drains source WAL writes
+# into its view tree on a background loop / keepalive tick; when the silo
+# begins stopping, an in-flight drain pass races ApplicationStopping and
+# its view-tree write is refused with a LatticeShuttingDownException (a
+# shutdown-only exception that is never thrown during steady-state load),
+# or the maintainer grain is being deactivated mid-drain and the call is
+# rejected with an OrleansMessageRejectionException ("Forwarding failed").
+# Both are logged at warn by ViewMaintainerGrain as "...drain...failed;
+# will retry" - the view is eventually consistent and the cohort's source
+# writes still reach a clean FINAL (failed=0), so these are pure drain-time
+# accounting artefacts, not a back-pressure failure. The match is anchored
+# on the ViewMaintainerGrain logger category so no foreground/source write
+# exception is ever swept up; a genuine mid-load maintainer fault would
+# surface a different (non-shutdown) inner exception and still count.
 $benignShutdownExceptions = 0
 if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
-	$benignShutdownExceptions = (
+	$reminderStopRace = (
 		@(Select-String -Path $siloLog -Pattern 'ReminderService has been stopped' -SimpleMatch)
 	).Count
+	$viewDrainShutdownRace = (
+		@(Select-String -Path $siloLog -Pattern 'ViewMaintainerGrain.*(LatticeShuttingDownException|OrleansMessageRejectionException)')
+	).Count
+	$benignShutdownExceptions = $reminderStopRace + $viewDrainShutdownRace
 	if ($benignShutdownExceptions -gt 0) {
 		$exceptionCount = [Math]::Max(0, $exceptionCount - $benignShutdownExceptions)
 	}

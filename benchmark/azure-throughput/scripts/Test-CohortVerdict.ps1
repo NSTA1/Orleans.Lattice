@@ -371,6 +371,48 @@ _Assert -Name 'warmup-retry signature does NOT match a load-time storage excepti
 	-Condition (-not ($loadExcLine -match $warmupSig)) `
 	-Detail "pattern '$warmupSig' wrongly matched a load-time exception"
 
+# Benign view-maintainer drain shutdown-race exclusion: the asynchronous
+# materialised-view maintainer drains source writes into its view tree on a
+# background loop; when the silo stops, an in-flight drain is refused with a
+# LatticeShuttingDownException (shutdown-only) or rejected with an
+# OrleansMessageRejectionException ("Forwarding failed") as the grain
+# deactivates. The runner folds these into BenignShutdownExceptions before
+# calling this function, so a cohort whose only "exceptions" were view-drain
+# shutdown races arrives with ExceptionCount=0 and stays HEALTHY, with the
+# excluded count surfaced as a shutdown-race diagnostic reason.
+$viewDrainOnly = $clean.Clone(); $viewDrainOnly.ExceptionCount = 0; $viewDrainOnly.BenignShutdownExceptions = 3
+$vVD = Resolve-CohortVerdict @viewDrainOnly
+_Assert -Name 'a cohort whose only exceptions were benign view-drain shutdown races is HEALTHY' `
+	-Condition ($vVD.State -eq 'HEALTHY') `
+	-Detail "got state=$($vVD.State) reasons=$($vVD.Reasons -join '; ')"
+_Assert -Name 'the excluded view-drain shutdown-race count is surfaced for diagnostics' `
+	-Condition ((@($vVD.Reasons) -match 'benign shutdown-race line').Count -ge 1) `
+	-Detail "reasons=$($vVD.Reasons -join '; ')"
+
+# Guard the exact line signature run-cohort.ps1 uses to identify benign
+# view-maintainer drain shutdown races
+# ('ViewMaintainerGrain.*(LatticeShuttingDownException|OrleansMessageRejectionException)').
+# The two real shutdown-window warn lines must match; a steady-state
+# maintainer fault with a different inner exception, and an unrelated
+# storage exception, must NOT.
+$viewDrainSig = 'ViewMaintainerGrain.*(LatticeShuttingDownException|OrleansMessageRejectionException)'
+$viewShutLine1 = "09:51:33 warn: Orleans.Lattice.Views.ViewMaintainerGrain[0] View 'bench' background drain pass failed; will retry. Orleans.Lattice.LatticeShuttingDownException: Write to tree 'view-bench' refused: the silo is shutting down"
+$viewShutLine2 = "09:51:34 warn: Orleans.Lattice.Views.ViewMaintainerGrain[0] View 'bench' background drain pass failed; will retry. Orleans.Runtime.OrleansMessageRejectionException: Forwarding failed: tried to forward to deactivating grain"
+$viewSteadyFault = "21:40:11 warn: Orleans.Lattice.Views.ViewMaintainerGrain[0] View 'bench' background drain pass failed; will retry. System.InvalidOperationException: projection codec mismatch"
+$storageExcLine = '21:55:52 warn: TcpIngestService[0] [silo] flush of 4096 failed (mode=set-many) Azure.Data.Tables.TableTransactionFailedException: Operation could not be completed'
+_Assert -Name 'view-drain signature matches a LatticeShuttingDownException drain warning' `
+	-Condition ($viewShutLine1 -match $viewDrainSig) `
+	-Detail "pattern '$viewDrainSig' did not match the shutting-down view-drain line"
+_Assert -Name 'view-drain signature matches an OrleansMessageRejectionException drain warning' `
+	-Condition ($viewShutLine2 -match $viewDrainSig) `
+	-Detail "pattern '$viewDrainSig' did not match the forwarding-failed view-drain line"
+_Assert -Name 'view-drain signature does NOT match a steady-state maintainer fault' `
+	-Condition (-not ($viewSteadyFault -match $viewDrainSig)) `
+	-Detail "pattern '$viewDrainSig' wrongly matched a non-shutdown maintainer fault"
+_Assert -Name 'view-drain signature does NOT match an unrelated storage exception' `
+	-Condition (-not ($storageExcLine -match $viewDrainSig)) `
+	-Detail "pattern '$viewDrainSig' wrongly matched a load-time storage exception"
+
 # Precedence: an un-quiesced drain tail (WEDGE) outranks a concurrent
 # FINAL failure (FAILED) since WEDGE is the most severe state.
 $wedgeOverFailed = $clean.Clone(); $wedgeOverFailed.DrainTailSamples = 12; $wedgeOverFailed.SiloQuiesced = $false; $wedgeOverFailed.FailedFinal = 10
