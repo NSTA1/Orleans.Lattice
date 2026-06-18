@@ -43,6 +43,7 @@ internal sealed partial class ViewMaintainerGrain
         var options = Options;
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
+        batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
 
         // Fall-off-log guard: trimmed entries force a rebuild from current source.

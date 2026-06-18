@@ -40,6 +40,7 @@ internal sealed partial class ViewMaintainerGrain(
     LatticeOptionsResolver optionsResolver,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
     IOptionsMonitor<LatticeOptions> latticeOptions,
+    IWalSaturationSignal? saturationSignal,
     [PersistentState("view-checkpoint", LatticeOptions.StorageProviderName)]
     IPersistentState<ViewCheckpointState> state)
     : IGrainBase, IRemindable, IViewMaintainerGrain
@@ -54,6 +55,7 @@ internal sealed partial class ViewMaintainerGrain(
     private static readonly Counter<long> KeyCollisions = LatticeMetrics.ViewKeyCollisions;
     private static readonly Counter<long> ViewAtomicStagingBackstop = LatticeMetrics.ViewAtomicStagingBackstop;
     private static readonly Counter<long> LagBudgetEviction = LatticeMetrics.ViewLagBudgetEviction;
+    private static readonly Counter<long> ViewSourceBackpressure = LatticeMetrics.ViewSourceBackpressure;
 
     private IGrainTimer? _timer;
     private string? _consumerId;
@@ -74,6 +76,11 @@ internal sealed partial class ViewMaintainerGrain(
     // state, the reminder routes through EnsureActiveAsync rather than draining with
     // default (unsuppressed, unchecked) state.
     private bool _activated;
+
+    // UTC time before which background timer-driven drains are skipped because the
+    // source tree was last observed under WAL saturation back-pressure. Foreground
+    // (WaitForApplyAsync) drains ignore this gate. Min value = no deferral active.
+    private DateTime _backpressureResumeUtc = DateTime.MinValue;
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
@@ -195,6 +202,7 @@ internal sealed partial class ViewMaintainerGrain(
         var options = Options;
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
+        batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
 
         // Fall-off-log guard: if the oldest still-readable offset has advanced
@@ -717,6 +725,17 @@ internal sealed partial class ViewMaintainerGrain(
     private async Task OnTimerTickAsync(CancellationToken cancellationToken)
     {
         using var viewWriteScope = ViewWriteContext.BeginScope();
+
+        // Source back-pressure deferral: while the source tree is throttled or
+        // saturated the maintainer skips background drain ticks so it stops piling
+        // read/write concurrency onto the foreground writer. The gate yields the
+        // grain turn immediately (it does not hold it), so a foreground
+        // WaitForApplyAsync drain can still make progress between deferred ticks.
+        if (DateTime.UtcNow < _backpressureResumeUtc)
+        {
+            return;
+        }
+
         try
         {
             await DrainAsync(cancellationToken);
@@ -725,5 +744,60 @@ internal sealed partial class ViewMaintainerGrain(
         {
             logger.LogWarning(ex, "View '{ViewName}' background drain pass failed; will retry.", ViewName);
         }
+
+        UpdateBackpressureDeferral();
+    }
+
+    // Reads the source tree's current WAL saturation regime, honouring the
+    // ObeySourceBackpressure switch and a missing signal (returns Healthy in both
+    // cases, i.e. full-rate draining).
+    private WalSaturationState GetSourceSaturationState(string sourceTreeId)
+    {
+        if (saturationSignal is null || !Options.ObeySourceBackpressure)
+        {
+            return WalSaturationState.Healthy;
+        }
+
+        return saturationSignal.GetCurrentState(sourceTreeId);
+    }
+
+    // Scales the configured per-pass batch down under source back-pressure and, when
+    // the source is not healthy, records the self-throttle on the metrics surface.
+    private int ApplyBackpressureBatchScaling(string sourceTreeId, int batchSize, LatticeViewOptions options)
+    {
+        var saturation = GetSourceSaturationState(sourceTreeId);
+        if (saturation == WalSaturationState.Healthy)
+        {
+            return batchSize;
+        }
+
+        ViewSourceBackpressure.Add(
+            1,
+            ViewTag,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagWalSaturationState, saturation.ToString().ToLowerInvariant()));
+
+        return ViewBackpressure.ScaleBatch(saturation, batchSize, options.ThrottledBatchRatio, options.SaturatedBatchSize);
+    }
+
+    // After a background drain pass, arms (or clears) the tick-skip window from the
+    // source's current saturation regime so the next ticks back off while it is hot.
+    private void UpdateBackpressureDeferral()
+    {
+        var registration = catalog.TryGet(ViewName);
+        if (registration is null || _shipViewSuppressed)
+        {
+            _backpressureResumeUtc = DateTime.MinValue;
+            return;
+        }
+
+        var options = Options;
+        var pauseMs = ViewBackpressure.PauseMs(
+            GetSourceSaturationState(registration.SourceTreeId),
+            options.ThrottledPauseMs,
+            options.SaturatedPauseMs);
+
+        _backpressureResumeUtc = pauseMs > 0
+            ? DateTime.UtcNow.AddMilliseconds(pauseMs)
+            : DateTime.MinValue;
     }
 }

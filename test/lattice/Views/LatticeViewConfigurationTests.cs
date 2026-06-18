@@ -46,4 +46,49 @@ public class LatticeViewConfigurationTests
             () => new LatticeViewDefinition("v", (ILatticeViewProjection)null!),
             Throws.ArgumentNullException);
     }
+
+    [Test]
+    public void Options_source_backpressure_defaults_are_obey_half_ratio_drip16()
+    {
+        var options = new LatticeViewOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.ObeySourceBackpressure, Is.True);
+            Assert.That(options.ThrottledBatchRatio, Is.EqualTo(0.5d));
+            Assert.That(options.ThrottledPauseMs, Is.EqualTo(50));
+            Assert.That(options.SaturatedBatchSize, Is.EqualTo(16));
+            Assert.That(options.SaturatedPauseMs, Is.EqualTo(500));
+        });
+    }
+
+    [Test]
+    public void Validator_accepts_default_backpressure_options()
+    {
+        var result = new Orleans.Lattice.Views.LatticeViewOptionsValidator()
+            .Validate(null, new LatticeViewOptions());
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validator_rejects_throttled_ratio_outside_unit_interval()
+    {
+        var validator = new Orleans.Lattice.Views.LatticeViewOptionsValidator();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(validator.Validate(null, new LatticeViewOptions { ThrottledBatchRatio = 1.5d }).Failed, Is.True);
+            Assert.That(validator.Validate(null, new LatticeViewOptions { ThrottledBatchRatio = -0.1d }).Failed, Is.True);
+        });
+    }
+
+    [Test]
+    public void Validator_rejects_non_positive_saturated_batch_size()
+    {
+        var result = new Orleans.Lattice.Views.LatticeViewOptionsValidator()
+            .Validate(null, new LatticeViewOptions { SaturatedBatchSize = 0 });
+
+        Assert.That(result.Failed, Is.True);
+    }
 }

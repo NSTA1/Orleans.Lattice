@@ -67,6 +67,16 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             failures.Add($"{nameof(LatticeViewOptions.MaxLagBudget)} must not be negative (was {options.MaxLagBudget}; 0 disables lag-budget eviction).");
         }
 
+        if (options.ThrottledBatchRatio is < 0d or > 1d)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.ThrottledBatchRatio)} must be within [0, 1] (was {options.ThrottledBatchRatio}).");
+        }
+
+        if (options.SaturatedBatchSize < 1)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.SaturatedBatchSize)} must be at least 1 (was {options.SaturatedBatchSize}).");
+        }
+
         return failures.Count > 0 ? ValidateOptionsResult.Fail(failures) : ValidateOptionsResult.Success;
     }
 }

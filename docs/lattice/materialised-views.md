@@ -395,6 +395,25 @@ chronically over budget. Size `LatticeOptions.WalRetention` at or above the
 expected steady-state view lag so the budget is a backstop rather than a routine
 trigger.
 
+### Source back-pressure
+
+The maintainer is asynchronous, but on a busy silo its drain still competes with
+the foreground writer for client-side concurrency (storage connections, threads,
+the grain scheduler). To keep the view from slowing the source it derives from,
+the maintainer obeys the source tree's WAL saturation signal. While the source is
+`Throttled` it drains a reduced batch (`ThrottledBatchRatio` of `BatchSize`) and
+defers its next background tick by `ThrottledPauseMs`; while the source is
+`Saturated` it drips a small `SaturatedBatchSize` batch and defers by
+`SaturatedPauseMs`. The view therefore lags more while the source is hot and
+catches up once it recovers - foreground write throughput is preserved over view
+freshness. Only background drains are deferred; an explicit read-your-writes
+barrier (`WaitForApplyAsync` / `WaitForSourceHeadAsync`) still makes progress, just
+with a smaller batch. Each self-throttled pass is emitted on
+`orleans.lattice.view.source_backpressure` (tagged with the observed source
+regime). Set `ObeySourceBackpressure` to `false` to opt out and always drain at
+full rate. The throttle engages only while the source is actually saturated, so
+leaving it on costs nothing on a healthy source.
+
 ## Configuration
 
 `LatticeViewOptions` is resolved per view name via
@@ -414,6 +433,11 @@ trigger.
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. See [Replication modes](#replication-modes). |
 | `MaxLagBudget` | 0 | Upper bound, in committed-but-unapplied source entries, on how far the view may fall behind before it is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. A non-positive value falls back to the default. Has no effect when `MaxLagBudget` is 0. |
+| `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. Only engages while the source is actually saturated. |
+| `ThrottledBatchRatio` | 0.5 | Fraction of `BatchSize` drained per pass while the source is `Throttled`. Clamped to `[0, 1]`; the effective batch is clamped to `[1, BatchSize]`. |
+| `ThrottledPauseMs` | 50 | Milliseconds background drain ticks are skipped after a pass that saw a `Throttled` source. `<= 0` disables the deferral. |
+| `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Clamped to `[1, BatchSize]`. |
+| `SaturatedPauseMs` | 500 | Milliseconds background drain ticks are skipped after a pass that saw a `Saturated` source. `<= 0` disables the deferral. |
 
 Configure a single view with `ConfigureLatticeView`:
 
@@ -440,6 +464,7 @@ meter, each tagged with the view name:
 | `orleans.lattice.view.atomic_staging_backstop` | Counter | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
 | `orleans.lattice.view.cross_tree_joint_violation` | Counter | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready in time. |
 | `orleans.lattice.view.lag_budget_eviction` | Counter | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
+| `orleans.lattice.view.source_backpressure` | Counter | Background drain passes that throttled themselves because the source tree was under WAL saturation back-pressure. Also tagged with the observed source regime (`throttled` / `saturated`). |
 
 ## Limitations
 

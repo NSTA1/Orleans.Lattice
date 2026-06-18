@@ -2370,4 +2370,21 @@ public static class LatticeMetrics
     public static readonly Counter<long> ViewLagBudgetEviction =
         Meter.CreateCounter<long>("orleans.lattice.view.lag_budget_eviction", unit: "{eviction}",
             description: "Views force-evicted (WAL unpinned and rebuilt) because they exceeded their configured MaxLagBudget.");
+
+    /// <summary>
+    /// Counter of background drain passes that observed the source tree under WAL
+    /// saturation back-pressure and consequently reduced their footprint - a
+    /// scaled-down batch size and, for a background timer tick, a deferral of the
+    /// next pass - so the asynchronous maintainer hands client concurrency back to
+    /// the foreground writer rather than competing with it. Tagged with
+    /// <see cref="TagView"/> and <see cref="TagWalSaturationState"/> (the observed
+    /// source regime, <c>throttled</c> or <c>saturated</c>). A sustained non-zero
+    /// rate means the source tree is hot enough that the view is deliberately
+    /// lagging to protect foreground throughput; it converges once the source
+    /// recovers. Never recorded while the source is <c>healthy</c> or when
+    /// <see cref="LatticeViewOptions.ObeySourceBackpressure"/> is disabled.
+    /// </summary>
+    public static readonly Counter<long> ViewSourceBackpressure =
+        Meter.CreateCounter<long>("orleans.lattice.view.source_backpressure", unit: "{pass}",
+            description: "View maintainer drain passes that throttled themselves because the source tree was under WAL saturation back-pressure.");
 }

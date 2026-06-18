@@ -74,6 +74,36 @@ public sealed class LatticeViewOptions
     public static readonly TimeSpan DefaultLagEvictionCooldown = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Default <see cref="ObeySourceBackpressure"/> (<c>true</c>): the maintainer
+    /// honours the source tree's WAL saturation signal and throttles its own drain.
+    /// </summary>
+    public const bool DefaultObeySourceBackpressure = true;
+
+    /// <summary>
+    /// Default <see cref="ThrottledBatchRatio"/> (<c>0.5</c>): drain half the
+    /// configured <see cref="BatchSize"/> per pass while the source is throttled.
+    /// </summary>
+    public const double DefaultThrottledBatchRatio = 0.5d;
+
+    /// <summary>
+    /// Default <see cref="ThrottledPauseMs"/> (50 ms): skip background drain ticks
+    /// for this long after a pass that observed a throttled source.
+    /// </summary>
+    public const int DefaultThrottledPauseMs = 50;
+
+    /// <summary>
+    /// Default <see cref="SaturatedBatchSize"/> (<c>16</c> entries): the small
+    /// drip-feed batch the maintainer drains per pass while the source is saturated.
+    /// </summary>
+    public const int DefaultSaturatedBatchSize = 16;
+
+    /// <summary>
+    /// Default <see cref="SaturatedPauseMs"/> (500 ms): skip background drain ticks
+    /// for this long after a pass that observed a saturated source.
+    /// </summary>
+    public const int DefaultSaturatedPauseMs = 500;
+
+    /// <summary>
     /// Maximum number of source WAL entries the maintainer reads and applies in a
     /// single drain pass per source shard before checkpointing. Must be positive;
     /// the registered validator rejects a non-positive value at first resolve.
@@ -209,4 +239,63 @@ public sealed class LatticeViewOptions
     /// <see cref="MaxLagBudget"/> is <c>0</c> (eviction disabled).
     /// </summary>
     public TimeSpan LagEvictionCooldown { get; set; } = DefaultLagEvictionCooldown;
+
+    /// <summary>
+    /// Whether the maintainer obeys the source tree's WAL saturation back-pressure
+    /// signal (<c>IWalSaturationSignal</c>, produced by <c>AddLattice</c>). When
+    /// <c>true</c> (the default) a maintainer whose source tree is
+    /// <see cref="WalSaturationState.Throttled"/> or
+    /// <see cref="WalSaturationState.Saturated"/> shrinks its per-pass drain batch
+    /// (<see cref="ThrottledBatchRatio"/> / <see cref="SaturatedBatchSize"/>) and
+    /// defers its next background drain tick (<see cref="ThrottledPauseMs"/> /
+    /// <see cref="SaturatedPauseMs"/>), so the asynchronous view yields client
+    /// concurrency to the foreground writer instead of competing with it. Only
+    /// background timer drains are deferred; a foreground read-your-writes drain
+    /// (<c>WaitForApplyAsync</c>) still makes progress, just with a smaller batch.
+    /// Set to <c>false</c> to keep the maintainer draining at full rate regardless
+    /// of source pressure (the view never self-throttles). The throttle engages
+    /// only while the source is actually saturated, so leaving it on costs nothing
+    /// on a healthy source. Defaults to
+    /// <see cref="DefaultObeySourceBackpressure"/>.
+    /// </summary>
+    public bool ObeySourceBackpressure { get; set; } = DefaultObeySourceBackpressure;
+
+    /// <summary>
+    /// Fraction of <see cref="BatchSize"/> the maintainer drains per pass while the
+    /// source tree is <see cref="WalSaturationState.Throttled"/>. The effective
+    /// batch is <c>ceil(BatchSize * ratio)</c> clamped to <c>[1, BatchSize]</c>; the
+    /// ratio itself is clamped to <c>[0, 1]</c> so an out-of-range value can never
+    /// inflate the batch. Ignored when <see cref="ObeySourceBackpressure"/> is
+    /// <c>false</c>. Defaults to <see cref="DefaultThrottledBatchRatio"/>.
+    /// </summary>
+    public double ThrottledBatchRatio { get; set; } = DefaultThrottledBatchRatio;
+
+    /// <summary>
+    /// Milliseconds the maintainer skips background drain ticks after a pass that
+    /// observed a <see cref="WalSaturationState.Throttled"/> source, lengthening the
+    /// effective poll cadence under pressure. A value less than or equal to zero
+    /// disables the deferral (batch scaling still applies). Ignored when
+    /// <see cref="ObeySourceBackpressure"/> is <c>false</c>. Defaults to
+    /// <see cref="DefaultThrottledPauseMs"/>.
+    /// </summary>
+    public int ThrottledPauseMs { get; set; } = DefaultThrottledPauseMs;
+
+    /// <summary>
+    /// Absolute per-pass drain batch the maintainer uses while the source tree is
+    /// <see cref="WalSaturationState.Saturated"/>, clamped to <c>[1, BatchSize]</c>.
+    /// A small drip-feed keeps the view converging without piling read/write
+    /// concurrency onto an already-saturated source. Ignored when
+    /// <see cref="ObeySourceBackpressure"/> is <c>false</c>. Defaults to
+    /// <see cref="DefaultSaturatedBatchSize"/>.
+    /// </summary>
+    public int SaturatedBatchSize { get; set; } = DefaultSaturatedBatchSize;
+
+    /// <summary>
+    /// Milliseconds the maintainer skips background drain ticks after a pass that
+    /// observed a <see cref="WalSaturationState.Saturated"/> source. A value less
+    /// than or equal to zero disables the deferral (batch scaling still applies).
+    /// Ignored when <see cref="ObeySourceBackpressure"/> is <c>false</c>. Defaults
+    /// to <see cref="DefaultSaturatedPauseMs"/>.
+    /// </summary>
+    public int SaturatedPauseMs { get; set; } = DefaultSaturatedPauseMs;
 }

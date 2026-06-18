@@ -319,6 +319,30 @@
           "legendFormat": "{{view}}"
         }
       ]
+    },
+    {
+      "id": 10,
+      "title": "Source back-pressure self-throttle (rate)",
+      "description": "Background drain passes per second that throttled themselves because the source tree was under WAL saturation back-pressure, by view and observed source regime (throttled / saturated). When non-zero the asynchronous maintainer is deliberately shrinking its drain batch and deferring ticks so it stops competing with the foreground writer for client concurrency; the view lags more while the source is hot and converges once the source recovers (correlate with the apply-lag panel). A sustained saturated rate means the source tree is the bottleneck, not the view. Always zero on a healthy source or for a view with ObeySourceBackpressure disabled.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.0001 } ] },
+          "color": { "mode": "fixed", "fixedColor": "yellow" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view, state) (rate(orleans_lattice_view_source_backpressure_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}} ({{state}})"
+        }
+      ]
     }
   ]
 }
