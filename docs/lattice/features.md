@@ -133,6 +133,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 ### Planned / open
 
 - [FX-042](https://github.com/NSTA1/Orleans.Lattice/issues/803) - Atomic re-key retraction in materialised views needs a core atomic set+delete primitive
+- [FX-043](https://github.com/NSTA1/Orleans.Lattice/issues/806) - WAL phase-2 drain backlog is invisible to the saturation signal, so a single slow Azure Table commit head-of-line-blocks a shard's foreground appends
 
 ### Shipped
 
