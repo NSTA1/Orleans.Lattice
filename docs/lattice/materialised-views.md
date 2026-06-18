@@ -414,6 +414,17 @@ regime). Set `ObeySourceBackpressure` to `false` to opt out and always drain at
 full rate. The throttle engages only while the source is actually saturated, so
 leaving it on costs nothing on a healthy source.
 
+Separately from this client-side self-throttle, the maintainer's catch-up reads
+no longer contend with foreground writes at the WAL grain itself. Each
+`(tree, partition)` is served by a single grain activation, and the maintainer
+tails it by paging through the write-ahead log. Those read pages interleave with
+concurrent foreground appends to the same activation rather than serialising
+ahead of them, so a maintainer that is paging over a large backlog cannot
+head-of-line-block the source's foreground write path while it reads. Append
+ordering is unaffected - appends remain serialised among themselves; only the
+read no longer holds the activation turn for the duration of its storage
+round-trip.
+
 ## Configuration
 
 `LatticeViewOptions` is resolved per view name via

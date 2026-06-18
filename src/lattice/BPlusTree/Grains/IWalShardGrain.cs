@@ -96,6 +96,23 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <param name="fromSequence">Inclusive starting sequence number.</param>
     /// <param name="maxEntries">Maximum number of entries to return; must be at least 1.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so catch-up readers
+    /// (the materialised-view maintainer, leaf replay, fall-off detection,
+    /// WAL introspection) do not head-of-line-block foreground appends.
+    /// Without it the grain's default non-reentrant scheduling makes each
+    /// read hold the single per-partition activation turn for the entire
+    /// duration of the underlying provider round-trip (an Azure Table page
+    /// fetch, paginated over the whole backlog), queuing every concurrent
+    /// <see cref="AppendAsync"/> behind it and stalling the foreground write
+    /// path. The read path touches only activation-immutable state
+    /// (<c>_provider</c>, the tree / shard identity, the encoder, the mode
+    /// resolvers) and committed provider rows - never the append-mutable
+    /// state guarded by the internal state gate - so interleaving reads with
+    /// appends is safe by construction; appends remain serialised by the
+    /// same gate they already use.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
 
     /// <summary>
@@ -120,6 +137,17 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <param name="fromSequence">Inclusive starting sequence number.</param>
     /// <param name="maxEntries">Maximum number of entries to return; must be at least 1.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason as
+    /// <see cref="ReadAsync"/>: the replication shipper drains this method
+    /// continuously, and without interleaving each shipping read would hold
+    /// the single per-partition activation turn across its provider
+    /// round-trip and starve foreground <see cref="AppendAsync"/> calls. The
+    /// shipping read touches only activation-immutable state and committed
+    /// provider rows, so it is safe to interleave with the gate-serialised
+    /// append path.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
 
     /// <summary>
