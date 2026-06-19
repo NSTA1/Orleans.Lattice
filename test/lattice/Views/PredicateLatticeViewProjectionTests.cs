@@ -350,4 +350,40 @@ public class PredicateLatticeViewProjectionTests
             () => new PredicateLatticeViewProjection(keySelector: k => k),
             Throws.ArgumentException);
     }
+
+    [Test]
+    public void Create_typed_filter_keeps_in_predicate_value_verbatim()
+    {
+        var projection = PredicateLatticeViewProjection.Create<PredicatePerson>(AdultFilter());
+        var value = Encode(new PredicatePerson("Alice", 30, true, 0.5, null, null));
+
+        var writes = projection.Project(Set("k", value, Clock(5))).ToList();
+
+        Assert.That(writes, Has.Count.EqualTo(1));
+        Assert.That(writes[0].Kind, Is.EqualTo(ViewWriteKind.Upsert));
+        Assert.That(writes[0].Value, Is.EqualTo(value));
+    }
+
+    [Test]
+    public void Create_typed_value_selector_transforms_the_deserialized_value()
+    {
+        var projection = PredicateLatticeViewProjection.Create<PredicatePerson>(
+            valueSelector: p => p with { Nickname = "redacted" },
+            valueSelectorVersion: "redact-v1");
+        var value = Encode(new PredicatePerson("Alice", 30, true, 0.5, "Al", null));
+
+        var writes = projection.Project(Set("k", value, Clock(5))).ToList();
+
+        Assert.That(writes, Has.Count.EqualTo(1));
+        var stored = JsonLatticeSerializer<PredicatePerson>.Default.Deserialize(writes[0].Value!);
+        Assert.That(stored.Nickname, Is.EqualTo("redacted"));
+    }
+
+    [Test]
+    public void Create_typed_requires_a_version_when_a_value_selector_is_supplied()
+    {
+        Assert.That(
+            () => PredicateLatticeViewProjection.Create<PredicatePerson>(valueSelector: p => p),
+            Throws.ArgumentException);
+    }
 }

@@ -1756,11 +1756,11 @@ ViewDigest digest = await adults.ComputeDigestAsync(cancellationToken);
 ILatticeView ageByName = viewFactory.Create(
     people,
     "age-sum-by-name",
-    new LatticeViewDefinition("age-sum-by-name", new AggregationLatticeViewProjection(
+    new LatticeViewDefinition("age-sum-by-name", AggregationLatticeViewProjection.Create<User>(
         AggregationKind.Sum,
-        groupKeySelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Name,
+        groupKeySelector: u => u.Name,
         selectorVersion: "sum-age-v1",
-        valueSelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Age)));
+        valueSelector: u => u.Age)));
 
 byte[]? aggregate = await ageByName.GetAsync("Alice", cancellationToken);
 double total = aggregate is null ? 0 : LatticeAggregationValue.DecodeDouble(aggregate);
@@ -1775,8 +1775,8 @@ double total = aggregate is null ? 0 : LatticeAggregationValue.DecodeDouble(aggr
 | `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle. Registered as a singleton by `AddLatticeViews`. |
 | `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
 | `LatticeViewDefinition` | Pairs a view name with either an `ILatticeViewProjection` (filter / re-project) or an `ILatticeAggregationProjection` (aggregation). |
-| `ILatticeViewProjection` / `PredicateLatticeViewProjection` | Filter / re-project projection: a predicate, optional value transform, and optional injective key re-map. `ProjectionVersion` is a structural hash that drives rebuild-on-change. |
-| `ILatticeAggregationProjection` / `AggregationLatticeViewProjection` | Aggregation projection: an `AggregationKind`, group-key selector, selector-version tag, and the value / member selector the kind needs. |
+| `ILatticeViewProjection` / `PredicateLatticeViewProjection` | Filter / re-project projection: a predicate, optional value transform, and optional injective key re-map. `ProjectionVersion` is a structural hash that drives rebuild-on-change. `Create<T>(...)` builds one whose value transform runs against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
+| `ILatticeAggregationProjection` / `AggregationLatticeViewProjection` | Aggregation projection: an `AggregationKind`, group-key selector, selector-version tag, and the value / member selector the kind needs. `Create<T>(...)` builds one whose selectors run against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
 | `AggregationKind` | `Count`, `Sum`, `Min`, `Max`, `SetUnion`. |
 | `LatticeAggregationValue` | Decoder for materialised aggregate bytes: `DecodeDouble` (`Sum` / `Min` / `Max`) and `DecodeInt64` (`Count` / `SetUnion`). |
 | `ViewDigest` | Order-independent content fingerprint over the materialised `(key, value)` pairs, with an `EntryCount`. |

@@ -174,20 +174,23 @@ reduces are supported through `AggregationKind`:
 | `Max` | Largest live contribution (`double`) | value selector |
 | `SetUnion` | Distinct-member cardinality (`long`) | member selector |
 
-Declare one with `AggregationLatticeViewProjection`: a group-key selector, a
-stable selector-version tag (the selectors are delegates and cannot be
-structurally hashed, so the tag drives rebuild-on-change), and the value or
-member selector the kind needs.
+Declare one with `AggregationLatticeViewProjection.Create<T>`: a group-key
+selector, a stable selector-version tag (the selectors are delegates and cannot
+be structurally hashed, so the tag drives rebuild-on-change), and the value or
+member selector the kind needs. The selectors run against the deserialized value
+type `T` (using `JsonLatticeSerializer<T>` by default, or pass your own
+`ILatticeSerializer<T>`), so you write `u => u.Name` rather than hand-rolling a
+`byte[]` round-trip.
 
 ```csharp verify
 siloBuilder.AddLatticeViews(views => views.AddAggregationView(
     viewName: "age-sum-by-name",
     sourceTreeId: "people",
-    projection: new AggregationLatticeViewProjection(
+    projection: AggregationLatticeViewProjection.Create<User>(
         AggregationKind.Sum,
-        groupKeySelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Name,
+        groupKeySelector: u => u.Name,
         selectorVersion: "sum-age-v1",
-        valueSelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Age)));
+        valueSelector: u => u.Age)));
 ```
 
 ### Reading an aggregate
