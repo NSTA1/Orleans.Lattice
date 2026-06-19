@@ -190,4 +190,78 @@ public class AggregationLatticeViewProjectionTests
 
         Assert.That(a.ProjectionVersion, Is.Not.EqualTo(b.ProjectionVersion));
     }
+
+    private sealed record Sale(string Customer, double Amount);
+
+    private static byte[] SaleBytes(string customer, double amount) =>
+        JsonLatticeSerializer<Sale>.Default.Serialize(new Sale(customer, amount));
+
+    [Test]
+    public void Create_typed_sum_runs_selectors_against_deserialized_value()
+    {
+        var projection = AggregationLatticeViewProjection.Create<Sale>(
+            AggregationKind.Sum,
+            groupKeySelector: s => s.Customer,
+            selectorVersion: "sale-v1",
+            valueSelector: s => s.Amount);
+
+        var contributions = projection.Project(Set("k", SaleBytes("Alice", 12.5), Clock(5))).ToList();
+
+        Assert.That(contributions, Has.Count.EqualTo(1));
+        Assert.That(contributions[0].GroupKey, Is.EqualTo("Alice"));
+        Assert.That(contributions[0].Numeric, Is.EqualTo(12.5));
+    }
+
+    [Test]
+    public void Create_typed_set_union_runs_member_selector_against_deserialized_value()
+    {
+        var projection = AggregationLatticeViewProjection.Create<Sale>(
+            AggregationKind.SetUnion,
+            groupKeySelector: s => s.Customer,
+            selectorVersion: "sale-v1",
+            memberSelector: s => s.Customer);
+
+        var contributions = projection.Project(Set("k", SaleBytes("Bob", 1), Clock(5))).ToList();
+
+        Assert.That(contributions, Has.Count.EqualTo(1));
+        Assert.That(contributions[0].Member, Is.EqualTo("Bob"));
+    }
+
+    [Test]
+    public void Create_typed_honours_a_custom_serializer()
+    {
+        var serializer = new PipeDelimitedSaleSerializer();
+        var projection = AggregationLatticeViewProjection.Create<Sale>(
+            AggregationKind.Sum,
+            groupKeySelector: s => s.Customer,
+            selectorVersion: "sale-v1",
+            valueSelector: s => s.Amount,
+            serializer: serializer);
+
+        var contributions = projection.Project(Set("k", serializer.Serialize(new Sale("Cleo", 9)), Clock(5))).ToList();
+
+        Assert.That(contributions, Has.Count.EqualTo(1));
+        Assert.That(contributions[0].GroupKey, Is.EqualTo("Cleo"));
+        Assert.That(contributions[0].Numeric, Is.EqualTo(9));
+    }
+
+    [Test]
+    public void Create_typed_requires_a_value_selector_for_a_sum()
+    {
+        Assert.That(
+            () => AggregationLatticeViewProjection.Create<Sale>(AggregationKind.Sum, s => s.Customer, "sale-v1"),
+            Throws.ArgumentException);
+    }
+
+    private sealed class PipeDelimitedSaleSerializer : ILatticeSerializer<Sale>
+    {
+        public byte[] Serialize(Sale value) =>
+            Encoding.UTF8.GetBytes($"{value.Customer}|{value.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+
+        public Sale Deserialize(byte[] bytes)
+        {
+            var parts = Encoding.UTF8.GetString(bytes).Split('|');
+            return new Sale(parts[0], double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
+        }
+    }
 }

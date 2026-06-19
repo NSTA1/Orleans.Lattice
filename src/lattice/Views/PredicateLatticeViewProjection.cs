@@ -115,6 +115,62 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
     /// <inheritdoc />
     public string ProjectionVersion => _projectionVersion;
 
+    /// <summary>
+    /// Creates a predicate projection whose value transform runs against the
+    /// deserialized value type <typeparamref name="T"/> instead of raw
+    /// <c>byte[]</c>. The supplied <paramref name="serializer"/> (or
+    /// <see cref="JsonLatticeSerializer{T}.Default"/> when omitted) deserializes
+    /// each source value before <paramref name="valueSelector"/> sees it and
+    /// re-serializes the transformed result for storage, so an operator writes a
+    /// typed transform rather than hand-rolling <c>byte[]</c> round-trips.
+    /// </summary>
+    /// <typeparam name="T">The source value type the transform operates on.</typeparam>
+    /// <param name="filter">
+    /// Optional value filter (the predicate IR produced by
+    /// <c>LatticePredicateTranslator</c>). When <see langword="null"/> every
+    /// source key is kept.
+    /// </param>
+    /// <param name="valueSelector">
+    /// Optional typed value transform applied to a kept entry's deserialized
+    /// value; the result is re-serialized for storage. When <see langword="null"/>
+    /// the source value is stored verbatim.
+    /// </param>
+    /// <param name="keySelector">
+    /// Optional injective re-map from source key to view key. When
+    /// <see langword="null"/> the view key equals the source key.
+    /// </param>
+    /// <param name="valueSelectorVersion">
+    /// Stable tag identifying the value-selector logic, folded into
+    /// <see cref="ProjectionVersion"/>. Required when
+    /// <paramref name="valueSelector"/> is supplied.
+    /// </param>
+    /// <param name="keySelectorVersion">
+    /// Stable tag identifying the key-selector logic, folded into
+    /// <see cref="ProjectionVersion"/>. Required when
+    /// <paramref name="keySelector"/> is supplied.
+    /// </param>
+    /// <param name="serializer">
+    /// Serializes and deserializes source values to <typeparamref name="T"/>.
+    /// Defaults to <see cref="JsonLatticeSerializer{T}.Default"/> when
+    /// <see langword="null"/>.
+    /// </param>
+    public static PredicateLatticeViewProjection Create<T>(
+        LatticePredicateNode? filter = null,
+        Func<T, T>? valueSelector = null,
+        Func<string, string>? keySelector = null,
+        string? valueSelectorVersion = null,
+        string? keySelectorVersion = null,
+        ILatticeSerializer<T>? serializer = null)
+    {
+        serializer ??= JsonLatticeSerializer<T>.Default;
+
+        Func<byte[]?, byte[]?>? wrapped = valueSelector is null
+            ? null
+            : bytes => bytes is null ? null : serializer.Serialize(valueSelector(serializer.Deserialize(bytes)));
+
+        return new PredicateLatticeViewProjection(filter, wrapped, keySelector, valueSelectorVersion, keySelectorVersion);
+    }
+
     /// <inheritdoc />
     public IEnumerable<ViewWrite> Project(LatticeMutation mutation)
     {

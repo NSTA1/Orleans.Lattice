@@ -100,6 +100,67 @@ public sealed class AggregationLatticeViewProjection : ILatticeAggregationProjec
         _projectionVersion = ComputeVersion(aggregation, selectorVersion, filter);
     }
 
+    /// <summary>
+    /// Creates an aggregation projection whose selectors run against the
+    /// deserialized value type <typeparamref name="T"/> instead of raw
+    /// <c>byte[]</c>. The supplied <paramref name="serializer"/> (or
+    /// <see cref="JsonLatticeSerializer{T}.Default"/> when omitted) deserializes
+    /// each source value before the selectors see it, so an operator writes
+    /// <c>u =&gt; u.Name</c> rather than
+    /// <c>bytes =&gt; serializer.Deserialize(bytes).Name</c>.
+    /// </summary>
+    /// <typeparam name="T">The source value type the selectors operate on.</typeparam>
+    /// <param name="aggregation">The reduce the view computes.</param>
+    /// <param name="groupKeySelector">
+    /// Maps a deserialized source value to the group key it belongs to. Must not
+    /// be <see langword="null"/>. The group key must not begin with the reserved
+    /// NUL (<c>\u0000</c>) character.
+    /// </param>
+    /// <param name="selectorVersion">
+    /// Stable tag identifying the selectors' logic, folded into
+    /// <see cref="ProjectionVersion"/>. Required because the selectors are
+    /// delegates and cannot be structurally hashed.
+    /// </param>
+    /// <param name="valueSelector">
+    /// Maps a deserialized source value to the numeric it contributes. Required
+    /// for <see cref="AggregationKind.Sum"/>, <see cref="AggregationKind.Min"/>,
+    /// and <see cref="AggregationKind.Max"/>; ignored otherwise.
+    /// </param>
+    /// <param name="memberSelector">
+    /// Maps a deserialized source value to the member it contributes to the
+    /// group's distinct-member set. Required for
+    /// <see cref="AggregationKind.SetUnion"/>; ignored otherwise.
+    /// </param>
+    /// <param name="filter">
+    /// Optional value filter (the predicate IR produced by
+    /// <c>LatticePredicateTranslator</c>). When <see langword="null"/> every
+    /// source entry participates.
+    /// </param>
+    /// <param name="serializer">
+    /// Deserializes source values to <typeparamref name="T"/>. Defaults to
+    /// <see cref="JsonLatticeSerializer{T}.Default"/> when <see langword="null"/>.
+    /// </param>
+    public static AggregationLatticeViewProjection Create<T>(
+        AggregationKind aggregation,
+        Func<T, string> groupKeySelector,
+        string selectorVersion,
+        Func<T, double>? valueSelector = null,
+        Func<T, string>? memberSelector = null,
+        LatticePredicateNode? filter = null,
+        ILatticeSerializer<T>? serializer = null)
+    {
+        ArgumentNullException.ThrowIfNull(groupKeySelector);
+        serializer ??= JsonLatticeSerializer<T>.Default;
+
+        return new AggregationLatticeViewProjection(
+            aggregation,
+            groupKeySelector: bytes => groupKeySelector(serializer.Deserialize(bytes)),
+            selectorVersion: selectorVersion,
+            valueSelector: valueSelector is null ? null : bytes => valueSelector(serializer.Deserialize(bytes)),
+            memberSelector: memberSelector is null ? null : bytes => memberSelector(serializer.Deserialize(bytes)),
+            filter: filter);
+    }
+
     /// <inheritdoc />
     public AggregationKind Aggregation { get; }
 
