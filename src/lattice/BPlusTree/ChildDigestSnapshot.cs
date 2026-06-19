@@ -32,4 +32,24 @@ internal readonly record struct ChildDigestSnapshot
 
     /// <summary>Highest projection-checkpoint offset across descendant leaves.</summary>
     [Id(2)] public long CheckpointOffset { get; init; }
+
+    /// <summary>
+    /// Monotonic, per-publisher-activation stamp identifying the order in
+    /// which this snapshot was produced relative to the publishing node's
+    /// other snapshots. The parent's fold
+    /// (<c>BPlusInternalGrain.ApplyChildSnapshotAsync</c>) drops any
+    /// snapshot whose sequence is <em>strictly lower</em> than the one
+    /// already folded for the same child, so a late publish that raced a
+    /// fresher one and arrived out of order cannot overwrite the newer
+    /// value for a still-owned child. The hazard it closes: under the
+    /// <c>[AlwaysInterleave]</c> leaf mutation surface a coalesced
+    /// per-write publish can read a child's pre-split (pre-trim) entry
+    /// count and land after the split's post-trim inline publish,
+    /// permanently inflating the chained-fold count. A default value of
+    /// <c>0</c> (used by direct unit-test pushes and the range/partial
+    /// digest computations that never reach the parent fold) is treated as
+    /// "unsequenced" and always accepted, preserving last-write-wins
+    /// semantics for callers that do not stamp a sequence.
+    /// </summary>
+    [Id(3)] public long PublishSequence { get; init; }
 }

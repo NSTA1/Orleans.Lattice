@@ -20,6 +20,31 @@ internal sealed partial class BPlusInternalGrain
     private const int SubtreeHashSize = 16;
 
     /// <summary>
+    /// Lazily-seeded, per-activation strictly-increasing stamp applied to
+    /// every <see cref="ChildDigestSnapshot"/> this internal node forwards
+    /// to its own parent (push) or returns on a pull, mirroring the leaf's
+    /// <c>NextDigestPublishSequence</c>. Lets the grandparent's fold drop a
+    /// stale out-of-order publish for a still-owned child the same way the
+    /// leaf-to-parent path does. Seeded from <see cref="DateTime.UtcNow"/>
+    /// ticks (never zero) so it stays monotonic across reactivations
+    /// without persisting a counter.
+    /// </summary>
+    private long _digestPublishSeq;
+
+    /// <summary>
+    /// Returns the next strictly-increasing publish sequence for this
+    /// activation, seeding the counter from the wall clock on first use.
+    /// </summary>
+    private long NextDigestPublishSequence()
+    {
+        if (_digestPublishSeq == 0)
+        {
+            _digestPublishSeq = DateTime.UtcNow.Ticks;
+        }
+        return ++_digestPublishSeq;
+    }
+
+    /// <summary>
     /// Reusable deadline source for <see cref="PublishUpwardAsync"/>. Upward
     /// publishes only run while the activation holds its non-reentrant
     /// <c>_splitGate</c>, so at most one publish is in flight per activation at
@@ -151,10 +176,29 @@ internal sealed partial class BPlusInternalGrain
             return;
         }
 
+        // Monotonic-sequence staleness guard. Under the [AlwaysInterleave]
+        // leaf mutation surface a coalesced per-write publish can read a
+        // child's PRE-split (pre-trim) entry count and race the split's
+        // post-trim inline publish; the two cross-grain publishes can then
+        // apply here out of order, leaving a stale higher count folded for a
+        // child this node STILL owns (the ownership guard above only rejects
+        // children that have been re-parented away). Each publisher stamps a
+        // per-activation-monotonic PublishSequence; drop any snapshot
+        // strictly older than the one already folded for this child so a
+        // late stale publish cannot overwrite a fresher one. A default
+        // sequence of 0 (direct unit-test pushes, range/partial digest
+        // computations) is treated as unsequenced and always accepted, so
+        // last-write-wins semantics are preserved for callers that do not
+        // stamp a sequence.
+        if (state.State.ChildDigests.TryGetValue(childId, out var existing)
+            && newSnapshot.PublishSequence < existing.PublishSequence)
+        {
+            return;
+        }
+
         // Update the per-child snapshot table first - it is the single
         // source of truth for every aggregate derived below.
         state.State.ChildDigests[childId] = newSnapshot;
-
         // Re-derive every aggregate (hash, entry count, max checkpoint)
         // from the persisted dictionary on every apply. The prior
         // incremental shape (`hash ^= prior; hash ^= new;
@@ -314,6 +358,7 @@ internal sealed partial class BPlusInternalGrain
             Hash = (byte[])state.State.SubtreeProjectionHash!.Clone(),
             EntryCount = state.State.SubtreeEntryCount,
             CheckpointOffset = state.State.SubtreeHighestCheckpointOffset,
+            PublishSequence = NextDigestPublishSequence(),
         });
     }
 
@@ -351,6 +396,7 @@ internal sealed partial class BPlusInternalGrain
             Hash = (byte[])state.State.SubtreeProjectionHash!.Clone(),
             EntryCount = state.State.SubtreeEntryCount,
             CheckpointOffset = state.State.SubtreeHighestCheckpointOffset,
+            PublishSequence = NextDigestPublishSequence(),
         };
 
         var timeout = (await GetOptionsAsync()).DigestPublishTimeout;
