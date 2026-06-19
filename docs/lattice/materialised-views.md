@@ -48,6 +48,48 @@ is a storage concern, independent of views.
 > `Orleans.Lattice.Replication` at all. `AddLatticeReplication` is only needed when
 > a view ships its tree across clusters (see [Replication modes](#replication-modes)).
 
+## Create a view
+
+A view is a `LatticeViewDefinition` - a view name paired with a projection. The
+projection is either a `PredicateLatticeViewProjection` (filter / re-project, one
+source key to at most one view key) or an `AggregationLatticeViewProjection` (a
+grouped reduce; see [Aggregation views](#aggregation-views)). When a projection
+needs selectors over the source value, build it with the typed `Create<T>`
+factory so the selectors run against the deserialized value type instead of raw
+`byte[]`.
+
+There are two ways to create a view.
+
+**At startup** - declare it on the silo builder so the maintainer comes online
+with the host. `AddView` registers a filter / re-project view;
+`AddAggregationView` registers an aggregation:
+
+```csharp verify
+siloBuilder.AddLatticeViews(views => views.AddView(
+    viewName: "adults",
+    sourceTreeId: "people",
+    projection: new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+```
+
+**At runtime** - resolve `ILatticeViewFactory` and call `Create` with the source
+tree, the view name, and the definition. Prefer this when the view shape is only
+known at runtime; it returns the same `ILatticeView` handle used for reads:
+
+```csharp verify
+var viewFactory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
+var people = grainFactory.GetGrain<ILattice>("people");
+
+ILatticeView adults = viewFactory.Create(
+    people,
+    "adults",
+    new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+```
+
+Either way the view materialises under its own `view-{name}` tree and converges
+toward the source as the maintainer applies projected writes.
+
 ## Reading a view
 
 A view is read through its `ILatticeView` handle, which resolves the live view
