@@ -108,7 +108,7 @@ internal sealed partial class ViewMaintainerGrain(
         // flows on RequestContext to every nested view-tree call, so a direct user
         // write - which never opens this scope - is rejected by the ILattice guard.
         using var viewWriteScope = ViewWriteContext.BeginScope();
-        var registration = catalog.TryGet(ViewName);
+        var registration = catalog.TryGet(ViewName) ?? await TryRehydrateRegistrationAsync();
         if (registration is null)
         {
             logger.LogWarning("View '{ViewName}' has no registration; maintainer cannot start.", ViewName);
@@ -160,6 +160,45 @@ internal sealed partial class ViewMaintainerGrain(
         StartTimer();
         _activated = true;
         await DrainAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Re-hydrates this view's registration from the durable runtime-view registry
+    /// when the in-memory catalog has no entry for it. This is the restart-survival
+    /// path: a maintainer woken by its keepalive reminder after a silo restart (or
+    /// reactivated on a silo whose catalog never saw a runtime
+    /// <see cref="ILatticeViewFactory.Create"/>) recovers its source tree id and
+    /// projection from durable state and registers them into the local catalog, so
+    /// it resumes draining instead of going dormant. Returns <see langword="null"/>
+    /// when no durable registration exists or its projection cannot be resolved.
+    /// </summary>
+    private async Task<ViewRegistration?> TryRehydrateRegistrationAsync()
+    {
+        RuntimeViewRegistration? record;
+        try
+        {
+            var registry = grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
+            var records = await registry.ListAsync();
+            record = records.FirstOrDefault(r => string.Equals(r.ViewName, ViewName, StringComparison.Ordinal));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "View '{ViewName}' failed to read the durable runtime registry while re-hydrating.", ViewName);
+            return null;
+        }
+
+        if (record is null)
+        {
+            return null;
+        }
+
+        var registration = RuntimeViewRehydrator.Resolve(record, context.ActivationServices, logger);
+        if (registration is not null)
+        {
+            catalog.Register(registration);
+        }
+
+        return registration;
     }
 
     /// <inheritdoc />

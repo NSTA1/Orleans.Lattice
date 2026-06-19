@@ -83,4 +83,15 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// when the source is empty. Used to capture a write-then-wait target.
     /// </summary>
     Task<HybridLogicalClock> CaptureSourceHeadHlcAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Tears the view down: unregisters the keepalive reminder so the grain stops
+    /// being kept alive, releases the source WAL cursor pin, deletes every backing
+    /// view-tree generation through the standard tree-deletion machinery, and
+    /// clears the durable checkpoint state. Idempotent - safe to call on a view
+    /// that was never activated or has already been decommissioned. The caller
+    /// (the factory) removes the catalog entry and the durable runtime
+    /// registration after this completes.
+    /// </summary>
+    Task DecommissionAsync(CancellationToken cancellationToken = default);
 }

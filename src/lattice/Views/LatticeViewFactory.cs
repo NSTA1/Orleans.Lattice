@@ -5,15 +5,18 @@ namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Default <see cref="ILatticeViewFactory"/>. Captures the grain factory, the
-/// view catalog, and the injectable <see cref="ILatticeReplicationContext"/> seam
-/// (views require a WAL provider, registered by <c>AddLattice</c>). Each
-/// <see cref="Create"/> call registers the view in the catalog so the maintainer
-/// grain can resolve the source tree id and projection, then ensures the
-/// maintainer is active.
+/// view catalog, the durable runtime-view registry, the startup-declared view
+/// names, and the injectable <see cref="ILatticeReplicationContext"/> seam (views
+/// require a WAL provider, registered by <c>AddLattice</c>). Each
+/// <see cref="Create"/> call registers the view in the catalog and persists its
+/// runtime registration durably so the maintainer survives a silo restart, then
+/// ensures the maintainer is active. <see cref="DeleteAsync"/> tears a view down
+/// completely.
 /// </summary>
 internal sealed class LatticeViewFactory(
     IGrainFactory grainFactory,
     IViewCatalog catalog,
+    IReadOnlyList<StartupViewRegistration> startupRegistrations,
     ILatticeReplicationContext replicationContext,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
     ILogger<LatticeViewFactory> logger) : ILatticeViewFactory
@@ -40,11 +43,13 @@ internal sealed class LatticeViewFactory(
 
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
 
-        // Lazy activation (Phase 1): kick the maintainer online in the background.
-        // Faults are observed and logged rather than surfaced through the sync
-        // Create call. The hosted ViewActivationService performs the same
-        // EnsureActiveAsync with retry/backoff for startup-registered views.
-        _ = EnsureActiveAsync(maintainer, viewName);
+        // Lazy activation (Phase 1): persist the durable runtime registration (so
+        // the view survives a restart) and kick the maintainer online in the
+        // background. Faults are observed and logged rather than surfaced through
+        // the sync Create call. The hosted ViewActivationService performs the same
+        // EnsureActiveAsync with retry/backoff for startup-registered and
+        // re-hydrated runtime views.
+        _ = PersistAndActivateAsync(maintainer, registration);
 
         var options = viewOptions.Get(viewName);
         var cacheTtl = options.ReadHandleCacheTtl > TimeSpan.Zero
@@ -57,8 +62,104 @@ internal sealed class LatticeViewFactory(
         return new LatticeView(viewName, grainFactory, maintainer, cacheTtl, registration.IsAggregation);
     }
 
-    private async Task EnsureActiveAsync(IViewMaintainerGrain maintainer, string viewName)
+    /// <inheritdoc />
+    public async Task DeleteAsync(string viewName, CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+
+        // A startup-declared view is authoritative: deleting it would only have it
+        // re-created on the next silo start from its declaration, so reject the
+        // call rather than silently churning.
+        if (IsStartupDeclared(viewName))
+        {
+            throw new InvalidOperationException(
+                $"View '{viewName}' is declared at startup via AddLatticeViews and cannot be deleted at runtime; the declaration would re-create it on the next silo start. Remove the startup declaration instead.");
+        }
+
+        // Idempotent no-op: a view that is neither in the catalog nor durably
+        // registered was never created (or is already deleted), so there is
+        // nothing to tear down - and crucially nothing to delete that would
+        // otherwise materialise a phantom backing tree.
+        if (!await ViewExistsAsync(viewName))
+        {
+            logger.LogDebug("DeleteAsync for view '{ViewName}' is a no-op; the view is not registered.", viewName);
+            return;
+        }
+
+        var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+        await maintainer.DecommissionAsync(cancellationToken);
+
+        await RegistryGrain.UnregisterAsync(viewName);
+        catalog.Remove(viewName);
+
+        logger.LogInformation("View '{ViewName}' deleted.", viewName);
+    }
+
+    private IViewRegistryGrain RegistryGrain =>
+        grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
+
+    private bool IsStartupDeclared(string viewName)
+    {
+        for (var i = 0; i < startupRegistrations.Count; i++)
+        {
+            if (string.Equals(startupRegistrations[i].ViewName, viewName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<bool> ViewExistsAsync(string viewName)
+    {
+        if (catalog.TryGet(viewName) is not null)
+        {
+            return true;
+        }
+
+        var durable = await RegistryGrain.ListAsync();
+        for (var i = 0; i < durable.Count; i++)
+        {
+            if (string.Equals(durable[i].ViewName, viewName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task PersistAndActivateAsync(IViewMaintainerGrain maintainer, ViewRegistration registration)
+    {
+        var viewName = registration.ViewName;
+        try
+        {
+            // Startup-declared views are re-registered authoritatively by the
+            // activation service on every start, so they need no durable runtime
+            // record (and on a name conflict the startup declaration wins).
+            if (!IsStartupDeclared(viewName))
+            {
+                var projection = (object?)registration.AggregationProjection ?? registration.Projection;
+                var typeName = projection!.GetType().AssemblyQualifiedName;
+                if (typeName is not null)
+                {
+                    await RegistryGrain.RegisterAsync(new RuntimeViewRegistration
+                    {
+                        ViewName = viewName,
+                        SourceTreeId = registration.SourceTreeId,
+                        ProjectionTypeName = typeName,
+                        ProjectionVersion = registration.ProjectionVersion,
+                        IsAggregation = registration.IsAggregation,
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to persist the durable runtime registration for view '{ViewName}'; it will not survive a restart until re-created.", viewName);
+        }
+
         try
         {
             await maintainer.EnsureActiveAsync(CancellationToken.None).ConfigureAwait(false);

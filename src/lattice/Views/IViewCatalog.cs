@@ -22,6 +22,13 @@ internal interface IViewCatalog
     /// </summary>
     ViewRegistration? TryGet(string viewName);
 
+    /// <summary>
+    /// Removes the binding for <paramref name="viewName"/>, so a subsequent
+    /// maintainer activation finds no registration and stays dormant. Idempotent:
+    /// a no-op when no view by that name is registered. Used by view deletion.
+    /// </summary>
+    void Remove(string viewName);
+
     /// <summary>Returns a snapshot of every currently-registered view.</summary>
     IReadOnlyCollection<ViewRegistration> All();
 }

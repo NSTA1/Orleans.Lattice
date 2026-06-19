@@ -27,5 +27,12 @@ internal sealed class ViewCatalog : IViewCatalog
     }
 
     /// <inheritdoc />
+    public void Remove(string viewName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        _views.TryRemove(viewName, out _);
+    }
+
+    /// <inheritdoc />
     public IReadOnlyCollection<ViewRegistration> All() => _views.Values.ToArray();
 }
