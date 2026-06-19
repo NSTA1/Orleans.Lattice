@@ -13,15 +13,18 @@ High-level testing policy plus the repository hygiene gates. For the detailed me
 
 ## Running tests (dev loop)
 
-- While iterating, exclude the long-running chaos/stress suite:
+- While iterating, run the smallest scope that still validates your change - a single method or a single fixture, never the whole suite. The tiered strategy (Tier 1 single method, Tier 2 single project, up to Tier 4 full suite), the per-project filters, and the category conventions live in `.github/instructions/testing.instructions.md`.
+
+- Run the full non-chaos suite **exactly once, immediately before raising a PR** - it is not an inner-loop action. Do not run it after every edit; use the narrow scopes above while iterating. That mandatory pre-PR run must:
+
+  - **Use blame-hang with a 3-minute per-test timeout** (`--blame-hang --blame-hang-timeout 3m`) so a hanging test is identified and the run is aborted with the culprit named, rather than stalling indefinitely.
+  - **Never suppress or filter the failure output.** When a test fails, the reason must be visible from that single run. Do not pipe the output through `Select-String`/`grep`/`Select-Object` filters or otherwise discard it - a failure must never require a second run just to expose why it failed.
 
   ```powershell
-  dotnet test --filter "TestCategory!=Chaos"
+  dotnet test --filter "TestCategory!=Chaos" --blame-hang --blame-hang-timeout 3m
   ```
 
-  Chaos tests (`[Category("Chaos")]`) are reserved for CI and pre-PR runs.
-
-- Use the smallest scope that still validates your change. The full tiered strategy (Tier 1 single method, up to Tier 4 full suite), the per-project filters, and the category conventions live in `.github/instructions/testing.instructions.md`.
+  Chaos tests (`[Category("Chaos")]`) remain CI-only. The Azure Table emulator suite (`[Category("AzureTableEmulator")]`) only runs when Azurite is started locally; otherwise exclude it as described in `.github/instructions/testing.instructions.md`.
 
 ## Hygiene gates
 
