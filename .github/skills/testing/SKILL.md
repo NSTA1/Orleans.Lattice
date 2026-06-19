@@ -28,13 +28,25 @@ High-level testing policy plus the repository hygiene gates. For the detailed me
 
 ## Hygiene gates
 
-The repository enforces a set of *hygiene gates* - structural regression tests that fail the build at PR time rather than letting a leak reach `main`. They run as ordinary tests inside the non-chaos suite, so any violation breaks the required `build-and-test` check. Run them all locally with:
+The repository enforces a set of *hygiene gates* - structural regression tests that fail the build at PR time rather than letting a leak reach `main`. They run as ordinary tests inside the non-chaos suite, so any violation breaks the required `build-and-test` check.
+
+The fast text- and structure-hygiene gates all carry `Hygiene` in their type name, so the core project's set runs with:
 
 ```powershell
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene"
 ```
 
-Each gate is a `[TestFixture]` under `test/lattice/`; several have sibling copies in the other test projects so the rule is enforced per assembly.
+Two things that filter does **not** cover, so do not treat it as "all gates":
+
+- `DocsSnippetCompilationTests` is **not** matched - its name has no `Hygiene` and it is `[Category("Docs")]`. It is also far heavier (it Roslyn-compiles every `csharp verify` snippet under `docs/`). Run it when you have touched docs, either by name or by category:
+
+  ```powershell
+  dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippet"
+  ```
+
+- `RoadmapIdentifierHygieneTests` and `IntegrationCategoryHygieneTests` have sibling copies in the replication, gRPC, and Azure Table test projects. The single-project command above only runs the core copy; the cross-project copies are exercised by the mandatory pre-PR full non-chaos run.
+
+Each gate is a `[TestFixture]` under `test/lattice/` (with the sibling copies noted above); the table below lists what each enforces.
 
 | Gate | What it enforces | How to stay green |
 |---|---|---|
