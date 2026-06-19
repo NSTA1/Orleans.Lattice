@@ -1001,6 +1001,17 @@ internal sealed class TcpIngestService(
         // still starts, but the warm-start kink will be visible in the
         // per-second timeline).
         //
+        // We retry two transient classes here: Orleans message rejections
+        // (directory-cache race) and transient activation cancellations -
+        // a shard warm-up probe that activates a grain whose state read
+        // times out against a transiently-throttled storage account
+        // surfaces as a bare TaskCanceledException. Without this, that
+        // cancellation escaped the loop and (because the silo runs with
+        // BackgroundServiceExceptionBehavior=StopHost) killed the host,
+        // producing a spurious WEDGE on pinned re-runs (issue #821). The
+        // genuine host-shutdown cancellation is still honoured immediately
+        // via the stopping-token guard below.
+        //
         // Retry budget is intentionally wider than the reshard submit
         // loop's: reshard ran INSIDE a subsequent 5-min
         // IsReshardCompleteAsync poll loop (2 s ticks) that effectively
@@ -1025,12 +1036,14 @@ internal sealed class TcpIngestService(
                 await lattice.WarmUpAsync(stoppingToken).ConfigureAwait(false);
                 warmUpCompleted = true;
             }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex) when (IsOrleansMessageRejection(ex))
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested
+                && (IsOrleansMessageRejection(ex) || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)))
             {
                 lastWarmUpException = ex;
                 var backoffMs = Math.Min(100 * (1 << (warmUpAttempt - 1)), MaxWarmUpBackoffMs);
-                Console.WriteLine($"[silo] warmup treeId={settings.TreeId} attempt={warmUpAttempt} REJECTED ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
+                var kind = IsOrleansMessageRejection(ex) ? "REJECTED" : "TRANSIENT-CANCEL";
+                Console.WriteLine($"[silo] warmup treeId={settings.TreeId} attempt={warmUpAttempt} {kind} ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
                 try
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), stoppingToken).ConfigureAwait(false);
