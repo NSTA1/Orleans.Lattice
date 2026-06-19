@@ -175,6 +175,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [FX-039](https://github.com/NSTA1/Orleans.Lattice/issues/651) - De-flake `Chaos_conditional_set_many_under_split_churn`: final completeness pass retries until no exception rather than until the completeness invariant holds, under-stamping a guard-matching key during post-split convergence
 - [FX-040](https://github.com/NSTA1/Orleans.Lattice/issues/775) - Tag index never authors flag-CRDT membership deltas, so its documented active-active (multi-writer) convergence is unachievable
 - [FX-041](https://github.com/NSTA1/Orleans.Lattice/issues/782) - Cross-tree atomic writes drop the typed CRDT delta on the replication receiver, degrading concurrent multi-writer convergence to LWW
+- [FX-043](https://github.com/NSTA1/Orleans.Lattice/issues/816) - Materialised views: durable runtime-view registration so a runtime-created view survives a silo restart, plus an `ILatticeViewFactory.DeleteAsync` view-teardown API
 
 ## Gaps & potential additions
 

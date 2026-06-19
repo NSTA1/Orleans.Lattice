@@ -153,6 +153,42 @@ public sealed class AdultsViewService(ILatticeViewFactory views, IGrainFactory g
 or empty view to readers - the rebuild happens off to the side and the live tree
 is swapped in atomically when it is complete.
 
+## Deleting a view
+
+`ILatticeViewFactory.DeleteAsync` tears a runtime-created view down completely:
+it stops the maintainer, unregisters the keepalive reminder, releases the source
+WAL cursor pin, soft-deletes the backing view tree, and clears the durable
+checkpoint and runtime registration. After it returns the view name is free to be
+re-created from scratch.
+
+```csharp verify
+public sealed class AdultsViewAdmin(ILatticeViewFactory views)
+{
+    public Task RemoveAsync(CancellationToken cancellationToken) =>
+        views.DeleteAsync("adults", cancellationToken);
+}
+```
+
+Deletion is idempotent: deleting a view that was never created, or re-deleting an
+already-deleted view, is a no-op. A view declared at startup via
+`AddLatticeViews(...)` cannot be deleted this way - the declaration would
+re-create it on the next start - so `DeleteAsync` rejects it with an
+`InvalidOperationException`.
+
+## Durability across restarts
+
+A view created at runtime through `ILatticeViewFactory.Create` records a durable
+registration (its source tree id, projection type, and projection version)
+alongside its checkpoint, so its maintainer resumes automatically after a silo
+restart without the application re-calling `Create`. Because a projection
+instance is not serialisable, only the projection's concrete type identity is
+persisted; the projection is re-resolved from dependency injection on restart. A
+runtime view therefore survives a restart only when its projection type is
+resolvable from the container - registered in DI, or constructable through its
+public constructor with dependency-injection-satisfiable arguments. Views
+declared at startup with `AddLatticeViews(...)` are always re-registered from the
+declaration and carry no such constraint.
+
 ## Changing a projection
 
 `PredicateLatticeViewProjection.ProjectionVersion` is a structural hash of the
@@ -560,3 +596,11 @@ meter, each tagged with the view name:
 - **Approximate set-union cardinality is a bounded sample, not HyperLogLog.**
   `AggregationMaxGroupEntries` bounds `SetUnion` with a distinct sample; a true
   HyperLogLog estimator is a later phase.
+- **A runtime view survives a restart only with a DI-resolvable projection.**
+  Only the projection's concrete type identity is persisted, so a view created at
+  runtime resumes after a silo restart only when that type can be resolved from
+  dependency injection. Startup-declared views are exempt - they are rebuilt from
+  their declaration.
+- **Startup-declared views cannot be deleted at runtime.** `DeleteAsync` rejects a
+  view that was declared through `AddLatticeViews(...)`, because the declaration
+  would re-create it on the next start. Remove the declaration instead.

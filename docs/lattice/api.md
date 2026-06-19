@@ -1773,7 +1773,7 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
 |------|------|
 | `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, and hosted maintainer. Part of the core `Orleans.Lattice` package. Declares startup views through the builder (`AddView` / `AddAggregationView`). |
 | `ConfigureLatticeView(viewName?, configure)` | Sets `LatticeViewOptions` defaults (no name) or per-view overrides. |
-| `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle. Registered as a singleton by `AddLatticeViews`. |
+| `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle and persists a durable runtime registration; `DeleteAsync(viewName, ct?)` tears a runtime view down completely (maintainer, reminder, WAL pin, backing tree, checkpoint, and registration) and is idempotent. Registered as a singleton by `AddLatticeViews`. |
 | `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
 | `TypedLatticeViewExtensions` | Typed read helpers over `ILatticeView`: `GetAsync<T>` / `EntriesAsync<T>` (deserialize via `ILatticeSerializer<T>`, default `JsonLatticeSerializer<T>`) and `GetAggregateDoubleAsync` / `GetAggregateInt64Async` (decode aggregate values via `LatticeAggregationValue`). |
 | `LatticeViewDefinition` | Pairs a view name with either an `ILatticeViewProjection` (filter / re-project) or an `ILatticeAggregationProjection` (aggregation). |
@@ -1807,5 +1807,10 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
 - **Atomic visibility.** A source atomic write (single-tree or cross-tree) is
   surfaced atomically in the derived views; see
   [Materialised views](materialised-views.md#atomic-write-visibility).
+- **Runtime-view durability.** A view created at runtime is re-registered durably
+  and resumes after a silo restart, provided its projection type is resolvable
+  from dependency injection. `DeleteAsync` rejects a startup-declared view (the
+  declaration would re-create it); see
+  [Materialised views](materialised-views.md#deleting-a-view).
 
 
