@@ -48,6 +48,48 @@ is a storage concern, independent of views.
 > `Orleans.Lattice.Replication` at all. `AddLatticeReplication` is only needed when
 > a view ships its tree across clusters (see [Replication modes](#replication-modes)).
 
+## Create a view
+
+A view is a `LatticeViewDefinition` - a view name paired with a projection. The
+projection is either a `PredicateLatticeViewProjection` (filter / re-project, one
+source key to at most one view key) or an `AggregationLatticeViewProjection` (a
+grouped reduce; see [Aggregation views](#aggregation-views)). When a projection
+needs selectors over the source value, build it with the typed `Create<T>`
+factory so the selectors run against the deserialized value type instead of raw
+`byte[]`.
+
+There are two ways to create a view.
+
+**At startup** - declare it on the silo builder so the maintainer comes online
+with the host. `AddView` registers a filter / re-project view;
+`AddAggregationView` registers an aggregation:
+
+```csharp verify
+siloBuilder.AddLatticeViews(views => views.AddView(
+    viewName: "adults",
+    sourceTreeId: "people",
+    projection: new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+```
+
+**At runtime** - resolve `ILatticeViewFactory` and call `Create` with the source
+tree, the view name, and the definition. Prefer this when the view shape is only
+known at runtime; it returns the same `ILatticeView` handle used for reads:
+
+```csharp verify
+var viewFactory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
+var people = grainFactory.GetGrain<ILattice>("people");
+
+ILatticeView adults = viewFactory.Create(
+    people,
+    "adults",
+    new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
+```
+
+Either way the view materialises under its own `view-{name}` tree and converges
+toward the source as the maintainer applies projected writes.
+
 ## Reading a view
 
 A view is read through its `ILatticeView` handle, which resolves the live view
@@ -174,20 +216,23 @@ reduces are supported through `AggregationKind`:
 | `Max` | Largest live contribution (`double`) | value selector |
 | `SetUnion` | Distinct-member cardinality (`long`) | member selector |
 
-Declare one with `AggregationLatticeViewProjection`: a group-key selector, a
-stable selector-version tag (the selectors are delegates and cannot be
-structurally hashed, so the tag drives rebuild-on-change), and the value or
-member selector the kind needs.
+Declare one with `AggregationLatticeViewProjection.Create<T>`: a group-key
+selector, a stable selector-version tag (the selectors are delegates and cannot
+be structurally hashed, so the tag drives rebuild-on-change), and the value or
+member selector the kind needs. The selectors run against the deserialized value
+type `T` (using `JsonLatticeSerializer<T>` by default, or pass your own
+`ILatticeSerializer<T>`), so you write `u => u.Name` rather than hand-rolling a
+`byte[]` round-trip.
 
 ```csharp verify
 siloBuilder.AddLatticeViews(views => views.AddAggregationView(
     viewName: "age-sum-by-name",
     sourceTreeId: "people",
-    projection: new AggregationLatticeViewProjection(
+    projection: AggregationLatticeViewProjection.Create<User>(
         AggregationKind.Sum,
-        groupKeySelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Name,
+        groupKeySelector: u => u.Name,
         selectorVersion: "sum-age-v1",
-        valueSelector: bytes => JsonLatticeSerializer<User>.Default.Deserialize(bytes)!.Age)));
+        valueSelector: u => u.Age)));
 ```
 
 ### Reading an aggregate
@@ -201,6 +246,25 @@ no live members):
 var sums = grainFactory.GetGrain<ILattice>("view-age-sum-by-name");
 byte[]? raw = await sums.GetAsync("Alice", cancellationToken);
 double total = raw is null ? 0 : LatticeAggregationValue.DecodeDouble(raw);
+```
+
+When you hold an `ILatticeView` handle, `GetAggregateDoubleAsync` /
+`GetAggregateInt64Async` do the decode for you (returning `null` for an empty
+group), so you never touch the bytes:
+
+```csharp verify
+ILatticeView ageByName = client.ServiceProvider
+    .GetRequiredService<ILatticeViewFactory>()
+    .Create(
+        grainFactory.GetGrain<ILattice>("people"),
+        "age-sum-by-name",
+        new LatticeViewDefinition("age-sum-by-name", AggregationLatticeViewProjection.Create<User>(
+            AggregationKind.Sum,
+            groupKeySelector: u => u.Name,
+            selectorVersion: "sum-age-v1",
+            valueSelector: u => u.Age)));
+
+double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToken) ?? 0;
 ```
 
 `Count` and `SetUnion` store a `long` (decode with `DecodeInt64`); `Sum`, `Min`,

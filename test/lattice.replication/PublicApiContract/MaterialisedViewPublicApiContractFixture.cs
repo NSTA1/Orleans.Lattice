@@ -82,11 +82,11 @@ internal sealed class MaterialisedViewPublicApiContractFixture
 
     /// <summary>The aggregation projection used by both the startup view and the runtime-created handle.</summary>
     public static AggregationLatticeViewProjection AmountByCustomer() =>
-        new(
+        AggregationLatticeViewProjection.Create<Order>(
             AggregationKind.Sum,
-            groupKeySelector: bytes => JsonLatticeSerializer<Order>.Default.Deserialize(bytes)!.Customer,
+            groupKeySelector: o => o.Customer,
             selectorVersion: "amount-by-customer-v1",
-            valueSelector: bytes => JsonLatticeSerializer<Order>.Default.Deserialize(bytes)!.Amount);
+            valueSelector: o => o.Amount);
 
     /// <summary>Resolves the public <see cref="ILatticeView"/> handle for the filter view.</summary>
     public ILatticeView FilterView()
