@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.Replication;
+using Orleans.Runtime;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -77,6 +78,16 @@ internal sealed class TwoSiteClusterFixture
 
         SiteA = await BuildSiteAsync<SiteASiloConfigurator>();
         SiteB = await BuildSiteAsync<SiteBSiloConfigurator>();
+
+        // The Orleans reminder service can still be completing initialization
+        // for a moment after DeployAsync returns. The first write to any tree
+        // registers the tombstone-compaction reminder, which faults with
+        // "Reminder Service is still initializing" if it loses that startup
+        // race. Warm each site here with a bounded retry so individual tests
+        // never observe the race.
+        await Task.WhenAll(
+            WarmUpReminderServiceAsync(SiteA),
+            WarmUpReminderServiceAsync(SiteB));
     }
 
     /// <summary>Stops and disposes both sites.</summary>
@@ -110,6 +121,36 @@ internal sealed class TwoSiteClusterFixture
         var cluster = builder.Build();
         await cluster.DeployAsync();
         return cluster;
+    }
+
+    /// <summary>
+    /// Forces the reminder service on every silo of <paramref name="cluster"/>
+    /// to finish initializing before tests run. Each warm-up write registers a
+    /// tombstone-compaction reminder; the write is retried on the transient
+    /// "Reminder Service is still initializing" fault. Several distinct tree ids
+    /// are used so placement spreads across both silos in the site.
+    /// </summary>
+    private static async Task WarmUpReminderServiceAsync(TestCluster cluster)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        for (var i = 0; i < 4; i++)
+        {
+            var tree = cluster.Client.GetGrain<ILattice>($"reminder-warmup-{i}");
+            while (true)
+            {
+                try
+                {
+                    await tree.SetAsync("warmup", new byte[] { 0 });
+                    break;
+                }
+                catch (OrleansException ex) when (
+                    ex.Message.Contains("Reminder Service is still initializing", StringComparison.Ordinal)
+                    && DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(250));
+                }
+            }
+        }
     }
 
     private static void ConfigureSilo(ISiloBuilder siloBuilder, string clusterId)
