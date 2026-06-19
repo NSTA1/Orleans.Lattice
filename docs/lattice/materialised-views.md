@@ -206,6 +206,25 @@ byte[]? raw = await sums.GetAsync("Alice", cancellationToken);
 double total = raw is null ? 0 : LatticeAggregationValue.DecodeDouble(raw);
 ```
 
+When you hold an `ILatticeView` handle, `GetAggregateDoubleAsync` /
+`GetAggregateInt64Async` do the decode for you (returning `null` for an empty
+group), so you never touch the bytes:
+
+```csharp verify
+ILatticeView ageByName = client.ServiceProvider
+    .GetRequiredService<ILatticeViewFactory>()
+    .Create(
+        grainFactory.GetGrain<ILattice>("people"),
+        "age-sum-by-name",
+        new LatticeViewDefinition("age-sum-by-name", AggregationLatticeViewProjection.Create<User>(
+            AggregationKind.Sum,
+            groupKeySelector: u => u.Name,
+            selectorVersion: "sum-age-v1",
+            valueSelector: u => u.Age)));
+
+double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToken) ?? 0;
+```
+
 `Count` and `SetUnion` store a `long` (decode with `DecodeInt64`); `Sum`, `Min`,
 and `Max` store a `double` (decode with `DecodeDouble`). Overwrites and deletes
 retract a source key's prior contribution automatically, so a group's value
