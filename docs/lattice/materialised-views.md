@@ -436,6 +436,14 @@ caps bound that buffer; if either is exceeded the view falls back to a rebuild
 from current committed source state. Each backstop trip increments
 `orleans.lattice.view.atomic_staging_backstop`.
 
+When a completed batch flushes to the view tree, the maintainer carries the
+projection's upserts **and** its retraction deletes inside a single mixed atomic
+op (`ILattice.SetManyAtomicAsync(upserts, deletes, operationId)`). This closes
+the re-key window: when a source mutation moves a row from view key A to view key
+B, the upsert at B and the delete at A flip in the same visibility change, so a
+reader never observes both view keys (or neither) at once. The same mixed flush
+is used on the cross-tree joint path below and on the per-tree degrade path.
+
 ```csharp verify
 siloBuilder.ConfigureLatticeView("adults", options =>
 {

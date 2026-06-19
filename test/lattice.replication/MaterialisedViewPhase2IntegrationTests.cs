@@ -180,6 +180,67 @@ public class MaterialisedViewPhase2IntegrationTests
     }
 
     [Test]
+    public async Task Rekey_source_write_never_exposes_old_and_new_view_keys_together()
+    {
+        const string tree = "mv2-rekey-atomic-src";
+        const string view = "mv2-rekey-atomic-view";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        _ = CreateView(tree, view, PrefixRekey());
+
+        // Seed the row at source key "a" -> view key "v:a".
+        await source.SetAsync("a", Bytes("payload"));
+        var viewTree = await DrainToZeroAsync(view);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await viewTree.GetAsync("v:a"), Is.EqualTo(Bytes("payload")));
+            Assert.That(await viewTree.GetAsync("v:b"), Is.Null);
+        });
+
+        // Re-key the row from source "a" to source "b" inside ONE atomic source
+        // batch (upsert "b", delete "a"). The completed batch flushes to the view
+        // as a mixed upsert(v:b) + delete(v:a) carried inside a single atomic
+        // view-tree op, so the old view key is retracted in the same visibility
+        // flip that publishes the new one.
+        await source.SetManyAtomicAsync(
+            new List<KeyValuePair<string, byte[]>> { new("b", Bytes("payload")) },
+            new[] { "a" },
+            $"rekey-{Guid.NewGuid():N}");
+
+        // Drain one step at a time; the view must never expose BOTH the old and
+        // the new view key at once - before the flip only v:a is present, after
+        // it only v:b, never both.
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        await maintainer.EnsureActiveAsync();
+        var converged = false;
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            var active = await _fixture.ActiveViewTreeAsync(view);
+            var hasOld = await active.GetAsync("v:a") is not null;
+            var hasNew = await active.GetAsync("v:b") is not null;
+            Assert.That(hasOld && hasNew, Is.False,
+                "the re-key flush exposed both the old and the new view key simultaneously");
+
+            await maintainer.DrainAsync();
+            if (await maintainer.GetLagAsync() == 0)
+            {
+                converged = true;
+                break;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.That(converged, Is.True, $"View '{view}' did not catch up to the source head.");
+
+        viewTree = await _fixture.ActiveViewTreeAsync(view);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await viewTree.GetAsync("v:b"), Is.EqualTo(Bytes("payload")));
+            Assert.That(await viewTree.GetAsync("v:a"), Is.Null);
+        });
+    }
+
+    [Test]
     public async Task WaitForSourceHlcAsync_completes_after_view_catches_up()
     {
         const string tree = "mv2-barrier-src";

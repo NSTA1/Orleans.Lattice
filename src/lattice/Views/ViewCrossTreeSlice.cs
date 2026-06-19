@@ -20,4 +20,12 @@ internal sealed record ViewCrossTreeSlice
 
     /// <summary>The coalesced upsert entries comprising this view's slice.</summary>
     [Id(2)] public required List<KeyValuePair<string, byte[]>> Upserts { get; init; }
+
+    /// <summary>
+    /// The retraction (tombstone) deletes comprising this view's slice. Carried
+    /// inside the joint flip alongside <see cref="Upserts"/> so a re-key
+    /// projection's old-key delete and new-key upsert flip atomically. Empty
+    /// when the slice has no retractions.
+    /// </summary>
+    [Id(3)] public IReadOnlyList<string> Deletes { get; init; } = [];
 }

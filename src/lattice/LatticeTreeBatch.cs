@@ -35,6 +35,20 @@ namespace Orleans.Lattice;
 /// couples a typed CRDT mutation prepared by a CRDT accessor's <c>Stage*</c>
 /// method) populate it.
 /// </para>
+/// <para>
+/// <b>Per-entry deletes.</b> <see cref="EntryDeletes"/> (when non-null) is
+/// aligned 1:1 with <see cref="Entries"/>: <c>EntryDeletes[i]</c> is
+/// <see langword="true"/> when <c>Entries[i]</c> is a <b>retraction
+/// (tombstone) delete</b> that rides the all-or-nothing batch alongside the
+/// upserts, or <see langword="false"/> for a plain value upsert. A delete
+/// entry's value buffer is ignored (the builder stages an empty buffer). The
+/// whole list is <see langword="null"/> when the slice carries only upserts
+/// (the common case, and the only case the <c>Set</c> / <c>SetWhere</c> builder
+/// methods produce); <see cref="LatticeAtomicWriteBuilder.Delete(string)"/>
+/// populates it. Carrying deletes inside the atomic op lets a re-key
+/// projection (a row moving from view key A to view key B) flip the upsert at
+/// B and the delete at A as a single visibility change.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeTreeBatch)]
@@ -42,4 +56,5 @@ public readonly record struct LatticeTreeBatch(
     [property: Id(0)] string TreeId,
     [property: Id(1)] List<KeyValuePair<string, byte[]>> Entries,
     [property: Id(2)] LatticePredicateNode? Predicate = null,
-    [property: Id(3)] List<byte[]?>? EntryDeltas = null);
+    [property: Id(3)] List<byte[]?>? EntryDeltas = null,
+    [property: Id(4)] List<bool>? EntryDeletes = null);

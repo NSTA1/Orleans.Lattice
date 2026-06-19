@@ -117,6 +117,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             ViewName = readiness.ViewName,
             ViewTreeId = readiness.ViewTreeId,
             Upserts = readiness.Upserts,
+            Deletes = readiness.Deletes ?? [],
         };
 
         // The wait set completes when every participant view has registered.
@@ -160,12 +161,13 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
 
     /// <summary>
     /// Issues the joint cross-tree flip across every participant view tree whose
-    /// slice has at least one upsert, idempotently keyed by
+    /// slice has at least one upsert or delete, idempotently keyed by
     /// <see cref="JointOperationId"/>. Empty slices contribute nothing to flip,
     /// so they are excluded; a single non-empty slice falls back to the
     /// single-tree atomic write (the cross-tree primitive requires two or more
-    /// trees). Retraction deletes are not carried - each maintainer applies its
-    /// own after observing the applied decision.
+    /// trees). Each slice's retraction deletes ride inside the joint flip
+    /// alongside its upserts, so a re-key projection's old-key delete and
+    /// new-key upsert flip atomically.
     /// </summary>
     private async Task IssueJointFlipAsync()
     {
@@ -175,10 +177,12 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         var batches = new List<LatticeTreeBatch>(state.State.Slices.Count);
         foreach (var slice in state.State.Slices.Values)
         {
-            if (slice.Upserts.Count > 0)
+            if (slice.Upserts.Count == 0 && slice.Deletes.Count == 0)
             {
-                batches.Add(new LatticeTreeBatch(slice.ViewTreeId, slice.Upserts));
+                continue;
             }
+
+            batches.Add(BuildMixedBatch(slice));
         }
 
         switch (batches.Count)
@@ -189,15 +193,44 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
                 return;
             case 1:
                 // One non-empty slice: a cross-tree write needs two or more trees,
-                // so flip the single tree atomically (still all-or-nothing for it).
+                // so flip the single tree atomically (still all-or-nothing for it),
+                // carrying its upserts and retraction deletes in one mixed op.
+                var only = state.State.Slices.Values.First(
+                    s => s.Upserts.Count > 0 || s.Deletes.Count > 0);
                 await grainFactory
-                    .GetGrain<ILattice>(batches[0].TreeId)
-                    .SetManyAtomicAsync(batches[0].Entries, JointOperationId);
+                    .GetGrain<ILattice>(only.ViewTreeId)
+                    .SetManyAtomicAsync(only.Upserts, only.Deletes, JointOperationId);
                 return;
             default:
                 await grainFactory.SetManyAtomicAsync(batches, JointOperationId);
                 return;
         }
+    }
+
+    /// <summary>
+    /// Builds the cross-tree batch for a single view slice, unioning the slice's
+    /// upserts and retraction deletes into one mixed <see cref="LatticeTreeBatch"/>
+    /// (the deletes carry an empty value buffer and a true entry-delete flag) so
+    /// the whole slice flips atomically inside the joint write.
+    /// </summary>
+    private static LatticeTreeBatch BuildMixedBatch(ViewCrossTreeSlice slice)
+    {
+        if (slice.Deletes.Count == 0)
+        {
+            return new LatticeTreeBatch(slice.ViewTreeId, slice.Upserts);
+        }
+
+        var entries = new List<KeyValuePair<string, byte[]>>(slice.Upserts.Count + slice.Deletes.Count);
+        entries.AddRange(slice.Upserts);
+        var entryDeletes = new List<bool>(entries.Capacity);
+        for (var i = 0; i < slice.Upserts.Count; i++) entryDeletes.Add(false);
+        foreach (var key in slice.Deletes)
+        {
+            entries.Add(new KeyValuePair<string, byte[]>(key, Array.Empty<byte>()));
+            entryDeletes.Add(true);
+        }
+
+        return new LatticeTreeBatch(slice.ViewTreeId, entries, Predicate: null, EntryDeltas: null, EntryDeletes: entryDeletes);
     }
 
     /// <inheritdoc />

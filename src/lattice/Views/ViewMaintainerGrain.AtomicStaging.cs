@@ -526,16 +526,15 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
-            if (upserts.Count > 0)
+            // Filter-path flush: apply the upserts and the retraction deletes
+            // inside a SINGLE mixed atomic op so a re-key projection (a row
+            // moving from view key A to view key B) flips the upsert at B and
+            // the delete at A as one visibility change - no reader ever sees
+            // both keys, or neither, at once.
+            if (upserts.Count > 0 || deletes.Count > 0)
             {
-                await viewTree.SetManyAtomicAsync(upserts, ViewSagaOperationId(txId), cancellationToken);
-                applied += upserts.Count;
-            }
-
-            foreach (var key in deletes)
-            {
-                await viewTree.DeleteAsync(key, cancellationToken);
-                applied++;
+                await viewTree.SetManyAtomicAsync(upserts, deletes, ViewSagaOperationId(txId), cancellationToken);
+                applied += upserts.Count + deletes.Count;
             }
 
             ReleaseStagedKeys(tx);

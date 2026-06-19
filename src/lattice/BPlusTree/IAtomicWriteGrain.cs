@@ -30,7 +30,15 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="treeId">Logical tree ID to write into.</param>
     /// <param name="entries">Key-value pairs to commit atomically. Must not contain duplicate keys.</param>
-    Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries);
+    /// <param name="entryDeletes">
+    /// Optional per-entry delete (tombstone) channel aligned 1:1 with
+    /// <paramref name="entries"/>: <c>entryDeletes[i]</c> is <see langword="true"/>
+    /// when <c>entries[i]</c> is a retraction delete that rides the atomic batch
+    /// as a tombstone rather than an upsert (its value buffer is ignored), or
+    /// <see langword="false"/> for a value upsert. The whole argument is
+    /// <see langword="null"/> when every entry is an upsert.
+    /// </param>
+    Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries, List<bool>? entryDeletes = null);
 
     /// <summary>
     /// Starts (or resumes) a <em>guarded</em> atomic write saga: the batch is
@@ -97,13 +105,22 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     /// prepare and persisted so a reminder-driven replay reuses the bytes
     /// verbatim without re-minting.
     /// </param>
+    /// <param name="entryDeletes">
+    /// Optional per-entry delete (tombstone) channel aligned 1:1 with
+    /// <paramref name="entries"/>: <c>entryDeletes[i]</c> is <see langword="true"/>
+    /// when <c>entries[i]</c> is a retraction delete that rides the atomic batch
+    /// as a tombstone rather than an upsert (its value buffer is ignored), or
+    /// <see langword="false"/> for a value upsert. The whole argument is
+    /// <see langword="null"/> when every entry is an upsert.
+    /// </param>
     Task<CrossTreePrepareVote> PrepareForCoordinatorAsync(
         string treeId,
         List<KeyValuePair<string, byte[]>> entries,
         LatticePredicateNode? predicate,
         string coordinatorKey,
         IReadOnlyList<string> participants,
-        List<byte[]?>? entryDeltas = null);
+        List<byte[]?>? entryDeltas = null,
+        List<bool>? entryDeletes = null);
 
     /// <summary>
     /// Finalizes a sub-saga previously paused by

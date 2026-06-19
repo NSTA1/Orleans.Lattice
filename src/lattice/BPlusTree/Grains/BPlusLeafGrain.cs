@@ -1101,6 +1101,13 @@ internal sealed partial class BPlusLeafGrain(
         // saga-wide / single-write carry when no per-key delta is present
         // keeps every value-only and saga-wide-only write byte-identical.
         var atomicBatchDeltaMap = LatticeAtomicBatchContext.CurrentDeltaMap;
+        // Per-entry delete set. A mixed set+delete atomic batch supplies the
+        // keys that must stage as prepared tombstones (MutationKind.Delete)
+        // rather than value writes; the saga's terminal flips the whole mixed
+        // batch visible (or drops it on abort) atomically. Null for every
+        // upsert-only batch (saga or foreground), keeping the value path
+        // byte-identical.
+        var atomicBatchDeleteSet = LatticeAtomicBatchContext.CurrentDeleteSet;
 
         for (var i = 0; i < count; i++)
         {
@@ -1108,12 +1115,20 @@ internal sealed partial class BPlusLeafGrain(
             var value = entries[i].Value;
             var stamp = AdvanceClockOrOverride();
             stamps[i] = stamp;
-            var lww = LwwValue<byte[]>.CreateWithExpiry(value, stamp, 0L)
-                with
-                {
-                    OriginClusterId = origin,
-                    VectorClock = vectorClock,
-                };
+            var isDelete = atomicBatchDeleteSet is not null && atomicBatchDeleteSet.Contains(key);
+            var lww = isDelete
+                ? LwwValue<byte[]>.Tombstone(stamp)
+                    with
+                    {
+                        OriginClusterId = origin,
+                        VectorClock = vectorClock,
+                    }
+                : LwwValue<byte[]>.CreateWithExpiry(value, stamp, 0L)
+                    with
+                    {
+                        OriginClusterId = origin,
+                        VectorClock = vectorClock,
+                    };
             values[i] = lww;
             int atomicBatchIndexForEntry;
             if (atomicBatchSize > 0)
@@ -1135,7 +1150,7 @@ internal sealed partial class BPlusLeafGrain(
             walEntries[i] = new WalRecord
             {
                 TreeId = treeId,
-                Op = MutationKind.Set,
+                Op = lww.IsTombstone ? MutationKind.Delete : MutationKind.Set,
                 Key = key,
                 Value = lww.IsTombstone ? null : lww.Value,
                 Timestamp = lww.Timestamp,
@@ -1304,7 +1319,14 @@ internal sealed partial class BPlusLeafGrain(
                             }
                             LatticeAtomicBatchContext.Current = (atomicBatchSize, globalIndex);
                         }
-                        await PublishSetAsync(key, published);
+                        if (published.IsTombstone)
+                        {
+                            await PublishDeleteAsync(key, published);
+                        }
+                        else
+                        {
+                            await PublishSetAsync(key, published);
+                        }
                     }
                 }
                 finally

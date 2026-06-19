@@ -194,6 +194,42 @@ public interface ILattice : IGrainWithStringKey
     Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Mixed atomic bulk write: applies a batch of <paramref name="upserts"/>
+    /// (key-value writes) <b>and</b> <paramref name="deletes"/> (key removals)
+    /// all-or-nothing, so no reader ever observes a partial application of the
+    /// batch. The defining use is a <i>re-key retraction</i>: a source mutation
+    /// that moves a projected row from one view key to another flips the upsert
+    /// at the new key and the delete at the old key inside the <b>same</b>
+    /// atomic visibility flip, so a reader never sees both keys (or neither)
+    /// simultaneously.
+    /// <para>
+    /// The two collections are unioned into a single atomic batch. The same
+    /// key may not appear in both <paramref name="upserts"/> and
+    /// <paramref name="deletes"/>, nor more than once within either collection;
+    /// a duplicate key throws <see cref="ArgumentException"/>. Each delete is
+    /// staged as a tombstone that becomes visible on the saga's commit terminal
+    /// and is dropped on abort, exactly like the upserts it rides with.
+    /// </para>
+    /// <para>
+    /// The saga is keyed by <c>{treeId}/{operationId}</c> with the same
+    /// idempotency, key-set-stability, and retention semantics as
+    /// <see cref="SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, string, CancellationToken)"/>.
+    /// The fingerprinted key set is the union of upsert and delete keys.
+    /// </para>
+    /// </summary>
+    /// <param name="upserts">The key-value pairs to write atomically. May be empty when the batch is delete-only.</param>
+    /// <param name="deletes">The keys to delete atomically. May be empty when the batch is upsert-only.</param>
+    /// <param name="operationId">Stable caller-supplied idempotency key. Must be non-empty and must not contain <c>'/'</c> (reserved as the grain-key separator).</param>
+    /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="operationId"/> is null, empty, whitespace, or contains <c>'/'</c>; or when the combined batch contains a duplicate or null key, or a null upsert value.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set, or when a write fails and compensation completes.</exception>
+    Task SetManyAtomicAsync(
+        List<KeyValuePair<string, byte[]>> upserts,
+        IReadOnlyList<string> deletes,
+        string operationId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Guarded atomic bulk write: commits <paramref name="entries"/>
     /// all-or-nothing, but only if <b>every</b> targeted key's pre-saga value
     /// satisfies the server-side predicate IR <paramref name="predicate"/>

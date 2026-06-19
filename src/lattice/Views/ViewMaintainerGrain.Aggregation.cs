@@ -276,9 +276,9 @@ internal sealed partial class ViewMaintainerGrain
             }
 
             // Single-tree atomic batch: flip the captured net slice atomically into
-            // the view tree (upserts in one atomic op keyed by the deterministic
-            // view-saga id so a replay re-attaches, then retraction deletes) so the
-            // whole batch becomes visible together.
+            // the view tree - upserts and retraction deletes ride one mixed atomic
+            // op keyed by the deterministic view-saga id (so a replay re-attaches)
+            // so the whole batch becomes visible together.
             await FlipLocalSliceAsync(viewTree, txId, upserts, deletes, cancellationToken);
             applied += upserts.Count + deletes.Count;
             ReleaseStagedKeys(tx);

@@ -37,8 +37,10 @@ Given a batch `[(k₀, v₀), (k₁, v₁), …, (kₙ₋₁, vₙ₋₁)]`, a s
 3. **Crash recovery.** If the silo hosting the saga grain crashes mid-flight,
    a keepalive reminder resumes the saga on reactivation and drives it to a
    terminal state (either Completed or Compensated + Completed).
-4. **Input validation.** Duplicate keys and null values fail fast with
-   `ArgumentException` before any write is attempted. An empty batch returns
+4. **Input validation.** Duplicate keys and null keys fail fast with
+   `ArgumentException` before any write is attempted. A null value fails fast
+   for an upsert entry, but is permitted for a delete entry in a mixed
+   set+delete batch (a delete carries no value). An empty batch returns
    immediately without contacting any leaf grain.
 5. **Idempotent client retry.** A re-invocation of the same saga grain (same
    `treeId` + `operationId`) after successful completion returns success
@@ -88,6 +90,45 @@ var typedBatch = new List<KeyValuePair<string, Order>>
 };
 await tree.SetManyAtomicAsync(typedBatch);
 ```
+
+## Mixed upsert + delete batches
+
+`SetManyAtomicAsync(upserts, deletes, operationId)` commits a batch that mixes
+**upserts and deletes** in a single all-or-nothing visibility flip. Every key
+in `upserts` is written and every key in `deletes` is tombstoned as one atomic
+unit: a reader observes either the whole batch applied or none of it, never a
+partial state where some upserts are visible but the deletes are not (or vice
+versa). Each delete becomes visible on commit and is dropped on abort, riding
+the **same saga terminal** as the upserts.
+
+This is the primitive behind atomic re-key retraction: when a logical row moves
+from key `A` to key `B`, the upsert at `B` and the delete at `A` flip together,
+so a reader never sees both keys at once or neither. The materialised-view
+maintainer uses it to flush a completed atomic batch's upserts and retraction
+deletes inside one mixed op (see [Materialised views](materialised-views.md)).
+
+A stable `operationId` is required for this overload so a client retry
+re-attaches to the original saga. The delete-key channel is optional on the
+wire: a batch with no deletes is byte-identical to the value-only overload.
+
+```csharp verify
+var tree = grainFactory.GetGrain<ILattice>("orders");
+
+// Move order:42's row from the "pending" index key to the "shipped" index key
+// atomically: the new key appears and the old key disappears in one flip.
+var upserts = new List<KeyValuePair<string, byte[]>>
+{
+    new("index/shipped/order:42", Encoding.UTF8.GetBytes("42")),
+};
+var deletes = new List<string> { "index/pending/order:42" };
+
+await tree.SetManyAtomicAsync(upserts, deletes, "rekey:order-42");
+```
+
+On the cross-tree fluent builder, stage a retraction with `.Delete(key)`
+alongside `.Set(...)` calls under the same `ForTree(...)`; the deletes ride the
+cross-tree saga and flip jointly with the upserts (see
+[Cross-tree atomic writes](#cross-tree-multi-tree-atomic-writes)).
 
 ## Guarded atomic writes
 
@@ -623,7 +664,8 @@ trees replicate to.
 |---|---|
 | `IGrainFactory.SetManyAtomicAsync(IReadOnlyList<LatticeTreeBatch>, operationId, ct)` | Commit per-tree slices atomically; returns a `CrossTreeAtomicWriteOutcome`. |
 | `IGrainFactory.BeginAtomicWrite(operationId)` | Open a `LatticeAtomicWriteBuilder` for fluent, per-tree staging. |
-| `LatticeTreeBatch(TreeId, Entries, Predicate = null)` | One tree's slice: tree id, key/value entries, optional server-side guard predicate. |
+| `LatticeAtomicWriteBuilder.Delete(key)` | Stage a retraction (tombstone) for `key` under the current `ForTree(...)`; rides the saga and flips jointly with sibling `Set` calls. |
+| `LatticeTreeBatch(TreeId, Entries, Predicate = null, EntryDeltas = null, EntryDeletes = null)` | One tree's slice: tree id, key/value entries, optional server-side guard predicate, optional per-entry CRDT deltas, and an optional parallel per-entry is-delete channel (a `true` slot tombstones its key). |
 | `CrossTreeAtomicWriteOutcome` | `Committed` (all trees committed) or `PreconditionFailed` (a guard failed; nothing committed anywhere). |
 
 A stable `operationId` is **required** (there is no auto-generated
@@ -649,6 +691,18 @@ if (outcome == CrossTreeAtomicWriteOutcome.PreconditionFailed)
 {
     // The guard failed; nothing was committed on either tree.
 }
+```
+
+```csharp verify
+// Mixed set + delete across trees: move a row from one tree's key to
+// another's, retracting the old key inside the same cross-tree saga.
+await grainFactory
+    .BeginAtomicWrite("rekey:order-42")
+    .ForTree("orders-east")
+        .Delete("order:42")
+    .ForTree("orders-west")
+        .Set("order:42", new Order("42", 250m))
+    .CommitAsync(cancellationToken);
 ```
 
 ```csharp verify

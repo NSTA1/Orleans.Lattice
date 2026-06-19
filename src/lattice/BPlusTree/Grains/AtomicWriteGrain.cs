@@ -202,7 +202,7 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <inheritdoc />
-    public async Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries)
+    public async Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries, List<bool>? entryDeletes = null)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entries);
@@ -248,7 +248,14 @@ internal sealed class AtomicWriteGrain(
         // and then capture pre-saga state.
         if (state.State.Phase == AtomicWritePhase.NotStarted)
         {
-            ValidateInputs(entries);
+            ValidateInputs(entries, entryDeletes);
+            // Capture the per-entry delete (tombstone) channel once, before
+            // Prepare, so a reminder-driven replay reuses it verbatim. Stored
+            // only when at least one entry is a delete; an all-upsert batch
+            // leaves the slot null and every entry stages as a value write.
+            state.State.EntryDeletes = entryDeletes is not null && entryDeletes.Exists(static d => d)
+                ? entryDeletes
+                : null;
 #if LATTICE_DIAG
             var swRegKa = System.Diagnostics.Stopwatch.StartNew();
             DiagSink.Write($"[DIAG saga-register-keepalive-enter] op={OperationKey} tree={treeId}");
@@ -351,7 +358,8 @@ internal sealed class AtomicWriteGrain(
         LatticePredicateNode? predicate,
         string coordinatorKey,
         IReadOnlyList<string> participants,
-        List<byte[]?>? entryDeltas = null)
+        List<byte[]?>? entryDeltas = null,
+        List<bool>? entryDeletes = null)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entries);
@@ -395,7 +403,7 @@ internal sealed class AtomicWriteGrain(
 
         if (state.State.Phase == AtomicWritePhase.NotStarted)
         {
-            ValidateInputs(entries);
+            ValidateInputs(entries, entryDeletes);
             // Capture the guard and the coordinator key before Prepare so a
             // reminder-driven Prepare replay re-applies the identical guard and
             // re-parks against the same coordinator.
@@ -410,6 +418,12 @@ internal sealed class AtomicWriteGrain(
             // saga-wide delta carry.
             state.State.EntryDeltas = entryDeltas is not null && entryDeltas.Exists(static d => d is not null)
                 ? entryDeltas
+                : null;
+            // Capture the per-entry delete (tombstone) channel once, before
+            // Prepare, mirroring the EntryDeltas capture. Stored only when at
+            // least one entry is a delete; an all-upsert slice leaves it null.
+            state.State.EntryDeletes = entryDeletes is not null && entryDeletes.Exists(static d => d)
+                ? entryDeletes
                 : null;
             await RegisterKeepaliveAsync();
             await PrepareAsync(treeId, entries);
@@ -530,16 +544,22 @@ internal sealed class AtomicWriteGrain(
         : Exception("Cross-tree sub-saga park step failed on a retryable fault.", inner);
 
     /// <summary>
-    /// Validates the batch: non-null values and no duplicate keys.
+    /// Validates the batch: no duplicate keys, no null keys, and a non-null
+    /// value for every upsert entry. A delete entry (its slot in
+    /// <paramref name="entryDeletes"/> is <see langword="true"/>) may carry a
+    /// null or empty value buffer because the leaf builds a tombstone rather
+    /// than reading the value.
     /// </summary>
-    private static void ValidateInputs(List<KeyValuePair<string, byte[]>> entries)
+    private static void ValidateInputs(List<KeyValuePair<string, byte[]>> entries, List<bool>? entryDeletes = null)
     {
         var seen = new HashSet<string>(entries.Count, StringComparer.Ordinal);
-        foreach (var entry in entries)
+        for (var i = 0; i < entries.Count; i++)
         {
+            var entry = entries[i];
+            var isDelete = entryDeletes is not null && i < entryDeletes.Count && entryDeletes[i];
             if (entry.Key is null)
                 throw new ArgumentException("Atomic write batch contains a null key.", nameof(entries));
-            if (entry.Value is null)
+            if (!isDelete && entry.Value is null)
                 throw new ArgumentException(
                     $"Atomic write batch contains a null value for key '{entry.Key}'.", nameof(entries));
             if (!seen.Add(entry.Key))
@@ -2317,6 +2337,14 @@ internal sealed class AtomicWriteGrain(
                 // back to the saga-wide delta carry exactly as before.
                 Dictionary<string, byte[]>? deltaMap = null;
                 var entryDeltas = state.State.EntryDeltas;
+                // Per-entry delete set (keys), built only when the saga
+                // persisted per-entry deletes (a mixed set+delete atomic
+                // batch). The leaf-side batched commit path looks each key up
+                // in this set and stages a prepared tombstone instead of a
+                // prepared value write; an all-upsert batch leaves it null so
+                // every entry stages as a value set exactly as before.
+                HashSet<string>? deleteSet = null;
+                var entryDeletes = state.State.EntryDeletes;
                 for (var i = startIndex; i < totalEntries; i++)
                 {
                     var entry = state.State.Entries[i];
@@ -2327,6 +2355,12 @@ internal sealed class AtomicWriteGrain(
                         && entryDeltas[i] is { } perEntryDelta)
                     {
                         (deltaMap ??= new Dictionary<string, byte[]>(remaining, StringComparer.Ordinal))[entry.Key] = perEntryDelta;
+                    }
+                    if (entryDeletes is not null
+                        && i < entryDeletes.Count
+                        && entryDeletes[i])
+                    {
+                        (deleteSet ??= new HashSet<string>(remaining, StringComparer.Ordinal)).Add(entry.Key);
                     }
                 }
 
@@ -2396,7 +2430,8 @@ internal sealed class AtomicWriteGrain(
                     using (LatticeAtomicBatchContext.With(
                         (state.State.AtomicBatchSize, startIndex),
                         indexMap,
-                        deltaMap))
+                        deltaMap,
+                        deleteSet))
                     {
                         await lattice.SetManyAsync(slice).ConfigureAwait(true);
                     }

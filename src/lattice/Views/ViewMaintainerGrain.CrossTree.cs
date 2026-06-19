@@ -41,11 +41,13 @@ namespace Orleans.Lattice.Views;
 /// participant view is permanently unavailable.
 /// </para>
 /// <para>
-/// <b>Deletes.</b> The cross-tree atomic write only sets (mirroring the
-/// single-tree atomic path), so a slice's retractions are not carried in the
-/// joint flip; the maintainer applies its own retraction deletes after observing
-/// the applied decision, exactly as the single-tree flush applies deletes after
-/// the atomic upsert.
+/// <b>Deletes.</b> A slice's retraction deletes ride <b>inside</b> the joint
+/// cross-tree flip alongside its upserts (each delete staged as a tombstone
+/// in the same mixed atomic op), so a re-key projection's old-key delete and
+/// new-key upsert flip as a single visibility change - no reader observes the
+/// old and new view keys simultaneously. The degenerate single-view and the
+/// degrade-to-local paths flip the same mixed upsert+delete slice through the
+/// view tree's single-tree mixed atomic primitive.
 /// </para>
 /// </summary>
 internal sealed partial class ViewMaintainerGrain
@@ -133,14 +135,14 @@ internal sealed partial class ViewMaintainerGrain
             WaitSet = waitSet,
             ViewTreeId = ViewTreeId,
             Upserts = upserts,
+            Deletes = deletes,
         });
 
         if (decision.Applied)
         {
-            // The coordinator flipped this view's upserts jointly across every
-            // participant view tree. Apply our own retractions (the cross-tree
-            // write only sets) and resolve.
-            await ApplyRetractionsAsync(viewTree, deletes, cancellationToken);
+            // The coordinator flipped this view's upserts AND retraction deletes
+            // jointly across every participant view tree inside one mixed atomic
+            // op, so nothing is left to apply out-of-band.
             return true;
         }
 
@@ -175,29 +177,14 @@ internal sealed partial class ViewMaintainerGrain
         var degradeDecision = await coordinator.RegisterDegradedAsync(ViewName);
         if (degradeDecision.Applied)
         {
-            await ApplyRetractionsAsync(viewTree, deletes, cancellationToken);
+            // The joint flip raced in just before our timeout and already carried
+            // this view's upserts AND retraction deletes in one mixed atomic op,
+            // so nothing is left to apply out-of-band.
             return true;
         }
 
         await DegradeLocallyAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
         return true;
-    }
-
-    /// <summary>
-    /// Applies this view's retraction deletes after observing an applied joint
-    /// flip (the cross-tree atomic write only sets, so retractions are applied
-    /// out-of-band, exactly as the single-tree flush applies deletes after the
-    /// atomic upsert).
-    /// </summary>
-    private static async Task ApplyRetractionsAsync(
-        ILattice viewTree,
-        List<string> deletes,
-        CancellationToken cancellationToken)
-    {
-        foreach (var key in deletes)
-        {
-            await viewTree.DeleteAsync(key, cancellationToken);
-        }
     }
 
     /// <summary>
@@ -223,10 +210,12 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>
-    /// Flips a slice into this view's own tree atomically (upserts through the
-    /// view tree's single-tree atomic primitive keyed by the deterministic
-    /// view-saga operation id so a replay re-attaches, then retraction deletes
-    /// after), the same shape the single-tree atomic flush uses.
+    /// Flips a slice into this view's own tree atomically: the upserts and the
+    /// retraction deletes ride a SINGLE mixed atomic op keyed by the
+    /// deterministic view-saga operation id (so a replay re-attaches), so a
+    /// re-key projection flips the upsert at the new view key and the delete at
+    /// the old view key as one visibility change. The same shape the
+    /// single-tree atomic flush uses.
     /// </summary>
     private static async Task FlipLocalSliceAsync(
         ILattice viewTree,
@@ -235,14 +224,9 @@ internal sealed partial class ViewMaintainerGrain
         List<string> deletes,
         CancellationToken cancellationToken)
     {
-        if (upserts.Count > 0)
+        if (upserts.Count > 0 || deletes.Count > 0)
         {
-            await viewTree.SetManyAtomicAsync(upserts, ViewSagaOperationId(txId), cancellationToken);
-        }
-
-        foreach (var key in deletes)
-        {
-            await viewTree.DeleteAsync(key, cancellationToken);
+            await viewTree.SetManyAtomicAsync(upserts, deletes, ViewSagaOperationId(txId), cancellationToken);
         }
     }
 

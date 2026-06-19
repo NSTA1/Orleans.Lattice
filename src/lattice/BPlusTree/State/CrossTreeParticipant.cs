@@ -50,4 +50,20 @@ internal sealed class CrossTreeParticipant
     /// decodes to <see langword="null"/>.
     /// </summary>
     [Id(4)] public List<byte[]?>? EntryDeltas { get; set; }
+
+    /// <summary>
+    /// Optional per-entry delete (tombstone) channel aligned 1:1 with
+    /// <see cref="Entries"/>: <c>EntryDeletes[i]</c> is <see langword="true"/>
+    /// when <c>Entries[i]</c> is a retraction delete that rides the
+    /// all-or-nothing batch alongside the upserts, or <see langword="false"/>
+    /// for a value upsert. The whole list is <see langword="null"/> when the
+    /// slice carries only upserts (the common case). A defensive copy taken by
+    /// the coordinator alongside <see cref="Entries"/>, then forwarded to the
+    /// per-tree sub-saga's
+    /// <see cref="Grains.AtomicWriteGrain.PrepareForCoordinatorAsync"/> so the
+    /// mixed set+delete batch flips visible (or rolls back) on the same
+    /// per-shard terminal. Wire-compatible: a missing field on legacy persisted
+    /// state decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(5)] public List<bool>? EntryDeletes { get; set; }
 }

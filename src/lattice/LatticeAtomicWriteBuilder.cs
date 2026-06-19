@@ -71,12 +71,28 @@ public sealed class LatticeAtomicWriteBuilder
         var slice = Current();
         slice.Entries.Add(new KeyValuePair<string, byte[]>(key, value));
         slice.EntryDeltas.Add(null);
+        slice.EntryDeletes.Add(false);
         return this;
     }
 
     /// <summary>
-    /// Stages a raw <paramref name="value"/> write for <paramref name="key"/> on
-    /// the current tree, attaching an opaque, already-serialised typed CRDT
+    /// Stages a retraction (tombstone) delete for <paramref name="key"/> on the
+    /// current tree. The delete rides the all-or-nothing cross-tree batch
+    /// alongside any sibling upserts, so a re-key projection (a row moving from
+    /// one view key to another) can flip the upsert at the new key and the
+    /// delete at the old key as a single atomic visibility change. The key is
+    /// removed when the batch commits and left untouched when it aborts.
+    /// </summary>
+    /// <param name="key">The key to delete atomically. Must be non-null.</param>
+    public LatticeAtomicWriteBuilder Delete(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var slice = Current();
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, Array.Empty<byte>()));
+        slice.EntryDeltas.Add(null);
+        slice.EntryDeletes.Add(true);
+        return this;
+    }
     /// <paramref name="delta"/> that rides the atomic write alongside the value.
     /// The receiver applies the delta to the addressed key by its merge mode
     /// (the flag-CRDT membership-row path mints an enable-dot delta this way),
@@ -92,6 +108,7 @@ public sealed class LatticeAtomicWriteBuilder
         var slice = Current();
         slice.Entries.Add(new KeyValuePair<string, byte[]>(key, value));
         slice.EntryDeltas.Add(delta);
+        slice.EntryDeletes.Add(false);
         return this;
     }
 
@@ -116,6 +133,7 @@ public sealed class LatticeAtomicWriteBuilder
         var slice = Current();
         slice.Entries.Add(new KeyValuePair<string, byte[]>(staged.Key, staged.Value));
         slice.EntryDeltas.Add(staged.Delta);
+        slice.EntryDeletes.Add(false);
         return this;
     }
 
@@ -130,6 +148,7 @@ public sealed class LatticeAtomicWriteBuilder
         var slice = Current();
         slice.Entries.Add(new KeyValuePair<string, byte[]>(key, serializer.Serialize(value)));
         slice.EntryDeltas.Add(null);
+        slice.EntryDeletes.Add(false);
         return this;
     }
 
@@ -164,6 +183,7 @@ public sealed class LatticeAtomicWriteBuilder
         slice.Predicate = ir;
         slice.Entries.Add(new KeyValuePair<string, byte[]>(key, serializer.Serialize(value)));
         slice.EntryDeltas.Add(null);
+        slice.EntryDeletes.Add(false);
         return this;
     }
 
@@ -189,7 +209,14 @@ public sealed class LatticeAtomicWriteBuilder
             var entryDeltas = slice.EntryDeltas.Exists(static d => d is not null)
                 ? slice.EntryDeltas
                 : null;
-            batches.Add(new LatticeTreeBatch(slice.TreeId, slice.Entries, slice.Predicate, entryDeltas));
+            // Forward the per-entry delete (tombstone) channel only when at
+            // least one entry on the slice is a Delete; an upsert-only slice
+            // forwards a null carry so the cross-tree write stays byte-identical
+            // to the pre-existing path.
+            var entryDeletes = slice.EntryDeletes.Exists(static d => d)
+                ? slice.EntryDeletes
+                : null;
+            batches.Add(new LatticeTreeBatch(slice.TreeId, slice.Entries, slice.Predicate, entryDeltas, entryDeletes));
         }
         return _factory.SetManyAtomicAsync(batches, _operationId, cancellationToken);
     }
@@ -203,6 +230,7 @@ public sealed class LatticeAtomicWriteBuilder
         public string TreeId { get; } = treeId;
         public List<KeyValuePair<string, byte[]>> Entries { get; } = [];
         public List<byte[]?> EntryDeltas { get; } = [];
+        public List<bool> EntryDeletes { get; } = [];
         public LatticePredicateNode? Predicate { get; set; }
     }
 }

@@ -144,6 +144,30 @@ public class CrossTreeAtomicWriteIntegrationTests
     }
 
     [Test]
+    public async Task Builder_carries_deletes_atomically_with_upserts()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var t1 = $"bd1-{suffix}";
+        var t2 = $"bd2-{suffix}";
+        var tree1 = _cluster.GrainFactory.GetGrain<ILattice>(t1);
+        var tree2 = _cluster.GrainFactory.GetGrain<ILattice>(t2);
+        // Seed keys that the cross-tree batch will retract.
+        await tree1.SetAsync("old:1", Bytes("o1"));
+        await tree2.SetAsync("old:2", Bytes("o2"));
+
+        var outcome = await _cluster.GrainFactory.BeginAtomicWrite($"xbd-{suffix}")
+            .ForTree(t1).Set("new:1", Bytes("n1")).Delete("old:1")
+            .ForTree(t2).Set("new:2", Bytes("n2")).Delete("old:2")
+            .CommitAsync();
+
+        Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(await tree1.GetAsync("new:1"), Is.EqualTo(Bytes("n1")));
+        Assert.That(await tree1.GetAsync("old:1"), Is.Null);
+        Assert.That(await tree2.GetAsync("new:2"), Is.EqualTo(Bytes("n2")));
+        Assert.That(await tree2.GetAsync("old:2"), Is.Null);
+    }
+
+    [Test]
     public async Task Builder_couples_staged_crdt_write_with_sibling_lww_and_commits_all()
     {
         var suffix = Guid.NewGuid().ToString("N");
