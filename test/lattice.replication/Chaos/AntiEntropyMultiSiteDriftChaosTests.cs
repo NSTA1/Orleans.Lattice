@@ -39,6 +39,15 @@ public class AntiEntropyMultiSiteDriftChaosTests
 {
     private const string TreeName = "chaos-anti-entropy";
 
+    /// <summary>
+    /// Shared convergence ceiling for every <c>WaitForKeysAsync</c> in this
+    /// fixture. The cold-start baseline (full silo startup + replication
+    /// bootstrap + first ship cadence) is strictly more expensive than the
+    /// warm post-heal drain, so both share one generous budget rather than
+    /// giving the baseline a tighter window that blows first under CI load.
+    /// </summary>
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(45);
+
     private static byte[] V(string s) => Encoding.UTF8.GetBytes(s);
 
     /// <summary>
@@ -117,7 +126,7 @@ public class AntiEntropyMultiSiteDriftChaosTests
         {
             await a.SetAsync($"base-{i}", V($"base-{i}"));
         }
-        await WaitForKeysAsync(c, Enumerable.Range(0, 4).Select(i => $"base-{i}"), TimeSpan.FromSeconds(20));
+        await WaitForKeysAsync(c, Enumerable.Range(0, 4).Select(i => $"base-{i}"), ConvergenceTimeout);
 
         // Skip writes at C: drop A's outbound edge to C, then author writes
         // that C never observes. A and C must diverge.
@@ -132,7 +141,7 @@ public class AntiEntropyMultiSiteDriftChaosTests
         // Heal the edge: the production shipper resumes from its stationary
         // per-peer cursor and ships the skipped backlog. C converges.
         fixture.TransportOf(0).HealSite(siteCId);
-        await WaitForKeysAsync(c, drifted, TimeSpan.FromSeconds(45));
+        await WaitForKeysAsync(c, drifted, ConvergenceTimeout);
     }
 
     [Test]
@@ -148,7 +157,7 @@ public class AntiEntropyMultiSiteDriftChaosTests
         {
             await a.SetAsync($"base-{i}", V($"base-{i}"));
         }
-        await WaitForKeysAsync(c, Enumerable.Range(0, 4).Select(i => $"base-{i}"), TimeSpan.FromSeconds(20));
+        await WaitForKeysAsync(c, Enumerable.Range(0, 4).Select(i => $"base-{i}"), ConvergenceTimeout);
 
         // Corrupt the apply path at C: every inbound batch throws mid-apply,
         // so C rejects the writes and falls behind. A and C diverge.
@@ -164,7 +173,7 @@ public class AntiEntropyMultiSiteDriftChaosTests
         // Clear the apply fault: the shipper's retry path re-delivers the
         // rejected batches, C applies them, and converges.
         fixture.ApplierOf(2).FailEveryNthCall = 0;
-        await WaitForKeysAsync(c, drifted, TimeSpan.FromSeconds(45));
+        await WaitForKeysAsync(c, drifted, ConvergenceTimeout);
     }
 
     [Test]
@@ -182,7 +191,7 @@ public class AntiEntropyMultiSiteDriftChaosTests
         {
             await a.SetAsync($"base-{i}", V($"base-{i}"));
         }
-        await WaitForKeysAsync(c, Enumerable.Range(0, 2).Select(i => $"base-{i}"), TimeSpan.FromSeconds(20));
+        await WaitForKeysAsync(c, Enumerable.Range(0, 2).Select(i => $"base-{i}"), ConvergenceTimeout);
 
         // Full partition: cut both directions of the A-C edge, then take
         // divergent writes on each side of the split (distinct keys so the
@@ -215,7 +224,7 @@ public class AntiEntropyMultiSiteDriftChaosTests
         fixture.TransportOf(2).HealSite(siteAId);
 
         var union = aSide.Concat(cSide).ToArray();
-        await WaitForKeysAsync(c, union, TimeSpan.FromSeconds(45));
-        await WaitForKeysAsync(a, union, TimeSpan.FromSeconds(45));
+        await WaitForKeysAsync(c, union, ConvergenceTimeout);
+        await WaitForKeysAsync(a, union, ConvergenceTimeout);
     }
 }

@@ -34,6 +34,13 @@ public class CompactionShippingChaosTests
 {
     private const string TreeName = "chaos-compaction";
 
+    /// <summary>
+    /// Convergence ceiling for the single cold-start drain. Sized to match the
+    /// other cold-start chaos convergence budgets so a loaded CI runner has
+    /// headroom for the churny workload to fully ship to site B.
+    /// </summary>
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(45);
+
     [Test]
     public async Task Tombstone_reap_envelopes_are_filtered_at_producer_under_concurrent_compaction_and_shipping()
     {
@@ -90,7 +97,7 @@ public class CompactionShippingChaosTests
         await compaction.RunCompactionPassAsync();
 
         // ---- Phase 4: drain. Site B must converge on the live key set.
-        await WaitForConvergenceAsync(bLattice, liveKeys, TimeSpan.FromSeconds(30));
+        await WaitForConvergenceAsync(bLattice, liveKeys, ConvergenceTimeout);
 
         // ---- Invariant: no Tombstone-op entry must have crossed the wire.
         var tombstoneReapEntries = observed

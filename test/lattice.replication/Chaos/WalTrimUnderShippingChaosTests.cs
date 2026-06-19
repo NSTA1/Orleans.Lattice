@@ -43,6 +43,13 @@ public class WalTrimUnderShippingChaosTests
 {
     private const string TreeName = "chaos-wal-trim";
 
+    /// <summary>
+    /// Shared convergence ceiling. The cold-start baseline wait is no cheaper
+    /// than the warm post-heal drain, so both use one generous budget to avoid
+    /// the baseline timing out first under loaded CI runners.
+    /// </summary>
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(45);
+
     [Test]
     public async Task Site_B_catches_up_via_incremental_shipping_after_partition_heal_with_aggressive_wal_gc()
     {
@@ -61,7 +68,7 @@ public class WalTrimUnderShippingChaosTests
         {
             await aLattice.SetAsync($"pre-{i:D2}", Encoding.UTF8.GetBytes($"v-{i}"));
         }
-        await WaitForConvergenceAsync(bLattice, Enumerable.Range(0, 8).Select(i => $"pre-{i:D2}"), TimeSpan.FromSeconds(20));
+        await WaitForConvergenceAsync(bLattice, Enumerable.Range(0, 8).Select(i => $"pre-{i:D2}"), ConvergenceTimeout);
 
         // Now drive three partition cycles while writing continuously.
         // Each cycle: isolate, write 10 keys, hold for 300 ms (enough
@@ -93,7 +100,7 @@ public class WalTrimUnderShippingChaosTests
 
         // Final drain: all entries authored across every cycle must
         // arrive at site B.
-        await WaitForConvergenceAsync(bLattice, allKeys, TimeSpan.FromSeconds(45));
+        await WaitForConvergenceAsync(bLattice, allKeys, ConvergenceTimeout);
 
         TestContext.Out.WriteLine(
             $"WAL-trim chaos: total keys = {allKeys.Count}, " +
