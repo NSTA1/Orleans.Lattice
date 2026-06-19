@@ -73,7 +73,7 @@ public static class LatticeAtomicBatchContext
     {
         var previous = Current;
         Current = batch;
-        return new Scope(previous, CurrentIndexMap, restoreMap: false, CurrentDeltaMap, restoreDeltaMap: false);
+        return new Scope(previous, CurrentIndexMap, restoreMap: false, CurrentDeltaMap, restoreDeltaMap: false, CurrentDeleteSet, restoreDeleteSet: false);
     }
 
     /// <summary>
@@ -125,7 +125,7 @@ public static class LatticeAtomicBatchContext
         var previousMap = CurrentIndexMap;
         Current = batch;
         CurrentIndexMap = indexMap;
-        return new Scope(previousBatch, previousMap, restoreMap: true, CurrentDeltaMap, restoreDeltaMap: false);
+        return new Scope(previousBatch, previousMap, restoreMap: true, CurrentDeltaMap, restoreDeltaMap: false, CurrentDeleteSet, restoreDeleteSet: false);
     }
 
     /// <summary>
@@ -180,7 +180,64 @@ public static class LatticeAtomicBatchContext
         Current = batch;
         CurrentIndexMap = indexMap;
         CurrentDeltaMap = deltaMap;
-        return new Scope(previousBatch, previousMap, restoreMap: true, previousDeltaMap, restoreDeltaMap: true);
+        return new Scope(previousBatch, previousMap, restoreMap: true, previousDeltaMap, restoreDeltaMap: true, CurrentDeleteSet, restoreDeleteSet: false);
+    }
+
+    /// <summary>
+    /// Gets or sets the optional set of keys that the in-flight atomic-write
+    /// batch applies as <b>tombstone (delete)</b> writes rather than value
+    /// (set) writes, on the ambient <see cref="RequestContext"/>. The set lets
+    /// a single atomic saga carry a mixed batch of upserts and deletes whose
+    /// visibility flips (or rolls back) on the same per-shard terminal: the
+    /// leaf publish helpers look each committed entry's key up in this set and,
+    /// when present, stage a prepared tombstone instead of a value write.
+    /// Setting <see langword="null"/> removes the key, matching the
+    /// "no deletes" default under which every entry is staged as a value set.
+    /// </summary>
+    public static IReadOnlySet<string>? CurrentDeleteSet
+    {
+        get => RequestContext.Get(LatticeEventConstants.AtomicBatchDeleteSetRequestContextKey)
+            as IReadOnlySet<string>;
+        set
+        {
+            if (value is null)
+            {
+                RequestContext.Remove(LatticeEventConstants.AtomicBatchDeleteSetRequestContextKey);
+            }
+            else
+            {
+                RequestContext.Set(
+                    LatticeEventConstants.AtomicBatchDeleteSetRequestContextKey,
+                    value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets <see cref="Current"/>, <see cref="CurrentIndexMap"/>,
+    /// <see cref="CurrentDeltaMap"/>, AND <see cref="CurrentDeleteSet"/> for the
+    /// lifetime of the returned scope. Restores all four prior values on
+    /// <see cref="IDisposable.Dispose"/>. Used by the saga coordinator to stamp
+    /// the per-entry delete set alongside the <c>(Size, BaseIndex)</c> pair, the
+    /// <c>key -> globalIndex</c> map, and the per-entry author-delta map so the
+    /// leaf commit path can stage a mixed batch of upserts and deletes that flip
+    /// atomically on a single terminal.
+    /// </summary>
+    public static IDisposable With(
+        (int Size, int Index)? batch,
+        IReadOnlyDictionary<string, int>? indexMap,
+        IReadOnlyDictionary<string, byte[]>? deltaMap,
+        IReadOnlySet<string>? deleteSet)
+    {
+        var previousBatch = Current;
+        var previousMap = CurrentIndexMap;
+        var previousDeltaMap = CurrentDeltaMap;
+        var previousDeleteSet = CurrentDeleteSet;
+        Current = batch;
+        CurrentIndexMap = indexMap;
+        CurrentDeltaMap = deltaMap;
+        CurrentDeleteSet = deleteSet;
+        return new Scope(previousBatch, previousMap, restoreMap: true, previousDeltaMap, restoreDeltaMap: true, previousDeleteSet, restoreDeleteSet: true);
     }
 
     private sealed class Scope(
@@ -188,7 +245,9 @@ public static class LatticeAtomicBatchContext
         IReadOnlyDictionary<string, int>? previousMap,
         bool restoreMap,
         IReadOnlyDictionary<string, byte[]>? previousDeltaMap,
-        bool restoreDeltaMap) : IDisposable
+        bool restoreDeltaMap,
+        IReadOnlySet<string>? previousDeleteSet,
+        bool restoreDeleteSet) : IDisposable
     {
         private bool _disposed;
 
@@ -208,6 +267,10 @@ public static class LatticeAtomicBatchContext
             if (restoreDeltaMap)
             {
                 CurrentDeltaMap = previousDeltaMap;
+            }
+            if (restoreDeleteSet)
+            {
+                CurrentDeleteSet = previousDeleteSet;
             }
         }
     }

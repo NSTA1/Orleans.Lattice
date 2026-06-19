@@ -227,6 +227,7 @@ Callers never see those exceptions.
 | `SetManyAsync` | `Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)` | Writes multiple entries in parallel. **Not atomic** - partial failure leaves the batch half-applied with no rollback. Use `SetManyAtomicAsync` when all-or-nothing semantics are required. Per-leaf batches collapse their per-key WAL grain hops into a single batched dispatch (see [WAL - Batched leaf write path](wal.md#batched-leaf-write-path)). |
 | `SetManyAtomicAsync` | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries)` | Atomically writes multiple entries: on success every key holds its new value, on any failure every key holds its pre-saga value. Concurrent readers observe the saga atomically tree-wide and across every cluster the tree replicates to. Throws `ArgumentException` on duplicate keys or null values; throws `InvalidOperationException` when compensation completes for a failed write. After completion, saga state is retained for `LatticeOptions.AtomicWriteRetention` (default 48 h). See [Atomic Writes](atomic-writes.md). |
 | `SetManyAtomicAsync` (idempotency key) | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId)` | Caller-supplied idempotency-key overload. Re-submitting the same `operationId` re-attaches to the original saga and inherits its outcome, turning a transport-level failure into a safe client retry. The `operationId` is bound to the exact sorted key set of the first call; mismatched key sets throw `InvalidOperationException`. Reordering keys or changing values is allowed. `operationId` must be non-empty and must not contain `'/'`; otherwise throws `ArgumentException`. See [Atomic Writes - Caller-supplied idempotency keys](atomic-writes.md#caller-supplied-idempotency-keys). |
+| `SetManyAtomicAsync` (mixed set + delete) | `Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> upserts, IReadOnlyList<string> deletes, string operationId)` | Mixed atomic batch: applies the `upserts` and the `deletes` all-or-nothing in one visibility flip, so no reader observes a partial set/delete. Each delete is staged as a tombstone that becomes visible on commit and is dropped on abort, riding the same saga terminal as the upserts. The defining use is a re-key retraction (move a row from view key A to view key B by upserting B and deleting A atomically). The fingerprinted key set is the union of upsert and delete keys; a key may not appear in both, and either collection may be empty. Same idempotency and retention semantics as the keyed overload. See [Atomic Writes](atomic-writes.md). |
 | `DeleteRangeAsync` | `Task<int> DeleteRangeAsync(string startInclusive, string endExclusive)` | Tombstones every live key in [`startInclusive`, `endExclusive`). Returns the total count tombstoned. For resumable or crash-safe range deletes, use [`OpenDeleteRangeCursorAsync`](#stateful-cursors). |
 | `CountAsync` | `Task<int> CountAsync()` | Returns the exact live key count across all shards under the topology snapshot observed during the call. A concurrent `SetManyAtomicAsync` is observed atomically (included or excluded as a unit). Bounded by `LatticeOptions.MaxScanRetries` (default 3); throws `InvalidOperationException` on retry exhaustion. |
 | `CountPerShardAsync` | `Task<IReadOnlyList<int>> CountPerShardAsync()` | Returns the per-shard live-key count, indexed by shard. Same consistency guarantees as `CountAsync`. Useful for diagnostics and load-balancing analysis. |
@@ -1114,6 +1115,7 @@ commits them as one cross-tree saga:
 | `Set` (staged CRDT) | `LatticeAtomicWriteBuilder Set(LatticeStagedCrdtWrite staged)` |
 | `SetWhere<T>` | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate, ILatticeSerializer<T> serializer)` |
 | `SetWhere<T>` (default serializer) | `LatticeAtomicWriteBuilder SetWhere<T>(string key, T value, Expression<Func<T, bool>> predicate)` |
+| `Delete` | `LatticeAtomicWriteBuilder Delete(string key)` |
 | `CommitAsync` | `Task<CrossTreeAtomicWriteOutcome> CommitAsync(CancellationToken = default)` |
 
 `CommitAsync` (and `SetManyAtomicAsync`) returns
@@ -1123,11 +1125,20 @@ when a guard failed and nothing committed on any tree. It throws
 `InvalidOperationException` if a write fails (after the saga compensates) or if
 the same `operationId` is re-submitted with a different tree-set or key-set.
 Supporting public types: `LatticeTreeBatch` (per-tree slice: `TreeId`,
-`Entries`, optional `Predicate`), the `CrossTreeAtomicWriteOutcome` enum
+`Entries`, optional `Predicate`, optional `EntryDeltas`, optional
+`EntryDeletes`), the `CrossTreeAtomicWriteOutcome` enum
 (`Committed`, `PreconditionFailed`), and `LatticeStagedCrdtWrite` (the
 client-side staging token a CRDT accessor's `Stage*` method returns; see
 [CRDT value-surface accessors](#crdt-value-surface-accessors)). See
 [Atomic Writes - Cross-tree atomic writes](atomic-writes.md#cross-tree-multi-tree-atomic-writes).
+
+The `Delete(key)` builder method stages a retraction (tombstone) delete that
+rides the all-or-nothing cross-tree batch alongside any sibling upserts, so a
+re-key projection (a row moving from one view key to another) flips the upsert
+at the new key and the delete at the old key as a single atomic visibility
+change. On `LatticeTreeBatch` the optional `EntryDeletes` list (when non-null)
+is aligned 1:1 with `Entries`: a `true` slot marks that entry a tombstone
+delete; the whole list is `null` for an upsert-only slice.
 
 The `Set(LatticeStagedCrdtWrite)` overload couples a typed CRDT mutation
 (prepared by a CRDT accessor's `Stage*` method) into the cross-tree saga

@@ -228,7 +228,7 @@ internal sealed class LatticeCrossTreeTxGrain(
             var p = participants[i];
             var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{p.TreeId}/{OperationId}");
             voteTasks[i] = saga.PrepareForCoordinatorAsync(
-                p.TreeId, p.Entries, p.Predicate, OperationId, participantTreeIds, p.EntryDeltas);
+                p.TreeId, p.Entries, p.Predicate, OperationId, participantTreeIds, p.EntryDeltas, p.EntryDeletes);
         }
 
         CrossTreePrepareVote[] votes;
@@ -366,16 +366,23 @@ internal sealed class LatticeCrossTreeTxGrain(
             if (batch.Entries.Count == 0) continue;
 
             var entries = new List<KeyValuePair<string, byte[]>>(batch.Entries.Count);
-            foreach (var (key, value) in batch.Entries)
+            for (var i = 0; i < batch.Entries.Count; i++)
             {
+                var (key, value) = batch.Entries[i];
+                var isDelete = batch.EntryDeletes is { } d && i < d.Count && d[i];
                 if (key is null)
                     throw new ArgumentException(
                         $"Cross-tree batch for tree '{batch.TreeId}' contains a null key.", nameof(batches));
-                if (value is null)
+                if (value is null && !isDelete)
                     throw new ArgumentException(
                         $"Cross-tree batch for tree '{batch.TreeId}' contains a null value for key '{key}'.",
                         nameof(batches));
-                entries.Add(new KeyValuePair<string, byte[]>(key, (byte[])value.Clone()));
+                // A delete entry carries an empty (non-null) value buffer so it
+                // rides the same prepared-write fan-out as the upserts; the
+                // explicit per-entry delete channel (not value-nullness) is what
+                // turns it into a tombstone at the leaf.
+                var cloned = value is null ? Array.Empty<byte>() : (byte[])value.Clone();
+                entries.Add(new KeyValuePair<string, byte[]>(key, cloned));
             }
 
             // Carry the optional per-entry author-delta list (flag-CRDT
@@ -395,12 +402,27 @@ internal sealed class LatticeCrossTreeTxGrain(
                 }
             }
 
+            // Carry the optional per-entry delete (tombstone) channel verbatim,
+            // aligned 1:1 with the cloned entries. Defensively copied; null when
+            // the batch had no deletes (every plain upsert-only batch), which
+            // keeps a value-only cross-tree write byte-identical.
+            List<bool>? entryDeletes = null;
+            if (batch.EntryDeletes is { } sourceDeletes && sourceDeletes.Exists(static d => d))
+            {
+                entryDeletes = new List<bool>(entries.Count);
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    entryDeletes.Add(i < sourceDeletes.Count && sourceDeletes[i]);
+                }
+            }
+
             result.Add(new CrossTreeParticipant
             {
                 TreeId = batch.TreeId,
                 Entries = entries,
                 Predicate = batch.Predicate,
                 EntryDeltas = entryDeltas,
+                EntryDeletes = entryDeletes,
             });
         }
 

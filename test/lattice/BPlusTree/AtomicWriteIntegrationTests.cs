@@ -246,4 +246,94 @@ public class AtomicWriteIntegrationTests
         Assert.That(await tree.GetAsync<int>("x"), Is.EqualTo(42));
         Assert.That(await tree.GetAsync<int>("y"), Is.EqualTo(7));
     }
+
+    // --- Mixed atomic set + delete (re-key retraction primitive) ---
+
+    [Test]
+    public async Task SetManyAtomicAsync_mixed_applies_upserts_and_deletes_together()
+    {
+        var treeId = $"mixed-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        // Seed two keys that the mixed batch will delete.
+        await tree.SetAsync("old-1", Bytes("o1"));
+        await tree.SetAsync("old-2", Bytes("o2"));
+
+        await tree.SetManyAtomicAsync(
+            Entries(("new-1", "n1"), ("new-2", "n2")),
+            new[] { "old-1", "old-2" },
+            $"op-{Guid.NewGuid():N}");
+
+        Assert.That(await tree.GetAsync("new-1"), Is.EqualTo(Bytes("n1")));
+        Assert.That(await tree.GetAsync("new-2"), Is.EqualTo(Bytes("n2")));
+        Assert.That(await tree.GetAsync("old-1"), Is.Null);
+        Assert.That(await tree.GetAsync("old-2"), Is.Null);
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_mixed_delete_only_batch_removes_keys()
+    {
+        var treeId = $"mixed-delonly-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        await tree.SetAsync("a", Bytes("A"));
+        await tree.SetAsync("b", Bytes("B"));
+
+        await tree.SetManyAtomicAsync(
+            new List<KeyValuePair<string, byte[]>>(),
+            new[] { "a", "b" },
+            $"op-{Guid.NewGuid():N}");
+
+        Assert.That(await tree.GetAsync("a"), Is.Null);
+        Assert.That(await tree.GetAsync("b"), Is.Null);
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_mixed_empty_batch_is_noop()
+    {
+        var treeId = $"mixed-empty-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        await tree.SetManyAtomicAsync(
+            new List<KeyValuePair<string, byte[]>>(),
+            Array.Empty<string>(),
+            $"op-{Guid.NewGuid():N}");
+
+        Assert.That(await tree.CountAsync(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task SetManyAtomicAsync_mixed_is_idempotent_on_operationId_replay()
+    {
+        var treeId = $"mixed-idem-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        await tree.SetAsync("old", Bytes("o"));
+        var operationId = $"op-{Guid.NewGuid():N}";
+
+        await tree.SetManyAtomicAsync(Entries(("new", "n")), new[] { "old" }, operationId);
+        // Replay with the same operation id and key set re-attaches to the
+        // completed saga and must not throw or double-apply.
+        await tree.SetManyAtomicAsync(Entries(("new", "n")), new[] { "old" }, operationId);
+
+        Assert.That(await tree.GetAsync("new"), Is.EqualTo(Bytes("n")));
+        Assert.That(await tree.GetAsync("old"), Is.Null);
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_mixed_throws_on_key_in_both_upserts_and_deletes()
+    {
+        var treeId = $"mixed-dup-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        Assert.ThrowsAsync<ArgumentException>(() =>
+            tree.SetManyAtomicAsync(Entries(("k", "v")), new[] { "k" }, $"op-{Guid.NewGuid():N}"));
+    }
+
+    [Test]
+    public void SetManyAtomicAsync_mixed_throws_on_null_deletes()
+    {
+        var treeId = $"mixed-nulldel-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+
+        Assert.ThrowsAsync<ArgumentNullException>(() =>
+            tree.SetManyAtomicAsync(Entries(("k", "v")), null!, $"op-{Guid.NewGuid():N}"));
+    }
 }

@@ -70,6 +70,37 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal void MarkDigestDirty() => _digestDirty = true;
 
+    /// <summary>
+    /// Lazily-seeded, per-activation strictly-increasing stamp applied to
+    /// every <see cref="ChildDigestSnapshot"/> this leaf hands to its
+    /// parent (push) or returns on a pull. The parent's
+    /// <c>ApplyChildSnapshotAsync</c> drops any snapshot whose
+    /// <see cref="ChildDigestSnapshot.PublishSequence"/> is strictly lower
+    /// than the one already folded for this child, so a late coalesced
+    /// pre-split (pre-trim) publish that races the split's post-trim inline
+    /// publish - the <c>[AlwaysInterleave]</c> mutation surface lets the two
+    /// interleave and arrive out of order - can never overwrite the fresher
+    /// count for a child the parent still owns. Seeded from
+    /// <see cref="DateTime.UtcNow"/> ticks (never zero) so the stamp stays
+    /// monotonic across reactivations without persisting a counter; the
+    /// digest is staleness-tolerant, so a rare wall-clock regression merely
+    /// defers convergence to the next mutation's republish.
+    /// </summary>
+    private long _digestPublishSeq;
+
+    /// <summary>
+    /// Returns the next strictly-increasing publish sequence for this
+    /// activation, seeding the counter from the wall clock on first use.
+    /// </summary>
+    private long NextDigestPublishSequence()
+    {
+        if (_digestPublishSeq == 0)
+        {
+            _digestPublishSeq = DateTime.UtcNow.Ticks;
+        }
+        return ++_digestPublishSeq;
+    }
+
     /// <inheritdoc />
     public async Task SetParentAsync(GrainId? parentId)
     {
@@ -139,6 +170,7 @@ internal sealed partial class BPlusLeafGrain
             Hash = (byte[])state.State.ProjectionHash!.Clone(),
             EntryCount = Cache.Count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
+            PublishSequence = NextDigestPublishSequence(),
         });
     }
 
@@ -439,6 +471,7 @@ internal sealed partial class BPlusLeafGrain
             Hash = (byte[])state.State.ProjectionHash!.Clone(),
             EntryCount = Cache.Count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
+            PublishSequence = NextDigestPublishSequence(),
         };
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
         await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);

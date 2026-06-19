@@ -168,6 +168,23 @@ public static class LatticeEventConstants
     internal const string AtomicBatchDeltaMapRequestContextKey = "ol.batch.delta";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry an optional
+    /// per-saga set of keys that the in-flight atomic-write batch applies as
+    /// <b>tombstone (delete)</b> writes rather than value (set) writes,
+    /// alongside the <see cref="AtomicBatchRequestContextKey"/>
+    /// <c>(Size, BaseIndex)</c> pair. The set lets a single atomic-write saga
+    /// carry a mixed batch of upserts and deletes that flip visible (or roll
+    /// back) on the same per-shard terminal: the leaf-side batched commit path
+    /// looks each entry's key up in this set and, when present, stages a
+    /// prepared tombstone (<see cref="MutationKind.Delete"/>) instead of a
+    /// prepared value write. Absent on non-saga writes and on saga writes whose
+    /// entries are all upserts (the common case), under which every entry is
+    /// staged as a value set exactly as before. Internal - set through
+    /// <see cref="LatticeAtomicBatchContext"/>.
+    /// </summary>
+    internal const string AtomicBatchDeleteSetRequestContextKey = "ol.batch.del";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the saga's
     /// authoritative touched-shard count from the
     /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator

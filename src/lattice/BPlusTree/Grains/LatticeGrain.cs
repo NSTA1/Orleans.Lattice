@@ -1444,6 +1444,54 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
+    /// Mixed atomic bulk write: unions <paramref name="upserts"/> and
+    /// <paramref name="deletes"/> into a single atomic batch carrying a
+    /// parallel per-entry delete (tombstone) channel, then dispatches to the
+    /// saga grain keyed by <c>{TreeId}/{operationId}</c>. The delete keys ride
+    /// the same saga terminal as the upserts, so a re-key retraction (upsert at
+    /// the new key, delete at the old key) flips atomically.
+    /// </summary>
+    public async Task SetManyAtomicAsync(
+        List<KeyValuePair<string, byte[]>> upserts,
+        IReadOnlyList<string> deletes,
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ThrowIfProtectedView();
+        ThrowIfShuttingDown();
+        ArgumentNullException.ThrowIfNull(upserts);
+        ArgumentNullException.ThrowIfNull(deletes);
+        ValidateOperationId(operationId);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (upserts.Count == 0 && deletes.Count == 0) return;
+
+        // Union the upserts and deletes into a single batch with a parallel
+        // per-entry delete flag. Upserts keep their flag false; deletes carry
+        // an empty (non-null) value buffer and a true flag so the leaf stages a
+        // tombstone. When there are no deletes the delete channel stays null,
+        // keeping the dispatch byte-identical to the upsert-only overload.
+        var entries = new List<KeyValuePair<string, byte[]>>(upserts.Count + deletes.Count);
+        entries.AddRange(upserts);
+        List<bool>? entryDeletes = null;
+        if (deletes.Count > 0)
+        {
+            entryDeletes = new List<bool>(entries.Capacity);
+            for (var i = 0; i < upserts.Count; i++) entryDeletes.Add(false);
+            foreach (var key in deletes)
+            {
+                entries.Add(new KeyValuePair<string, byte[]>(key, Array.Empty<byte>()));
+                entryDeletes.Add(true);
+            }
+        }
+
+        var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
+        await ShardActivationRetry.RunAsync(
+            () => saga.ExecuteAsync(TreeId, entries, entryDeletes),
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Guarded atomic multi-key write. Activates a dedicated
     /// <see cref="IAtomicWriteGrain"/> and awaits its guarded saga, which
     /// commits all-or-nothing only if every key's pre-saga value satisfies

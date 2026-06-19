@@ -34,9 +34,18 @@ internal sealed record ViewCrossTreeReadiness
 
     /// <summary>
     /// This view's slice: the coalesced upsert entries the cross-tree batch
-    /// would flip into the view tree. Retraction deletes are not carried here -
-    /// the cross-tree atomic write only sets (mirroring the single-tree atomic
-    /// path), so the maintainer applies its own deletes after the joint flip.
+    /// flips into the view tree. The retraction deletes ride alongside them in
+    /// <see cref="Deletes"/> so the joint flip carries the whole mixed slice
+    /// atomically.
     /// </summary>
     [Id(4)] public required List<KeyValuePair<string, byte[]>> Upserts { get; init; }
+
+    /// <summary>
+    /// This view's retraction (tombstone) deletes for the cross-tree batch.
+    /// Carried inside the joint flip alongside <see cref="Upserts"/> so a re-key
+    /// projection flips the upsert at the new view key and the delete at the old
+    /// view key as one atomic visibility change. Empty when the slice has no
+    /// retractions.
+    /// </summary>
+    [Id(5)] public IReadOnlyList<string> Deletes { get; init; } = [];
 }

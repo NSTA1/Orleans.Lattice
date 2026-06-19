@@ -323,4 +323,35 @@ internal sealed class AtomicWriteState
     /// </para>
     /// </summary>
     [Id(21)] public List<byte[]?>? EntryDeltas { get; set; }
+
+    /// <summary>
+    /// Optional per-entry delete (tombstone) channel aligned 1:1 with
+    /// <see cref="Entries"/>: <c>EntryDeletes[i]</c> is <see langword="true"/>
+    /// when <c>Entries[i]</c> is a retraction delete that rides the
+    /// all-or-nothing batch as a prepared tombstone
+    /// (<see cref="MutationKind.Delete"/>) rather than a prepared value write,
+    /// or <see langword="false"/> for an upsert. The whole list is
+    /// <see langword="null"/> when every entry is an upsert (the common case,
+    /// and the only case the plain <c>SetManyAtomicAsync</c> entry points
+    /// produce). A delete entry's value buffer is ignored - the leaf builds a
+    /// tombstone <see cref="Primitives.LwwValue{T}"/> rather than reading the
+    /// value - so a delete slot may carry an empty buffer.
+    /// <para>
+    /// Captured once on the first prepare and persisted so a reminder-driven
+    /// replay reuses it verbatim; the saga stamps the delete set onto the
+    /// ambient <see cref="LatticeAtomicBatchContext"/> for every batched
+    /// <c>SetManyAsync</c> dispatch during
+    /// <see cref="AtomicWritePhase.Execute"/>. Compensation needs no
+    /// byte-inverse: a delete rides a prepared write invisible to readers until
+    /// the saga's terminal mark surfaces it, so an aborting saga's
+    /// <c>TxAbort</c> terminal drops the staged tombstone exactly as it drops a
+    /// staged value write - the key's pre-saga value is never disturbed.
+    /// </para>
+    /// <para>
+    /// Wire-compatible: a missing field on legacy persisted state decodes to
+    /// <see langword="null"/>, in which case every entry is staged as a value
+    /// upsert exactly as before this field existed.
+    /// </para>
+    /// </summary>
+    [Id(22)] public List<bool>? EntryDeletes { get; set; }
 }
