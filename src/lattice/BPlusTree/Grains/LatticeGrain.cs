@@ -2066,7 +2066,24 @@ internal sealed partial class LatticeGrain(
         if (Options.TombstoneGracePeriod == Timeout.InfiniteTimeSpan) return;
 
         var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
-        await compaction.EnsureReminderAsync();
+        try
+        {
+            await compaction.EnsureReminderAsync();
+        }
+        catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
+        {
+            // Registering the tombstone-compaction keepalive reminder is a
+            // best-effort background-GC bootstrap that runs on the first write to
+            // a tree. The Orleans reminder service initialises asynchronously
+            // after the silo reaches Active, so a write in that startup window
+            // throws a transient "still initializing" - which must never fail the
+            // user's write. Defer: leave _compactionEnsured false so a later write
+            // (once the service is up, within seconds of silo start) registers it.
+            logger.LogDebug(
+                "Deferred tombstone-compaction reminder registration for tree {TreeId}: reminder service still initializing; will retry on a subsequent write.",
+                TreeId);
+            return;
+        }
         _compactionEnsured = true;
     }
 
@@ -2087,7 +2104,22 @@ internal sealed partial class LatticeGrain(
         }
 
         var monitor = grainFactory.GetGrain<IHotShardMonitorGrain>(TreeId);
-        await monitor.EnsureRunningAsync();
+        try
+        {
+            await monitor.EnsureRunningAsync();
+        }
+        catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
+        {
+            // Same best-effort first-write bootstrap as the compaction reminder:
+            // the hot-shard monitor registers its keepalive reminder, which can
+            // race the reminder service's async startup init. Defer rather than
+            // fail the user's write; a later write re-attempts once the service
+            // is initialised.
+            logger.LogDebug(
+                "Deferred hot-shard-monitor activation for tree {TreeId}: reminder service still initializing; will retry on a subsequent write.",
+                TreeId);
+            return;
+        }
         _monitorEnsured = true;
     }
 
