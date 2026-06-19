@@ -127,18 +127,27 @@ public class MultiSiloRestartWalDurabilityRegressionTests
             "Test cluster must have at least one SecondarySilo to restart.");
         await _cluster.RestartSiloAsync(secondary!);
 
-        // Allow Orleans a moment to settle: WalShardGrain / leaf
-        // activations whose home silo was the secondary need to
-        // reactivate on the primary before the read fan-out can land.
-        await Task.Delay(TimeSpan.FromSeconds(2));
+        // Allow Orleans time to settle: WalShardGrain / leaf activations
+        // whose home silo was the secondary need to reactivate on the
+        // primary before the read fan-out can land. A fixed sleep is not
+        // enough on a slow/contended CI runner - reactivation can take
+        // longer than any single hard-coded delay, and the first read
+        // then surfaces a transient ShardActivationTimeoutException that
+        // has nothing to do with durability. Instead we poll the reads on
+        // a generous deadline, tolerating only the transient reactivation
+        // exceptions (a genuinely lost key returns null, which is NOT
+        // retried and still fails the durability assertions below).
+        var settleDeadline = TimeSpan.FromSeconds(60);
 
         // Post-restart invariants. Universe must be intact.
-        var postCount = await tree.CountAsync();
+        var postCount = await ReadWithReactivationRetryAsync(
+            () => tree.CountAsync(), settleDeadline);
         var postMissing = new List<string>();
         var postBadValue = new List<string>();
         for (int i = 0; i < UniverseSize; i++)
         {
-            var v = await tree.GetAsync(KeyOf(i));
+            var v = await ReadWithReactivationRetryAsync(
+                () => tree.GetAsync(KeyOf(i)), settleDeadline);
             if (v is null)
             {
                 postMissing.Add(KeyOf(i));
@@ -167,6 +176,63 @@ public class MultiSiloRestartWalDurabilityRegressionTests
                 "Post-restart CountAsync must match the seeded universe size " +
                 "- there were no writers, so the count cannot have moved.");
         });
+    }
+
+    /// <summary>
+    /// Polls a post-restart read on a bounded deadline, swallowing only
+    /// the transient exceptions a silo reactivation legitimately raises
+    /// while shards are still coming up on the surviving silo. A read
+    /// that returns a value (including <c>null</c> for a genuinely absent
+    /// key) is returned immediately so the durability assertions still
+    /// observe real key loss; only throwing reads are retried. Once the
+    /// deadline elapses the last transient exception is rethrown so a
+    /// permanently-wedged reactivation still fails the test loudly.
+    /// </summary>
+    private static async Task<T> ReadWithReactivationRetryAsync<T>(
+        Func<Task<T>> read, TimeSpan deadline)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                return await read();
+            }
+            catch (Exception ex) when (IsTransientReactivationException(ex))
+            {
+                if (sw.Elapsed >= deadline)
+                {
+                    throw;
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
+            }
+        }
+    }
+
+    /// <summary>
+    /// True for the transient exceptions a read may observe while the
+    /// restarted silo's shards are still reactivating: the lattice
+    /// activation-readiness timeout and Orleans' own transient
+    /// messaging/placement failures. Genuine durability defects surface
+    /// as a <c>null</c> read result, not as one of these exceptions.
+    /// </summary>
+    private static bool IsTransientReactivationException(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException!)
+        {
+            if (e is ShardActivationTimeoutException or TimeoutException)
+            {
+                return true;
+            }
+            var typeName = e.GetType().Name;
+            if (typeName is "OrleansMessageRejectionException"
+                or "SiloUnavailableException"
+                or "OrleansException")
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator

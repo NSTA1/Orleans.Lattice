@@ -1470,19 +1470,34 @@ internal sealed class WalShardGrain(
                 }
             }
 
-            // If a predecessor already failed and faulted us, our acks
-            // were faulted in HandleFailureAsync; do not try to satisfy
-            // them with a result. Our provider call may have committed
-            // against an orphaned offset window - that is the price of
-            // multi-batch concurrency and is reconciled by the post-
-            // failure resync against GetHighestOffsetAsync.
-            if (Volatile.Read(ref _stickyFailure) is null)
+            // Apply our acks unless a failure handler explicitly faulted
+            // this slot. We deliberately key off the per-slot
+            // FaultedByFailure flag rather than the global _stickyFailure
+            // latch: a slot ordered AFTER the failed window had its acks
+            // faulted by HandleFlushFailureAsync (its provider call may
+            // have committed against an orphaned offset window that the
+            // post-failure resync rolls back), so it must skip. But a
+            // slot ordered BEFORE the failed window committed durably and
+            // is NOT touched by any failure handler - it must still honour
+            // its acks even though a *later* flush latched the sticky
+            // failure in the meantime. Keying off the global latch here
+            // would strand those predecessor acks (nobody results or
+            // faults them) and wedge their callers forever.
+            bool faultedByFailure;
+            lock (_stateGate)
+            {
+                faultedByFailure = slot.FaultedByFailure;
+                if (!faultedByFailure)
+                {
+                    for (var i = 0; i < slot.Acks.Count; i++)
+                    {
+                        slot.Acks[i].TrySetResult(offsets[i]);
+                    }
+                }
+            }
+            if (!faultedByFailure)
             {
                 Trace($"flush.ok    [{slot.StartOffset},{slot.EndOffsetExclusive}) -> set {slot.Acks.Count} TCS results");
-                for (var i = 0; i < slot.Acks.Count; i++)
-                {
-                    slot.Acks[i].TrySetResult(offsets[i]);
-                }
                 // Success path's terminal lifecycle stamp. The slot is
                 // about to be removed by the outer finally; a slot
                 // observed at AcksApplied has fully discharged its
@@ -1493,7 +1508,7 @@ internal sealed class WalShardGrain(
             }
             else
             {
-                Trace($"flush.ok    [{slot.StartOffset},{slot.EndOffsetExclusive}) but sticky set - SKIP TCS results");
+                Trace($"flush.ok    [{slot.StartOffset},{slot.EndOffsetExclusive}) but slot faulted - SKIP TCS results");
             }
         }
         catch (Exception ex)
@@ -1594,10 +1609,18 @@ internal sealed class WalShardGrain(
 
             // Capture the TCS lists to fault later. We deliberately defer
             // faulting until after the resync (see the method summary).
+            // Mark the failed slot and every slot ordered after it so
+            // their FlushAsync success paths skip applying results: their
+            // offset windows are about to be rolled back by the resync.
+            // Predecessor slots are deliberately left unmarked - they
+            // committed durably and must still result even though we are
+            // latching the sticky failure here.
             failedAcks = failedNode.Value.Acks;
+            failedNode.Value.FaultedByFailure = true;
             laterSlots = new List<InFlightFlush>();
             for (var n = failedNode.Next; n is not null; n = n.Next)
             {
+                n.Value.FaultedByFailure = true;
                 laterSlots.Add(n.Value);
             }
             Trace($"failure.handle failed=[{failedNode.Value.StartOffset},{failedNode.Value.EndOffsetExclusive}) laterSlots={laterSlots.Count} pendingAcks={_pendingAcks.Count}");
@@ -1703,6 +1726,22 @@ internal sealed class WalShardGrain(
         public required List<long> Offsets { get; init; }
         public required List<TaskCompletionSource<long>> Acks { get; init; }
         public Task Task { get; set; } = System.Threading.Tasks.Task.CompletedTask;
+
+        /// <summary>
+        /// Set by <see cref="WalShardGrain.HandleFlushFailureAsync"/> (under
+        /// <c>_stateGate</c>) on the failed slot and every slot ordered
+        /// after it. A slot so marked must NOT apply its ack results in the
+        /// <see cref="WalShardGrain.FlushAsync"/> success path even if its
+        /// provider call committed, because the post-failure resync rolls
+        /// its offset window back; the failure handler faults its acks
+        /// instead. Predecessor slots are never marked: they committed
+        /// durably and result normally regardless of a later flush's
+        /// failure. Keying the success-path skip off this per-slot flag
+        /// rather than the global <c>_stickyFailure</c> latch prevents a
+        /// predecessor's acks from being stranded (neither resulted nor
+        /// faulted) when a later flush latches the failure first.
+        /// </summary>
+        public bool FaultedByFailure;
 
         /// <summary>
         /// Lifecycle stamp. Updated at every milestone in
