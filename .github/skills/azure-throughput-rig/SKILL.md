@@ -1,147 +1,312 @@
 ---
 name: azure-throughput-rig
-description: Operate the real-Azure azure-throughput benchmark rig in benchmark/azure-throughput/. Use when running throughput/scaling experiments against real Azure Storage - provisioning or tearing down the single-silo VM + WAL storage accounts, running a cohort, selecting a workload or scaling arm via BENCH_* env, reading the FINAL active-throughput number, verifying a multi-account WAL spread, driving a rung sweep, or handling auto-shutdown for a long sweep. Covers the single-account and multi-account (1..8 WAL storage accounts) topologies.
+description: Operate the real-Azure azure-throughput benchmark rig in benchmark/azure-throughput/. Use when running throughput experiments against real Azure Storage - provisioning or tearing down the single-silo VM and WAL storage accounts, running a cohort, picking a workload (set-many, atomic, cross-tree, set-point, set-point-mv, get-point, get-many), tuning any BENCH_* configuration knob, or reading the cohort result. Documents every workload option, every BENCH_* env var, and every script parameter.
 ---
 
 # Operating the azure-throughput rig
 
-The real-Azure single-silo throughput harness lives in `benchmark/azure-throughput/`.
-It is the **only** benchmark in the suite backed by *real* Azure Storage; the local
-docker-compose scenarios (`benchmark.ps1 <scenario>`) use Azurite, which collapses
-network RTT and does not model Azure Tables partition-server behaviour or throttling.
-Reach for this rig when a throughput claim needs real-Azure numbers.
-
-Authoritative deeper docs live next to the scripts: `benchmark/azure-throughput/README.md`
-(human onboarding) and `benchmark/azure-throughput/wedge-plan.md` §23.3 (the full `BENCH_*`
-knob catalogue). Read them before a first run. This skill is the operational runbook.
-
-> **Availability:** the multi-account WAL fan-out (`deploy.ps1 -WalAccountCount`,
-> `BENCH_WAL_ACCOUNTS`, the `[silo] wal-placement` line) and the MV-attached
-> `set-point-mv` workload only exist once the materialised-views work has merged to
-> `main`. On a checkout without them, use the single-account path only.
+A two-process Linux-VM benchmark in `benchmark/azure-throughput/` that drives a
+single-silo Orleans.Lattice host against a **real Azure Storage account** (Azure Table
+WAL via managed identity) and reports entries written/read per second. It is the only
+benchmark in the suite backed by real Azure Storage; the local docker scenarios use
+Azurite, which collapses network RTT.
 
 ## Topology
 
-A single Linux VM runs two systemd units sharing loopback TCP `127.0.0.1:7000`:
-`lattice-producer.service` (synthetic fleet emitter) → `lattice-silo.service`
-(`ILattice` writes) → Azure Table WAL via the VM's **system-assigned managed identity**
-(no keys, no connection strings). Single VM (not ACI) gives deterministic CPU,
-accelerated networking, the full `dotnet-*` diagnostic surface, and journald log capture.
+One Linux VM runs two systemd units that share a loopback TCP hop on `127.0.0.1:7000`:
 
-## One-time setup
+- `lattice-producer.service` — emits synthetic `VehicleTelemetryEvent` JSON lines over TCP.
+- `lattice-silo.service` — reads those lines and dispatches the selected `ILattice`
+  operation against one lattice tree, persisting WAL traffic to Azure Tables. The silo
+  authenticates with the VM's **system-assigned managed identity** (no keys/connection
+  strings on the default path).
+
+The silo prints `ops/sec` to stdout once per second; the systemd-journald log is the
+canonical result surface.
+
+## Workflow at a glance
 
 ```powershell
-az login
-# benchmark/azure-throughput/scripts/parameters.local.ps1 (gitignored) holds operator overrides:
-#   SubscriptionId, Location (match your Tables-account region), SshPublicKeyPath (deploy.ps1 generates the key if missing),
-#   NamePrefix, VmSize, AutoShutdownTime / AutoShutdownTimeZone.
+./scripts/deploy.ps1 -NamePrefix latperf -VmSize Standard_D8as_v5   # provision once
+./scripts/vm.ps1 start                                              # ensure VM running
+./scripts/update.ps1                                                # sync source, publish, restart silo
+./scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 30 ` # run one measurement
+  -ExtraSiloEnv @{ BENCH_WORKLOAD_MODE = 'set-point' }
+./scripts/vm.ps1 logs                                               # tail the silo journal
+./scripts/vm.ps1 stop                                               # deallocate compute
+az group delete --name rg-latperf --yes --no-wait                   # full teardown
 ```
 
-## Provision
+All scripts live under `benchmark/azure-throughput/scripts/` and accept `-NamePrefix` to
+target a named environment and `-ParametersFile` to point at an explicit parameters file.
+
+---
+
+## Scripts and their parameters
+
+### `parameters.ps1` / `parameters.local.ps1`
+
+`parameters.ps1` holds the committed defaults; copy it to `parameters.local.ps1`
+(gitignored) and edit. Every script auto-discovers `parameters.local.ps1`. Fields:
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `SubscriptionId` | `''` | Azure subscription (`az account show --query id -o tsv`). |
+| `ResourceGroup` | `rg-lat` | Base resource-group name; becomes `rg-<NamePrefix>`. |
+| `Location` | `westus3` | Region. **Set to the same region as the Tables account.** |
+| `NamePrefix` | `lat` | Names the RG, VM, and `~/.ssh/config` host alias. |
+| `VmSize` | `Standard_D2as_v5` | VM SKU (smallest with accelerated networking). |
+| `AdminUsername` | `azureuser` | VM admin user. |
+| `SshPublicKeyPath` | `~/.ssh/id_ed25519.pub` | SSH public key; `deploy.ps1` generates one if missing. |
+| `AllowedSshSourceAddress` | `''` | NSG SSH allow-CIDR; blank auto-detects your IP. |
+| `AutoShutdownTimeZone` | `UTC` | Time zone for the auto-shutdown schedule. |
+| `AutoShutdownTime` | `1900` | Daily VM auto-deallocate time (HHmm). |
+| `OsDiskSizeGB` | `64` | OS disk size. |
+
+### `deploy.ps1` — provision end-to-end
+
+Provisions VM + NIC (accelerated networking) + NSG + storage account(s) + managed-identity
+role assignments + cloud-init, then chains to `update.ps1` to publish and start the silo.
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `-ParametersFile <path>` | auto-discover | Explicit parameters `.ps1`. |
+| `-NamePrefix <name>` | from parameters | Names the RG (`rg-<name>`) and SSH host alias. |
+| `-VmSize <sku>` | from parameters | VM SKU override. |
+| `-WalAccountCount <1..8>` | `1` | Number of WAL storage accounts to provision up front. Values >1 create extra accounts whose table endpoints are wired into the silo as keyed WAL providers, enabling the `BENCH_WAL_ACCOUNTS` fan-out without a redeploy. |
+
+To run a second environment side-by-side: `./scripts/deploy.ps1 -NamePrefix lat-exp -VmSize Standard_F8as_v6`.
+
+### `update.ps1` — inner loop (sync → publish → restart)
+
+Tars the git-tracked tree, ships it over SSH, runs `dotnet publish` for the silo and
+producer on the VM, re-renders the systemd units, and restarts the silo.
+
+| Parameter | Effect |
+|-----------|--------|
+| `-NoBuild` | Skip rsync + publish; just bounce the silo. |
+| `-NoRestart` | Sync + publish but leave the service running (inspect before restart). |
+| `-Clean` | Wipe `/opt/lattice/publish*` before publishing (force a full rebuild). |
+| `-SkipUnitSync` | Don't re-render the systemd units (use when only source changed). |
+| `-ParametersFile <path>` | Explicit parameters file. |
+| `-NamePrefix <name>` | Target a named environment. |
+
+### `run-cohort.ps1` — run one measurement
+
+Applies the env drop-in, restarts the silo, starts the producer with the given load,
+waits for the producer to exit, lets in-flight work drain, stops the silo, and pulls the
+journals back to `benchmark/.run/azure-throughput/`.
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `-Vehicles <N>` | `4000` | Sets `BENCH_VEHICLE_COUNT` (fleet size). |
+| `-TickHz <N>` | `5` | Sets `BENCH_TICK_HZ` (samples/sec/vehicle). Offered rate = Vehicles × TickHz. |
+| `-DurationSec <N>` | `45` | Sets `BENCH_DURATION_SEC` (producer run length). |
+| `-ExtraSiloEnv @{...}` | `@{}` | Arbitrary silo env overrides applied via a runtime drop-in (cleared between cohorts). **This is how every workload/config arm is selected without a redeploy.** |
+| `-QuiesceTimeoutSec <N>` | `60` | Max seconds to wait for the silo's in-flight gauge to drain to zero before stopping (avoids shutdown-abort artefacts on in-flight cross-tree sagas). `0` skips the wait. |
+| `-CaptureCounters` | off | Attach `dotnet-counters` for the cohort; writes `counters-<cohort>.csv`. |
+| `-ParametersFile <path>` | auto | Explicit parameters file. |
+| `-NamePrefix <name>` | from parameters | Target a named environment. |
+
+Artifacts per cohort under `benchmark/.run/azure-throughput/`: `silo-<cohort>.log`,
+`producer-<cohort>.log`, `sampler-<cohort>.csv` (per-second CPU%/RSS), and
+`counters-<cohort>.csv` when `-CaptureCounters` is set.
+
+### `ladder.ps1` — rung sweep
+
+Loops `run-cohort.ps1` over a list of rungs and appends one row per rung to a results CSV.
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `-Rungs <"V:Hz"[]>` | `1000:5 … 50000:5` | Array of `vehicles:tickHz` rungs. |
+| `-DurationSec <N>` | `30` | Producer seconds per rung. |
+| `-CooldownSec <N>` | `5` | Pause between rungs. |
+| `-ResponseTimeoutSec <N>` | `180` | Sets `BENCH_RESPONSE_TIMEOUT_SEC` for every rung (drop to 30 to reproduce the grain-RPC-deadline failure mode). |
+| `-ExtraSiloEnv @{...}` | `@{}` | Extra silo env forwarded to every cohort. |
+| `-DegradeThresholdPct <N>` | `0` | If non-zero, stop the sweep once a rung's throughput drops below `(1 - N/100)` of the best observed (a "find the peak" sweep). |
+| `-ResultsCsv <path>` | `scripts/.ladder-results.csv` | Output CSV path. |
+| `-NamePrefix <name>` / `-ParametersFile <path>` | — | As above. |
+
+### `vm.ps1 <action>` — day-to-day VM control
+
+Mandatory positional `-Action`, plus `-NamePrefix` / `-ParametersFile`.
+
+| Action | Effect |
+|--------|--------|
+| `start` | Start (allocate) the VM. |
+| `stop` | Deallocate the VM (stops compute billing; storage + public IP still bill). |
+| `status` | Show power state. |
+| `ssh` | Open an SSH session to the VM. |
+| `logs` | Tail the silo journal (`journalctl -fu lattice-silo`). |
+| `refresh-ip` | Refresh the cached public IP in `~/.ssh/config`. |
+
+---
+
+## Workload options (`BENCH_WORKLOAD_MODE`)
+
+Selects which `ILattice` operation the silo dispatches per producer batch. Case-insensitive
+kebab- or concatenated form. Unset/unknown ⇒ `set-many`.
+
+| Value | Operation exercised |
+|-------|---------------------|
+| `set-many` (default) | One `ILattice.SetManyAsync` per producer batch (`BENCH_BATCH_SIZE` entries). The batched write path. |
+| `set-many-atomic` | `ILattice.SetManyAtomicAsync`, slicing each producer batch into atomic sagas of `BENCH_ATOMIC_BATCH_SIZE` keys (default 64). Single-tree all-or-nothing writes. |
+| `set-many-atomic-2` | Single-tree atomic sagas pinned to **2 keys** each. Fixed-shape partner for the atomic comparison. |
+| `cross-tree-atomic-2` | All-or-nothing write across **two** trees (`{treeId}` and `{treeId}-b`), 1 key per tree, via `IGrainFactory.BeginAtomicWrite(...).CommitAsync()`. |
+| `cross-tree-atomic-64` | Cross-tree atomic saga of 64 keys (32 per tree). |
+| `set-point` | One `ILattice.SetAsync` per key — fan-out point writes. |
+| `set-point-mv` | Identical write path to `set-point`, but the silo also attaches an asynchronous materialised view (key-preserving passthrough) over the tree via `AddLatticeViews`. The A/B partner of `set-point` for measuring whether maintaining a view perturbs the source tree's point-write path. |
+| `get-point` | One `ILattice.GetAsync` per key — fan-out point reads. Keyspace is pre-seeded at startup via `ILattice.BulkLoadAsync` (size = `BENCH_VEHICLE_COUNT`). |
+| `get-many` | `ILattice.GetManyAsync` — batched reads. Keyspace pre-seeded as for `get-point`. |
+
+> The `set-point-mv` workload and the multi-account knobs below only exist on a checkout
+> that includes the materialised-views work. On a checkout without it, use the other eight
+> modes and the single-account path.
+
+---
+
+## Configuration (`BENCH_*` environment variables)
+
+Pass any of these via `run-cohort.ps1 -ExtraSiloEnv @{ ... }` (silo) — the producer-side
+rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-DurationSec`.
+
+### Offered load (producer)
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_VEHICLE_COUNT` | 1000 (cohort sets 4000) | Fleet size = number of distinct keys. Also the read-mode pre-seed size on the silo. |
+| `BENCH_TICK_HZ` | 5 | Samples/sec/vehicle. **Offered rate = vehicles × tickHz.** |
+| `BENCH_DURATION_SEC` | 300 (cohort sets per `-DurationSec`) | Producer run length; `0` = run forever. |
+| `BENCH_SILO_HOST` | `127.0.0.1` | Silo host the producer connects to. |
+| `BENCH_SILO_PORT` | 7000 | Silo TCP port the producer connects to. |
+
+### Storage and identity (silo)
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_STORAGE_URI` | — (required) | `https://{account}.table.core.windows.net` — WAL table endpoint for managed identity. |
+| `BENCH_STORAGE_CONN` | — | Connection-string fallback; overrides `BENCH_STORAGE_URI` when set. |
+| `BENCH_WAL_TABLE` | `OrleansLatticeWal` | WAL table name. |
+| `BENCH_TREE_ID` | rotating `azure-throughput-<utc>` | Tree id. Rotates per silo restart so prior offsets don't bias the run; **pin it to re-use existing rows** (cross-run replay). |
+| `BENCH_TCP_PORT` | 7000 | Silo TCP listen port. |
+
+### Workload shape
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_WORKLOAD_MODE` | `set-many` | The operation under test (see workload table above). |
+| `BENCH_ATOMIC_BATCH_SIZE` | 64 | Saga key-count, used only by `set-many-atomic`. |
+
+### Batching and flush
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync`. |
+| `BENCH_FLUSH_MS` | 50 | Max flush latency (ms) before a partial batch is sent. |
+| `BENCH_FLUSH_CONCURRENCY` | 8 | Max in-flight `SetManyAsync` calls. Pairs with `BENCH_WAL_PARTITIONS` so parallel flushes fan out across distinct WAL grains. Drop to 1 to isolate per-leaf-turn RTT from mailbox queueing. |
+
+### WAL fan-out and pipeline
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (8) | WAL grains per tree — the primary write-parallelism lever. Distinct partitions ⇒ distinct Azure Tables manifest partitions. |
+| `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (16) | Per-`WalShardGrain` pipeline depth. `1` = strict single-in-flight ordering against the provider. |
+| `BENCH_WAL_ACCOUNTS` | 1 | How many provisioned storage accounts the tree's WAL partitions are spread across (index 0 = `BENCH_STORAGE_URI`, 1..N-1 = the extra accounts). Clamped to the number actually provisioned (`deploy.ps1 -WalAccountCount`). |
+| `BENCH_WAL_EXTRA_ACCOUNT_URIS` | — (set by `update.ps1`) | `;`-delimited list of extra account table endpoints, wired as keyed WAL providers `acct1, acct2, …`. Normally you don't set this by hand — `deploy.ps1 -WalAccountCount` + `update.ps1` populate it. |
+| `BENCH_PIPELINE_PHASE2` | on | Overlap phase 2 of batch N with phases 0+1 of batch N+1 on the same shard. `0` disables. |
+| `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS` | 5 | How long the per-shard PhaseTwoWorker waits after the first arrival so additional commits coalesce into one Azure Tables transaction. `0` = drain on first signal. |
+| `BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC` | library default (3) | Per-commit deadline for the PhaseTwoWorker's manifest commit. `0` = unbounded; `>0` = finite deadline (a hung commit becomes a bounded timeout the resync path recovers). |
+| `BENCH_DIGEST_COALESCING_WINDOW_MS` | 5 | Coalescing window (ms) for digest writes. |
+| `BENCH_WAL_ELIMINATE_CANDIDATE_ROW` | library default | Toggle the hot-path candidate-row elimination optimisation. |
+| `BENCH_SHARD_COUNT` | 0 (library default, 64) | Override the tree's physical shard count via `ILattice.ReshardAsync` at startup (grow-only against a populated tree; any target works against an empty tree). |
+
+### WAL transport hygiene
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_WAL_CONNECTION_REUSE` | false | Use a pooled-connection reuse transport with a finite pooled-connection lifetime + idle timeout (cloud-NAT socket hygiene). |
+| `BENCH_WAL_CONN_LIFETIME_SEC` | 90 | Pooled-connection lifetime (s) when reuse is on. |
+| `BENCH_WAL_NETWORK_TIMEOUT_SEC` | 0 (SDK default ~100 s) | Per-attempt network timeout for the WAL Tables client; a finite value bounds each HTTP attempt so a hung request releases its pending-batch slot. |
+
+### Leaf / grain storage
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_LEAF_STORAGE_KIND` | `azure` | Grain-state store for leaf/internal/atomic checkpoints: `azure` (production-shape Azure Table storage), `memory` (Orleans memory storage — diagnostic), `null` (no-op writes — removes persistence to expose the WAL ceiling; not production-shape). |
+| `BENCH_LEAF_STORAGE_TABLE` | `OrleansLatticeGrainState` | Table name when kind = `azure`. |
+| `BENCH_LEAF_STORAGE_NUM_GRAINS` | 0 (library default, 10) | `NumStorageGrains` when kind = `memory`. |
+
+### Saturation signal (back-pressure)
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op). |
+| `BENCH_SATURATION_THROTTLED_RATIO` | `LatticeOptions.DefaultWalSaturationThrottledRatio` (0.75) | Admission-depth ratio at/above which the tree raises Throttled. Range [0.0, 1.0]; lower = earlier throttle. |
+| `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` | `LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold` (1) | Min dispatch-timeout trips per window that raise Saturated regardless of depth. |
+| `BENCH_THROTTLED_LINE_DELAY_MICROS` | library default (1000 = 1 ms) | Per-line delay applied while Throttled, slowing the TCP reader so the producer's socket blocks and the admission gate drains. `0` = no delay. |
+| `BENCH_WAL_APPEND_DISPATCH_TIMEOUT_SEC` | `LatticeOptions.DefaultWalAppendDispatchTimeout` | WAL append dispatch timeout override. |
+
+### Lifecycle, timeouts, reporting
+
+| Var | Default | Effect |
+|-----|---------|--------|
+| `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Orleans Silo + Client `ResponseTimeout` (s). **Raise to 180 when saturating** so a slow worst-partition flush doesn't trip the deadline and trigger a producer reconnect/retransmit storm. `ladder.ps1` pins this to 180. |
+| `BENCH_TOTAL_DURATION_SEC` | 600 | Server-side watchdog: after this many seconds the silo triggers a graceful shutdown even if the cohort runner died. `0` disables. |
+| `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
+| `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (p50/p90/p99 per instrument/tree/shard/phase). `0` disables. |
+| `BENCH_DISABLE_STORAGE_USAGE_POLLER` | empty | Set to `1` to disable the storage-usage poller for the cohort (`StorageUsagePollInterval = 0`). |
+
+---
+
+## Reading a cohort result
+
+`run-cohort.ps1` prints a `=== Cohort complete ===` summary and writes the silo journal to
+`benchmark/.run/azure-throughput/silo-<cohort>.log`. Parse the **log file** directly
+(`run-cohort.ps1` writes its summary with `Write-Host`, so capturing the script's stdout
+into a variable yields nothing).
+
+Key lines in the silo log:
+
+- `[silo] FINAL ops=.. failed=.. discarded=.. elapsed=..s active=..s ops/sec (avg)=.. (active avg)=..`
+  — the **active avg** is the sustained-ingest rate over the active window (it excludes the
+  pre-connect idle window and the post-FINAL drain). `failed` / `discarded` count
+  unsuccessful operations.
+- `Verdict : HEALTHY | DEGRADED | WEDGE | FAILED` — the run-cohort classification.
+- `Silo CPU : avg ..% / peak ..%` (of one vCPU) — from the sampler.
+- `Diagnostics : stall-watchdog=.. wal-slot=.. wal-append=..` — internal back-pressure/stall counters.
+- `[silo] wal-placement accounts=N partitions=M -> 0:default,1:acct1,...` — emitted when
+  `BENCH_WAL_ACCOUNTS > 1`; confirms which account each WAL partition landed on. Its
+  absence (with accounts >1) or an `ERROR wal-placement-spread` means the arm ran
+  single-account.
+
+`ladder.ps1` additionally writes one CSV row per rung (`written`, `failed`, active-avg,
+CPU peak, RSS, verdict, timestamp) to its `-ResultsCsv`.
+
+---
+
+## Auto-shutdown and teardown
+
+`deploy.ps1` installs a DevTestLab schedule `shutdown-computevm-<prefix>-vm` that
+deallocates the VM at `AutoShutdownTime` (default 19:00 UTC) daily. A long sweep can run
+past that — disable the schedule for the duration, then delete the whole group when done:
 
 ```powershell
-# Single account (default). Provisions VM + storage + RBAC + cloud-init, publishes silo+producer, starts the silo.
-./benchmark/azure-throughput/scripts/deploy.ps1 -NamePrefix latperf -VmSize Standard_D8as_v5
-
-# Multi-account: provision N WAL storage accounts up front (1..8). No redeploy needed between account arms.
-./benchmark/azure-throughput/scripts/deploy.ps1 -NamePrefix latperf -VmSize Standard_D8as_v5 -WalAccountCount 8
-```
-
-`-NamePrefix latperf` makes the resource group `rg-latperf` and the `~/.ssh/config` host
-alias `latperf`, so every other script accepts `-NamePrefix latperf`. RBAC
-(managed-identity role assignments) can lag 30–60 s after deploy, more across 8 accounts;
-if the silo's first WAL write 403s, wait a minute and re-run `update.ps1` to bounce it.
-
-## Inner loop
-
-```powershell
-./benchmark/azure-throughput/scripts/update.ps1               # git ls-files | tar | ssh -> dotnet publish on VM -> restart silo
-#   flags: -NoBuild (just bounce) | -NoRestart | -Clean (wipe publish*) | -SkipUnitSync
-./benchmark/azure-throughput/scripts/vm.ps1 logs              # journalctl -fu lattice-silo
-./benchmark/azure-throughput/scripts/vm.ps1 start|stop|status|ssh|refresh-ip
-```
-
-## Run a cohort
-
-```powershell
-./benchmark/azure-throughput/scripts/run-cohort.ps1 -NamePrefix latperf `
-  -Vehicles 400 -TickHz 5 -DurationSec 30 `
-  -ExtraSiloEnv @{ BENCH_WORKLOAD_MODE = 'set-point'; BENCH_WAL_ACCOUNTS = '1' }
-```
-
-`-ExtraSiloEnv` threads arbitrary env into the silo's systemd drop-in — this is how every
-arm is selected **without a redeploy**. `-CaptureCounters` additionally captures
-`dotnet-counters`. Each cohort writes three artifacts under `benchmark/.run/azure-throughput/`:
-`silo-<cohort>.log`, `producer-<cohort>.log`, `sampler-<cohort>.csv`.
-
-## `BENCH_*` knobs that matter
-
-| Knob | Default | Effect |
-|------|---------|--------|
-| `BENCH_WORKLOAD_MODE` | `set-many` | The call shape: `set-many`, `set-many-atomic`, `set-many-atomic-2`, `cross-tree-atomic-2`, `cross-tree-atomic-64`, `set-point`, `set-point-mv`, `get-point`, `get-many`. |
-| `BENCH_VEHICLE_COUNT`, `BENCH_TICK_HZ` | 4000, 5 | Offered rate (the rung). |
-| `BENCH_DURATION_SEC` | 45 | Producer run length. 30 s is enough for a 5 Hz set-point rung. |
-| `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (8) | **Primary write lever.** WAL grain count per tree. |
-| `BENCH_WAL_ACCOUNTS` | 1 | How many provisioned accounts to spread partitions across. Needs `deploy.ps1 -WalAccountCount >= N`. |
-| `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Grain-RPC deadline. **Raise to 180 when saturating** or you'll see `grain-rpc-deadline` failures that mimic wedges. `ladder.ps1` pins this to 180. |
-| `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight flushes; pairs with partitions. |
-| `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (16) | Per-`WalShardGrain` pipeline depth. |
-| `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync` (batched modes). |
-| `BENCH_TREE_ID` | rotates per cohort | Pin to re-use a WAL partition; otherwise each cohort starts on an empty manifest. |
-
-## Reading results
-
-`run-cohort.ps1` prints a `=== Cohort complete ===` block. The fields that matter:
-
-- `Silo FINAL` → `[silo] FINAL ops=.. failed=.. discarded=.. elapsed=..s active=..s ops/sec (avg)=.. (active avg)=..` — the **active avg** is the honest sustained-ingest number (it excludes the silo's pre-connect idle window and the post-FINAL drain).
-- `FINAL active : N entries in Ts active = X/s` — the headline throughput. **If a `(failed=..)` annotation appears, the number is drain-inflated — discard it and treat the rung as wedged.**
-- `Steady mean` + `inFlight med/max` — a pinned `med/max=8/8` means the fixed pipeline depth is the parallelism cap.
-- `Silo CPU : avg ..% / peak ..%` (of one vCPU) — watch this approach the box core-count under load; ~linear growth with partition count signals silo-side WAL-dispatch CPU as the binding constraint.
-- `Diagnostics : stall-watchdog=.. wal-slot=.. wal-append=..` — any non-zero count, especially with a non-zero `failed`, is the wedge evidence triad.
-- `Verdict : HEALTHY | DEGRADED | WEDGE | FAILED` — treat anything but `HEALTHY` as above the safe ceiling for that rung.
-
-**Parse the silo log directly** (`benchmark/.run/azure-throughput/silo-<cohort>.log`)
-rather than trusting `ladder.ps1`'s CSV verdict column, which is unreliable. Note that
-`run-cohort.ps1` uses `Write-Host`, so capturing its output into a variable yields empty
-parse results — read the written log files instead.
-
-For a multi-account arm, confirm the spread fired by grepping the silo log for
-`[silo] wal-placement` — e.g. `accounts=8 partitions=8 -> 0:default,1:acct1,...,7:acct7`.
-Absence of that line (with `BENCH_WAL_ACCOUNTS>1`) or an `ERROR wal-placement-spread`
-means the arm ran single-account and must be re-run.
-
-## Driving a sweep
-
-`ladder.ps1` loops `run-cohort.ps1` over rungs, but its verdict parser is unreliable —
-prefer a thin custom driver that loops the arms × rungs you need and greps each silo log
-for the `FINAL` / `Steady` / `Verdict` / `Silo CPU` lines. Keep `-ErrorActionPreference
-Continue` and null-safe parsing so one cohort's parse hiccup doesn't abort the sweep.
-
-## Long sweeps vs auto-shutdown
-
-The Bicep deploys a DevTestLab schedule `shutdown-computevm-<prefix>-vm` that deallocates
-the VM at **19:00 UTC daily** (configurable via `AutoShutdownTime` / `AutoShutdownTimeZone`).
-A multi-arm sweep can run past that. Disable it for the sweep, then **delete the whole
-group at the end regardless**:
-
-```powershell
-# Disable auto-shutdown for the duration of a long sweep.
+# Disable auto-shutdown for a long sweep.
 az resource update --resource-group rg-latperf `
   --resource-type Microsoft.DevTestLab/schedules `
   --name shutdown-computevm-latperf-vm --set properties.status=Disabled
 
-# ... run the sweep, capture all logs ...
-
-# Tear down (stops all compute + storage billing).
+# Full teardown (stops all compute + storage billing).
 az group delete --name rg-latperf --yes --no-wait
 ```
 
-To merely pause between sessions without losing the deployment, `vm.ps1 stop` deallocates
-compute (storage + public IP still bill at a few dollars/month).
+`vm.ps1 stop` only deallocates compute; the storage account(s) and public IP keep billing
+until the resource group is deleted.
 
-## Caveats
+## First-run notes
 
-- The harness measures **end-to-end commit throughput** for a *single silo, single tree*. It is not the partitioned-WAL structural probe (`benchmark/host/Bench.WalAzureTable`).
-- Keys are `Guid.ToString("N")` → uniform-random across shards. Edit `Producer/Program.cs` to skew distribution.
-- Managed-identity role propagation can take up to ~60 s after `deploy.ps1`; a first-write 403 usually clears by re-running `update.ps1`.
-- The write knee is **metastable/bistable** — healthy rungs can bracket wedged rungs. Do not conclude a throughput ceiling from a single healthy run; confirm across repeats.
+- `az login` first. Managed-identity role propagation can take up to ~60 s after
+  `deploy.ps1`; if the silo's first WAL write returns 403, wait a minute and re-run
+  `update.ps1` to bounce the silo. Multi-account deploys can take longer to propagate.
+- Keys are `Guid.ToString("N")`, uniform-random across shards. Edit `Producer/Program.cs`
+  to change the key distribution.

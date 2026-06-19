@@ -178,8 +178,8 @@ collapses RTT). **Its operating runbook is the `azure-throughput-rig` skill** โ€
 that skill for the mechanics: provisioning (single- and multi-account), the inner loop,
 running a cohort, the `BENCH_*` knob table, reading the `[silo] FINAL` active-throughput
 line, verifying a multi-account `wal-placement` spread, driving a sweep, and
-auto-shutdown/teardown. Deeper detail lives in that folder's `README.md` and
-`wedge-plan.md` ยง23.3 (the authoritative `BENCH_*` catalogue).
+auto-shutdown/teardown. That skill documents every workload mode, every `BENCH_*`
+configuration knob, and every script parameter.
 
 What stays *here* is the **judgment** layer the skill deliberately does not encode:
 
