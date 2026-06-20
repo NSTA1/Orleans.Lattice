@@ -8,9 +8,13 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v7.3.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v7.3.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+## [7.3.1] - 2026-06-20
+
+Core-library patch release (`Orleans.Lattice` only). Adds a name-only materialised-view read handle (`ILatticeViewFactory.GetAsync`) and closes a direct view-tree read hole (F-123) - see [`docs/lattice/materialised-views.md`](docs/lattice/materialised-views.md). Companion package versions (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Dashboards`) remain at `7.3.0` - this release ships the core library only. Safe drop-in upgrade from v7.3.0; no public-API break and no wire-format change.
 
 ### Added
 
@@ -558,6 +562,7 @@ From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a
 
 ---
 [Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.0...HEAD
+[7.3.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.0...v7.3.1
 [7.3.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.2.0...v7.3.0
 [7.2.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.1.0...v7.2.0
 [7.1.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.0.0...v7.1.0
