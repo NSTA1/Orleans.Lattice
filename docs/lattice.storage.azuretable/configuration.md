@@ -64,7 +64,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`RetryMaxAttempts`](#retrymaxattempts) | `int?` | `null` |
 | [`RetryDelay`](#retrydelay) | `TimeSpan?` | `null` |
 | [`RetryMaxDelay`](#retrymaxdelay) | `TimeSpan?` | `null` |
-| [`RetryNetworkTimeout`](#retrynetworktimeout) | `TimeSpan?` | `null` |
+| [`RetryNetworkTimeout`](#retrynetworktimeout) | `TimeSpan?` | `10 s` |
 | [`RetryMode`](#retrymode) | `RetryMode?` | `null` |
 
 ### Commit pipeline options
@@ -135,7 +135,7 @@ Overrides the Azure SDK maximum retry delay. `null` leaves the SDK default. Must
 
 ### `RetryNetworkTimeout`
 
-Overrides the Azure SDK per-attempt network timeout. `null` leaves the SDK default. Must be positive when set. Use it to prevent one stuck request from occupying a WAL slot for the full SDK default timeout.
+Overrides the Azure SDK per-attempt network timeout. Defaults to `10 s` - a finite bound below the WAL flush budget so a stuck request surfaces a fault into the WAL shard's failure handler (which releases and recovers the slot) instead of being abandoned while the transport zombies on for the SDK's unbounded ~100 s default. Set to `null` to restore the SDK default; must be positive when set. Prevents one stuck request from occupying a WAL slot - and, under a sustained storage brown-out, accumulating into hundreds of zombie attempts that self-sustain the brown-out.
 
 ### `RetryMode`
 

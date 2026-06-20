@@ -4,6 +4,7 @@ using Azure.Data.Tables;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using NSubstitute.Core;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
@@ -50,19 +51,25 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
     [OneTimeTearDown]
     public void OneTimeTearDown() => _services.Dispose();
 
-    private AzureTableWalStorageProvider CreateProvider() =>
-        new(
-            Options.Create(new AzureTableWalStorageOptions
-            {
-                // Never used: these tests pass a substituted TableClient
-                // straight to SubmitPhaseOneAsync and never reach the
-                // provider's own EnsureTableAsync codepath. The literal
-                // must still parse as a valid connection-string shape.
-                ConnectionString = "UseDevelopmentStorage=true",
-                TableName = "Treplay" + Guid.NewGuid().ToString("N"),
-                Compression = LatticeCompression.None,
-            }),
-            _serializer);
+    private AzureTableWalStorageProvider CreateProvider(Action<AzureTableWalStorageOptions>? configure = null)
+    {
+        var options = new AzureTableWalStorageOptions
+        {
+            // Never used: these tests pass a substituted TableClient
+            // straight to SubmitPhaseOneAsync and never reach the
+            // provider's own EnsureTableAsync codepath. The literal
+            // must still parse as a valid connection-string shape.
+            ConnectionString = "UseDevelopmentStorage=true",
+            TableName = "Treplay" + Guid.NewGuid().ToString("N"),
+            Compression = LatticeCompression.None,
+            // Retry in place without delay so the transient-retry tests run
+            // deterministically and fast (the backoff jitter is irrelevant to
+            // the offset-preserving behaviour under test).
+            PhaseOneTransientRetryBaseDelay = TimeSpan.Zero,
+        };
+        configure?.Invoke(options);
+        return new(Options.Create(options), _serializer);
+    }
 
     private static List<TableTransactionAction> BuildBatchActions(long firstOffset, int count)
     {
@@ -93,7 +100,26 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
         Offset = source.Offset,
         Payload = source.Payload is null ? null : (byte[])source.Payload.Clone(),
         Compression = source.Compression,
+        BatchHash = source.BatchHash is null ? null : (byte[])source.BatchHash.Clone(),
+        BatchEntryCount = source.BatchEntryCount,
     };
+
+    /// <summary>
+    /// Builds the resident-row dictionary that simulates a durable batch as
+    /// the service would hold it after a first attempt committed: the actions
+    /// are stamped with the per-batch sentinel exactly as the production
+    /// submit path does, then cloned. The first row therefore carries the
+    /// <see cref="AzureTableWalEntity.BatchHash"/> /
+    /// <see cref="AzureTableWalEntity.BatchEntryCount"/> sentinel, exercising
+    /// the O(1) replay-proof path.
+    /// </summary>
+    private static Dictionary<string, AzureTableWalEntity> BuildStampedResident(IReadOnlyList<TableTransactionAction> actions)
+    {
+        AzureTableWalStorageProvider.StampPhaseOneBatchSentinel(actions);
+        return actions.ToDictionary(
+            a => ((AzureTableWalEntity)a.Entity).RowKey,
+            a => Clone((AzureTableWalEntity)a.Entity));
+    }
 
     /// <summary>
     /// Configures the substitute so the resident table contains exactly
@@ -283,27 +309,30 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
     }
 
     [Test]
-    public void SubmitPhaseOneAsync_propagates_a_non_409_failure_without_attempting_replay_verification()
+    public void SubmitPhaseOneAsync_propagates_a_non_409_non_transient_failure_without_attempting_replay_verification()
     {
-        // The idempotent-replay handler must be scoped strictly to 409.
-        // A throttling / server-busy failure has to flow straight through
-        // the generic failure path and never trigger a read-back.
+        // The idempotent-replay handler must be scoped strictly to 409, and a
+        // genuinely non-transient failure (here a 400 BadRequest) must flow
+        // straight through the generic failure path: no read-back, no retry.
         var sut = CreateProvider();
         var actions = BuildBatchActions(firstOffset: 400, count: 3);
         var table = Substitute.For<TableClient>();
         table.SubmitTransactionAsync(
                 Arg.Any<IEnumerable<TableTransactionAction>>(),
                 Arg.Any<CancellationToken>())
-            .ThrowsAsync(new RequestFailedException(503, "Server is busy.", "ServerBusy", innerException: null));
+            .ThrowsAsync(new RequestFailedException(400, "Bad request.", "InvalidInput", innerException: null));
 
         Assert.That(
             async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None),
             Throws.TypeOf<RequestFailedException>()
-                .With.Property(nameof(RequestFailedException.Status)).EqualTo(503));
+                .With.Property(nameof(RequestFailedException.Status)).EqualTo(400));
 
-        // No verification read should ever have been issued for a non-409.
+        // No verification read should ever have been issued for a non-409, and
+        // a non-transient fault must not be retried in place.
         table.DidNotReceive().GetEntityAsync<AzureTableWalEntity>(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IEnumerable<string>?>(), Arg.Any<CancellationToken>());
+        _ = table.Received(1).SubmitTransactionAsync(
+            Arg.Any<IEnumerable<TableTransactionAction>>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -386,8 +415,298 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
         });
     }
 
+    [Test]
+    public async Task SubmitPhaseOneAsync_proves_replay_with_a_single_read_when_first_row_carries_the_sentinel()
+    {
+        // O(1) fast path: the durable batch carries the per-batch sentinel on
+        // its first row, so the guard proves the whole batch with exactly one
+        // point-read - no per-entry read amplification.
+        await using var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 800, count: 5);
+        var resident = BuildStampedResident(actions);
+        var table = CreateConflictingTable(resident);
+
+        await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None);
+
+        await table.Received(1).GetEntityAsync<AzureTableWalEntity>(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IEnumerable<string>?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void SubmitPhaseOneAsync_detects_tail_divergence_with_a_single_read_even_when_first_row_is_identical()
+    {
+        // The divergent-payload case the sentinel exists for: a different
+        // batch is durable whose FIRST row is byte-identical but whose tail
+        // differs. A first-row-payload-only check would mask it; the
+        // whole-batch hash on the first row catches it with a single read.
+        var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 900, count: 4);
+
+        // The durable rows are a divergent batch A' whose last entry differs
+        // from what this call (batch A) tries to write, but whose first row
+        // is identical.
+        var divergent = BuildBatchActions(firstOffset: 900, count: 4);
+        ((AzureTableWalEntity)divergent[3].Entity).Payload = [0xDE, 0xAD, 0xBE, 0xEF];
+        var resident = BuildStampedResident(divergent);
+        var table = CreateConflictingTable(resident);
+
+        Assert.That(
+            async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<RequestFailedException>()
+                .With.Property(nameof(RequestFailedException.Status))
+                .EqualTo(AzureTableWalStorageProvider.EntityAlreadyExistsStatusCode));
+
+        // Divergence was proven without reading every row.
+        table.Received(1).GetEntityAsync<AzureTableWalEntity>(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IEnumerable<string>?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void SubmitPhaseOneAsync_detects_a_different_batch_length_via_the_sentinel()
+    {
+        // A durable batch of a different length with an identical first row
+        // must not be mistaken for a replay: the entry-count guard catches it.
+        var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 1000, count: 5);
+        var shorter = BuildBatchActions(firstOffset: 1000, count: 3);
+        var resident = BuildStampedResident(shorter);
+        var table = CreateConflictingTable(resident);
+
+        Assert.That(
+            async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<RequestFailedException>()
+                .With.Property(nameof(RequestFailedException.Status))
+                .EqualTo(AzureTableWalStorageProvider.EntityAlreadyExistsStatusCode));
+    }
+
+    [Test]
+    public void ComputePhaseOneBatchHash_is_deterministic_and_payload_sensitive()
+    {
+        var a = BuildBatchActions(firstOffset: 1200, count: 3);
+        var b = BuildBatchActions(firstOffset: 1200, count: 3);
+        var c = BuildBatchActions(firstOffset: 1200, count: 3);
+        ((AzureTableWalEntity)c[2].Entity).Payload = [0x01, 0x02, 0x03];
+
+        var hashA = AzureTableWalStorageProvider.ComputePhaseOneBatchHash(a);
+        var hashB = AzureTableWalStorageProvider.ComputePhaseOneBatchHash(b);
+        var hashC = AzureTableWalStorageProvider.ComputePhaseOneBatchHash(c);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hashA, Is.EqualTo(hashB), "identical batches must hash identically");
+            Assert.That(hashA, Is.Not.EqualTo(hashC), "a divergent tail payload must change the hash");
+            Assert.That(hashA, Has.Length.EqualTo(16), "XxHash128 produces a 16-byte digest");
+        });
+    }
+
+    // --- #824 offset-preserving transient phase-1 retry ---------------------
+
+    /// <summary>
+    /// Builds a substitute whose <see cref="TableClient.SubmitTransactionAsync"/> throws
+    /// <paramref name="transientFault"/> for its first <paramref name="failuresBeforeSuccess"/>
+    /// calls and then succeeds, letting a test assert that the provider re-issues the identical
+    /// batch in place until it lands rather than surfacing the fault to the shard.
+    /// </summary>
+    private static TableClient CreateTransientThenSuccessTable(int failuresBeforeSuccess, Exception transientFault)
+    {
+        var table = Substitute.For<TableClient>();
+        var calls = 0;
+        Func<CallInfo, Response<IReadOnlyList<Response>>> handler = _ =>
+        {
+            calls++;
+            if (calls <= failuresBeforeSuccess)
+            {
+                throw transientFault;
+            }
+
+            return Response.FromValue<IReadOnlyList<Response>>(Array.Empty<Response>(), Substitute.For<Response>());
+        };
+        table.SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(handler);
+        return table;
+    }
+
+    [Test]
+    public async Task SubmitPhaseOneAsync_retries_the_identical_batch_in_place_on_a_transient_fault_then_succeeds()
+    {
+        // #824 ignition step: a phase-1 transaction faults transiently (here a
+        // 500 OperationTimedOut, the exact shape observed wedging v1200). The
+        // provider must resubmit the byte-identical batch at the same offsets
+        // until it lands, so the calling shard never faults / resyncs /
+        // re-drives divergent content.
+        await using var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 1300, count: 4);
+        var table = CreateTransientThenSuccessTable(
+            failuresBeforeSuccess: 2,
+            transientFault: new RequestFailedException(500, "Operation could not be completed within the specified time.", "OperationTimedOut", innerException: null));
+
+        using var metrics = new ProviderCounterRecorder();
+        await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // 2 transient failures + 1 success = 3 submit attempts.
+            _ = table.Received(3).SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(), Arg.Any<CancellationToken>());
+            Assert.That(metrics.Sum(TransientRetriesInstrument), Is.EqualTo(2),
+                "each in-place retry of a transient fault must increment provider.phase1.transient_retries");
+            Assert.That(metrics.Sum(RetryExhaustedInstrument), Is.EqualTo(0),
+                "a transient fault that resolves on retry must not surface on provider.retry.exhausted");
+        });
+    }
+
+    [Test]
+    public async Task SubmitPhaseOneAsync_resolves_a_transient_fault_followed_by_a_durable_409_as_an_idempotent_replay()
+    {
+        // The race that turns a transient fault durable: the first attempt
+        // actually committed server-side but the response was lost (surfaced as
+        // a timeout), so the in-place retry collides with the now-durable rows
+        // and 409s. Because the retry is byte-identical, the O(1) replay proof
+        // resolves it as a success - no fault reaches the shard.
+        await using var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 1400, count: 3);
+        var resident = BuildStampedResident(actions);
+
+        var table = Substitute.For<TableClient>();
+        var calls = 0;
+        Func<CallInfo, Response<IReadOnlyList<Response>>> submit = _ =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                throw new TimeoutException("network timeout");
+            }
+
+            throw new RequestFailedException(
+                AzureTableWalStorageProvider.EntityAlreadyExistsStatusCode,
+                "0:The specified entity already exists.",
+                "EntityAlreadyExists",
+                innerException: null);
+        };
+        table.SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(submit);
+        table.GetEntityAsync<AzureTableWalEntity>(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IEnumerable<string>?>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var rowKey = callInfo.ArgAt<string>(1);
+                var entity = resident[rowKey];
+                return Task.FromResult(Response.FromValue(Clone(entity), Substitute.For<Response>()));
+            });
+
+        using var metrics = new ProviderCounterRecorder();
+        await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(metrics.Sum(TransientRetriesInstrument), Is.EqualTo(1),
+                "the transient fault must drive exactly one in-place retry");
+            Assert.That(metrics.Sum(IdempotentReplaysInstrument), Is.EqualTo(1),
+                "the retry's durable-409 must resolve via the idempotent-replay proof");
+            Assert.That(metrics.Sum(RetryExhaustedInstrument), Is.EqualTo(0),
+                "a proven replay reached via a transient retry must not surface as a hard failure");
+        });
+    }
+
+    [Test]
+    public void SubmitPhaseOneAsync_surfaces_a_transient_fault_after_exhausting_the_retry_budget()
+    {
+        // A transient fault that never clears must still fail (the shard's
+        // sticky-failure resync remains the last-resort net), but only after
+        // the bounded in-place budget is spent - never an unbounded loop.
+        var sut = CreateProvider(o => o.PhaseOneTransientRetryMaxAttempts = 2);
+        var actions = BuildBatchActions(firstOffset: 1500, count: 3);
+        var table = Substitute.For<TableClient>();
+        table.SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(),
+                Arg.Any<CancellationToken>())
+            .ThrowsAsync(new RequestFailedException(503, "Server is busy.", "ServerBusy", innerException: null));
+
+        using var metrics = new ProviderCounterRecorder();
+        Assert.That(
+            async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<RequestFailedException>()
+                .With.Property(nameof(RequestFailedException.Status)).EqualTo(503));
+
+        Assert.Multiple(() =>
+        {
+            // 1 initial + 2 retries = 3 attempts.
+            _ = table.Received(3).SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(), Arg.Any<CancellationToken>());
+            Assert.That(metrics.Sum(TransientRetriesInstrument), Is.EqualTo(2),
+                "the budget must allow exactly PhaseOneTransientRetryMaxAttempts in-place retries");
+            Assert.That(metrics.Sum(RetryExhaustedInstrument), Is.EqualTo(1),
+                "an exhausted transient retry must surface on provider.retry.exhausted exactly once");
+        });
+    }
+
+    [Test]
+    public void SubmitPhaseOneAsync_does_not_retry_when_the_drain_token_is_cancelled()
+    {
+        // A cancellation caused by the silo's own drain token is a shutdown,
+        // not a transient network fault: it must surface immediately, never be
+        // retried in place.
+        var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 1600, count: 3);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var table = Substitute.For<TableClient>();
+        table.SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(),
+                Arg.Any<CancellationToken>())
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        using var metrics = new ProviderCounterRecorder();
+        Assert.That(
+            async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+
+        Assert.Multiple(() =>
+        {
+            _ = table.Received(1).SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(), Arg.Any<CancellationToken>());
+            Assert.That(metrics.Sum(TransientRetriesInstrument), Is.EqualTo(0),
+                "a drain-token cancellation must not be treated as a transient fault");
+        });
+    }
+
+    [Test]
+    public void SubmitPhaseOneAsync_does_not_retry_an_unprovable_409_collision()
+    {
+        // A genuine offset collision (a different batch is already durable at
+        // these offsets) is NOT transient and must surface on the first 409
+        // without any in-place retry - the loop can never spin on a real
+        // conflict.
+        var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 1700, count: 3);
+        var divergent = BuildBatchActions(firstOffset: 1700, count: 3);
+        ((AzureTableWalEntity)divergent[2].Entity).Payload = [0xDE, 0xAD];
+        var resident = BuildStampedResident(divergent);
+        var table = CreateConflictingTable(resident);
+
+        using var metrics = new ProviderCounterRecorder();
+        Assert.That(
+            async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<RequestFailedException>()
+                .With.Property(nameof(RequestFailedException.Status))
+                .EqualTo(AzureTableWalStorageProvider.EntityAlreadyExistsStatusCode));
+
+        Assert.Multiple(() =>
+        {
+            _ = table.Received(1).SubmitTransactionAsync(
+                Arg.Any<IEnumerable<TableTransactionAction>>(), Arg.Any<CancellationToken>());
+            Assert.That(metrics.Sum(TransientRetriesInstrument), Is.EqualTo(0),
+                "an unprovable 409 must never be retried in place");
+        });
+    }
+
     private const string IdempotentReplaysInstrument = "orleans.lattice.provider.idempotent_replays";
     private const string RetryExhaustedInstrument = "orleans.lattice.provider.retry.exhausted";
+    private const string TransientRetriesInstrument = "orleans.lattice.provider.phase1.transient_retries";
 
     /// <summary>
     /// Captures <see cref="Counter{T}"/> measurements published on
@@ -407,7 +726,9 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
             _listener.InstrumentPublished = (instrument, listener) =>
             {
                 if (ReferenceEquals(instrument.Meter, LatticeMetrics.Meter)
-                    && (instrument.Name == IdempotentReplaysInstrument || instrument.Name == RetryExhaustedInstrument))
+                    && (instrument.Name == IdempotentReplaysInstrument
+                        || instrument.Name == RetryExhaustedInstrument
+                        || instrument.Name == TransientRetriesInstrument))
                 {
                     listener.EnableMeasurementEvents(instrument);
                 }

@@ -1044,6 +1044,23 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.provider.idempotent_replays", unit: "{call}",
             description: "Provider commit calls whose 409 EntityAlreadyExists conflict was proven to be an idempotent replay of an already-durable write and resolved as a success.");
 
+    /// <summary>
+    /// Counts phase-1 commit attempts that the provider re-issued in place after a
+    /// <i>transient</i> fault (a timeout, a 408 / 429 / 5xx, or a network-level cancellation
+    /// that is not the silo's own drain token). Each retry resubmits the <b>byte-identical</b>
+    /// batch at the same offsets, so it never asks the calling <c>WalShardGrain</c> to fault,
+    /// resync, and re-drive divergent content - the positive-feedback 409 conflict storm this
+    /// counter's retry path exists to prevent. A retry that lands on an already-durable batch
+    /// resolves via the idempotent-replay proof (and increments
+    /// <see cref="ProviderIdempotentReplays"/>); one that lands on a never-committed batch
+    /// simply commits. A non-zero value means the provider absorbed transient phase-1 turbulence
+    /// without escalating it to the shard. When the bounded retry budget is exhausted the fault
+    /// surfaces on <see cref="ProviderRetryExhausted"/> as before.
+    /// </summary>
+    public static readonly Counter<long> ProviderPhaseOneTransientRetries =
+        Meter.CreateCounter<long>("orleans.lattice.provider.phase1.transient_retries", unit: "{attempt}",
+            description: "Phase-1 commit attempts the provider re-issued in place after a transient fault, resubmitting the byte-identical batch at the same offsets rather than faulting the calling WAL shard.");
+
     // --- Saga fan-out diagnostic instruments (AtomicWriteGrain) -------------
 
     /// <summary>

@@ -167,10 +167,12 @@ public sealed class AzureTableWalStorageOptions
     public TimeSpan? RetryMaxDelay { get; set; }
 
     /// <summary>
-    /// When set, overrides <see cref="RetryOptions.NetworkTimeout"/>
-    /// on the constructed <see cref="TableClientOptions.Retry"/> - the
-    /// per-attempt deadline applied at the transport layer. <c>null</c>
-    /// leaves the SDK default (100 s) in place. Must be positive.
+    /// Overrides <see cref="RetryOptions.NetworkTimeout"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/> - the
+    /// per-attempt deadline applied at the transport layer. Defaults to
+    /// <see cref="DefaultRetryNetworkTimeout"/> (10 s); set to
+    /// <c>null</c> to restore the unbounded SDK default (~100 s). Must
+    /// be positive when set.
     /// <para>
     /// Functions as a per-attempt deadline budget: a stuck request
     /// cannot keep a WAL slot occupied longer than this value before
@@ -178,8 +180,40 @@ public sealed class AzureTableWalStorageOptions
     /// surfacing a <see cref="ProviderRetryExhausted"/>-tagged failure
     /// to the caller. Ignored when <see cref="ServiceClient"/> is set.
     /// </para>
+    /// <para>
+    /// <b>Why a finite default.</b> The Azure SDK's retry loop observes
+    /// cancellation only <i>between</i> attempts, not while a single
+    /// attempt is parked on the transport (the
+    /// <c>NetworkTimeout</c> is the only bound on an in-flight attempt).
+    /// Under a sustained single-account Azure Tables brown-out a WAL
+    /// shard self-bounds each flush at
+    /// <c>LatticeOptions.WalFlushTimeout</c> (15 s default) and abandons
+    /// its await, but with the SDK's unbounded ~100 s
+    /// <c>NetworkTimeout</c> the abandoned HTTP attempt keeps running -
+    /// hundreds of these zombie attempts accumulate and self-sustain the
+    /// brown-out independently of any conflict-retry path. A finite
+    /// default below <c>WalFlushTimeout</c> makes a stuck attempt
+    /// surface a real <see cref="Azure.RequestFailedException"/> into the
+    /// shard's reconcile-aware failure handler within the flush budget
+    /// (so the slot is released and recovered) instead of being
+    /// abandoned while the transport zombies on for ~100 s. The
+    /// <see cref="SaturationAwareRetryPolicy"/> short-circuits the
+    /// <i>retries</i> after the first attempt; this default bounds the
+    /// first attempt the policy intentionally never short-circuits.
+    /// </para>
     /// </summary>
-    public TimeSpan? RetryNetworkTimeout { get; set; }
+    public TimeSpan? RetryNetworkTimeout { get; set; } = DefaultRetryNetworkTimeout;
+
+    /// <summary>
+    /// Default value for <see cref="RetryNetworkTimeout"/> (10 seconds).
+    /// Chosen to sit below the <c>LatticeOptions.WalFlushTimeout</c>
+    /// default (15 s) so a hung transport attempt surfaces a fault into
+    /// the WAL shard's failure handler within the per-flush budget,
+    /// while still leaving 75-1000x headroom over the WAL hot path's
+    /// observed server-timing p99 (10-130 ms) so healthy transactions
+    /// are never spuriously timed out.
+    /// </summary>
+    public static readonly TimeSpan DefaultRetryNetworkTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.Mode"/> on the
@@ -584,6 +618,62 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>Default value for <see cref="SaturationShortCircuitCooldown"/> (2 seconds).</summary>
     public static readonly TimeSpan DefaultSaturationShortCircuitCooldown = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Maximum number of <i>additional</i> in-place phase-1 commit attempts the provider makes
+    /// after a <b>transient</b> fault before it surfaces the fault to the calling
+    /// <c>WalShardGrain</c>. <c>2</c> (the default) means up to three total attempts per phase-1
+    /// commit. Set to <c>0</c> to restore the historical behaviour (surface every transient fault
+    /// immediately).
+    /// <para>
+    /// <b>What this fixes.</b> A phase-1 batch commits in a single atomic Azure Table transaction
+    /// keyed by its first offset. When that transaction faults <i>transiently</i> - a network
+    /// timeout, a 408 / 429 / 500 / 503, or a network-level cancellation that is not the silo's own
+    /// drain token - the batch may or may not have become durable, but phase-2 has not run. The
+    /// historical path surfaced that fault to the shard, which latched a sticky failure and resynced
+    /// <c>_nextOffset</c> to the phase-2 <c>TAIL</c> (blind to the just-written, still-uncommitted
+    /// phase-1 rows above it). The shard then re-coalesced different mutations and re-drove
+    /// <i>divergent</i> content onto those occupied offsets, producing an <i>unprovable</i>
+    /// <c>409 EntityAlreadyExists</c> that faulted again - a positive-feedback conflict storm that
+    /// collapses sustained throughput (observed under single-account <c>set-point</c> saturation).
+    /// </para>
+    /// <para>
+    /// <b>Why retrying the identical batch is safe.</b> Each retry resubmits the <b>byte-identical</b>
+    /// batch at the <b>same offsets</b>. If the prior attempt was already durable, the retry's
+    /// <c>Add</c> returns <c>409</c>, which the existing O(1) idempotent-replay proof
+    /// (<see cref="IWalStorageProvider"/> phase-1 path) resolves as a success; if it was not durable,
+    /// the retry commits it. Either way the offsets and content never change, so the shard never
+    /// faults, never resyncs, and never re-drives divergent content - the storm cannot ignite. An
+    /// unprovable <c>409</c> (a genuine collision with a <i>different</i> resident batch) still
+    /// surfaces immediately without retry, so this loop cannot spin. Each retry increments
+    /// <c>orleans.lattice.provider.phase1.transient_retries</c>.
+    /// </para>
+    /// <para>
+    /// Must be non-negative.
+    /// </para>
+    /// </summary>
+    public int PhaseOneTransientRetryMaxAttempts { get; set; } = DefaultPhaseOneTransientRetryMaxAttempts;
+
+    /// <summary>Default value for <see cref="PhaseOneTransientRetryMaxAttempts"/> (2 additional attempts; three total).</summary>
+    public const int DefaultPhaseOneTransientRetryMaxAttempts = 2;
+
+    /// <summary>
+    /// Base delay for the jittered backoff applied between in-place phase-1 transient retries
+    /// (see <see cref="PhaseOneTransientRetryMaxAttempts"/>). The actual wait before attempt
+    /// <c>n</c> (1-based) is a random value in <c>[0, BaseDelay * n)</c>, capped at
+    /// <see cref="DefaultPhaseOneTransientRetryMaxDelay"/>. The jitter desynchronises the
+    /// re-drive paths of multiple hot shards so they do not retry in lockstep (a touch of
+    /// backoff damping complementing the offset-preserving retry). Default 25 ms. Set to
+    /// <see cref="TimeSpan.Zero"/> to retry without delay. Must be non-negative.
+    /// </summary>
+    public TimeSpan PhaseOneTransientRetryBaseDelay { get; set; } = DefaultPhaseOneTransientRetryBaseDelay;
+
+    /// <summary>Default value for <see cref="PhaseOneTransientRetryBaseDelay"/> (25 ms).</summary>
+    public static readonly TimeSpan DefaultPhaseOneTransientRetryBaseDelay = TimeSpan.FromMilliseconds(25);
+
+    /// <summary>Upper bound on any single phase-1 transient-retry backoff wait (250 ms).</summary>
+    public static readonly TimeSpan DefaultPhaseOneTransientRetryMaxDelay = TimeSpan.FromMilliseconds(250);
+
 
     /// <summary>
     /// Per-row WAL payload compression algorithm. Defaults to
