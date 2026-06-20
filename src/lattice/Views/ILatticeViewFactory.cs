@@ -29,6 +29,26 @@ public interface ILatticeViewFactory
     ILatticeView Create(ILattice source, string viewName, LatticeViewDefinition definition);
 
     /// <summary>
+    /// Opens a read handle for a materialised view that <b>already exists</b>,
+    /// resolved by name from the view catalog, the startup declarations, or the
+    /// durable runtime-view registry - without re-supplying the source tree or the
+    /// view definition. Use this when a caller only needs to <em>read</em> a view
+    /// (or observe its lag / force a rebuild) and does not hold the projection: the
+    /// returned <see cref="ILatticeView"/> resolves the maintainer's active
+    /// generation on each read, so it is the supported alternative to binding the
+    /// backing <c>view-{name}</c> tree directly (which a rebuild can leave stale).
+    /// <para>
+    /// Returns <see langword="null"/> when no view named <paramref name="viewName"/>
+    /// is registered (it was never created, or was deleted). This does not activate
+    /// or create anything; the maintainer comes online lazily on the first read
+    /// through the handle.
+    /// </para>
+    /// </summary>
+    /// <param name="viewName">The logical view name; the view tree is resolved as <c>view-{viewName}</c>.</param>
+    /// <param name="cancellationToken">Cancellation token observed during the durable-registry lookup.</param>
+    Task<ILatticeView?> GetAsync(string viewName, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Deletes the materialised view named <paramref name="viewName"/>: stops and
     /// decommissions its maintainer (unregistering the keepalive reminder,
     /// releasing the source WAL pin, and clearing the durable checkpoint), deletes

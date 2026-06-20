@@ -122,6 +122,10 @@ public class MaterialisedViewAtomicVisibilityTests
     [Test]
     public async Task Prepared_but_uncommitted_batch_is_not_visible_in_the_view()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-atomic-uncommitted-src";
         const string view = "mv-atomic-uncommitted-view";
         _ = CreateAdultView(tree, view);
@@ -145,6 +149,7 @@ public class MaterialisedViewAtomicVisibilityTests
     [Test]
     public async Task TxCommit_makes_the_whole_batch_visible_atomically()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-atomic-commit-src";
         const string view = "mv-atomic-commit-view";
         _ = CreateAdultView(tree, view);
@@ -185,6 +190,7 @@ public class MaterialisedViewAtomicVisibilityTests
     [Test]
     public async Task Aborted_batch_is_never_surfaced()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-atomic-abort-src";
         const string view = "mv-atomic-abort-view";
         _ = CreateAdultView(tree, view);
@@ -212,6 +218,7 @@ public class MaterialisedViewAtomicVisibilityTests
     [Test]
     public async Task Multi_shard_batch_is_reassembled_across_partitions()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-atomic-multishard-src";
         const string view = "mv-atomic-multishard-view";
         _ = CreateAdultView(tree, view);
@@ -256,6 +263,7 @@ public class MaterialisedViewAtomicVisibilityTests
     [Test]
     public async Task Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-atomic-replay-src";
         const string view = "mv-atomic-replay-view";
         _ = CreateAdultView(tree, view);
@@ -321,6 +329,7 @@ public class MaterialisedViewAtomicVisibilityTests
     [Test]
     public async Task Bounded_staging_buffer_forces_a_rebuild_and_the_view_still_converges()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-atomic-backstop-src";
         var view = MaterialisedViewClusterFixture.BackstopViewName;
         _ = CreateAdultView(tree, view);

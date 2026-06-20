@@ -60,6 +60,10 @@ public class MaterialisedViewPhase2IntegrationTests
     [Test]
     public async Task Rekeyed_view_reflects_inserts_updates_and_deletes()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv2-rekey-src";
         const string view = "mv2-rekey-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -91,6 +95,7 @@ public class MaterialisedViewPhase2IntegrationTests
     [Test]
     public async Task Rekeyed_view_range_delete_via_matched_keys_retracts_each_key()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv2-rekey-range-src";
         const string view = "mv2-rekey-range-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -119,6 +124,7 @@ public class MaterialisedViewPhase2IntegrationTests
     [Test]
     public async Task Key_preserving_view_range_delete_removes_view_range()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv2-kp-range-src";
         const string view = "mv2-kp-range-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -143,6 +149,7 @@ public class MaterialisedViewPhase2IntegrationTests
     [Test]
     public async Task Rekey_collision_emits_metric_and_falls_back_to_lww()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv2-collision-src";
         const string view = "mv2-collision-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -182,6 +189,7 @@ public class MaterialisedViewPhase2IntegrationTests
     [Test]
     public async Task Rekey_source_write_never_exposes_old_and_new_view_keys_together()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv2-rekey-atomic-src";
         const string view = "mv2-rekey-atomic-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -243,6 +251,7 @@ public class MaterialisedViewPhase2IntegrationTests
     [Test]
     public async Task WaitForSourceHlcAsync_completes_after_view_catches_up()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv2-barrier-src";
         const string view = "mv2-barrier-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);

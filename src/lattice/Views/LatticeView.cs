@@ -76,6 +76,7 @@ internal sealed class LatticeView(
     public async Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);
+        using var readScope = ViewReadContext.BeginScope();
         var tree = await ResolveTreeAsync(cancellationToken);
         return await tree.GetAsync(key, cancellationToken);
     }
@@ -83,6 +84,7 @@ internal sealed class LatticeView(
     /// <inheritdoc />
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
+        using var readScope = ViewReadContext.BeginScope();
         var tree = await ResolveTreeAsync(cancellationToken);
         if (!isAggregation)
         {
@@ -91,6 +93,10 @@ internal sealed class LatticeView(
 
         // Count only the materialised group values, excluding the reserved
         // internal rows, so a group's accumulator shards never inflate the count.
+        // This streams the group-value keys because ILattice exposes only a
+        // whole-tree CountAsync (which would include the reserved NUL-prefixed
+        // rows); a server-side ranged count would avoid materialising the keys.
+        // Tracked as a follow-up optimisation (issue #845).
         var count = 0;
         await foreach (var _ in tree.KeysAsync(ReservedFloor, cancellationToken: cancellationToken))
         {
@@ -106,6 +112,7 @@ internal sealed class LatticeView(
         string? endExclusive = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        using var readScope = ViewReadContext.BeginScope();
         var tree = await ResolveTreeAsync(cancellationToken);
         await foreach (var key in tree.KeysAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken))
         {
@@ -119,6 +126,7 @@ internal sealed class LatticeView(
         string? endExclusive = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        using var readScope = ViewReadContext.BeginScope();
         var tree = await ResolveTreeAsync(cancellationToken);
         await foreach (var entry in tree.EntriesAsync(startInclusive ?? ReservedFloor, endExclusive, cancellationToken: cancellationToken))
         {

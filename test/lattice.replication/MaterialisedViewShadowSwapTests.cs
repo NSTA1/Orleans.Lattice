@@ -132,6 +132,10 @@ public class MaterialisedViewShadowSwapTests
     [Test]
     public async Task Rebuild_reclaims_the_old_generation_tree()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "ss-reclaim-src";
         const string view = "ss-reclaim-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -173,6 +177,7 @@ public class MaterialisedViewShadowSwapTests
     [Test]
     public async Task Rebuild_preserves_entry_ttl()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "ss-ttl-src";
         const string view = "ss-ttl-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
