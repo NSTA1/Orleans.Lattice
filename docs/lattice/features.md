@@ -27,6 +27,18 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
 - [F-106](https://github.com/NSTA1/Orleans.Lattice/issues/794) - Asynchronous materialised views: WAL-consumer-driven, eventually-consistent filter/re-project and aggregation views over a source tree, derived locally per cluster
 - [F-107](https://github.com/NSTA1/Orleans.Lattice/issues/795) - Reusable log-tailing WAL subscriber abstraction; migrate the replication producer from the inline mutation observer to a log-first delivery model
+- [F-110](https://github.com/NSTA1/Orleans.Lattice/issues/836) - Orleans.Lattice.Api.State: optional gRPC add-on that lets external clients query, observe, and subscribe to a cluster's tree state and metadata (trees, structure, entries, views) for a tree-explorer dashboard and a later MCP surface, registered via `AddLatticeStateApi(...)`
+- [F-111](https://github.com/NSTA1/Orleans.Lattice/issues/825) - Orleans.Lattice.Api.State: project & package scaffolding with a no-op `AddLatticeStateApi(...)` front door
+- [F-112](https://github.com/NSTA1/Orleans.Lattice/issues/826) - Orleans.Lattice.Api.State: transport-agnostic state-query model & read facade that both the gRPC and future MCP bindings reuse
+- [F-113](https://github.com/NSTA1/Orleans.Lattice/issues/827) - Orleans.Lattice.Api.State: tree & view discovery / catalog endpoint with lifecycle state and effective per-tree config
+- [F-114](https://github.com/NSTA1/Orleans.Lattice/issues/828) - Orleans.Lattice.Api.State: push-up structural tree metadata so a tree's topology is readable in O(shards) calls without a full grain walk
+- [F-115](https://github.com/NSTA1/Orleans.Lattice/issues/829) - Orleans.Lattice.Api.State: tree-structure query endpoint surfacing the topology snapshot, paged and depth-limited
+- [F-116](https://github.com/NSTA1/Orleans.Lattice/issues/830) - Orleans.Lattice.Api.State: snapshot-isolated, predicate-capable entry / key-range inspection endpoint
+- [F-117](https://github.com/NSTA1/Orleans.Lattice/issues/831) - Orleans.Lattice.Api.State: gRPC contract & service host binding the read facade, with an authorization seam
+- [F-118](https://github.com/NSTA1/Orleans.Lattice/issues/832) - Orleans.Lattice.Api.State: change observation - resumable server-streaming subscription to live mutations with backpressure off the write hot path
+- [F-119](https://github.com/NSTA1/Orleans.Lattice/issues/833) - Orleans.Lattice.Api.State: live metadata / metrics observation - coalesced aggregate and topology-delta stream for dashboard gauges
+- [F-120](https://github.com/NSTA1/Orleans.Lattice/issues/834) - Orleans.Lattice.Api.State: efficiency & overhead guardrails - zero cost when unregistered, benchmarked overhead budget, snapshot/metric coalescing
+- [F-121](https://github.com/NSTA1/Orleans.Lattice/issues/835) - Orleans.Lattice.Api.State: docs, sample explorer & end-to-end tests, plus validation of the MCP-reuse seam
 
 ### Shipped
 
