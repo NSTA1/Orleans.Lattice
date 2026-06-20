@@ -777,6 +777,11 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. `ShipView` requires the replication package. |
 | `MaxLagBudget` | 0 | Maximum committed-but-unapplied source entries before the view is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. Has no effect when `MaxLagBudget` is 0. |
+| `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. |
+| `ThrottledBatchRatio` | 0.5 | Fraction of `BatchSize` drained per pass while the source is `Throttled`. Clamped to `[0, 1]`; the effective batch is clamped to `[1, BatchSize]`. |
+| `ThrottledPauseMs` | 50 | Milliseconds background drain ticks are skipped after a pass that saw a `Throttled` source. `<= 0` disables the deferral. |
+| `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Clamped to `[1, BatchSize]`. |
+| `SaturatedPauseMs` | 500 | Milliseconds background drain ticks are skipped after a pass that saw a `Saturated` source. `<= 0` disables the deferral. |
 
 See [Materialised views](materialised-views.md) for the full behaviour of each
 option, including what registrations a view needs (`AddLattice` +

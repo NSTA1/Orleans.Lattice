@@ -1791,6 +1791,7 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
 | `ILatticeViewProjection` / `PredicateLatticeViewProjection` | Filter / re-project projection: a predicate, optional value transform, and optional injective key re-map. `ProjectionVersion` is a structural hash that drives rebuild-on-change. `Create<T>(...)` builds one whose value transform runs against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
 | `ILatticeAggregationProjection` / `AggregationLatticeViewProjection` | Aggregation projection: an `AggregationKind`, group-key selector, selector-version tag, and the value / member selector the kind needs. `Create<T>(...)` builds one whose selectors run against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
 | `AggregationKind` | `Count`, `Sum`, `Min`, `Max`, `SetUnion`. |
+| `ViewWrite` / `ViewWriteKind` | The SPI value a projection's `Project(...)` yields: an upsert, delete, or range-reconcile against the view tree (`ViewWrite.Upsert` / `ViewWrite.Delete`). Authored only when writing a custom projection. |
 | `LatticeAggregationValue` | Decoder for materialised aggregate bytes: `DecodeDouble` (`Sum` / `Min` / `Max`) and `DecodeInt64` (`Count` / `SetUnion`). |
 | `ViewDigest` | Order-independent content fingerprint over the materialised `(key, value)` pairs, with an `EntryCount`. |
 | `LatticeViewOptions` | Per-view options resolved via `IOptionsMonitor<LatticeViewOptions>.Get(viewName)`. See [configuration](configuration.md#materialised-view-options). |
