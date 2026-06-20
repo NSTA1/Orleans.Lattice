@@ -313,31 +313,39 @@ $Layer2Rows = @(
 		ThroughputUnit = 'keys/s';
 	},
 	@{
-		Label = '`SetAsync` (point write, 100 veh/5 Hz)';
+		Label = '`SetAsync` (point write, 200 veh/5 Hz)';
 		WorkloadId = 'set-point';
 		WorkloadMode = 'set-point';
 		ThroughputUnit = 'keys/s';
 		# Per-workload offered rung. Point writes are the most account-bound
 		# mode: each key is its own WAL append and its own Azure Table
-		# operation (no batching of round-trips), so the eight in-flight
-		# flush slots cap the sustained rate at only ~800-850 key-writes/s
-		# against a single Tables account on the D8as_v5 host. Unlike the
-		# batched modes, point writes peg the flush slots (inFlight 8/8) at
-		# any offered rate near that ceiling, and once the slots are pinned a
-		# WAL append can wait behind the admission cap past its 30s dispatch
-		# timeout and fail - so cohorts at/near the ceiling fail ~2/3 of the
-		# time (validated: 350 veh -> 1/3 HEALTHY). Holding the offered rate
-		# well below the ceiling keeps the flush slots unsaturated (inFlight
-		# stays low) so no append ever waits out its dispatch timeout, and
-		# all three cohorts complete with zero failures. The reported number
-		# is therefore a conservative *sustained* point-write rate at a sub-
-		# saturation offered load, not the saturation ceiling (the account
-		# ceiling is discussed in docs/lattice/throughput.md).
-		# 100 veh x 5 Hz = 500 keys/s offered.
-		Rung = '100:5:45';
+		# operation (no batching of round-trips). The historical ~800-850
+		# key-writes/s knee was an artefact of the phase-1 409
+		# EntityAlreadyExists conflict storm (#824): a lost-response replay
+		# re-drove divergent content onto durable offsets, collapsing the WAL
+		# write path into a non-recovering wedge well below the real storage
+		# ceiling. That storm was removed (commit a858602 / PR #838: O(1)
+		# idempotent 409 replay proof + shard-side reconcile-before-resync +
+		# a finite WAL network timeout). The real-Azure P=16 ladder now runs
+		# clean across the whole 200->2000 offered-ops/s band (failed=0 at
+		# every rung, transient single-account stalls self-heal within the
+		# flush budget), with the single-account steady ceiling at ~5-8k
+		# entries/s. Stochastic single-account brown-out wedges only reappear
+		# above ~1500 offered ops/s. So the prior 100 veh (500 keys/s) rung
+		# is now ~2x below the proven-reliable range. Holding the offered
+		# rate to 200 veh keeps the cohort squarely inside the measured
+		# failed=0 band with comfortable headroom below the ~1500 ops/s
+		# stochastic-wedge onset, so the flush slots stay unsaturated and all
+		# three cohorts complete with zero failures. The reported number is a
+		# conservative *sustained* point-write rate at a sub-saturation
+		# offered load, not the saturation ceiling (the account ceiling and
+		# the multi-account fan-out remedy are discussed in
+		# docs/lattice/throughput.md).
+		# 200 veh x 5 Hz = 1,000 keys/s offered.
+		Rung = '200:5:45';
 	},
 	@{
-		Label = '`SetAsync` (point write + async materialised view, 100 veh/5 Hz)';
+		Label = '`SetAsync` (point write + async materialised view, 200 veh/5 Hz)';
 		WorkloadId = 'set-point-mv';
 		WorkloadMode = 'set-point-mv';
 		ThroughputUnit = 'keys/s';
@@ -351,8 +359,8 @@ $Layer2Rows = @(
 		# cohort - that equality is the evidence the materialised view is fully
 		# asynchronous and does not tax the primary tree's write path. The
 		# offered rung matches `set-point` exactly so the comparison is
-		# like-for-like. 100 veh x 5 Hz = 500 keys/s offered.
-		Rung = '100:5:45';
+		# like-for-like. 200 veh x 5 Hz = 1,000 keys/s offered.
+		Rung = '200:5:45';
 	},
 	@{
 		Label = '`GetManyAsync` (4,096 keys/call)';
@@ -1088,7 +1096,20 @@ function Read-SiloLogStats {
 		# trailing drain windows where count is low). The reporter emits at
 		# ~10-second cadence; t>=15s catches the second window onward.
 		$productive = @($phaseAMatches | Where-Object {
-			$_.Line -match '\[phaseA\] t=\s*([\d.]+)s' -and ([double]$Matches[1] -ge 15)
+			# Exclude the asynchronous view-maintainer's internal apply rows
+			# (tree=view-<name>). For set-point-mv the source tree and the
+			# attached materialised-view tree BOTH emit set.duration, but the
+			# view tree's rows are coalesced background apply batches - a single
+			# recorded "set" can cover thousands of tailed WAL entries, so its
+			# duration spans seconds and is NOT the caller-visible SetAsync
+			# latency. Worse, the producer stops a few seconds before the silo,
+			# so the final productive window often carries ONLY the view tree's
+			# drain rows; without this filter the last-window pick lands on them
+			# and publishes a multi-second cell for a workload whose real
+			# per-call p50 matches plain set-point. Anchor the cell on the
+			# source tree by dropping any tree=view-* row.
+			($_.Line -notmatch ' tree=view-[^\s]*') -and
+			($_.Line -match '\[phaseA\] t=\s*([\d.]+)s') -and ([double]$Matches[1] -ge 15)
 		})
 		if ($productive.Count -eq 0) { continue }
 		# Use the last full productive window (matches the pre-fix behaviour
@@ -1159,14 +1180,20 @@ function Aggregate-Layer1Cells {
 		$p90Key   = "microbench_${slug}_p90_ns"
 		$p99Key   = "microbench_${slug}_p99_ns"
 		$allocKey = "microbench_${slug}_alloc_b"
-		# Rows whose per-call batch size is > 1 are async-heavy
-		# (SetManyAsync, GetManyAsync, SetManyAtomicAsync). BDN's MemoryDiagnoser
-		# reads GC.GetAllocatedBytesForCurrentThread(), which is thread-local;
-		# on those workloads the await continuation can land on a worker thread
-		# and the workload-thread reading collapses to 0 for that cohort even
-		# though the operation clearly allocates. Point rows (ExpectedBatchSize=1
-		# or unset) can legitimately report 0 - e.g. a JIT-promoted
-		# allocation-free GetAsync steady state - and must not be filtered.
+		# A cohort can occasionally report alloc_b=0 for a row that clearly
+		# allocates. This is a BenchmarkDotNet MemoryDiagnoser measurement
+		# artefact, not a real allocation-free path: the per-op allocated-bytes
+		# delta (workload minus overhead) is computed from GC counters, and under
+		# a Server / background (concurrent) GC a collection landing inside the
+		# measurement window perturbs that delta enough to floor the cheapest
+		# paths (~200-300 B/op point reads) to a reported 0. The microbench host
+		# now runs Workstation, non-concurrent GC (see the .csproj) which removes
+		# the contamination at the source. As defence in depth the aggregator
+		# still drops alloc_b=0 cohorts for batched rows (ExpectedBatchSize>1),
+		# whose larger per-call allocation makes a true 0 impossible. Point rows
+		# (ExpectedBatchSize 1 or unset) are NOT dropped: some of them - e.g.
+		# ExistsAsync returning a cached Task<bool> singleton - genuinely allocate
+		# ~0, so a measured 0 there is correct and must be preserved.
 		$batchSize = if ($row.ContainsKey('ExpectedBatchSize')) { [int]$row.ExpectedBatchSize } else { 1 }
 		$dropZeroAllocCohorts = $batchSize -gt 1
 		$p50s = @(); $p75s = @(); $p90s = @(); $p99s = @(); $allocs = @()
@@ -1196,14 +1223,14 @@ function Aggregate-Layer1Cells {
 		$p75Median = if ($p75s.Count -gt 0) { (Get-Median $p75s) } else { $null }
 		$p90Median = if ($p90s.Count -gt 0) { (Get-Median $p90s) } else { $null }
 		$p99Median = if ($p99s.Count -gt 0) { (Get-Median $p99s) } else { $null }
-		# Explicit null check, NOT truthy: a real measurement of '0 bytes allocated'
-		# (e.g. an in-process GetAsync that the JIT promotes to an allocation-free
-		# steady-state) is falsy under `if ($allocMedian)` and was previously
-		# coerced to $null, rendering as 'n/a' in the doc table even though zero
-		# is the correct answer. The batched-row zero-drop above prevents BDN's
-		# thread-local-counter async undercount from clobbering this with a
-		# bogus 0 - if every cohort for a batched row dropped, $allocs is empty
-		# and the cell renders as 'n/a' (correctly: we have no usable sample).
+		# Explicit null check, NOT truthy: a real measurement of '0 bytes
+		# allocated' (e.g. ExistsAsync returning a cached Task<bool> singleton)
+		# is falsy under `if ($allocMedian)` and was previously coerced to $null,
+		# rendering as 'n/a' in the doc table even though zero is the correct
+		# answer. The batched-row zero-drop above prevents a stray GC-perturbed
+		# alloc_b=0 from clobbering a batched row's median - if every cohort for a
+		# batched row dropped, $allocs is empty and the cell renders as 'n/a'
+		# (correctly: we have no usable sample).
 		$allocMedian = if ($allocs.Count -gt 0) { (Get-Median $allocs) } else { $null }
 		# Per-key throughput ceiling: (1 / p50_seconds) * batchSize.
 		# Batched calls return per-key keys/s rather than per-call calls/s
@@ -1731,6 +1758,36 @@ function Main {
 		# the corrected doc without paying for a fresh Azure VM).
 		if ($state.ContainsKey('layer1') -and $state.layer1.ContainsKey('cohorts') -and @($state.layer1.cohorts).Count -gt 0) {
 			$state.layer1.rows = Aggregate-Layer1Cells -Cohorts $state.layer1.cohorts
+		}
+		# Re-derive each Layer 2 cohort's steady-state mean and per-call
+		# quantiles from its retained on-disk silo log before re-aggregating.
+		# Read-SiloLogStats runs once at cohort time and freezes its result into
+		# state.json, so without this re-parse a fix to the per-call instrument
+		# selection (e.g. excluding the async view-maintainer's tree=view-* rows)
+		# would never reach a -DryRun replay - Aggregate-Layer2Cells only
+		# re-medians the already-baked per-cohort values. Re-parsing the logs the
+		# run already pulled back is the whole point of a dry-run replay: fix an
+		# aggregator/parse bug locally, replay, see the corrected doc without
+		# paying for a fresh Azure VM. Cohorts whose silo log is no longer on
+		# disk keep their stored values.
+		if ($state.ContainsKey('layer2') -and $state.layer2.ContainsKey('cohorts') -and $state.layer2.cohorts -is [hashtable]) {
+			$dryRunBatchSize = [int](Get-StateOr $state 'batchSize' 4096)
+			foreach ($mode in @($state.layer2.cohorts.Keys)) {
+				foreach ($cohort in @($state.layer2.cohorts[$mode])) {
+					$cohortLog = Get-StateOr $cohort 'siloLog' $null
+					if ($cohortLog -and (Test-Path $cohortLog)) {
+						$reparsed = Read-SiloLogStats -SiloLogPath $cohortLog -WorkloadMode $mode -BatchSize $dryRunBatchSize
+						$cohort.steadyMean   = $reparsed.SteadyMean
+						$cohort.perCallP50Ms = $reparsed.PerCallP50Ms
+						$cohort.perCallP75Ms = $reparsed.PerCallP75Ms
+						$cohort.perCallP90Ms = $reparsed.PerCallP90Ms
+						$cohort.perCallP99Ms = $reparsed.PerCallP99Ms
+						$cohort.inFlightMax  = $reparsed.InFlightMax
+						$cohort.failed       = $reparsed.Failed
+						$cohort.verdict      = $reparsed.Verdict
+					}
+				}
+			}
 		}
 		if ($state.ContainsKey('layer2') -and $state.layer2.ContainsKey('cohorts') -and $state.layer2.cohorts -is [hashtable] -and $state.layer2.cohorts.Count -gt 0) {
 			$state.layer2.rows = Aggregate-Layer2Cells -CohortsByMode $state.layer2.cohorts

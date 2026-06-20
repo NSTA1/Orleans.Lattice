@@ -73,28 +73,28 @@ mechanical and the prose around the marker is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
   dotnet=10.0.109
-  gitSha=8b0cefa
-  host=Standard_D8as_v5
-  rowsMeasured=2026-06-11
+  gitSha=f52b1b5
+  host=Standard_D4as_v5
+  rowsMeasured=2026-06-20
   methodology=Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |
 |------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|
-| `GetAsync` (point read) | **1.37 us** | 4.18 us | 9.11 us | 63.44 us | 216 B | **~730.4 k keys/s** |
-| `SetAsync` (point write) | **9.32 us** | 18.68 us | 22.33 us | 43.63 us | 784 B | **~107.3 k keys/s** |
-| `GetManyAsync` (4 keys/call) | **10.16 us** | 14.26 us | 16.46 us | 75.81 us | 6 KB | **~393.5 k keys/s** |
-| `SetManyAsync` (1,000 keys/call) | **912.13 us** | 928.05 us | 1.55 ms | 3.12 ms | 100 KB | **~1.1 M keys/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **286.21 us** | 411.56 us | 490.57 us | 1.85 ms | 65 KB | **~55.9 k keys/s** |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **132.25 us** | 156.74 us | 182.09 us | 192.34 us | 54 KB | **~15.1 k keys/s** |
-| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **253.93 us** | 263.89 us | 295.4 us | 301.6 us | 104 KB | **~252 k keys/s** |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **271.36 us** | 302.77 us | 327.32 us | 346.08 us | 123 KB | **~7.4 k keys/s** |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **396.64 us** | 411.1 us | 448.91 us | 450.8 us | 186 KB | **~161.4 k keys/s** |
+| `GetAsync` (point read) | **1.79 us** | 4.12 us | 7.9 us | 68.78 us | 216 B | **~559.8 k keys/s** |
+| `SetAsync` (point write) | **4.13 us** | 5.86 us | 7.27 us | 29.53 us | 784 B | **~242.3 k keys/s** |
+| `GetManyAsync` (4 keys/call) | **11.19 us** | 15.02 us | 20.27 us | 77.82 us | 6 KB | **~357.4 k keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **1.06 ms** | 1.11 ms | 1.68 ms | 2.88 ms | 100 KB | **~941.6 k keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **270.2 us** | 331.51 us | 415.61 us | 1.15 ms | 64 KB | **~59.2 k keys/s** |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **160.89 us** | 183.17 us | 195.9 us | 202.57 us | 53 KB | **~12.4 k keys/s** |
+| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **281.21 us** | 306.96 us | 310.66 us | 313.57 us | 104 KB | **~227.6 k keys/s** |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **315.65 us** | 348.83 us | 357.55 us | 361.48 us | 124 KB | **~6.3 k keys/s** |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **428.78 us** | 493.89 us | 500.86 us | 506.31 us | 187 KB | **~149.3 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-06-11 on Standard_D8as_v5 (.NET 10.0.109) at git sha 8b0cefa, n=3 cohorts (BDN quick).
+> Measured 2026-06-20 on Standard_D4as_v5 (.NET 10.0.109) at git sha f52b1b5, n=3 cohorts (BDN quick).
 
 **Reading the numbers.** The per-thread call rate is the derived
 `1 / p50` scaled by the per-call batch size (1 for `GetAsync` / `SetAsync`,
@@ -143,34 +143,35 @@ realistic latency the storage provider contributes.
 <!-- perf-table:layer2:start
   schema=v1
   batchSize=4096
-  cohortN=3
+  cohortN=1/2/3
   dotnet=10.0.109
-  gitSha=17eaf5b
-  host=Standard_D8as_v5
+  gitSha=f52b1b5
+  host=Standard_D4as_v5
   region=westus3
   responseTimeoutSec=180
-  rowsMeasured=2026-06-12
+  rowsMeasured=2026-06-20
   rung=4000 vehicles / 5 Hz / 45s
   walMaxPendingBatches=16
   walPartitions=8
-  methodology=Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo's 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.
+  methodology=Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo's 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. All five workload modes report the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |
 |------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|
-| `GetAsync` (point read) | **~19.7 k keys/s** | ~70 us | ~70 us | ~100 us | ~100 us |
-| `SetAsync` (point write, 100 veh/5 Hz) | **500 keys/s** | ~6.66 ms | ~10.34 ms | ~13.58 ms | ~21.62 ms |
-| `GetManyAsync` (4,096 keys/call) | **~19.7 k keys/s** | ~2 ms | ~2.06 ms | ~5.2 ms | ~6.06 ms |
-| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **~6.5 k keys/s** | ~198.58 ms | ~225.45 ms | ~243.97 ms | ~268.46 ms |
-| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **507 keys/s** | ~9.92 ms | ~10.67 ms | ~12.99 ms | ~50.96 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **121 keys/s** | ~15.17 ms | ~23.72 ms | ~24.66 ms | ~47.84 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **44 keys/s** | ~4.06 ms | ~4.5 ms | ~10.5 ms | ~11.67 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz) | **737 keys/s** | ~33.37 ms | ~38.56 ms | ~48.4 ms | ~78.94 ms |
+| `GetAsync` (point read) | **~21.1 k keys/s** | ~60 us | ~80 us | ~90 us | ~100 us |
+| `SetAsync` (point write, 200 veh/5 Hz) | **~1.2 k keys/s** | ~20.42 ms | ~29.17 ms | ~40.32 ms | ~79.01 ms |
+| `SetAsync` (point write + async materialised view, 200 veh/5 Hz) | **~1.2 k keys/s** | ~27.67 ms | ~44.16 ms | ~67.94 ms | ~221.38 ms |
+| `GetManyAsync` (4,096 keys/call) | **~19.9 k keys/s** | ~3.43 ms | ~3.72 ms | ~4.2 ms | ~7.99 ms |
+| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **~7 k keys/s** | ~337.88 ms | ~453.73 ms | ~499.11 ms | ~527.96 ms |
+| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **565 keys/s** | ~19.47 ms | ~29.26 ms | ~57.6 ms | ~78.09 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **186 keys/s** | ~10.91 ms | ~13.91 ms | ~17.61 ms | ~137.1 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **53 keys/s** | ~7.36 ms | ~7.64 ms | ~8.71 ms | ~8.71 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz) | **813 keys/s** | ~58.69 ms | ~72.33 ms | ~83.39 ms | ~103.31 ms |
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-06-12 on Standard_D8as_v5 in westus3 (.NET 10.0.109) at git sha 17eaf5b, n=3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
+> Measured 2026-06-20 on Standard_D4as_v5 in westus3 (.NET 10.0.109) at git sha f52b1b5, n=1/2/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
@@ -182,6 +183,24 @@ keys as a sequence of 100-entity Azure-Tables transactions against one
 batch partition). If your workload can naturally batch writes (telemetry
 tick frames, event sourcing batches, periodic flush windows), use
 `SetManyAsync`. If it cannot, your write ceiling is the `SetAsync` row.
+
+**An asynchronous materialised view is nearly free on the write path.**
+The `SetAsync (point write + async materialised view)` row drives the
+*identical* point-write path as the plain `SetAsync` row, at the same
+offered load, with a key-preserving materialised view attached over the
+tree. Its sustained source-write throughput is unchanged (~1.2 k keys/s)
+because the view is maintained **asynchronously, off the caller's
+critical path**: the foreground `SetAsync` returns as soon as the source
+tree's write is durable, and the view maintainer applies its coalesced
+background batches afterwards (in the benchmark the view kept up with
+zero apply lag). The only measurable cost is a modest widening of the
+caller-visible latency tail (p50 ~28 ms vs ~20 ms, p99 ~221 ms vs
+~79 ms), because the background view applies contend with the foreground
+writes for the same silo CPU, WAL-flush slots, and single Azure Tables
+account budget. The takeaway for capacity planning: maintaining a view
+costs a bounded latency-tail overhead on the source writes, not a
+throughput penalty - budget for the view's own write load on the shared
+account rather than for a slowdown of the tree it projects from.
 
 **The write rows are not maximum-throughput numbers.** Each write
 workload is driven at its own deliberately *sub-saturation* offered load
@@ -201,12 +220,11 @@ its own saturation point. Every write-row throughput cell is therefore a
 one another as if they shared an offered load - even the single-tree and
 cross-tree 64-key atomic rows are driven at different rungs, because
 their sustainable key-write rates differ by call shape; the per-call
-latency columns are the meaningful cross-shape comparison. The absolute ceiling
-for a single storage account lives in
-`benchmark/azure-throughput/throughput.md` section 31 (pinned
-empirically at **~22-24 ke/s aggregate key-write throughput**, with
-`TableTransactionFailedException` (409 Conflict + SDK timeout) bursts as
-the saturation signal). A workload that combines several of these write
+latency columns are the meaningful cross-shape comparison. A single Azure
+Tables Standard account has a finite per-account ceiling - the binder is
+per-account concurrent in-flight transactions, and bursts of
+`TableTransactionFailedException` (409 Conflict + SDK timeout) are the
+saturation signal. A workload that combines several of these write
 shapes on one account adds their offered loads and can climb into that
 saturation regime - see [WAL Tuning](wal-tuning.md) for the back-pressure
 manifestations and the partition-the-storage recovery path. The binding

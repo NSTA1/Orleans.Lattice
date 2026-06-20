@@ -7,8 +7,22 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Benchmark.Microbench</RootNamespace>
     <AssemblyName>Orleans.Lattice.Benchmark.Microbench</AssemblyName>
-    <ServerGarbageCollection>true</ServerGarbageCollection>
-    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <!-- Workstation, non-concurrent GC is required for accurate BenchmarkDotNet
+         MemoryDiagnoser results. Under Server GC each logical core gets its own
+         heap with a large per-thread allocation context, and the concurrent
+         (background) GC thread runs asynchronously to the measured operation.
+         Together these make the per-operation allocated-bytes delta that
+         MemoryDiagnoser computes (workload minus overhead) non-deterministic for
+         the cheapest paths: on a busy multi-core Linux host the point-read family
+         (~200-300 B/op) stochastically floored to a reported 0 B, while the same
+         code measured a correct non-zero figure on a quieter host or run. A
+         single-heap, blocking GC removes the background-thread contamination and
+         the chunked allocation-context masking, so allocation is measured
+         deterministically and reproducibly. This is the BDN-recommended config
+         for per-operation microbenchmarks and only affects this measurement
+         host - it does not change what the Orleans.Lattice library ships with. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredCompilation>true</TieredCompilation>
     <!-- BenchmarkDotNet 0.15.x pins Microsoft.CodeAnalysis.Common to 4.14.0 for its
          in-process Roslyn emit toolchain, while the surrounding solution uses 5.0.0.
