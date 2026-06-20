@@ -1,4 +1,7 @@
-﻿namespace Orleans.Lattice.BPlusTree.Grains;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Views;
+
+namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Bulk-load, tree deletion, recovery, and purge operations.
@@ -68,10 +71,37 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
+        await ThrowIfSourceOfMaterialisedViewAsync(cancellationToken);
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => deletion.DeleteTreeAsync(),
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Rejects deleting this tree while it is the source of one or more
+    /// materialised views. A view derives its contents from its source tree's
+    /// write-ahead log; deleting the source out from under a live view would
+    /// freeze the view at stale state, leak the maintainer's source-WAL cursor
+    /// pin, and fault any later view rebuild. The dependent view(s) must be torn
+    /// down first via <c>ILatticeViewFactory.DeleteAsync</c>. The guard is an
+    /// optional service registered only by <c>AddLatticeViews</c>, so a host
+    /// without materialised views resolves nothing and is unaffected.
+    /// </summary>
+    private async Task ThrowIfSourceOfMaterialisedViewAsync(CancellationToken cancellationToken)
+    {
+        var guard = services.GetService<IViewSourceGuard>();
+        if (guard is null)
+        {
+            return;
+        }
+
+        var dependents = await guard.FindDependentViewsAsync(TreeId, cancellationToken);
+        if (dependents.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Tree '{TreeId}' cannot be deleted because {dependents.Count} materialised view(s) derive from it: {string.Join(", ", dependents)}. Delete the dependent view(s) first via ILatticeViewFactory.DeleteAsync, then delete the source tree.");
+        }
     }
 
     public async Task RecoverTreeAsync(CancellationToken cancellationToken = default)

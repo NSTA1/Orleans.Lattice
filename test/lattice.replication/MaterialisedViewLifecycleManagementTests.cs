@@ -337,6 +337,58 @@ public class MaterialisedViewLifecycleManagementTests
         Assert.That((await RegistryGrain.ListAsync()).Any(r => r.ViewName == view), Is.False, "deleting an aggregation view should remove its durable registration");
     }
 
+    [Test]
+    public async Task DeleteTreeAsync_on_a_source_with_a_runtime_view_is_rejected()
+    {
+        const string tree = "mv-srcdel-runtime-src";
+        const string view = "mv-srcdel-runtime-view";
+        var source = _cluster.Client.GetGrain<ILattice>(tree);
+        _ = CreateRuntimeView(tree, view);
+        await DrainToZeroAsync(view);
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => source.DeleteTreeAsync(),
+            "deleting a source tree that still has a dependent view must be rejected");
+        Assert.That(ex!.Message, Does.Contain(view), "the rejection should name the blocking view");
+
+        // After the dependent view is deleted, the source tree is free to delete.
+        await Factory.DeleteAsync(view);
+        Assert.DoesNotThrowAsync(
+            () => source.DeleteTreeAsync(),
+            "once the dependent view is gone the source tree should delete");
+    }
+
+    [Test]
+    public void DeleteTreeAsync_on_a_source_with_a_startup_view_is_rejected()
+    {
+        var source = _cluster.Client.GetGrain<ILattice>(StartupSourceTreeId);
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => source.DeleteTreeAsync(),
+            "deleting a source tree that backs a startup-declared view must be rejected");
+        Assert.That(ex!.Message, Does.Contain(StartupViewName), "the rejection should name the blocking startup view");
+    }
+
+    [Test]
+    public async Task DeleteTreeAsync_on_a_source_with_no_views_succeeds()
+    {
+        const string tree = "mv-srcdel-noview-src";
+        var source = _cluster.Client.GetGrain<ILattice>(tree);
+        await source.SetAsync("k", "v"u8.ToArray());
+
+        Assert.DoesNotThrowAsync(
+            () => source.DeleteTreeAsync(),
+            "a tree with no dependent views must delete normally");
+    }
+
+    [Test]
+    public void Create_over_a_view_tree_source_is_rejected()
+    {
+        var viewSource = _cluster.Client.GetGrain<ILattice>("view-some-existing-view");
+        Assert.Throws<InvalidOperationException>(
+            () => Factory.Create(viewSource, "mv-chained-view", new LatticeViewDefinition("mv-chained-view", new IdentityViewProjection())),
+            "creating a view whose source is itself a view tree must be rejected");
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
