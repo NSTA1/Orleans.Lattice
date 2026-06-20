@@ -59,6 +59,7 @@ public class ShardRootGrainConsistentScanTests
                 Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(Task.FromResult(entries.ToList()));
         leaf.CountAsync().Returns(Task.FromResult(keys.Count));
+        leaf.CountAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.FromResult(keys.Count));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         leaf.GetPrevSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
 
@@ -200,6 +201,47 @@ public class ShardRootGrainConsistentScanTests
             Throws.InstanceOf<ArgumentOutOfRangeException>());
         Assert.That(async () => await h.Grain.CountForSlotsAsync([0], -1),
             Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void CountForSlotsAsync_ranged_throws_when_sortedSlots_null()
+    {
+        var h = CreateHarness();
+        Assert.That(async () => await h.Grain.CountForSlotsAsync(null!, VirtualShardCount, null, null),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void CountForSlotsAsync_ranged_throws_when_virtualShardCount_non_positive()
+    {
+        var h = CreateHarness();
+        Assert.That(async () => await h.Grain.CountForSlotsAsync([0], 0, null, null),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task CountForSlotsAsync_ranged_with_null_bounds_equals_parameterless()
+    {
+        var keys = KeysWithSlots(50);
+        var h = CreateHarness(leafKeys: keys);
+        var slot0 = ShardMap.GetVirtualSlot(keys[0], VirtualShardCount);
+
+        var unbounded = await h.Grain.CountForSlotsAsync([slot0], VirtualShardCount);
+        var ranged = await h.Grain.CountForSlotsAsync([slot0], VirtualShardCount, null, null);
+
+        Assert.That(ranged, Is.EqualTo(unbounded));
+    }
+
+    [Test]
+    public async Task CountAsync_ranged_with_null_bounds_equals_parameterless()
+    {
+        var keys = KeysWithSlots(7);
+        var h = CreateHarness(leafKeys: keys);
+
+        var unbounded = await h.Grain.CountAsync();
+        var ranged = await h.Grain.CountAsync(null, null);
+
+        Assert.That(ranged, Is.EqualTo(unbounded));
     }
 
     [Test]

@@ -1176,7 +1176,9 @@ internal sealed partial class ShardRootGrain(
         return totalDeleted;
     }
 
-    public async Task<int> CountAsync()
+    public Task<int> CountAsync() => CountAsync(null, null);
+
+    public async Task<int> CountAsync(string? startInclusive, string? endExclusive)
     {
         await PrepareForOperationAsync();
         RecordRead();
@@ -1191,7 +1193,11 @@ internal sealed partial class ShardRootGrain(
         // if any virtual slots have been split away, we cannot trust
         // the leaf-level count (it includes orphan moved-slot entries). Walk
         // the keys and filter. The fast path (no splits) is preserved when
-        // MovedAwaySlots is empty.
+        // MovedAwaySlots is empty. The [startInclusive, endExclusive) bounds
+        // are pushed all the way to the leaf so counting stays server-side:
+        // a fully-covered leaf returns its full count and a boundary leaf
+        // returns only the in-range subset, never materialising keys across
+        // the lattice->caller wire.
         var hasMovedAway = state.State.MovedAwaySlots.Count > 0
             && state.State.MovedAwayVirtualShardCount is not null;
 
@@ -1202,7 +1208,7 @@ internal sealed partial class ShardRootGrain(
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             if (hasMovedAway)
             {
-                var keys = await leaf.GetKeysAsync(null, null);
+                var keys = await leaf.GetKeysAsync(startInclusive, endExclusive);
                 for (int i = 0; i < keys.Count; i++)
                 {
                     if (!IsSlotMovedAway(keys[i])) total++;
@@ -1210,7 +1216,7 @@ internal sealed partial class ShardRootGrain(
             }
             else
             {
-                total += await leaf.CountAsync();
+                total += await leaf.CountAsync(startInclusive, endExclusive);
             }
 
             var next = await leaf.GetNextSiblingAsync();
@@ -1277,7 +1283,11 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount)
+    public Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount) =>
+        CountForSlotsAsync(sortedSlots, virtualShardCount, null, null);
+
+    /// <inheritdoc />
+    public async Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive)
     {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
@@ -1297,7 +1307,12 @@ internal sealed partial class ShardRootGrain(
         while (true)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
-            var keys = await leaf.GetKeysAsync(null, null);
+            // Push the [startInclusive, endExclusive) bound to the leaf so it
+            // returns only the in-range keys; the per-slot ownership filter is
+            // then applied to that already-bounded set. Both constraints must
+            // hold for a key to count, keeping the post-split ranged count
+            // exact against the authoritative ShardMap.
+            var keys = await leaf.GetKeysAsync(startInclusive, endExclusive);
             for (int i = 0; i < keys.Count; i++)
             {
                 var slot = ShardMap.GetVirtualSlot(keys[i], virtualShardCount);

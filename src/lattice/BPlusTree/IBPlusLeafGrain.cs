@@ -202,6 +202,18 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<int> CountAsync();
 
     /// <summary>
+    /// Returns the number of live (non-tombstoned) keys in this leaf whose key
+    /// falls in the half-open range [<paramref name="startInclusive"/>,
+    /// <paramref name="endExclusive"/>). A <see langword="null"/> bound is
+    /// unbounded on that side; <c>CountAsync(null, null)</c> is equivalent to
+    /// <see cref="CountAsync()"/>. Bounds use the same Ordinal comparison and
+    /// in-progress-split-boundary handling as <see cref="GetKeysAsync"/>, so a
+    /// ranged count matches an equivalent ranged key enumeration exactly while
+    /// shipping only an integer (no keys cross the wire).
+    /// </summary>
+    Task<int> CountAsync(string? startInclusive, string? endExclusive);
+
+    /// <summary>
     /// Returns a point-in-time count of live and tombstoned-or-expired entries
     /// in this leaf in a single call. Used by the diagnostics aggregation path
     /// (<see cref="ILattice.DiagnoseAsync"/>) to compute tombstone ratios without

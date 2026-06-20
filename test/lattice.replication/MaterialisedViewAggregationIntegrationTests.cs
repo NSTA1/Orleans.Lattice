@@ -217,4 +217,45 @@ public class MaterialisedViewAggregationIntegrationTests
         viewTree = await DrainToZeroAsync(view);
         Assert.That(SumValue(await viewTree.GetAsync("red")), Is.EqualTo(13), "red = 3 + 4 + 6 after the atomic batch folds in.");
     }
+
+    [Test]
+    public async Task Aggregation_view_CountAsync_returns_distinct_group_count_excluding_reserved_rows()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        const string tree = "agg-count-src";
+        const string view = "agg-count-view";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        var handle = CreateView(tree, view, AggregationKind.Sum);
+
+        // Four source keys across three distinct groups. The aggregation
+        // maintainer also writes reserved accumulator / inverse / membership
+        // rows under the NUL prefix, so the view's backing tree holds strictly
+        // more than three rows.
+        await source.SetAsync("a", Record("red", 10));
+        await source.SetAsync("b", Record("red", 5));
+        await source.SetAsync("c", Record("blue", 7));
+        await source.SetAsync("d", Record("green", 3));
+        var viewTree = await DrainToZeroAsync(view);
+
+        // The view-facing CountAsync must report only the materialised group
+        // values (red, blue, green) and never the reserved internal rows.
+        var groupCount = await handle.CountAsync();
+        Assert.That(groupCount, Is.EqualTo(3),
+            "Aggregation view CountAsync must count only the distinct group values.");
+
+        // The raw whole-tree count includes the reserved NUL-prefixed rows, so
+        // it must be strictly greater than the group count - proving those rows
+        // exist and that the ranged count genuinely excludes them rather than
+        // there being no reserved rows to begin with.
+        var rawCount = await viewTree.CountAsync();
+        Assert.That(rawCount, Is.GreaterThan(groupCount),
+            "The backing tree must hold reserved rows beyond the group values.");
+
+        // A delete that empties the green group drops the visible count to 2.
+        await source.DeleteAsync("d");
+        await DrainToZeroAsync(view);
+        var afterDelete = await handle.CountAsync();
+        Assert.That(afterDelete, Is.EqualTo(2),
+            "Removing the only contribution to a group drops the group count.");
+    }
 }

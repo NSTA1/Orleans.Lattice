@@ -293,6 +293,22 @@ public interface ILattice : IGrainWithStringKey
     Task<int> CountAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the number of live (non-tombstoned) keys whose key falls in the
+    /// half-open range [<paramref name="startInclusive"/>,
+    /// <paramref name="endExclusive"/>) across all shards. A
+    /// <see langword="null"/> bound is unbounded on that side, so
+    /// <c>CountAsync(null, null)</c> is equivalent to <see cref="CountAsync(CancellationToken)"/>.
+    /// Reuses the whole-tree count machinery: fully-covered leaves contribute
+    /// their full count and only boundary leaf(s) are partial-counted, so no
+    /// keys are materialised across the wire. Carries the same
+    /// strong-consistency and concurrent-split reconciliation guarantees as
+    /// <see cref="CountAsync(CancellationToken)"/>; bounded by
+    /// <see cref="LatticeOptions.MaxScanRetries"/>.
+    /// </summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    Task<int> CountAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the number of live (non-tombstoned) keys in each shard as an ordered list.
     /// The list index corresponds to the shard index (0-based).
     /// Useful for diagnostics and load-balancing analysis.
