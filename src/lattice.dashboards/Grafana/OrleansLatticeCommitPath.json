@@ -464,8 +464,8 @@
     },
     {
       "id": 109,
-      "title": "Storage-provider retries (ops/s) - attempts vs exhausted vs idempotent-replays",
-      "description": "provider.retry.attempts tracks every retry the storage adapter issues against a transient failure (healthy resilience under transient-fault load). provider.retry.exhausted increments when the bounded-retry budget is exhausted and the caller-visible exception propagates - any non-zero rate is alert-worthy because it means a foreground commit failed. provider.idempotent_replays increments when a phase-one batch hits a 409 EntityAlreadyExists whose resident rows are proven byte-identical to the batch (a lost-response SDK retry of an already-durable write) and is resolved as a success - a non-zero rate is benign but signals the cluster is losing phase-one responses under load (CPU / network pressure), so it should track alongside, not instead of, exhausted.",
+      "title": "Storage-provider retries (ops/s) - attempts vs exhausted vs idempotent-replays vs phase1-transient",
+      "description": "provider.retry.attempts tracks every retry the storage adapter issues against a transient failure (healthy resilience under transient-fault load). provider.retry.exhausted increments when the bounded-retry budget is exhausted and the caller-visible exception propagates - any non-zero rate is alert-worthy because it means a foreground commit failed. provider.idempotent_replays increments when a phase-one batch hits a 409 EntityAlreadyExists whose resident rows are proven byte-identical to the batch (a lost-response SDK retry of an already-durable write) and is resolved as a success - a non-zero rate is benign but signals the cluster is losing phase-one responses under load (CPU / network pressure), so it should track alongside, not instead of, exhausted. provider.phase1.transient_retries counts phase-1 commit attempts the provider re-issued in place after a transient fault, resubmitting the byte-identical batch at the same offsets rather than faulting the calling WAL shard - a non-zero rate means the provider absorbed phase-1 turbulence without escalating it to the shard.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 76 },
@@ -473,7 +473,8 @@
       "targets": [
         { "refId": "A", "expr": "sum(rate(orleans_lattice_provider_retry_attempts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "attempts" },
         { "refId": "E", "expr": "sum(rate(orleans_lattice_provider_retry_exhausted_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "exhausted" },
-        { "refId": "I", "expr": "sum(rate(orleans_lattice_provider_idempotent_replays_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "idempotent-replays" }
+        { "refId": "I", "expr": "sum(rate(orleans_lattice_provider_idempotent_replays_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "idempotent-replays" },
+        { "refId": "T", "expr": "sum(rate(orleans_lattice_provider_phase1_transient_retries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "phase1-transient-retries" }
       ]
     },
     {
