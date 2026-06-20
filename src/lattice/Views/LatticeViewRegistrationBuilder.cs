@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice;
@@ -26,6 +27,7 @@ public sealed class LatticeViewRegistrationBuilder
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projection);
+        ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
         _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, _ => projection));
         return this;
     }
@@ -42,6 +44,7 @@ public sealed class LatticeViewRegistrationBuilder
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projectionFactory);
+        ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
         _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, projectionFactory));
         return this;
     }
@@ -58,6 +61,7 @@ public sealed class LatticeViewRegistrationBuilder
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projection);
+        ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
         _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, ProjectionFactory: null, _ => projection));
         return this;
     }
@@ -74,6 +78,7 @@ public sealed class LatticeViewRegistrationBuilder
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projectionFactory);
+        ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
         _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, ProjectionFactory: null, projectionFactory));
         return this;
     }

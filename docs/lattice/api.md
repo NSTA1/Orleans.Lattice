@@ -476,7 +476,7 @@ maintenance windows accordingly.
 |--------|-----------|-------------|
 | `TreeExistsAsync` | `Task<bool> TreeExistsAsync()` | Returns `true` if this tree is registered. |
 | `GetAllTreeIdsAsync` | `Task<IReadOnlyList<string>> GetAllTreeIdsAsync()` | Returns all registered tree IDs in sorted order. System trees (`_lattice_*`) are excluded. Physical trees created by `ResizeAsync` / `SnapshotAsync` are included. |
-| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `LatticeOptions.SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** - reads and writes throw `InvalidOperationException` until `RecoverTreeAsync`. See [Tree Deletion](tree-deletion.md). |
+| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `LatticeOptions.SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** - reads and writes throw `InvalidOperationException` until `RecoverTreeAsync`. Throws `InvalidOperationException` when one or more materialised views derive from this tree; tear those views down first via `ILatticeViewFactory.DeleteAsync` (see [Materialised views](materialised-views.md#deleting-a-source-tree-that-has-views)). See [Tree Deletion](tree-deletion.md). |
 | `RecoverTreeAsync` | `Task RecoverTreeAsync()` | Recovers a soft-deleted tree before purge completes. |
 | `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. ⚠️ **Permanently destroys all data.** |
 
@@ -1815,6 +1815,13 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
   `view-*` tree with `InvalidOperationException` (reads are unaffected). Write to
   the source tree and let the view converge. `view-` is therefore a reserved
   tree-name prefix for directly-writable trees.
+- **Source deletion is guarded.** A source tree that still has one or more
+  materialised views cannot be deleted: `DeleteTreeAsync` throws
+  `InvalidOperationException` naming the dependent view(s). Tear the view(s) down
+  first via `ILatticeViewFactory.DeleteAsync`, then delete the source.
+- **No view-on-view.** A view's source must be a directly-writable tree, not
+  another view. `Create` and the startup `AddView` / `AddAggregationView`
+  builders reject a `view-*` source with `InvalidOperationException`.
 - **Atomic visibility.** A source atomic write (single-tree or cross-tree) is
   surfaced atomically in the derived views; see
   [Materialised views](materialised-views.md#atomic-write-visibility).
