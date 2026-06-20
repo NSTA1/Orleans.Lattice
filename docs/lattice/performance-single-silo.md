@@ -82,15 +82,15 @@ mechanical and the prose around the marker is hand-editable.
 
 | Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |
 |------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|
-| `GetAsync` (point read) | **1.38 us** | 4.87 us | 9.76 us | 151.88 us | 0 B | **~722.6 k keys/s** |
-| `SetAsync` (point write) | **4.7 us** | 6.58 us | 9.48 us | 29.72 us | 784 B | **~212.6 k keys/s** |
-| `GetManyAsync` (4 keys/call) | **9.2 us** | 12.76 us | 21.51 us | 79.56 us | 6 KB | **~434.9 k keys/s** |
-| `SetManyAsync` (1,000 keys/call) | **1.08 ms** | 1.13 ms | 1.7 ms | 2.93 ms | 100 KB | **~924.1 k keys/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **298.96 us** | 440.16 us | 570.34 us | 1.66 ms | 64 KB | **~53.5 k keys/s** |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **166 us** | 192.44 us | 225.53 us | 247.79 us | 51 KB | **~12 k keys/s** |
-| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **271.53 us** | 293.24 us | 308.82 us | 328.02 us | 104 KB | **~235.7 k keys/s** |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **367.5 us** | 388.06 us | 414.09 us | 484.87 us | 123 KB | **~5.4 k keys/s** |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **385.2 us** | 447.76 us | 459.28 us | 473.52 us | 187 KB | **~166.1 k keys/s** |
+| `GetAsync` (point read) | **1.79 us** | 4.12 us | 7.9 us | 68.78 us | 216 B | **~559.8 k keys/s** |
+| `SetAsync` (point write) | **4.13 us** | 5.86 us | 7.27 us | 29.53 us | 784 B | **~242.3 k keys/s** |
+| `GetManyAsync` (4 keys/call) | **11.19 us** | 15.02 us | 20.27 us | 77.82 us | 6 KB | **~357.4 k keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **1.06 ms** | 1.11 ms | 1.68 ms | 2.88 ms | 100 KB | **~941.6 k keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **270.2 us** | 331.51 us | 415.61 us | 1.15 ms | 64 KB | **~59.2 k keys/s** |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **160.89 us** | 183.17 us | 195.9 us | 202.57 us | 53 KB | **~12.4 k keys/s** |
+| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **281.21 us** | 306.96 us | 310.66 us | 313.57 us | 104 KB | **~227.6 k keys/s** |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **315.65 us** | 348.83 us | 357.55 us | 361.48 us | 124 KB | **~6.3 k keys/s** |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **428.78 us** | 493.89 us | 500.86 us | 506.31 us | 187 KB | **~149.3 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 

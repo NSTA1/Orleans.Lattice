@@ -1180,14 +1180,20 @@ function Aggregate-Layer1Cells {
 		$p90Key   = "microbench_${slug}_p90_ns"
 		$p99Key   = "microbench_${slug}_p99_ns"
 		$allocKey = "microbench_${slug}_alloc_b"
-		# Rows whose per-call batch size is > 1 are async-heavy
-		# (SetManyAsync, GetManyAsync, SetManyAtomicAsync). BDN's MemoryDiagnoser
-		# reads GC.GetAllocatedBytesForCurrentThread(), which is thread-local;
-		# on those workloads the await continuation can land on a worker thread
-		# and the workload-thread reading collapses to 0 for that cohort even
-		# though the operation clearly allocates. Point rows (ExpectedBatchSize=1
-		# or unset) can legitimately report 0 - e.g. a JIT-promoted
-		# allocation-free GetAsync steady state - and must not be filtered.
+		# A cohort can occasionally report alloc_b=0 for a row that clearly
+		# allocates. This is a BenchmarkDotNet MemoryDiagnoser measurement
+		# artefact, not a real allocation-free path: the per-op allocated-bytes
+		# delta (workload minus overhead) is computed from GC counters, and under
+		# a Server / background (concurrent) GC a collection landing inside the
+		# measurement window perturbs that delta enough to floor the cheapest
+		# paths (~200-300 B/op point reads) to a reported 0. The microbench host
+		# now runs Workstation, non-concurrent GC (see the .csproj) which removes
+		# the contamination at the source. As defence in depth the aggregator
+		# still drops alloc_b=0 cohorts for batched rows (ExpectedBatchSize>1),
+		# whose larger per-call allocation makes a true 0 impossible. Point rows
+		# (ExpectedBatchSize 1 or unset) are NOT dropped: some of them - e.g.
+		# ExistsAsync returning a cached Task<bool> singleton - genuinely allocate
+		# ~0, so a measured 0 there is correct and must be preserved.
 		$batchSize = if ($row.ContainsKey('ExpectedBatchSize')) { [int]$row.ExpectedBatchSize } else { 1 }
 		$dropZeroAllocCohorts = $batchSize -gt 1
 		$p50s = @(); $p75s = @(); $p90s = @(); $p99s = @(); $allocs = @()
@@ -1217,14 +1223,14 @@ function Aggregate-Layer1Cells {
 		$p75Median = if ($p75s.Count -gt 0) { (Get-Median $p75s) } else { $null }
 		$p90Median = if ($p90s.Count -gt 0) { (Get-Median $p90s) } else { $null }
 		$p99Median = if ($p99s.Count -gt 0) { (Get-Median $p99s) } else { $null }
-		# Explicit null check, NOT truthy: a real measurement of '0 bytes allocated'
-		# (e.g. an in-process GetAsync that the JIT promotes to an allocation-free
-		# steady-state) is falsy under `if ($allocMedian)` and was previously
-		# coerced to $null, rendering as 'n/a' in the doc table even though zero
-		# is the correct answer. The batched-row zero-drop above prevents BDN's
-		# thread-local-counter async undercount from clobbering this with a
-		# bogus 0 - if every cohort for a batched row dropped, $allocs is empty
-		# and the cell renders as 'n/a' (correctly: we have no usable sample).
+		# Explicit null check, NOT truthy: a real measurement of '0 bytes
+		# allocated' (e.g. ExistsAsync returning a cached Task<bool> singleton)
+		# is falsy under `if ($allocMedian)` and was previously coerced to $null,
+		# rendering as 'n/a' in the doc table even though zero is the correct
+		# answer. The batched-row zero-drop above prevents a stray GC-perturbed
+		# alloc_b=0 from clobbering a batched row's median - if every cohort for a
+		# batched row dropped, $allocs is empty and the cell renders as 'n/a'
+		# (correctly: we have no usable sample).
 		$allocMedian = if ($allocs.Count -gt 0) { (Get-Median $allocs) } else { $null }
 		# Per-key throughput ceiling: (1 / p50_seconds) * batchSize.
 		# Batched calls return per-key keys/s rather than per-call calls/s
