@@ -586,6 +586,62 @@ public sealed class AzureTableWalStorageOptions
     public static readonly TimeSpan DefaultSaturationShortCircuitCooldown = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// Maximum number of <i>additional</i> in-place phase-1 commit attempts the provider makes
+    /// after a <b>transient</b> fault before it surfaces the fault to the calling
+    /// <c>WalShardGrain</c>. <c>2</c> (the default) means up to three total attempts per phase-1
+    /// commit. Set to <c>0</c> to restore the historical behaviour (surface every transient fault
+    /// immediately).
+    /// <para>
+    /// <b>What this fixes.</b> A phase-1 batch commits in a single atomic Azure Table transaction
+    /// keyed by its first offset. When that transaction faults <i>transiently</i> - a network
+    /// timeout, a 408 / 429 / 500 / 503, or a network-level cancellation that is not the silo's own
+    /// drain token - the batch may or may not have become durable, but phase-2 has not run. The
+    /// historical path surfaced that fault to the shard, which latched a sticky failure and resynced
+    /// <c>_nextOffset</c> to the phase-2 <c>TAIL</c> (blind to the just-written, still-uncommitted
+    /// phase-1 rows above it). The shard then re-coalesced different mutations and re-drove
+    /// <i>divergent</i> content onto those occupied offsets, producing an <i>unprovable</i>
+    /// <c>409 EntityAlreadyExists</c> that faulted again - a positive-feedback conflict storm that
+    /// collapses sustained throughput (observed under single-account <c>set-point</c> saturation).
+    /// </para>
+    /// <para>
+    /// <b>Why retrying the identical batch is safe.</b> Each retry resubmits the <b>byte-identical</b>
+    /// batch at the <b>same offsets</b>. If the prior attempt was already durable, the retry's
+    /// <c>Add</c> returns <c>409</c>, which the existing O(1) idempotent-replay proof
+    /// (<see cref="IWalStorageProvider"/> phase-1 path) resolves as a success; if it was not durable,
+    /// the retry commits it. Either way the offsets and content never change, so the shard never
+    /// faults, never resyncs, and never re-drives divergent content - the storm cannot ignite. An
+    /// unprovable <c>409</c> (a genuine collision with a <i>different</i> resident batch) still
+    /// surfaces immediately without retry, so this loop cannot spin. Each retry increments
+    /// <c>orleans.lattice.provider.phase1.transient_retries</c>.
+    /// </para>
+    /// <para>
+    /// Must be non-negative.
+    /// </para>
+    /// </summary>
+    public int PhaseOneTransientRetryMaxAttempts { get; set; } = DefaultPhaseOneTransientRetryMaxAttempts;
+
+    /// <summary>Default value for <see cref="PhaseOneTransientRetryMaxAttempts"/> (2 additional attempts; three total).</summary>
+    public const int DefaultPhaseOneTransientRetryMaxAttempts = 2;
+
+    /// <summary>
+    /// Base delay for the jittered backoff applied between in-place phase-1 transient retries
+    /// (see <see cref="PhaseOneTransientRetryMaxAttempts"/>). The actual wait before attempt
+    /// <c>n</c> (1-based) is a random value in <c>[0, BaseDelay * n)</c>, capped at
+    /// <see cref="DefaultPhaseOneTransientRetryMaxDelay"/>. The jitter desynchronises the
+    /// re-drive paths of multiple hot shards so they do not retry in lockstep (a touch of
+    /// backoff damping complementing the offset-preserving retry). Default 25 ms. Set to
+    /// <see cref="TimeSpan.Zero"/> to retry without delay. Must be non-negative.
+    /// </summary>
+    public TimeSpan PhaseOneTransientRetryBaseDelay { get; set; } = DefaultPhaseOneTransientRetryBaseDelay;
+
+    /// <summary>Default value for <see cref="PhaseOneTransientRetryBaseDelay"/> (25 ms).</summary>
+    public static readonly TimeSpan DefaultPhaseOneTransientRetryBaseDelay = TimeSpan.FromMilliseconds(25);
+
+    /// <summary>Upper bound on any single phase-1 transient-retry backoff wait (250 ms).</summary>
+    public static readonly TimeSpan DefaultPhaseOneTransientRetryMaxDelay = TimeSpan.FromMilliseconds(250);
+
+
+    /// <summary>
     /// Per-row WAL payload compression algorithm. Defaults to
     /// <see cref="LatticeCompression.Zstd"/>: each entry's encoded
     /// <c>WalRecord</c> payload at or above

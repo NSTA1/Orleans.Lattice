@@ -570,77 +570,123 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // all rows present) and which batch's bytes are durable, in O(1).
         StampPhaseOneBatchSentinel(actions);
 
+        var maxRetries = Math.Max(0, _options.PhaseOneTransientRetryMaxAttempts);
+        var transientAttempt = 0;
+
         try
         {
-            await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
-        }
-        catch (RequestFailedException rfe) when (rfe.Status == EntityAlreadyExistsStatusCode)
-        {
-            // Idempotent-replay resolution. The Azure Tables SDK retry
-            // pipeline can resend a phase-1 batch whose first attempt
-            // already committed server-side but whose response was lost
-            // (a socket / read timeout under CPU or network pressure).
-            // The resend then collides with the rows the first attempt
-            // durably wrote and the service returns 409
-            // EntityAlreadyExists. Because a WAL batch partition is keyed
-            // by (treeId, shardIndex, firstOffset) and offsets are
-            // allocated by a single writer, the only legitimate cause of
-            // a 409 on this path is such a replay: the prior write is
-            // already durable, so the batch is a no-op success. We prove
-            // that by reading the resident batch-sentinel row back and
-            // confirming its hash + entry count match what this call tried
-            // to write (an O(1) proof that the whole batch committed
-            // byte-identically). A mismatch - or a row that is absent - is
-            // NOT a clean replay; it indicates a genuine offset collision /
-            // upstream corruption, so we surface the original failure loudly
-            // rather than masking it. This mirrors the candidate row's
-            // long-standing Upsert(Replace) idempotency (see
-            // WriteCandidateRowAsync) which the phase-1 entry rows
-            // previously lacked.
-            bool isReplay;
-            try
+            while (true)
             {
-                isReplay = await IsIdempotentPhaseOneReplayAsync(table, actions, cancellationToken).ConfigureAwait(false);
-            }
-            catch (RequestFailedException)
-            {
-                // The verification read-back itself failed transiently, so we
-                // cannot prove the 409 was an idempotent replay. Fall through
-                // as "not a replay" and surface the original conflict as a
-                // hard failure rather than masking it.
-                isReplay = false;
-            }
+                try
+                {
+                    await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+                catch (RequestFailedException rfe) when (rfe.Status == EntityAlreadyExistsStatusCode)
+                {
+                    // Idempotent-replay resolution. The Azure Tables SDK retry
+                    // pipeline (or our own offset-preserving retry below) can
+                    // resend a phase-1 batch whose first attempt already
+                    // committed server-side but whose response was lost (a
+                    // socket / read timeout under CPU or network pressure).
+                    // The resend then collides with the rows the first attempt
+                    // durably wrote and the service returns 409
+                    // EntityAlreadyExists. Because a WAL batch partition is
+                    // keyed by (treeId, shardIndex, firstOffset) and offsets
+                    // are allocated by a single writer, the only legitimate
+                    // cause of a 409 on this path is such a replay: the prior
+                    // write is already durable, so the batch is a no-op
+                    // success. We prove that by reading the resident
+                    // batch-sentinel row back and confirming its hash + entry
+                    // count match what this call tried to write (an O(1) proof
+                    // that the whole batch committed byte-identically). A
+                    // mismatch - or a row that is absent - is NOT a clean
+                    // replay; it indicates a genuine offset collision /
+                    // upstream corruption, so we surface the original failure
+                    // loudly rather than masking it. This mirrors the
+                    // candidate row's long-standing Upsert(Replace) idempotency
+                    // (see WriteCandidateRowAsync) which the phase-1 entry rows
+                    // previously lacked. An unprovable 409 is never retried, so
+                    // this loop cannot spin on a genuine collision.
+                    bool isReplay;
+                    try
+                    {
+                        isReplay = await IsIdempotentPhaseOneReplayAsync(table, actions, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (RequestFailedException)
+                    {
+                        // The verification read-back itself failed transiently, so we
+                        // cannot prove the 409 was an idempotent replay. Fall through
+                        // as "not a replay" and surface the original conflict as a
+                        // hard failure rather than masking it.
+                        isReplay = false;
+                    }
 
-            if (!isReplay)
-            {
-                LatticeMetrics.ProviderRetryExhausted.Add(1,
-                    treeTag,
-                    shardTag,
-                    LatticeMetrics.PhasePhase1Tag,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(rfe)));
-                throw;
-            }
+                    if (!isReplay)
+                    {
+                        LatticeMetrics.ProviderRetryExhausted.Add(1,
+                            treeTag,
+                            shardTag,
+                            LatticeMetrics.PhasePhase1Tag,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(rfe)));
+                        throw;
+                    }
 
-            // Proven idempotent replay: the write is already durable.
-            // Record it on its own counter so dashboards can see
-            // lost-response retries without conflating them with genuine
-            // provider failures, and - critically - so the WAL
-            // saturation classifier (which escalates on
-            // ProviderRetryExhausted) is not driven to Saturated by a
-            // write that actually succeeded.
-            LatticeMetrics.ProviderIdempotentReplays.Add(1,
-                treeTag,
-                shardTag,
-                LatticeMetrics.PhasePhase1Tag);
-        }
-        catch (Exception ex)
-        {
-            LatticeMetrics.ProviderRetryExhausted.Add(1,
-                treeTag,
-                shardTag,
-                LatticeMetrics.PhasePhase1Tag,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)));
-            throw;
+                    // Proven idempotent replay: the write is already durable.
+                    // Record it on its own counter so dashboards can see
+                    // lost-response retries without conflating them with genuine
+                    // provider failures, and - critically - so the WAL
+                    // saturation classifier (which escalates on
+                    // ProviderRetryExhausted) is not driven to Saturated by a
+                    // write that actually succeeded.
+                    LatticeMetrics.ProviderIdempotentReplays.Add(1,
+                        treeTag,
+                        shardTag,
+                        LatticeMetrics.PhasePhase1Tag);
+                    return;
+                }
+                catch (Exception ex) when (
+                    transientAttempt < maxRetries
+                    && !cancellationToken.IsCancellationRequested
+                    && IsTransientPhaseOneFault(ex))
+                {
+                    // Offset-preserving transient retry (#824). A phase-1
+                    // transaction that faults transiently (timeout / 408 / 429
+                    // / 5xx / non-shutdown network cancel) may or may not have
+                    // become durable, but phase-2 has not run. Surfacing it to
+                    // the shard would latch a sticky failure and resync
+                    // _nextOffset to the phase-2 TAIL, which is blind to the
+                    // just-written, still-uncommitted phase-1 rows above it;
+                    // the shard would then re-coalesce different mutations and
+                    // re-drive divergent content onto those occupied offsets,
+                    // producing an unprovable 409 conflict storm. Instead we
+                    // resubmit the BYTE-IDENTICAL batch at the SAME offsets: if
+                    // the prior attempt was durable the resubmit 409s and the
+                    // O(1) proof above resolves it as a success; if not, the
+                    // resubmit commits. Either way offsets + content are
+                    // preserved, so the shard never faults and the storm cannot
+                    // ignite. Jittered backoff desynchronises co-firing shards.
+                    transientAttempt++;
+                    LatticeMetrics.ProviderPhaseOneTransientRetries.Add(1,
+                        treeTag,
+                        shardTag,
+                        LatticeMetrics.PhasePhase1Tag);
+                    var delay = ComputePhaseOneTransientRetryDelay(transientAttempt);
+                    if (delay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LatticeMetrics.ProviderRetryExhausted.Add(1,
+                        treeTag,
+                        shardTag,
+                        LatticeMetrics.PhasePhase1Tag,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)));
+                    throw;
+                }
+            }
         }
         finally
         {
@@ -657,6 +703,58 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 LatticeMetrics.PhasePhase1Tag,
                 _pipelinePhaseTwoTag);
         }
+    }
+
+    /// <summary>
+    /// Classifies whether a phase-1 <see cref="TableClient.SubmitTransactionAsync"/> fault is
+    /// <i>transient</i> - i.e. safe to resolve by resubmitting the byte-identical batch at the
+    /// same offsets (see <see cref="AzureTableWalStorageOptions.PhaseOneTransientRetryMaxAttempts"/>).
+    /// A timeout, a non-shutdown network cancellation, or a 408 / 429 / 5xx (including the
+    /// <c>OperationTimedOut</c> / <c>ServerBusy</c> table error codes) is transient; everything
+    /// else - notably a non-replay 409, which is handled by its own catch - is not. The caller's
+    /// catch filter additionally excludes the silo's own drain
+    /// <see cref="CancellationToken"/> so a shutdown is never mistaken for a transient fault.
+    /// </summary>
+    private static bool IsTransientPhaseOneFault(Exception ex)
+    {
+        switch (ex)
+        {
+            // A cancellation reaching here is not the caller's drain token (the
+            // catch filter excludes that), so it is a per-attempt network / SDK
+            // timeout surfaced as a cancellation - retryable in place.
+            case OperationCanceledException:
+            case TimeoutException:
+                return true;
+            // TableTransactionFailedException derives from RequestFailedException,
+            // so this arm also covers a transient batch-transaction fault.
+            case RequestFailedException rfe:
+                return rfe.Status is 408 or 429 or 500 or 502 or 503 or 504
+                    || string.Equals(rfe.ErrorCode, "OperationTimedOut", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(rfe.ErrorCode, "ServerBusy", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(rfe.ErrorCode, "Timeout", StringComparison.OrdinalIgnoreCase);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Computes the jittered backoff before phase-1 transient retry <paramref name="attempt"/>
+    /// (1-based): a uniform random value in <c>[0, BaseDelay * attempt)</c>, capped at
+    /// <see cref="AzureTableWalStorageOptions.DefaultPhaseOneTransientRetryMaxDelay"/>. The jitter
+    /// desynchronises the re-drive paths of multiple hot shards so they do not retry in lockstep.
+    /// </summary>
+    private TimeSpan ComputePhaseOneTransientRetryDelay(int attempt)
+    {
+        var baseDelay = _options.PhaseOneTransientRetryBaseDelay;
+        if (baseDelay <= TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var ceilingMs = Math.Min(
+            baseDelay.TotalMilliseconds * attempt,
+            AzureTableWalStorageOptions.DefaultPhaseOneTransientRetryMaxDelay.TotalMilliseconds);
+        return TimeSpan.FromMilliseconds(Random.Shared.NextDouble() * ceilingMs);
     }
 
     /// <summary>
