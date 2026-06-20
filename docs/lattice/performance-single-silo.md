@@ -184,6 +184,24 @@ batch partition). If your workload can naturally batch writes (telemetry
 tick frames, event sourcing batches, periodic flush windows), use
 `SetManyAsync`. If it cannot, your write ceiling is the `SetAsync` row.
 
+**An asynchronous materialised view is nearly free on the write path.**
+The `SetAsync (point write + async materialised view)` row drives the
+*identical* point-write path as the plain `SetAsync` row, at the same
+offered load, with a key-preserving materialised view attached over the
+tree. Its sustained source-write throughput is unchanged (~1.2 k keys/s)
+because the view is maintained **asynchronously, off the caller's
+critical path**: the foreground `SetAsync` returns as soon as the source
+tree's write is durable, and the view maintainer applies its coalesced
+background batches afterwards (in the benchmark the view kept up with
+zero apply lag). The only measurable cost is a modest widening of the
+caller-visible latency tail (p50 ~28 ms vs ~20 ms, p99 ~221 ms vs
+~79 ms), because the background view applies contend with the foreground
+writes for the same silo CPU, WAL-flush slots, and single Azure Tables
+account budget. The takeaway for capacity planning: maintaining a view
+costs a bounded latency-tail overhead on the source writes, not a
+throughput penalty - budget for the view's own write load on the shared
+account rather than for a slowdown of the tree it projects from.
+
 **The write rows are not maximum-throughput numbers.** Each write
 workload is driven at its own deliberately *sub-saturation* offered load
 (the per-row vehicle / Hz annotation in the operation label), because the
@@ -202,12 +220,11 @@ its own saturation point. Every write-row throughput cell is therefore a
 one another as if they shared an offered load - even the single-tree and
 cross-tree 64-key atomic rows are driven at different rungs, because
 their sustainable key-write rates differ by call shape; the per-call
-latency columns are the meaningful cross-shape comparison. The absolute ceiling
-for a single storage account lives in
-`benchmark/azure-throughput/throughput.md` section 31 (pinned
-empirically at **~22-24 ke/s aggregate key-write throughput**, with
-`TableTransactionFailedException` (409 Conflict + SDK timeout) bursts as
-the saturation signal). A workload that combines several of these write
+latency columns are the meaningful cross-shape comparison. A single Azure
+Tables Standard account has a finite per-account ceiling - the binder is
+per-account concurrent in-flight transactions, and bursts of
+`TableTransactionFailedException` (409 Conflict + SDK timeout) are the
+saturation signal. A workload that combines several of these write
 shapes on one account adds their offered loads and can climb into that
 saturation regime - see [WAL Tuning](wal-tuning.md) for the back-pressure
 manifestations and the partition-the-storage recovery path. The binding
