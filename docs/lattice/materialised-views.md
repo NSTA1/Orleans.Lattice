@@ -98,40 +98,18 @@ every hop and stacks source-WAL cursor pins), so `Create` and the startup
 
 ## Reading a view
 
-A view is read through its `ILatticeView` handle, which resolves the live view
-tree for you. Prefer the handle over binding a raw `ILattice` grain, because a
-rebuild can swap the live tree underneath you:
-
-```csharp verify
-public sealed class AdultsReader(ILatticeViewFactory views, IGrainFactory grains)
-{
-    public async Task<byte[]?> ReadAsync(string key, CancellationToken cancellationToken)
-    {
-        var source = grains.GetGrain<ILattice>("people");
-        ILatticeView adults = views.Create(
-            source,
-            "adults",
-            new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
-                LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
-
-        return await adults.GetAsync(key, cancellationToken);
-    }
-}
-```
-
-`ILatticeView` exposes the usual reads - `GetAsync`, `CountAsync`, `KeysAsync`,
-`EntriesAsync` - over the materialised content.
-
-When the view already exists and the caller only needs to **read** it (and does
-not hold the source tree or projection), resolve a handle by name with
-`ILatticeViewFactory.GetAsync`. It returns `null` when no view of that name is
-registered and never creates anything; the maintainer comes online lazily on the
-first read:
+Reading a view never needs the source tree or the projection - resolve a read
+handle by name with `ILatticeViewFactory.GetAsync`. The factory looks the view up
+in the catalog, the startup declarations, or the durable runtime registry and
+returns an `ILatticeView` that follows the maintainer's active generation on every
+read, so a rebuild that swaps the live view tree underneath you is handled for
+you. `GetAsync` returns `null` when no view of that name is registered and never
+creates anything; the maintainer comes online lazily on the first read:
 
 ```csharp verify
 public sealed class AdultsByNameReader(ILatticeViewFactory views)
 {
-    public async Task<byte[]?> ReadAsync(string key, CancellationToken cancellationToken)
+    public async Task<User?> ReadAsync(string key, CancellationToken cancellationToken)
     {
         // Open an already-registered view by name - no source tree or projection needed.
         ILatticeView? adults = await views.GetAsync("adults", cancellationToken);
@@ -140,10 +118,17 @@ public sealed class AdultsByNameReader(ILatticeViewFactory views)
             return null; // the view was never created, or was deleted
         }
 
-        return await adults.GetAsync(key, cancellationToken);
+        // Typed read: deserialize the view value to User (defaults to JsonLatticeSerializer<User>).
+        return await adults.GetAsync<User>(key, cancellationToken);
     }
 }
 ```
+
+`ILatticeView` exposes the usual reads - `GetAsync`, `CountAsync`, `KeysAsync`,
+`EntriesAsync` - over the materialised content. If you are creating the view in
+the same place you read it, the handle returned by `Create` (see
+[Create a view](#create-a-view)) exposes the same reads, so reuse it rather than
+re-resolving the view by name.
 
 A view is **read-only**, and its backing tree is private to the maintainer. Its
 contents are derived from the source tree and owned by the maintainer, so the
