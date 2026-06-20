@@ -1808,11 +1808,13 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
   the startup mode validator).
 - **Reminders.** The maintainer registers a keepalive reminder, so a reminder
   provider must be configured on the silo.
-- **Read through the handle.** A rebuild can swap the live view tree, so prefer
-  the `ILatticeView` handle (which re-resolves the active tree) over binding a raw
-  `ILattice` grain by a fixed id. To open an existing view by name for reading,
-  call `ILatticeViewFactory.GetAsync(viewName)` (returns `null` when the view is
-  not registered).
+- **Read a view by name.** Reading needs neither the source tree nor the
+  projection: call `ILatticeViewFactory.GetAsync(viewName)` to open an existing
+  view (returns `null` when the view is not registered). The returned
+  `ILatticeView` re-resolves the maintainer's active generation on every read, so
+  a rebuild that swaps the live view tree underneath you is handled for you.
+  (Reads and writes issued against a raw `ILattice` grain bound to a fixed
+  `view-{name}` id are rejected - see the next note.)
 - **Views are read-only, and the backing tree is private.** The `view-{name}` tree
   is derived state owned by the maintainer; the public `ILattice` surface rejects
   **both** direct writes **and** direct content reads to any `view-*` tree with
