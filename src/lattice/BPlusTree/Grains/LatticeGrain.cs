@@ -170,11 +170,12 @@ internal sealed partial class LatticeGrain(
     /// the view maintainer. A view tree is derived state owned by its maintainer;
     /// a direct user write would corrupt the view's drift digest and trigger a
     /// spurious rebuild, so only writes carrying the maintainer's view-write
-    /// capability (<see cref="ViewWriteContext"/>) are admitted. Reads are
-    /// unaffected (this guard is invoked only from mutating methods), and the
-    /// replication apply path (<see cref="IReplicationApplyGrain"/>) bypasses it
-    /// via explicit interface implementation so a ShipView consumer still receives
-    /// its replicated view tree.
+    /// capability (<see cref="ViewWriteContext"/>) are admitted. Direct user
+    /// <em>reads</em> are rejected separately by
+    /// <see cref="ThrowIfProtectedViewRead"/>, and the replication apply path
+    /// (<see cref="IReplicationApplyGrain"/>) bypasses it via explicit interface
+    /// implementation so a ShipView consumer still receives its replicated view
+    /// tree.
     /// </summary>
     private void ThrowIfProtectedView()
     {
@@ -182,6 +183,34 @@ internal sealed partial class LatticeGrain(
             && !ViewWriteContext.IsAuthorised)
             throw new InvalidOperationException(
                 $"Tree ID '{TreeId}' is a materialised view and is read-only through the public ILattice surface. A view's contents are maintained from its source tree; write to the source instead. Choose a tree name that does not start with '{LatticeConstants.ViewTreePrefix}' for directly-writable trees.");
+    }
+
+    /// <summary>
+    /// Rejects a direct public <see cref="ILattice"/> <em>content read</em>
+    /// (<c>GetAsync</c>, <c>GetWithVersionAsync</c>, <c>ExistsAsync</c>,
+    /// <c>GetManyAsync</c>, <c>CountAsync</c>, <c>CountPerShardAsync</c>,
+    /// <c>KeysAsync</c>, <c>EntriesAsync</c>, and their predicate variants) of a
+    /// materialised-view tree (any id starting with
+    /// <see cref="LatticeConstants.ViewTreePrefix"/>) that does not originate from
+    /// an authorised view scope. A shadow-swap rebuild can swap the active
+    /// view-tree generation underneath a fixed <c>view-{name}</c> bind, so a raw
+    /// read may observe a stale or empty generation; callers must read through an
+    /// <see cref="ILatticeView"/> handle (resolved via
+    /// <c>ILatticeViewFactory.GetAsync</c> or <c>ILatticeViewFactory.Create</c>),
+    /// which resolves the active generation and opens a
+    /// <see cref="ViewReadContext"/> scope. The maintainer's own view-tree reads
+    /// run under either that read scope or its <see cref="ViewWriteContext"/> write
+    /// scope, so both are admitted. Structural reads (projection digests used by
+    /// replication anti-entropy) and the replication apply path are not affected by
+    /// this guard.
+    /// </summary>
+    private void ThrowIfProtectedViewRead()
+    {
+        if (TreeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal)
+            && !ViewWriteContext.IsAuthorised
+            && !ViewReadContext.IsAuthorised)
+            throw new InvalidOperationException(
+                $"Tree ID '{TreeId}' is a materialised view and cannot be read directly through the public ILattice surface; a rebuild can swap the active view-tree generation underneath a raw bind, so a direct read may observe a stale or empty generation. Resolve an ILatticeView handle via ILatticeViewFactory.GetAsync(...) (or Create) and read through it instead.");
     }
 
     private IHostApplicationLifetime? _lifetime;
@@ -234,6 +263,7 @@ internal sealed partial class LatticeGrain(
     public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         return GetAsyncCore(key, cancellationToken);
     }
 
@@ -334,6 +364,7 @@ internal sealed partial class LatticeGrain(
     public async Task<VersionedValue> GetWithVersionAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -404,6 +435,7 @@ internal sealed partial class LatticeGrain(
     public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         return ExistsAsyncCore(key, cancellationToken);
     }
 
@@ -484,6 +516,7 @@ internal sealed partial class LatticeGrain(
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(keys);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1671,6 +1704,7 @@ internal sealed partial class LatticeGrain(
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
@@ -1940,6 +1974,7 @@ internal sealed partial class LatticeGrain(
     public async Task<IReadOnlyList<int>> CountPerShardAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
         try
         {

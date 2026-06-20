@@ -70,6 +70,7 @@ internal sealed partial class ViewMaintainerGrain
     /// <inheritdoc />
     public async Task<ViewDigest> ComputeViewDigestAsync(CancellationToken cancellationToken = default)
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         var registration = catalog.TryGet(ViewName);
         var isAggregation = registration?.IsAggregation ?? false;
         var activeTree = grainFactory.GetGrain<ILattice>(ViewTreeId);

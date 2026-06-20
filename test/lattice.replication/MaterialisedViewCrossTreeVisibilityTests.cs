@@ -101,6 +101,10 @@ public class MaterialisedViewCrossTreeVisibilityTests
     [Test]
     public async Task One_views_slice_is_not_surfaced_while_the_other_is_pre_commit()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         var suffix = Guid.NewGuid().ToString("N");
         var treeA = $"mv-xt-joint-a-src-{suffix}";
         var treeB = $"mv-xt-joint-b-src-{suffix}";
@@ -152,6 +156,7 @@ public class MaterialisedViewCrossTreeVisibilityTests
     [Test]
     public async Task Committed_cross_tree_batch_becomes_visible_in_both_views()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         var suffix = Guid.NewGuid().ToString("N");
         var treeA = $"mv-xt-commit-a-src-{suffix}";
         var treeB = $"mv-xt-commit-b-src-{suffix}";
@@ -195,6 +200,7 @@ public class MaterialisedViewCrossTreeVisibilityTests
     [Test]
     public async Task Aborted_cross_tree_batch_surfaces_in_neither_view()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         var suffix = Guid.NewGuid().ToString("N");
         var treeA = $"mv-xt-abort-a-src-{suffix}";
         var treeB = $"mv-xt-abort-b-src-{suffix}";
@@ -230,6 +236,7 @@ public class MaterialisedViewCrossTreeVisibilityTests
     [Test]
     public async Task Participant_unavailable_degrades_to_per_tree_slice_and_emits_the_metric()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         var suffix = Guid.NewGuid().ToString("N");
         var treeA = $"mv-xt-degrade-a-src-{suffix}";
         var treeB = $"mv-xt-degrade-b-src-{suffix}";
@@ -279,6 +286,7 @@ public class MaterialisedViewCrossTreeVisibilityTests
     [Test]
     public async Task Joint_flip_is_idempotent_under_redelivery()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         var suffix = Guid.NewGuid().ToString("N");
         var treeA = $"mv-xt-idem-a-src-{suffix}";
         var treeB = $"mv-xt-idem-b-src-{suffix}";

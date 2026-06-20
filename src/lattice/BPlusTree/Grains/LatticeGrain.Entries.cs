@@ -45,6 +45,7 @@ internal sealed partial class LatticeGrain
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, cancellationToken);
     }
 
@@ -57,6 +58,7 @@ internal sealed partial class LatticeGrain
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
         return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, predicate, cancellationToken);
     }
 

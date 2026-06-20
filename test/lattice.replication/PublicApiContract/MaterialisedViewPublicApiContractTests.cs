@@ -146,7 +146,7 @@ public class MaterialisedViewPublicApiContractTests
     }
 
     [Test]
-    public async Task Direct_user_writes_to_a_view_tree_are_rejected_while_reads_and_the_maintainer_still_work()
+    public async Task Direct_user_writes_and_reads_to_a_view_tree_are_rejected_while_the_handle_and_maintainer_still_work()
     {
         const string tree = "people-readonly";
         const string viewName = "adults-readonly";
@@ -162,7 +162,9 @@ public class MaterialisedViewPublicApiContractTests
 
         // A caller could discover the underlying view tree id (view-{name}) and grab
         // its ILattice grain reference directly. Every public mutating call must be
-        // rejected - the view is derived state owned by its maintainer.
+        // rejected - the view is derived state owned by its maintainer - and every
+        // public content read must be rejected too, because a rebuild can swap the
+        // active generation underneath this fixed bind.
         var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>("view-" + viewName);
 
         Assert.Multiple(() =>
@@ -181,11 +183,17 @@ public class MaterialisedViewPublicApiContractTests
             Assert.ThrowsAsync<InvalidOperationException>(
                 () => viewTree.DeleteRangeAsync("a", "z"),
                 "a direct DeleteRange to a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => viewTree.GetAsync("p1"),
+                "a direct GetAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(
+                () => viewTree.CountAsync(),
+                "a direct CountAsync against a view tree must be rejected");
         });
 
-        // Reads against the view tree are unaffected, and the rejected writes left
-        // the view untouched.
-        Assert.That(await viewTree.GetAsync("p1"), Is.Not.Null, "reads on a view tree must remain allowed");
+        // The content is still readable through the supported ILatticeView handle,
+        // and the rejected writes left the view untouched.
+        Assert.That(await view.GetAsync("p1"), Is.Not.Null, "reads through the view handle must remain allowed");
 
         // The maintainer still owns the view: a fresh source write converges normally.
         await source.SetAsync("p2", MaterialisedViewPublicApiContractFixture.PersonBytes(55));
@@ -224,6 +232,126 @@ public class MaterialisedViewPublicApiContractTests
             Assert.That(LatticeAggregationValue.DecodeDouble(alice!), Is.EqualTo(15).Within(1e-9), "Alice's order amounts should sum");
             Assert.That(LatticeAggregationValue.DecodeDouble(bob!), Is.EqualTo(7).Within(1e-9), "Bob's single order should reduce to its amount");
             return Task.CompletedTask;
+        });
+    }
+
+    [Test]
+    public async Task GetAsync_returns_null_for_an_unregistered_view()
+    {
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+
+        var handle = await factory.GetAsync("no-such-view-was-ever-created");
+
+        Assert.That(handle, Is.Null, "GetAsync must return null for a view that was never created");
+    }
+
+    [Test]
+    public async Task GetAsync_opens_a_working_read_handle_for_an_existing_runtime_view()
+    {
+        const string tree = "people-getasync";
+        const string viewName = "adults-getasync";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await source.SetAsync("ga-adult", MaterialisedViewPublicApiContractFixture.PersonBytes(42));
+        await source.SetAsync("ga-minor", MaterialisedViewPublicApiContractFixture.PersonBytes(9)); // filtered out
+
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+
+        // Register the view once with its definition...
+        var created = factory.Create(
+            source,
+            viewName,
+            new LatticeViewDefinition(viewName, MaterialisedViewPublicApiContractFixture.AdultFilter()));
+        await created.WaitForSourceHeadAsync(Barrier);
+
+        // ...then re-open it by name only, without re-supplying the source or projection.
+        var reopened = await factory.GetAsync(viewName);
+
+        Assert.That(reopened, Is.Not.Null, "GetAsync must resolve a registered runtime view by name");
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await reopened!.GetAsync("ga-adult"), Is.Not.Null, "the re-opened handle must read an in-predicate key");
+            Assert.That(await reopened.GetAsync("ga-minor"), Is.Null, "the re-opened handle must exclude an out-of-predicate key");
+            Assert.That(await reopened.CountAsync(), Is.EqualTo(1), "the re-opened handle must report the converged key count");
+        });
+    }
+
+    [Test]
+    public async Task GetAsync_resolves_a_startup_declared_view_without_a_prior_create()
+    {
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+
+        // The "adults" view is declared at startup via AddLatticeViews; GetAsync
+        // must resolve it from the declaration/catalog with no Create call here.
+        // (Resolution only - this test must not write to the shared startup source,
+        // which other tests assert exact counts over.)
+        var handle = await factory.GetAsync(MaterialisedViewPublicApiContractFixture.FilterViewName);
+
+        Assert.That(handle, Is.Not.Null, "GetAsync must resolve a startup-declared view by name");
+        Assert.That(await handle!.GetLagAsync(), Is.GreaterThanOrEqualTo(0), "the resolved startup-view handle must be a live, maintainer-backed view");
+    }
+
+    [Test]
+    public async Task GetAsync_resolves_the_aggregation_flag_so_the_count_excludes_reserved_rows()
+    {
+        const string tree = "orders-getasync";
+        const string viewName = "amount-by-customer-getasync";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await source.SetAsync("o1", MaterialisedViewPublicApiContractFixture.OrderBytes("Zoe", 3));
+        await source.SetAsync("o2", MaterialisedViewPublicApiContractFixture.OrderBytes("Zoe", 4));
+
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var created = factory.Create(
+            source,
+            viewName,
+            new LatticeViewDefinition(viewName, MaterialisedViewPublicApiContractFixture.AmountByCustomer()));
+        await created.WaitForSourceHeadAsync(Barrier);
+
+        var reopened = await factory.GetAsync(viewName);
+
+        Assert.That(reopened, Is.Not.Null, "GetAsync must resolve a registered aggregation view by name");
+        await Assert.MultipleAsync(async () =>
+        {
+            // If the aggregation flag were lost, CountAsync would fall back to the
+            // whole-tree count and include the reserved accumulator rows (> 1).
+            Assert.That(await reopened!.CountAsync(), Is.EqualTo(1), "the re-opened aggregation handle must count only the materialised group, excluding reserved rows");
+            Assert.That(LatticeAggregationValue.DecodeDouble((await reopened.GetAsync("Zoe"))!), Is.EqualTo(7).Within(1e-9), "the re-opened aggregation handle must read the reduced group value");
+        });
+    }
+
+    [Test]
+    public async Task Every_public_content_read_against_a_view_tree_is_rejected()
+    {
+        const string tree = "people-readguard";
+        const string viewName = "adults-readguard";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await source.SetAsync("rg1", MaterialisedViewPublicApiContractFixture.PersonBytes(30));
+
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var view = factory.Create(
+            source,
+            viewName,
+            new LatticeViewDefinition(viewName, MaterialisedViewPublicApiContractFixture.AdultFilter()));
+        await view.WaitForSourceHeadAsync(Barrier);
+
+        var viewTree = _fixture.Cluster.Client.GetGrain<ILattice>("view-" + viewName);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.ThrowsAsync<InvalidOperationException>(() => viewTree.GetAsync("rg1"), "GetAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(() => viewTree.GetWithVersionAsync("rg1"), "GetWithVersionAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(() => viewTree.ExistsAsync("rg1"), "ExistsAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(() => viewTree.GetManyAsync(new List<string> { "rg1" }), "GetManyAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(() => viewTree.CountAsync(), "CountAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(() => viewTree.CountPerShardAsync(), "CountPerShardAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                await foreach (var _ in viewTree.KeysAsync()) { }
+            }, "KeysAsync against a view tree must be rejected");
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                await foreach (var _ in viewTree.EntriesAsync()) { }
+            }, "EntriesAsync against a view tree must be rejected");
+            await Task.CompletedTask;
         });
     }
 }

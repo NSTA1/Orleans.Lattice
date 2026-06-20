@@ -53,15 +53,55 @@ internal sealed class LatticeViewFactory(
         // re-hydrated runtime views.
         _ = PersistAndActivateAsync(maintainer, registration);
 
+        return BuildHandle(viewName, registration.IsAggregation);
+    }
+
+    /// <inheritdoc />
+    public async Task<ILatticeView?> GetAsync(string viewName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+
+        // Resolve whether the view exists and whether it is an aggregation view -
+        // the only definition-derived fact the read handle needs - without
+        // requiring the caller to re-supply the source tree or projection. Prefer
+        // the in-memory catalog (startup-declared and runtime views already seen on
+        // this silo), then the startup declarations (declared but not yet
+        // re-hydrated into this silo's catalog), then the durable runtime registry
+        // (runtime views created on another silo or before a restart).
+        if (catalog.TryGet(viewName) is { } registration)
+        {
+            return BuildHandle(viewName, registration.IsAggregation);
+        }
+
+        if (FindStartupRegistration(viewName) is { } startup)
+        {
+            return BuildHandle(viewName, startup.AggregationProjectionFactory is not null);
+        }
+
+        var durable = await RegistryGrain.ListAsync();
+        for (var i = 0; i < durable.Count; i++)
+        {
+            if (string.Equals(durable[i].ViewName, viewName, StringComparison.Ordinal))
+            {
+                return BuildHandle(viewName, durable[i].IsAggregation);
+            }
+        }
+
+        return null;
+    }
+
+    private LatticeView BuildHandle(string viewName, bool isAggregation)
+    {
+        var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
         var options = viewOptions.Get(viewName);
         var cacheTtl = options.ReadHandleCacheTtl > TimeSpan.Zero
             ? options.ReadHandleCacheTtl
             : LatticeViewOptions.DefaultReadHandleCacheTtl;
 
-        // The read handle resolves the active-generation tree through the
-        // maintainer (cached for cacheTtl) rather than binding a fixed tree id, so
-        // queries follow a shadow-swap rebuild automatically.
-        return new LatticeView(viewName, grainFactory, maintainer, cacheTtl, registration.IsAggregation);
+        // The read handle resolves the active-generation tree through the maintainer
+        // (cached for cacheTtl) rather than binding a fixed tree id, so queries
+        // follow a shadow-swap rebuild automatically.
+        return new LatticeView(viewName, grainFactory, maintainer, cacheTtl, isAggregation);
     }
 
     /// <inheritdoc />
@@ -111,6 +151,19 @@ internal sealed class LatticeViewFactory(
         }
 
         return false;
+    }
+
+    private StartupViewRegistration? FindStartupRegistration(string viewName)
+    {
+        for (var i = 0; i < startupRegistrations.Count; i++)
+        {
+            if (string.Equals(startupRegistrations[i].ViewName, viewName, StringComparison.Ordinal))
+            {
+                return startupRegistrations[i];
+            }
+        }
+
+        return null;
     }
 
     private async Task<bool> ViewExistsAsync(string viewName)

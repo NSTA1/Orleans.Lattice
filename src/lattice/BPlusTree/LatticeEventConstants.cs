@@ -339,4 +339,16 @@ public static class LatticeEventConstants
     /// flows automatically on outgoing calls.
     /// </summary>
     internal const string ViewWriteRequestContextKey = "ol.vw";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key set by the materialised-view read handle
+    /// (and the maintainer's own view-tree reads, e.g. digest computation) for the
+    /// duration of a turn that reads a view tree, marking those reads as authorised
+    /// so the public <see cref="ILattice"/> content-read guard admits them while
+    /// still rejecting direct user reads of <c>view-*</c> trees (whose active
+    /// generation a rebuild can swap underneath a raw bind). Internal - set through
+    /// <see cref="Views.ViewReadContext"/>. The flag propagates across grain calls
+    /// because <c>RequestContext</c> flows automatically on outgoing calls.
+    /// </summary>
+    internal const string ViewReadRequestContextKey = "ol.vr";
 }
