@@ -72,4 +72,14 @@ The old `LeafCacheGrain("leaf-abc")` is never called again and will be garbage-c
 
 ### Stale `LatticeGrain` activations
 
-`LatticeGrain` is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old (now soft-deleted) physical tree. When a request hits a stale activation and the shard throws `InvalidOperationException`, the grain catches the error, invalidates its cached alias via `TryInvalidateStaleAlias()`, re-resolves the alias from the registry, and retries the operation - all transparently within the same grain call. This means the caller sees at most one brief retry delay, not a failure. Old activations will eventually deactivate due to inactivity.
+`LatticeGrain` is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old (now soft-deleted) physical tree. When a request hits a stale activation and the shard throws `InvalidOperationException`, the grain catches the error, invalidates its cached alias via `TryInvalidateStaleAlias()`, re-resolves the alias from the registry, and retries the operation - all transparently within the same grain call. This means the caller sees at most one brief retry delay, not a failure.
+
+## Read performance
+
+For the caller-visible effect of this cache on a live silo - the steady-state
+read-latency envelope it produces under a realistic offered load, and how a
+workload with a low cache-hit ratio shifts that envelope toward the underlying
+storage round-trip - see the Layer 2 read rows and the read-side caching note in
+the [single-silo performance guide](performance-single-silo.md). Those figures
+are regenerated against a real Azure deployment, so consult them there rather
+than reproducing any numbers here.
