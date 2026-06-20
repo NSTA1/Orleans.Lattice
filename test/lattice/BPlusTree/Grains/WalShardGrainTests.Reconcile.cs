@@ -67,6 +67,71 @@ public partial class WalShardGrainTests
             Throws.InvalidOperationException.With.Message.EqualTo("reconcile-boom"));
     }
 
+    [Test]
+    public async Task FlushFailure_resyncs_from_reconciled_phase1_tail()
+    {
+        // The #824 conflict-storm regression. A surfaced phase-1 fault
+        // can leave durable phase-1 entry rows committed above the
+        // phase-2 TAIL (a lost-response / brown-out timeout whose
+        // transaction actually landed). The failure handler must
+        // reconcile before reading the tail so the resync resumes from
+        // the durable phase-1 tail - not the stale phase-2 one - and the
+        // next coalesced flush lands in a fresh offset window instead of
+        // re-driving divergent content onto the still-durable offsets.
+        var inner = new InMemoryWalStorageProvider();
+        var provider = new FlushFailingReconcileForwardWalStorageProvider(inner, orphanCount: 3);
+        var grain = await CreateGrainAsync(provider, new LatticeOptions
+        {
+            WalMaxBatchEntries = 1,
+            WalMaxPendingBatches = 1,
+            WalFlushTimeout = TimeSpan.FromSeconds(5),
+        });
+
+        // First append's flush faults; recovery reconciles (rolling the
+        // 3 durable phase-1 orphans forward, advancing the tail to 2).
+        Assert.That(
+            async () => await grain.AppendAsync(MakeEntry("a"), CancellationToken.None),
+            Throws.InvalidOperationException.With.Message.EqualTo("phase1-boom"));
+
+        // The next append must resume after the reconciled tail (offset
+        // 3), not re-use offset 0 beneath the durable phase-1 orphans.
+        var offset = await grain.AppendAsync(MakeEntry("b"), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(offset, Is.EqualTo(3L));
+    }
+
+    [Test]
+    public async Task FlushFailure_reconciles_before_reading_tail()
+    {
+        // The ordering contract of the failure-recovery resync: it
+        // reconciles, then reads the tail - mirroring activation. The
+        // op log therefore carries the activation pair (Reconcile,
+        // GetHighestOffset) followed by the recovery pair.
+        var inner = new InMemoryWalStorageProvider();
+        var provider = new FlushFailingReconcileForwardWalStorageProvider(inner, orphanCount: 3);
+        var grain = await CreateGrainAsync(provider, new LatticeOptions
+        {
+            WalMaxBatchEntries = 1,
+            WalMaxPendingBatches = 1,
+            WalFlushTimeout = TimeSpan.FromSeconds(5),
+        });
+
+        Assert.That(
+            async () => await grain.AppendAsync(MakeEntry("a"), CancellationToken.None),
+            Throws.InvalidOperationException);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.ReconcileCallCount, Is.EqualTo(2));
+            Assert.That(
+                provider.OperationLog,
+                Is.EqualTo(new[]
+                {
+                    "Reconcile", "GetHighestOffset", "Reconcile", "GetHighestOffset",
+                }));
+        });
+    }
+
     /// <summary>
     /// <see cref="IWalStorageProvider"/> double that records every
     /// <c>ReconcileAsync</c> / <c>GetHighestOffsetAsync</c> invocation
@@ -177,5 +242,93 @@ public partial class WalShardGrainTests
 
         public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
             => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// <see cref="IWalStorageProvider"/> double that models the #824
+    /// conflict-storm ignition: the first flush call faults <i>after</i>
+    /// its phase-1 entry rows are durable above the visible phase-2 tail
+    /// (a lost-response / brown-out timeout). The durable phase-1 orphan
+    /// only becomes visible through <c>ReconcileAsync</c> (the roll-
+    /// forward), and only once a flush has actually been attempted - so
+    /// activation reconciliation is a no-op and the orphan surfaces solely
+    /// during failure recovery. Records the reconcile / tail-read op log
+    /// so the recovery ordering can be asserted.
+    /// </summary>
+    private sealed class FlushFailingReconcileForwardWalStorageProvider(
+        InMemoryWalStorageProvider inner,
+        int orphanCount) : IWalStorageProvider
+    {
+        private int _flushCalls;
+        private bool _rolledForward;
+
+        public List<string> OperationLog { get; } = new();
+
+        public int ReconcileCallCount { get; private set; }
+
+        public async Task ReconcileAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        {
+            ReconcileCallCount++;
+            OperationLog.Add("Reconcile");
+
+            // The durable phase-1 orphan only exists once the failed
+            // flush has attempted (and durably landed) its phase-1
+            // transaction; before that, reconciliation has nothing to
+            // roll forward. Idempotent: a second reconcile is a no-op.
+            if (_rolledForward || Volatile.Read(ref _flushCalls) == 0)
+            {
+                return;
+            }
+
+            _rolledForward = true;
+            var entries = new WalEntry[orphanCount];
+            for (var i = 0; i < orphanCount; i++)
+            {
+                entries[i] = new WalEntry
+                {
+                    Offset = i,
+                    Mutation = WalRecordConverter.FromWalRecord(new WalRecord
+                    {
+                        TreeId = treeId,
+                        Op = MutationKind.Set,
+                        Key = $"orphan-{i}",
+                        Value = new byte[] { 0x01 },
+                        Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+                        OriginClusterId = "site-a",
+                    }),
+                };
+            }
+
+            await inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
+        {
+            var ordinal = Interlocked.Increment(ref _flushCalls);
+            if (ordinal == 1)
+            {
+                // The first flush's phase-1 lands durably (modelled by
+                // the deferred roll-forward in ReconcileAsync) but its
+                // ack never arrives - the fault the storm rides in on.
+                throw new InvalidOperationException("phase1-boom");
+            }
+
+            await inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken).ConfigureAwait(false);
+        }
+
+        public IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken)
+            => inner.ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken);
+
+        public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        {
+            OperationLog.Add("GetHighestOffset");
+            return inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+        }
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
+            => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
     }
 }

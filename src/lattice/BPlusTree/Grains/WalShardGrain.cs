@@ -1586,7 +1586,8 @@ internal sealed class WalShardGrain(
     /// Handles a failure observed by the flush owning <paramref name="failedNode"/>.
     /// Latches the sticky failure, captures every TCS that needs to be
     /// faulted (failed window + later windows + pending), drains every
-    /// later in-flight slot, re-synchronises <see cref="_nextOffset"/>
+    /// later in-flight slot, reconciles any half-committed multi-phase
+    /// backend state and re-synchronises <see cref="_nextOffset"/>
     /// from the provider's authoritative tail, clears the sticky latch,
     /// and only *then* faults the captured TCSs. The fault-after-resync
     /// order means a caller that catches the surfaced exception and
@@ -1594,6 +1595,19 @@ internal sealed class WalShardGrain(
     /// a still-latched one, which preserves the sequential-test pattern
     /// "throw, switch backend, retry succeeds at the rolled-back offset"
     /// without the test having to spin on the sticky latch.
+    /// <para>
+    /// The resync reconciles before reading the tail, exactly as
+    /// activation recovery does (#824). A surfaced phase-1 fault can
+    /// leave durable phase-1 entry rows committed <i>above</i> the
+    /// phase-2 TAIL (a lost-response or brown-out timeout whose
+    /// transaction actually landed). Reading the bare TAIL would rewind
+    /// <see cref="_nextOffset"/> beneath those still-durable rows, so
+    /// the next coalesced flush would re-drive divergent content onto
+    /// their occupied offsets and trigger the unprovable-409 conflict
+    /// storm. Reconciling first rolls those contiguous phase-1 orphans
+    /// forward (or rolls gapped ones back), so the tail read resumes
+    /// from the durable phase-1 tail rather than the stale phase-2 one.
+    /// </para>
     /// </summary>
     private async Task HandleFlushFailureAsync(LinkedListNode<InFlightFlush> failedNode, Exception ex)
     {
@@ -1663,11 +1677,34 @@ internal sealed class WalShardGrain(
         {
             // Bound the resync with the same flush deadline. If the
             // original flush hung against a wedged partition, the tail
-            // read can hang the same way; without a ceiling the failure
-            // handler itself would never complete, the later in-flight
-            // slots it is draining would stay parked, and the recovery
-            // would wedge in place of the flush it was meant to rescue.
+            // read (and the reconcile below) can hang the same way;
+            // without a ceiling the failure handler itself would never
+            // complete, the later in-flight slots it is draining would
+            // stay parked, and the recovery would wedge in place of the
+            // flush it was meant to rescue.
             var resyncTimeout = Options.WalFlushTimeout;
+
+            // Reconcile before reading the tail, mirroring activation
+            // recovery (OnActivateAsync). A surfaced phase-1 fault can
+            // leave durable phase-1 entry rows above the phase-2 TAIL;
+            // reconciling rolls those contiguous orphans forward (or
+            // gapped ones back) so the tail read below resumes from the
+            // durable phase-1 tail. Without this the resync would rewind
+            // beneath the still-durable rows and the next coalesced flush
+            // would re-drive divergent content onto their offsets,
+            // igniting the unprovable-409 conflict storm (#824). A
+            // single-transaction backend inherits the interface's no-op
+            // ReconcileAsync, so this is free there.
+            using (var reconcileDeadline = resyncTimeout == Timeout.InfiniteTimeSpan
+                ? null
+                : new CancellationTokenSource(resyncTimeout))
+            {
+                await _provider.ReconcileAsync(
+                    _treeId,
+                    _shardIndex,
+                    reconcileDeadline?.Token ?? CancellationToken.None).ConfigureAwait(true);
+            }
+
             using var deadline = resyncTimeout == Timeout.InfiniteTimeSpan
                 ? null
                 : new CancellationTokenSource(resyncTimeout);
