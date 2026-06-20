@@ -4,8 +4,8 @@ using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.Hashing;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
 using System.Text;
 using Azure;
 using Azure.Data.Tables;
@@ -759,7 +759,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // an idempotent replay iff its entry count, its whole-batch hash, and
         // the first entry's own payload all match.
         return residentFirst.BatchEntryCount == actions.Count
-            && CryptographicOperations.FixedTimeEquals(residentFirst.BatchHash, expectedHash)
+            && ((ReadOnlySpan<byte>)residentFirst.BatchHash).SequenceEqual(expectedHash)
             && PhaseOneEntityPayloadMatches(expectedFirst, residentFirst);
     }
 
@@ -833,7 +833,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     }
 
     /// <summary>
-    /// Computes a collision-resistant SHA-256 hash over a phase-1 batch's
+    /// Computes an XxHash128 fingerprint over a phase-1 batch's
     /// canonical content: the entry count followed by, for every entry in
     /// order, its offset, compression tag, and payload bytes (with an
     /// explicit null/length marker so a null payload cannot alias a
@@ -844,15 +844,20 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// (which are a deterministic function of the offsets already hashed).
     /// Two batches with identical hashes therefore carry identical entry
     /// payloads in identical order, so a resident row's matching hash proves
-    /// an idempotent replay rather than a divergent collision.
+    /// an idempotent replay rather than a divergent collision. The guard is a
+    /// non-adversarial accidental-divergence check under the single-writer,
+    /// monotonic-offset WAL invariant (not a security boundary), so the
+    /// 128-bit non-cryptographic XxHash128 - the same fingerprint primitive
+    /// the core library uses for leaf/subtree projection digests - is used
+    /// rather than a heavier cryptographic digest.
     /// </summary>
     internal static byte[] ComputePhaseOneBatchHash(IReadOnlyList<TableTransactionAction> actions)
     {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var hash = new XxHash128();
         Span<byte> scratch = stackalloc byte[8];
 
         BinaryPrimitives.WriteInt32LittleEndian(scratch, actions.Count);
-        hash.AppendData(scratch[..4]);
+        hash.Append(scratch[..4]);
 
         for (var i = 0; i < actions.Count; i++)
         {
@@ -862,25 +867,25 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 // still well-defined; such a batch can never match a resident
                 // WAL batch and will fail the replay check regardless.
                 BinaryPrimitives.WriteInt64LittleEndian(scratch, -1L);
-                hash.AppendData(scratch);
+                hash.Append(scratch);
                 continue;
             }
 
             BinaryPrimitives.WriteInt64LittleEndian(scratch, entity.Offset);
-            hash.AppendData(scratch);
+            hash.Append(scratch);
             BinaryPrimitives.WriteInt32LittleEndian(scratch, entity.Compression);
-            hash.AppendData(scratch[..4]);
+            hash.Append(scratch[..4]);
 
             if (entity.Payload is null)
             {
                 BinaryPrimitives.WriteInt32LittleEndian(scratch, -1);
-                hash.AppendData(scratch[..4]);
+                hash.Append(scratch[..4]);
             }
             else
             {
                 BinaryPrimitives.WriteInt32LittleEndian(scratch, entity.Payload.Length);
-                hash.AppendData(scratch[..4]);
-                hash.AppendData(entity.Payload);
+                hash.Append(scratch[..4]);
+                hash.Append(entity.Payload);
             }
         }
 

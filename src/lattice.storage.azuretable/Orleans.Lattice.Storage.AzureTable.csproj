@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.9" />
   </ItemGroup>
 
 </Project>

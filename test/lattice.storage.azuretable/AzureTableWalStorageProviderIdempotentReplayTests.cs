@@ -485,7 +485,7 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
         {
             Assert.That(hashA, Is.EqualTo(hashB), "identical batches must hash identically");
             Assert.That(hashA, Is.Not.EqualTo(hashC), "a divergent tail payload must change the hash");
-            Assert.That(hashA, Has.Length.EqualTo(32), "SHA-256 produces a 32-byte digest");
+            Assert.That(hashA, Has.Length.EqualTo(16), "XxHash128 produces a 16-byte digest");
         });
     }
 
