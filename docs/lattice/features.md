@@ -130,6 +130,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-105](https://github.com/NSTA1/Orleans.Lattice/issues/780) - Public generic CRDT-in-saga builder API: let any typed CRDT mutation ride a cross-tree atomic write (genericise F-104's per-entry delta carry)
 - [F-108](https://github.com/NSTA1/Orleans.Lattice/issues/797) - Extend lazy CRDT row materialisation to the durable writer path (delta-only WAL) so production apply allocation drops from O(state) to O(delta)
 - [F-109](https://github.com/NSTA1/Orleans.Lattice/issues/798) - Lazy CRDT post-merge row materialisation on the writerless apply path + growing-state apply microbench
+- [F-122](https://github.com/NSTA1/Orleans.Lattice/issues/839) - Materialised views: reject deleting a source tree that still has dependent views, and reject creating a view whose source is itself a view
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down

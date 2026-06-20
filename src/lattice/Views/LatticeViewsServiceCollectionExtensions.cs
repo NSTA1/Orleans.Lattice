@@ -55,6 +55,7 @@ public static class LatticeViewsServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<LatticeViewOptions>, LatticeViewOptionsValidator>());
 
         builder.Services.TryAddSingleton<IViewCatalog, ViewCatalog>();
+        builder.Services.TryAddSingleton<IViewSourceGuard, ViewSourceGuard>();
         builder.Services.TryAddSingleton<ILatticeViewFactory, LatticeViewFactory>();
         builder.Services.TryAddSingleton<IReadOnlyList<StartupViewRegistration>>(
             _ => registrationBuilder.Registrations);

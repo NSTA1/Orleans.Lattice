@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Views;
 
@@ -36,6 +37,7 @@ internal sealed class LatticeViewFactory(
         _ = replicationContext;
 
         var sourceTreeId = source.GetPrimaryKeyString();
+        ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
         var registration = definition.AggregationProjection is { } aggregation
             ? new ViewRegistration(viewName, sourceTreeId, Projection: null, aggregation)
             : new ViewRegistration(viewName, sourceTreeId, definition.Projection);

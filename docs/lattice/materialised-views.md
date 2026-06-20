@@ -90,6 +90,12 @@ ILatticeView adults = viewFactory.Create(
 Either way the view materialises under its own `view-{name}` tree and converges
 toward the source as the maintainer applies projected writes.
 
+A view's source must be a directly-writable tree, **not another view**: chaining a
+view onto another view's `view-*` tree is unsupported (it compounds apply lag at
+every hop and stacks source-WAL cursor pins), so `Create` and the startup
+`AddView` / `AddAggregationView` builders reject a `view-*` source with
+`InvalidOperationException`.
+
 ## Reading a view
 
 A view is read through its `ILatticeView` handle, which resolves the live view
@@ -174,6 +180,32 @@ already-deleted view, is a no-op. A view declared at startup via
 `AddLatticeViews(...)` cannot be deleted this way - the declaration would
 re-create it on the next start - so `DeleteAsync` rejects it with an
 `InvalidOperationException`.
+
+## Deleting a source tree that has views
+
+A materialised view derives its contents from its source tree's write-ahead log,
+so the source must outlive every view built on it. A source tree that still has
+one or more views therefore **cannot be deleted**: `ILattice.DeleteTreeAsync`
+throws `InvalidOperationException` and names the dependent view(s). Tear the
+view(s) down first with `ILatticeViewFactory.DeleteAsync` (which releases the
+maintainer's source-WAL cursor pin), then delete the source:
+
+```csharp verify
+public sealed class SourceTeardownService(ILatticeViewFactory views, IGrainFactory grains)
+{
+    public async Task DropPeopleAndViewsAsync(CancellationToken cancellationToken)
+    {
+        // Delete every view derived from 'people' before the source itself.
+        await views.DeleteAsync("adults", cancellationToken);
+
+        await grains.GetGrain<ILattice>("people").DeleteTreeAsync(cancellationToken);
+    }
+}
+```
+
+The guard covers views declared at startup and views created at runtime, and is
+authoritative across the whole cluster. A host that never calls `AddLatticeViews`
+has no views and is unaffected.
 
 ## Durability across restarts
 
