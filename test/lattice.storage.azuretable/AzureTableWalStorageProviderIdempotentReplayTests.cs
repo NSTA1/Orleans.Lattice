@@ -93,7 +93,26 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
         Offset = source.Offset,
         Payload = source.Payload is null ? null : (byte[])source.Payload.Clone(),
         Compression = source.Compression,
+        BatchHash = source.BatchHash is null ? null : (byte[])source.BatchHash.Clone(),
+        BatchEntryCount = source.BatchEntryCount,
     };
+
+    /// <summary>
+    /// Builds the resident-row dictionary that simulates a durable batch as
+    /// the service would hold it after a first attempt committed: the actions
+    /// are stamped with the per-batch sentinel exactly as the production
+    /// submit path does, then cloned. The first row therefore carries the
+    /// <see cref="AzureTableWalEntity.BatchHash"/> /
+    /// <see cref="AzureTableWalEntity.BatchEntryCount"/> sentinel, exercising
+    /// the O(1) replay-proof path.
+    /// </summary>
+    private static Dictionary<string, AzureTableWalEntity> BuildStampedResident(IReadOnlyList<TableTransactionAction> actions)
+    {
+        AzureTableWalStorageProvider.StampPhaseOneBatchSentinel(actions);
+        return actions.ToDictionary(
+            a => ((AzureTableWalEntity)a.Entity).RowKey,
+            a => Clone((AzureTableWalEntity)a.Entity));
+    }
 
     /// <summary>
     /// Configures the substitute so the resident table contains exactly
@@ -383,6 +402,90 @@ public class AzureTableWalStorageProviderIdempotentReplayTests
                 "a genuine offset collision must surface on provider.retry.exhausted");
             Assert.That(metrics.Sum(IdempotentReplaysInstrument), Is.EqualTo(0),
                 "a genuine offset collision must not be masked as an idempotent replay");
+        });
+    }
+
+    [Test]
+    public async Task SubmitPhaseOneAsync_proves_replay_with_a_single_read_when_first_row_carries_the_sentinel()
+    {
+        // O(1) fast path: the durable batch carries the per-batch sentinel on
+        // its first row, so the guard proves the whole batch with exactly one
+        // point-read - no per-entry read amplification.
+        await using var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 800, count: 5);
+        var resident = BuildStampedResident(actions);
+        var table = CreateConflictingTable(resident);
+
+        await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None);
+
+        await table.Received(1).GetEntityAsync<AzureTableWalEntity>(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IEnumerable<string>?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void SubmitPhaseOneAsync_detects_tail_divergence_with_a_single_read_even_when_first_row_is_identical()
+    {
+        // The divergent-payload case the sentinel exists for: a different
+        // batch is durable whose FIRST row is byte-identical but whose tail
+        // differs. A first-row-payload-only check would mask it; the
+        // whole-batch hash on the first row catches it with a single read.
+        var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 900, count: 4);
+
+        // The durable rows are a divergent batch A' whose last entry differs
+        // from what this call (batch A) tries to write, but whose first row
+        // is identical.
+        var divergent = BuildBatchActions(firstOffset: 900, count: 4);
+        ((AzureTableWalEntity)divergent[3].Entity).Payload = [0xDE, 0xAD, 0xBE, 0xEF];
+        var resident = BuildStampedResident(divergent);
+        var table = CreateConflictingTable(resident);
+
+        Assert.That(
+            async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<RequestFailedException>()
+                .With.Property(nameof(RequestFailedException.Status))
+                .EqualTo(AzureTableWalStorageProvider.EntityAlreadyExistsStatusCode));
+
+        // Divergence was proven without reading every row.
+        table.Received(1).GetEntityAsync<AzureTableWalEntity>(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IEnumerable<string>?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void SubmitPhaseOneAsync_detects_a_different_batch_length_via_the_sentinel()
+    {
+        // A durable batch of a different length with an identical first row
+        // must not be mistaken for a replay: the entry-count guard catches it.
+        var sut = CreateProvider();
+        var actions = BuildBatchActions(firstOffset: 1000, count: 5);
+        var shorter = BuildBatchActions(firstOffset: 1000, count: 3);
+        var resident = BuildStampedResident(shorter);
+        var table = CreateConflictingTable(resident);
+
+        Assert.That(
+            async () => await sut.SubmitPhaseOneAsync(table, actions, TreeId, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<RequestFailedException>()
+                .With.Property(nameof(RequestFailedException.Status))
+                .EqualTo(AzureTableWalStorageProvider.EntityAlreadyExistsStatusCode));
+    }
+
+    [Test]
+    public void ComputePhaseOneBatchHash_is_deterministic_and_payload_sensitive()
+    {
+        var a = BuildBatchActions(firstOffset: 1200, count: 3);
+        var b = BuildBatchActions(firstOffset: 1200, count: 3);
+        var c = BuildBatchActions(firstOffset: 1200, count: 3);
+        ((AzureTableWalEntity)c[2].Entity).Payload = [0x01, 0x02, 0x03];
+
+        var hashA = AzureTableWalStorageProvider.ComputePhaseOneBatchHash(a);
+        var hashB = AzureTableWalStorageProvider.ComputePhaseOneBatchHash(b);
+        var hashC = AzureTableWalStorageProvider.ComputePhaseOneBatchHash(c);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hashA, Is.EqualTo(hashB), "identical batches must hash identically");
+            Assert.That(hashA, Is.Not.EqualTo(hashC), "a divergent tail payload must change the hash");
+            Assert.That(hashA, Has.Length.EqualTo(32), "SHA-256 produces a 32-byte digest");
         });
     }
 

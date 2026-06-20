@@ -80,4 +80,43 @@ internal sealed class AzureTableWalEntity : ITableEntity
     /// </para>
     /// </summary>
     public int Compression { get; set; }
+
+    /// <summary>
+    /// Per-batch idempotency sentinel: a collision-resistant hash over the
+    /// whole phase-1 batch's canonical content (start offset, entry count,
+    /// and every entry's offset + compression tag + payload bytes). Carried
+    /// only on the <i>first</i> entry row of a batch (the row whose
+    /// <see cref="Offset"/> equals the batch's start offset); left
+    /// <see langword="null"/> on every other entry row, the head sentinel,
+    /// the TAIL pointer, candidate rows, and manifest M-rows.
+    /// <para>
+    /// Because a phase-1 batch is committed in a single Azure Table
+    /// transaction (atomic all-or-nothing within the partition), the first
+    /// row's presence proves the whole batch is durable, and this hash
+    /// proves <i>which</i> batch's bytes are durable. The
+    /// <c>409 EntityAlreadyExists</c> idempotent-replay guard
+    /// (<see cref="AzureTableWalStorageProvider.IsIdempotentPhaseOneReplayAsync"/>)
+    /// reads back this single row and compares the resident hash to the hash
+    /// of the batch the call tried to write - an O(1) proof that replaces the
+    /// former O(batch-size) per-entry read-back while still detecting any
+    /// divergent payload anywhere in the batch. A row written before this
+    /// column existed decodes the absent property to <see langword="null"/>,
+    /// which the guard treats as a legacy row and falls back to the
+    /// per-entry read-back for, so the schema is forward- and
+    /// backward-compatible with no migration.
+    /// </para>
+    /// </summary>
+    public byte[]? BatchHash { get; set; }
+
+    /// <summary>
+    /// Number of entry rows in the phase-1 batch this row begins. Carried
+    /// only on the first entry row of a batch (alongside
+    /// <see cref="BatchHash"/>); zero on every other row. Compared by the
+    /// idempotent-replay guard so a resident batch of a different length can
+    /// never be mistaken for a byte-identical replay even in the
+    /// astronomically unlikely event of a <see cref="BatchHash"/> collision.
+    /// Defaults to <c>0</c> for legacy rows written before the column
+    /// existed.
+    /// </summary>
+    public int BatchEntryCount { get; set; }
 }
