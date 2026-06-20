@@ -63,6 +63,10 @@ public class MaterialisedViewReplicationLifecycleTests
     [Test]
     public async Task Drain_evicts_and_rebuilds_when_lag_exceeds_budget()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-lag-evict-src";
         var view = MaterialisedViewClusterFixture.LagBudgetEvictionViewName;
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -131,6 +135,7 @@ public class MaterialisedViewReplicationLifecycleTests
     [Test]
     public async Task Drain_does_not_evict_when_budget_disabled()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-lag-noevict-src";
         var view = MaterialisedViewClusterFixture.LagBudgetDisabledViewName;
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -158,6 +163,7 @@ public class MaterialisedViewReplicationLifecycleTests
     [Test]
     public async Task ShipView_producer_runs_and_derives_into_the_stable_view_tree()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-shipview-producer-src";
         var view = MaterialisedViewClusterFixture.ShipViewProducerViewName;
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -209,6 +215,7 @@ public class MaterialisedViewReplicationLifecycleTests
     [Test]
     public async Task ShipView_producer_unsuppresses_when_the_source_becomes_readable_later()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-shipview-late-source-src";
         var view = MaterialisedViewClusterFixture.ShipViewLateSourceViewName;
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);

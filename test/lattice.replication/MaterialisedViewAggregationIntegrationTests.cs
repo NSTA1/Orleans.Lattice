@@ -75,6 +75,10 @@ public class MaterialisedViewAggregationIntegrationTests
     [Test]
     public async Task Sum_view_converges_across_inserts_overwrites_and_deletes()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "agg-sum-src";
         const string view = "agg-sum-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -105,6 +109,7 @@ public class MaterialisedViewAggregationIntegrationTests
     [Test]
     public async Task Min_view_redrives_after_deleting_current_extremum()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "agg-min-src";
         const string view = "agg-min-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -125,6 +130,7 @@ public class MaterialisedViewAggregationIntegrationTests
     [Test]
     public async Task Committed_atomic_batch_folds_into_aggregation_groups_only_after_commit()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "agg-atomic-src";
         const string view = "agg-atomic-view";
         const string origin = "remote-origin";
@@ -168,6 +174,7 @@ public class MaterialisedViewAggregationIntegrationTests
     [Test]
     public async Task Single_tree_atomic_batch_folds_onto_an_existing_group_atomically()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "agg-atomic-onto-existing-src";
         const string view = "agg-atomic-onto-existing-view";
         const string origin = "remote-origin";

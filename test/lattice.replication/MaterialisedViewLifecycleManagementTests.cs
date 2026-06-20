@@ -139,6 +139,17 @@ public class MaterialisedViewLifecycleManagementTests
         return _cluster.Client.GetGrain<ILattice>(treeId);
     }
 
+    // White-box helper: read a key straight from a view's active backing tree the
+    // way an authorised internal reader (the maintainer or an ILatticeView handle)
+    // would, by opening a ViewReadContext scope. This bypasses the public
+    // read-guard so these lifecycle assertions exercise backing-tree state (e.g.
+    // a soft-deleted generation still throwing) rather than the guard itself.
+    private static async Task<byte[]?> ReadActiveViewKeyAsync(ILattice viewTree, string key)
+    {
+        using var scope = ViewReadContext.BeginScope();
+        return await viewTree.GetAsync(key);
+    }
+
     private IViewRegistryGrain RegistryGrain =>
         _cluster.Client.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
 
@@ -188,7 +199,7 @@ public class MaterialisedViewLifecycleManagementTests
 
         await source.SetAsync("k1", "v1"u8.ToArray());
         await DrainToZeroAsync(view);
-        Assert.That(await (await ActiveViewTreeAsync(view)).GetAsync("k1"), Is.Not.Null, "the view should materialise the first source write");
+        Assert.That(await ReadActiveViewKeyAsync(await ActiveViewTreeAsync(view), "k1"), Is.Not.Null, "the view should materialise the first source write");
 
         // Simulate a silo restart's effect on the in-memory catalog: the durable
         // checkpoint and registry survive, but the catalog entry is gone. A
@@ -207,8 +218,8 @@ public class MaterialisedViewLifecycleManagementTests
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(SiloServices.GetRequiredService<IViewCatalog>().TryGet(view), Is.Not.Null, "re-hydration should re-register the view in the catalog");
-            Assert.That(await viewTree.GetAsync("k1"), Is.Not.Null, "the pre-restart entry should still be materialised");
-            Assert.That(await viewTree.GetAsync("k2"), Is.Not.Null, "the resumed maintainer should apply a post-restart source write");
+            Assert.That(await ReadActiveViewKeyAsync(viewTree, "k1"), Is.Not.Null, "the pre-restart entry should still be materialised");
+            Assert.That(await ReadActiveViewKeyAsync(viewTree, "k2"), Is.Not.Null, "the resumed maintainer should apply a post-restart source write");
         });
     }
 
@@ -223,7 +234,7 @@ public class MaterialisedViewLifecycleManagementTests
         await DrainToZeroAsync(view);
 
         var viewTreeBefore = await ActiveViewTreeAsync(view);
-        Assert.That(await viewTreeBefore.GetAsync("d1"), Is.Not.Null, "precondition: the view holds the source entry");
+        Assert.That(await ReadActiveViewKeyAsync(viewTreeBefore, "d1"), Is.Not.Null, "precondition: the view holds the source entry");
 
         await Factory.DeleteAsync(view);
 
@@ -234,9 +245,10 @@ public class MaterialisedViewLifecycleManagementTests
             Assert.That(SiloServices.GetRequiredService<IViewCatalog>().TryGet(view), Is.Null, "the catalog entry should be removed");
         });
 
-        // The backing tree is soft-deleted, so a read against it now throws.
+        // The backing tree is soft-deleted, so a read against it now throws even
+        // under an authorised view-read scope.
         Assert.ThrowsAsync<InvalidOperationException>(
-            () => viewTreeBefore.GetAsync("d1"),
+            () => ReadActiveViewKeyAsync(viewTreeBefore, "d1"),
             "the backing view tree should be deleted");
 
         // The view name is free to be re-created. It rebuilds onto a fresh backing
@@ -245,7 +257,7 @@ public class MaterialisedViewLifecycleManagementTests
         _ = CreateRuntimeView(tree, view);
         await DrainToZeroAsync(view);
         var recreated = await ActiveViewTreeAsync(view);
-        Assert.That(await recreated.GetAsync("d1"), Is.Not.Null, "a re-created view rebuilds onto a fresh tree and re-derives from the source");
+        Assert.That(await ReadActiveViewKeyAsync(recreated, "d1"), Is.Not.Null, "a re-created view rebuilds onto a fresh tree and re-derives from the source");
     }
 
     [Test]

@@ -122,14 +122,43 @@ public sealed class AdultsReader(ILatticeViewFactory views, IGrainFactory grains
 `ILatticeView` exposes the usual reads - `GetAsync`, `CountAsync`, `KeysAsync`,
 `EntriesAsync` - over the materialised content.
 
-A view is **read-only**. Its contents are derived from the source tree and owned
-by the maintainer, so the underlying `view-{name}` tree rejects direct writes
+When the view already exists and the caller only needs to **read** it (and does
+not hold the source tree or projection), resolve a handle by name with
+`ILatticeViewFactory.GetAsync`. It returns `null` when no view of that name is
+registered and never creates anything; the maintainer comes online lazily on the
+first read:
+
+```csharp verify
+public sealed class AdultsByNameReader(ILatticeViewFactory views)
+{
+    public async Task<byte[]?> ReadAsync(string key, CancellationToken cancellationToken)
+    {
+        // Open an already-registered view by name - no source tree or projection needed.
+        ILatticeView? adults = await views.GetAsync("adults", cancellationToken);
+        if (adults is null)
+        {
+            return null; // the view was never created, or was deleted
+        }
+
+        return await adults.GetAsync(key, cancellationToken);
+    }
+}
+```
+
+A view is **read-only**, and its backing tree is private to the maintainer. Its
+contents are derived from the source tree and owned by the maintainer, so the
+underlying `view-{name}` tree rejects **both direct writes and direct reads**
 through the public `ILattice` surface: binding `GetGrain<ILattice>("view-adults")`
-and calling `SetAsync` / `DeleteAsync` / `SetManyAtomicAsync` (or any other
-mutating method) throws `InvalidOperationException`. Reads of the view tree are
-unaffected. To change a view's contents, write to its **source** tree and let the
-view converge. (For this reason, `view-` is a reserved tree-name prefix: don't
-name a directly-writable data tree `view-something`.)
+and calling a mutating method (`SetAsync` / `DeleteAsync` / `SetManyAtomicAsync`,
+or any other write) **or** a content read (`GetAsync` / `GetWithVersionAsync` /
+`ExistsAsync` / `GetManyAsync` / `CountAsync` / `CountPerShardAsync` / `KeysAsync`
+/ `EntriesAsync`) throws `InvalidOperationException`. A rebuild can swap the active
+view-tree generation underneath a raw bind, so a direct read could observe a stale
+or empty generation - always read through the `ILatticeView` handle (resolved via
+`ILatticeViewFactory.GetAsync` or `Create`), which follows the active generation.
+To change a view's contents, write to its **source** tree and let the view
+converge. (For this reason, `view-` is a reserved tree-name prefix: don't name a
+directly-writable data tree `view-something`.)
 
 ## Observing lag and forcing a rebuild
 

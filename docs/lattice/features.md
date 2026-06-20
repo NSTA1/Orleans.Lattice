@@ -131,6 +131,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-108](https://github.com/NSTA1/Orleans.Lattice/issues/797) - Extend lazy CRDT row materialisation to the durable writer path (delta-only WAL) so production apply allocation drops from O(state) to O(delta)
 - [F-109](https://github.com/NSTA1/Orleans.Lattice/issues/798) - Lazy CRDT post-merge row materialisation on the writerless apply path + growing-state apply microbench
 - [F-122](https://github.com/NSTA1/Orleans.Lattice/issues/839) - Materialised views: reject deleting a source tree that still has dependent views, and reject creating a view whose source is itself a view
+- [F-123](https://github.com/NSTA1/Orleans.Lattice/issues/846) - Materialised views: name-only `ILatticeView` read handle via `ILatticeViewFactory.GetAsync`, plus a guard that rejects direct content reads of a view's backing tree through `ILattice` (a rebuild can swap the active generation under a raw bind)
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down

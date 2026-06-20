@@ -65,6 +65,10 @@ public class MaterialisedViewIntegrationTests
     [Test]
     public async Task View_reflects_inserts_filtered_by_predicate()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-insert-src";
         const string view = "mv-insert-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -88,6 +92,7 @@ public class MaterialisedViewIntegrationTests
     [Test]
     public async Task View_update_wins_by_hlc()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-update-src";
         const string view = "mv-update-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -106,6 +111,7 @@ public class MaterialisedViewIntegrationTests
     [Test]
     public async Task View_retracts_key_that_updates_out_of_predicate()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-retract-src";
         const string view = "mv-retract-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -127,6 +133,7 @@ public class MaterialisedViewIntegrationTests
     [Test]
     public async Task View_removes_deleted_source_key()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-delete-src";
         const string view = "mv-delete-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -169,6 +176,7 @@ public class MaterialisedViewIntegrationTests
     [Test]
     public async Task RebuildAsync_reconverges_after_view_drift()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-rebuild-src";
         const string view = "mv-rebuild-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);

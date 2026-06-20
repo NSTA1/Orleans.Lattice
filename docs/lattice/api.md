@@ -1784,7 +1784,7 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
 |------|------|
 | `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, and hosted maintainer. Part of the core `Orleans.Lattice` package. Declares startup views through the builder (`AddView` / `AddAggregationView`). |
 | `ConfigureLatticeView(viewName?, configure)` | Sets `LatticeViewOptions` defaults (no name) or per-view overrides. |
-| `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle and persists a durable runtime registration; `DeleteAsync(viewName, ct?)` tears a runtime view down completely (maintainer, reminder, WAL pin, backing tree, checkpoint, and registration) and is idempotent. Registered as a singleton by `AddLatticeViews`. |
+| `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle and persists a durable runtime registration; `GetAsync(viewName, ct?)` opens a read handle for an already-registered view by name (returns `null` when none is registered), without re-supplying the source or projection; `DeleteAsync(viewName, ct?)` tears a runtime view down completely (maintainer, reminder, WAL pin, backing tree, checkpoint, and registration) and is idempotent. Registered as a singleton by `AddLatticeViews`. |
 | `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
 | `TypedLatticeViewExtensions` | Typed read helpers over `ILatticeView`: `GetAsync<T>` / `EntriesAsync<T>` (deserialize via `ILatticeSerializer<T>`, default `JsonLatticeSerializer<T>`) and `GetAggregateDoubleAsync` / `GetAggregateInt64Async` (decode aggregate values via `LatticeAggregationValue`). |
 | `LatticeViewDefinition` | Pairs a view name with either an `ILatticeViewProjection` (filter / re-project) or an `ILatticeAggregationProjection` (aggregation). |
@@ -1810,12 +1810,17 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
   provider must be configured on the silo.
 - **Read through the handle.** A rebuild can swap the live view tree, so prefer
   the `ILatticeView` handle (which re-resolves the active tree) over binding a raw
-  `ILattice` grain by a fixed id.
-- **Views are read-only.** The `view-{name}` tree is derived state owned by the
-  maintainer; the public `ILattice` mutating surface rejects direct writes to any
-  `view-*` tree with `InvalidOperationException` (reads are unaffected). Write to
-  the source tree and let the view converge. `view-` is therefore a reserved
-  tree-name prefix for directly-writable trees.
+  `ILattice` grain by a fixed id. To open an existing view by name for reading,
+  call `ILatticeViewFactory.GetAsync(viewName)` (returns `null` when the view is
+  not registered).
+- **Views are read-only, and the backing tree is private.** The `view-{name}` tree
+  is derived state owned by the maintainer; the public `ILattice` surface rejects
+  **both** direct writes **and** direct content reads to any `view-*` tree with
+  `InvalidOperationException` (a rebuild can swap the active generation underneath a
+  raw bind, so a direct read could observe a stale or empty generation). Read
+  through the `ILatticeView` handle instead, and write to the source tree to change
+  a view's contents. `view-` is therefore a reserved tree-name prefix for
+  directly-writable trees.
 - **Source deletion is guarded.** A source tree that still has one or more
   materialised views cannot be deleted: `DeleteTreeAsync` throws
   `InvalidOperationException` naming the dependent view(s). Tear the view(s) down

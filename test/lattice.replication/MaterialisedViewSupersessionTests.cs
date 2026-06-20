@@ -140,6 +140,10 @@ public class MaterialisedViewSupersessionTests
     [Test]
     public async Task Ordinary_write_with_higher_hlc_supersedes_a_committed_atomic_batch_same_pass()
     {
+        // White-box reads of a view's backing tree run under an authorised
+        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
+        // the public read-guard otherwise rejects direct view-tree reads.
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-supersede-same-src";
         const string view = "mv-supersede-same-view";
         _ = CreateAdultView(tree, view);
@@ -166,6 +170,7 @@ public class MaterialisedViewSupersessionTests
     [Test]
     public async Task Ordinary_write_with_higher_hlc_supersedes_a_committed_atomic_batch_across_passes()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-supersede-cross-src";
         const string view = "mv-supersede-cross-view";
         _ = CreateAdultView(tree, view);
@@ -202,6 +207,7 @@ public class MaterialisedViewSupersessionTests
     [Test]
     public async Task Aggregation_group_reflects_the_higher_hlc_ordinary_write_not_the_atomic_value()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-supersede-agg-src";
         const string view = "mv-supersede-agg-view";
         _ = CreateSumView(tree, view);
@@ -228,6 +234,7 @@ public class MaterialisedViewSupersessionTests
     [Test]
     public async Task Rebuild_with_an_in_flight_prepare_does_not_lose_the_committed_batch()
     {
+        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "mv-rebuild-inflight-src";
         const string view = "mv-rebuild-inflight-view";
         _ = CreateAdultView(tree, view);
