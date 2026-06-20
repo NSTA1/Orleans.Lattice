@@ -547,7 +547,7 @@ defers its next background tick by `ThrottledPauseMs`; while the source is
 `SaturatedPauseMs`. The view therefore lags more while the source is hot and
 catches up once it recovers - foreground write throughput is preserved over view
 freshness. Only background drains are deferred; an explicit read-your-writes
-barrier (`WaitForApplyAsync` / `WaitForSourceHeadAsync`) still makes progress, just
+barrier (`WaitForSourceHlcAsync` / `WaitForSourceHeadAsync`) still makes progress, just
 with a smaller batch. Each self-throttled pass is emitted on
 `orleans.lattice.view.source_backpressure` (tagged with the observed source
 regime). Set `ObeySourceBackpressure` to `false` to opt out and always drain at

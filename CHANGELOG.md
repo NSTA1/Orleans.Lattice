@@ -8,9 +8,13 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v7.2.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v7.3.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+## [7.3.0] - 2026-06-20
+
+Minor release across the package family. The headline addition is **asynchronous materialised views** (F-106): a source tree can now project an eventually-consistent, WAL-tailing filter / re-project / aggregation view, maintained in its own tree and read through the ordinary `ILattice` surface - see [`docs/lattice/materialised-views.md`](docs/lattice/materialised-views.md) for the full feature. Runtime-created views are durably registered and survive a silo restart, `ILatticeViewFactory.DeleteAsync` tears a view down cleanly, and two lifecycle guards reject deleting a source tree that still has dependent views and creating a view whose source is itself a view (F-122). Supporting the views, a new core mixed atomic set+delete primitive (`SetManyAtomicAsync(upserts, deletes, operationId)`, FX-042) closes the re-key retraction window. On the performance side, lazy post-merge CRDT row materialisation now flattens per-apply allocation from O(state) to O(delta) on both the writerless and durable-writer paths (F-108 / F-109), and the replication receiver folds typed-CRDT delta runs server-side in one batched grain call. The `Microsoft.Orleans.*` family moves to 10.2.0. Stability fixes include removal of the WAL `set-point` phase-one 409 conflict storm and a material reduction of the residual single-account brown-out wedge. See the per-section entries below.
 
 ### Added
 
@@ -549,7 +553,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.2.0...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.0...HEAD
+[7.3.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.2.0...v7.3.0
 [7.2.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.1.0...v7.2.0
 [7.1.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.0.0...v7.1.0
 [7.0.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v6.4.0...v7.0.0

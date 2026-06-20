@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Replication</PackageId>
-    <Version>7.2.0</Version>
+    <Version>7.3.0</Version>
     <Description>Cross-cluster replication for Orleans.Lattice - sharded, CRDT-backed key-value replication between Orleans clusters.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
