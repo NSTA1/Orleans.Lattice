@@ -376,9 +376,22 @@ public class AzureTableWalStorageOptionsTests
             Assert.That(options.RetryMaxAttempts, Is.Null);
             Assert.That(options.RetryDelay, Is.Null);
             Assert.That(options.RetryMaxDelay, Is.Null);
-            Assert.That(options.RetryNetworkTimeout, Is.Null);
             Assert.That(options.RetryMode, Is.Null);
         });
+    }
+
+    [Test]
+    public void RetryNetworkTimeout_defaults_to_finite_bound()
+    {
+        // Unlike the other additive retry knobs, RetryNetworkTimeout
+        // defaults to a finite value (not null) so the WAL transport
+        // bounds each attempt below the per-flush budget rather than
+        // inheriting the SDK's unbounded ~100 s default - see the
+        // option's documentation for the brown-out rationale.
+        var options = new AzureTableWalStorageOptions();
+
+        Assert.That(options.RetryNetworkTimeout, Is.EqualTo(AzureTableWalStorageOptions.DefaultRetryNetworkTimeout));
+        Assert.That(AzureTableWalStorageOptions.DefaultRetryNetworkTimeout, Is.EqualTo(TimeSpan.FromSeconds(10)));
     }
 
     [Test]
@@ -566,10 +579,11 @@ public class AzureTableWalStorageOptionsTests
     [Test]
     public void BuildServiceClient_leaves_sdk_defaults_when_no_retry_knob_is_set()
     {
-        // Additive contract: with all knobs null and no host callback
-        // touching Retry, the constructed TableClientOptions.Retry
-        // surface matches a fresh TableClientOptions - i.e. the SDK
-        // defaults. We snapshot a fresh instance and compare.
+        // Additive contract: with all knobs at their defaults and no
+        // host callback touching Retry, the constructed
+        // TableClientOptions.Retry surface matches a fresh
+        // TableClientOptions (the SDK defaults) - EXCEPT NetworkTimeout,
+        // which the provider bounds to its finite DefaultRetryNetworkTimeout.
         var defaults = new TableClientOptions();
 
         TableClientOptions? observed = null;
@@ -587,9 +601,31 @@ public class AzureTableWalStorageOptionsTests
             Assert.That(observed!.Retry.MaxRetries, Is.EqualTo(defaults.Retry.MaxRetries));
             Assert.That(observed.Retry.Delay, Is.EqualTo(defaults.Retry.Delay));
             Assert.That(observed.Retry.MaxDelay, Is.EqualTo(defaults.Retry.MaxDelay));
-            Assert.That(observed.Retry.NetworkTimeout, Is.EqualTo(defaults.Retry.NetworkTimeout));
+            Assert.That(observed.Retry.NetworkTimeout, Is.EqualTo(AzureTableWalStorageOptions.DefaultRetryNetworkTimeout));
             Assert.That(observed.Retry.Mode, Is.EqualTo(defaults.Retry.Mode));
         });
+    }
+
+    [Test]
+    public void BuildServiceClient_restores_sdk_NetworkTimeout_when_explicitly_null()
+    {
+        // Opt-out contract: setting RetryNetworkTimeout = null restores
+        // the SDK's unbounded default, the historical behaviour before
+        // the finite default was introduced.
+        var defaults = new TableClientOptions();
+
+        TableClientOptions? observed = null;
+        var options = new AzureTableWalStorageOptions
+        {
+            ConnectionString = "UseDevelopmentStorage=true",
+            RetryNetworkTimeout = null,
+            ConfigureClientOptions = co => observed = co,
+        };
+
+        _ = options.BuildServiceClient();
+
+        Assert.That(observed, Is.Not.Null);
+        Assert.That(observed!.Retry.NetworkTimeout, Is.EqualTo(defaults.Retry.NetworkTimeout));
     }
 
     [Test]

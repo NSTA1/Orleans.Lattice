@@ -70,7 +70,7 @@ See [Architecture](architecture.md) for the storage and commit model, and [Core 
 | Commit pipeline | `PipelinePhaseTwoCommits`, `EliminateCandidateRowOnHotPath`, `PipelinedPhaseTwoFaultHandler`, `PhaseTwoCoalescingWindow`, `PhaseTwoCommitTimeout` |
 | Saturation | `HonorSaturationSignal`, `SaturationShortCircuitCooldown` |
 | Compression | `Compression`, `CompressionMinPayloadBytes` |
-| Defaults | `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultHonorSaturationSignal`, `DefaultSaturationShortCircuitCooldown`, `DefaultCompression`, `DefaultCompressionMinPayloadBytes` |
+| Defaults | `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultRetryNetworkTimeout`, `DefaultHonorSaturationSignal`, `DefaultSaturationShortCircuitCooldown`, `DefaultCompression`, `DefaultCompressionMinPayloadBytes` |
 
 Exactly one authentication mode must be configured. See [Configuration](configuration.md) for defaults, validation, and examples.
 

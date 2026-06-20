@@ -167,10 +167,12 @@ public sealed class AzureTableWalStorageOptions
     public TimeSpan? RetryMaxDelay { get; set; }
 
     /// <summary>
-    /// When set, overrides <see cref="RetryOptions.NetworkTimeout"/>
-    /// on the constructed <see cref="TableClientOptions.Retry"/> - the
-    /// per-attempt deadline applied at the transport layer. <c>null</c>
-    /// leaves the SDK default (100 s) in place. Must be positive.
+    /// Overrides <see cref="RetryOptions.NetworkTimeout"/> on the
+    /// constructed <see cref="TableClientOptions.Retry"/> - the
+    /// per-attempt deadline applied at the transport layer. Defaults to
+    /// <see cref="DefaultRetryNetworkTimeout"/> (10 s); set to
+    /// <c>null</c> to restore the unbounded SDK default (~100 s). Must
+    /// be positive when set.
     /// <para>
     /// Functions as a per-attempt deadline budget: a stuck request
     /// cannot keep a WAL slot occupied longer than this value before
@@ -178,8 +180,40 @@ public sealed class AzureTableWalStorageOptions
     /// surfacing a <see cref="ProviderRetryExhausted"/>-tagged failure
     /// to the caller. Ignored when <see cref="ServiceClient"/> is set.
     /// </para>
+    /// <para>
+    /// <b>Why a finite default.</b> The Azure SDK's retry loop observes
+    /// cancellation only <i>between</i> attempts, not while a single
+    /// attempt is parked on the transport (the
+    /// <c>NetworkTimeout</c> is the only bound on an in-flight attempt).
+    /// Under a sustained single-account Azure Tables brown-out a WAL
+    /// shard self-bounds each flush at
+    /// <c>LatticeOptions.WalFlushTimeout</c> (15 s default) and abandons
+    /// its await, but with the SDK's unbounded ~100 s
+    /// <c>NetworkTimeout</c> the abandoned HTTP attempt keeps running -
+    /// hundreds of these zombie attempts accumulate and self-sustain the
+    /// brown-out independently of any conflict-retry path. A finite
+    /// default below <c>WalFlushTimeout</c> makes a stuck attempt
+    /// surface a real <see cref="Azure.RequestFailedException"/> into the
+    /// shard's reconcile-aware failure handler within the flush budget
+    /// (so the slot is released and recovered) instead of being
+    /// abandoned while the transport zombies on for ~100 s. The
+    /// <see cref="SaturationAwareRetryPolicy"/> short-circuits the
+    /// <i>retries</i> after the first attempt; this default bounds the
+    /// first attempt the policy intentionally never short-circuits.
+    /// </para>
     /// </summary>
-    public TimeSpan? RetryNetworkTimeout { get; set; }
+    public TimeSpan? RetryNetworkTimeout { get; set; } = DefaultRetryNetworkTimeout;
+
+    /// <summary>
+    /// Default value for <see cref="RetryNetworkTimeout"/> (10 seconds).
+    /// Chosen to sit below the <c>LatticeOptions.WalFlushTimeout</c>
+    /// default (15 s) so a hung transport attempt surfaces a fault into
+    /// the WAL shard's failure handler within the per-flush budget,
+    /// while still leaving 75-1000x headroom over the WAL hot path's
+    /// observed server-timing p99 (10-130 ms) so healthy transactions
+    /// are never spuriously timed out.
+    /// </summary>
+    public static readonly TimeSpan DefaultRetryNetworkTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.Mode"/> on the
