@@ -67,4 +67,22 @@ internal interface ILatticeStateQuery
     Task<ViewCatalogPage> ListViewsAsync(
         CatalogRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the structural node graph of the given tree - shard roots,
+    /// internal nodes, and leaves - each annotated with node kind, key-range
+    /// bounds, live/tombstone counts, fan-out, and depth, or a typed
+    /// not-found result when the tree does not exist. Built from the pushed-up
+    /// per-shard topology snapshots: a whole-tree read issues one structural
+    /// read per shard root (O(shards)) and never fans out to leaves. The
+    /// response is bounded by the request's depth and node-count budget, with
+    /// <see cref="NodeStateSummary.HasMoreChildren"/> markers so a client can
+    /// lazily expand truncated subtrees via
+    /// <see cref="StructureRequest.SubPathNodeId"/>.
+    /// </summary>
+    /// <param name="request">Scope (tree, optional shard / sub-path) and depth / node budget.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<TreeStructureResult> GetTreeStructureAsync(
+        StructureRequest request,
+        CancellationToken cancellationToken = default);
 }
