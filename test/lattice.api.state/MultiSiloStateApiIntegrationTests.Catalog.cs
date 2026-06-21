@@ -4,7 +4,7 @@ using Orleans.Lattice.BPlusTree.State;
 namespace Orleans.Lattice.Api.State.Tests;
 
 /// <summary>
-/// F-113 discovery / catalog multi-silo coverage. A runtime view created on one
+/// Discovery / catalog multi-silo coverage. A runtime view created on one
 /// silo must be visible to a facade served by another silo (it is recorded in the
 /// cluster-wide view registry, not just the originating silo's local catalog), and
 /// the tree catalog must enumerate trees regardless of which silo hosts their
