@@ -85,4 +85,35 @@ internal interface ILatticeStateQuery
     Task<TreeStructureResult> GetTreeStructureAsync(
         StructureRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Scans the actual entries of a tree as a snapshot-isolated, key-ordered,
+    /// paged read, optionally scoped to a key range and filtered by a
+    /// server-side predicate. The first call (no
+    /// <see cref="EntryScanRequest.ContinuationToken"/>) opens a point-in-time
+    /// cursor; every continuation pages against that same frozen view, so the
+    /// scan never observes a torn write and is resilient to concurrent writes,
+    /// splits, and reshards. Values are returned as size-bounded previews (the
+    /// full length is always reported) so whole values do not cross the wire
+    /// unnecessarily. Tombstoned and TTL-expired entries are excluded from the
+    /// live scan rather than surfaced as live.
+    /// </summary>
+    /// <param name="request">Scope, paging, preview budget, and optional predicate.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<EntryScanResult> ScanEntriesAsync(
+        EntryScanRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the full record for a single key (with a larger value-preview
+    /// budget than a scan), or a typed not-found that distinguishes an unknown
+    /// tree from a missing key. Intended for the explorer's detail pane.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The entry key to read.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<EntryDetailResult> GetEntryAsync(
+        string treeId,
+        string key,
+        CancellationToken cancellationToken = default);
 }

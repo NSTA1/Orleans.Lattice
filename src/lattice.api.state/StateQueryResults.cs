@@ -10,6 +10,9 @@ public enum StateQueryStatus
 
     /// <summary>The requested tree does not exist.</summary>
     TreeNotFound = 1,
+
+    /// <summary>The tree exists but the requested key was not found.</summary>
+    KeyNotFound = 2,
 }
 
 /// <summary>
@@ -122,5 +125,103 @@ public sealed record TreeStructureResult
     {
         ArgumentNullException.ThrowIfNull(treeId);
         return new TreeStructureResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId };
+    }
+}
+
+/// <summary>
+/// Result of <see cref="ILatticeStateQuery.ScanEntriesAsync"/>: a
+/// snapshot-isolated, key-ordered page of entries plus an opaque continuation
+/// token, or a typed not-found when the tree does not exist.
+/// </summary>
+public sealed record EntryScanResult
+{
+    /// <summary>Lookup outcome.</summary>
+    public StateQueryStatus Status { get; init; }
+
+    /// <summary>The tree id that was scanned.</summary>
+    public required string TreeId { get; init; }
+
+    /// <summary>
+    /// The entries in this page, in the scan's key order (empty when not
+    /// found or when the scan is drained).
+    /// </summary>
+    public IReadOnlyList<EntryRecord> Entries { get; init; } = Array.Empty<EntryRecord>();
+
+    /// <summary>
+    /// Opaque token to pass as <see cref="EntryScanRequest.ContinuationToken"/>
+    /// to fetch the next page against the same snapshot, or
+    /// <see langword="null"/> when the scan is fully drained.
+    /// </summary>
+    public string? ContinuationToken { get; init; }
+
+    /// <summary>Builds a found page.</summary>
+    public static EntryScanResult Found(string treeId, IReadOnlyList<EntryRecord> entries, string? continuationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(entries);
+        return new EntryScanResult
+        {
+            Status = StateQueryStatus.Found,
+            TreeId = treeId,
+            Entries = entries,
+            ContinuationToken = continuationToken,
+        };
+    }
+
+    /// <summary>Builds a not-found result for the given tree id.</summary>
+    public static EntryScanResult NotFound(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return new EntryScanResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId };
+    }
+}
+
+/// <summary>
+/// Result of <see cref="ILatticeStateQuery.GetEntryAsync"/>: the full record
+/// for a single existing key, or a typed not-found that distinguishes an
+/// unknown tree from a missing key.
+/// </summary>
+public sealed record EntryDetailResult
+{
+    /// <summary>Lookup outcome.</summary>
+    public StateQueryStatus Status { get; init; }
+
+    /// <summary>The tree id that was queried.</summary>
+    public required string TreeId { get; init; }
+
+    /// <summary>The key that was queried.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>The record when <see cref="Status"/> is <see cref="StateQueryStatus.Found"/>.</summary>
+    public EntryRecord? Entry { get; init; }
+
+    /// <summary>Builds a found result for the given key.</summary>
+    public static EntryDetailResult Found(string treeId, EntryRecord entry)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(entry);
+        return new EntryDetailResult
+        {
+            Status = StateQueryStatus.Found,
+            TreeId = treeId,
+            Key = entry.Key,
+            Entry = entry,
+        };
+    }
+
+    /// <summary>Builds a tree-not-found result.</summary>
+    public static EntryDetailResult TreeNotFound(string treeId, string key)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(key);
+        return new EntryDetailResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId, Key = key };
+    }
+
+    /// <summary>Builds a key-not-found result.</summary>
+    public static EntryDetailResult KeyNotFound(string treeId, string key)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(key);
+        return new EntryDetailResult { Status = StateQueryStatus.KeyNotFound, TreeId = treeId, Key = key };
     }
 }
