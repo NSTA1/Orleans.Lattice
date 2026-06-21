@@ -246,4 +246,189 @@ public class LatticeStateGrpcIntegrationTests
                 new CatalogRequest { PageSize = 10 }));
         Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
     }
+
+    [Test]
+    public async Task authorizer_receives_scan_operation_and_target_tree()
+    {
+        var treeId = $"grpc-authz-scan-{Guid.NewGuid():N}";
+        await _fixture.CreatePopulatedTreeAsync(treeId, keyCount: 4, shardCount: 1);
+
+        var recorder = new RecordingStateApiAuthorizer(allow: true);
+        await using var host = await _fixture.CreateGrpcHostAsync(recorder, requireAuthorization: true);
+
+        await CallAsync(host.Channel, host.Methods.ScanEntries,
+            new EntryScanRequest { TreeId = treeId, PageSize = 10 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder.Last.Operation, Is.EqualTo(LatticeStateApiOperation.ScanEntries));
+            Assert.That(recorder.Last.TargetTreeId, Is.EqualTo(treeId));
+        });
+    }
+
+    [Test]
+    public async Task authorizer_receives_get_entry_operation_and_target_tree()
+    {
+        var treeId = $"grpc-authz-get-{Guid.NewGuid():N}";
+        await _fixture.CreatePopulatedTreeAsync(treeId, keyCount: 4, shardCount: 1);
+
+        var recorder = new RecordingStateApiAuthorizer(allow: true);
+        await using var host = await _fixture.CreateGrpcHostAsync(recorder, requireAuthorization: true);
+
+        await CallAsync(host.Channel, host.Methods.GetEntry,
+            new EntryGetRequest { TreeId = treeId, Key = GrpcStateClusterFixture.KeyAt(1) });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder.Last.Operation, Is.EqualTo(LatticeStateApiOperation.GetEntry));
+            Assert.That(recorder.Last.TargetTreeId, Is.EqualTo(treeId));
+        });
+    }
+
+    [Test]
+    public async Task authorizer_receives_structure_operation_and_target_tree()
+    {
+        var treeId = $"grpc-authz-struct-{Guid.NewGuid():N}";
+        await _fixture.CreatePopulatedTreeAsync(treeId, keyCount: 8, shardCount: 1);
+
+        var recorder = new RecordingStateApiAuthorizer(allow: true);
+        await using var host = await _fixture.CreateGrpcHostAsync(recorder, requireAuthorization: true);
+
+        await CallAsync(host.Channel, host.Methods.GetTreeStructure, new StructureRequest { TreeId = treeId });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder.Last.Operation, Is.EqualTo(LatticeStateApiOperation.GetTreeStructure));
+            Assert.That(recorder.Last.TargetTreeId, Is.EqualTo(treeId));
+        });
+    }
+
+    [Test]
+    public async Task authorizer_receives_null_target_tree_for_catalog_operations()
+    {
+        var recorder = new RecordingStateApiAuthorizer(allow: true);
+        await using var host = await _fixture.CreateGrpcHostAsync(recorder, requireAuthorization: true);
+
+        await CallAsync(host.Channel, host.Methods.ListTrees, new CatalogRequest { PageSize = 10 });
+        var afterListTrees = recorder.Last;
+
+        await CallAsync(host.Channel, host.Methods.ListViews, new CatalogRequest { PageSize = 10 });
+        var afterListViews = recorder.Last;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterListTrees.Operation, Is.EqualTo(LatticeStateApiOperation.ListTrees));
+            Assert.That(afterListTrees.TargetTreeId, Is.Null, "cluster-wide catalog ops are not tree-scoped");
+            Assert.That(afterListViews.Operation, Is.EqualTo(LatticeStateApiOperation.ListViews));
+            Assert.That(afterListViews.TargetTreeId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task tree_scoped_authorizer_allows_one_tree_and_denies_another()
+    {
+        var allowedTree = $"grpc-authz-allow-{Guid.NewGuid():N}";
+        var deniedTree = $"grpc-authz-deny-{Guid.NewGuid():N}";
+        await _fixture.CreatePopulatedTreeAsync(allowedTree, keyCount: 4, shardCount: 1);
+        await _fixture.CreatePopulatedTreeAsync(deniedTree, keyCount: 4, shardCount: 1);
+
+        var authorizer = new TreeScopedStateApiAuthorizer(allowedTree);
+        await using var host = await _fixture.CreateGrpcHostAsync(authorizer, requireAuthorization: true);
+
+        var allowed = await CallAsync(host.Channel, host.Methods.ScanEntries,
+            new EntryScanRequest { TreeId = allowedTree, PageSize = 10 });
+        Assert.That(allowed.Status, Is.EqualTo(StateQueryStatus.Found));
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () =>
+            await CallAsync(host.Channel, host.Methods.ScanEntries,
+                new EntryScanRequest { TreeId = deniedTree, PageSize = 10 }));
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied),
+            "a per-tree policy must deny a tree outside its allowed set");
+    }
+
+    [Test]
+    public async Task scan_entries_maps_malformed_continuation_token_to_invalid_argument()
+    {
+        var treeId = $"grpc-bad-token-{Guid.NewGuid():N}";
+        await _fixture.CreatePopulatedTreeAsync(treeId, keyCount: 4, shardCount: 1);
+
+        // A continuation token naming an unknown/stale cursor is a malformed
+        // client request and must map to InvalidArgument, not Internal (which
+        // would mask the client error as a server fault).
+        var ex = Assert.ThrowsAsync<RpcException>(async () =>
+            await CallAsync(_host.Channel, _host.Methods.ScanEntries,
+                new EntryScanRequest { TreeId = treeId, PageSize = 5, ContinuationToken = "not-a-real-cursor" }));
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.InvalidArgument));
+    }
+
+    [Test]
+    public async Task scan_entries_over_grpc_reads_cluster_distributed_state_from_non_primary_silo()
+    {
+        var fixture = new GrpcStateClusterFixture();
+        await fixture.InitializeAsync(siloCount: 3);
+        try
+        {
+            var treeId = $"grpc-multisilo-{Guid.NewGuid():N}";
+            await fixture.CreatePopulatedTreeAsync(treeId, keyCount: 24, shardCount: 6);
+
+            // Bind the gRPC surface to a NON-primary silo's facade: the write
+            // path targeted the cluster client, the grains are distributed
+            // across all three silos, and the read must still observe them all.
+            await using var host = await fixture.CreateGrpcHostAsync(facade: fixture.QueryOnSilo(1));
+
+            var seen = new List<string>();
+            string? token = null;
+            do
+            {
+                var page = await CallAsync(host.Channel, host.Methods.ScanEntries,
+                    new EntryScanRequest { TreeId = treeId, PageSize = 7, ContinuationToken = token });
+                seen.AddRange(page.Entries.Select(e => e.Key));
+                token = page.ContinuationToken;
+            }
+            while (!string.IsNullOrEmpty(token));
+
+            Assert.That(seen, Is.EquivalentTo(Enumerable.Range(0, 24).Select(GrpcStateClusterFixture.KeyAt)));
+        }
+        finally
+        {
+            await fixture.DisposeAsync();
+        }
+    }
+}
+
+/// <summary>
+/// Test authorizer that records the most recent
+/// <see cref="LatticeStateApiAuthorizationContext"/> it observed so a test can
+/// assert the operation and target tree were decoded and forwarded correctly.
+/// </summary>
+internal sealed class RecordingStateApiAuthorizer(bool allow) : ILatticeStateApiAuthorizer
+{
+    private LatticeStateApiAuthorizationContext _last;
+
+    public LatticeStateApiAuthorizationContext Last => _last;
+
+    public Task<bool> IsAuthorizedAsync(
+        LatticeStateApiAuthorizationContext authorizationContext,
+        CancellationToken cancellationToken)
+    {
+        _last = authorizationContext;
+        return Task.FromResult(allow);
+    }
+}
+
+/// <summary>
+/// Test authorizer that permits only calls scoped to a specific tree (and the
+/// cluster-wide catalog operations), denying every other tree. Exercises the
+/// per-tree decisioning the enriched authorization context enables.
+/// </summary>
+internal sealed class TreeScopedStateApiAuthorizer(string allowedTreeId) : ILatticeStateApiAuthorizer
+{
+    public Task<bool> IsAuthorizedAsync(
+        LatticeStateApiAuthorizationContext authorizationContext,
+        CancellationToken cancellationToken)
+    {
+        var allowed = authorizationContext.TargetTreeId is null
+            || string.Equals(authorizationContext.TargetTreeId, allowedTreeId, StringComparison.Ordinal);
+        return Task.FromResult(allowed);
+    }
 }

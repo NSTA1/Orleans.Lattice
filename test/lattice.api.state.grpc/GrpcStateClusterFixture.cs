@@ -32,9 +32,19 @@ internal sealed class GrpcStateClusterFixture
 
     public ILatticeStateQuery Query => SiloServices.GetRequiredService<ILatticeStateQuery>();
 
-    public async Task InitializeAsync()
+    /// <summary>
+    /// Resolves the <see cref="ILatticeStateQuery"/> facade hosted on the silo at
+    /// <paramref name="index"/>. Used by the multi-silo gRPC test to bind the
+    /// gRPC surface to a facade on a silo other than the one the writing client
+    /// happened to target, proving the binding reads cluster-distributed state.
+    /// </summary>
+    public ILatticeStateQuery QueryOnSilo(int index) =>
+        Cluster.Silos.OfType<InProcessSiloHandle>().ElementAt(index).SiloHost.Services
+            .GetRequiredService<ILatticeStateQuery>();
+
+    public async Task InitializeAsync(int siloCount = 1)
     {
-        var builder = new TestClusterBuilder(initialSilosCount: 1);
+        var builder = new TestClusterBuilder(initialSilosCount: (short)siloCount);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
@@ -56,11 +66,17 @@ internal sealed class GrpcStateClusterFixture
     /// Authorizer to register; defaults to <see cref="AllowAllStateApiAuthorizer"/>.
     /// </param>
     /// <param name="requireAuthorization">Whether to enforce the authorizer.</param>
+    /// <param name="facade">
+    /// The facade the gRPC surface binds to; defaults to the primary silo's
+    /// <see cref="Query"/>. Pass <see cref="QueryOnSilo"/> to host over a
+    /// non-primary silo for multi-silo coverage.
+    /// </param>
     public async Task<GrpcStateHost> CreateGrpcHostAsync(
         ILatticeStateApiAuthorizer? authorizer = null,
-        bool requireAuthorization = false)
+        bool requireAuthorization = false,
+        ILatticeStateQuery? facade = null)
     {
-        var facade = Query;
+        facade ??= Query;
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {
