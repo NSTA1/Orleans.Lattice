@@ -274,4 +274,36 @@ public sealed class StateDtoSerializationTests
             Assert.That(copy.Predicate, Is.Not.Null);
         });
     }
+
+    [Test]
+    public void StateObserveRequest_round_trips()
+    {
+        var original = new StateObserveRequest
+        {
+            TreeId = "tree-a",
+            StartInclusive = "a",
+            EndExclusive = "m",
+            ContinuationToken = "cursor-1",
+            IncludeMaintenance = true,
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void StateChangeNotification_round_trips()
+    {
+        var original = new StateChangeNotification
+        {
+            TreeId = "tree-a",
+            Key = "k1",
+            EndExclusiveKey = "k9",
+            Kind = StateChangeKind.DeleteRange,
+            Hlc = HybridLogicalClock.Zero,
+            Category = MutationCategory.Maintenance,
+            Position = "1|7|9",
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
 }

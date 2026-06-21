@@ -42,6 +42,8 @@ internal sealed class GrpcStateClusterFixture
         Cluster.Silos.OfType<InProcessSiloHandle>().ElementAt(index).SiloHost.Services
             .GetRequiredService<ILatticeStateQuery>();
 
+    public ILatticeStateObserver Observer => SiloServices.GetRequiredService<ILatticeStateObserver>();
+
     public async Task InitializeAsync(int siloCount = 1)
     {
         var builder = new TestClusterBuilder(initialSilosCount: (short)siloCount);
@@ -77,6 +79,7 @@ internal sealed class GrpcStateClusterFixture
         ILatticeStateQuery? facade = null)
     {
         facade ??= Query;
+        var observer = Observer;
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -87,6 +90,7 @@ internal sealed class GrpcStateClusterFixture
                     services.AddLogging();
                     services.AddRouting();
                     services.AddSingleton(facade);
+                    services.AddSingleton(observer);
                     if (authorizer is not null)
                     {
                         services.AddSingleton(authorizer);
@@ -118,6 +122,7 @@ internal sealed class GrpcStateClusterFixture
         {
             ShardCount = shardCount,
             MaxLeafKeys = SmallMaxLeafKeys,
+            WalPartitions = 1,
         });
 
         return Cluster.Client.GetGrain<ILattice>(treeId);
@@ -141,9 +146,16 @@ internal sealed class GrpcStateClusterFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
-            siloBuilder.ConfigureLattice(o => o.DigestCoalescingWindowMs = 0);
+            siloBuilder.ConfigureLattice(o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                o.WalPartitions = 1;
+            });
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeStateApi();
+            siloBuilder.AddLatticeStateApi(o =>
+            {
+                o.ChangeObservationPollInterval = TimeSpan.FromMilliseconds(25);
+            });
         }
     }
 }

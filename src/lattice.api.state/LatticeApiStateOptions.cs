@@ -46,4 +46,19 @@ public sealed class LatticeApiStateOptions
     /// detail pane shows one entry at a time. Defaults to <c>1048576</c> bytes.
     /// </summary>
     public int SingleEntryValuePreviewBytes { get; set; } = 1024 * 1024;
+
+    /// <summary>
+    /// How long a change-observation subscription waits before re-polling the
+    /// WAL tail once it has drained all currently-available changes. Lower
+    /// values reduce notification latency at the cost of more idle WAL reads.
+    /// Defaults to 250&#160;ms.
+    /// </summary>
+    public TimeSpan ChangeObservationPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Maximum number of WAL entries read per partition per drain cycle by a
+    /// change-observation subscription. Bounds the work and memory of a single
+    /// catch-up read. Defaults to <c>256</c>.
+    /// </summary>
+    public int ChangeObservationPageSize { get; set; } = 256;
 }

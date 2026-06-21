@@ -8,7 +8,8 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c>
 /// reflects against to discover and register the five unary RPCs
 /// (<c>ListTrees</c>, <c>ListViews</c>, <c>GetTreeStructure</c>,
-/// <c>ScanEntries</c>, <c>GetEntry</c>).
+/// <c>ScanEntries</c>, <c>GetEntry</c>) and the server-streaming
+/// <c>ObserveChanges</c> subscription RPC.
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c>
@@ -37,6 +38,12 @@ internal abstract class LatticeStateGrpcServiceBase
     /// <summary>Returns the full record for a single key. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<EntryGetResponse> GetEntry(EntryGetRequest request, ServerCallContext context);
 
+    /// <summary>Streams change notifications for a tree until the call is cancelled. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task ObserveChanges(
+        StateObserveRequest request,
+        IServerStreamWriter<StateChangeNotification> responseStream,
+        ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -61,6 +68,7 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.GetTreeStructure, (UnaryServerMethod<StructureRequest, StructureResponse>?)null);
             binder.AddMethod(methods.ScanEntries, (UnaryServerMethod<EntryScanRequest, EntryScanResponse>?)null);
             binder.AddMethod(methods.GetEntry, (UnaryServerMethod<EntryGetRequest, EntryGetResponse>?)null);
+            binder.AddMethod(methods.ObserveChanges, (ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>?)null);
             return;
         }
 
@@ -69,6 +77,7 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.GetTreeStructure, new UnaryServerMethod<StructureRequest, StructureResponse>(serviceImpl.GetTreeStructure));
         binder.AddMethod(methods.ScanEntries, new UnaryServerMethod<EntryScanRequest, EntryScanResponse>(serviceImpl.ScanEntries));
         binder.AddMethod(methods.GetEntry, new UnaryServerMethod<EntryGetRequest, EntryGetResponse>(serviceImpl.GetEntry));
+        binder.AddMethod(methods.ObserveChanges, new ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>(serviceImpl.ObserveChanges));
     }
 }
 
@@ -82,6 +91,7 @@ internal abstract class LatticeStateGrpcServiceBase
 internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
 {
     private readonly ILatticeStateQuery _query;
+    private readonly ILatticeStateObserver _observer;
     private readonly ILogger<LatticeStateGrpcService> _logger;
 
     /// <summary>
@@ -96,13 +106,16 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     public LatticeStateGrpcService(
         LatticeStateGrpcMethods methods,
         ILatticeStateQuery query,
+        ILatticeStateObserver observer,
         ILogger<LatticeStateGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(observer);
         ArgumentNullException.ThrowIfNull(logger);
 
         _query = query;
+        _observer = observer;
         _logger = logger;
     }
 
@@ -175,6 +188,52 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
                 Entry = result.Entry,
             };
         });
+
+    /// <inheritdoc />
+    public override async Task ObserveChanges(
+        StateObserveRequest request,
+        IServerStreamWriter<StateChangeNotification> responseStream,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        ArgumentNullException.ThrowIfNull(context);
+
+        try
+        {
+            await foreach (var notification in _observer
+                .ObserveAsync(request, context.CancellationToken)
+                .ConfigureAwait(false))
+            {
+                await responseStream.WriteAsync(notification).ConfigureAwait(false);
+            }
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Client tore down the subscription; a clean return ends the stream.
+        }
+        catch (LatticeStateCursorExpiredException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (KeyNotFoundException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Api.State: gRPC change subscription for tree {TreeId} failed.", request.TreeId);
+            throw new RpcException(new Status(StatusCode.Internal, "The state-API change subscription failed."));
+        }
+    }
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
