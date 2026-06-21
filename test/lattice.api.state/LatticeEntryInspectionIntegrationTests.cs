@@ -360,4 +360,21 @@ public sealed class LatticeEntryInspectionIntegrationTests
             "reserved trees must be invisible to the detail surface");
         Assert.That(result.Entry, Is.Null);
     }
+
+    [Test]
+    public async Task ScanEntries_rejects_malformed_continuation_token_as_argument_error()
+    {
+        await _fixture.RegisterTreeAsync("scan-bad-token", shardCount: 2);
+
+        var request = new EntryScanRequest
+        {
+            TreeId = "scan-bad-token",
+            ContinuationToken = "not-a-real-cursor",
+        };
+
+        // A continuation token that names an unknown/stale cursor is a malformed
+        // client request, not a server fault: it must surface as ArgumentException
+        // rather than leaking an InvalidOperationException through the facade.
+        Assert.ThrowsAsync<ArgumentException>(async () => await _fixture.Query.ScanEntriesAsync(request));
+    }
 }

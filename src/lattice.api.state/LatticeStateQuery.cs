@@ -283,7 +283,20 @@ internal sealed class LatticeStateQuery(
         var pageSize = ClampPageSize(request.PageSize);
         var previewBudget = ClampScanPreviewBudget(request.ValuePreviewBudget);
 
-        var page = await tree.NextEntriesAsync(cursorId, pageSize, cancellationToken).ConfigureAwait(false);
+        LatticeCursorEntriesPage page;
+        try
+        {
+            page = await tree.NextEntriesAsync(cursorId, pageSize, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex) when (!fresh)
+        {
+            // A client-supplied continuation token that names an unknown, drained,
+            // or already-closed cursor is a malformed request, not a server fault.
+            throw new ArgumentException(
+                $"The continuation token '{request.ContinuationToken}' is invalid or has expired.",
+                nameof(request),
+                ex);
+        }
 
         var records = new List<EntryRecord>(page.Entries.Count);
         foreach (var entry in page.Entries)
