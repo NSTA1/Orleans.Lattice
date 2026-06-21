@@ -70,6 +70,11 @@ public static class LatticeApiStateServiceCollectionExtensions
         // transport binding's subscription RPC adapts over this surface.
         builder.Services.TryAddSingleton<ILatticeStateObserver, LatticeStateObserver>();
 
+        // The transport-agnostic live metrics-observation facade. Samples
+        // low-cardinality per-tree aggregates on a cadence and delta-encodes
+        // them; the dashboard's live gauges adapt over this surface.
+        builder.Services.TryAddSingleton<ILatticeStateMetricsObserver, LatticeStateMetricsObserver>();
+
         // Idempotency marker: the structural wiring (added by later issues)
         // runs once regardless of how many times the host calls this method.
         // A repeat call still layers any supplied configure delegate above,

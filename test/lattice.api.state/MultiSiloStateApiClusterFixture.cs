@@ -50,6 +50,21 @@ internal sealed class MultiSiloStateApiClusterFixture
         return services[index].GetRequiredService<ILatticeStateQuery>();
     }
 
+    /// <summary>The metrics observer resolved from the first silo.</summary>
+    public ILatticeStateMetricsObserver Metrics => SiloServices.GetRequiredService<ILatticeStateMetricsObserver>();
+
+    /// <summary>
+    /// The metrics observer resolved from a silo other than the one identified by
+    /// <paramref name="notIndex"/>, so a sample/subscription can be served by a
+    /// silo that did not originate the state under test.
+    /// </summary>
+    public ILatticeStateMetricsObserver MetricsFromOtherSilo(int notIndex = 0)
+    {
+        var services = AllSiloServices;
+        var index = notIndex == 0 ? services.Count - 1 : 0;
+        return services[index].GetRequiredService<ILatticeStateMetricsObserver>();
+    }
+
     /// <summary>The change observer resolved from the first silo.</summary>
     public ILatticeStateObserver Observer => SiloServices.GetRequiredService<ILatticeStateObserver>();
 
@@ -133,6 +148,7 @@ internal sealed class MultiSiloStateApiClusterFixture
             {
                 o.ChangeObservationPollInterval = TimeSpan.FromMilliseconds(25);
                 o.ChangeObservationPageSize = 64;
+                o.MetricsSampleInterval = TimeSpan.FromMilliseconds(100);
             });
         }
     }

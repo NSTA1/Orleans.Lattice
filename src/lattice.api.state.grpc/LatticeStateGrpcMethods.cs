@@ -43,6 +43,12 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The server-streaming change-observation RPC method name.</summary>
     public const string ObserveChangesMethodName = "ObserveChanges";
 
+    /// <summary>The server-streaming metrics-observation RPC method name.</summary>
+    public const string ObserveMetricsMethodName = "ObserveMetrics";
+
+    /// <summary>The unary one-shot metrics-snapshot RPC method name.</summary>
+    public const string GetMetricsSnapshotMethodName = "GetMetricsSnapshot";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeStateGrpcMethods(
         Serializer<CatalogRequest> catalogRequestSerializer,
@@ -55,7 +61,9 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<EntryGetRequest> entryGetRequestSerializer,
         Serializer<EntryGetResponse> entryGetResponseSerializer,
         Serializer<StateObserveRequest> observeRequestSerializer,
-        Serializer<StateChangeNotification> changeNotificationSerializer)
+        Serializer<StateChangeNotification> changeNotificationSerializer,
+        Serializer<TreeMetricsRequest> metricsRequestSerializer,
+        Serializer<TreeMetricsSnapshot> metricsSnapshotSerializer)
     {
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(treeCatalogPageSerializer);
@@ -68,6 +76,8 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(entryGetResponseSerializer);
         ArgumentNullException.ThrowIfNull(observeRequestSerializer);
         ArgumentNullException.ThrowIfNull(changeNotificationSerializer);
+        ArgumentNullException.ThrowIfNull(metricsRequestSerializer);
+        ArgumentNullException.ThrowIfNull(metricsSnapshotSerializer);
 
         ListTrees = new Method<CatalogRequest, TreeCatalogPage>(
             type: MethodType.Unary,
@@ -110,6 +120,20 @@ internal sealed class LatticeStateGrpcMethods
             name: ObserveChangesMethodName,
             requestMarshaller: LatticeStateGrpcMarshallers.Create(observeRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(changeNotificationSerializer));
+
+        ObserveMetrics = new Method<TreeMetricsRequest, TreeMetricsSnapshot>(
+            type: MethodType.ServerStreaming,
+            serviceName: ServiceName,
+            name: ObserveMetricsMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(metricsRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(metricsSnapshotSerializer));
+
+        GetMetricsSnapshot = new Method<TreeMetricsRequest, TreeMetricsSnapshot>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetMetricsSnapshotMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(metricsRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(metricsSnapshotSerializer));
     }
 
     /// <summary>The unary <c>ListTrees</c> discovery RPC.</summary>
@@ -129,6 +153,12 @@ internal sealed class LatticeStateGrpcMethods
 
     /// <summary>The server-streaming <c>ObserveChanges</c> subscription RPC.</summary>
     public Method<StateObserveRequest, StateChangeNotification> ObserveChanges { get; }
+
+    /// <summary>The server-streaming <c>ObserveMetrics</c> live-metrics RPC.</summary>
+    public Method<TreeMetricsRequest, TreeMetricsSnapshot> ObserveMetrics { get; }
+
+    /// <summary>The unary one-shot <c>GetMetricsSnapshot</c> RPC.</summary>
+    public Method<TreeMetricsRequest, TreeMetricsSnapshot> GetMetricsSnapshot { get; }
 }
 
 /// <summary>

@@ -55,4 +55,16 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="StateObserveRequest"/>.</summary>
     public const string StateObserveRequest = "ola.sor";
+
+    /// <summary>Alias for <see cref="TreeMetricsRequest"/>.</summary>
+    public const string TreeMetricsRequest = "ola.tmr";
+
+    /// <summary>Alias for <see cref="ShardHotness"/>.</summary>
+    public const string ShardHotness = "ola.sh";
+
+    /// <summary>Alias for <see cref="TreeMetrics"/>.</summary>
+    public const string TreeMetrics = "ola.tm";
+
+    /// <summary>Alias for <see cref="TreeMetricsSnapshot"/>.</summary>
+    public const string TreeMetricsSnapshot = "ola.tms";
 }
