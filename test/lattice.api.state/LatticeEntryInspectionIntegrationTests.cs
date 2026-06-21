@@ -272,4 +272,92 @@ public sealed class LatticeEntryInspectionIntegrationTests
         Assert.ThrowsAsync<OperationCanceledException>(
             async () => await _fixture.Query.GetEntryAsync("any", "k", cts.Token));
     }
+
+    [Test]
+    public async Task ScanEntries_excludes_tombstoned_keys()
+    {
+        var tree = await _fixture.CreatePopulatedTreeAsync("scan-tombstone", keyCount: 20, shardCount: 2);
+        await tree.DeleteAsync(EntryInspectionClusterFixture.KeyAt(5));
+        await tree.DeleteAsync(EntryInspectionClusterFixture.KeyAt(12));
+
+        var entries = await DrainAsync(new EntryScanRequest { TreeId = "scan-tombstone", PageSize = 6 });
+
+        var keys = entries.Select(e => e.Key).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Does.Not.Contain(EntryInspectionClusterFixture.KeyAt(5)), "a tombstoned key must not surface in a scan");
+            Assert.That(keys, Does.Not.Contain(EntryInspectionClusterFixture.KeyAt(12)));
+            Assert.That(keys, Has.Length.EqualTo(18), "only the 18 live keys remain");
+        });
+    }
+
+    [Test]
+    public async Task GetEntry_tombstoned_key_is_key_not_found()
+    {
+        var tree = await _fixture.RegisterTreeAsync("detail-tombstone", shardCount: 1);
+        await tree.SetAsync("doomed", EntryInspectionClusterFixture.Utf8("v"));
+        await tree.DeleteAsync("doomed");
+
+        var result = await _fixture.Query.GetEntryAsync("detail-tombstone", "doomed");
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.KeyNotFound),
+            "a tombstoned key must read as missing, not as a live entry");
+        Assert.That(result.Entry, Is.Null);
+    }
+
+    [Test]
+    public async Task ScanEntries_reverse_returns_descending_key_order()
+    {
+        const int count = 30;
+        await _fixture.CreatePopulatedTreeAsync("scan-reverse", keyCount: count, shardCount: 3);
+
+        var entries = await DrainAsync(new EntryScanRequest { TreeId = "scan-reverse", Reverse = true, PageSize = 7 });
+
+        var keys = entries.Select(e => e.Key).ToArray();
+        var expected = Enumerable.Range(0, count).Reverse().Select(EntryInspectionClusterFixture.KeyAt).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Is.EqualTo(expected), "a reverse scan must return every key in descending order");
+            Assert.That(keys, Is.Unique, "a reverse paged scan must not duplicate entries");
+        });
+    }
+
+    [Test]
+    public async Task ScanEntries_on_empty_tree_returns_found_with_no_entries()
+    {
+        await _fixture.RegisterTreeAsync("scan-empty", shardCount: 2);
+
+        var result = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = "scan-empty", PageSize = 10 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found), "an empty but existing tree is Found, not NotFound");
+            Assert.That(result.Entries, Is.Empty);
+            Assert.That(result.ContinuationToken, Is.Null, "a drained empty scan must not leak a cursor");
+        });
+    }
+
+    [Test]
+    public async Task ScanEntries_treats_reserved_tree_as_not_found()
+    {
+        await _fixture.RegisterViewBackingTreeAsync("view-scan-probe");
+
+        var result = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = "view-scan-probe" });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
+            "reserved trees must be invisible to the scan surface");
+        Assert.That(result.Entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetEntry_treats_reserved_tree_as_not_found()
+    {
+        await _fixture.RegisterViewBackingTreeAsync("view-detail-probe");
+
+        var result = await _fixture.Query.GetEntryAsync("view-detail-probe", "k");
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
+            "reserved trees must be invisible to the detail surface");
+        Assert.That(result.Entry, Is.Null);
+    }
 }

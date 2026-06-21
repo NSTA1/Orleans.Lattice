@@ -144,5 +144,77 @@ public class LatticeSnapshotCursorIntegrationTests
 
         Assert.That(collected, Is.EquivalentTo(new[] { "b", "c", "d" }));
     }
+
+    [Test]
+    public async Task Snapshot_key_cursor_reverse_pages_all_keys_descending()
+    {
+        // Regression: the per-shard snapshot-leaf fetch truncated to the first
+        // `limit` keys (the smallest), so a reverse paged scan over multiple
+        // shards yielded only the bottom of the range and dropped the rest. The
+        // fetch must return the largest `limit` keys when the cursor is reverse.
+        var keys = Enumerable.Range(0, 40).Select(i => $"key-{i:D4}").ToArray();
+        var tree = await SeedTreeAsync($"snap-rev-keys-{Guid.NewGuid():N}", keys);
+
+        var cursorId = await tree.OpenSnapshotKeyCursorAsync(reverse: true);
+        var collected = new List<string>();
+        while (true)
+        {
+            var page = await tree.NextKeysAsync(cursorId, 7);
+            collected.AddRange(page.Keys);
+            if (!page.HasMore) break;
+        }
+        await tree.CloseCursorAsync(cursorId);
+
+        var expected = keys.Reverse().ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(collected, Is.EqualTo(expected), "a reverse snapshot scan must page every key in descending order");
+            Assert.That(collected, Is.Unique);
+        });
+    }
+
+    [Test]
+    public async Task Snapshot_entry_cursor_reverse_pages_all_entries_descending()
+    {
+        var keys = Enumerable.Range(0, 40).Select(i => $"key-{i:D4}").ToArray();
+        var tree = await SeedTreeAsync($"snap-rev-entries-{Guid.NewGuid():N}", keys);
+
+        var cursorId = await tree.OpenSnapshotEntryCursorAsync(reverse: true);
+        var collected = new List<string>();
+        while (true)
+        {
+            var page = await tree.NextEntriesAsync(cursorId, 6);
+            collected.AddRange(page.Entries.Select(e => e.Key));
+            if (!page.HasMore) break;
+        }
+        await tree.CloseCursorAsync(cursorId);
+
+        Assert.That(collected, Is.EqualTo(keys.Reverse().ToArray()),
+            "a reverse snapshot entry scan must page every entry in descending key order");
+    }
+
+    [Test]
+    public async Task Snapshot_key_cursor_reverse_respects_range_filter()
+    {
+        var keys = Enumerable.Range(0, 20).Select(i => $"key-{i:D4}").ToArray();
+        var tree = await SeedTreeAsync($"snap-rev-range-{Guid.NewGuid():N}", keys);
+
+        var cursorId = await tree.OpenSnapshotKeyCursorAsync(
+            startInclusive: "key-0005",
+            endExclusive: "key-0012",
+            reverse: true);
+        var collected = new List<string>();
+        while (true)
+        {
+            var page = await tree.NextKeysAsync(cursorId, 3);
+            collected.AddRange(page.Keys);
+            if (!page.HasMore) break;
+        }
+        await tree.CloseCursorAsync(cursorId);
+
+        var expected = Enumerable.Range(5, 7).Reverse().Select(i => $"key-{i:D4}").ToArray();
+        Assert.That(collected, Is.EqualTo(expected),
+            "a reverse range scan must honour [startInclusive, endExclusive) and descend");
+    }
 }
 

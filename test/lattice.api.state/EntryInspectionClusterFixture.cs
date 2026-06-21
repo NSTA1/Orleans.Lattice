@@ -69,6 +69,11 @@ internal sealed class EntryInspectionClusterFixture
 
     public static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
 
+    /// <summary>Registers a reserved <c>view-</c> backing tree directly in the registry.</summary>
+    public Task RegisterViewBackingTreeAsync(string viewTreeId) =>
+        Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .RegisterAsync(viewTreeId, new TreeRegistryEntry { ShardCount = 1 });
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)

@@ -260,7 +260,7 @@ internal sealed class LatticeStateQuery(
         string cursorId;
         if (fresh)
         {
-            if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+            if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
             {
                 return EntryScanResult.NotFound(request.TreeId);
             }
@@ -313,7 +313,7 @@ internal sealed class LatticeStateQuery(
         cancellationToken.ThrowIfCancellationRequested();
 
         var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryDetailResult.TreeNotFound(treeId, key);
         }
