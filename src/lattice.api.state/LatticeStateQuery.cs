@@ -35,7 +35,7 @@ internal sealed class LatticeStateQuery(
         cancellationToken.ThrowIfCancellationRequested();
 
         var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return TreeSummaryResult.NotFound(treeId);
         }
@@ -53,7 +53,7 @@ internal sealed class LatticeStateQuery(
         cancellationToken.ThrowIfCancellationRequested();
 
         var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return ShardSummariesResult.NotFound(treeId);
         }
@@ -114,10 +114,7 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var catalog = _services.GetService<IViewCatalog>();
-        var registrations = catalog is null
-            ? Array.Empty<ViewRegistration>()
-            : catalog.All().ToArray();
+        var registrations = await CollectViewsAsync(cancellationToken).ConfigureAwait(false);
 
         var ordered = registrations
             .Where(r => request.PageToken is null || string.CompareOrdinal(r.ViewName, request.PageToken) > 0)
@@ -188,6 +185,56 @@ internal sealed class LatticeStateQuery(
     private static bool IsReservedTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
         || treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Collects the cluster-wide set of materialised views, deduplicated by name.
+    /// The local <see cref="IViewCatalog"/> only holds the views that have been
+    /// activated on the serving silo (every startup-declared view plus any runtime
+    /// view that has rehydrated here), so runtime views created on another silo are
+    /// missed by a single-silo enumeration. The durable
+    /// <see cref="IViewRegistryGrain"/> holds every runtime view cluster-wide; the
+    /// union of the two, with the local catalog winning on a name conflict (startup
+    /// declarations are authoritative and never recorded in the registry), yields a
+    /// consistent listing regardless of which silo serves the request.
+    /// </summary>
+    private async Task<IReadOnlyCollection<ViewListing>> CollectViewsAsync(CancellationToken cancellationToken)
+    {
+        var byName = new Dictionary<string, ViewListing>(StringComparer.Ordinal);
+
+        var registry = _grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
+        try
+        {
+            var runtime = await registry.ListAsync().ConfigureAwait(false);
+            foreach (var registration in runtime)
+            {
+                byName[registration.ViewName] = new ViewListing(
+                    registration.ViewName,
+                    registration.SourceTreeId,
+                    registration.IsAggregation);
+            }
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A transient registry-activation failure must not blind the listing to
+            // the locally-known views, so fall back to the catalog-only union.
+        }
+
+        var catalog = _services.GetService<IViewCatalog>();
+        if (catalog is not null)
+        {
+            foreach (var registration in catalog.All())
+            {
+                byName[registration.ViewName] = new ViewListing(
+                    registration.ViewName,
+                    registration.SourceTreeId,
+                    registration.IsAggregation);
+            }
+        }
+
+        return byName.Values;
+    }
+
+    private readonly record struct ViewListing(string ViewName, string SourceTreeId, bool IsAggregation);
 
     private TreeCatalogEntry MapCatalogEntry(string treeId, TreeRegistryEntry? entry, bool isDeleted)
     {

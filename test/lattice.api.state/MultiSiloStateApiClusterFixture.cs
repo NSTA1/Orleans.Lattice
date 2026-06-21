@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Views;
 using Orleans.Runtime;
 using Orleans.TestingHost;
 
@@ -90,12 +91,27 @@ internal sealed class MultiSiloStateApiClusterFixture
         return tree;
     }
 
+    /// <summary>
+    /// Creates a runtime materialised view over <paramref name="sourceTreeId"/> by
+    /// resolving the view factory from the silo identified by
+    /// <paramref name="siloIndex"/>. The runtime view is recorded in the
+    /// cluster-wide <c>IViewRegistryGrain</c>, so a facade served by a different
+    /// silo must still observe it.
+    /// </summary>
+    public ILatticeView CreateViewOnSilo(string sourceTreeId, string viewName, int siloIndex)
+    {
+        var factory = AllSiloServices[siloIndex].GetRequiredService<ILatticeViewFactory>();
+        var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, new PredicateLatticeViewProjection()));
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
+            siloBuilder.AddLatticeViews();
             siloBuilder.AddLatticeStateApi();
         }
     }
