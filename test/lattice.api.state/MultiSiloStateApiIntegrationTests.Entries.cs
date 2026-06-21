@@ -4,7 +4,7 @@ using Orleans.Lattice.BPlusTree;
 namespace Orleans.Lattice.Api.State.Tests;
 
 /// <summary>
-/// F-116 entry / key-range inspection multi-silo coverage. A scan opens a
+/// Entry / key-range inspection multi-silo coverage. A scan opens a
 /// snapshot cursor that lives on the originating silo, and a single-key detail
 /// read fans out to whichever shard owns the key; both must return the same
 /// result when served by a facade on a different silo from the one that wrote
