@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Views;
 using Orleans.Serialization;
 using Orleans.TestingHost;
 
@@ -146,6 +147,17 @@ internal sealed class GrpcStateClusterFixture
 
     public static string KeyAt(int index) => $"key-{index:D5}";
 
+    /// <summary>
+    /// Defines a view over <paramref name="sourceTreeId"/> so the catalog's
+    /// view-listing surface has something to return through the public client.
+    /// </summary>
+    public ILatticeView CreateView(string sourceTreeId, string viewName)
+    {
+        var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, new PredicateLatticeViewProjection()));
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
@@ -157,6 +169,7 @@ internal sealed class GrpcStateClusterFixture
                 o.WalPartitions = 1;
             });
             siloBuilder.UseInMemoryReminderService();
+            siloBuilder.AddLatticeViews();
             siloBuilder.AddLatticeStateApi(o =>
             {
                 o.ChangeObservationPollInterval = TimeSpan.FromMilliseconds(25);
@@ -182,6 +195,8 @@ internal sealed class GrpcStateHost : IAsyncDisposable
     }
 
     public GrpcChannel Channel { get; }
+
+    public IServiceProvider Services => _host.Services;
 
     public LatticeStateGrpcMethods Methods { get; }
 

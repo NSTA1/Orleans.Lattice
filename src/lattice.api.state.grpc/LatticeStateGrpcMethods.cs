@@ -1,4 +1,5 @@
 using Grpc.Core;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.State.Grpc;
@@ -23,7 +24,7 @@ namespace Orleans.Lattice.Api.State.Grpc;
 internal sealed class LatticeStateGrpcMethods
 {
     /// <summary>The fully-qualified gRPC service name.</summary>
-    public const string ServiceName = "orleans.lattice.api.state.LatticeState";
+    public const string ServiceName = "orleans.lattice.api.state";
 
     /// <summary>The unary tree-catalog discovery RPC method name.</summary>
     public const string ListTreesMethodName = "ListTrees";
@@ -159,6 +160,31 @@ internal sealed class LatticeStateGrpcMethods
 
     /// <summary>The unary one-shot <c>GetMetricsSnapshot</c> RPC.</summary>
     public Method<TreeMetricsRequest, TreeMetricsSnapshot> GetMetricsSnapshot { get; }
+
+    /// <summary>
+    /// Builds the method definitions from the Orleans serializers resolved out
+    /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
+    /// factory and the public client so both ends wire identical marshallers.
+    /// </summary>
+    public static LatticeStateGrpcMethods FromServiceProvider(IServiceProvider serializerProvider)
+    {
+        ArgumentNullException.ThrowIfNull(serializerProvider);
+
+        return new LatticeStateGrpcMethods(
+            serializerProvider.GetRequiredService<Serializer<CatalogRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeCatalogPage>>(),
+            serializerProvider.GetRequiredService<Serializer<ViewCatalogPage>>(),
+            serializerProvider.GetRequiredService<Serializer<StructureRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<StructureResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<EntryScanRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<EntryScanResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<EntryGetRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<EntryGetResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<StateObserveRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<StateChangeNotification>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeMetricsRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeMetricsSnapshot>>());
+    }
 }
 
 /// <summary>
