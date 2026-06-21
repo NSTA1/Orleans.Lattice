@@ -2,7 +2,9 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Api.State.Tests;
@@ -58,6 +60,45 @@ internal sealed class ChangeObservationClusterFixture
     public static string KeyAt(int index) => $"key-{index:D5}";
 
     public static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
+
+    /// <summary>
+    /// Appends raw <see cref="WalRecord"/> entries directly to a tree's single
+    /// WAL partition, bypassing the public mutation surface. This is the only
+    /// way a test can inject a <see cref="MutationCategory.Maintenance"/> record
+    /// (the public <see cref="ILattice"/> surface only ever emits
+    /// <see cref="MutationCategory.User"/>), so the maintenance-category filter
+    /// can be exercised behaviourally end to end.
+    /// </summary>
+    public async Task AppendWalRecordsAsync(string treeId, params WalRecord[] records)
+    {
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var physicalTreeId = await registry.ResolveAsync(treeId) ?? treeId;
+        var wal = Cluster.Client.GetGrain<IWalShardGrain>($"{physicalTreeId}/0");
+        foreach (var record in records)
+        {
+            await wal.AppendAsync(record with { TreeId = physicalTreeId }, CancellationToken.None);
+        }
+    }
+
+    /// <summary>Builds a user-category <see cref="MutationKind.Set"/> WAL record.</summary>
+    public static WalRecord UserSet(string key, string value) => new()
+    {
+        Op = MutationKind.Set,
+        Key = key,
+        Value = Utf8(value),
+        Timestamp = HybridLogicalClock.Zero,
+        Category = MutationCategory.User,
+    };
+
+    /// <summary>Builds a maintenance-category <see cref="MutationKind.Set"/> WAL record.</summary>
+    public static WalRecord MaintenanceSet(string key, string value) => new()
+    {
+        Op = MutationKind.Set,
+        Key = key,
+        Value = Utf8(value),
+        Timestamp = HybridLogicalClock.Zero,
+        Category = MutationCategory.Maintenance,
+    };
 
     /// <summary>
     /// Drains up to <paramref name="count"/> notifications from a live

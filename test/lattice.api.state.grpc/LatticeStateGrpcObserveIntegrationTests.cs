@@ -149,4 +149,27 @@ public class LatticeStateGrpcObserveIntegrationTests
         });
         Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
     }
+
+    [Test]
+    public async Task observe_is_rejected_with_permission_denied_when_authorization_denies()
+    {
+        var treeId = $"grpc-obs-deny-{Guid.NewGuid():N}";
+        await _fixture.RegisterTreeAsync(treeId, shardCount: 1);
+
+        await using var host = await _fixture.CreateGrpcHostAsync(
+            new DenyAllStateApiAuthorizer(), requireAuthorization: true);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () =>
+        {
+            using var cts = new CancellationTokenSource(Timeout);
+            using var call = host.Channel.CreateCallInvoker().AsyncServerStreamingCall(
+                host.Methods.ObserveChanges,
+                host: null,
+                new CallOptions(cancellationToken: cts.Token),
+                new StateObserveRequest { TreeId = treeId });
+            await call.ResponseStream.MoveNext(cts.Token);
+        });
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied),
+            "the streaming observe RPC must enforce the same default-deny posture as the unary RPCs");
+    }
 }

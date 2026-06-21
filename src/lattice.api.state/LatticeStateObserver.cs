@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.Options;
@@ -231,13 +232,34 @@ internal sealed class LatticeStateObserver(
 
     private static string EncodeToken(long[] cursor)
     {
-        var builder = new StringBuilder(TokenVersion);
-        for (var p = 0; p < cursor.Length; p++)
+        // Hot path: runs per emitted notification on a live stream. Build the
+        // "<version>|<c0>|<c1>|..." payload straight into a stack (or pooled)
+        // byte buffer and Base64 the span, so the only allocation is the
+        // returned token string itself - no StringBuilder, intermediate string,
+        // or separate ASCII byte[] per notification.
+        // Each partition contributes '|' plus at most 20 digits for a long.
+        var maxLength = TokenVersion.Length + (cursor.Length * 21);
+        byte[]? rented = maxLength > 256 ? ArrayPool<byte>.Shared.Rent(maxLength) : null;
+        Span<byte> buffer = rented ?? stackalloc byte[256];
+        try
         {
-            builder.Append('|').Append(cursor[p]);
-        }
+            var written = Encoding.ASCII.GetBytes(TokenVersion, buffer);
+            for (var p = 0; p < cursor.Length; p++)
+            {
+                buffer[written++] = (byte)'|';
+                cursor[p].TryFormat(buffer[written..], out var digits);
+                written += digits;
+            }
 
-        return Convert.ToBase64String(Encoding.ASCII.GetBytes(builder.ToString()));
+            return Convert.ToBase64String(buffer[..written]);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     private static long[] DecodeToken(string token, int partitions)

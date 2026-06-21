@@ -305,4 +305,53 @@ public class LatticeChangeObservationIntegrationTests
 
         Assert.That(enumerationCompleted, Is.True);
     }
+
+    [Test]
+    public async Task excludes_maintenance_changes_by_default()
+    {
+        var treeId = $"obs-maint-default-{Guid.NewGuid():N}";
+        await _fixture.RegisterTreeAsync(treeId);
+
+        // Inject user / maintenance / user directly into the WAL: the default
+        // subscription (IncludeMaintenance = false) must deliver only the two
+        // user writes and silently skip the maintenance record between them.
+        var notifications = await ObserveWhileAsync(
+            new StateObserveRequest { TreeId = treeId },
+            expectedCount: 2,
+            () => _fixture.AppendWalRecordsAsync(
+                treeId,
+                ChangeObservationClusterFixture.UserSet("u-key-1", "v1"),
+                ChangeObservationClusterFixture.MaintenanceSet("m-key", "compaction"),
+                ChangeObservationClusterFixture.UserSet("u-key-2", "v2")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(notifications.Select(n => n.Key), Is.EqualTo(new[] { "u-key-1", "u-key-2" }));
+            Assert.That(notifications.Select(n => n.Category),
+                Is.All.EqualTo(MutationCategory.User), "maintenance writes must be filtered out by default");
+        });
+    }
+
+    [Test]
+    public async Task includes_maintenance_changes_when_requested()
+    {
+        var treeId = $"obs-maint-included-{Guid.NewGuid():N}";
+        await _fixture.RegisterTreeAsync(treeId);
+
+        var notifications = await ObserveWhileAsync(
+            new StateObserveRequest { TreeId = treeId, IncludeMaintenance = true },
+            expectedCount: 3,
+            () => _fixture.AppendWalRecordsAsync(
+                treeId,
+                ChangeObservationClusterFixture.UserSet("u-key-1", "v1"),
+                ChangeObservationClusterFixture.MaintenanceSet("m-key", "compaction"),
+                ChangeObservationClusterFixture.UserSet("u-key-2", "v2")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(notifications.Select(n => n.Key), Is.EqualTo(new[] { "u-key-1", "m-key", "u-key-2" }));
+            Assert.That(notifications.Count(n => n.Category == MutationCategory.Maintenance), Is.EqualTo(1),
+                "the maintenance write must surface when IncludeMaintenance is set");
+        });
+    }
 }
