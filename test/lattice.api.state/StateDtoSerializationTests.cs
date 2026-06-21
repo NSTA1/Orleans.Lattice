@@ -230,4 +230,19 @@ public sealed class StateDtoSerializationTests
         Assert.That(copy.ExpiresAtTicks, Is.EqualTo(123456));
         Assert.That(copy.CrdtShape, Is.EqualTo("OrSet"));
     }
+
+    [Test]
+    public void StructureRequest_round_trips()
+    {
+        var original = new StructureRequest
+        {
+            TreeId = "tree-a",
+            ShardIndex = 3,
+            SubPathNodeId = "node-7",
+            DepthLimit = 5,
+            MaxNodes = 250,
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
 }

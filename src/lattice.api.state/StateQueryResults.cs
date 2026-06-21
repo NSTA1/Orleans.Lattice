@@ -73,3 +73,54 @@ public sealed record ShardSummariesResult
         return new ShardSummariesResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId };
     }
 }
+
+/// <summary>
+/// Result of <see cref="ILatticeStateQuery.GetTreeStructureAsync"/>: either a
+/// bounded, depth-limited node graph (one entry per shard root for a
+/// whole-tree read, or a single subtree for a sub-path descent) or a typed
+/// not-found.
+/// </summary>
+public sealed record TreeStructureResult
+{
+    /// <summary>Lookup outcome.</summary>
+    public StateQueryStatus Status { get; init; }
+
+    /// <summary>The tree id that was queried.</summary>
+    public required string TreeId { get; init; }
+
+    /// <summary>
+    /// The root nodes of the response, in deterministic key-range order. For a
+    /// whole-tree read this is the per-shard root nodes; for a sub-path descent
+    /// it is the single requested subtree. Empty when not found.
+    /// </summary>
+    public IReadOnlyList<NodeStateSummary> Roots { get; init; } = Array.Empty<NodeStateSummary>();
+
+    /// <summary>
+    /// Whether the node-count budget was exhausted, so some subtrees were
+    /// truncated and can be re-read with a sub-path descent. The per-node
+    /// <see cref="NodeStateSummary.HasMoreChildren"/> flags identify exactly
+    /// which nodes were truncated.
+    /// </summary>
+    public bool Truncated { get; init; }
+
+    /// <summary>Builds a found result.</summary>
+    public static TreeStructureResult Found(string treeId, IReadOnlyList<NodeStateSummary> roots, bool truncated)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(roots);
+        return new TreeStructureResult
+        {
+            Status = StateQueryStatus.Found,
+            TreeId = treeId,
+            Roots = roots,
+            Truncated = truncated,
+        };
+    }
+
+    /// <summary>Builds a not-found result for the given tree id.</summary>
+    public static TreeStructureResult NotFound(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return new TreeStructureResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId };
+    }
+}
