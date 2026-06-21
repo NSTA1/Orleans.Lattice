@@ -1,11 +1,13 @@
 <Solution>
   <Project Path="src/lattice/Orleans.Lattice.csproj" />
+  <Project Path="src/lattice.api.state/Orleans.Lattice.Api.State.csproj" />
   <Project Path="src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj" />
   <Project Path="src/lattice.replication/Orleans.Lattice.Replication.csproj" />
   <Project Path="src/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.csproj" />
   <Project Path="src/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.csproj" />
   <Project Path="benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj" />
   <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
+  <Project Path="test/lattice.api.state/Orleans.Lattice.Api.State.Tests.csproj" />
   <Project Path="test/lattice.dashboards/Orleans.Lattice.Dashboards.Tests.csproj" />
   <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
   <Project Path="test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj" />
