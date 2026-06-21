@@ -270,4 +270,43 @@ public class LatticeMetricsObservationIntegrationTests
 
         Assert.That(pump.IsCompleted, Is.True);
     }
+
+    [Test]
+    public async Task observe_delta_reports_a_removed_tree_in_removed_tree_ids()
+    {
+        var keptTree = $"metrics-keep-{Guid.NewGuid():N}";
+        var droppedTree = $"metrics-drop-{Guid.NewGuid():N}";
+        await _fixture.CreatePopulatedTreeAsync(keptTree, keyCount: 4, shardCount: 1);
+        await _fixture.CreatePopulatedTreeAsync(droppedTree, keyCount: 4, shardCount: 1);
+
+        var (pump, snapshots, cts) = _fixture.ObserveInBackground(
+            new TreeMetricsRequest { TreeIds = new[] { keptTree, droppedTree } });
+
+        // Wait for the initial full snapshot that carries both trees.
+        await MetricsObservationClusterFixture.WaitUntilAsync(
+            () => { lock (snapshots) { return snapshots.Count >= 1 && snapshots[0].Trees.Count == 2; } }, Timeout);
+
+        // Drop one tree: it now vanishes from the sampled set and must surface as
+        // a removal (not merely absent) on the next delta tick.
+        await _fixture.UnregisterTreeAsync(droppedTree);
+
+        TreeMetricsSnapshot? removalTick = null;
+        var sawRemoval = await MetricsObservationClusterFixture.WaitUntilAsync(
+            () =>
+            {
+                lock (snapshots)
+                {
+                    removalTick = snapshots.Skip(1).FirstOrDefault(s => s.RemovedTreeIds.Contains(droppedTree));
+                    return removalTick is not null;
+                }
+            },
+            Timeout);
+
+        await cts.CancelAsync();
+        await pump;
+
+        Assert.That(sawRemoval, Is.True, "a tree dropped between ticks must be reported in RemovedTreeIds");
+        Assert.That(removalTick!.RemovedTreeIds, Does.Not.Contain(keptTree),
+            "a surviving tree must never be reported as removed");
+    }
 }

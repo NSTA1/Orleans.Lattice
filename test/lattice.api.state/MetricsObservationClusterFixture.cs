@@ -44,8 +44,7 @@ internal sealed class MetricsObservationClusterFixture
         }
     }
 
-    public async Task<ILattice> RegisterTreeAsync(string treeId, int shardCount = 1)
-    {
+    public async Task<ILattice> RegisterTreeAsync(string treeId, int shardCount = 1)    {
         var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(treeId, new TreeRegistryEntry
         {
@@ -68,6 +67,17 @@ internal sealed class MetricsObservationClusterFixture
     }
 
     public static string KeyAt(int index) => $"key-{index:D5}";
+
+    /// <summary>
+    /// Removes <paramref name="treeId"/> from the registry so it vanishes from
+    /// the sampled set, letting a test assert it surfaces on a delta tick's
+    /// <see cref="TreeMetricsSnapshot.RemovedTreeIds"/>.
+    /// </summary>
+    public async Task UnregisterTreeAsync(string treeId)
+    {
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.UnregisterAsync(treeId);
+    }
 
     /// <summary>
     /// Starts a background metrics subscription accumulating each tick into a

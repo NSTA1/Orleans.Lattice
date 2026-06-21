@@ -96,4 +96,24 @@ public class LatticeStateGrpcMetricsIntegrationTests
             Assert.That(call.ResponseStream.Current.Trees.Select(t => t.TreeId), Does.Contain(treeId));
         });
     }
+
+    [Test]
+    public async Task observe_metrics_is_rejected_with_permission_denied_when_authorization_denies()
+    {
+        await using var host = await _fixture.CreateGrpcHostAsync(
+            new DenyAllStateApiAuthorizer(), requireAuthorization: true);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () =>
+        {
+            using var cts = new CancellationTokenSource(Timeout);
+            using var call = host.Channel.CreateCallInvoker().AsyncServerStreamingCall(
+                host.Methods.ObserveMetrics,
+                host: null,
+                new CallOptions(cancellationToken: cts.Token),
+                new TreeMetricsRequest());
+            await call.ResponseStream.MoveNext(cts.Token);
+        });
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied),
+            "the streaming metrics RPC must enforce the same default-deny posture as the unary RPCs");
+    }
 }
