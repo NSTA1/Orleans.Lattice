@@ -263,6 +263,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync();
 
     /// <summary>
+    /// Returns a leaf-only <see cref="ShardTopologyNode"/> describing this
+    /// leaf's key range, live/tombstone split, and entry count. Called by
+    /// the shard root only when the shard's root node is itself a leaf
+    /// (a flat tree); for taller trees a leaf is summarised from its
+    /// parent's stored snapshot table without a call back into the leaf.
+    /// </summary>
+    Task<ShardTopologyNode> GetTopologyNodeAsync();
+
+    /// <summary>
     /// Persists the logical chain-shard index this leaf belongs to -
     /// the <c>shardIndex</c> half of the owning
     /// <c>ShardRootGrain</c>'s <c>{treeId}/{shardIndex}</c> grain key.

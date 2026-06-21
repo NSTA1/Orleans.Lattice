@@ -286,6 +286,12 @@ internal static class TypeAliases
     // by IBPlusInternalGrain.OnChildDigestPublishedAsync).
     internal const string ChildDigestSnapshot = "ol.cds";
 
+    // Read-only structural topology node surfaced by
+    // IShardRootGrain.GetTopologySnapshotAsync / IBPlusInternalGrain.GetTopologyAsync.
+    // Reconstructed from already-pushed-up per-child digest snapshots so the
+    // shard root can answer a topology query without fanning out to leaves.
+    internal const string ShardTopologyNode = "ol.stn";
+
     // Read-only shard-root node reference (root grain id + leaf flag)
     // surfaced by IShardRootGrain.GetRootNodeRefAsync for anti-entropy
     // drift-localisation traversal that descends the internal-node tree.
