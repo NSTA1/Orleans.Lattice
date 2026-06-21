@@ -4,7 +4,7 @@
 
 ## Service
 
-The service name on the wire is `orleans.lattice.api.state.LatticeState`. It exposes eight RPCs: six unary and two server-streaming. Each maps one-to-one onto a facade verb.
+The service name on the wire is `orleans.lattice.api.state` (so each method's full path is `/orleans.lattice.api.state/<Rpc>`). It exposes eight RPCs: six unary and two server-streaming. Each maps one-to-one onto a facade verb.
 
 | RPC | Kind | Request | Response | Surface |
 |---|---|---|---|---|

@@ -112,6 +112,53 @@ public class LatticeStateGrpcClientE2ETests
             "structure and metrics must agree on live-key count");
     }
 
+    [Test]
+    public async Task client_surfaces_views_point_reads_and_metric_streaming_end_to_end()
+    {
+        await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);
+        _fixture.CreateView(TreeId, "e2e-view");
+
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        // View discovery through the public client.
+        var views = await client.ListViewsAsync(new CatalogRequest { PageSize = 100 });
+        var view = views.Entries.SingleOrDefault(v => v.ViewName == "e2e-view");
+        Assert.That(view, Is.Not.Null, "the defined view should appear in the view catalog");
+        Assert.That(view!.SourceTreeId, Is.EqualTo(TreeId));
+
+        // Single-entry point read through the public client: a present key and a
+        // missing key must report distinct outcomes.
+        var presentKey = GrpcStateClusterFixture.KeyAt(3);
+        var present = await client.GetEntryAsync(new EntryGetRequest { TreeId = TreeId, Key = presentKey });
+        Assert.That(present.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(present.Entry, Is.Not.Null);
+        Assert.That(present.Entry!.Key, Is.EqualTo(presentKey));
+
+        var missingEx = Assert.ThrowsAsync<RpcException>(async () =>
+            await client.GetEntryAsync(new EntryGetRequest { TreeId = TreeId, Key = "no-such-key" }));
+        Assert.That(missingEx!.StatusCode, Is.EqualTo(StatusCode.NotFound),
+            "a missing key surfaces as a NotFound RPC fault through the public client");
+
+        // Live metric streaming through the public client: the first emitted
+        // snapshot is the initial full sample and must carry the tree's counts.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        TreeMetricsSnapshot? first = null;
+        await foreach (var snapshot in client.ObserveMetricsAsync(
+            new TreeMetricsRequest { TreeIds = new[] { TreeId }, IncludeShardHotness = true },
+            cts.Token))
+        {
+            first = snapshot;
+            break;
+        }
+
+        Assert.That(first, Is.Not.Null, "the metric stream must emit an initial snapshot");
+        var streamed = first!.Trees.SingleOrDefault(t => t.TreeId == TreeId);
+        Assert.That(streamed, Is.Not.Null, "the streamed snapshot should include the tree");
+        Assert.That(streamed!.ShardCount, Is.EqualTo(ShardCount));
+        Assert.That(streamed.LiveKeys, Is.EqualTo(KeyCount));
+    }
+
     private static async Task<List<EntryRecord>> ScanAllAsync(LatticeStateApiGrpcClient client, string treeId)
     {
         var all = new List<EntryRecord>();

@@ -8,7 +8,7 @@ A read-only cluster state-API add-on for [Orleans.Lattice](../../README.md) - qu
 
 It is built in two layers:
 
-- **A transport-agnostic facade.** `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` expose discovery, structure, entry inspection, change observation, and metrics over plain request/response records. The facade has no wire dependency, so an in-process host (an MCP server co-located in the silo) consumes the exact same surface a remote client does.
+- **A transport-agnostic facade.** `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` expose discovery, structure, entry inspection, change observation, and metrics over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one. The facade interfaces are `internal` to the package; an out-of-package in-process host (an MCP bridge co-located in the silo) reuses it by co-hosting the gRPC binding and dialing it over a loopback channel - see [Client](client.md#in-process-reuse).
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.State.Grpc` projects the facade onto a long-lived gRPC service whose messages are the same Orleans-serialized records, plus a public `LatticeStateApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
 It covers:
@@ -25,7 +25,7 @@ The package is **strictly read-only**: every surface observes state, none of the
 ## Core Properties
 
 - **Read-only by construction.** There is no write, delete, split, or reconfigure verb anywhere on the surface. The facade and the gRPC service expose observation verbs only.
-- **Strongly-consistent reads.** Entry scans and counts run under the core library's snapshot-isolated cursor machinery, so a page reflects a coherent point-in-time view even during concurrent writes and rebalancing.
+- **Strongly-consistent reads.** Entry scans run under the core library's snapshot-isolated cursor machinery, so a page reflects a coherent point-in-time view even during concurrent writes and rebalancing. Structure and metric counts are not cursor-bound: they come from the pushed-up topology digest and the metrics sampler, which report the latest published aggregate rather than a scan-pinned snapshot.
 - **Transport-agnostic.** The facade is the contract; gRPC is one binding. The same records flow to an in-process consumer and a remote one, so an MCP bridge reuses the facade with zero re-modelling.
 - **Fail-closed.** The gRPC surface authorizes every call. Left unconfigured it denies all traffic, so an endpoint is never accidentally exposed unauthenticated.
 - **Low ambient cost.** Discovery, structure, and metrics sampling coalesce shared work: many concurrent subscribers to the same metric request share a single sampling loop, and a cluster with no readers does no sampling at all.

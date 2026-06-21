@@ -17,7 +17,7 @@ builder.Host.UseOrleans(silo =>
 });
 ```
 
-With only this step, the facade is available **in-process**: anything co-hosted in the silo (for example an MCP server) can resolve `ILatticeStateQuery` from DI and read the cluster directly, with no transport hop. See [Client](client.md#in-process-reuse) for that path.
+With only this step the facade runs **in-process**, with no transport hop. The facade interfaces (`ILatticeStateQuery` and friends) are `internal` to the package, so a co-located consumer reuses them in one of two ways: either it lives in an assembly the package grants `InternalsVisibleTo` and resolves them from DI directly, or - the supported path for an out-of-package host such as an MCP bridge - it co-hosts the gRPC binding in the same process and dials it over a loopback channel, which still avoids a network hop. See [Client](client.md#in-process-reuse) for that path.
 
 ## 2. Add the gRPC binding
 

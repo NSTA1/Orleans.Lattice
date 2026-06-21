@@ -14,7 +14,7 @@ The sampler is reference-counted: the loop starts when the first subscriber for 
 
 ## Live metric feeds are delta-coalesced
 
-A metrics subscription emits the initial full snapshot, then only the **changes**. Between samples the sampler diffs the new aggregate against the last one it published and emits a delta snapshot; trees whose metrics did not move contribute nothing to the wire. A largely-idle cluster with a live dashboard attached produces a small trickle of deltas, not a full re-send every interval.
+A metrics subscription emits the initial full snapshot, then only the **changes**. The shared sampler publishes a full aggregate map each interval; each subscription's own observer diffs that map against the last one **it** emitted and forwards only a delta snapshot, so trees whose metrics did not move contribute nothing to that subscriber's wire. Keeping the diff per-subscriber (rather than in the shared loop) lets every subscriber start from its own initial full tick regardless of when it attached. A largely-idle cluster with a live dashboard attached produces a small trickle of deltas, not a full re-send every interval.
 
 ## Reads do not stall writes
 
