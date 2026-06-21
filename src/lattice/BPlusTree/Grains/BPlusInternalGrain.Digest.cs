@@ -20,28 +20,36 @@ internal sealed partial class BPlusInternalGrain
     private const int SubtreeHashSize = 16;
 
     /// <summary>
-    /// Lazily-seeded, per-activation strictly-increasing stamp applied to
-    /// every <see cref="ChildDigestSnapshot"/> this internal node forwards
-    /// to its own parent (push) or returns on a pull, mirroring the leaf's
-    /// <c>NextDigestPublishSequence</c>. Lets the grandparent's fold drop a
-    /// stale out-of-order publish for a still-owned child the same way the
-    /// leaf-to-parent path does. Seeded from <see cref="DateTime.UtcNow"/>
-    /// ticks (never zero) so it stays monotonic across reactivations
-    /// without persisting a counter.
+    /// Lazily-seeded, strictly-increasing stamp applied to every
+    /// <see cref="ChildDigestSnapshot"/> this internal node forwards to its own
+    /// parent (push) or returns on a pull, mirroring the leaf's
+    /// <c>NextDigestPublishSequence</c>. Lets the grandparent's fold drop a stale
+    /// out-of-order publish for a still-owned child the same way the
+    /// leaf-to-parent path does. The high-water mark is persisted in
+    /// <see cref="InternalNodeState.DigestPublishSequence"/> and the counter is
+    /// seeded from the larger of that value and the current wall clock, so the
+    /// sequence stays monotonic across reactivations and silo relocation even
+    /// under wall-clock skew - a fresh activation can never seed below a stamp this
+    /// node already emitted.
     /// </summary>
     private long _digestPublishSeq;
 
     /// <summary>
-    /// Returns the next strictly-increasing publish sequence for this
-    /// activation, seeding the counter from the wall clock on first use.
+    /// Returns the next strictly-increasing publish sequence for this node, seeding
+    /// the counter on first use from the persisted high-water mark (or the wall
+    /// clock, whichever is greater) and staging the advanced value back into state
+    /// so the surrounding write persists the new high-water mark.
     /// </summary>
     private long NextDigestPublishSequence()
     {
         if (_digestPublishSeq == 0)
         {
-            _digestPublishSeq = DateTime.UtcNow.Ticks;
+            _digestPublishSeq = Math.Max(state.State.DigestPublishSequence, DateTime.UtcNow.Ticks);
         }
-        return ++_digestPublishSeq;
+
+        var next = ++_digestPublishSeq;
+        state.State.DigestPublishSequence = next;
+        return next;
     }
 
     /// <summary>

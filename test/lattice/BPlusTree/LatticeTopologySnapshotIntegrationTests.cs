@@ -90,12 +90,16 @@ public class LatticeTopologySnapshotIntegrationTests
         return (entry, live, tomb, low, high);
     }
 
-    private async Task AssertTopologyMatchesWalkAsync(ILattice tree, long expectedTotalEntries)
+    private async Task AssertTopologyMatchesWalkAsync(
+        ILattice tree,
+        long expectedTotalEntries,
+        int? shardCount = null)
     {
+        var shards = shardCount ?? FourShardClusterFixture.TestShardCount;
         await LatticeDigestSettleHelpers.AwaitAllShardDigestsConvergeAsync(
-            tree, FourShardClusterFixture.TestShardCount, expectedTotalEntries);
+            tree, shards, expectedTotalEntries);
 
-        for (var shardIndex = 0; shardIndex < FourShardClusterFixture.TestShardCount; shardIndex++)
+        for (var shardIndex = 0; shardIndex < shards; shardIndex++)
         {
             var (entry, live, tomb, low, high) = await WalkLeafTopologyAsync(tree, shardIndex);
             var shard = await ResolveShardAsync(tree, shardIndex);
@@ -124,6 +128,133 @@ public class LatticeTopologySnapshotIntegrationTests
                     $"shard {shardIndex} high key must match a fresh leaf walk");
             });
         }
+    }
+
+    [Test]
+    public async Task Topology_aggregate_matches_leaf_walk_after_reshard()
+    {
+        // Grow the shard count online; the push-up structural digest must
+        // re-converge so a shard-root snapshot still reconstructs the same
+        // aggregate a fresh leaf walk produces, now across the new shard set.
+        const int reshardTarget = 6;
+        var treeId = $"topo-reshard-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+        for (var i = 0; i < 50; i++)
+        {
+            await tree.SetAsync($"key-{i:D4}", Encoding.UTF8.GetBytes($"val-{i}"));
+        }
+        await AssertTopologyMatchesWalkAsync(tree, expectedTotalEntries: 50);
+
+        await tree.ReshardAsync(reshardTarget, CancellationToken.None);
+        await DriveReshardToCompletionAsync(treeId, tree);
+
+        // The logical data is preserved through routing dedup even though the
+        // physical shard set may briefly retain moved rows in more than one shard.
+        Assert.That(await tree.CountAsync(), Is.EqualTo(50), "reshard must preserve every live key");
+
+        var registry = _fixture.Cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var map = await registry.GetShardMapAsync(treeId);
+        Assert.That(map, Is.Not.Null, "reshard must persist a grown shard map");
+        var shardIndices = map!.GetPhysicalShardIndices().ToArray();
+        Assert.That(shardIndices, Has.Length.GreaterThanOrEqualTo(reshardTarget));
+
+        await AssertEachShardTopologyReconcilesAsync(tree, shardIndices);
+    }
+
+    /// <summary>
+    /// For every physical shard in <paramref name="shardIndices"/>, polls the
+    /// shard root's pushed-up topology snapshot until it reconciles exactly with a
+    /// fresh walk of that shard's own leaf chain (summed entry / live / tombstone
+    /// counts and spanned key range). This is the digest-correctness invariant the
+    /// push-up snapshot must restore after an online reshard: each shard root's
+    /// aggregate equals the ground truth beneath it. Cross-shard sums are not
+    /// asserted because a reshard can leave a moved row physically present in more
+    /// than one shard's leaf chain until trimming completes (the routing layer
+    /// dedups logically), so the per-shard aggregate, not a tree-wide sum, is the
+    /// faithful oracle.
+    /// </summary>
+    private async Task AssertEachShardTopologyReconcilesAsync(ILattice tree, IReadOnlyList<int> shardIndices)
+    {
+        foreach (var shardIndex in shardIndices)
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (true)
+            {
+                var (entry, live, tomb, low, high) = await WalkLeafTopologyAsync(tree, shardIndex);
+                var shard = await ResolveShardAsync(tree, shardIndex);
+                var topology = await shard.GetTopologySnapshotAsync(16, CancellationToken.None);
+
+                var reconciled = (entry == 0 && topology is null)
+                    || (topology is not null
+                        && topology.EntryCount == entry
+                        && topology.LiveCount == live
+                        && topology.TombstoneCount == tomb
+                        && topology.LowKeyInclusive == low
+                        && topology.HighKeyExclusive == high);
+
+                if (reconciled) break;
+                if (DateTime.UtcNow > deadline)
+                {
+                    Assert.Fail(
+                        $"shard {shardIndex} topology did not reconcile after reshard: " +
+                        $"snapshot=({topology?.EntryCount},{topology?.LiveCount},{topology?.TombstoneCount}) " +
+                        $"leafWalk=({entry},{live},{tomb})");
+                }
+                await Task.Delay(100);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Drives the asynchronous reshard coordinator and every dispatched
+    /// per-shard split coordinator to completion synchronously, since the
+    /// integration cluster's timers tick too slowly for the default test budget.
+    /// </summary>
+    private async Task DriveReshardToCompletionAsync(string treeId, ILattice tree)
+    {
+        var grainFactory = _fixture.Cluster.GrainFactory;
+        var reshard = grainFactory.GetGrain<ITreeReshardGrain>(treeId);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        for (var i = 0; i < 100; i++)
+        {
+            if (await tree.IsReshardCompleteAsync() && await reshard.IsIdleAsync()) return;
+
+            await reshard.RunReshardPassAsync();
+
+            var map = await registry.GetShardMapAsync(treeId)
+                ?? ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, FourShardClusterFixture.TestShardCount);
+            foreach (var idx in map.GetPhysicalShardIndices())
+            {
+                var split = grainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/{idx}");
+                if (!await split.IsIdleAsync())
+                {
+                    await split.RunSplitPassAsync();
+                }
+            }
+
+            await Task.Delay(50);
+        }
+
+        Assert.Fail("Reshard did not converge within the allotted passes.");
+    }
+
+    [Test]
+    public async Task Topology_aggregate_matches_leaf_walk_after_resize()
+    {
+        // Resize the structural fanout online (rebuilds the leaf/internal
+        // shape). The pushed-up digest must re-converge against a fresh leaf
+        // walk after the rebuild rather than retaining the pre-resize aggregate.
+        var tree = await NewTreeAsync("topo-resize");
+        for (var i = 0; i < 50; i++)
+        {
+            await tree.SetAsync($"key-{i:D4}", Encoding.UTF8.GetBytes($"val-{i}"));
+        }
+        await AssertTopologyMatchesWalkAsync(tree, expectedTotalEntries: 50);
+
+        await tree.ResizeAsync(newMaxLeafKeys: 16, newMaxInternalChildren: 16, CancellationToken.None);
+
+        await AssertTopologyMatchesWalkAsync(tree, expectedTotalEntries: 50);
     }
 
     [Test]

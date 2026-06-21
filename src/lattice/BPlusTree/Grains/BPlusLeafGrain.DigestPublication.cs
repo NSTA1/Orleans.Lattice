@@ -71,34 +71,39 @@ internal sealed partial class BPlusLeafGrain
     internal void MarkDigestDirty() => _digestDirty = true;
 
     /// <summary>
-    /// Lazily-seeded, per-activation strictly-increasing stamp applied to
-    /// every <see cref="ChildDigestSnapshot"/> this leaf hands to its
-    /// parent (push) or returns on a pull. The parent's
-    /// <c>ApplyChildSnapshotAsync</c> drops any snapshot whose
-    /// <see cref="ChildDigestSnapshot.PublishSequence"/> is strictly lower
-    /// than the one already folded for this child, so a late coalesced
+    /// Lazily-seeded, strictly-increasing stamp applied to every
+    /// <see cref="ChildDigestSnapshot"/> this leaf hands to its parent (push) or
+    /// returns on a pull. The parent's <c>ApplyChildSnapshotAsync</c> drops any
+    /// snapshot whose <see cref="ChildDigestSnapshot.PublishSequence"/> is strictly
+    /// lower than the one already folded for this child, so a late coalesced
     /// pre-split (pre-trim) publish that races the split's post-trim inline
     /// publish - the <c>[AlwaysInterleave]</c> mutation surface lets the two
-    /// interleave and arrive out of order - can never overwrite the fresher
-    /// count for a child the parent still owns. Seeded from
-    /// <see cref="DateTime.UtcNow"/> ticks (never zero) so the stamp stays
-    /// monotonic across reactivations without persisting a counter; the
-    /// digest is staleness-tolerant, so a rare wall-clock regression merely
-    /// defers convergence to the next mutation's republish.
+    /// interleave and arrive out of order - can never overwrite the fresher count
+    /// for a child the parent still owns. The high-water mark is persisted in
+    /// <see cref="LeafNodeState.DigestPublishSequence"/> and the counter is seeded
+    /// from the larger of that persisted value and the current wall clock, so the
+    /// sequence stays monotonic across reactivations and silo relocation even when
+    /// wall clocks differ - a fresh activation can never seed below a stamp this
+    /// leaf already emitted, so the parent cannot permanently drop its publishes.
     /// </summary>
     private long _digestPublishSeq;
 
     /// <summary>
-    /// Returns the next strictly-increasing publish sequence for this
-    /// activation, seeding the counter from the wall clock on first use.
+    /// Returns the next strictly-increasing publish sequence for this leaf, seeding
+    /// the counter on first use from the persisted high-water mark (or the wall
+    /// clock, whichever is greater) and staging the advanced value back into state
+    /// so the surrounding mutation's write persists the new high-water mark.
     /// </summary>
     private long NextDigestPublishSequence()
     {
         if (_digestPublishSeq == 0)
         {
-            _digestPublishSeq = DateTime.UtcNow.Ticks;
+            _digestPublishSeq = Math.Max(state.State.DigestPublishSequence, DateTime.UtcNow.Ticks);
         }
-        return ++_digestPublishSeq;
+
+        var next = ++_digestPublishSeq;
+        state.State.DigestPublishSequence = next;
+        return next;
     }
 
     /// <inheritdoc />
