@@ -411,6 +411,8 @@ internal sealed partial class BPlusInternalGrain(
         }
     }
 
+    public Task<string?> GetTreeIdAsync() => Task.FromResult(state.State.TreeId);
+
     private async Task<SplitResult> SplitAsync()
     {
         // Phase 1: Persist the split intent before any cross-grain calls.
