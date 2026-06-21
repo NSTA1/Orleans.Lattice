@@ -90,6 +90,16 @@ internal sealed class InternalNodeState
     [Id(12)] public Dictionary<GrainId, ChildDigestSnapshot> ChildDigests { get; set; } = new();
 
     /// <summary>
+    /// Durable high-water mark of the strictly-increasing publish sequence this
+    /// internal node stamps onto every <see cref="ChildDigestSnapshot"/> it
+    /// publishes upward. Persisting it keeps the sequence monotonic across
+    /// activations and silos so a grandparent's staleness guard never permanently
+    /// drops this node's publishes after a re-activation seeded a lower stamp from
+    /// a skewed wall clock. Zero on first activation; seeded lazily.
+    /// </summary>
+    [Id(13)] public long DigestPublishSequence { get; set; }
+
+    /// <summary>
     /// Routes a key to the correct child grain by finding the rightmost separator ≤ key.
     /// </summary>
     public GrainId Route(string key)
