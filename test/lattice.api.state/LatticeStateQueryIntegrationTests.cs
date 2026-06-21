@@ -120,6 +120,31 @@ public sealed class LatticeStateQueryIntegrationTests
         Assert.That(viaAdapter.TotalLiveKeys, Is.EqualTo(direct.Summary.TotalLiveKeys));
     }
 
+    [Test]
+    public async Task GetTreeSummaryAsync_deep_read_counts_tombstones_shallow_read_reports_zero()
+    {
+        const string treeId = "deep-tombstones";
+        var tree = await _fixture.CreatePopulatedTreeAsync(treeId, keyCount: 30);
+        for (var i = 0; i < 10; i++)
+        {
+            await tree.DeleteAsync($"key-{i:D5}");
+        }
+
+        var deep = await _fixture.Query.GetTreeSummaryAsync(treeId, deep: true);
+        var shallow = await _fixture.Query.GetTreeSummaryAsync(treeId, deep: false);
+
+        Assert.That(deep.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(deep.Summary!.TotalLiveKeys, Is.EqualTo(20));
+        Assert.That(deep.Summary.TombstoneCount, Is.GreaterThan(0),
+            "a deep read must surface the tombstones left by the deletes");
+
+        Assert.That(shallow.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(shallow.Summary!.TotalLiveKeys, Is.EqualTo(20),
+            "live-key count must be accurate regardless of read depth");
+        Assert.That(shallow.Summary.TombstoneCount, Is.EqualTo(0),
+            "a shallow read must report tombstone counts as zero");
+    }
+
     private sealed class ParityAdapter(ILatticeStateQuery query)
     {
         public async Task<TreeStateSummary?> SummariseAsync(string treeId)
