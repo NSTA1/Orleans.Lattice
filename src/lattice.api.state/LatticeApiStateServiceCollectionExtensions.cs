@@ -61,6 +61,10 @@ public static class LatticeApiStateServiceCollectionExtensions
         // caller passes no configure delegate.
         builder.Services.AddOptions<LatticeApiStateOptions>();
 
+        // The transport-agnostic read facade. Registered as a silo singleton
+        // that every transport binding (gRPC now, MCP later) adapts over.
+        builder.Services.TryAddSingleton<ILatticeStateQuery, LatticeStateQuery>();
+
         // Idempotency marker: the structural wiring (added by later issues)
         // runs once regardless of how many times the host calls this method.
         // A repeat call still layers any supplied configure delegate above,

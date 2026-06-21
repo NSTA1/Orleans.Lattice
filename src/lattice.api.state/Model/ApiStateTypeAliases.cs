@@ -1,0 +1,34 @@
+namespace Orleans.Lattice.Api.State;
+
+/// <summary>
+/// Centralised Orleans serialization alias constants for every
+/// <c>Orleans.Lattice.Api.State</c> type that participates in the wire
+/// format. Each alias is a short, fixed string that gives a type a stable
+/// wire identity independent of its CLR name. State-API aliases use the
+/// <c>ola.</c> prefix (Orleans Lattice Api) to avoid collision with the
+/// core (<c>ol.</c>) and replication (<c>olr.</c>) alias namespaces.
+/// </summary>
+/// <remarks>
+/// Never rename or reuse an alias value: it is part of the on-the-wire and
+/// persisted format. New types append new constants.
+/// </remarks>
+public static class ApiStateTypeAliases
+{
+    /// <summary>Alias for <see cref="TreeConfigSummary"/>.</summary>
+    public const string TreeConfigSummary = "ola.tc";
+
+    /// <summary>Alias for <see cref="TreeStateSummary"/>.</summary>
+    public const string TreeStateSummary = "ola.ts";
+
+    /// <summary>Alias for <see cref="ShardStateSummary"/>.</summary>
+    public const string ShardStateSummary = "ola.ss";
+
+    /// <summary>Alias for <see cref="NodeStateSummary"/>.</summary>
+    public const string NodeStateSummary = "ola.ns";
+
+    /// <summary>Alias for <see cref="ViewStateSummary"/>.</summary>
+    public const string ViewStateSummary = "ola.vs";
+
+    /// <summary>Alias for <see cref="EntryRecord"/>.</summary>
+    public const string EntryRecord = "ola.er";
+}
