@@ -245,4 +245,33 @@ public sealed class StateDtoSerializationTests
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));
     }
+
+    [Test]
+    public void EntryScanRequest_round_trips()
+    {
+        var original = new EntryScanRequest
+        {
+            TreeId = "tree-a",
+            StartInclusive = "a",
+            EndExclusive = "m",
+            Reverse = true,
+            PageSize = 64,
+            ContinuationToken = "cursor-1",
+            ValuePreviewBudget = 512,
+            Predicate = LatticePredicateTranslator.Translate<ScanPerson>(p => p.Age >= 18),
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("tree-a"));
+            Assert.That(copy.StartInclusive, Is.EqualTo("a"));
+            Assert.That(copy.EndExclusive, Is.EqualTo("m"));
+            Assert.That(copy.Reverse, Is.True);
+            Assert.That(copy.PageSize, Is.EqualTo(64));
+            Assert.That(copy.ContinuationToken, Is.EqualTo("cursor-1"));
+            Assert.That(copy.ValuePreviewBudget, Is.EqualTo(512));
+            Assert.That(copy.Predicate, Is.Not.Null);
+        });
+    }
 }

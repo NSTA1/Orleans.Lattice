@@ -163,7 +163,7 @@ internal sealed partial class LatticeCursorGrain
         var (effStart, effEnd) = ComputeEffectiveRange();
         var reverse = state.State.Spec.Reverse;
 
-        var perShardLists = await FetchPerShardKeysAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate);
+        var perShardLists = await FetchPerShardKeysAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate, reverse);
         var collected = new List<string>(pageSize);
         MergeSortedKeyLists(perShardLists, reverse, pageSize, collected);
 
@@ -205,7 +205,7 @@ internal sealed partial class LatticeCursorGrain
         var (effStart, effEnd) = ComputeEffectiveRange();
         var reverse = state.State.Spec.Reverse;
 
-        var perShardLists = await FetchPerShardEntriesAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate);
+        var perShardLists = await FetchPerShardEntriesAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate, reverse);
         var collected = new List<KeyValuePair<string, byte[]>>(pageSize);
         MergeSortedEntryLists(perShardLists, reverse, pageSize, collected);
 
@@ -250,14 +250,15 @@ internal sealed partial class LatticeCursorGrain
         string? effStart,
         string? effEnd,
         int pageSize,
-        LatticePredicateNode? predicate)
+        LatticePredicateNode? predicate,
+        bool reverse)
     {
         var shards = ResolvePerShardPerPartitionOffsets(coord);
         var tasks = new Task<List<string>>[shards.Count];
         var index = 0;
         foreach (var (shardIdx, capturedOffsets) in shards)
         {
-            tasks[index++] = FetchSnapshotShardKeysAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize, predicate);
+            tasks[index++] = FetchSnapshotShardKeysAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize, predicate, reverse);
         }
 
         return await Task.WhenAll(tasks);
@@ -270,11 +271,12 @@ internal sealed partial class LatticeCursorGrain
         string? effStart,
         string? effEnd,
         int pageSize,
-        LatticePredicateNode? predicate)
+        LatticePredicateNode? predicate,
+        bool reverse)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
-        return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize, predicate: predicate);
+        return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
     private async Task<List<KeyValuePair<string, byte[]>>> FetchSnapshotShardEntriesAsync(
@@ -284,11 +286,12 @@ internal sealed partial class LatticeCursorGrain
         string? effStart,
         string? effEnd,
         int pageSize,
-        LatticePredicateNode? predicate)
+        LatticePredicateNode? predicate,
+        bool reverse)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
-        return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate);
+        return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
     /// <summary>
@@ -299,14 +302,15 @@ internal sealed partial class LatticeCursorGrain
         string? effStart,
         string? effEnd,
         int pageSize,
-        LatticePredicateNode? predicate)
+        LatticePredicateNode? predicate,
+        bool reverse)
     {
         var shards = ResolvePerShardPerPartitionOffsets(coord);
         var tasks = new Task<List<KeyValuePair<string, byte[]>>>[shards.Count];
         var index = 0;
         foreach (var (shardIdx, capturedOffsets) in shards)
         {
-            tasks[index++] = FetchSnapshotShardEntriesAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize, predicate);
+            tasks[index++] = FetchSnapshotShardEntriesAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize, predicate, reverse);
         }
 
         return await Task.WhenAll(tasks);

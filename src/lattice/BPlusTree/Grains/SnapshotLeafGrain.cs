@@ -160,7 +160,7 @@ internal sealed class SnapshotLeafGrain(
     }
 
     /// <inheritdoc />
-    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null)
+    public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false)
     {
         EnsureOpened();
         if (limit <= 0)
@@ -187,14 +187,25 @@ internal sealed class SnapshotLeafGrain(
             if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
                 continue;
             result.Add(key);
-            if (result.Count >= limit)
+            if (reverse)
+            {
+                // Keep only the largest `limit` matches: the dictionary is
+                // ascending, so drop the smallest from the window head once it
+                // overflows. The retained slice stays ascending for the cursor's
+                // reverse k-way merge.
+                if (result.Count > limit)
+                    result.RemoveAt(0);
+            }
+            else if (result.Count >= limit)
+            {
                 break;
+            }
         }
         return Task.FromResult(result);
     }
 
     /// <inheritdoc />
-    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null)
+    public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false)
     {
         EnsureOpened();
         if (limit <= 0)
@@ -218,8 +229,15 @@ internal sealed class SnapshotLeafGrain(
             if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
                 continue;
             result.Add(new KeyValuePair<string, byte[]>(key, value.Value));
-            if (result.Count >= limit)
+            if (reverse)
+            {
+                if (result.Count > limit)
+                    result.RemoveAt(0);
+            }
+            else if (result.Count >= limit)
+            {
                 break;
+            }
         }
         return Task.FromResult(result);
     }

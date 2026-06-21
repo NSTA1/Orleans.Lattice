@@ -16,6 +16,7 @@ namespace Orleans.Lattice.Api.State;
 internal sealed class LatticeStateQuery(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> options,
+    IOptions<LatticeApiStateOptions> apiOptions,
     IServiceProvider services) : ILatticeStateQuery
 {
     private readonly IGrainFactory _grainFactory = grainFactory
@@ -23,6 +24,9 @@ internal sealed class LatticeStateQuery(
 
     private readonly IOptionsMonitor<LatticeOptions> _options = options
         ?? throw new ArgumentNullException(nameof(options));
+
+    private readonly LatticeApiStateOptions _apiOptions = (apiOptions
+        ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
 
     private readonly IServiceProvider _services = services
         ?? throw new ArgumentNullException(nameof(services));
@@ -241,6 +245,161 @@ internal sealed class LatticeStateQuery(
 
         return TreeStructureResult.Found(request.TreeId, rootNodes, budget.AnyTruncated);
     }
+
+    public async Task<EntryScanResult> ScanEntriesAsync(
+        EntryScanRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+
+        var fresh = string.IsNullOrEmpty(request.ContinuationToken);
+        string cursorId;
+        if (fresh)
+        {
+            if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return EntryScanResult.NotFound(request.TreeId);
+            }
+
+            // A point-in-time snapshot cursor: every page reads the frozen view
+            // captured here, so a multi-page scan never observes a torn write.
+            cursorId = request.Predicate is { } predicate
+                ? await tree.OpenSnapshotEntryCursorWherePredicateAsync(
+                    predicate, request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
+                    .ConfigureAwait(false)
+                : await tree.OpenSnapshotEntryCursorAsync(
+                    request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
+                    .ConfigureAwait(false);
+        }
+        else
+        {
+            cursorId = request.ContinuationToken!;
+        }
+
+        var pageSize = ClampPageSize(request.PageSize);
+        var previewBudget = ClampScanPreviewBudget(request.ValuePreviewBudget);
+
+        LatticeCursorEntriesPage page;
+        try
+        {
+            page = await tree.NextEntriesAsync(cursorId, pageSize, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex) when (!fresh)
+        {
+            // A client-supplied continuation token that names an unknown, drained,
+            // or already-closed cursor is a malformed request, not a server fault.
+            throw new ArgumentException(
+                $"The continuation token '{request.ContinuationToken}' is invalid or has expired.",
+                nameof(request),
+                ex);
+        }
+
+        var records = new List<EntryRecord>(page.Entries.Count);
+        foreach (var entry in page.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            records.Add(await BuildEntryRecordAsync(tree, entry.Key, entry.Value, previewBudget, cancellationToken)
+                .ConfigureAwait(false));
+        }
+
+        string? continuation = page.HasMore ? cursorId : null;
+        if (!page.HasMore)
+        {
+            // Drained: release the server-side cursor / snapshot pin promptly.
+            await tree.CloseCursorAsync(cursorId, cancellationToken).ConfigureAwait(false);
+        }
+
+        return EntryScanResult.Found(request.TreeId, records, continuation);
+    }
+
+    public async Task<EntryDetailResult> GetEntryAsync(
+        string treeId,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(key);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return EntryDetailResult.TreeNotFound(treeId, key);
+        }
+
+        var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        if (versioned.Value is null)
+        {
+            // Absent or tombstoned: the public read contract reports both as a
+            // missing key for the detail pane.
+            return EntryDetailResult.KeyNotFound(treeId, key);
+        }
+
+        var record = BuildEntryRecord(
+            key,
+            versioned.Value,
+            versioned.Version,
+            versioned.ExpiresAtTicks,
+            _apiOptions.SingleEntryValuePreviewBytes);
+
+        return EntryDetailResult.Found(treeId, record);
+    }
+
+    private async Task<EntryRecord> BuildEntryRecordAsync(
+        ILattice tree,
+        string key,
+        byte[] value,
+        int previewBudget,
+        CancellationToken cancellationToken)
+    {
+        // The cursor page carries the snapshot value bytes (used verbatim for
+        // the preview and full length); the per-entry version / TTL is overlaid
+        // from a metadata read so the record carries HLC and expiry.
+        var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        return BuildEntryRecord(key, value, versioned.Version, versioned.ExpiresAtTicks, previewBudget);
+    }
+
+    private static EntryRecord BuildEntryRecord(
+        string key,
+        byte[] value,
+        Orleans.Lattice.HybridLogicalClock version,
+        long expiresAtTicks,
+        int previewBudget)
+    {
+        var fullLength = value.Length;
+        var truncated = fullLength > previewBudget;
+        var preview = truncated ? value[..previewBudget] : value;
+
+        return new EntryRecord
+        {
+            Key = key,
+            ValuePreview = preview,
+            ValueLength = fullLength,
+            Truncated = truncated,
+            Hlc = version,
+            IsTombstone = false,
+            ExpiresAtTicks = expiresAtTicks,
+            CrdtShape = null,
+        };
+    }
+
+    private int ClampPageSize(int requested) => requested switch
+    {
+        < 1 => _apiOptions.DefaultScanPageSize,
+        _ when requested > _apiOptions.MaxScanPageSize => _apiOptions.MaxScanPageSize,
+        _ => requested,
+    };
+
+    private int ClampScanPreviewBudget(int requested) => requested switch
+    {
+        < 1 => _apiOptions.DefaultScanValuePreviewBytes,
+        _ when requested > _apiOptions.MaxScanValuePreviewBytes => _apiOptions.MaxScanValuePreviewBytes,
+        _ => requested,
+    };
 
     private async Task<int> ResolveShardCountAsync(ILatticeRegistry registry, string treeId)
     {

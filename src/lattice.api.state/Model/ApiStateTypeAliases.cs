@@ -46,4 +46,7 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="StructureRequest"/>.</summary>
     public const string StructureRequest = "ola.sr";
+
+    /// <summary>Alias for <see cref="EntryScanRequest"/>.</summary>
+    public const string EntryScanRequest = "ola.esr";
 }
