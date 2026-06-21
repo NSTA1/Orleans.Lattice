@@ -188,4 +188,18 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// node activating with legacy state, or a crash-recovery rebuild).
     /// </summary>
     Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync();
+
+    /// <summary>
+    /// Returns a <see cref="ShardTopologyNode"/> describing this internal
+    /// node and its descendants, reconstructed entirely from the per-child
+    /// snapshot table this node already maintains. Immediate children are
+    /// summarised in-place: leaf children never trigger a call back into the
+    /// leaf, and internal children are expanded recursively only while
+    /// <paramref name="depthLimit"/> is positive (decremented per level).
+    /// When the limit is exhausted, internal children are returned as
+    /// summary nodes with <see cref="ShardTopologyNode.ChildrenTruncated"/>
+    /// set. Cost is bounded by the number of internal nodes actually
+    /// visited, never by leaf count.
+    /// </summary>
+    Task<ShardTopologyNode> GetTopologyAsync(int depthLimit);
 }

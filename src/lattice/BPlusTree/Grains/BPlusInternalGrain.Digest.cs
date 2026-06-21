@@ -353,14 +353,143 @@ internal sealed partial class BPlusInternalGrain
     public Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
     {
         EnsureSubtreeHashInitialized();
-        return Task.FromResult(new ChildDigestSnapshot
+        return Task.FromResult(BuildOwnSubtreeSnapshot());
+    }
+
+    /// <summary>
+    /// Builds the snapshot this internal node publishes to its parent's
+    /// per-child table. The hash, entry count and checkpoint offset drive
+    /// the parent's XOR fold exactly as before; the appended structural
+    /// fields (key bounds, live/tombstone split, subtree depth, immediate
+    /// fanout) are derived from this node's own per-child snapshot table so
+    /// they ride upward for free and are never folded into the digest
+    /// arithmetic.
+    /// </summary>
+    private ChildDigestSnapshot BuildOwnSubtreeSnapshot()
+    {
+        var (depth, live, tombstones, low, high) = ComputeStructuralAggregates();
+        return new ChildDigestSnapshot
         {
             Hash = (byte[])state.State.SubtreeProjectionHash!.Clone(),
             EntryCount = state.State.SubtreeEntryCount,
             CheckpointOffset = state.State.SubtreeHighestCheckpointOffset,
             PublishSequence = NextDigestPublishSequence(),
-        });
+            LowKeyInclusive = low,
+            HighKeyExclusive = high,
+            LiveCount = live,
+            TombstoneCount = tombstones,
+            SubtreeDepth = depth,
+            ChildFanout = state.State.Children.Count,
+        };
     }
+
+    /// <summary>
+    /// Reduces this node's per-child snapshot table into subtree-level
+    /// structural aggregates: height (<c>1 + max(child depth)</c>), live and
+    /// tombstone totals, and the spanned key range. The high bound collapses
+    /// to <see langword="null"/> (unbounded) when any child is unbounded
+    /// above. Bounded by the node's fanout and reads only in-memory state.
+    /// </summary>
+    private (int Depth, long Live, long Tombstones, string? Low, string? High) ComputeStructuralAggregates()
+    {
+        var maxChildDepth = 0;
+        long live = 0;
+        long tombstones = 0;
+        string? low = null;
+        string? high = null;
+        var highUnbounded = false;
+        foreach (var snap in state.State.ChildDigests.Values)
+        {
+            if (snap.SubtreeDepth > maxChildDepth) maxChildDepth = snap.SubtreeDepth;
+            live += snap.LiveCount;
+            tombstones += snap.TombstoneCount;
+            if (snap.LowKeyInclusive is not null &&
+                (low is null || string.CompareOrdinal(snap.LowKeyInclusive, low) < 0))
+            {
+                low = snap.LowKeyInclusive;
+            }
+            if (snap.HighKeyExclusive is null)
+            {
+                highUnbounded = true;
+            }
+            else if (high is null || string.CompareOrdinal(snap.HighKeyExclusive, high) > 0)
+            {
+                high = snap.HighKeyExclusive;
+            }
+        }
+        if (highUnbounded) high = null;
+        return (maxChildDepth + 1, live, tombstones, low, high);
+    }
+
+    /// <inheritdoc />
+    public async Task<ShardTopologyNode> GetTopologyAsync(int depthLimit)
+    {
+        EnsureSubtreeHashInitialized();
+        var (depth, live, tombstones, low, high) = ComputeStructuralAggregates();
+
+        var children = new List<ShardTopologyNode>(state.State.Children.Count);
+        foreach (var childEntry in state.State.Children)
+        {
+            var childId = childEntry.ChildId;
+            state.State.ChildDigests.TryGetValue(childId, out var snap);
+            if (state.State.ChildrenAreLeaves)
+            {
+                children.Add(LeafSummaryNode(childId, snap));
+            }
+            else if (depthLimit > 0)
+            {
+                var childInternal = grainFactory.GetGrain<IBPlusInternalGrain>(childId);
+                children.Add(await childInternal.GetTopologyAsync(depthLimit - 1));
+            }
+            else
+            {
+                children.Add(InternalSummaryNode(childId, snap));
+            }
+        }
+
+        return new ShardTopologyNode
+        {
+            NodeId = context.GrainId.ToString(),
+            IsLeaf = false,
+            SubtreeDepth = depth,
+            LowKeyInclusive = low,
+            HighKeyExclusive = high,
+            EntryCount = state.State.SubtreeEntryCount,
+            LiveCount = live,
+            TombstoneCount = tombstones,
+            ChildFanout = state.State.Children.Count,
+            Children = children,
+        };
+    }
+
+    private static ShardTopologyNode LeafSummaryNode(GrainId childId, ChildDigestSnapshot snap)
+        => new()
+        {
+            NodeId = childId.ToString(),
+            IsLeaf = true,
+            SubtreeDepth = snap.SubtreeDepth == 0 ? 1 : snap.SubtreeDepth,
+            LowKeyInclusive = snap.LowKeyInclusive,
+            HighKeyExclusive = snap.HighKeyExclusive,
+            EntryCount = snap.EntryCount,
+            LiveCount = snap.LiveCount,
+            TombstoneCount = snap.TombstoneCount,
+            ChildFanout = 0,
+        };
+
+    private static ShardTopologyNode InternalSummaryNode(GrainId childId, ChildDigestSnapshot snap)
+        => new()
+        {
+            NodeId = childId.ToString(),
+            IsLeaf = false,
+            SubtreeDepth = snap.SubtreeDepth,
+            LowKeyInclusive = snap.LowKeyInclusive,
+            HighKeyExclusive = snap.HighKeyExclusive,
+            EntryCount = snap.EntryCount,
+            LiveCount = snap.LiveCount,
+            TombstoneCount = snap.TombstoneCount,
+            ChildFanout = snap.ChildFanout,
+            ChildrenTruncated = snap.ChildFanout > 0,
+        };
 
     /// <summary>
     /// Snapshots this node's current subtree aggregates and forwards them
@@ -391,13 +520,7 @@ internal sealed partial class BPlusInternalGrain
     {
         EnsureSubtreeHashInitialized();
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
-        var snapshot = new ChildDigestSnapshot
-        {
-            Hash = (byte[])state.State.SubtreeProjectionHash!.Clone(),
-            EntryCount = state.State.SubtreeEntryCount,
-            CheckpointOffset = state.State.SubtreeHighestCheckpointOffset,
-            PublishSequence = NextDigestPublishSequence(),
-        };
+        var snapshot = BuildOwnSubtreeSnapshot();
 
         var timeout = (await GetOptionsAsync()).DigestPublishTimeout;
         if (timeout == Timeout.InfiniteTimeSpan)
