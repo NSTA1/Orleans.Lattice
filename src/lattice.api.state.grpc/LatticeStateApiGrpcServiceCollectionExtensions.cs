@@ -80,11 +80,13 @@ public static class LatticeStateApiGrpcServiceCollectionExtensions
 
     /// <summary>
     /// Maps the state-API RPC routes (five unary plus the server-streaming
-    /// <c>ObserveChanges</c> subscription) on the supplied
+    /// <c>ObserveChanges</c> / <c>ObserveMetrics</c> subscriptions and the
+    /// unary <c>GetMetricsSnapshot</c>) on the supplied
     /// <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeStateApiGrpc"/> and must expose
-    /// <c>ILatticeStateQuery</c> and <c>ILatticeStateObserver</c> (via
-    /// <c>AddLatticeStateApi</c>) in the same service provider before this call.
+    /// <c>ILatticeStateQuery</c>, <c>ILatticeStateObserver</c>, and
+    /// <c>ILatticeStateMetricsObserver</c> (via <c>AddLatticeStateApi</c>) in
+    /// the same service provider before this call.
     /// </summary>
     /// <returns>The endpoint route builder for chaining.</returns>
     public static IEndpointRouteBuilder MapLatticeStateApiGrpc(
@@ -117,7 +119,9 @@ public static class LatticeStateApiGrpcServiceCollectionExtensions
                 sp.GetRequiredService<Serializer<EntryGetRequest>>(),
                 sp.GetRequiredService<Serializer<EntryGetResponse>>(),
                 sp.GetRequiredService<Serializer<StateObserveRequest>>(),
-                sp.GetRequiredService<Serializer<StateChangeNotification>>());
+                sp.GetRequiredService<Serializer<StateChangeNotification>>(),
+                sp.GetRequiredService<Serializer<TreeMetricsRequest>>(),
+                sp.GetRequiredService<Serializer<TreeMetricsSnapshot>>());
             LatticeStateGrpcMethodsHolder.Current = methods;
             return methods;
         });

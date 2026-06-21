@@ -44,6 +44,9 @@ internal sealed class GrpcStateClusterFixture
 
     public ILatticeStateObserver Observer => SiloServices.GetRequiredService<ILatticeStateObserver>();
 
+    public ILatticeStateMetricsObserver Metrics =>
+        SiloServices.GetRequiredService<ILatticeStateMetricsObserver>();
+
     public async Task InitializeAsync(int siloCount = 1)
     {
         var builder = new TestClusterBuilder(initialSilosCount: (short)siloCount);
@@ -80,6 +83,7 @@ internal sealed class GrpcStateClusterFixture
     {
         facade ??= Query;
         var observer = Observer;
+        var metrics = Metrics;
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -91,6 +95,7 @@ internal sealed class GrpcStateClusterFixture
                     services.AddRouting();
                     services.AddSingleton(facade);
                     services.AddSingleton(observer);
+                    services.AddSingleton(metrics);
                     if (authorizer is not null)
                     {
                         services.AddSingleton(authorizer);
@@ -155,6 +160,7 @@ internal sealed class GrpcStateClusterFixture
             siloBuilder.AddLatticeStateApi(o =>
             {
                 o.ChangeObservationPollInterval = TimeSpan.FromMilliseconds(25);
+                o.MetricsSampleInterval = TimeSpan.FromMilliseconds(100);
             });
         }
     }

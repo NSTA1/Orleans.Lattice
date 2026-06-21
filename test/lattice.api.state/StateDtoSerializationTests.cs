@@ -306,4 +306,70 @@ public sealed class StateDtoSerializationTests
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));
     }
+
+    [Test]
+    public void TreeMetricsRequest_round_trips()
+    {
+        var original = new TreeMetricsRequest
+        {
+            TreeIds = new[] { "tree-a", "tree-b" },
+            IncludeShardHotness = true,
+            IncludeViewLag = true,
+            IncludeSystemTrees = true,
+            SampleInterval = TimeSpan.FromMilliseconds(500),
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeIds, Is.EqualTo(new[] { "tree-a", "tree-b" }));
+            Assert.That(copy.IncludeShardHotness, Is.True);
+            Assert.That(copy.IncludeViewLag, Is.True);
+            Assert.That(copy.IncludeSystemTrees, Is.True);
+            Assert.That(copy.SampleInterval, Is.EqualTo(TimeSpan.FromMilliseconds(500)));
+        });
+    }
+
+    [Test]
+    public void TreeMetricsSnapshot_round_trips_with_deltas()
+    {
+        var original = new TreeMetricsSnapshot
+        {
+            SampledAt = DateTimeOffset.UnixEpoch,
+            IsInitial = false,
+            Trees = new[]
+            {
+                new TreeMetrics
+                {
+                    TreeId = "tree-a",
+                    Lifecycle = TreeLifecycleState.Active,
+                    ShardCount = 2,
+                    LiveKeys = 100,
+                    Tombstones = 3,
+                    MinDepth = 1,
+                    MaxDepth = 2,
+                    ShardsSplitting = 1,
+                    ViewCount = 1,
+                    ViewLagTotal = 7,
+                    ShardHotness = new[]
+                    {
+                        new ShardHotness { ShardIndex = 0, OpsPerSecond = 12.5, LiveKeys = 50, SplitInProgress = true },
+                    },
+                },
+            },
+            RemovedTreeIds = new[] { "tree-z" },
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.IsInitial, Is.False);
+            Assert.That(copy.RemovedTreeIds, Is.EqualTo(new[] { "tree-z" }));
+            Assert.That(copy.Trees, Has.Count.EqualTo(1));
+            Assert.That(copy.Trees[0].TreeId, Is.EqualTo("tree-a"));
+            Assert.That(copy.Trees[0].ViewLagTotal, Is.EqualTo(7));
+            Assert.That(copy.Trees[0].ShardHotness, Has.Count.EqualTo(1));
+            Assert.That(copy.Trees[0].ShardHotness[0].OpsPerSecond, Is.EqualTo(12.5));
+        });
+    }
 }

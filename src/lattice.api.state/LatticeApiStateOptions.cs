@@ -61,4 +61,13 @@ public sealed class LatticeApiStateOptions
     /// catch-up read. Defaults to <c>256</c>.
     /// </summary>
     public int ChangeObservationPageSize { get; set; } = 256;
+
+    /// <summary>
+    /// Default cadence at which the metadata / metrics observation feed samples
+    /// per-tree aggregates when a request does not override it. Because the
+    /// feed samples already-maintained aggregates on a timer (rather than per
+    /// mutation), this trades dashboard-gauge freshness against sampling cost.
+    /// Defaults to one second.
+    /// </summary>
+    public TimeSpan MetricsSampleInterval { get; set; } = TimeSpan.FromSeconds(1);
 }

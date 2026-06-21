@@ -44,6 +44,15 @@ internal abstract class LatticeStateGrpcServiceBase
         IServerStreamWriter<StateChangeNotification> responseStream,
         ServerCallContext context);
 
+    /// <summary>Streams live metric snapshots until the call is cancelled. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task ObserveMetrics(
+        TreeMetricsRequest request,
+        IServerStreamWriter<TreeMetricsSnapshot> responseStream,
+        ServerCallContext context);
+
+    /// <summary>Returns a single live metrics snapshot. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<TreeMetricsSnapshot> GetMetricsSnapshot(TreeMetricsRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -69,6 +78,8 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.ScanEntries, (UnaryServerMethod<EntryScanRequest, EntryScanResponse>?)null);
             binder.AddMethod(methods.GetEntry, (UnaryServerMethod<EntryGetRequest, EntryGetResponse>?)null);
             binder.AddMethod(methods.ObserveChanges, (ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>?)null);
+            binder.AddMethod(methods.ObserveMetrics, (ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
+            binder.AddMethod(methods.GetMetricsSnapshot, (UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             return;
         }
 
@@ -78,6 +89,8 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.ScanEntries, new UnaryServerMethod<EntryScanRequest, EntryScanResponse>(serviceImpl.ScanEntries));
         binder.AddMethod(methods.GetEntry, new UnaryServerMethod<EntryGetRequest, EntryGetResponse>(serviceImpl.GetEntry));
         binder.AddMethod(methods.ObserveChanges, new ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>(serviceImpl.ObserveChanges));
+        binder.AddMethod(methods.ObserveMetrics, new ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.ObserveMetrics));
+        binder.AddMethod(methods.GetMetricsSnapshot, new UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.GetMetricsSnapshot));
     }
 }
 
@@ -92,6 +105,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
 {
     private readonly ILatticeStateQuery _query;
     private readonly ILatticeStateObserver _observer;
+    private readonly ILatticeStateMetricsObserver _metricsObserver;
     private readonly ILogger<LatticeStateGrpcService> _logger;
 
     /// <summary>
@@ -107,15 +121,18 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         LatticeStateGrpcMethods methods,
         ILatticeStateQuery query,
         ILatticeStateObserver observer,
+        ILatticeStateMetricsObserver metricsObserver,
         ILogger<LatticeStateGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(observer);
+        ArgumentNullException.ThrowIfNull(metricsObserver);
         ArgumentNullException.ThrowIfNull(logger);
 
         _query = query;
         _observer = observer;
+        _metricsObserver = metricsObserver;
         _logger = logger;
     }
 
@@ -232,6 +249,73 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             _logger.LogError(ex, "Api.State: gRPC change subscription for tree {TreeId} failed.", request.TreeId);
             throw new RpcException(new Status(StatusCode.Internal, "The state-API change subscription failed."));
+        }
+    }
+
+    /// <inheritdoc />
+    public override async Task ObserveMetrics(
+        TreeMetricsRequest request,
+        IServerStreamWriter<TreeMetricsSnapshot> responseStream,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        ArgumentNullException.ThrowIfNull(context);
+
+        try
+        {
+            await foreach (var snapshot in _metricsObserver
+                .ObserveAsync(request, context.CancellationToken)
+                .ConfigureAwait(false))
+            {
+                await responseStream.WriteAsync(snapshot).ConfigureAwait(false);
+            }
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Client tore down the subscription; a clean return ends the stream.
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Api.State: gRPC metrics subscription failed.");
+            throw new RpcException(new Status(StatusCode.Internal, "The state-API metrics subscription failed."));
+        }
+    }
+
+    /// <inheritdoc />
+    public override async Task<TreeMetricsSnapshot> GetMetricsSnapshot(TreeMetricsRequest request, ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        try
+        {
+            return await _metricsObserver.SampleAsync(request, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new RpcException(new Status(StatusCode.Cancelled, "The state-API request was cancelled."));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Api.State: gRPC call to {Method} failed.", context.Method);
+            throw new RpcException(new Status(StatusCode.Internal, "The state-API request failed."));
         }
     }
 
