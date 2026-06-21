@@ -116,9 +116,95 @@ public sealed class StateDtoSerializationTests
             Lag = 42,
             EntryCount = 7,
             LastDigest = "deadbeef",
+            IsAggregation = true,
         };
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void ViewStateSummary_round_trips_with_unsampled_stats()
+    {
+        var original = new ViewStateSummary
+        {
+            ViewName = "view-b",
+            SourceTreeId = "tree-b",
+            Lag = null,
+            EntryCount = null,
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void CatalogRequest_round_trips()
+    {
+        var original = new CatalogRequest
+        {
+            PageSize = 25,
+            PageToken = "tree-k",
+            IncludeSystemTrees = true,
+            IncludeViewStats = true,
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void TreeCatalogEntry_round_trips()
+    {
+        var original = new TreeCatalogEntry
+        {
+            TreeId = "tree-a",
+            IsAlias = true,
+            PhysicalTreeId = "tree-a-phys",
+            Lifecycle = TreeLifecycleState.SoftDeleted,
+            ShardCount = 8,
+            Config = new TreeConfigSummary { ShardCount = 8, VirtualShardCount = 4096, MaxLeafKeys = 64 },
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void TreeCatalogPage_round_trips()
+    {
+        var original = new TreeCatalogPage
+        {
+            Entries = new[]
+            {
+                new TreeCatalogEntry
+                {
+                    TreeId = "tree-a",
+                    ShardCount = 4,
+                    Config = new TreeConfigSummary { ShardCount = 4, VirtualShardCount = 4096 },
+                },
+            },
+            NextPageToken = "tree-a",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.That(copy.NextPageToken, Is.EqualTo("tree-a"));
+        Assert.That(copy.Entries, Has.Count.EqualTo(1));
+        Assert.That(copy.Entries[0].TreeId, Is.EqualTo("tree-a"));
+    }
+
+    [Test]
+    public void ViewCatalogPage_round_trips()
+    {
+        var original = new ViewCatalogPage
+        {
+            Entries = new[]
+            {
+                new ViewStateSummary { ViewName = "view-a", SourceTreeId = "tree-a" },
+            },
+            NextPageToken = null,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.That(copy.NextPageToken, Is.Null);
+        Assert.That(copy.Entries, Has.Count.EqualTo(1));
+        Assert.That(copy.Entries[0].ViewName, Is.EqualTo("view-a"));
     }
 
     [Test]

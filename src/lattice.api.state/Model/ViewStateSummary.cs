@@ -15,12 +15,26 @@ public sealed record ViewStateSummary
     /// <summary>The source tree the view projects from.</summary>
     [Id(1)] public required string SourceTreeId { get; init; }
 
-    /// <summary>Current replication / projection lag of the view.</summary>
-    [Id(2)] public long Lag { get; init; }
+    /// <summary>
+    /// Current apply lag of the view (source WAL entries committed but not yet
+    /// applied), or <see langword="null"/> when the catalog did not sample it
+    /// (see <see cref="CatalogRequest.IncludeViewStats"/>).
+    /// </summary>
+    [Id(2)] public long? Lag { get; init; }
 
-    /// <summary>Number of entries currently materialised in the view.</summary>
-    [Id(3)] public long EntryCount { get; init; }
+    /// <summary>
+    /// Number of entries currently materialised in the view, or
+    /// <see langword="null"/> when the catalog did not sample it (see
+    /// <see cref="CatalogRequest.IncludeViewStats"/>).
+    /// </summary>
+    [Id(3)] public long? EntryCount { get; init; }
 
     /// <summary>An opaque last-digest marker for the view, when available.</summary>
     [Id(4)] public string? LastDigest { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the view is a grouped-reduce (aggregation)
+    /// view rather than a filter / re-project view.
+    /// </summary>
+    [Id(5)] public bool IsAggregation { get; init; }
 }
