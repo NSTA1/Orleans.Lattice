@@ -237,4 +237,64 @@ public sealed class LatticeStructureIntegrationTests
             Assert.That(root.ShardIndex, Is.EqualTo(1), "a shard-filtered read must only return the requested shard");
         }
     }
+
+    [Test]
+    public async Task GetTreeStructure_subpath_node_from_another_tree_is_rejected()
+    {
+        // A sub-path node id is an opaque, caller-supplied grain id. Binding one
+        // tree's internal node under a different tree's id must not leak that
+        // node's subtree - the request must be treated as not-found.
+        await _fixture.CreatePopulatedTreeAsync("struct-tenant-a", keyCount: 80, shardCount: 2);
+        await _fixture.CreatePopulatedTreeAsync("struct-tenant-b", keyCount: 80, shardCount: 2);
+
+        var aStructure = await _fixture.Query.GetTreeStructureAsync(new StructureRequest
+        {
+            TreeId = "struct-tenant-a",
+            DepthLimit = StructureRequest.MaxDepthLimit,
+            MaxNodes = StructureRequest.MaxNodeBudget,
+        });
+        var aInternal = aStructure.Roots.First(r => r.Kind == NodeKind.Internal && r.Children.Count > 0);
+
+        var escaped = await _fixture.Query.GetTreeStructureAsync(new StructureRequest
+        {
+            TreeId = "struct-tenant-b",
+            SubPathNodeId = aInternal.NodeId,
+            ShardIndex = aInternal.ShardIndex,
+            DepthLimit = StructureRequest.MaxDepthLimit,
+            MaxNodes = StructureRequest.MaxNodeBudget,
+        });
+
+        Assert.That(escaped.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
+            "a sub-path node belonging to another tree must not be served");
+        Assert.That(escaped.Roots, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetTreeStructure_malformed_subpath_node_is_not_found()
+    {
+        await _fixture.CreatePopulatedTreeAsync("struct-malformed", keyCount: 10, shardCount: 2);
+
+        var result = await _fixture.Query.GetTreeStructureAsync(new StructureRequest
+        {
+            TreeId = "struct-malformed",
+            SubPathNodeId = "not-a-valid-grain-id",
+            DepthLimit = StructureRequest.MaxDepthLimit,
+            MaxNodes = StructureRequest.MaxNodeBudget,
+        });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+        Assert.That(result.Roots, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetTreeStructure_treats_reserved_tree_as_not_found()
+    {
+        await _fixture.RegisterViewBackingTreeAsync("view-struct-probe");
+
+        var result = await _fixture.Query.GetTreeStructureAsync(new StructureRequest { TreeId = "view-struct-probe" });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
+            "reserved trees must be invisible to the structure surface");
+        Assert.That(result.Roots, Is.Empty);
+    }
 }

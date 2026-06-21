@@ -166,7 +166,7 @@ internal sealed class LatticeStateQuery(
         cancellationToken.ThrowIfCancellationRequested();
 
         var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
-        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return TreeStructureResult.NotFound(request.TreeId);
         }
@@ -180,8 +180,24 @@ internal sealed class LatticeStateQuery(
         // only its subtree, without reading any unrelated shard.
         if (!string.IsNullOrEmpty(request.SubPathNodeId))
         {
-            var grainId = GrainId.Parse(request.SubPathNodeId);
+            if (!GrainId.TryParse(request.SubPathNodeId, out var grainId))
+            {
+                return TreeStructureResult.NotFound(request.TreeId);
+            }
+
             var node = _grainFactory.GetGrain<IBPlusInternalGrain>(grainId);
+
+            // The sub-path node id is an opaque, caller-supplied grain id, and an
+            // internal node is keyed only by an unscoped guid - nothing in the id
+            // binds it to a tree. Verify the bound node actually belongs to the
+            // requested tree before returning its subtree, so a structure query
+            // labelled with one tree id cannot be steered at another tree's node.
+            var nodeTreeId = await node.GetTreeIdAsync().ConfigureAwait(false);
+            if (!string.Equals(nodeTreeId, physicalTreeId, StringComparison.Ordinal))
+            {
+                return TreeStructureResult.NotFound(request.TreeId);
+            }
+
             var subtree = await node.GetTopologyAsync(depthLimit).ConfigureAwait(false);
             var shardIndex = request.ShardIndex ?? subtree.ShardIndex ?? 0;
 

@@ -70,6 +70,10 @@ internal sealed class StructureClusterFixture
         return Cluster.GrainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
     }
 
+    /// <summary>Registers a reserved <c>view-</c> backing tree directly in the registry.</summary>
+    public Task RegisterViewBackingTreeAsync(string viewTreeId) =>
+        Registry.RegisterAsync(viewTreeId, new TreeRegistryEntry { ShardCount = 1 });
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)

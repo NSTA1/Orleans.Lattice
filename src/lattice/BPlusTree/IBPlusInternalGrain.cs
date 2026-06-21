@@ -119,6 +119,15 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     Task SetTreeIdAsync(string treeId);
 
     /// <summary>
+    /// Returns the physical tree id this node was associated with via
+    /// <see cref="SetTreeIdAsync"/>, or <see langword="null"/> if it has not yet
+    /// been bound to a tree. Used to verify that a caller-supplied sub-path node
+    /// id actually belongs to the tree named in the request before its subtree is
+    /// returned, so a structure query cannot be steered at another tree's node.
+    /// </summary>
+    Task<string?> GetTreeIdAsync();
+
+    /// <summary>
     /// Initialises this internal node with a pre-built list of children.
     /// Used by bulk load to construct internal nodes in a single call.
     /// <paramref name="separatorKeys"/> and <paramref name="childIds"/> must have equal length.
