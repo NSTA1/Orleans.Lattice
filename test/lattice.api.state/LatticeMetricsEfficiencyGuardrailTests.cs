@@ -96,6 +96,14 @@ public class LatticeMetricsEfficiencyGuardrailTests
             () => _fixture.Sampler.ActiveSamplerCount == 0,
             TimeSpan.FromSeconds(5));
         Assert.That(drained, Is.True, "the loop should stop when the last subscriber detaches");
+
+        // Draining the sampler count is necessary but not sufficient: prove the
+        // loop is genuinely halted by confirming the cumulative sample counter
+        // stops advancing once the last subscriber has gone.
+        var quiescedCount = _fixture.Sampler.TotalSampleCount;
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        Assert.That(_fixture.Sampler.TotalSampleCount, Is.EqualTo(quiescedCount),
+            "no further sampling passes may run after the last subscriber detaches");
     }
 
     [Test]
