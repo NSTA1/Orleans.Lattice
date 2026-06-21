@@ -183,6 +183,8 @@ internal sealed class GrpcStateHost : IAsyncDisposable
 
     public GrpcChannel Channel { get; }
 
+    public IServiceProvider Services => _host.Services;
+
     public LatticeStateGrpcMethods Methods { get; }
 
     public async ValueTask DisposeAsync()

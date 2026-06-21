@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.State.Grpc;
 
@@ -108,20 +107,7 @@ public static class LatticeStateApiGrpcServiceCollectionExtensions
     {
         services.TryAddSingleton<LatticeStateGrpcMethods>(sp =>
         {
-            var methods = new LatticeStateGrpcMethods(
-                sp.GetRequiredService<Serializer<CatalogRequest>>(),
-                sp.GetRequiredService<Serializer<TreeCatalogPage>>(),
-                sp.GetRequiredService<Serializer<ViewCatalogPage>>(),
-                sp.GetRequiredService<Serializer<StructureRequest>>(),
-                sp.GetRequiredService<Serializer<StructureResponse>>(),
-                sp.GetRequiredService<Serializer<EntryScanRequest>>(),
-                sp.GetRequiredService<Serializer<EntryScanResponse>>(),
-                sp.GetRequiredService<Serializer<EntryGetRequest>>(),
-                sp.GetRequiredService<Serializer<EntryGetResponse>>(),
-                sp.GetRequiredService<Serializer<StateObserveRequest>>(),
-                sp.GetRequiredService<Serializer<StateChangeNotification>>(),
-                sp.GetRequiredService<Serializer<TreeMetricsRequest>>(),
-                sp.GetRequiredService<Serializer<TreeMetricsSnapshot>>());
+            var methods = LatticeStateGrpcMethods.FromServiceProvider(sp);
             LatticeStateGrpcMethodsHolder.Current = methods;
             return methods;
         });
