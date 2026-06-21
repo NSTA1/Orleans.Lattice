@@ -3,7 +3,7 @@ using Orleans.Lattice.BPlusTree;
 namespace Orleans.Lattice.Api.State.Tests;
 
 /// <summary>
-/// F-115 tree-structure multi-silo coverage. A tree whose shards are distributed
+/// Tree-structure multi-silo coverage. A tree whose shards are distributed
 /// across silos must yield the same node graph regardless of which silo serves the
 /// facade, and a sub-path descent steered at a node belonging to a different tree
 /// must be rejected no matter where the originating tree's shards live.
