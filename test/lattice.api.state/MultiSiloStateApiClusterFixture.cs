@@ -22,6 +22,7 @@ internal sealed class MultiSiloStateApiClusterFixture
     public const int SiloCount = 3;
     public const int ShardCount = 8;
     public const int MaxLeafKeys = 4;
+    public const int WalPartitions = 4;
 
     public TestCluster Cluster { get; private set; } = null!;
 
@@ -47,6 +48,21 @@ internal sealed class MultiSiloStateApiClusterFixture
         var services = AllSiloServices;
         var index = notIndex == 0 ? services.Count - 1 : 0;
         return services[index].GetRequiredService<ILatticeStateQuery>();
+    }
+
+    /// <summary>The change observer resolved from the first silo.</summary>
+    public ILatticeStateObserver Observer => SiloServices.GetRequiredService<ILatticeStateObserver>();
+
+    /// <summary>
+    /// The change observer resolved from a silo other than the one identified by
+    /// <paramref name="notIndex"/>, so a subscription can be served by a silo that
+    /// did not originate the writes it tails.
+    /// </summary>
+    public ILatticeStateObserver ObserverFromOtherSilo(int notIndex = 0)
+    {
+        var services = AllSiloServices;
+        var index = notIndex == 0 ? services.Count - 1 : 0;
+        return services[index].GetRequiredService<ILatticeStateObserver>();
     }
 
     public async Task InitializeAsync()
@@ -110,9 +126,14 @@ internal sealed class MultiSiloStateApiClusterFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            siloBuilder.ConfigureLattice(o => o.WalPartitions = WalPartitions);
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeViews();
-            siloBuilder.AddLatticeStateApi();
+            siloBuilder.AddLatticeStateApi(o =>
+            {
+                o.ChangeObservationPollInterval = TimeSpan.FromMilliseconds(25);
+                o.ChangeObservationPageSize = 64;
+            });
         }
     }
 }

@@ -40,6 +40,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary single-entry get RPC method name.</summary>
     public const string GetEntryMethodName = "GetEntry";
 
+    /// <summary>The server-streaming change-observation RPC method name.</summary>
+    public const string ObserveChangesMethodName = "ObserveChanges";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeStateGrpcMethods(
         Serializer<CatalogRequest> catalogRequestSerializer,
@@ -50,7 +53,9 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<EntryScanRequest> entryScanRequestSerializer,
         Serializer<EntryScanResponse> entryScanResponseSerializer,
         Serializer<EntryGetRequest> entryGetRequestSerializer,
-        Serializer<EntryGetResponse> entryGetResponseSerializer)
+        Serializer<EntryGetResponse> entryGetResponseSerializer,
+        Serializer<StateObserveRequest> observeRequestSerializer,
+        Serializer<StateChangeNotification> changeNotificationSerializer)
     {
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(treeCatalogPageSerializer);
@@ -61,6 +66,8 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(entryScanResponseSerializer);
         ArgumentNullException.ThrowIfNull(entryGetRequestSerializer);
         ArgumentNullException.ThrowIfNull(entryGetResponseSerializer);
+        ArgumentNullException.ThrowIfNull(observeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(changeNotificationSerializer);
 
         ListTrees = new Method<CatalogRequest, TreeCatalogPage>(
             type: MethodType.Unary,
@@ -96,6 +103,13 @@ internal sealed class LatticeStateGrpcMethods
             name: GetEntryMethodName,
             requestMarshaller: LatticeStateGrpcMarshallers.Create(entryGetRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(entryGetResponseSerializer));
+
+        ObserveChanges = new Method<StateObserveRequest, StateChangeNotification>(
+            type: MethodType.ServerStreaming,
+            serviceName: ServiceName,
+            name: ObserveChangesMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(observeRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(changeNotificationSerializer));
     }
 
     /// <summary>The unary <c>ListTrees</c> discovery RPC.</summary>
@@ -112,6 +126,9 @@ internal sealed class LatticeStateGrpcMethods
 
     /// <summary>The unary <c>GetEntry</c> RPC.</summary>
     public Method<EntryGetRequest, EntryGetResponse> GetEntry { get; }
+
+    /// <summary>The server-streaming <c>ObserveChanges</c> subscription RPC.</summary>
+    public Method<StateObserveRequest, StateChangeNotification> ObserveChanges { get; }
 }
 
 /// <summary>

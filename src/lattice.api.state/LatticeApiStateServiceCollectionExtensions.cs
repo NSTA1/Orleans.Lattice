@@ -65,6 +65,11 @@ public static class LatticeApiStateServiceCollectionExtensions
         // that every transport binding (gRPC now, MCP later) adapts over.
         builder.Services.TryAddSingleton<ILatticeStateQuery, LatticeStateQuery>();
 
+        // The transport-agnostic live change-observation facade. Tails the
+        // tree's durable WAL by cursor and yields change notifications; every
+        // transport binding's subscription RPC adapts over this surface.
+        builder.Services.TryAddSingleton<ILatticeStateObserver, LatticeStateObserver>();
+
         // Idempotency marker: the structural wiring (added by later issues)
         // runs once regardless of how many times the host calls this method.
         // A repeat call still layers any supplied configure delegate above,
