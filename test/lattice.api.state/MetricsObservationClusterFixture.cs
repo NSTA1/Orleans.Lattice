@@ -27,6 +27,8 @@ internal sealed class MetricsObservationClusterFixture
 
     public ILatticeStateQuery Query => SiloServices.GetRequiredService<ILatticeStateQuery>();
 
+    public SharedMetricsSampler Sampler => SiloServices.GetRequiredService<SharedMetricsSampler>();
+
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder(initialSilosCount: 1);

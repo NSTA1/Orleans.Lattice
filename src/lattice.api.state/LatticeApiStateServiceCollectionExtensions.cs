@@ -70,6 +70,13 @@ public static class LatticeApiStateServiceCollectionExtensions
         // transport binding's subscription RPC adapts over this surface.
         builder.Services.TryAddSingleton<ILatticeStateObserver, LatticeStateObserver>();
 
+        // The shared, reference-counted metrics sampler. All metric polls and
+        // subscriptions funnel through this singleton so concurrent dashboard
+        // clients watching the same scope coalesce onto one sampling loop,
+        // keeping server cost O(trees + shards) per tick rather than scaling
+        // with the number of connected observers.
+        builder.Services.TryAddSingleton<SharedMetricsSampler>();
+
         // The transport-agnostic live metrics-observation facade. Samples
         // low-cardinality per-tree aggregates on a cadence and delta-encodes
         // them; the dashboard's live gauges adapt over this surface.
