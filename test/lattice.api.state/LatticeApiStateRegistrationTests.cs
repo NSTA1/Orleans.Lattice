@@ -61,6 +61,51 @@ public class LatticeApiStateRegistrationTests
         Assert.That(returned, Is.SameAs(builder));
     }
 
+    [Test]
+    public void Without_AddLatticeStateApi_no_facade_services_are_registered()
+    {
+        var builder = new TestSiloBuilder();
+        SimulateAddLattice(builder);
+
+        // The core lattice is present but the state API add-on is NOT invoked:
+        // none of its facade or sampler services must leak into the container,
+        // proving the add-on imposes zero structural cost when unregistered.
+        Assert.Multiple(() =>
+        {
+            Assert.That(IsRegistered<ILatticeStateQuery>(builder), Is.False);
+            Assert.That(IsRegistered<ILatticeStateObserver>(builder), Is.False);
+            Assert.That(IsRegistered<ILatticeStateMetricsObserver>(builder), Is.False);
+            Assert.That(IsRegistered<SharedMetricsSampler>(builder), Is.False);
+        });
+    }
+
+    [Test]
+    public void AddLatticeStateApi_registers_the_shared_metrics_sampler_once()
+    {
+        var builder = new TestSiloBuilder();
+        SimulateAddLattice(builder);
+
+        builder.AddLatticeStateApi();
+        builder.AddLatticeStateApi();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(IsRegistered<ILatticeStateQuery>(builder), Is.True);
+            Assert.That(IsRegistered<ILatticeStateObserver>(builder), Is.True);
+            Assert.That(IsRegistered<ILatticeStateMetricsObserver>(builder), Is.True);
+            Assert.That(IsRegistered<SharedMetricsSampler>(builder), Is.True);
+
+            // The coalescing sampler is a single shared instance, so repeated
+            // registration must not stack duplicate descriptors.
+            Assert.That(
+                builder.Services.Count(d => d.ServiceType == typeof(SharedMetricsSampler)),
+                Is.EqualTo(1));
+        });
+    }
+
+    private static bool IsRegistered<TService>(TestSiloBuilder builder)
+        => builder.Services.Any(d => d.ServiceType == typeof(TService));
+
     /// <summary>
     /// Mirrors the single registration <c>AddLattice</c> makes that the state
     /// API ordering guard probes for, so these unit tests do not need a silo.
