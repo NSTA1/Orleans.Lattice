@@ -60,7 +60,7 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             return await continuation(request, context).ConfigureAwait(false);
         }
 
-        await EnforceAuthAsync(context).ConfigureAwait(false);
+        await EnforceAuthAsync(request, context).ConfigureAwait(false);
         return await continuation(request, context).ConfigureAwait(false);
     }
 
@@ -82,22 +82,25 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             return;
         }
 
-        await EnforceAuthAsync(context).ConfigureAwait(false);
+        await EnforceAuthAsync(request, context).ConfigureAwait(false);
         await continuation(request, responseStream, context).ConfigureAwait(false);
     }
 
-    private async Task EnforceAuthAsync(ServerCallContext context)
+    private async Task EnforceAuthAsync<TRequest>(TRequest request, ServerCallContext context)
     {
         if (!_options.CurrentValue.RequireAuthorization)
         {
             return;
         }
 
+        var (operation, targetTreeId) = DescribeCall(context.Method, request);
+        var authorizationContext = new LatticeStateApiAuthorizationContext(context, operation, targetTreeId);
+
         bool authorized;
         try
         {
             authorized = await _authorizer
-                .IsAuthorizedAsync(context, context.CancellationToken)
+                .IsAuthorizedAsync(authorizationContext, context.CancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -118,6 +121,34 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
                 + "Register a permissive ILatticeStateApiAuthorizer (or AllowAllStateApiAuthorizer) to opt in, "
                 + "or set LatticeStateApiGrpcOptions.RequireAuthorization=false when an outer boundary guards the endpoint."));
         }
+    }
+
+    /// <summary>
+    /// Decodes the inbound call's operation (from the gRPC method name) and the
+    /// tree it targets (from the request payload). Catalog requests are not
+    /// scoped to a single tree, so they carry a <see langword="null"/> target.
+    /// </summary>
+    private static (LatticeStateApiOperation Operation, string? TargetTreeId) DescribeCall<TRequest>(string fullMethodName, TRequest request)
+    {
+        var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
+        var operation = methodName switch
+        {
+            LatticeStateGrpcMethods.ListViewsMethodName => LatticeStateApiOperation.ListViews,
+            LatticeStateGrpcMethods.GetTreeStructureMethodName => LatticeStateApiOperation.GetTreeStructure,
+            LatticeStateGrpcMethods.ScanEntriesMethodName => LatticeStateApiOperation.ScanEntries,
+            LatticeStateGrpcMethods.GetEntryMethodName => LatticeStateApiOperation.GetEntry,
+            _ => LatticeStateApiOperation.ListTrees,
+        };
+
+        var targetTreeId = request switch
+        {
+            StructureRequest s => s.TreeId,
+            EntryScanRequest s => s.TreeId,
+            EntryGetRequest g => g.TreeId,
+            _ => null,
+        };
+
+        return (operation, targetTreeId);
     }
 
     private static bool IsLatticeStateApiMethod(string fullMethodName)

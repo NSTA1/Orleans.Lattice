@@ -15,15 +15,21 @@ namespace Orleans.Lattice.Api.State.Grpc;
 public interface ILatticeStateApiAuthorizer
 {
     /// <summary>
-    /// Decides whether the inbound call described by <paramref name="context"/>
-    /// may read cluster state. Implementations typically inspect request
-    /// headers (a bearer token, a shared secret, a client certificate claim)
-    /// exposed through the call context.
+    /// Decides whether the inbound call described by
+    /// <paramref name="authorizationContext"/> may read cluster state.
+    /// Implementations typically inspect request headers (a bearer token, a
+    /// shared secret, a client certificate claim) exposed through
+    /// <see cref="LatticeStateApiAuthorizationContext.Call"/>, and may scope the
+    /// decision to the call's
+    /// <see cref="LatticeStateApiAuthorizationContext.Operation"/> and
+    /// <see cref="LatticeStateApiAuthorizationContext.TargetTreeId"/> (for
+    /// example, allow discovery but deny entry reads, or restrict a caller to a
+    /// specific set of trees).
     /// </summary>
-    /// <param name="context">The server call context for the inbound RPC.</param>
+    /// <param name="authorizationContext">The decoded inbound call description.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><see langword="true"/> to allow the call; otherwise <see langword="false"/>.</returns>
-    Task<bool> IsAuthorizedAsync(ServerCallContext context, CancellationToken cancellationToken);
+    Task<bool> IsAuthorizedAsync(LatticeStateApiAuthorizationContext authorizationContext, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -35,11 +41,8 @@ public interface ILatticeStateApiAuthorizer
 public sealed class DenyAllStateApiAuthorizer : ILatticeStateApiAuthorizer
 {
     /// <inheritdoc />
-    public Task<bool> IsAuthorizedAsync(ServerCallContext context, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        return Task.FromResult(false);
-    }
+    public Task<bool> IsAuthorizedAsync(LatticeStateApiAuthorizationContext authorizationContext, CancellationToken cancellationToken)
+        => Task.FromResult(false);
 }
 
 /// <summary>
@@ -51,9 +54,6 @@ public sealed class DenyAllStateApiAuthorizer : ILatticeStateApiAuthorizer
 public sealed class AllowAllStateApiAuthorizer : ILatticeStateApiAuthorizer
 {
     /// <inheritdoc />
-    public Task<bool> IsAuthorizedAsync(ServerCallContext context, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        return Task.FromResult(true);
-    }
+    public Task<bool> IsAuthorizedAsync(LatticeStateApiAuthorizationContext authorizationContext, CancellationToken cancellationToken)
+        => Task.FromResult(true);
 }
