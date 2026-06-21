@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Views;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Api.State;
 
@@ -154,6 +155,143 @@ internal sealed class LatticeStateQuery(
         }
 
         return new ViewCatalogPage { Entries = entries, NextPageToken = nextToken };
+    }
+
+    public async Task<TreeStructureResult> GetTreeStructureAsync(
+        StructureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return TreeStructureResult.NotFound(request.TreeId);
+        }
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var physicalTreeId = await registry.ResolveAsync(request.TreeId).ConfigureAwait(false);
+        var depthLimit = request.EffectiveDepthLimit;
+        var budget = new NodeBudget { Remaining = request.EffectiveMaxNodes };
+
+        // Sub-path descent: bind the named internal node directly and return
+        // only its subtree, without reading any unrelated shard.
+        if (!string.IsNullOrEmpty(request.SubPathNodeId))
+        {
+            var grainId = GrainId.Parse(request.SubPathNodeId);
+            var node = _grainFactory.GetGrain<IBPlusInternalGrain>(grainId);
+            var subtree = await node.GetTopologyAsync(depthLimit).ConfigureAwait(false);
+            var shardIndex = request.ShardIndex ?? subtree.ShardIndex ?? 0;
+
+            var roots = new List<NodeStateSummary>(1);
+            if (budget.Remaining > 0)
+            {
+                budget.Remaining--;
+                roots.Add(MapTopologyNode(subtree, shardIndex, depth: 0, budget));
+            }
+
+            return TreeStructureResult.Found(request.TreeId, roots, budget.AnyTruncated);
+        }
+
+        var shardCount = await ResolveShardCountAsync(registry, request.TreeId).ConfigureAwait(false);
+        var rootNodes = new List<NodeStateSummary>();
+
+        var startShard = request.ShardIndex ?? 0;
+        var endShard = request.ShardIndex.HasValue ? request.ShardIndex.Value + 1 : shardCount;
+
+        for (var shardIndex = startShard; shardIndex < endShard; shardIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // One structural read per shard root: O(shards), never per-leaf.
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var snapshot = await shard.GetTopologySnapshotAsync(depthLimit, cancellationToken).ConfigureAwait(false);
+            if (snapshot is null)
+            {
+                continue;
+            }
+
+            if (budget.Remaining <= 0)
+            {
+                budget.AnyTruncated = true;
+                break;
+            }
+
+            budget.Remaining--;
+            rootNodes.Add(MapTopologyNode(snapshot, shardIndex, depth: 0, budget));
+        }
+
+        return TreeStructureResult.Found(request.TreeId, rootNodes, budget.AnyTruncated);
+    }
+
+    private async Task<int> ResolveShardCountAsync(ILatticeRegistry registry, string treeId)
+    {
+        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        return entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
+    }
+
+    private sealed class NodeBudget
+    {
+        public int Remaining;
+        public bool AnyTruncated;
+    }
+
+    /// <summary>
+    /// Maps a core <see cref="ShardTopologyNode"/> into the public
+    /// <see cref="NodeStateSummary"/>, expanding children in deterministic
+    /// key-range order while the shared node budget allows. Children omitted
+    /// because the budget ran out (or because the snapshot itself was
+    /// depth-truncated) leave the node flagged
+    /// <see cref="NodeStateSummary.HasMoreChildren"/>.
+    /// </summary>
+    private static NodeStateSummary MapTopologyNode(
+        ShardTopologyNode node,
+        int shardIndex,
+        int depth,
+        NodeBudget budget)
+    {
+        var children = new List<NodeStateSummary>(node.Children.Count);
+        var hasMore = node.ChildrenTruncated;
+
+        foreach (var child in node.Children)
+        {
+            if (budget.Remaining <= 0)
+            {
+                hasMore = true;
+                break;
+            }
+
+            budget.Remaining--;
+            children.Add(MapTopologyNode(child, shardIndex, depth + 1, budget));
+        }
+
+        if (children.Count < node.Children.Count)
+        {
+            hasMore = true;
+        }
+
+        if (hasMore)
+        {
+            budget.AnyTruncated = true;
+        }
+
+        return new NodeStateSummary
+        {
+            Kind = node.IsLeaf ? NodeKind.Leaf : NodeKind.Internal,
+            NodeId = node.NodeId,
+            ShardIndex = shardIndex,
+            Depth = depth,
+            KeyRangeLow = node.LowKeyInclusive,
+            KeyRangeHigh = node.HighKeyExclusive,
+            ChildCount = node.ChildFanout,
+            SubtreeKeyCount = node.LiveCount,
+            SubtreeTombstoneCount = node.TombstoneCount,
+            SplitInProgress = false,
+            HasMoreChildren = hasMore,
+            Children = children,
+        };
     }
 
     private static async Task<(long? Lag, long? EntryCount)> SampleViewAsync(

@@ -43,4 +43,7 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="ViewCatalogPage"/>.</summary>
     public const string ViewCatalogPage = "ola.vcp";
+
+    /// <summary>Alias for <see cref="StructureRequest"/>.</summary>
+    public const string StructureRequest = "ola.sr";
 }
