@@ -71,34 +71,39 @@ internal sealed partial class BPlusLeafGrain
     internal void MarkDigestDirty() => _digestDirty = true;
 
     /// <summary>
-    /// Lazily-seeded, per-activation strictly-increasing stamp applied to
-    /// every <see cref="ChildDigestSnapshot"/> this leaf hands to its
-    /// parent (push) or returns on a pull. The parent's
-    /// <c>ApplyChildSnapshotAsync</c> drops any snapshot whose
-    /// <see cref="ChildDigestSnapshot.PublishSequence"/> is strictly lower
-    /// than the one already folded for this child, so a late coalesced
+    /// Lazily-seeded, strictly-increasing stamp applied to every
+    /// <see cref="ChildDigestSnapshot"/> this leaf hands to its parent (push) or
+    /// returns on a pull. The parent's <c>ApplyChildSnapshotAsync</c> drops any
+    /// snapshot whose <see cref="ChildDigestSnapshot.PublishSequence"/> is strictly
+    /// lower than the one already folded for this child, so a late coalesced
     /// pre-split (pre-trim) publish that races the split's post-trim inline
     /// publish - the <c>[AlwaysInterleave]</c> mutation surface lets the two
-    /// interleave and arrive out of order - can never overwrite the fresher
-    /// count for a child the parent still owns. Seeded from
-    /// <see cref="DateTime.UtcNow"/> ticks (never zero) so the stamp stays
-    /// monotonic across reactivations without persisting a counter; the
-    /// digest is staleness-tolerant, so a rare wall-clock regression merely
-    /// defers convergence to the next mutation's republish.
+    /// interleave and arrive out of order - can never overwrite the fresher count
+    /// for a child the parent still owns. The high-water mark is persisted in
+    /// <see cref="LeafNodeState.DigestPublishSequence"/> and the counter is seeded
+    /// from the larger of that persisted value and the current wall clock, so the
+    /// sequence stays monotonic across reactivations and silo relocation even when
+    /// wall clocks differ - a fresh activation can never seed below a stamp this
+    /// leaf already emitted, so the parent cannot permanently drop its publishes.
     /// </summary>
     private long _digestPublishSeq;
 
     /// <summary>
-    /// Returns the next strictly-increasing publish sequence for this
-    /// activation, seeding the counter from the wall clock on first use.
+    /// Returns the next strictly-increasing publish sequence for this leaf, seeding
+    /// the counter on first use from the persisted high-water mark (or the wall
+    /// clock, whichever is greater) and staging the advanced value back into state
+    /// so the surrounding mutation's write persists the new high-water mark.
     /// </summary>
     private long NextDigestPublishSequence()
     {
         if (_digestPublishSeq == 0)
         {
-            _digestPublishSeq = DateTime.UtcNow.Ticks;
+            _digestPublishSeq = Math.Max(state.State.DigestPublishSequence, DateTime.UtcNow.Ticks);
         }
-        return ++_digestPublishSeq;
+
+        var next = ++_digestPublishSeq;
+        state.State.DigestPublishSequence = next;
+        return next;
     }
 
     /// <inheritdoc />
@@ -160,9 +165,23 @@ internal sealed partial class BPlusLeafGrain
 
     /// <inheritdoc />
     public Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
+        => Task.FromResult(BuildOwnChildDigestSnapshot());
+
+    /// <summary>
+    /// Builds the snapshot this leaf publishes to its parent's per-child
+    /// table. The <see cref="ChildDigestSnapshot.Hash"/>,
+    /// <see cref="ChildDigestSnapshot.EntryCount"/> and
+    /// <see cref="ChildDigestSnapshot.CheckpointOffset"/> fields drive the
+    /// parent's XOR fold exactly as before; the appended structural fields
+    /// (key bounds, live/tombstone split, depth, fanout) ride along so the
+    /// parent can answer topology queries without calling back into the
+    /// leaf. Structural fields are never folded into the digest arithmetic.
+    /// </summary>
+    private ChildDigestSnapshot BuildOwnChildDigestSnapshot()
     {
         EnsureProjectionHashInitialized();
-        return Task.FromResult(new ChildDigestSnapshot
+        var (live, tombstones) = ComputeStructuralLeafCounts();
+        return new ChildDigestSnapshot
         {
             // Clone so an in-place XOR on state.State.ProjectionHash
             // cannot retroactively mutate the bytes the caller has
@@ -171,6 +190,49 @@ internal sealed partial class BPlusLeafGrain
             EntryCount = Cache.Count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
             PublishSequence = NextDigestPublishSequence(),
+            LowKeyInclusive = state.State.LowKeyInclusive,
+            HighKeyExclusive = state.State.HighKeyExclusive,
+            LiveCount = live,
+            TombstoneCount = tombstones,
+            SubtreeDepth = 1,
+            ChildFanout = 0,
+        };
+    }
+
+    /// <summary>
+    /// Counts live versus tombstoned rows in the leaf cache. Defined so the
+    /// split sums to <c>Cache.Count</c> (the value already published as
+    /// <see cref="ChildDigestSnapshot.EntryCount"/>): tombstoned rows are
+    /// counted as tombstones and every other resident row as live.
+    /// </summary>
+    private (long Live, long Tombstones) ComputeStructuralLeafCounts()
+    {
+        long tombstones = 0;
+        foreach (var (_, lww) in Cache.EnumerateRows())
+        {
+            if (lww.IsTombstone) tombstones++;
+        }
+        var live = Cache.Count - tombstones;
+        if (live < 0) live = 0;
+        return (live, tombstones);
+    }
+
+    /// <inheritdoc />
+    public Task<ShardTopologyNode> GetTopologyNodeAsync()
+    {
+        var (live, tombstones) = ComputeStructuralLeafCounts();
+        return Task.FromResult(new ShardTopologyNode
+        {
+            NodeId = context.GrainId.ToString(),
+            IsLeaf = true,
+            ShardIndex = state.State.ShardIndex,
+            SubtreeDepth = 1,
+            LowKeyInclusive = state.State.LowKeyInclusive,
+            HighKeyExclusive = state.State.HighKeyExclusive,
+            EntryCount = Cache.Count,
+            LiveCount = live,
+            TombstoneCount = tombstones,
+            ChildFanout = 0,
         });
     }
 
@@ -462,17 +524,7 @@ internal sealed partial class BPlusLeafGrain
 
     private async Task PublishCurrentDigestAsync(GrainId parentId)
     {
-        EnsureProjectionHashInitialized();
-        var snapshot = new ChildDigestSnapshot
-        {
-            // Clone so a subsequent in-place XOR on
-            // state.State.ProjectionHash does not retroactively mutate
-            // the bytes the parent's table has captured.
-            Hash = (byte[])state.State.ProjectionHash!.Clone(),
-            EntryCount = Cache.Count,
-            CheckpointOffset = state.State.ProjectionCheckpointOffset,
-            PublishSequence = NextDigestPublishSequence(),
-        };
+        var snapshot = BuildOwnChildDigestSnapshot();
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
         await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);
 

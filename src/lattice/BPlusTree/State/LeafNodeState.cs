@@ -250,4 +250,15 @@ internal sealed class LeafNodeState
     /// </para>
     /// </summary>
     [Id(19)] public long[]? ProjectionCheckpointOffsetsByPartition { get; set; }
+
+    /// <summary>
+    /// Durable high-water mark of the strictly-increasing publish sequence this
+    /// leaf stamps onto every <see cref="ChildDigestSnapshot"/> it hands its
+    /// parent. Persisting it makes the sequence monotonic across activations and
+    /// silos: a re-activated (or relocated) leaf resumes above every sequence it
+    /// previously emitted, so the parent's staleness guard can never permanently
+    /// drop this leaf's publishes because a fresh activation seeded a lower stamp
+    /// from a skewed wall clock. Zero on first activation; seeded lazily.
+    /// </summary>
+    [Id(20)] public long DigestPublishSequence { get; set; }
 }

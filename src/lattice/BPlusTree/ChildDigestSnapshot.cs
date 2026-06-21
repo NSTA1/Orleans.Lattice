@@ -52,4 +52,30 @@ internal readonly record struct ChildDigestSnapshot
     /// semantics for callers that do not stamp a sequence.
     /// </summary>
     [Id(3)] public long PublishSequence { get; init; }
+
+    /// <summary>
+    /// Lowest key inclusively covered by the child's subtree, or
+    /// <see langword="null"/> when the subtree is empty. Structural-only:
+    /// populated by snapshot producers and stored verbatim in the parent's
+    /// per-child table, but never folded into the digest arithmetic.
+    /// </summary>
+    [Id(4)] public string? LowKeyInclusive { get; init; }
+
+    /// <summary>
+    /// Exclusive upper bound of the key range the child's subtree covers,
+    /// or <see langword="null"/> when unbounded/empty. Structural-only.
+    /// </summary>
+    [Id(5)] public string? HighKeyExclusive { get; init; }
+
+    /// <summary>Count of live (non-tombstoned, unexpired) entries in the child's subtree. Structural-only.</summary>
+    [Id(6)] public long LiveCount { get; init; }
+
+    /// <summary>Count of tombstoned entries retained in the child's subtree. Structural-only.</summary>
+    [Id(7)] public long TombstoneCount { get; init; }
+
+    /// <summary>Height of the child's subtree: <c>1</c> for a leaf, <c>1 + max(child depth)</c> for an internal node. Structural-only.</summary>
+    [Id(8)] public int SubtreeDepth { get; init; }
+
+    /// <summary>Number of immediate children: <c>0</c> for a leaf, <c>Children.Count</c> for an internal node. Structural-only.</summary>
+    [Id(9)] public int ChildFanout { get; init; }
 }

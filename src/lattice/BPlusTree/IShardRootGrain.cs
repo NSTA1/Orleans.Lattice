@@ -544,6 +544,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardRootNodeRef?> GetRootNodeRefAsync();
 
     /// <summary>
+    /// Returns a read-only <see cref="ShardTopologyNode"/> tree describing
+    /// this shard's structure - node key ranges, per-subtree live/tombstone
+    /// counts, depth and fanout - reconstructed from the per-child digest
+    /// snapshots that mutations already propagate up the internal-node chain.
+    /// Internal nodes are expanded down to <paramref name="depthLimit"/>
+    /// levels (0 = root summary only); leaves are summarised from their
+    /// parent's stored snapshot, so the read never fans out to the leaf
+    /// chain except in the flat-tree case, where the single root leaf is
+    /// read once. Returns <see langword="null"/> for an empty shard.
+    /// </summary>
+    Task<ShardTopologyNode?> GetTopologySnapshotAsync(int depthLimit, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Operator-tooling rebuild: clears the materialised projection state
     /// (entries, projection hash, persisted checkpoint offset, pending-tx
     /// machinery) on every leaf in this shard's chain and forces each
