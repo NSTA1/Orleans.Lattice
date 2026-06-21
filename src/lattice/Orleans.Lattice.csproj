@@ -48,6 +48,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.State" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable.Tests" />

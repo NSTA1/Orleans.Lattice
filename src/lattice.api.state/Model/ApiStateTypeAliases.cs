@@ -31,4 +31,16 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="EntryRecord"/>.</summary>
     public const string EntryRecord = "ola.er";
+
+    /// <summary>Alias for <see cref="CatalogRequest"/>.</summary>
+    public const string CatalogRequest = "ola.cr";
+
+    /// <summary>Alias for <see cref="TreeCatalogEntry"/>.</summary>
+    public const string TreeCatalogEntry = "ola.tce";
+
+    /// <summary>Alias for <see cref="TreeCatalogPage"/>.</summary>
+    public const string TreeCatalogPage = "ola.tcp";
+
+    /// <summary>Alias for <see cref="ViewCatalogPage"/>.</summary>
+    public const string ViewCatalogPage = "ola.vcp";
 }

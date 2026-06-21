@@ -1,4 +1,8 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Api.State;
 
@@ -10,13 +14,17 @@ namespace Orleans.Lattice.Api.State;
 /// </summary>
 internal sealed class LatticeStateQuery(
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> options) : ILatticeStateQuery
+    IOptionsMonitor<LatticeOptions> options,
+    IServiceProvider services) : ILatticeStateQuery
 {
     private readonly IGrainFactory _grainFactory = grainFactory
         ?? throw new ArgumentNullException(nameof(grainFactory));
 
     private readonly IOptionsMonitor<LatticeOptions> _options = options
         ?? throw new ArgumentNullException(nameof(options));
+
+    private readonly IServiceProvider _services = services
+        ?? throw new ArgumentNullException(nameof(services));
 
     public async Task<TreeSummaryResult> GetTreeSummaryAsync(
         string treeId,
@@ -59,6 +67,151 @@ internal sealed class LatticeStateQuery(
                 .ToArray();
 
         return ShardSummariesResult.Found(treeId, shards);
+    }
+
+    public async Task<TreeCatalogPage> ListTreesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+
+        var ordered = allIds
+            .Where(id => request.IncludeSystemTrees || !IsReservedTree(id))
+            .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
+            .OrderBy(id => id, StringComparer.Ordinal);
+
+        var pageSize = request.EffectivePageSize;
+        var entries = new List<TreeCatalogEntry>(pageSize);
+        string? nextToken = null;
+
+        foreach (var id in ordered)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entries.Count == pageSize)
+            {
+                nextToken = entries[^1].TreeId;
+                break;
+            }
+
+            var entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
+            var deletion = _grainFactory.GetGrain<ITreeDeletionGrain>(id);
+            var isDeleted = await deletion.IsDeletedAsync().ConfigureAwait(false);
+
+            entries.Add(MapCatalogEntry(id, entry, isDeleted));
+        }
+
+        return new TreeCatalogPage { Entries = entries, NextPageToken = nextToken };
+    }
+
+    public async Task<ViewCatalogPage> ListViewsAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var catalog = _services.GetService<IViewCatalog>();
+        var registrations = catalog is null
+            ? Array.Empty<ViewRegistration>()
+            : catalog.All().ToArray();
+
+        var ordered = registrations
+            .Where(r => request.PageToken is null || string.CompareOrdinal(r.ViewName, request.PageToken) > 0)
+            .OrderBy(r => r.ViewName, StringComparer.Ordinal)
+            .ToArray();
+
+        var pageSize = request.EffectivePageSize;
+        var factory = request.IncludeViewStats ? _services.GetService<ILatticeViewFactory>() : null;
+        var entries = new List<ViewStateSummary>(Math.Min(pageSize, ordered.Length));
+        string? nextToken = null;
+
+        foreach (var registration in ordered)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entries.Count == pageSize)
+            {
+                nextToken = entries[^1].ViewName;
+                break;
+            }
+
+            long? lag = null;
+            long? entryCount = null;
+            if (factory is not null)
+            {
+                (lag, entryCount) = await SampleViewAsync(factory, registration.ViewName, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            entries.Add(new ViewStateSummary
+            {
+                ViewName = registration.ViewName,
+                SourceTreeId = registration.SourceTreeId,
+                Lag = lag,
+                EntryCount = entryCount,
+                IsAggregation = registration.IsAggregation,
+            });
+        }
+
+        return new ViewCatalogPage { Entries = entries, NextPageToken = nextToken };
+    }
+
+    private static async Task<(long? Lag, long? EntryCount)> SampleViewAsync(
+        ILatticeViewFactory factory,
+        string viewName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var view = await factory.GetAsync(viewName, cancellationToken).ConfigureAwait(false);
+            if (view is null)
+            {
+                return (null, null);
+            }
+
+            var lag = await view.GetLagAsync(cancellationToken).ConfigureAwait(false);
+            var count = await view.CountAsync(cancellationToken).ConfigureAwait(false);
+            return (lag, count);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A view whose maintainer cannot be sampled (e.g. a ship-view consumer
+            // or a transient activation failure) is still listed; its statistics
+            // are simply reported as unavailable.
+            return (null, null);
+        }
+    }
+
+    private static bool IsReservedTree(string treeId) =>
+        treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+        || treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+
+    private TreeCatalogEntry MapCatalogEntry(string treeId, TreeRegistryEntry? entry, bool isDeleted)
+    {
+        var physicalTreeId = entry?.PhysicalTreeId;
+        var opts = _options.Get(treeId);
+        var shardCount = entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
+
+        return new TreeCatalogEntry
+        {
+            TreeId = treeId,
+            IsAlias = physicalTreeId is not null,
+            PhysicalTreeId = physicalTreeId,
+            Lifecycle = isDeleted ? TreeLifecycleState.SoftDeleted : TreeLifecycleState.Active,
+            ShardCount = shardCount,
+            Config = new TreeConfigSummary
+            {
+                ShardCount = shardCount,
+                VirtualShardCount = LatticeConstants.DefaultVirtualShardCount,
+                MaxLeafKeys = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys,
+                MaxInternalChildren = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,
+                WalPartitions = entry?.WalPartitions ?? opts.WalPartitions,
+                SoftDeleteDuration = opts.SoftDeleteDuration,
+            },
+        };
     }
 
     private TreeConfigSummary BuildConfig(string treeId, TreeDiagnosticReport report)
