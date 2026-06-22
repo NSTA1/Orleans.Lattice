@@ -1,5 +1,6 @@
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.Web.Components;
@@ -19,6 +20,7 @@ builder.Services.AddExplorerConfiguration();
 builder.Services.AddExplorerCatalog();
 builder.Services.AddExplorerMetrics();
 builder.Services.AddExplorerTopology();
+builder.Services.AddExplorerData();
 
 var app = builder.Build();
 
