@@ -22,6 +22,9 @@ internal sealed class FakeStateClient : ILatticeStateClient, IDisposable
     public Func<CancellationToken, Task<TreeMetricsSnapshot>> MetricsHandler { get; set; } =
         _ => Task.FromResult(new TreeMetricsSnapshot());
 
+    public Func<CancellationToken, Task<ClusterInfo>> ClusterInfoHandler { get; set; } =
+        _ => Task.FromResult(new ClusterInfo());
+
     public Func<CancellationToken, IAsyncEnumerable<TreeMetricsSnapshot>> ObserveMetricsHandler { get; set; } =
         _ => EmptyAsync<TreeMetricsSnapshot>();
 
@@ -42,6 +45,9 @@ internal sealed class FakeStateClient : ILatticeStateClient, IDisposable
 
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => MetricsHandler(cancellationToken);
+
+    public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
+        => ClusterInfoHandler(cancellationToken);
 
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => EmptyAsync<StateChangeNotification>();

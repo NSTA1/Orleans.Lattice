@@ -35,6 +35,9 @@ internal sealed class FakeStateClientCapture : ILatticeStateClient
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new TreeMetricsSnapshot());
 
+    public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new ClusterInfo());
+
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => EmptyAsync<StateChangeNotification>();
 

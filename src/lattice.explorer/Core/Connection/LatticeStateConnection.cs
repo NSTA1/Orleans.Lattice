@@ -167,6 +167,10 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         => ExecuteAsync((c, ct) => c.GetMetricsSnapshotAsync(request, ct), cancellationToken);
 
     /// <inheritdoc />
+    public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.GetClusterInfoAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => StreamAsync((c, ct) => c.ObserveChangesAsync(request, ct), cancellationToken);
 

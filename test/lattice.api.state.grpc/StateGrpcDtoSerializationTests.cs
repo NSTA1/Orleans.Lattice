@@ -167,4 +167,23 @@ public sealed class StateGrpcDtoSerializationTests
             Assert.That(copy.Truncated, Is.True);
         });
     }
+
+    [Test]
+    public void ClusterInfo_round_trips()
+    {
+        var original = new ClusterInfo { ClusterId = "msmfg-us", ServiceId = "msmfg-service" };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.ClusterId, Is.EqualTo("msmfg-us"));
+            Assert.That(copy.ServiceId, Is.EqualTo("msmfg-service"));
+        });
+    }
+
+    [Test]
+    public void ClusterInfoRequest_round_trips()
+    {
+        Assert.That(RoundTrip(new ClusterInfoRequest()), Is.EqualTo(new ClusterInfoRequest()));
+    }
 }

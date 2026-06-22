@@ -69,6 +69,16 @@ internal interface ILatticeStateQuery
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns identity and high-level metadata for the cluster this query
+    /// serves (the connected silo's Orleans cluster / service id). Intended for
+    /// a client to display which cluster it is connected to. The result is
+    /// generic and additive so further cluster metadata can be surfaced later
+    /// without a new method.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<ClusterInfo> GetClusterInfoAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the structural node graph of the given tree - shard roots,
     /// internal nodes, and leaves - each annotated with node kind, key-range
     /// bounds, live/tombstone counts, fan-out, and depth, or a typed

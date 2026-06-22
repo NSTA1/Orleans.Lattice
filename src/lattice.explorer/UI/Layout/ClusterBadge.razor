@@ -1,0 +1,69 @@
+@using Orleans.Lattice.Api.State
+@using Orleans.Lattice.Explorer.Core
+@using Orleans.Lattice.Explorer.Core.Connection
+@implements IDisposable
+@inject ILatticeStateConnection Connection
+
+<header class="explorer-brand">
+    <span class="explorer-brand-name">@ExplorerInfo.DisplayName</span>
+    @if (!string.IsNullOrEmpty(_clusterId))
+    {
+        <span class="explorer-brand-sep">/</span>
+        <span class="explorer-cluster" title="@ClusterTooltip">
+            <span class="explorer-cluster-label">cluster</span>
+            <span class="explorer-cluster-id">@_clusterId</span>
+        </span>
+    }
+</header>
+
+@code {
+    private string? _clusterId;
+    private string? _serviceId;
+
+    private string ClusterTooltip =>
+        string.IsNullOrEmpty(_serviceId)
+            ? $"Connected cluster: {_clusterId}"
+            : $"Connected cluster: {_clusterId} (service {_serviceId})";
+
+    protected override void OnInitialized()
+    {
+        Connection.StatusChanged += OnStatusChanged;
+        if (Connection.Status.State == LatticeConnectionState.Connected)
+        {
+            _ = LoadAsync();
+        }
+    }
+
+    private void OnStatusChanged(LatticeConnectionStatus status)
+    {
+        if (status.State == LatticeConnectionState.Connected)
+        {
+            _ = LoadAsync();
+        }
+        else if (status.IsDisconnected)
+        {
+            _clusterId = null;
+            _serviceId = null;
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            var info = await Connection.GetClusterInfoAsync(new ClusterInfoRequest());
+            _clusterId = string.IsNullOrEmpty(info.ClusterId) ? null : info.ClusterId;
+            _serviceId = info.ServiceId;
+        }
+        catch
+        {
+            // The badge is best-effort: a failure to resolve cluster identity must
+            // never disrupt the shell. The connection banner surfaces real faults.
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Connection.StatusChanged -= OnStatusChanged;
+}

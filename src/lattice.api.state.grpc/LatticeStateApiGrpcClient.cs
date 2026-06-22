@@ -76,6 +76,10 @@ public sealed class LatticeStateApiGrpcClient
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetMetricsSnapshot, request, cancellationToken);
 
+    /// <summary>Returns identity and metadata for the connected cluster.</summary>
+    public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.GetClusterInfo, request, cancellationToken);
+
     /// <summary>
     /// Subscribes to live change notifications for a tree, yielding each
     /// notification until the call is cancelled or the server ends the stream.

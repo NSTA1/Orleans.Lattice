@@ -39,6 +39,9 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
         => Task.FromResult(new StructureResponse { TreeId = "t" });
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new TreeMetricsSnapshot());
+
+    public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new ClusterInfo());
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => EmptyAsync<StateChangeNotification>();
     public IAsyncEnumerable<TreeMetricsSnapshot> ObserveMetricsAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
