@@ -154,4 +154,47 @@ public partial class PublicReplicationApiContractTests
         Assert.That(siteBOriginatedDeliveries, Is.Empty,
             "Site B must not echo Site A's write back to Site A.");
     }
+
+    /// <summary>
+    /// Regression for issue #894 (F-137): the explorer / state API "Data"
+    /// catalog lists trees via
+    /// <see cref="ILatticeRegistry.GetAllTreeIdsAsync"/>. A tree authored
+    /// only in the peer cluster - never locally registered or written on
+    /// the receiver - must still appear in the receiver's registry catalog
+    /// once the replication apply path materialises it, otherwise the
+    /// explorer shows an empty catalog (as though cross-cluster data never
+    /// arrived) even though a point read on the receiver returns the value.
+    /// </summary>
+    [Test]
+    public async Task Replicated_tree_is_listed_in_receiver_registry_catalog_without_local_registration()
+    {
+        var treeId = NextTreeId("receiver-catalog");
+
+        var treeOnA = await _fixture.CreateReplicatedTreeOnSiteAOnlyAsync(treeId);
+        var treeOnB = _fixture.TreeOnB(treeId);
+
+        var registryB = ClientB.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        // Note: the fixture helper registers the tree on Site A ONLY, so
+        // Site B never receives a local RegisterAsync call. Any catalog
+        // visibility on Site B is therefore owed purely to the receiver
+        // apply path (shipper delivery + ShardRootGrain self-registration).
+        // We deliberately do NOT assert Site B is empty up front: once the
+        // A->B shipper activates it can deliver - and thus self-register the
+        // tree on B - asynchronously, even before the explicit write below.
+
+        await treeOnA.SetAsync("k1", Bytes("v1"));
+
+        await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
+            async () => Str(await treeOnB.GetAsync("k1")) == "v1",
+            $"Site B should apply Site A's write to '{treeId}/k1'.");
+
+        // The point read converged; the tree must now be discoverable via
+        // the same registry catalog the state API / explorer enumerate -
+        // despite Site B never having been locally registered.
+        var catalogB = await registryB.GetAllTreeIdsAsync();
+        Assert.That(catalogB, Does.Contain(treeId),
+            "The replication apply path must register the tree in the receiver's "
+            + "registry so the explorer / state API catalog lists it.");
+    }
 }

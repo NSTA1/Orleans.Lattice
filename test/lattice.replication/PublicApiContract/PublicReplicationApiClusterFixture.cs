@@ -181,6 +181,47 @@ internal sealed class PublicReplicationApiClusterFixture
         return ClientA.GetGrain<ILattice>(treeId);
     }
 
+    /// <summary>
+    /// Registers a replicated tree on Site A ONLY and activates the
+    /// per-(tree, peer) shipper grains in both directions. Unlike
+    /// <see cref="CreateReplicatedTreeAsync"/>, the receiving cluster
+    /// (Site B) is deliberately left with no registry entry for the
+    /// tree. This models the production reality that a tree authored in
+    /// one cluster is never pre-registered in the peer cluster: the
+    /// peer's registry entry must be created by the replication apply
+    /// path itself. Returns the Site A grain reference.
+    /// </summary>
+    public async Task<ILattice> CreateReplicatedTreeOnSiteAOnlyAsync(
+        string treeId,
+        int shardCount = DefaultShardCount,
+        int maxLeafKeys = SmallMaxLeafKeys,
+        int maxInternalChildren = SmallMaxInternalChildren)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var entry = new TreeRegistryEntry
+        {
+            MaxLeafKeys = maxLeafKeys,
+            MaxInternalChildren = maxInternalChildren,
+            ShardCount = shardCount,
+        };
+
+        // Register on Site A only. Site B must learn the tree exists
+        // purely through the replication apply path (the receiver-side
+        // ShardRootGrain self-registration on first merge/delta apply).
+        var registryA = ClientA.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registryA.RegisterAsync(treeId, entry);
+
+        await ClientA
+            .GetGrain<IReplicationShipperGrain>($"{treeId}/{SiteBClusterId}")
+            .EnsureActiveAsync(CancellationToken.None);
+        await ClientB
+            .GetGrain<IReplicationShipperGrain>($"{treeId}/{SiteAClusterId}")
+            .EnsureActiveAsync(CancellationToken.None);
+
+        return ClientA.GetGrain<ILattice>(treeId);
+    }
+
     /// <summary>Returns the Site A grain reference for the supplied <paramref name="treeId"/>.</summary>
     public ILattice TreeOnA(string treeId) => ClientA.GetGrain<ILattice>(treeId);
 
