@@ -1,0 +1,60 @@
+@using Orleans.Lattice.Explorer.Core.Connection
+@implements IDisposable
+@inject ILatticeStateConnection Connection
+
+@{
+    var status = Connection.Status;
+}
+@if (status.State == LatticeConnectionState.Reconnecting)
+{
+    <div class="explorer-connbar explorer-connbar-warn" role="status">
+        <span class="explorer-conndot"></span>
+        <span class="explorer-connmsg">Reconnecting...</span>
+    </div>
+}
+else if (status.IsDisconnected)
+{
+    <div class="explorer-connbar explorer-connbar-down" role="alert">
+        <span class="explorer-conndot"></span>
+        <span class="explorer-connmsg">@(status.Message ?? "Disconnected from the state API.")</span>
+        <button type="button"
+                class="explorer-btn explorer-btn-primary explorer-reconnect"
+                disabled="@_reconnecting"
+                @onclick="ReconnectAsync">
+            @(_reconnecting ? "Reconnecting..." : "Reconnect")
+        </button>
+    </div>
+}
+
+@code {
+    private bool _reconnecting;
+
+    protected override void OnInitialized()
+    {
+        Connection.StatusChanged += OnStatusChanged;
+    }
+
+    private async Task ReconnectAsync()
+    {
+        if (_reconnecting)
+        {
+            return;
+        }
+
+        _reconnecting = true;
+        StateHasChanged();
+        try
+        {
+            await Connection.ReconnectAsync();
+        }
+        finally
+        {
+            _reconnecting = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnStatusChanged(LatticeConnectionStatus _) => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Connection.StatusChanged -= OnStatusChanged;
+}

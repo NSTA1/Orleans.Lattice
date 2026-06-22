@@ -2,11 +2,14 @@
 
 <div class="explorer-shell">
     <ConfigurationGate>
-        <div class="explorer-layout">
-            <NavigationPanel />
-            <main class="explorer-main">
-                @Body
-            </main>
+        <div class="explorer-body">
+            <ConnectionStatusBanner />
+            <div class="explorer-layout">
+                <NavigationPanel />
+                <main class="explorer-main">
+                    @Body
+                </main>
+            </div>
         </div>
     </ConfigurationGate>
 </div>
