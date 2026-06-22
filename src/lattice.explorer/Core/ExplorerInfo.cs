@@ -10,6 +10,13 @@ public static class ExplorerInfo
     public const string ApplicationName = "Orleans.Lattice.Explorer";
 
     /// <summary>
+    /// Short, human-friendly product name used for the browser page title and
+    /// other display surfaces where the fully-qualified <see cref="ApplicationName"/>
+    /// reads awkwardly.
+    /// </summary>
+    public const string DisplayName = "Lattice Explorer";
+
+    /// <summary>
     /// One-line description of what the application does, suitable for a
     /// window subtitle or about box.
     /// </summary>
