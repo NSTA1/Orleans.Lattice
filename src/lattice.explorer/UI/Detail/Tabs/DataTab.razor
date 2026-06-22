@@ -1,5 +1,297 @@
+@using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
+@inject IDataReader DataReader
 
-<div class="explorer-tab-placeholder">
-    <p>Data for <code>@Selection.Id</code> will appear here.</p>
+<div class="explorer-data">
+    <div class="explorer-data-toolbar">
+        <button type="button" class="explorer-btn" disabled="@_loading" @onclick="ReloadFirstPageAsync">
+            @(_loading ? "Loading..." : "Refresh")
+        </button>
+        <label class="explorer-data-pagesize">
+            Page size
+            <select disabled="@_loading" @onchange="OnPageSizeChanged">
+                @foreach (var size in DataPaging.PageSizes)
+                {
+                    <option value="@size" selected="@(size == _pageSize)">@size</option>
+                }
+            </select>
+        </label>
+        <div class="explorer-data-pager">
+            <button type="button" class="explorer-btn" disabled="@(_loading || _pageIndex == 0)" @onclick="PreviousPageAsync">Prev</button>
+            <span class="explorer-data-pagenum">Page @(_pageIndex + 1)</span>
+            <button type="button" class="explorer-btn" disabled="@(_loading || !_page.HasMore)" @onclick="NextPageAsync">Next</button>
+        </div>
+    </div>
+
+    <div class="explorer-data-body">
+        <div class="explorer-data-keys">
+            @if (_loading && _page.Entries.Count == 0)
+            {
+                <div class="explorer-data-state">Loading entries...</div>
+            }
+            else if (_error is not null)
+            {
+                <div class="explorer-data-state explorer-data-error">
+                    <span>@_error</span>
+                    <button type="button" class="explorer-btn-link" @onclick="ReloadFirstPageAsync">Try again</button>
+                </div>
+            }
+            else if (_page.Entries.Count == 0)
+            {
+                <div class="explorer-data-state">No entries on this page.</div>
+            }
+            else
+            {
+                <table class="explorer-table explorer-data-keytable">
+                    <thead>
+                        <tr>
+                            <th>Key</th>
+                            <th>Size</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in _page.Entries)
+                        {
+                            <tr class="explorer-data-keyrow @(entry.Key == _selectedKey ? "is-selected" : null)"
+                                @onclick="@(() => SelectAsync(entry.Key))">
+                                <td class="explorer-data-key">@entry.Key</td>
+                                <td>@entry.ValueLength.ToString("N0")</td>
+                                <td>
+                                    @if (entry.IsTombstone)
+                                    {
+                                        <span class="explorer-data-flag explorer-data-flag-tomb">tomb</span>
+                                    }
+                                    @if (entry.CrdtShape is not null)
+                                    {
+                                        <span class="explorer-data-flag">@entry.CrdtShape</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+
+        <div class="explorer-data-detail">
+            @if (_selectedKey is null)
+            {
+                <div class="explorer-data-state">Select a key to inspect its value.</div>
+            }
+            else if (_detailLoading)
+            {
+                <div class="explorer-data-state">Loading value...</div>
+            }
+            else if (_detailError is not null)
+            {
+                <div class="explorer-data-state explorer-data-error">
+                    <span>@_detailError</span>
+                    <button type="button" class="explorer-btn-link" @onclick="@(() => SelectAsync(_selectedKey))">Try again</button>
+                </div>
+            }
+            else if (_detail is null)
+            {
+                <div class="explorer-data-state">Key not found (it may have changed since the scan).</div>
+            }
+            else
+            {
+                var d = _detail;
+                <div class="explorer-data-detail-head">
+                    <code class="explorer-data-detail-key">@d.Key</code>
+                    @if (_rendered is not null)
+                    {
+                        <span class="explorer-data-format">@_rendered.Format.ToString().ToLowerInvariant()</span>
+                    }
+                </div>
+
+                <dl class="explorer-data-meta">
+                    <div><dt>Value length</dt><dd>@d.ValueLength.ToString("N0") bytes</dd></div>
+                    <div><dt>Timestamp</dt><dd>@FormatHlc(d)</dd></div>
+                    <div><dt>Tombstone</dt><dd>@(d.IsTombstone ? "yes" : "no")</dd></div>
+                    <div><dt>Expires</dt><dd>@FormatExpiry(d)</dd></div>
+                    @if (d.CrdtShape is not null)
+                    {
+                        <div><dt>CRDT shape</dt><dd>@d.CrdtShape</dd></div>
+                    }
+                </dl>
+
+                @if (_rendered?.Note is not null)
+                {
+                    <p class="explorer-data-note">@_rendered.Note</p>
+                }
+
+                @if (_rendered is null || _rendered.Format == ValueFormat.Empty)
+                {
+                    <p class="explorer-data-muted">No value bytes.</p>
+                }
+                else
+                {
+                    <pre class="explorer-data-value explorer-data-value-@_rendered.Format.ToString().ToLowerInvariant()">@_rendered.Content</pre>
+                }
+            }
+        </div>
+    </div>
 </div>
+
+@code {
+    private DataPage _page = DataPage.Empty;
+    private readonly List<string?> _pageStartTokens = new() { null };
+    private int _pageIndex;
+    private int _pageSize = DataPaging.DefaultPageSize;
+    private bool _loading;
+    private string? _error;
+
+    private string? _selectedKey;
+    private DataEntry? _detail;
+    private RenderedValue? _rendered;
+    private bool _detailLoading;
+    private string? _detailError;
+
+    protected override async Task OnInitializedAsync() => await LoadPageAsync();
+
+    private async Task LoadPageAsync()
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            _page = await DataReader.ScanAsync(Selection.Id, _pageSize, _pageStartTokens[_pageIndex], TabToken);
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _page = DataPage.Empty;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ReloadFirstPageAsync()
+    {
+        ResetPaging();
+        ClearSelection();
+        await LoadPageAsync();
+    }
+
+    private async Task OnPageSizeChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var size))
+        {
+            _pageSize = DataPaging.Normalize(size);
+        }
+
+        // Page-size change opens a fresh snapshot from the first page.
+        ResetPaging();
+        ClearSelection();
+        await LoadPageAsync();
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (!_page.HasMore)
+        {
+            return;
+        }
+
+        if (_pageIndex == _pageStartTokens.Count - 1)
+        {
+            _pageStartTokens.Add(_page.ContinuationToken);
+        }
+
+        _pageIndex++;
+        ClearSelection();
+        await LoadPageAsync();
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        if (_pageIndex == 0)
+        {
+            return;
+        }
+
+        _pageIndex--;
+        ClearSelection();
+        await LoadPageAsync();
+    }
+
+    private async Task SelectAsync(string? key)
+    {
+        if (key is null)
+        {
+            return;
+        }
+
+        _selectedKey = key;
+        _detail = null;
+        _rendered = null;
+        _detailError = null;
+        _detailLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            _detail = await DataReader.GetEntryAsync(Selection.Id, key, TabToken);
+            _rendered = _detail is null ? null : ValueRenderer.Render(_detail.Value, _detail.Truncated);
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _detailError = ex.Message;
+        }
+        finally
+        {
+            _detailLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ResetPaging()
+    {
+        _pageStartTokens.Clear();
+        _pageStartTokens.Add(null);
+        _pageIndex = 0;
+    }
+
+    private void ClearSelection()
+    {
+        _selectedKey = null;
+        _detail = null;
+        _rendered = null;
+        _detailError = null;
+    }
+
+    private static string FormatHlc(DataEntry entry)
+    {
+        if (entry.Hlc.WallClockTicks <= 0)
+        {
+            return "-";
+        }
+
+        var wall = new DateTime(entry.Hlc.WallClockTicks, DateTimeKind.Utc).ToLocalTime();
+        return $"{wall:yyyy-MM-dd HH:mm:ss} (+{entry.Hlc.Counter})";
+    }
+
+    private static string FormatExpiry(DataEntry entry)
+    {
+        if (entry.ExpiresAtTicks <= 0)
+        {
+            return "never";
+        }
+
+        return new DateTime(entry.ExpiresAtTicks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    }
+}
