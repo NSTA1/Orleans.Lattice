@@ -1,0 +1,216 @@
+@using Orleans.Lattice.Explorer.Core.Catalog
+@using Orleans.Lattice.Explorer.Core.Configuration
+@implements IDisposable
+@inject ICatalogReader CatalogReader
+@inject IExplorerSelection Selection
+@inject IExplorerSession Session
+
+<nav class="explorer-nav" aria-label="Tree and view catalog">
+    <header class="explorer-nav-header">
+        <CogButton Title="Connection settings" OnClick="OpenConfig" />
+
+        <div class="explorer-nav-toggle" role="tablist" aria-label="Catalog kind">
+            <button type="button"
+                    role="tab"
+                    class="explorer-toggle-option @(_kind == CatalogKind.Trees ? "is-active" : null)"
+                    aria-selected="@(_kind == CatalogKind.Trees)"
+                    @onclick="@(() => SwitchKindAsync(CatalogKind.Trees))">
+                Trees
+            </button>
+            <button type="button"
+                    role="tab"
+                    class="explorer-toggle-option @(_kind == CatalogKind.Views ? "is-active" : null)"
+                    aria-selected="@(_kind == CatalogKind.Views)"
+                    @onclick="@(() => SwitchKindAsync(CatalogKind.Views))">
+                Views
+            </button>
+        </div>
+
+        <button type="button"
+                class="explorer-nav-refresh"
+                title="Refresh"
+                aria-label="Refresh catalog"
+                disabled="@_loading"
+                @onclick="RefreshAsync">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                <path fill="currentColor"
+                      d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
+            </svg>
+        </button>
+    </header>
+
+    <div class="explorer-nav-body">
+        @if (_loading && _items.Count == 0)
+        {
+            <div class="explorer-nav-state">Loading catalog...</div>
+        }
+        else if (_error is not null)
+        {
+            <div class="explorer-nav-state explorer-nav-error">
+                <span>@_error</span>
+                <button type="button" class="explorer-btn-link" @onclick="RefreshAsync">Try again</button>
+            </div>
+        }
+        else if (_items.Count == 0)
+        {
+            <div class="explorer-nav-state">
+                @(_kind == CatalogKind.Trees ? "No trees found." : "No views found.")
+            </div>
+        }
+        else
+        {
+            <ul class="explorer-nav-list" role="listbox" aria-label="@(_kind == CatalogKind.Trees ? "Trees" : "Views")">
+                @foreach (var item in _items)
+                {
+                    var isSelected = string.Equals(Selection.Selected?.Id, item.Id, StringComparison.Ordinal)
+                        && Selection.Selected?.Kind == item.Kind;
+                    <li role="option" aria-selected="@isSelected">
+                        <button type="button"
+                                class="explorer-nav-item @(isSelected ? "is-selected" : null)"
+                                @onclick="@(() => Select(item))">
+                            <span class="explorer-nav-item-id">@item.Id</span>
+                            <span class="explorer-nav-item-meta">
+                                @if (item.Kind == CatalogKind.Trees)
+                                {
+                                    @if (item.Lifecycle is not null)
+                                    {
+                                        <span class="explorer-badge">@item.Lifecycle</span>
+                                    }
+                                    @if (item.ShardCount is int shards)
+                                    {
+                                        <span class="explorer-badge" title="Shard count">@shards sh</span>
+                                    }
+                                }
+                                else
+                                {
+                                    @if (item.IsAggregation)
+                                    {
+                                        <span class="explorer-badge" title="Aggregation view">agg</span>
+                                    }
+                                    @if (item.SourceTreeId is not null)
+                                    {
+                                        <span class="explorer-badge explorer-badge-muted" title="Source tree">@item.SourceTreeId</span>
+                                    }
+                                }
+                            </span>
+                        </button>
+                    </li>
+                }
+            </ul>
+
+            @if (_hasMore)
+            {
+                <button type="button"
+                        class="explorer-nav-more"
+                        disabled="@_loading"
+                        @onclick="LoadMoreAsync">
+                    @(_loading ? "Loading..." : "Load more")
+                </button>
+            }
+        }
+    </div>
+</nav>
+
+@if (_showConfig)
+{
+    <div class="explorer-config-overlay">
+        <ConfigurationDialog Initial="Session.Current"
+                             AllowCancel="true"
+                             OnSaved="CloseConfig"
+                             OnCancelled="CloseConfig" />
+    </div>
+}
+
+@code {
+    private const int PageSize = 100;
+
+    private readonly List<CatalogItem> _items = new();
+    private CatalogKind _kind = CatalogKind.Trees;
+    private string? _nextToken;
+    private bool _hasMore;
+    private bool _loading;
+    private string? _error;
+    private bool _showConfig;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Selection.SelectionChanged += OnSelectionChanged;
+        Session.ConfigurationChanged += OnConfigurationChanged;
+        await ReloadAsync();
+    }
+
+    private async Task SwitchKindAsync(CatalogKind kind)
+    {
+        if (_kind == kind)
+        {
+            return;
+        }
+
+        _kind = kind;
+        await ReloadAsync();
+    }
+
+    private Task RefreshAsync() => ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _items.Clear();
+        _nextToken = null;
+        _hasMore = false;
+        await LoadPageAsync(reset: true);
+    }
+
+    private Task LoadMoreAsync() => LoadPageAsync(reset: false);
+
+    private async Task LoadPageAsync(bool reset)
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            var page = await CatalogReader.LoadAsync(_kind, reset ? null : _nextToken, PageSize);
+            _items.AddRange(page.Items);
+            _nextToken = page.NextPageToken;
+            _hasMore = page.HasMore;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void Select(CatalogItem item) => Selection.Select(item);
+
+    private void OpenConfig()
+    {
+        _showConfig = true;
+        StateHasChanged();
+    }
+
+    private void CloseConfig()
+    {
+        _showConfig = false;
+        StateHasChanged();
+    }
+
+    private void OnSelectionChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnConfigurationChanged() => InvokeAsync(async () =>
+    {
+        Selection.Select(null);
+        await ReloadAsync();
+    });
+
+    public void Dispose()
+    {
+        Selection.SelectionChanged -= OnSelectionChanged;
+        Session.ConfigurationChanged -= OnConfigurationChanged;
+    }
+}

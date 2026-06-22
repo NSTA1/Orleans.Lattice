@@ -1,9 +1,12 @@
 @inherits LayoutComponentBase
 
 <div class="explorer-shell">
-    <main class="explorer-main">
-        <ConfigurationGate>
-            @Body
-        </ConfigurationGate>
-    </main>
+    <ConfigurationGate>
+        <div class="explorer-layout">
+            <NavigationPanel />
+            <main class="explorer-main">
+                @Body
+            </main>
+        </div>
+    </ConfigurationGate>
 </div>
