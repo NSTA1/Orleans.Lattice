@@ -22,4 +22,10 @@
     <ProjectReference Include="..\..\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.80.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.0" />
+  </ItemGroup>
+
 </Project>
