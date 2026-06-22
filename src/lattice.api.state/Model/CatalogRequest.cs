@@ -53,6 +53,14 @@ public sealed record CatalogRequest
     /// </summary>
     [Id(3)] public bool IncludeViewStats { get; init; }
 
+    /// <summary>
+    /// When set, restricts the tag-index catalog
+    /// (<see cref="ILatticeStateQuery.ListTagIndexesAsync"/>) to indexes that
+    /// cover this source tree. Ignored by the tree and view catalogs. Defaults
+    /// to <see langword="null"/> (all tag indexes).
+    /// </summary>
+    [Id(4)] public string? SourceTreeId { get; init; }
+
     /// <summary>The effective, clamped page size derived from <see cref="PageSize"/>.</summary>
     public int EffectivePageSize => PageSize switch
     {

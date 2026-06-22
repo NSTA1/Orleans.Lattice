@@ -9,12 +9,16 @@ public interface IDataReader
     /// <summary>
     /// Scans a page of entries for <paramref name="treeId"/>. Pass the
     /// <paramref name="continuationToken"/> from a prior page to resume the same
-    /// snapshot, or <see langword="null"/> to open a fresh snapshot scan.
+    /// snapshot, or <see langword="null"/> to open a fresh snapshot scan. When a
+    /// <paramref name="tagFilter"/> is supplied, only the rows of
+    /// <paramref name="treeId"/> tagged with that value (in the named index) are
+    /// returned.
     /// </summary>
     Task<DataPage> ScanAsync(
         string treeId,
         int pageSize,
         string? continuationToken = null,
+        TagFilter? tagFilter = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -22,4 +26,11 @@ public interface IDataReader
     /// the key is absent.
     /// </summary>
     Task<DataEntry?> GetEntryAsync(string treeId, string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the clean names of the tag indexes that cover
+    /// <paramref name="treeId"/>, for the Data tab's tag filter. Returns an
+    /// empty list when the table has no associated tag indexes.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default);
 }

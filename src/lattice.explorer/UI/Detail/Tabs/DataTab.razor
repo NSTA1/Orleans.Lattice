@@ -23,6 +23,38 @@
         </div>
     </div>
 
+    @if (_tagIndexes.Count > 0)
+    {
+        <div class="explorer-data-toolbar explorer-data-tagfilter">
+            <label class="explorer-data-tagfilter-field">
+                Tag index
+                <select disabled="@_loading" @bind="_selectedIndex">
+                    @foreach (var name in _tagIndexes)
+                    {
+                        <option value="@name">@name</option>
+                    }
+                </select>
+            </label>
+            <label class="explorer-data-tagfilter-field">
+                Tag
+                <input type="text" disabled="@_loading" placeholder="tag value"
+                       @bind="_tagValue" @bind:event="oninput" @onkeyup="OnTagKeyUp" />
+            </label>
+            <button type="button" class="explorer-btn"
+                    disabled="@(_loading || string.IsNullOrWhiteSpace(_tagValue))"
+                    @onclick="ApplyTagFilterAsync">
+                Filter
+            </button>
+            @if (_activeTagFilter is not null)
+            {
+                <span class="explorer-data-tagfilter-active">
+                    Showing rows tagged <code>@_activeTagFilter.Tag</code> in <code>@_activeTagFilter.IndexName</code>
+                </span>
+                <button type="button" class="explorer-btn-link" disabled="@_loading" @onclick="ClearTagFilterAsync">Clear</button>
+            }
+        </div>
+    }
+
     <div class="explorer-data-body">
         <div class="explorer-data-keys">
             @if (_loading && _page.Entries.Count == 0)
@@ -148,7 +180,36 @@
     private bool _detailLoading;
     private string? _detailError;
 
-    protected override async Task OnInitializedAsync() => await LoadPageAsync();
+    private IReadOnlyList<string> _tagIndexes = Array.Empty<string>();
+    private string? _selectedIndex;
+    private string? _tagValue;
+    private TagFilter? _activeTagFilter;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTagIndexesAsync();
+        await LoadPageAsync();
+    }
+
+    private async Task LoadTagIndexesAsync()
+    {
+        try
+        {
+            _tagIndexes = await DataReader.ListTagIndexesForTreeAsync(Selection.Id, TabToken);
+            _selectedIndex = _tagIndexes.Count > 0 ? _tagIndexes[0] : null;
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            // Tab navigated away mid-load; nothing to surface.
+        }
+        catch
+        {
+            // The tag filter is a progressive enhancement: if the catalog probe
+            // fails the Data tab still works as an unfiltered scan.
+            _tagIndexes = Array.Empty<string>();
+            _selectedIndex = null;
+        }
+    }
 
     private async Task LoadPageAsync()
     {
@@ -158,7 +219,7 @@
 
         try
         {
-            _page = await DataReader.ScanAsync(Selection.Id, _pageSize, _pageStartTokens[_pageIndex], TabToken);
+            _page = await DataReader.ScanAsync(Selection.Id, _pageSize, _pageStartTokens[_pageIndex], _activeTagFilter, TabToken);
         }
         catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
         {
@@ -178,6 +239,35 @@
 
     private async Task ReloadFirstPageAsync()
     {
+        ResetPaging();
+        ClearSelection();
+        await LoadPageAsync();
+    }
+
+    private async Task OnTagKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_tagValue))
+        {
+            await ApplyTagFilterAsync();
+        }
+    }
+
+    private async Task ApplyTagFilterAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedIndex) || string.IsNullOrWhiteSpace(_tagValue))
+        {
+            return;
+        }
+
+        _activeTagFilter = new TagFilter(_selectedIndex, _tagValue.Trim());
+        ResetPaging();
+        ClearSelection();
+        await LoadPageAsync();
+    }
+
+    private async Task ClearTagFilterAsync()
+    {
+        _activeTagFilter = null;
         ResetPaging();
         ClearSelection();
         await LoadPageAsync();

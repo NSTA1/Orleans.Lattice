@@ -145,6 +145,7 @@ public sealed class StateDtoSerializationTests
             PageToken = "tree-k",
             IncludeSystemTrees = true,
             IncludeViewStats = true,
+            SourceTreeId = "orders",
         };
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));
@@ -290,6 +291,8 @@ public sealed class StateDtoSerializationTests
             ContinuationToken = "cursor-1",
             ValuePreviewBudget = 512,
             Predicate = LatticePredicateTranslator.Translate<ScanPerson>(p => p.Age >= 18),
+            IndexName = "by-status",
+            Tag = "open",
         };
 
         var copy = RoundTrip(original);
@@ -303,6 +306,8 @@ public sealed class StateDtoSerializationTests
             Assert.That(copy.ContinuationToken, Is.EqualTo("cursor-1"));
             Assert.That(copy.ValuePreviewBudget, Is.EqualTo(512));
             Assert.That(copy.Predicate, Is.Not.Null);
+            Assert.That(copy.IndexName, Is.EqualTo("by-status"));
+            Assert.That(copy.Tag, Is.EqualTo("open"));
         });
     }
 

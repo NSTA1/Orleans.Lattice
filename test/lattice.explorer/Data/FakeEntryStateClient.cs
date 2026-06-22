@@ -12,12 +12,16 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
 {
     public EntryScanRequest? LastScan { get; private set; }
     public EntryGetRequest? LastGet { get; private set; }
+    public CatalogRequest? LastTagIndexes { get; private set; }
 
     public Func<EntryScanRequest, EntryScanResponse> OnScan { get; set; } =
         _ => new EntryScanResponse { TreeId = "t" };
 
     public Func<EntryGetRequest, EntryGetResponse> OnGet { get; set; } =
         r => new EntryGetResponse { TreeId = r.TreeId, Key = r.Key, Status = StateQueryStatus.KeyNotFound };
+
+    public Func<CatalogRequest, TagIndexCatalogPage> OnListTagIndexes { get; set; } =
+        _ => new TagIndexCatalogPage();
 
     public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)
     {
@@ -37,7 +41,10 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
         => Task.FromResult(new ViewCatalogPage());
 
     public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
-        => Task.FromResult(new TagIndexCatalogPage());
+    {
+        LastTagIndexes = request;
+        return Task.FromResult(OnListTagIndexes(request));
+    }
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)

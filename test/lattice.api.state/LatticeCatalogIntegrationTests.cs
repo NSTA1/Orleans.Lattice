@@ -199,13 +199,85 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
-    public async Task ListTagIndexesAsync_returns_empty_when_none_registered()
+    public async Task ListTagIndexesAsync_filters_to_indexes_covering_the_source_tree()
     {
-        await _fixture.RegisterTreeAsync("tree-only");
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 4);
+        await _fixture.CreatePopulatedTreeAsync("widgets", keyCount: 2);
 
-        var page = await _fixture.Query.ListTagIndexesAsync(new CatalogRequest());
+        var ordersIndex = _fixture.CreateTagIndex("orders", "orders-by-status");
+        await ordersIndex.Key("key-00000").AddAsync(["open"]);
 
-        Assert.That(page.Entries, Is.Empty);
-        Assert.That(page.NextPageToken, Is.Null);
+        var widgetsIndex = _fixture.CreateTagIndex("widgets", "widgets-by-kind");
+        await widgetsIndex.Key("key-00000").AddAsync(["bolt"]);
+
+        var forOrders = await _fixture.Query.ListTagIndexesAsync(new CatalogRequest { SourceTreeId = "orders" });
+        Assert.That(forOrders.Entries.Select(e => e.IndexName), Is.EqualTo(new[] { "orders-by-status" }));
+
+        var forNone = await _fixture.Query.ListTagIndexesAsync(new CatalogRequest { SourceTreeId = "no-such-tree" });
+        Assert.That(forNone.Entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task ScanEntriesAsync_with_index_and_tag_returns_only_tagged_rows()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 6);
+
+        var index = _fixture.CreateTagIndex("orders", "orders-by-status");
+        await index.Key("key-00000").AddAsync(["open"]);
+        await index.Key("key-00002").AddAsync(["open"]);
+        await index.Key("key-00001").AddAsync(["closed"]);
+
+        var open = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "orders",
+            IndexName = "orders-by-status",
+            Tag = "open",
+            PageSize = 100,
+        });
+
+        Assert.That(open.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(open.Entries.Select(e => e.Key), Is.EqualTo(new[] { "key-00000", "key-00002" }));
+
+        var closed = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "orders",
+            IndexName = "orders-by-status",
+            Tag = "closed",
+            PageSize = 100,
+        });
+
+        Assert.That(closed.Entries.Select(e => e.Key), Is.EqualTo(new[] { "key-00001" }));
+    }
+
+    [Test]
+    public async Task ScanEntriesAsync_with_tag_pages_without_overlap()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 5);
+
+        var index = _fixture.CreateTagIndex("orders", "orders-by-status");
+        for (var i = 0; i < 5; i++)
+        {
+            await index.Key($"key-{i:D5}").AddAsync(["open"]);
+        }
+
+        var seen = new List<string>();
+        string? token = null;
+        do
+        {
+            var page = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+            {
+                TreeId = "orders",
+                IndexName = "orders-by-status",
+                Tag = "open",
+                PageSize = 2,
+                ContinuationToken = token,
+            });
+            seen.AddRange(page.Entries.Select(e => e.Key));
+            token = page.ContinuationToken;
+        }
+        while (!string.IsNullOrEmpty(token));
+
+        Assert.That(seen, Is.Unique);
+        Assert.That(seen, Is.EqualTo(new[] { "key-00000", "key-00001", "key-00002", "key-00003", "key-00004" }));
     }
 }

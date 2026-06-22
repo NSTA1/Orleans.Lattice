@@ -160,7 +160,6 @@ public class LatticeStateGrpcClientE2ETests
     }
 
     [Test]
-    [Test]
     public async Task client_surfaces_cluster_info_over_the_transport()
     {
         await using var host = await _fixture.CreateGrpcHostAsync();
@@ -192,6 +191,35 @@ public class LatticeStateGrpcClientE2ETests
         Assert.That(trees.Entries.Select(t => t.TreeId), Does.Not.Contain("tag-e2e-index"),
             "tag-index trees must not leak into the tree catalog");
     }
+
+    [Test]
+    public async Task client_filters_table_rows_by_tag_end_to_end()
+    {
+        await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);
+        var index = _fixture.CreateTagIndex(TreeId, "by-status");
+        await index.Key(GrpcStateClusterFixture.KeyAt(1)).AddAsync(["open"]);
+        await index.Key(GrpcStateClusterFixture.KeyAt(4)).AddAsync(["open"]);
+        await index.Key(GrpcStateClusterFixture.KeyAt(2)).AddAsync(["closed"]);
+
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        // The covering tag index is discoverable for the table.
+        var covering = await client.ListTagIndexesAsync(new CatalogRequest { SourceTreeId = TreeId, PageSize = 100 });
+        Assert.That(covering.Entries.Select(e => e.IndexName), Does.Contain("by-status"));
+
+        // A tag-filtered scan returns only the rows tagged 'open'.
+        var open = await client.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = TreeId,
+            IndexName = "by-status",
+            Tag = "open",
+            PageSize = 100,
+        });
+        Assert.That(open.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(
+            open.Entries.Select(e => e.Key),
+            Is.EquivalentTo(new[] { GrpcStateClusterFixture.KeyAt(1), GrpcStateClusterFixture.KeyAt(4) }));
     }
 
     private static async Task<List<EntryRecord>> ScanAllAsync(LatticeStateApiGrpcClient client, string treeId)
