@@ -12,6 +12,12 @@ public class ExplorerInfoTests
     }
 
     [Test]
+    public void DisplayName_is_the_friendly_page_title()
+    {
+        Assert.That(ExplorerInfo.DisplayName, Is.EqualTo("Lattice Explorer"));
+    }
+
+    [Test]
     public void Description_is_present()
     {
         Assert.That(ExplorerInfo.Description, Is.Not.Empty);

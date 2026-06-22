@@ -103,6 +103,26 @@ public sealed class InventorySeederTests
     }
 
     [Test]
+    public async Task Seed_reseeds_when_marker_set_but_lattice_empty()
+    {
+        var (router, _, lattice) = _fixture.NewRouter();
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
+
+        // Simulate a durable seed marker that survived a restart which wiped
+        // the (non-durable) lattice fact tree: set the flag, leave the tree
+        // empty. The seeder must re-seed rather than trust the stale marker.
+        var seedFlag = _fixture.GrainFactory.GetGrain<IInventorySeedStateGrain>(IInventorySeedStateGrain.SingletonKey);
+        await seedFlag.TryMarkSeededAsync();
+        Assert.That(await lattice.ListPartsAsync(), Is.Empty, "precondition: lattice starts empty");
+
+        await seeder.SeedAsync(CancellationToken.None);
+
+        var parts = await lattice.ListPartsAsync();
+        Assert.That(parts, Has.Count.EqualTo(InventorySeeder.TotalParts),
+            "seeder should re-seed when the marker is set but the lattice tree is empty");
+    }
+
+    [Test]
     public async Task Seed_baseline_and_lattice_agree_post_seed()
     {
         var (router, baseline, lattice) = _fixture.NewRouter();
