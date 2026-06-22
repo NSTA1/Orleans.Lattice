@@ -23,6 +23,8 @@ public class MetricsReaderTests
             => Task.FromResult(new TreeCatalogPage());
         public Task<ViewCatalogPage> ListViewsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new ViewCatalogPage());
+        public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new TagIndexCatalogPage());
         public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new StructureResponse { TreeId = "t" });
         public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)

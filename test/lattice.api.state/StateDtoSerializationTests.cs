@@ -145,6 +145,7 @@ public sealed class StateDtoSerializationTests
             PageToken = "tree-k",
             IncludeSystemTrees = true,
             IncludeViewStats = true,
+            SourceTreeId = "orders",
         };
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));
@@ -208,6 +209,37 @@ public sealed class StateDtoSerializationTests
     }
 
     [Test]
+    public void TagIndexStateSummary_round_trips()
+    {
+        var original = new TagIndexStateSummary
+        {
+            IndexName = "orders-by-status",
+            TreeId = "tag-orders-by-status",
+            ShardCount = 3,
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void TagIndexCatalogPage_round_trips()
+    {
+        var original = new TagIndexCatalogPage
+        {
+            Entries = new[]
+            {
+                new TagIndexStateSummary { IndexName = "idx-a", TreeId = "tag-idx-a", ShardCount = 2 },
+            },
+            NextPageToken = "tag-idx-a",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.That(copy.NextPageToken, Is.EqualTo("tag-idx-a"));
+        Assert.That(copy.Entries, Has.Count.EqualTo(1));
+        Assert.That(copy.Entries[0].IndexName, Is.EqualTo("idx-a"));
+    }
+
+    [Test]
     public void EntryRecord_round_trips()
     {
         var original = new EntryRecord
@@ -259,6 +291,8 @@ public sealed class StateDtoSerializationTests
             ContinuationToken = "cursor-1",
             ValuePreviewBudget = 512,
             Predicate = LatticePredicateTranslator.Translate<ScanPerson>(p => p.Age >= 18),
+            IndexName = "by-status",
+            Tag = "open",
         };
 
         var copy = RoundTrip(original);
@@ -272,6 +306,8 @@ public sealed class StateDtoSerializationTests
             Assert.That(copy.ContinuationToken, Is.EqualTo("cursor-1"));
             Assert.That(copy.ValuePreviewBudget, Is.EqualTo(512));
             Assert.That(copy.Predicate, Is.Not.Null);
+            Assert.That(copy.IndexName, Is.EqualTo("by-status"));
+            Assert.That(copy.Tag, Is.EqualTo("open"));
         });
     }
 

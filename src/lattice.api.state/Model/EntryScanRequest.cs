@@ -62,4 +62,24 @@ public sealed record EntryScanRequest
     /// non-matching values are never transferred.
     /// </summary>
     [Id(7)] public LatticePredicateNode? Predicate { get; init; }
+
+    /// <summary>
+    /// Optional tag-index name. When set together with <see cref="Tag"/>, the
+    /// scan is restricted to the keys of <see cref="TreeId"/> that carry
+    /// <see cref="Tag"/> in this index (the index tree is resolved server-side,
+    /// so the internal <c>tag-</c> naming convention never crosses the wire).
+    /// The index name is the clean name surfaced by
+    /// <see cref="ILatticeStateQuery.ListTagIndexesAsync"/>.
+    /// </summary>
+    [Id(8)] public string? IndexName { get; init; }
+
+    /// <summary>
+    /// Optional tag value to filter by. Honoured only when
+    /// <see cref="IndexName"/> is also set; the scan then returns the entries of
+    /// <see cref="TreeId"/> tagged with this value. The snapshot-cursor key
+    /// range (<see cref="StartInclusive"/> / <see cref="EndExclusive"/> /
+    /// <see cref="Reverse"/> / <see cref="Predicate"/>) does not apply to a
+    /// tag-filtered scan.
+    /// </summary>
+    [Id(9)] public string? Tag { get; init; }
 }

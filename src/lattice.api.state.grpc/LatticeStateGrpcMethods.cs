@@ -32,6 +32,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary view-catalog discovery RPC method name.</summary>
     public const string ListViewsMethodName = "ListViews";
 
+    /// <summary>The unary tag-index-catalog discovery RPC method name.</summary>
+    public const string ListTagIndexesMethodName = "ListTagIndexes";
+
     /// <summary>The unary tree-structure RPC method name.</summary>
     public const string GetTreeStructureMethodName = "GetTreeStructure";
 
@@ -58,6 +61,7 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<CatalogRequest> catalogRequestSerializer,
         Serializer<TreeCatalogPage> treeCatalogPageSerializer,
         Serializer<ViewCatalogPage> viewCatalogPageSerializer,
+        Serializer<TagIndexCatalogPage> tagIndexCatalogPageSerializer,
         Serializer<StructureRequest> structureRequestSerializer,
         Serializer<StructureResponse> structureResponseSerializer,
         Serializer<EntryScanRequest> entryScanRequestSerializer,
@@ -74,6 +78,7 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(treeCatalogPageSerializer);
         ArgumentNullException.ThrowIfNull(viewCatalogPageSerializer);
+        ArgumentNullException.ThrowIfNull(tagIndexCatalogPageSerializer);
         ArgumentNullException.ThrowIfNull(structureRequestSerializer);
         ArgumentNullException.ThrowIfNull(structureResponseSerializer);
         ArgumentNullException.ThrowIfNull(entryScanRequestSerializer);
@@ -100,6 +105,13 @@ internal sealed class LatticeStateGrpcMethods
             name: ListViewsMethodName,
             requestMarshaller: LatticeStateGrpcMarshallers.Create(catalogRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(viewCatalogPageSerializer));
+
+        ListTagIndexes = new Method<CatalogRequest, TagIndexCatalogPage>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListTagIndexesMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(catalogRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(tagIndexCatalogPageSerializer));
 
         GetTreeStructure = new Method<StructureRequest, StructureResponse>(
             type: MethodType.Unary,
@@ -157,6 +169,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary <c>ListViews</c> discovery RPC.</summary>
     public Method<CatalogRequest, ViewCatalogPage> ListViews { get; }
 
+    /// <summary>The unary <c>ListTagIndexes</c> discovery RPC.</summary>
+    public Method<CatalogRequest, TagIndexCatalogPage> ListTagIndexes { get; }
+
     /// <summary>The unary <c>GetTreeStructure</c> RPC.</summary>
     public Method<StructureRequest, StructureResponse> GetTreeStructure { get; }
 
@@ -191,6 +206,7 @@ internal sealed class LatticeStateGrpcMethods
             serializerProvider.GetRequiredService<Serializer<CatalogRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeCatalogPage>>(),
             serializerProvider.GetRequiredService<Serializer<ViewCatalogPage>>(),
+            serializerProvider.GetRequiredService<Serializer<TagIndexCatalogPage>>(),
             serializerProvider.GetRequiredService<Serializer<StructureRequest>>(),
             serializerProvider.GetRequiredService<Serializer<StructureResponse>>(),
             serializerProvider.GetRequiredService<Serializer<EntryScanRequest>>(),

@@ -25,6 +25,13 @@
                     @onclick="@(() => SwitchKindAsync(CatalogKind.Views))">
                 Views
             </button>
+            <button type="button"
+                    role="tab"
+                    class="explorer-toggle-option @(_kind == CatalogKind.TagIndexes ? "is-active" : null)"
+                    aria-selected="@(_kind == CatalogKind.TagIndexes)"
+                    @onclick="@(() => SwitchKindAsync(CatalogKind.TagIndexes))">
+                Tag indexes
+            </button>
         </div>
 
         <button type="button"
@@ -55,12 +62,12 @@
         else if (_items.Count == 0)
         {
             <div class="explorer-nav-state">
-                @(_kind == CatalogKind.Trees ? "No trees found." : "No views found.")
+                @EmptyMessage
             </div>
         }
         else
         {
-            <ul class="explorer-nav-list" role="listbox" aria-label="@(_kind == CatalogKind.Trees ? "Trees" : "Views")">
+            <ul class="explorer-nav-list" role="listbox" aria-label="@KindLabel">
                 @foreach (var item in _items)
                 {
                     var isSelected = string.Equals(Selection.Selected?.Id, item.Id, StringComparison.Ordinal)
@@ -69,7 +76,7 @@
                         <button type="button"
                                 class="explorer-nav-item @(isSelected ? "is-selected" : null)"
                                 @onclick="@(() => Select(item))">
-                            <span class="explorer-nav-item-id">@item.Id</span>
+                            <span class="explorer-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Id)</span>
                             <span class="explorer-nav-item-meta">
                                 @if (item.Kind == CatalogKind.Trees)
                                 {
@@ -80,6 +87,14 @@
                                     @if (item.ShardCount is int shards)
                                     {
                                         <span class="explorer-badge" title="Shard count">@shards sh</span>
+                                    }
+                                }
+                                else if (item.Kind == CatalogKind.TagIndexes)
+                                {
+                                    <span class="explorer-badge" title="Tag index">tag</span>
+                                    @if (item.ShardCount is int tagShards)
+                                    {
+                                        <span class="explorer-badge" title="Shard count">@tagShards sh</span>
                                     }
                                 }
                                 else
@@ -127,6 +142,20 @@
 
     private readonly List<CatalogItem> _items = new();
     private CatalogKind _kind = CatalogKind.Trees;
+    private string KindLabel => _kind switch
+    {
+        CatalogKind.Trees => "Trees",
+        CatalogKind.Views => "Views",
+        CatalogKind.TagIndexes => "Tag indexes",
+        _ => "Catalog",
+    };
+    private string EmptyMessage => _kind switch
+    {
+        CatalogKind.Trees => "No trees found.",
+        CatalogKind.Views => "No views found.",
+        CatalogKind.TagIndexes => "No tag indexes found.",
+        _ => "No items found.",
+    };
     private string? _nextToken;
     private bool _hasMore;
     private bool _loading;

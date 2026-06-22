@@ -28,6 +28,7 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
         {
             CatalogKind.Trees => await LoadTreesAsync(request, cancellationToken).ConfigureAwait(false),
             CatalogKind.Views => await LoadViewsAsync(request, cancellationToken).ConfigureAwait(false),
+            CatalogKind.TagIndexes => await LoadTagIndexesAsync(request, cancellationToken).ConfigureAwait(false),
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown catalog kind."),
         };
     }
@@ -64,6 +65,25 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
                 Kind = CatalogKind.Views,
                 SourceTreeId = entry.SourceTreeId,
                 IsAggregation = entry.IsAggregation,
+            });
+        }
+
+        return new CatalogPage { Items = items, NextPageToken = page.NextPageToken };
+    }
+
+    private async Task<CatalogPage> LoadTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken)
+    {
+        var page = await _client.ListTagIndexesAsync(request, cancellationToken).ConfigureAwait(false);
+
+        var items = new List<CatalogItem>(page.Entries.Count);
+        foreach (var entry in page.Entries)
+        {
+            items.Add(new CatalogItem
+            {
+                Id = entry.TreeId,
+                Kind = CatalogKind.TagIndexes,
+                IndexName = entry.IndexName,
+                ShardCount = entry.ShardCount,
             });
         }
 

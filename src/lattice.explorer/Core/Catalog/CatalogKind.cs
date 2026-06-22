@@ -12,4 +12,7 @@ public enum CatalogKind
 
     /// <summary>List materialised views via <c>ListViewsAsync</c>.</summary>
     Views,
+
+    /// <summary>List tag-index membership trees via <c>ListTagIndexesAsync</c>.</summary>
+    TagIndexes,
 }

@@ -117,4 +117,53 @@ public class CatalogReaderTests
     {
         Assert.That(() => new CatalogReader(null!), Throws.ArgumentNullException);
     }
+
+    private static TagIndexStateSummary TagIndex(string indexName, string treeId, int shards) => new()
+    {
+        IndexName = indexName,
+        TreeId = treeId,
+        ShardCount = shards,
+    };
+
+    [Test]
+    public async Task LoadAsync_TagIndexes_MapsSummariesAndToken()
+    {
+        var client = new FakeStateClientCapture
+        {
+            OnListTagIndexes = _ => Task.FromResult(new TagIndexCatalogPage
+            {
+                Entries = new[] { TagIndex("by-status", "tag-by-status", 3), TagIndex("by-owner", "tag-by-owner", 1) },
+                NextPageToken = "tag-by-status",
+            }),
+        };
+        var reader = new CatalogReader(client);
+
+        var page = await reader.LoadAsync(CatalogKind.TagIndexes, pageToken: null, pageSize: 50);
+
+        Assert.That(page.Items, Has.Count.EqualTo(2));
+        Assert.That(page.Items[0].Id, Is.EqualTo("tag-by-status"));
+        Assert.That(page.Items[0].Kind, Is.EqualTo(CatalogKind.TagIndexes));
+        Assert.That(page.Items[0].IndexName, Is.EqualTo("by-status"));
+        Assert.That(page.Items[0].ShardCount, Is.EqualTo(3));
+        Assert.That(page.NextPageToken, Is.EqualTo("tag-by-status"));
+        Assert.That(page.HasMore, Is.True);
+    }
+
+    [Test]
+    public async Task LoadAsync_TagIndexes_RoutesToListTagIndexes()
+    {
+        var calledTrees = false;
+        var calledTagIndexes = false;
+        var client = new FakeStateClientCapture
+        {
+            OnListTrees = _ => { calledTrees = true; return Task.FromResult(new TreeCatalogPage()); },
+            OnListTagIndexes = _ => { calledTagIndexes = true; return Task.FromResult(new TagIndexCatalogPage()); },
+        };
+        var reader = new CatalogReader(client);
+
+        await reader.LoadAsync(CatalogKind.TagIndexes, pageToken: null, pageSize: 10);
+
+        Assert.That(calledTagIndexes, Is.True);
+        Assert.That(calledTrees, Is.False);
+    }
 }

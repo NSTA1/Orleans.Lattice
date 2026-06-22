@@ -38,4 +38,10 @@ public sealed record CatalogItem
     /// (aggregation) view; always <see langword="false"/> for trees.
     /// </summary>
     public bool IsAggregation { get; init; }
+
+    /// <summary>
+    /// For tag indexes, the logical index name (the membership tree id with its
+    /// reserved <c>tag-</c> prefix removed); <see langword="null"/> otherwise.
+    /// </summary>
+    public string? IndexName { get; init; }
 }

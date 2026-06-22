@@ -158,6 +158,14 @@ internal sealed class GrpcStateClusterFixture
         return factory.Create(source, viewName, new LatticeViewDefinition(viewName, new PredicateLatticeViewProjection()));
     }
 
+    /// <summary>Opens the tag index <paramref name="indexName"/> bound to <paramref name="sourceTreeId"/>.</summary>
+    public ILatticeTagIndex CreateTagIndex(string sourceTreeId, string indexName)
+    {
+        var factory = SiloServices.GetRequiredService<ILatticeTagIndexFactory>();
+        var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        return factory.Create(source, indexName);
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
