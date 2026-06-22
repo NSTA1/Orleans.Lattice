@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Metrics;
 
 namespace Orleans.Lattice.Explorer;
 
@@ -32,6 +33,7 @@ public static class MauiProgram
                 FileSystem.AppDataDirectory,
                 ExplorerConfigStoreOptions.DefaultFileName));
         builder.Services.AddExplorerCatalog();
+        builder.Services.AddExplorerMetrics();
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();

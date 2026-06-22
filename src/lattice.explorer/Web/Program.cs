@@ -1,5 +1,6 @@
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Web.Components;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,6 +16,7 @@ builder.Services.AddRazorComponents()
 // store sits under the server's per-user local app-data folder.
 builder.Services.AddExplorerConfiguration();
 builder.Services.AddExplorerCatalog();
+builder.Services.AddExplorerMetrics();
 
 var app = builder.Build();
 
