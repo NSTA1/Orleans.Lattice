@@ -31,11 +31,23 @@ public static class MauiProgram
         builder.Services.AddMauiBlazorWebView();
 
         // The config store, shared connection, and session. The JSON store lives
-        // in the MAUI per-user app-data directory on the Windows desktop head.
+        // in the MAUI per-user app-data directory on the Windows desktop head,
+        // unless a launcher overrides the path via LATTICE_EXPLORER_CONFIG.
         builder.Services.AddExplorerConfiguration(options =>
-            options.FilePath = Path.Combine(
-                FileSystem.AppDataDirectory,
-                ExplorerConfigStoreOptions.DefaultFileName));
+        {
+            var configOverride = Environment.GetEnvironmentVariable(
+                EnvironmentExplorerBootstrap.ConfigPathVariable);
+            options.FilePath = !string.IsNullOrWhiteSpace(configOverride)
+                ? configOverride
+                : Path.Combine(
+                    FileSystem.AppDataDirectory,
+                    ExplorerConfigStoreOptions.DefaultFileName);
+        });
+
+        // Launcher-friendly first-run bootstrap: seed the endpoint (and an
+        // optional sign-in credential) from environment variables when nothing is
+        // persisted yet.
+        builder.Services.AddExplorerEnvironmentBootstrap();
         builder.Services.AddExplorerCatalog();
         builder.Services.AddExplorerMetrics();
         builder.Services.AddExplorerTopology();

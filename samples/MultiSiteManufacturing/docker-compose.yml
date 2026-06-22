@@ -89,6 +89,19 @@ x-silo-common: &silo-common
     dockerfile: samples/MultiSiteManufacturing/Dockerfile
   image: msmfg-host:dev
   restart: unless-stopped
+  # Optional state-API auth credentials (issue #886). run.ps1 -Username/-Password
+  # writes a git-ignored .env next to this compose file containing
+  # EXPLORER_STATE_AUTH=true plus one LATTICE_STATE_USER_<user>=pbkdf2-sha256$...
+  # line (the salted hash, never the plaintext). env_file injects whatever it
+  # finds verbatim into every silo container, which is the only mechanism that
+  # carries the dynamically-named per-user credential var across without Compose
+  # having to template a variable NAME. `required: false` keeps an
+  # un-parameterised `docker compose up` (no .env present) working unchanged:
+  # with no file, EXPLORER_STATE_AUTH is unset/false and the host leaves
+  # state-API authorization disabled.
+  env_file:
+    - path: .env
+      required: false
   environment:
     # Orleans + ASP.NET Core bind configuration. ASPNETCORE_URLS must
     # bind 0.0.0.0 (via "+") so host port publishing reaches the app;

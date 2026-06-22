@@ -41,6 +41,11 @@
          host-rolled ReplicationTopology. -->
     <ProjectReference Include="..\..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
+    <!-- Read-only cluster state API, co-hosted on the lattice-backed silo and
+         exposed over the same :8081 h2c gRPC pipeline as replication so the
+         Orleans.Lattice.Explorer can browse the running sample (issue #886). -->
+    <ProjectReference Include="..\..\..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>

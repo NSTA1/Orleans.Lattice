@@ -18,8 +18,21 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 // The config backing store, shared connection, and session live in DI. The JSON
-// store sits under the server's per-user local app-data folder.
-builder.Services.AddExplorerConfiguration();
+// store sits under the server's per-user local app-data folder, unless a
+// launcher overrides the path via LATTICE_EXPLORER_CONFIG.
+builder.Services.AddExplorerConfiguration(options =>
+{
+    var configOverride = Environment.GetEnvironmentVariable(
+        Orleans.Lattice.Explorer.Core.Configuration.EnvironmentExplorerBootstrap.ConfigPathVariable);
+    if (!string.IsNullOrWhiteSpace(configOverride))
+    {
+        options.FilePath = configOverride;
+    }
+});
+
+// Launcher-friendly first-run bootstrap: seed the endpoint (and an optional
+// sign-in credential) from environment variables when nothing is persisted yet.
+builder.Services.AddExplorerEnvironmentBootstrap();
 builder.Services.AddExplorerCatalog();
 builder.Services.AddExplorerMetrics();
 builder.Services.AddExplorerTopology();

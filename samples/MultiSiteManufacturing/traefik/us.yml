@@ -18,6 +18,15 @@
 #                      uses h2c (HTTP/2 cleartext) because gRPC
 #                      requires HTTP/2 end-to-end and the silo Kestrel
 #                      endpoint is configured for h2c.
+#   - us-state         PathPrefix(`/orleans.lattice.api.state/`)
+#                      Round-robin, no sticky cookie. Priority 200.
+#                      Reached by the Orleans.Lattice.Explorer browsing
+#                      the read-only state API (issue #886). Same h2c
+#                      backend pool on :8081 as us-replicate; reads are
+#                      stateless cluster-wide aggregates so any silo
+#                      serves them and no affinity is needed. The
+#                      trailing slash anchors the prefix so it cannot
+#                      collide with a Blazor route.
 #   - us-web           /             sticky cookie. Blazor Server's
 #                      SignalR circuit pins to one silo per browser tab.
 http:
@@ -33,6 +42,19 @@ http:
       entryPoints:
         - web
       service: us-replicate
+
+    us-state:
+      # gRPC service name: orleans.lattice.api.state (full method paths
+      # are /orleans.lattice.api.state/<Method>). The trailing slash
+      # anchors the prefix so it cannot collide with a Blazor route.
+      # priority: 200 keeps it ahead of the / catch-all, exactly like
+      # us-replicate.
+      rule: "PathPrefix(`/orleans.lattice.api.state/`)"
+
+      priority: 200
+      entryPoints:
+        - web
+      service: us-state
 
     us-web:
       rule: "PathPrefix(`/`)"
@@ -60,6 +82,20 @@ http:
         # would mark the upstream "down" and stall replication. Traefik
         # without a health check just round-robins and the gRPC client
         # observes failures itself, with retry + backoff in the package.
+
+    us-state:
+      loadBalancer:
+        # No sticky cookie: state-API reads are stateless, cluster-wide
+        # aggregates sourced from data both silos share, so any silo
+        # serves any read. Round-robin spreads explorer load across the
+        # two silos. `h2c://` upstream speaks HTTP/2 cleartext to the
+        # silo's dedicated :8081 gRPC listener - the same backend pool
+        # us-replicate uses. No health check, for the same reason as
+        # us-replicate: an HTTP/2 probe to the gRPC port has no clean
+        # 200 to assert on, and the gRPC client retries itself.
+        servers:
+          - url: "h2c://silo-us-a:8081"
+          - url: "h2c://silo-us-b:8081"
 
     us-web:
       loadBalancer:
