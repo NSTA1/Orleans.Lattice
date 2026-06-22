@@ -1,8 +1,11 @@
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Topology;
+using Orleans.Lattice.Explorer.UI.Authentication;
+using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Explorer.Web.Components;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,6 +25,15 @@ builder.Services.AddExplorerMetrics();
 builder.Services.AddExplorerTopology();
 builder.Services.AddExplorerData();
 
+// Authentication. The credential rests in an HttpOnly + Secure cookie encrypted
+// with Data Protection (no browser storage); the login dialog posts to the
+// server endpoints below so the password never crosses the SignalR circuit.
+builder.Services.AddDataProtection();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<ICredentialStore, CookieCredentialStore>();
+builder.Services.AddSingleton(new ExplorerAuthUiOptions { UseServerFormPost = true });
+builder.Services.AddExplorerAuth();
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
@@ -33,6 +45,29 @@ if (!app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseAntiforgery();
 app.MapStaticAssets();
+
+// Server-side sign-in / sign-out endpoints. The login form posts here so the
+// password is handled on the server and stored in the encrypted cookie rather
+// than round-tripped over the circuit. SameSite=Strict on the credential cookie
+// mitigates cross-site posts, so antiforgery is disabled on these form posts.
+app.MapPost("/auth/login", async (HttpContext context, IExplorerAuthSession auth) =>
+{
+    var form = await context.Request.ReadFormAsync();
+    var username = form["username"].ToString();
+    var password = form["password"].ToString();
+    if (!string.IsNullOrWhiteSpace(username))
+    {
+        await auth.LoginAsync(username.Trim(), password);
+    }
+
+    return Results.Redirect("/");
+}).DisableAntiforgery();
+
+app.MapPost("/auth/logout", async (IExplorerAuthSession auth) =>
+{
+    await auth.LogoutAsync();
+    return Results.Redirect("/");
+}).DisableAntiforgery();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()

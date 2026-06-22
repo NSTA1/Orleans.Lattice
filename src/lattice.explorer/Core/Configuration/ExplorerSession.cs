@@ -48,7 +48,8 @@ public sealed class ExplorerSession : IExplorerSession
             _initialized = true;
 
             var configuration = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
-            if (configuration is not null && EndpointValidation.TryValidate(configuration.Endpoint, out _))
+            if (configuration is not null &&
+                TransportSecurityPolicy.TryValidateEndpoint(configuration.Endpoint, configuration.TransportMode, out _))
             {
                 await Connection.ConfigureAsync(configuration.ToConnectionSettings(), cancellationToken).ConfigureAwait(false);
                 Current = configuration;
@@ -67,7 +68,7 @@ public sealed class ExplorerSession : IExplorerSession
     public async Task ApplyAsync(ExplorerConfiguration configuration, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        if (!EndpointValidation.TryValidate(configuration.Endpoint, out var error))
+        if (!TransportSecurityPolicy.TryValidateEndpoint(configuration.Endpoint, configuration.TransportMode, out var error))
         {
             throw new ArgumentException(error, nameof(configuration));
         }

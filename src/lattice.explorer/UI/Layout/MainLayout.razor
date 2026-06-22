@@ -1,15 +1,36 @@
 @inherits LayoutComponentBase
+@using Orleans.Lattice.Explorer.UI.Authentication
+@implements IDisposable
 
-<div class="explorer-shell">
-    <ConfigurationGate>
-        <div class="explorer-body">
-            <ConnectionStatusBanner />
-            <div class="explorer-layout">
-                <NavigationPanel />
-                <main class="explorer-main">
-                    @Body
-                </main>
+<CascadingValue Value="_login" IsFixed="true">
+    <div class="explorer-shell">
+        <ConfigurationGate>
+            <div class="explorer-body">
+                <ConnectionStatusBanner />
+                <div class="explorer-layout">
+                    <NavigationPanel />
+                    <main class="explorer-main">
+                        @Body
+                    </main>
+                </div>
             </div>
+        </ConfigurationGate>
+    </div>
+
+    @if (_login.IsVisible)
+    {
+        <div class="explorer-config-overlay">
+            <LoginDialog OnClosed="_login.Close" />
         </div>
-    </ConfigurationGate>
-</div>
+    }
+</CascadingValue>
+
+@code {
+    private readonly LoginDialogState _login = new();
+
+    protected override void OnInitialized() => _login.Changed += OnLoginChanged;
+
+    private void OnLoginChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => _login.Changed -= OnLoginChanged;
+}

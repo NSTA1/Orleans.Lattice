@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Explorer.Core.Configuration;
 public sealed record ExplorerConfiguration
 {
     /// <summary>The current on-disk schema version, for forward compatibility.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>The schema version of the persisted document.</summary>
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
@@ -23,15 +23,24 @@ public sealed record ExplorerConfiguration
     public string Endpoint { get; init; } = string.Empty;
 
     /// <summary>
+    /// The transport-security posture for this endpoint. Defaults to
+    /// <see cref="ExplorerTransportMode.Secure"/>; the interim anonymous /
+    /// plaintext path requires an explicit
+    /// <see cref="ExplorerTransportMode.InsecureLoopbackDev"/> opt-in so the
+    /// secure-by-default posture is never silently lost.
+    /// </summary>
+    public ExplorerTransportMode TransportMode { get; init; } = ExplorerTransportMode.Secure;
+
+    /// <summary>
     /// Allows unencrypted HTTP/2 (h2c) so a plain <c>http://</c> endpoint works
     /// for local development. Ignored for <c>https://</c> endpoints.
     /// </summary>
     public bool AllowUnencryptedHttp2 { get; init; }
 
     /// <summary>
-    /// Optional metadata headers attached to every call (the authentication
-    /// seam). Persisted so a future security feature can populate it; left empty
-    /// for anonymous development connections.
+    /// Optional non-secret metadata headers attached to every call. The live
+    /// authentication credential is never persisted here - it comes from the
+    /// per-user credential store and is applied to the connection at sign-in.
     /// </summary>
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
 

@@ -1,4 +1,5 @@
 @using Orleans.Lattice.Explorer.Core.Connection
+@using Orleans.Lattice.Explorer.UI.Authentication
 @implements IDisposable
 @inject ILatticeStateConnection Connection
 
@@ -17,8 +18,16 @@ else if (status.IsDisconnected)
     <div class="explorer-connbar explorer-connbar-down" role="alert">
         <span class="explorer-conndot"></span>
         <span class="explorer-connmsg">@(status.Message ?? "Disconnected from the state API.")</span>
+        @if (status.RequiresAuthentication)
+        {
+            <button type="button"
+                    class="explorer-btn explorer-btn-primary explorer-reconnect"
+                    @onclick="OpenLogin">
+                Sign in
+            </button>
+        }
         <button type="button"
-                class="explorer-btn explorer-btn-primary explorer-reconnect"
+                class="explorer-btn explorer-reconnect"
                 disabled="@_reconnecting"
                 @onclick="ReconnectAsync">
             @(_reconnecting ? "Reconnecting..." : "Reconnect")
@@ -29,10 +38,16 @@ else if (status.IsDisconnected)
 @code {
     private bool _reconnecting;
 
+    /// <summary>Shared dialog state used to open the login dialog on an auth failure.</summary>
+    [CascadingParameter]
+    public LoginDialogState? Login { get; set; }
+
     protected override void OnInitialized()
     {
         Connection.StatusChanged += OnStatusChanged;
     }
+
+    private void OpenLogin() => Login?.Open();
 
     private async Task ReconnectAsync()
     {

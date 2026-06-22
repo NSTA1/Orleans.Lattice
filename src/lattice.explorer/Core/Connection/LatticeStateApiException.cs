@@ -24,4 +24,12 @@ public sealed class LatticeStateApiException : Exception
     /// recover) rather than a permanent fault such as an authentication error.
     /// </summary>
     public bool IsTransient { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the failure was an authentication /
+    /// authorization rejection (gRPC <c>Unauthenticated</c> or
+    /// <c>PermissionDenied</c>), so the UI can offer a "Sign in" action rather
+    /// than (or alongside) a plain reconnect.
+    /// </summary>
+    public bool RequiresAuthentication { get; init; }
 }
