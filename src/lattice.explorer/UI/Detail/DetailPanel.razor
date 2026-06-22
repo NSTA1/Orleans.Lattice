@@ -1,0 +1,78 @@
+@using Orleans.Lattice.Explorer.Core.Catalog
+@using Orleans.Lattice.Explorer.Core.Detail
+@using Orleans.Lattice.Explorer.UI.Detail.Tabs
+@implements IDisposable
+@inject IExplorerSelection Selection
+
+<section class="explorer-detail" aria-label="Detail">
+    @{
+        var selected = Selection.Selected;
+    }
+    <header class="explorer-detail-header">
+        <div class="explorer-tabstrip" role="tablist" aria-label="Detail tabs">
+            @foreach (var tab in DetailTabs.Ordered)
+            {
+                <button type="button"
+                        role="tab"
+                        class="explorer-tab @(tab == _activeTab ? "is-active" : null)"
+                        aria-selected="@(tab == _activeTab)"
+                        @onclick="@(() => SetTab(tab))">
+                    @DetailTabs.Label(tab)
+                </button>
+            }
+        </div>
+        @if (selected is not null)
+        {
+            <span class="explorer-detail-title" title="@selected.Id">@selected.Id</span>
+        }
+    </header>
+
+    <div class="explorer-detail-body">
+        @if (selected is null)
+        {
+            <div class="explorer-detail-empty">
+                <p>Select a tree or view to inspect it.</p>
+            </div>
+        }
+        else
+        {
+            var key = $"{selected.Kind}:{selected.Id}:{_activeTab}";
+            switch (_activeTab)
+            {
+                case DetailTab.Metrics:
+                    <MetricsTab @key="key" Selection="selected" />
+                    break;
+                case DetailTab.Topology:
+                    <TopologyTab @key="key" Selection="selected" />
+                    break;
+                case DetailTab.Data:
+                    <DataTab @key="key" Selection="selected" />
+                    break;
+            }
+        }
+    </div>
+</section>
+
+@code {
+    private DetailTab _activeTab = DetailTabs.Default;
+
+    protected override void OnInitialized()
+    {
+        Selection.SelectionChanged += OnSelectionChanged;
+    }
+
+    private void SetTab(DetailTab tab)
+    {
+        if (_activeTab == tab)
+        {
+            return;
+        }
+
+        _activeTab = tab;
+        StateHasChanged();
+    }
+
+    private void OnSelectionChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Selection.SelectionChanged -= OnSelectionChanged;
+}
