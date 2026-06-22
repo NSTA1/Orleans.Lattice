@@ -1,22 +1,375 @@
+/*
+  Orleans.Lattice.Explorer design system.
+  Sleek, minimal, technical: a dark-first surface, a single cool accent, thin
+  borders, tight radii, and a monospace face for technical/data values. New
+  features inherit these tokens and utility classes.
+
+  Theming / accessibility seam (toggles land in a later feature):
+  - Structure tokens (radii, fonts, motion, shadow) are theme-independent.
+  - Every colour is a semantic token in the theme layer below; nothing else in
+    this stylesheet hardcodes a colour. A future theme toggle only needs to set
+    `data-theme` on <html> (the dark default and a `data-theme="light"` hook are
+    already wired). High-contrast or additional palettes slot in the same way.
+  - Motion respects `prefers-reduced-motion` (see the end of this file), so a
+    reduced-motion preference or toggle needs no per-rule changes.
+*/
+
 :root {
-    color-scheme: light dark;
+    /* Structure tokens (theme-independent) */
+    --radius: 6px;
+    --radius-sm: 4px;
+
+    --font-ui: "Inter", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+    --motion-fast: 120ms;
+    --motion-ease: ease;
+
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+}
+
+/* Theme layer: dark is the default; an explicit data-theme="dark" selects it too. */
+:root,
+:root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --bg: #0b0e14;
+    --bg-panel: #0f131c;
+    --bg-elevated: #131927;
+    --bg-input: #0c1019;
+
+    --border: #1e2532;
+    --border-strong: #2b3545;
+    --focus-ring: rgba(76, 194, 255, 0.35);
+
+    --text: #d8dee9;
+    --text-muted: #8a93a3;
+    --text-dim: #5a6373;
+
+    --accent: #4cc2ff;
+    --accent-hover: #74d1ff;
+    --accent-contrast: #04111c;
+
+    --ok: #3ad29f;
+    --warn: #ffc857;
+    --danger: #ff6b6b;
+
+    --overlay: rgba(4, 7, 12, 0.72);
+    --danger-surface: rgba(255, 107, 107, 0.08);
+    --danger-border: rgba(255, 107, 107, 0.3);
+}
+
+/*
+  Light palette hook, ready for the future theme toggle. It is only applied when
+  a caller opts in with <html data-theme="light">, so the current default
+  appearance is unchanged.
+*/
+:root[data-theme="light"] {
+    color-scheme: light;
+
+    --bg: #f6f8fb;
+    --bg-panel: #ffffff;
+    --bg-elevated: #ffffff;
+    --bg-input: #ffffff;
+
+    --border: #dfe4ec;
+    --border-strong: #c4ccd8;
+    --focus-ring: rgba(20, 110, 180, 0.3);
+
+    --text: #1b2330;
+    --text-muted: #5a6473;
+    --text-dim: #8a93a3;
+
+    --accent: #1b73c4;
+    --accent-hover: #155a9b;
+    --accent-contrast: #ffffff;
+
+    --ok: #1a9c6e;
+    --warn: #b07a16;
+    --danger: #c92a2a;
+
+    --overlay: rgba(20, 28, 40, 0.4);
+    --danger-surface: rgba(201, 42, 42, 0.07);
+    --danger-border: rgba(201, 42, 42, 0.3);
+}
+
+* {
+    box-sizing: border-box;
 }
 
 body {
     margin: 0;
-    font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
+
+h1, h2, h3 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text);
+}
+
+h1 {
+    font-size: 1.4rem;
+    margin: 0 0 0.5rem;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--accent-hover);
+}
+
+code, .explorer-mono {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+}
+
+/* Layout shell */
 
 .explorer-shell {
     display: flex;
     min-height: 100vh;
+    background: var(--bg);
 }
 
 .explorer-main {
     flex: 1;
-    padding: 1.5rem;
+    padding: 1.75rem 2rem;
+    min-width: 0;
 }
 
 .explorer-description {
-    color: #6c757d;
+    color: var(--text-muted);
+}
+
+/* Panels and utilities */
+
+.explorer-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.explorer-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.55rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* Toolbar + cog */
+
+.explorer-config-toolbar {
+    display: flex;
+    align-items: center;
+    margin-bottom: 1.25rem;
+}
+
+.explorer-cog {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.explorer-cog:hover {
+    color: var(--accent);
+    background: var(--bg-elevated);
+    border-color: var(--border);
+}
+
+.explorer-cog:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+/* Configuration dialog */
+
+.explorer-config-loading {
+    padding: 2rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+
+.explorer-config-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: var(--overlay);
+    backdrop-filter: blur(2px);
+    z-index: 1000;
+}
+
+.explorer-config-dialog {
+    width: min(30rem, 94vw);
+    padding: 1.75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow);
+}
+
+.explorer-config-dialog h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.1rem;
+}
+
+.explorer-config-help {
+    color: var(--text-muted);
+    margin: 0 0 1.25rem;
+    font-size: 0.88rem;
+}
+
+.explorer-config-field {
+    display: block;
+    margin-bottom: 1.1rem;
+}
+
+.explorer-config-field span {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.explorer-config-field input[type="text"] {
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.explorer-config-field input[type="text"]::placeholder {
+    color: var(--text-dim);
+}
+
+.explorer-config-field input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.explorer-config-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.88rem;
+    color: var(--text-muted);
+}
+
+.explorer-config-checkbox input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--accent);
+}
+
+.explorer-config-error {
+    margin: 0 0 1.1rem;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.85rem;
+    color: var(--danger);
+    background: var(--danger-surface);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-sm);
+}
+
+.explorer-config-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+}
+
+/* Buttons */
+
+.explorer-btn {
+    padding: 0.5rem 1rem;
+    font-family: var(--font-ui);
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.explorer-btn:hover:not(:disabled) {
+    border-color: var(--text-muted);
+    background: var(--bg-panel);
+}
+
+.explorer-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.explorer-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.explorer-btn-primary {
+    color: var(--accent-contrast);
+    background: var(--accent);
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+.explorer-btn-primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+}
+
+/*
+  Accessibility: honour a reduced-motion preference (or a future reduced-motion
+  toggle that sets the same media state) without touching individual rules.
+*/
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+    }
 }

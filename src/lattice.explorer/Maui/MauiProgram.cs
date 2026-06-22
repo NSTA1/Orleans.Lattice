@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Explorer.Core.Configuration;
 
 namespace Orleans.Lattice.Explorer;
 
@@ -22,6 +23,13 @@ public static class MauiProgram
             });
 
         builder.Services.AddMauiBlazorWebView();
+
+        // The config store, shared connection, and session. The JSON store lives
+        // in the MAUI per-user app-data directory on the Windows desktop head.
+        builder.Services.AddExplorerConfiguration(options =>
+            options.FilePath = Path.Combine(
+                FileSystem.AppDataDirectory,
+                ExplorerConfigStoreOptions.DefaultFileName));
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();

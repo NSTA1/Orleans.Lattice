@@ -1,0 +1,114 @@
+@using Orleans.Lattice.Explorer.Core.Configuration
+@inject IExplorerSession Session
+
+<div class="explorer-config-dialog" role="dialog" aria-modal="true" aria-label="Connection settings">
+    <h2>Connect to the state API</h2>
+    <p class="explorer-config-help">
+        Enter the address of the Lattice state-API endpoint the explorer should connect to.
+    </p>
+
+    <label class="explorer-config-field">
+        <span>Endpoint</span>
+        <input type="text"
+               placeholder="https://host:443"
+               value="@_endpoint"
+               @oninput="OnEndpointInput"
+               @onkeydown="OnKeyDown" />
+    </label>
+
+    <label class="explorer-config-checkbox">
+        <input type="checkbox" checked="@_allowInsecure" @onchange="OnAllowInsecureChange" />
+        <span>Allow unencrypted HTTP/2 (h2c) for local development</span>
+    </label>
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <p class="explorer-config-error" role="alert">@_error</p>
+    }
+
+    <div class="explorer-config-actions">
+        @if (AllowCancel)
+        {
+            <button type="button" class="explorer-btn" disabled="@_saving" @onclick="CancelAsync">Cancel</button>
+        }
+        <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_saving" @onclick="SaveAsync">
+            @(_saving ? "Connecting..." : "Save and connect")
+        </button>
+    </div>
+</div>
+
+@code {
+    private string _endpoint = string.Empty;
+    private bool _allowInsecure;
+    private string? _error;
+    private bool _saving;
+
+    /// <summary>The configuration to pre-populate the form with, if any.</summary>
+    [Parameter]
+    public ExplorerConfiguration? Initial { get; set; }
+
+    /// <summary>Whether a Cancel button is shown (hidden on the mandatory first-run flow).</summary>
+    [Parameter]
+    public bool AllowCancel { get; set; }
+
+    /// <summary>Invoked after the configuration is saved and applied.</summary>
+    [Parameter]
+    public EventCallback OnSaved { get; set; }
+
+    /// <summary>Invoked when the user cancels.</summary>
+    [Parameter]
+    public EventCallback OnCancelled { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (Initial is not null)
+        {
+            _endpoint = Initial.Endpoint;
+            _allowInsecure = Initial.AllowUnencryptedHttp2;
+        }
+    }
+
+    private void OnEndpointInput(ChangeEventArgs e) => _endpoint = e.Value?.ToString() ?? string.Empty;
+
+    private void OnAllowInsecureChange(ChangeEventArgs e) => _allowInsecure = e.Value is true;
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter")
+        {
+            await SaveAsync();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!EndpointValidation.TryValidate(_endpoint, out var error))
+        {
+            _error = error;
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Session.ApplyAsync(new ExplorerConfiguration
+            {
+                Endpoint = _endpoint.Trim(),
+                AllowUnencryptedHttp2 = _allowInsecure,
+                Headers = Initial?.Headers,
+            });
+            await OnSaved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task CancelAsync() => await OnCancelled.InvokeAsync();
+}
