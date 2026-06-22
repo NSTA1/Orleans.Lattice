@@ -6,6 +6,9 @@
   <Project Path="src/lattice.replication/Orleans.Lattice.Replication.csproj" />
   <Project Path="src/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.csproj" />
   <Project Path="src/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.csproj" />
+  <Project Path="src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj" />
+  <Project Path="src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj" />
+  <Project Path="src/lattice.explorer/Web/Orleans.Lattice.Explorer.Web.csproj" />
   <Project Path="benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj" />
   <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
   <Project Path="test/lattice.api.state/Orleans.Lattice.Api.State.Tests.csproj" />
@@ -14,5 +17,6 @@
   <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
   <Project Path="test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj" />
   <Project Path="test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj" />
+  <Project Path="test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj" />
   <Project Path="test/microbench/Orleans.Lattice.Benchmark.Microbench.Tests.csproj" />
 </Solution>

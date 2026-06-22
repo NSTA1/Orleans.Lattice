@@ -1,0 +1,22 @@
+:root {
+    color-scheme: light dark;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.explorer-shell {
+    display: flex;
+    min-height: 100vh;
+}
+
+.explorer-main {
+    flex: 1;
+    padding: 1.5rem;
+}
+
+.explorer-description {
+    color: #6c757d;
+}
