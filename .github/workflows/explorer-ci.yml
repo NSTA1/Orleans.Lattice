@@ -1,0 +1,59 @@
+name: Explorer CI
+
+# Advisory (non-required) lane that builds the .NET MAUI Windows desktop head of
+# Orleans.Lattice.Explorer. The core `build-and-test` job runs on ubuntu, which
+# has no MAUI workload and therefore cannot compile the Windows head - that head
+# is deliberately kept out of `Orleans.Lattice.slnx`. This job covers it on a
+# Windows runner. It only runs when explorer files change, so it never burdens
+# unrelated PRs, and it is not a required status check.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/lattice.explorer/**'
+      - 'test/lattice.explorer/**'
+      - '.github/workflows/explorer-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: explorer-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-head:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install MAUI Windows workload
+        run: dotnet workload install maui-windows
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-explorer-${{ runner.os }}-${{ hashFiles('src/lattice.explorer/**/*.csproj', 'test/lattice.explorer/**/*.csproj') }}
+          restore-keys: nuget-explorer-${{ runner.os }}-
+
+      # Build the Windows desktop head explicitly (the ubuntu lane already builds
+      # Core/UI/Web). This is the only target that requires the MAUI workload.
+      - name: Build MAUI Windows head
+        run: dotnet build src/lattice.explorer/Maui/Orleans.Lattice.Explorer.csproj --configuration Release -f net10.0-windows10.0.19041.0
+
+      - name: Test explorer
+        run: dotnet test test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj --configuration Release --filter "TestCategory!=Chaos" --logger "trx;LogFileName=explorer-windows.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: explorer-test-results
+          path: '**/*.trx'

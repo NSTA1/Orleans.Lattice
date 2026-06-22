@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="456" height="456" viewBox="0 0 456 456" version="1.1" xmlns="http://www.w3.org/2000/svg" xml:space="preserve" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
+    <g style="stroke:#ffffff;stroke-width:12;stroke-linecap:round;fill:none;">
+        <path d="M228,120 L148,238" />
+        <path d="M228,120 L308,238" />
+        <path d="M148,238 L108,356" />
+        <path d="M148,238 L188,356" />
+        <path d="M308,238 L268,356" />
+        <path d="M308,238 L348,356" />
+    </g>
+    <g style="fill:#ffffff;">
+        <circle cx="228" cy="120" r="32" />
+        <circle cx="148" cy="238" r="27" />
+        <circle cx="308" cy="238" r="27" />
+        <circle cx="108" cy="356" r="21" />
+        <circle cx="188" cy="356" r="21" />
+        <circle cx="268" cy="356" r="21" />
+        <circle cx="348" cy="356" r="21" />
+    </g>
+</svg>

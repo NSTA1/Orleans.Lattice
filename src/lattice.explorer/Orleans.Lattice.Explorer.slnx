@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="Core/Orleans.Lattice.Explorer.Core.csproj" />
+  <Project Path="UI/Orleans.Lattice.Explorer.UI.csproj" />
+  <Project Path="Web/Orleans.Lattice.Explorer.Web.csproj" />
+  <Project Path="Maui/Orleans.Lattice.Explorer.csproj" />
+  <Project Path="../../test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj" />
+</Solution>

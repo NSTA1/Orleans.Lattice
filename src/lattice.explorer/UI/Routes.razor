@@ -1,0 +1,11 @@
+@*
+    Root router for the explorer UI, shared by both heads (Windows desktop and
+    web). The AppAssembly is this UI class library, so every routable page lives
+    here and renders identically on each head.
+*@
+<Router AppAssembly="typeof(Layout.MainLayout).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>
