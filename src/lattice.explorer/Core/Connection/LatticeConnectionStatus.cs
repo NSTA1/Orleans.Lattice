@@ -8,10 +8,16 @@ namespace Orleans.Lattice.Explorer.Core.Connection;
 /// <param name="State">The current lifecycle state.</param>
 /// <param name="Endpoint">The configured endpoint address, or <see langword="null"/> when unconfigured.</param>
 /// <param name="Message">A human-readable description of the current state, suitable for display.</param>
+/// <param name="RequiresAuthentication">
+/// <see langword="true"/> when the connection faulted because the endpoint
+/// rejected the call as unauthenticated / forbidden, so the UI should offer a
+/// "Sign in" action.
+/// </param>
 public sealed record LatticeConnectionStatus(
     LatticeConnectionState State,
     string? Endpoint,
-    string? Message)
+    string? Message,
+    bool RequiresAuthentication = false)
 {
     /// <summary>The initial, unconfigured status.</summary>
     public static readonly LatticeConnectionStatus Disconnected =

@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Topology;
+using Orleans.Lattice.Explorer.UI.Authentication;
 
 namespace Orleans.Lattice.Explorer;
 
@@ -38,6 +40,13 @@ public static class MauiProgram
         builder.Services.AddExplorerMetrics();
         builder.Services.AddExplorerTopology();
         builder.Services.AddExplorerData();
+
+        // Authentication. The desktop head rests the credential on the machine via
+        // DPAPI (per-user encrypted) and signs in fully in-process.
+        builder.Services.AddSingleton<ICredentialStore>(
+            new DpapiCredentialStore(Path.Combine(FileSystem.AppDataDirectory, "credential.bin")));
+        builder.Services.AddSingleton(new ExplorerAuthUiOptions { UseServerFormPost = false });
+        builder.Services.AddExplorerAuth();
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();

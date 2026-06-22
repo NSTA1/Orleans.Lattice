@@ -1,6 +1,8 @@
+@using Orleans.Lattice.Explorer.Core.Authentication
 @using Orleans.Lattice.Explorer.Core.Configuration
 @implements IDisposable
 @inject IExplorerSession Session
+@inject IExplorerAuthSession AuthSession
 
 @if (!_initialized)
 {
@@ -28,6 +30,7 @@ else
     {
         Session.ConfigurationChanged += OnConfigurationChanged;
         await Session.InitializeAsync();
+        await AuthSession.InitializeAsync();
         _initialized = true;
     }
 

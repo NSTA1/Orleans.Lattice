@@ -1153,6 +1153,68 @@ code, .explorer-mono {
     color: var(--danger);
 }
 
+/* Authentication: sign-in button + signed-in identity in the nav header */
+
+.explorer-auth {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.explorer-auth-form {
+    display: inline-flex;
+    margin: 0;
+}
+
+.explorer-auth-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    max-width: 7rem;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.explorer-auth-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.explorer-auth-signin {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--motion-ease),
+                background var(--motion-fast) var(--motion-ease),
+                border-color var(--motion-fast) var(--motion-ease);
+}
+
+.explorer-auth-signin:hover {
+    color: var(--accent);
+    background: var(--bg-elevated);
+    border-color: var(--border-strong);
+}
+
+.explorer-auth-signin:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.explorer-auth-label {
+    line-height: 1;
+}
+
 /*
   Accessibility: honour a reduced-motion preference (or a future reduced-motion
   toggle that sets the same media state) without touching individual rules.

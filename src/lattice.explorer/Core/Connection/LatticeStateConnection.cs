@@ -130,7 +130,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
             }
             else
             {
-                SetFaulted(Friendly(ex));
+                SetFaulted(Friendly(ex), IsAuthFailure(ex));
             }
 
             return false;
@@ -239,10 +239,14 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 }
                 else
                 {
-                    SetFaulted(Friendly(ex));
+                    SetFaulted(Friendly(ex), IsAuthFailure(ex));
                 }
 
-                throw new LatticeStateApiException(Friendly(ex), ex) { IsTransient = IsTransient(ex) };
+                throw new LatticeStateApiException(Friendly(ex), ex)
+                {
+                    IsTransient = IsTransient(ex),
+                    RequiresAuthentication = IsAuthFailure(ex),
+                };
             }
         }
     }
@@ -277,8 +281,12 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                     yield break;
                 }
 
-                SetFaulted(Friendly(ex));
-                throw new LatticeStateApiException(Friendly(ex), ex) { IsTransient = false };
+                SetFaulted(Friendly(ex), IsAuthFailure(ex));
+                throw new LatticeStateApiException(Friendly(ex), ex)
+                {
+                    IsTransient = false,
+                    RequiresAuthentication = IsAuthFailure(ex),
+                };
             }
 
             OnSuccess();
@@ -392,7 +400,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         }
     }
 
-    private void SetFaulted(string message)
+    private void SetFaulted(string message, bool requiresAuth = false)
     {
         LatticeConnectionStatus? raise;
         lock (_gate)
@@ -402,7 +410,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 return;
             }
 
-            raise = SetUnlocked(LatticeConnectionState.Faulted, _settings?.Address, message);
+            raise = SetUnlocked(LatticeConnectionState.Faulted, _settings?.Address, message, requiresAuth);
         }
 
         if (raise is not null)
@@ -411,9 +419,9 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         }
     }
 
-    private LatticeConnectionStatus? SetUnlocked(LatticeConnectionState state, string? endpoint, string message)
+    private LatticeConnectionStatus? SetUnlocked(LatticeConnectionState state, string? endpoint, string message, bool requiresAuth = false)
     {
-        var next = new LatticeConnectionStatus(state, endpoint, message);
+        var next = new LatticeConnectionStatus(state, endpoint, message, requiresAuth);
         if (next == _status)
         {
             return null;
@@ -456,6 +464,10 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         StatusCode.Unknown or
         StatusCode.ResourceExhausted or
         StatusCode.Aborted;
+
+    private static bool IsAuthFailure(RpcException ex) => ex.StatusCode is
+        StatusCode.Unauthenticated or
+        StatusCode.PermissionDenied;
 
     private static string Friendly(RpcException ex) => ex.StatusCode switch
     {

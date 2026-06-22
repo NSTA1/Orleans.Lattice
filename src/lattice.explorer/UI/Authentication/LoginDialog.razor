@@ -1,0 +1,114 @@
+@using Orleans.Lattice.Explorer.Core.Authentication
+@using Orleans.Lattice.Explorer.UI.Authentication
+@inject IExplorerAuthSession AuthSession
+@inject IServiceProvider Services
+
+<div class="explorer-config-dialog" role="dialog" aria-modal="true" aria-label="Sign in to the state API">
+    <h2>Sign in</h2>
+    <p class="explorer-config-help">
+        Enter the username and password for the Lattice state-API endpoint.
+    </p>
+
+    @if (_options.UseServerFormPost)
+    {
+        <form method="post" action="@_options.LoginPath">
+            <label class="explorer-config-field">
+                <span>Username</span>
+                <input type="text" name="username" autocomplete="username" />
+            </label>
+            <label class="explorer-config-field">
+                <span>Password</span>
+                <input type="password" name="password" autocomplete="current-password" />
+            </label>
+            <div class="explorer-config-actions">
+                <button type="button" class="explorer-btn" @onclick="Cancel">Cancel</button>
+                <button type="submit" class="explorer-btn explorer-btn-primary">Sign in</button>
+            </div>
+        </form>
+    }
+    else
+    {
+        <label class="explorer-config-field">
+            <span>Username</span>
+            <input type="text"
+                   autocomplete="username"
+                   value="@_username"
+                   @oninput="OnUsernameInput"
+                   @onkeydown="OnKeyDown" />
+        </label>
+        <label class="explorer-config-field">
+            <span>Password</span>
+            <input type="password"
+                   autocomplete="current-password"
+                   value="@_password"
+                   @oninput="OnPasswordInput"
+                   @onkeydown="OnKeyDown" />
+        </label>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <p class="explorer-config-error" role="alert">@_error</p>
+        }
+
+        <div class="explorer-config-actions">
+            <button type="button" class="explorer-btn" disabled="@_busy" @onclick="Cancel">Cancel</button>
+            <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_busy" @onclick="SignInAsync">
+                @(_busy ? "Signing in..." : "Sign in")
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string? _error;
+    private bool _busy;
+    private ExplorerAuthUiOptions _options = new();
+
+    /// <summary>Invoked when the dialog is dismissed (cancel or successful sign-in).</summary>
+    [Parameter]
+    public EventCallback OnClosed { get; set; }
+
+    protected override void OnInitialized() =>
+        _options = (ExplorerAuthUiOptions?)Services.GetService(typeof(ExplorerAuthUiOptions)) ?? new ExplorerAuthUiOptions();
+
+    private void OnUsernameInput(ChangeEventArgs e) => _username = e.Value?.ToString() ?? string.Empty;
+
+    private void OnPasswordInput(ChangeEventArgs e) => _password = e.Value?.ToString() ?? string.Empty;
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter")
+        {
+            await SignInAsync();
+        }
+    }
+
+    private async Task SignInAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_username))
+        {
+            _error = "Enter a username.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            await AuthSession.LoginAsync(_username.Trim(), _password);
+            await OnClosed.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task Cancel() => await OnClosed.InvokeAsync();
+}

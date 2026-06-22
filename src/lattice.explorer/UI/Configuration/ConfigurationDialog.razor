@@ -17,6 +17,11 @@
     </label>
 
     <label class="explorer-config-checkbox">
+        <input type="checkbox" checked="@_insecureLoopbackDev" @onchange="OnInsecureModeChange" />
+        <span>Insecure loopback-dev mode (anonymous, plaintext; localhost only)</span>
+    </label>
+
+    <label class="explorer-config-checkbox">
         <input type="checkbox" checked="@_allowInsecure" @onchange="OnAllowInsecureChange" />
         <span>Allow unencrypted HTTP/2 (h2c) for local development</span>
     </label>
@@ -40,6 +45,7 @@
 @code {
     private string _endpoint = string.Empty;
     private bool _allowInsecure;
+    private bool _insecureLoopbackDev;
     private string? _error;
     private bool _saving;
 
@@ -59,18 +65,24 @@
     [Parameter]
     public EventCallback OnCancelled { get; set; }
 
+    private ExplorerTransportMode TransportMode =>
+        _insecureLoopbackDev ? ExplorerTransportMode.InsecureLoopbackDev : ExplorerTransportMode.Secure;
+
     protected override void OnParametersSet()
     {
         if (Initial is not null)
         {
             _endpoint = Initial.Endpoint;
             _allowInsecure = Initial.AllowUnencryptedHttp2;
+            _insecureLoopbackDev = Initial.TransportMode == ExplorerTransportMode.InsecureLoopbackDev;
         }
     }
 
     private void OnEndpointInput(ChangeEventArgs e) => _endpoint = e.Value?.ToString() ?? string.Empty;
 
     private void OnAllowInsecureChange(ChangeEventArgs e) => _allowInsecure = e.Value is true;
+
+    private void OnInsecureModeChange(ChangeEventArgs e) => _insecureLoopbackDev = e.Value is true;
 
     private async Task OnKeyDown(KeyboardEventArgs e)
     {
@@ -82,7 +94,7 @@
 
     private async Task SaveAsync()
     {
-        if (!EndpointValidation.TryValidate(_endpoint, out var error))
+        if (!TransportSecurityPolicy.TryValidateEndpoint(_endpoint, TransportMode, out var error))
         {
             _error = error;
             return;
@@ -95,6 +107,7 @@
             await Session.ApplyAsync(new ExplorerConfiguration
             {
                 Endpoint = _endpoint.Trim(),
+                TransportMode = TransportMode,
                 AllowUnencryptedHttp2 = _allowInsecure,
                 Headers = Initial?.Headers,
             });

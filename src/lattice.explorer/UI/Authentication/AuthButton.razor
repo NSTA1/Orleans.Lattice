@@ -1,0 +1,76 @@
+@using Orleans.Lattice.Explorer.Core.Authentication
+@using Orleans.Lattice.Explorer.UI.Authentication
+@implements IDisposable
+@inject IExplorerAuthSession AuthSession
+@inject IServiceProvider Services
+
+@if (AuthSession.IsAuthenticated)
+{
+    <div class="explorer-auth">
+        <span class="explorer-auth-user" title="Signed in">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+                <path fill="currentColor"
+                      d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.4 0-8 2.7-8 6v1h16v-1c0-3.3-3.6-6-8-6Z" />
+            </svg>
+            <span class="explorer-auth-name">@AuthSession.Username</span>
+        </span>
+        @if (_options.UseServerFormPost)
+        {
+            <form method="post" action="@_options.LogoutPath" class="explorer-auth-form">
+                <button type="submit" class="explorer-btn-link" title="Sign out">Sign out</button>
+            </form>
+        }
+        else
+        {
+            <button type="button" class="explorer-btn-link" title="Sign out" disabled="@_busy" @onclick="SignOutAsync">
+                Sign out
+            </button>
+        }
+    </div>
+}
+else
+{
+    <button type="button" class="explorer-auth-signin" title="Sign in" aria-label="Sign in" @onclick="OpenLogin">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <path fill="currentColor"
+                  d="M10 17v-2H4V9h6V7l5 5-5 5Zm2-15a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z" />
+        </svg>
+        <span class="explorer-auth-label">Sign in</span>
+    </button>
+}
+
+@code {
+    private bool _busy;
+    private ExplorerAuthUiOptions _options = new();
+
+    /// <summary>Shared dialog state used to open the login dialog.</summary>
+    [CascadingParameter]
+    public LoginDialogState? Login { get; set; }
+
+    protected override void OnInitialized()
+    {
+        _options = (ExplorerAuthUiOptions?)Services.GetService(typeof(ExplorerAuthUiOptions)) ?? new ExplorerAuthUiOptions();
+        AuthSession.AuthenticationChanged += OnAuthenticationChanged;
+    }
+
+    private void OpenLogin() => Login?.Open();
+
+    private async Task SignOutAsync()
+    {
+        _busy = true;
+        StateHasChanged();
+        try
+        {
+            await AuthSession.LogoutAsync();
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnAuthenticationChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => AuthSession.AuthenticationChanged -= OnAuthenticationChanged;
+}
