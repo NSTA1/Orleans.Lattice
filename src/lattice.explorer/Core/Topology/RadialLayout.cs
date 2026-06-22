@@ -25,8 +25,17 @@ public static class RadialLayout
     /// <summary>The rendered radius of a node marker, in canvas units.</summary>
     public const double NodeRadius = 11;
 
-    /// <summary>Extra canvas padding added around the outermost ring.</summary>
-    public const double Padding = 28;
+    /// <summary>
+    /// The allowance, in canvas units, added beyond the outermost ring to cover a
+    /// node's marker radius plus its expand/leaf-count label.
+    /// </summary>
+    public const double Padding = 16;
+
+    /// <summary>
+    /// The minimum fraction of the canvas left as empty margin around the graph
+    /// when it is framed to fit, so the full topology shows with breathing room.
+    /// </summary>
+    public const double MarginFraction = 0.10;
 
     /// <summary>The ring radius for a given level and root count.</summary>
     /// <param name="level">The zero-based level (roots at level 0).</param>
@@ -55,11 +64,21 @@ public static class RadialLayout
     }
 
     /// <summary>
-    /// The half-extent of the canvas: the distance from the centre to the edge of
-    /// the bounding box that frames every ring, including the node radius and padding.
+    /// The radius of the drawn content: the outermost ring plus a node's marker
+    /// and label allowance. This is the half-size of the graph's bounding box.
+    /// </summary>
+    /// <param name="levelCount">The number of levels the layout spans.</param>
+    /// <param name="rootCount">The number of shard roots in the forest.</param>
+    public static double ContentRadius(int levelCount, int rootCount) =>
+        RingRadius(Math.Max(0, levelCount - 1), rootCount) + NodeRadius + Padding;
+
+    /// <summary>
+    /// The half-extent of the square canvas viewBox that frames the whole graph
+    /// with at least <see cref="MarginFraction"/> empty margin on the fitting
+    /// axis, so a freshly loaded topology shows in full with breathing room.
     /// </summary>
     /// <param name="levelCount">The number of levels the layout spans.</param>
     /// <param name="rootCount">The number of shard roots in the forest.</param>
     public static double Extent(int levelCount, int rootCount) =>
-        RingRadius(Math.Max(0, levelCount - 1), rootCount) + NodeRadius + Padding;
+        ContentRadius(levelCount, rootCount) / (1 - MarginFraction);
 }

@@ -66,13 +66,28 @@ public class RadialLayoutTests
     }
 
     [Test]
-    public void Extent_FramesOutermostRingPlusNodeAndPadding()
+    public void ContentRadius_FramesOutermostRingPlusNodeAndPadding()
     {
-        var extent = RadialLayout.Extent(levelCount: 3, rootCount: 1);
+        var content = RadialLayout.ContentRadius(levelCount: 3, rootCount: 1);
 
         Assert.That(
-            extent,
+            content,
             Is.EqualTo(RadialLayout.RingRadius(2, 1) + RadialLayout.NodeRadius + RadialLayout.Padding));
+    }
+
+    [Test]
+    public void Extent_LeavesAtLeastTheMarginFractionAroundTheContent()
+    {
+        var content = RadialLayout.ContentRadius(levelCount: 3, rootCount: 2);
+        var extent = RadialLayout.Extent(levelCount: 3, rootCount: 2);
+
+        Assert.Multiple(() =>
+        {
+            // The content occupies (1 - margin) of the half-extent, leaving the
+            // margin fraction as empty space on the fitting axis.
+            Assert.That(content / extent, Is.EqualTo(1 - RadialLayout.MarginFraction).Within(1e-9));
+            Assert.That((extent - content) / extent, Is.GreaterThanOrEqualTo(RadialLayout.MarginFraction - 1e-9));
+        });
     }
 
     [Test]
