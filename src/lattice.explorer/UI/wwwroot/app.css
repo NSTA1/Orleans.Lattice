@@ -940,6 +940,7 @@ code, .explorer-mono {
 
 .explorer-topology-canvas {
     flex: 1 1 auto;
+    min-height: 0;
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 8px;
