@@ -1,0 +1,16 @@
+<div class="explorer-tile">
+    <span class="explorer-tile-label">@Label</span>
+    <span class="explorer-tile-value">@Value</span>
+</div>
+
+@code {
+    /// <summary>The metric's caption.</summary>
+    [Parameter]
+    [EditorRequired]
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>The formatted metric value.</summary>
+    [Parameter]
+    [EditorRequired]
+    public string Value { get; set; } = string.Empty;
+}

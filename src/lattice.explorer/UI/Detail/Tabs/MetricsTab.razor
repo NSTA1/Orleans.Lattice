@@ -1,5 +1,125 @@
+@using Orleans.Lattice.Api.State
+@using Orleans.Lattice.Explorer.Core.Metrics
 @inherits DetailTabBase
+@inject IMetricsReader MetricsReader
 
-<div class="explorer-tab-placeholder">
-    <p>Metrics for <code>@Selection.Id</code> will appear here.</p>
+<div class="explorer-metrics">
+    <div class="explorer-metrics-toolbar">
+        <button type="button"
+                class="explorer-btn explorer-metrics-refresh"
+                disabled="@_loading"
+                @onclick="LoadAsync">
+            @(_loading ? "Refreshing..." : "Refresh")
+        </button>
+        @if (_metrics is not null)
+        {
+            <span class="explorer-metrics-sampled">Sampled @_sampledAt.ToLocalTime().ToString("HH:mm:ss")</span>
+        }
+    </div>
+
+    @if (_loading && _metrics is null)
+    {
+        <div class="explorer-metrics-state">Loading metrics...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="explorer-metrics-state explorer-metrics-error">
+            <span>@_error</span>
+            <button type="button" class="explorer-btn-link" @onclick="LoadAsync">Try again</button>
+        </div>
+    }
+    else if (_metrics is null)
+    {
+        <div class="explorer-metrics-state">No metrics reported for this id.</div>
+    }
+    else
+    {
+        var m = _metrics;
+        <div class="explorer-tiles">
+            <MetricTile Label="Lifecycle" Value="@m.Lifecycle.ToString()" />
+            <MetricTile Label="Shards" Value="@m.ShardCount.ToString()" />
+            <MetricTile Label="Live keys" Value="@m.LiveKeys.ToString("N0")" />
+            <MetricTile Label="Tombstones" Value="@m.Tombstones.ToString("N0")" />
+            <MetricTile Label="Depth (min/max)" Value="@($"{m.MinDepth} / {m.MaxDepth}")" />
+            <MetricTile Label="Shards splitting" Value="@m.ShardsSplitting.ToString()" />
+            @if (m.ViewCount is int views)
+            {
+                <MetricTile Label="Views" Value="@views.ToString()" />
+            }
+            @if (m.ViewLagTotal is long lag)
+            {
+                <MetricTile Label="View lag (total)" Value="@lag.ToString("N0")" />
+            }
+        </div>
+
+        <section class="explorer-hotness">
+            <h3 class="explorer-section-title">Per-shard hotness</h3>
+            @if (m.ShardHotness.Count == 0)
+            {
+                <p class="explorer-metrics-muted">No per-shard hotness reported.</p>
+            }
+            else
+            {
+                <table class="explorer-table">
+                    <thead>
+                        <tr>
+                            <th>Shard</th>
+                            <th>Ops/sec</th>
+                            <th>Live keys</th>
+                            <th>Splitting</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var shard in m.ShardHotness)
+                        {
+                            <tr>
+                                <td>@shard.ShardIndex</td>
+                                <td>@shard.OpsPerSecond.ToString("N1")</td>
+                                <td>@shard.LiveKeys.ToString("N0")</td>
+                                <td>@(shard.SplitInProgress ? "yes" : "-")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+    }
 </div>
+
+@code {
+    private TreeMetrics? _metrics;
+    private DateTimeOffset _sampledAt;
+    private bool _loading;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            _metrics = await MetricsReader.GetAsync(Selection.Id, TabToken);
+            _sampledAt = DateTimeOffset.UtcNow;
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+}
