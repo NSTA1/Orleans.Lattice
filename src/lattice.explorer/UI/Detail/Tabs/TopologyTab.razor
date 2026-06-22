@@ -1,5 +1,185 @@
+@using Orleans.Lattice.Api.State
+@using Orleans.Lattice.Explorer.Core.Topology
 @inherits DetailTabBase
+@inject ITopologyReader TopologyReader
 
-<div class="explorer-tab-placeholder">
-    <p>Topology for <code>@Selection.Id</code> will appear here.</p>
+<div class="explorer-topology">
+    <div class="explorer-topology-toolbar">
+        <button type="button"
+                class="explorer-btn explorer-topology-refresh"
+                disabled="@_loading"
+                @onclick="LoadAsync">
+            @(_loading ? "Loading..." : "Refresh")
+        </button>
+        <label class="explorer-topology-toggle">
+            <input type="checkbox" checked="@_showLeaves" @onchange="OnToggleLeaves" />
+            Show leaf nodes
+        </label>
+        @if (_truncated)
+        {
+            <span class="explorer-topology-trunc" title="Depth or node budget reached">truncated</span>
+        }
+        <div class="explorer-topology-legend" aria-hidden="true">
+            <span class="explorer-topology-legend-label">load</span>
+            @for (var b = 0; b < TopologyLayout.LoadBuckets; b++)
+            {
+                <span class="explorer-topo-swatch explorer-topo-load-@b"></span>
+            }
+        </div>
+    </div>
+
+    @if (_loading && _graph is null)
+    {
+        <div class="explorer-topology-state">Loading topology...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="explorer-topology-state explorer-topology-error">
+            <span>@_error</span>
+            <button type="button" class="explorer-btn-link" @onclick="LoadAsync">Try again</button>
+        </div>
+    }
+    else if (_graph is null || _graph.Nodes.Count == 0)
+    {
+        <div class="explorer-topology-state">No structure reported for this id.</div>
+    }
+    else
+    {
+        var width = Math.Max(1, _graph.ColumnCount) * ColumnSpacing + Margin * 2;
+        var height = Math.Max(1, _graph.LevelCount) * LevelSpacing + Margin * 2;
+        <div class="explorer-topology-canvas">
+            <svg viewBox="@($"0 0 {width} {height}")"
+                 width="@width" height="@height"
+                 role="img" aria-label="Tree topology graph">
+                @foreach (var edge in _graph.Edges)
+                {
+                    <line class="explorer-topo-edge"
+                          x1="@Cx(edge.FromColumn)" y1="@Cy(edge.FromLevel)"
+                          x2="@Cx(edge.ToColumn)" y2="@Cy(edge.ToLevel)" />
+                }
+                @foreach (var node in _graph.Nodes)
+                {
+                    var cx = Cx(node.Column);
+                    var cy = Cy(node.Level);
+                    var expandable = node.Node.HasMoreChildren;
+                    <g class="explorer-topo-node @(expandable ? "is-expandable" : null) @(node.Node.SplitInProgress ? "is-splitting" : null)"
+                       transform="@($"translate({cx},{cy})")"
+                       @onclick="@(() => OnNodeClickAsync(node.Node))">
+                        <title>@NodeTooltip(node)</title>
+                        <circle class="explorer-topo-dot explorer-topo-load-@node.LoadBucket" r="@NodeRadius" />
+                        @if (node.LeafBadge > 0)
+                        {
+                            @((MarkupString)$"<text class=\"explorer-topo-badge\" x=\"0\" y=\"4\">{node.LeafBadge}</text>")
+                        }
+                        @if (expandable)
+                        {
+                            @((MarkupString)$"<text class=\"explorer-topo-expand\" x=\"0\" y=\"{NodeRadius + 12}\">+</text>")
+                        }
+                    </g>
+                }
+            </svg>
+        </div>
+    }
 </div>
+
+@code {
+    private const double ColumnSpacing = 64;
+    private const double LevelSpacing = 80;
+    private const double Margin = 32;
+    private const double NodeRadius = 11;
+
+    private IReadOnlyList<TopologyNode> _roots = Array.Empty<TopologyNode>();
+    private TopologyGraph? _graph;
+    private bool _showLeaves;
+    private bool _truncated;
+    private bool _loading;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            var fetch = await TopologyReader.GetAsync(Selection.Id, TabToken);
+            _roots = fetch.Roots;
+            _truncated = fetch.Truncated;
+            Rebuild();
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnToggleLeaves(ChangeEventArgs e)
+    {
+        _showLeaves = e.Value is true;
+        Rebuild();
+    }
+
+    private async Task OnNodeClickAsync(TopologyNode node)
+    {
+        if (!node.HasMoreChildren || _loading)
+        {
+            return;
+        }
+
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var fetch = await TopologyReader.ExpandAsync(Selection.Id, node.ShardIndex, node.NodeId, TabToken);
+            var children = fetch.Roots.Count == 1 && string.Equals(fetch.Roots[0].NodeId, node.NodeId, StringComparison.Ordinal)
+                ? fetch.Roots[0].Children
+                : fetch.Roots;
+            _roots = TopologyTree.WithExpanded(_roots, node.NodeId, children);
+            Rebuild();
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void Rebuild() => _graph = TopologyLayout.Build(_roots, _showLeaves);
+
+    private static double Cx(double column) => Margin + column * ColumnSpacing + ColumnSpacing / 2;
+
+    private static double Cy(int level) => Margin + level * LevelSpacing + LevelSpacing / 2;
+
+    private static string NodeTooltip(PositionedNode node)
+    {
+        var n = node.Node;
+        var kind = n.Kind switch
+        {
+            NodeKind.ShardRoot => "shard root",
+            NodeKind.Internal => "internal",
+            NodeKind.Leaf => "leaf",
+            _ => n.Kind.ToString(),
+        };
+        return $"{kind} (shard {n.ShardIndex}, depth {n.Depth})\nkeys: {n.SubtreeKeyCount:N0}, tombstones: {n.SubtreeTombstoneCount:N0}";
+    }
+}

@@ -57,6 +57,12 @@
     --overlay: rgba(4, 7, 12, 0.72);
     --danger-surface: rgba(255, 107, 107, 0.08);
     --danger-border: rgba(255, 107, 107, 0.3);
+
+    --topo-load-0: #3b6ea5;
+    --topo-load-1: #3aa6a0;
+    --topo-load-2: #6fc05a;
+    --topo-load-3: #e0b341;
+    --topo-load-4: #e3603a;
 }
 
 /*
@@ -91,6 +97,12 @@
     --overlay: rgba(20, 28, 40, 0.4);
     --danger-surface: rgba(201, 42, 42, 0.07);
     --danger-border: rgba(201, 42, 42, 0.3);
+
+    --topo-load-0: #5a86bd;
+    --topo-load-1: #2f9f97;
+    --topo-load-2: #5aa83f;
+    --topo-load-3: #c79420;
+    --topo-load-4: #cc4a28;
 }
 
 * {
@@ -818,6 +830,128 @@ code, .explorer-mono {
 .explorer-table td {
     font-family: var(--font-mono);
     color: var(--text);
+}
+
+/* Topology tab: SVG tree graph with load-coloured nodes. */
+.explorer-topology {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    height: 100%;
+}
+
+.explorer-topology-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.explorer-topology-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.explorer-topology-trunc {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--warn);
+}
+
+.explorer-topology-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-left: auto;
+}
+
+.explorer-topology-legend-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-right: 0.2rem;
+}
+
+.explorer-topo-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    display: inline-block;
+}
+
+.explorer-topo-load-0 { fill: var(--topo-load-0); background: var(--topo-load-0); }
+.explorer-topo-load-1 { fill: var(--topo-load-1); background: var(--topo-load-1); }
+.explorer-topo-load-2 { fill: var(--topo-load-2); background: var(--topo-load-2); }
+.explorer-topo-load-3 { fill: var(--topo-load-3); background: var(--topo-load-3); }
+.explorer-topo-load-4 { fill: var(--topo-load-4); background: var(--topo-load-4); }
+
+.explorer-topology-canvas {
+    flex: 1 1 auto;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-input);
+}
+
+.explorer-topo-edge {
+    stroke: var(--border-strong);
+    stroke-width: 1.5;
+}
+
+.explorer-topo-node {
+    cursor: default;
+}
+
+.explorer-topo-node.is-expandable {
+    cursor: pointer;
+}
+
+.explorer-topo-dot {
+    stroke: var(--bg-input);
+    stroke-width: 2;
+}
+
+.explorer-topo-node.is-splitting .explorer-topo-dot {
+    stroke: var(--warn);
+    stroke-width: 2.5;
+}
+
+.explorer-topo-node.is-expandable:hover .explorer-topo-dot {
+    stroke: var(--accent);
+}
+
+.explorer-topo-badge {
+    fill: var(--accent-contrast);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.explorer-topo-expand {
+    fill: var(--text-muted);
+    font-size: 0.8rem;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.explorer-topology-state {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.explorer-topology-error {
+    color: var(--danger);
 }
 
 /*
