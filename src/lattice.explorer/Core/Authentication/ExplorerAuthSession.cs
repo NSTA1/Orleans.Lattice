@@ -13,6 +13,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 {
     private readonly IExplorerSession _session;
     private readonly ICredentialStore _store;
+    private readonly IExplorerCredentialSeed? _seed;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private StoredCredential? _credential;
     private bool _initialized;
@@ -20,12 +21,22 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     /// <summary>Creates the auth session over the explorer session and credential store.</summary>
     /// <param name="session">The explorer session that owns the endpoint and connection.</param>
     /// <param name="store">The per-user credential store.</param>
-    public ExplorerAuthSession(IExplorerSession session, ICredentialStore store)
+    /// <param name="seed">
+    /// Optional launcher-friendly sign-in seed. When the credential store is
+    /// empty, the seed supplies a username/password applied in memory for the
+    /// current process only (never written back to the store). Resolved from DI
+    /// when registered; <see langword="null"/> otherwise.
+    /// </param>
+    public ExplorerAuthSession(
+        IExplorerSession session,
+        ICredentialStore store,
+        IExplorerCredentialSeed? seed = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(store);
         _session = session;
         _store = store;
+        _seed = seed;
         _session.ConfigurationChanged += OnConfigurationChanged;
     }
 
@@ -51,6 +62,12 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 
             _initialized = true;
             _credential = await _store.GetAsync(cancellationToken).ConfigureAwait(false);
+
+            // No stored credential: fall back to the launcher-friendly sign-in
+            // seed (username/password passed via environment variable). Applied
+            // in memory only - it is never written back to the credential store.
+            _credential ??= _seed?.TrySeed();
+
             if (_credential is not null)
             {
                 await ReconfigureAsync(cancellationToken).ConfigureAwait(false);

@@ -1,0 +1,6 @@
+# Generated state-API auth credentials (issue #886). run.ps1 -Username/-Password
+# writes this file with EXPLORER_STATE_AUTH=true and a LATTICE_STATE_USER_<user>
+# salted-hash line; docker-compose loads it via an optional env_file. It holds a
+# (hashed) secret and is regenerated on every parameterised run, so it must never
+# be committed. -Down / -Clean delete it.
+.env

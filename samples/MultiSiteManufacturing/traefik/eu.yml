@@ -11,6 +11,19 @@ http:
         - web
       service: eu-replicate
 
+    eu-state:
+      # gRPC service name: orleans.lattice.api.state (full method paths
+      # are /orleans.lattice.api.state/<Method>). Read-only state API
+      # browsed by the Orleans.Lattice.Explorer (issue #886). Trailing
+      # slash anchors the prefix; priority 200 keeps it ahead of the /
+      # catch-all, mirroring eu-replicate.
+      rule: "PathPrefix(`/orleans.lattice.api.state/`)"
+
+      priority: 200
+      entryPoints:
+        - web
+      service: eu-state
+
     eu-web:
       rule: "PathPrefix(`/`)"
       entryPoints:
@@ -26,6 +39,18 @@ http:
         # dedicated h2c listener (Program.cs ConfigureKestrel) since
         # plaintext Kestrel cannot multiplex HTTP/1.1 + HTTP/2 on the
         # same port.
+        servers:
+          - url: "h2c://silo-eu-a:8081"
+          - url: "h2c://silo-eu-b:8081"
+
+    eu-state:
+      loadBalancer:
+        # No sticky cookie: state-API reads are stateless, cluster-wide
+        # aggregates either silo can serve, so round-robin spreads
+        # explorer load. h2c upstream to the same dedicated :8081 gRPC
+        # listener eu-replicate uses. No health check, for the same
+        # reason as eu-replicate (no clean 200 on an HTTP/2 probe to the
+        # gRPC port; the gRPC client retries itself).
         servers:
           - url: "h2c://silo-eu-a:8081"
           - url: "h2c://silo-eu-b:8081"

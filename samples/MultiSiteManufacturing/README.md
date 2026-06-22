@@ -130,6 +130,60 @@ them in sync with the live meter instruments, and the
 `orleans.lattice` and `orleans.lattice.replication` meters at
 `/metrics` on each silo.
 
+## Exploring the cluster with Orleans.Lattice.Explorer
+
+Each silo co-hosts the read-only **Orleans.Lattice.Api.State** gRPC surface on
+its dedicated `:8081` h2c listener - the same one the cross-cluster replication
+service uses. Each cluster's Traefik exposes it through the existing published
+endpoint (`5001` US, `5002` EU) via a non-sticky, round-robin,
+`PathPrefix(`/orleans.lattice.api.state/`)` router, so the
+[Orleans.Lattice.Explorer](../../src/lattice.explorer) can browse the running
+cluster's trees, views, metrics, topology, and data with no new host ports. The
+sticky Blazor `/` router that pins each browser tab's SignalR circuit is
+untouched; the state-API router just has a higher-priority, more-specific
+prefix.
+
+`run-explorer.ps1` launches the explorer pointed at a cluster. It seeds the
+endpoint (and, optionally, a sign-in credential) through the explorer's
+launcher-friendly environment bootstrap, so nothing in your per-user explorer
+config is hand-edited.
+
+### Anonymous (default)
+
+```powershell
+./run.ps1                 # state-API authorization is OFF by default
+./run-explorer.ps1        # Blazor web explorer -> US cluster (http://localhost:5001)
+./run-explorer.ps1 -Cluster eu
+```
+
+The explorer connects anonymously over loopback h2c (insecure-loopback-dev
+transport mode). Open the printed `http://localhost:5290` once the web head
+starts.
+
+### With state-API authentication
+
+Supply a username and password to `run.ps1`. It generates the salted PBKDF2 hash
+with `tools/New-LatticeStateCredential.ps1` and delivers it to every silo
+container as `LATTICE_STATE_USER_<username>` through a git-ignored `.env` file;
+the plaintext password never reaches a container env, a command line, or the
+compose file. The host then enables `RequireAuthorization = true` with the
+reference `EnvVarCredentialAuthorizer`, so an anonymous explorer is rejected and
+a signed-in one succeeds.
+
+```powershell
+./run.ps1 -Username alice -Password 'Sup3rSecret'
+./run-explorer.ps1 -Username alice -Password 'Sup3rSecret'
+```
+
+### Windows desktop explorer
+
+```powershell
+./run-explorer.ps1 -Client windows
+./run-explorer.ps1 -Client windows -Username alice -Password 'Sup3rSecret'
+```
+
+`./run.ps1 -Down` and `./run.ps1 -Clean` delete the generated `.env`.
+
 ## Project layout
 
 ```

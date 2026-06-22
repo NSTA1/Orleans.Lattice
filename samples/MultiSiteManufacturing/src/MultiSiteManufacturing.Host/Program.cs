@@ -4,6 +4,8 @@ using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
+using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -158,6 +160,12 @@ builder.Host.UseOrleans(silo =>
         silo.AddMemoryGrainStorage("msmfgGrainState");
         silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
 
+        // Read-only cluster state API (issue #886). Co-hosted on the
+        // lattice-backed silo so the Orleans.Lattice.Explorer can browse this
+        // single-process quick-start over the gRPC state surface. Must follow
+        // AddLattice (it reads the core tree registry / digests).
+        silo.AddLatticeStateApi();
+
         // Drive the deep storage gauges (snapshot / leaf-state / total bytes)
         // on a slow cadence so the Grafana storage panels populate without an
         // operator calling the storage-usage API. The deep read is O(1) per
@@ -217,6 +225,12 @@ builder.Host.UseOrleans(silo =>
         // so it does not pin idle trees resident. WAL-bytes still refresh on
         // the faster default poll.
         silo.ConfigureLattice(o => o.StorageUsageDeepPollInterval = TimeSpan.FromSeconds(60));
+
+        // Read-only cluster state API (issue #886). Co-hosted on the
+        // lattice-backed silo so the Orleans.Lattice.Explorer can browse the
+        // running cluster over the gRPC state surface, exposed through Traefik
+        // on the published cluster endpoint. Must follow AddLattice.
+        silo.AddLatticeStateApi();
 
         // Cluster-wide dashboard broadcast stream backed by Azure
         // Storage Queues. Every silo's DashboardBroadcaster publishes
@@ -299,6 +313,27 @@ builder.Host.UseOrleans(silo =>
 });
 
 builder.Services.AddGrpc();
+
+// Read-only state API gRPC binding (issue #886). Shares the host's single
+// AddGrpc pipeline and is served on the existing :8081 h2c listener, mapped at
+// the bottom of this file. Reached through each cluster's Traefik via the
+// `/orleans.lattice.api.state/` router (priority 200, round-robin h2c, no
+// sticky cookie) on the published cluster endpoint (5001 US / 5002 EU).
+//
+// Authorization is OFF by default so the sample is one-command runnable: the
+// explorer connects anonymously over loopback h2c. When run.ps1 is given
+// credentials it sets EXPLORER_STATE_AUTH=true and delivers each operator's
+// salted PBKDF2 hash to the silo containers as LATTICE_STATE_USER_<user>, at
+// which point the reference EnvVarCredentialAuthorizer enforces Basic auth and
+// an anonymous explorer is rejected. The state-API auth interceptor scopes
+// itself to the state service by name prefix, so the in-cluster Fact / Site /
+// Compliance / Inventory and replication gRPC services are unaffected.
+var stateApiAuthEnabled = builder.Configuration.GetValue<bool>("EXPLORER_STATE_AUTH");
+builder.Services.AddLatticeStateApiGrpc(o => o.RequireAuthorization = stateApiAuthEnabled);
+if (stateApiAuthEnabled)
+{
+    builder.Services.AddEnvVarCredentialAuthorizer();
+}
 
 // Cross-cluster replication transport. The package's gRPC push
 // transport ships outbound batches via grpc-dotnet over the same
@@ -506,6 +541,13 @@ app.MapGrpcService<FactIngressServiceImpl>();
 app.MapGrpcService<SiteControlServiceImpl>();
 app.MapGrpcService<ComplianceServiceImpl>();
 app.MapGrpcService<InventoryServiceImpl>();
+
+// Read-only state API gRPC routes (issue #886). Served on the existing :8081
+// h2c listener via the shared AddGrpc pipeline; reachable through Traefik's
+// `/orleans.lattice.api.state/` router on the published cluster endpoint so the
+// Orleans.Lattice.Explorer can browse this cluster's trees, views, metrics,
+// topology, and data with no new published host ports.
+app.MapLatticeStateApiGrpc();
 
 // Receiver-side gRPC route for cross-cluster replication push. Mapped
 // only when package replication was wired in above so the in-memory
