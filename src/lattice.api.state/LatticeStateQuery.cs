@@ -86,6 +86,7 @@ internal sealed class LatticeStateQuery(
         var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
 
         var ordered = allIds
+            .Where(id => !IsTagIndexTree(id))
             .Where(id => request.IncludeSystemTrees || !IsReservedTree(id))
             .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
             .OrderBy(id => id, StringComparer.Ordinal);
@@ -172,6 +173,46 @@ internal sealed class LatticeStateQuery(
             ClusterId = cluster?.ClusterId ?? string.Empty,
             ServiceId = cluster?.ServiceId ?? string.Empty,
         });
+    }
+
+    public async Task<TagIndexCatalogPage> ListTagIndexesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+
+        var ordered = allIds
+            .Where(IsTagIndexTree)
+            .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
+            .OrderBy(id => id, StringComparer.Ordinal);
+
+        var pageSize = request.EffectivePageSize;
+        var entries = new List<TagIndexStateSummary>(pageSize);
+        string? nextToken = null;
+
+        foreach (var id in ordered)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entries.Count == pageSize)
+            {
+                nextToken = entries[^1].TreeId;
+                break;
+            }
+
+            var entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
+            entries.Add(new TagIndexStateSummary
+            {
+                IndexName = id[LatticeConstants.TagIndexTreePrefix.Length..],
+                TreeId = id,
+                ShardCount = entry?.ShardCount ?? 0,
+            });
+        }
+
+        return new TagIndexCatalogPage { Entries = entries, NextPageToken = nextToken };
     }
 
     public async Task<TreeStructureResult> GetTreeStructureAsync(
@@ -511,6 +552,9 @@ internal sealed class LatticeStateQuery(
     private static bool IsReservedTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
         || treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+
+    private static bool IsTagIndexTree(string treeId) =>
+        treeId.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Collects the cluster-wide set of materialised views, deduplicated by name.

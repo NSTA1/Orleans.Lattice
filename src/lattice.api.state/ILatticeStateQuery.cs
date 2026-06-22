@@ -79,6 +79,18 @@ internal interface ILatticeStateQuery
     Task<ClusterInfo> GetClusterInfoAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Enumerates the tag-index membership trees (those whose id carries the
+    /// reserved <c>tag-</c> prefix) as a deterministic, paged catalog. These are
+    /// listed separately from <see cref="ListTreesAsync"/> so a consumer can
+    /// present tag indexes as their own category alongside trees and views.
+    /// </summary>
+    /// <param name="request">Paging request.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<TagIndexCatalogPage> ListTagIndexesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the structural node graph of the given tree - shard roots,
     /// internal nodes, and leaves - each annotated with node kind, key-range
     /// bounds, live/tombstone counts, fan-out, and depth, or a typed

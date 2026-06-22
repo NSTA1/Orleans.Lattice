@@ -61,6 +61,21 @@ internal static class LatticeConstants
     public const string ViewTreePrefix = "view-";
 
     /// <summary>
+    /// Reserved tree-name prefix for the sibling tag-index membership trees the
+    /// tag-index surface owns, named <c>tag-{indexName}</c>. Each such tree holds
+    /// the tag-membership rows for one logical index, keyed
+    /// <c>tag \0 treeId \0 key</c>.
+    /// <para>
+    /// Like <see cref="ViewTreePrefix"/>, this is a user-facing tree rather than
+    /// a silo-internal name: it is registered in the tree registry and can be
+    /// read through the public surface. It is called out as a named constant so
+    /// the discovery / catalog layer can classify tag-index trees separately from
+    /// ordinary user trees.
+    /// </para>
+    /// </summary>
+    public const string TagIndexTreePrefix = "tag-";
+
+    /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized

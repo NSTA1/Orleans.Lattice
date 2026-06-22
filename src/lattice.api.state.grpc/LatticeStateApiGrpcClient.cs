@@ -60,6 +60,10 @@ public sealed class LatticeStateApiGrpcClient
     public Task<ViewCatalogPage> ListViewsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.ListViews, request, cancellationToken);
 
+    /// <summary>Lists the tag-index membership trees as a deterministic, paged catalog.</summary>
+    public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ListTagIndexes, request, cancellationToken);
+
     /// <summary>Returns the structural node graph of a tree.</summary>
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetTreeStructure, request, cancellationToken);

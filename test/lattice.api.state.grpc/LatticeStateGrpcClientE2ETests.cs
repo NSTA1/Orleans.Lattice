@@ -160,6 +160,7 @@ public class LatticeStateGrpcClientE2ETests
     }
 
     [Test]
+    [Test]
     public async Task client_surfaces_cluster_info_over_the_transport()
     {
         await using var host = await _fixture.CreateGrpcHostAsync();
@@ -170,6 +171,27 @@ public class LatticeStateGrpcClientE2ETests
         Assert.That(info, Is.Not.Null);
         Assert.That(info.ClusterId, Is.Not.Empty,
             "the connected silo's cluster id must round-trip over the gRPC transport");
+    }
+
+    [Test]
+    public async Task client_lists_tag_indexes_separately_from_trees_end_to_end()
+    {
+        await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);
+        await _fixture.RegisterTreeAsync("tag-e2e-index", shardCount: 2);
+
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        var tagIndexes = await client.ListTagIndexesAsync(new CatalogRequest { PageSize = 100 });
+        var index = tagIndexes.Entries.SingleOrDefault(t => t.TreeId == "tag-e2e-index");
+        Assert.That(index, Is.Not.Null, "the registered tag index should appear in the tag-index catalog");
+        Assert.That(index!.IndexName, Is.EqualTo("e2e-index"));
+        Assert.That(index.ShardCount, Is.EqualTo(2));
+
+        var trees = await client.ListTreesAsync(new CatalogRequest { PageSize = 100 });
+        Assert.That(trees.Entries.Select(t => t.TreeId), Does.Not.Contain("tag-e2e-index"),
+            "tag-index trees must not leak into the tree catalog");
+    }
     }
 
     private static async Task<List<EntryRecord>> ScanAllAsync(LatticeStateApiGrpcClient client, string treeId)

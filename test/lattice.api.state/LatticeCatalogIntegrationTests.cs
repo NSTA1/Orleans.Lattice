@@ -171,4 +171,41 @@ public sealed class LatticeCatalogIntegrationTests
         Assert.That(page.Entries, Is.Empty);
         Assert.That(page.NextPageToken, Is.Null);
     }
+
+    [Test]
+    public async Task ListTagIndexesAsync_returns_registered_tag_index_trees()
+    {
+        await _fixture.RegisterTagIndexTreeAsync("orders-by-status", shardCount: 3);
+
+        var page = await _fixture.Query.ListTagIndexesAsync(new CatalogRequest());
+
+        var entry = page.Entries.Single();
+        Assert.That(entry.IndexName, Is.EqualTo("orders-by-status"));
+        Assert.That(entry.TreeId, Is.EqualTo(LatticeConstants.TagIndexTreePrefix + "orders-by-status"));
+        Assert.That(entry.ShardCount, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task ListTreesAsync_excludes_tag_index_trees()
+    {
+        await _fixture.RegisterTreeAsync("tree-user");
+        await _fixture.RegisterTagIndexTreeAsync("hidden-index");
+
+        var trees = await _fixture.Query.ListTreesAsync(new CatalogRequest { IncludeSystemTrees = true });
+
+        Assert.That(trees.Entries.Select(e => e.TreeId), Does.Contain("tree-user"));
+        Assert.That(trees.Entries.Select(e => e.TreeId),
+            Does.Not.Contain(LatticeConstants.TagIndexTreePrefix + "hidden-index"));
+    }
+
+    [Test]
+    public async Task ListTagIndexesAsync_returns_empty_when_none_registered()
+    {
+        await _fixture.RegisterTreeAsync("tree-only");
+
+        var page = await _fixture.Query.ListTagIndexesAsync(new CatalogRequest());
+
+        Assert.That(page.Entries, Is.Empty);
+        Assert.That(page.NextPageToken, Is.Null);
+    }
 }

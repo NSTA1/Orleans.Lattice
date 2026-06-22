@@ -39,3 +39,23 @@ public sealed record ViewCatalogPage
     /// </summary>
     [Id(1)] public string? NextPageToken { get; init; }
 }
+
+/// <summary>
+/// One page of the tag-index catalog. <see cref="NextPageToken"/> is the cursor
+/// to pass back in the next <see cref="CatalogRequest"/> to continue
+/// enumeration; it is <see langword="null"/> on the final page.
+/// </summary>
+[GenerateSerializer]
+[Alias(ApiStateTypeAliases.TagIndexCatalogPage)]
+[Immutable]
+public sealed record TagIndexCatalogPage
+{
+    /// <summary>The tag-index summaries on this page, ordered by membership tree id.</summary>
+    [Id(0)] public IReadOnlyList<TagIndexStateSummary> Entries { get; init; } = Array.Empty<TagIndexStateSummary>();
+
+    /// <summary>
+    /// The continuation cursor for the next page, or <see langword="null"/>
+    /// when this is the last page.
+    /// </summary>
+    [Id(1)] public string? NextPageToken { get; init; }
+}

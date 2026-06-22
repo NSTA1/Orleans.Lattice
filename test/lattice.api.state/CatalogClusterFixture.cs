@@ -76,6 +76,10 @@ internal sealed class CatalogClusterFixture
     public Task RegisterViewBackingTreeAsync(string viewTreeId) =>
         Registry.RegisterAsync(viewTreeId, new TreeRegistryEntry { ShardCount = 1 });
 
+    /// <summary>Registers a reserved <c>tag-</c> index backing tree directly in the registry.</summary>
+    public Task RegisterTagIndexTreeAsync(string indexName, int shardCount = 1) =>
+        Registry.RegisterAsync(LatticeConstants.TagIndexTreePrefix + indexName, new TreeRegistryEntry { ShardCount = shardCount });
+
     /// <summary>Creates a runtime materialised view over the given source tree.</summary>
     public ILatticeView CreateView(string sourceTreeId, string viewName)
     {

@@ -65,6 +65,9 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
     public Task<ViewCatalogPage> ListViewsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => _client.ListViewsAsync(request, cancellationToken);
 
+    public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => _client.ListTagIndexesAsync(request, cancellationToken);
+
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => _client.GetTreeStructureAsync(request, cancellationToken);
 
