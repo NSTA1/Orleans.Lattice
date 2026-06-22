@@ -92,18 +92,14 @@ internal sealed class LatticeView(
         }
 
         // Count only the materialised group values, excluding the reserved
-        // internal rows, so a group's accumulator shards never inflate the count.
-        // This streams the group-value keys because ILattice exposes only a
-        // whole-tree CountAsync (which would include the reserved NUL-prefixed
-        // rows); a server-side ranged count would avoid materialising the keys.
-        // Tracked as a follow-up optimisation (issue #845).
-        var count = 0;
-        await foreach (var _ in tree.KeysAsync(ReservedFloor, cancellationToken: cancellationToken))
-        {
-            count++;
-        }
-
-        return count;
+        // internal accumulator / inverse / membership rows under the NUL
+        // prefix, so a group's accumulator shards never inflate the count.
+        // The server-side ranged count over [ReservedFloor, null) reuses the
+        // whole-tree count machinery (fully-covered leaves contribute their
+        // full count; only the boundary leaf at ReservedFloor is
+        // partial-counted) and ships only an integer, so no group-value keys
+        // are materialised across the wire.
+        return await tree.CountAsync(ReservedFloor, null, cancellationToken);
     }
 
     /// <inheritdoc />

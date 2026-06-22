@@ -1608,7 +1608,9 @@ internal sealed partial class BPlusLeafGrain(
         };
     }
 
-    public async Task<int> CountAsync()
+    public Task<int> CountAsync() => CountAsync(null, null);
+
+    public async Task<int> CountAsync(string? startInclusive, string? endExclusive)
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
@@ -1623,14 +1625,27 @@ internal sealed partial class BPlusLeafGrain(
         // SimpleSumCountAsync) would visit the right half on both leaves and
         // over-count. Skipping rows >= SplitKey while a split is in progress
         // makes the donor report only the keys it still owns.
+        // The [startInclusive, endExclusive) bounds use the same Ordinal
+        // comparison semantics as GetKeysAsync so a ranged count (the
+        // aggregation-view group-value count over [ReservedFloor, null))
+        // matches an equivalent ranged key enumeration exactly, without
+        // materialising any keys across the wire.
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
         var splitKey = state.State.SplitKey;
         var count = 0;
         foreach (var (key, lww) in Cache.EnumerateRows())
         {
+            if (endExclusive is not null &&
+                string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                break;
+
             if (splitInProgress && splitKey is not null &&
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 break;
+
+            if (startInclusive is not null &&
+                string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
+                continue;
 
             if (pendingKeys.TryGetValue(key, out var pending))
             {
@@ -1652,8 +1667,14 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, pending) in pendingKeys)
         {
             if (Cache.ContainsKey(key)) continue;
+            if (endExclusive is not null &&
+                string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
+                continue;
             if (splitInProgress && splitKey is not null &&
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
+                continue;
+            if (startInclusive is not null &&
+                string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                 continue;
             var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
             if (status != TxStatus.Committed) continue;

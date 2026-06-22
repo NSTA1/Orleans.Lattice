@@ -1722,13 +1722,47 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    public async Task<int> CountAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ThrowIfProtectedViewRead();
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            return await RangedCountAsyncCore(startInclusive, endExclusive, cancellationToken);
+        }
+        catch (StaleTreeRoutingException) when (TryInvalidateStaleAlias())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return await RangedCountAsyncCore(startInclusive, endExclusive, cancellationToken);
+        }
+        catch (InvalidOperationException) when (TryInvalidateStaleAlias())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return await RangedCountAsyncCore(startInclusive, endExclusive, cancellationToken);
+        }
+    }
+
     /// <summary>
-    /// Strongly-consistent total live key count across all physical shards
-    /// of this tree. Tolerates concurrent adaptive shard splits by
-    /// asking every physical shard to count only the virtual slots it
-    /// currently owns per the authoritative <see cref="ShardMap"/>, then
+    /// Whole-tree strongly-consistent count. Delegates to
+    /// <see cref="RangedCountAsyncCore"/> with unbounded range
+    /// <c>(null, null)</c> so the intricate split-reconciliation machinery
+    /// lives in exactly one place.
+    /// </summary>
+    private Task<int> CountAsyncCore(CancellationToken cancellationToken) =>
+        RangedCountAsyncCore(null, null, cancellationToken);
+
+    /// <summary>
+    /// Strongly-consistent live key count over the half-open key range
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)
+    /// across all physical shards of this tree (a <see langword="null"/>
+    /// bound is unbounded on that side). Tolerates concurrent adaptive shard
+    /// splits by asking every physical shard to count only the virtual slots
+    /// it currently owns per the authoritative <see cref="ShardMap"/>, then
     /// re-reading the map after the fan-out and retrying on any version
-    /// change.
+    /// change. Fully-covered leaves contribute their full count; only
+    /// boundary leaf(s) are partial-counted, and no keys are materialised
+    /// across the wire on either path.
     /// <para>
     /// This supersedes an earlier design that fanned out via
     /// <see cref="IShardRootGrain.CountWithMovedAwayAsync"/> and relied on
@@ -1751,7 +1785,7 @@ internal sealed partial class LatticeGrain(
     /// deadlock on itself).
     /// </para>
     /// </summary>
-    private async Task<int> CountAsyncCore(CancellationToken cancellationToken)
+    private async Task<int> RangedCountAsyncCore(string? startInclusive, string? endExclusive, CancellationToken cancellationToken)
     {
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -1798,14 +1832,15 @@ internal sealed partial class LatticeGrain(
             // ShardMap.Version is monotonically incremented on every persist,
             // so if it is still 0 at the end of the call, no split can have
             // started during our fan-out. Use the cheap leaf.CountAsync()
-            // path (O1 per leaf) and avoid BuildOwnedSlotMap / per-key
-            // slot hashing / binary-search entirely.
+            // path (full leaf count, in-range bound applied at the leaf) and
+            // avoid BuildOwnedSlotMap / per-key slot hashing / binary-search
+            // entirely.
             if (versionAtStart == 0L)
             {
                 int simple;
                 using (LatticeRegistrySnapshotContext.BeginScope(snap1))
                 {
-                    simple = await SimpleSumCountAsync(physicalTreeId, physicalShards);
+                    simple = await SimpleSumCountAsync(physicalTreeId, physicalShards, startInclusive, endExclusive);
                 }
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
                 if (mapAfter.Version != 0L) { shardMap0 = mapAfter; continue; }
@@ -1815,9 +1850,10 @@ internal sealed partial class LatticeGrain(
 
             // Partition virtual slots by current owner per the
             // authoritative map and ask each physical shard to count only
-            // its owned slots. This makes the result topology-consistent
-            // with the observed map snapshot regardless of where each
-            // shard is in its per-split phase machine.
+            // its owned slots (additionally bounded to the range). This
+            // makes the result topology-consistent with the observed map
+            // snapshot regardless of where each shard is in its per-split
+            // phase machine.
             var ownedByShard = BuildOwnedSlotMap(shardMap0);
             var pass1Tasks = new Task<int>[physicalShards.Count];
             using (LatticeRegistrySnapshotContext.BeginScope(snap1))
@@ -1836,7 +1872,7 @@ internal sealed partial class LatticeGrain(
                     // cold-start seed-timeout retries only that shard, not
                     // the whole fan-out.
                     pass1Tasks[i] = ShardActivationRetry.RunAsync(
-                        () => shard.CountForSlotsAsync(owned, virtualShardCount));
+                        () => shard.CountForSlotsAsync(owned, virtualShardCount, startInclusive, endExclusive));
                 }
                 await Task.WhenAll(pass1Tasks);
             }
@@ -1865,7 +1901,7 @@ internal sealed partial class LatticeGrain(
             "Increase LatticeOptions.MaxScanRetries or reduce concurrent split activity.");
     }
 
-    private async Task<int> SimpleSumCountAsync(string physicalTreeId, IReadOnlyList<int> physicalShards)
+    private async Task<int> SimpleSumCountAsync(string physicalTreeId, IReadOnlyList<int> physicalShards, string? startInclusive, string? endExclusive)
     {
         // Per-shard ShardActivationRetry wrap: a single shard's cold-start
         // seed-timeout retries only that shard, not the whole fan-out.
@@ -1874,7 +1910,7 @@ internal sealed partial class LatticeGrain(
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
             tasks[i] = ShardActivationRetry.RunAsync(
-                () => shard.CountAsync());
+                () => shard.CountAsync(startInclusive, endExclusive));
         }
         await Task.WhenAll(tasks);
         var total = 0;

@@ -208,6 +208,16 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<int> CountAsync();
 
     /// <summary>
+    /// Returns the number of live (non-tombstoned) keys in this shard's B+ tree
+    /// whose key falls in the half-open range [<paramref name="startInclusive"/>,
+    /// <paramref name="endExclusive"/>) by walking the leaf chain and pushing the
+    /// bound to each leaf. A <see langword="null"/> bound is unbounded on that
+    /// side; <c>CountAsync(null, null)</c> is equivalent to <see cref="CountAsync()"/>.
+    /// Counting stays server-side: only an integer crosses the wire, never keys.
+    /// </summary>
+    Task<int> CountAsync(string? startInclusive, string? endExclusive);
+
+    /// <summary>
     /// Returns a page of live keys in this shard's B+ tree in sorted order,
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
@@ -696,6 +706,17 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// the value used elsewhere in the tree's routing.
     /// </param>
     Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// Like <see cref="CountForSlotsAsync(int[], int)"/>, but additionally
+    /// restricts the count to keys in the half-open range
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// A <see langword="null"/> bound is unbounded on that side. Both the
+    /// per-slot ownership filter and the range bound must hold for a key to
+    /// count, so the post-split ranged total stays exact against the
+    /// authoritative <see cref="ShardMap"/>.
+    /// </summary>
+    Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive);
 
     /// <summary>
     /// Returns a page of live keys in this shard whose virtual slot is in

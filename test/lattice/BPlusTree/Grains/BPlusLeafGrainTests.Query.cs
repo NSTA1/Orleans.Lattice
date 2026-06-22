@@ -683,7 +683,103 @@ public partial class BPlusLeafGrainTests
         Assert.That(count, Is.EqualTo(3));
     }
 
-    // --- GetStatsAsync ---
+    // --- CountAsync(startInclusive, endExclusive) ---
+
+    [Test]
+    public async Task Count_range_null_bounds_equals_unbounded_count()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        Assert.That(await grain.CountAsync(null, null), Is.EqualTo(await grain.CountAsync()));
+    }
+
+    [Test]
+    public async Task Count_range_is_inclusive_of_start_and_exclusive_of_end()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        // [b, d) -> { b, c }
+        var count = await grain.CountAsync("b", "d");
+        Assert.That(count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Count_range_startInclusive_only_counts_from_floor()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        var count = await grain.CountAsync("b", null);
+        Assert.That(count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Count_range_empty_when_start_equals_end()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+
+        var count = await grain.CountAsync("b", "b");
+        Assert.That(count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Count_range_excludes_reserved_floor_prefix()
+    {
+        // Mirrors the aggregation-view usage: reserved NUL-prefixed rows are
+        // excluded by counting [\u0001, null) so accumulator shards never
+        // inflate the group-value count.
+        var grain = CreateGrain();
+        await grain.SetAsync("\0acc-red", Encoding.UTF8.GetBytes("r"));
+        await grain.SetAsync("\0acc-blue", Encoding.UTF8.GetBytes("b"));
+        await grain.SetAsync("red", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("blue", Encoding.UTF8.GetBytes("2"));
+
+        var count = await grain.CountAsync("\u0001", null);
+        Assert.That(count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Count_range_excludes_tombstoned_keys_in_range()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        await grain.DeleteAsync("b");
+
+        var count = await grain.CountAsync("a", "d");
+        Assert.That(count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task Count_range_honours_split_boundary_within_bounds()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("3"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("4"));
+
+        // Donor stuck mid-split: keys >= "m" are not owned. A ranged count
+        // over [a, z) must still respect the split boundary and exclude them.
+        state.State.SplitState = Orleans.Lattice.Primitives.SplitState.SplitInProgress;
+        state.State.SplitKey = "m";
+
+        var count = await grain.CountAsync("a", "z");
+        Assert.That(count, Is.EqualTo(2));
+    }
 
     [Test]
     public async Task Stats_excludes_keys_at_or_above_split_key_while_split_in_progress()
