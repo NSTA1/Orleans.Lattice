@@ -4,6 +4,14 @@ namespace MultiSiteManufacturing.Host.Domain;
 /// Ordered compliance states. Higher values dominate under the severity fold.
 /// <see cref="Scrap"/> is terminal: no further dispositions demote it.
 /// </summary>
+/// <remarks>
+/// Carries <see cref="GenerateSerializerAttribute"/> because
+/// <c>IBaselinePartGrain.GetStateAsync</c> returns it as a bare grain-call
+/// result. An enum transferred as a top-level Orleans message body (rather than
+/// nested inside an already-serializable record) is rejected by the runtime
+/// type allow-list unless it has a generated serializer.
+/// </remarks>
+[GenerateSerializer]
 public enum ComplianceState
 {
     /// <summary>No defects recorded, or defects explicitly dispositioned as use-as-is.</summary>
