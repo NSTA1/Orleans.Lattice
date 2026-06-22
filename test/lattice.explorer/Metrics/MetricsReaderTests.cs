@@ -29,6 +29,8 @@ public class MetricsReaderTests
             => Task.FromResult(new EntryScanResponse { TreeId = "t" });
         public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new EntryGetResponse { TreeId = "t", Key = "k" });
+        public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ClusterInfo());
         public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
             => EmptyAsync<StateChangeNotification>();
         public IAsyncEnumerable<TreeMetricsSnapshot> ObserveMetricsAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)

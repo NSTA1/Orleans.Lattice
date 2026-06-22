@@ -77,6 +77,9 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => _client.GetMetricsSnapshotAsync(request, cancellationToken);
 
+    public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
+        => _client.GetClusterInfoAsync(request, cancellationToken);
+
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => _client.ObserveChangesAsync(request, cancellationToken);
 

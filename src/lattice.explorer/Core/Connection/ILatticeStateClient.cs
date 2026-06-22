@@ -30,6 +30,9 @@ public interface ILatticeStateClient
     /// <summary>Returns a single live metrics snapshot.</summary>
     Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Returns identity and metadata for the connected cluster.</summary>
+    Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Subscribes to live change notifications for a tree.</summary>
     IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default);
 

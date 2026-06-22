@@ -177,6 +177,45 @@ code, .explorer-mono {
     min-width: 0;
 }
 
+.explorer-brand {
+    display: flex;
+    align-items: baseline;
+    gap: 0.55rem;
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+    flex-shrink: 0;
+}
+
+.explorer-brand-name {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text);
+}
+
+.explorer-brand-sep {
+    color: var(--text-dim);
+}
+
+.explorer-cluster {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.explorer-cluster-label {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.7rem;
+}
+
+.explorer-cluster-id {
+    font-family: var(--font-mono);
+    color: var(--accent);
+}
+
 .explorer-description {
     color: var(--text-muted);
 }

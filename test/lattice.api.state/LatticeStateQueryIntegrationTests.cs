@@ -1,3 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Api.State.Tests;
@@ -67,6 +70,19 @@ public sealed class LatticeStateQueryIntegrationTests
 
         Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
         Assert.That(result.Shards, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetClusterInfoAsync_reports_the_silos_cluster_and_service_id()
+    {
+        var configured = _fixture.SiloServices
+            .GetRequiredService<IOptions<ClusterOptions>>().Value;
+
+        var info = await _fixture.Query.GetClusterInfoAsync();
+
+        Assert.That(info.ClusterId, Is.EqualTo(configured.ClusterId));
+        Assert.That(info.ClusterId, Is.Not.Empty);
+        Assert.That(info.ServiceId, Is.EqualTo(configured.ServiceId));
     }
 
     [Test]

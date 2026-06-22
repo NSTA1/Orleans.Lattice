@@ -159,6 +159,19 @@ public class LatticeStateGrpcClientE2ETests
         Assert.That(streamed.LiveKeys, Is.EqualTo(KeyCount));
     }
 
+    [Test]
+    public async Task client_surfaces_cluster_info_over_the_transport()
+    {
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        var info = await client.GetClusterInfoAsync(new ClusterInfoRequest());
+
+        Assert.That(info, Is.Not.Null);
+        Assert.That(info.ClusterId, Is.Not.Empty,
+            "the connected silo's cluster id must round-trip over the gRPC transport");
+    }
+
     private static async Task<List<EntryRecord>> ScanAllAsync(LatticeStateApiGrpcClient client, string treeId)
     {
         var all = new List<EntryRecord>();

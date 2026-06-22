@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Views;
@@ -159,6 +160,18 @@ internal sealed class LatticeStateQuery(
         }
 
         return new ViewCatalogPage { Entries = entries, NextPageToken = nextToken };
+    }
+
+    public Task<ClusterInfo> GetClusterInfoAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var cluster = _services.GetService<IOptions<ClusterOptions>>()?.Value;
+        return Task.FromResult(new ClusterInfo
+        {
+            ClusterId = cluster?.ClusterId ?? string.Empty,
+            ServiceId = cluster?.ServiceId ?? string.Empty,
+        });
     }
 
     public async Task<TreeStructureResult> GetTreeStructureAsync(

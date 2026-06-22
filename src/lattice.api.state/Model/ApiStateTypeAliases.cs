@@ -67,4 +67,10 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="TreeMetricsSnapshot"/>.</summary>
     public const string TreeMetricsSnapshot = "ola.tms";
+
+    /// <summary>Alias for <see cref="ClusterInfoRequest"/>.</summary>
+    public const string ClusterInfoRequest = "ola.cir";
+
+    /// <summary>Alias for <see cref="ClusterInfo"/>.</summary>
+    public const string ClusterInfo = "ola.ci";
 }

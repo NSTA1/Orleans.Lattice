@@ -53,6 +53,9 @@ internal abstract class LatticeStateGrpcServiceBase
     /// <summary>Returns a single live metrics snapshot. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<TreeMetricsSnapshot> GetMetricsSnapshot(TreeMetricsRequest request, ServerCallContext context);
 
+    /// <summary>Returns identity and metadata for the connected cluster. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<ClusterInfo> GetClusterInfo(ClusterInfoRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -80,6 +83,7 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.ObserveChanges, (ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>?)null);
             binder.AddMethod(methods.ObserveMetrics, (ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             binder.AddMethod(methods.GetMetricsSnapshot, (UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
+            binder.AddMethod(methods.GetClusterInfo, (UnaryServerMethod<ClusterInfoRequest, ClusterInfo>?)null);
             return;
         }
 
@@ -91,6 +95,7 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.ObserveChanges, new ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>(serviceImpl.ObserveChanges));
         binder.AddMethod(methods.ObserveMetrics, new ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.ObserveMetrics));
         binder.AddMethod(methods.GetMetricsSnapshot, new UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.GetMetricsSnapshot));
+        binder.AddMethod(methods.GetClusterInfo, new UnaryServerMethod<ClusterInfoRequest, ClusterInfo>(serviceImpl.GetClusterInfo));
     }
 }
 
@@ -318,6 +323,10 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
             throw new RpcException(new Status(StatusCode.Internal, "The state-API request failed."));
         }
     }
+
+    /// <inheritdoc />
+    public override Task<ClusterInfo> GetClusterInfo(ClusterInfoRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (query, _, ct) => query.GetClusterInfoAsync(ct));
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,

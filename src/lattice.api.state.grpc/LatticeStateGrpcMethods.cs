@@ -50,6 +50,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary one-shot metrics-snapshot RPC method name.</summary>
     public const string GetMetricsSnapshotMethodName = "GetMetricsSnapshot";
 
+    /// <summary>The unary cluster-info RPC method name.</summary>
+    public const string GetClusterInfoMethodName = "GetClusterInfo";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeStateGrpcMethods(
         Serializer<CatalogRequest> catalogRequestSerializer,
@@ -64,7 +67,9 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<StateObserveRequest> observeRequestSerializer,
         Serializer<StateChangeNotification> changeNotificationSerializer,
         Serializer<TreeMetricsRequest> metricsRequestSerializer,
-        Serializer<TreeMetricsSnapshot> metricsSnapshotSerializer)
+        Serializer<TreeMetricsSnapshot> metricsSnapshotSerializer,
+        Serializer<ClusterInfoRequest> clusterInfoRequestSerializer,
+        Serializer<ClusterInfo> clusterInfoSerializer)
     {
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(treeCatalogPageSerializer);
@@ -79,6 +84,8 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(changeNotificationSerializer);
         ArgumentNullException.ThrowIfNull(metricsRequestSerializer);
         ArgumentNullException.ThrowIfNull(metricsSnapshotSerializer);
+        ArgumentNullException.ThrowIfNull(clusterInfoRequestSerializer);
+        ArgumentNullException.ThrowIfNull(clusterInfoSerializer);
 
         ListTrees = new Method<CatalogRequest, TreeCatalogPage>(
             type: MethodType.Unary,
@@ -135,6 +142,13 @@ internal sealed class LatticeStateGrpcMethods
             name: GetMetricsSnapshotMethodName,
             requestMarshaller: LatticeStateGrpcMarshallers.Create(metricsRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(metricsSnapshotSerializer));
+
+        GetClusterInfo = new Method<ClusterInfoRequest, ClusterInfo>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetClusterInfoMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(clusterInfoRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(clusterInfoSerializer));
     }
 
     /// <summary>The unary <c>ListTrees</c> discovery RPC.</summary>
@@ -161,6 +175,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary one-shot <c>GetMetricsSnapshot</c> RPC.</summary>
     public Method<TreeMetricsRequest, TreeMetricsSnapshot> GetMetricsSnapshot { get; }
 
+    /// <summary>The unary <c>GetClusterInfo</c> RPC.</summary>
+    public Method<ClusterInfoRequest, ClusterInfo> GetClusterInfo { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -183,7 +200,9 @@ internal sealed class LatticeStateGrpcMethods
             serializerProvider.GetRequiredService<Serializer<StateObserveRequest>>(),
             serializerProvider.GetRequiredService<Serializer<StateChangeNotification>>(),
             serializerProvider.GetRequiredService<Serializer<TreeMetricsRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeMetricsSnapshot>>());
+            serializerProvider.GetRequiredService<Serializer<TreeMetricsSnapshot>>(),
+            serializerProvider.GetRequiredService<Serializer<ClusterInfoRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<ClusterInfo>>());
     }
 }
 
