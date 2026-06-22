@@ -154,6 +154,8 @@ public sealed class DocsSnippetCompilationTests
             using Orleans.Lattice.Storage.AzureTable;
             using Orleans.Lattice.Replication;
             using Orleans.Lattice.Replication.Grpc;
+            using Orleans.Lattice.Api.State;
+            using Orleans.Lattice.Api.State.Grpc;
             using Microsoft.AspNetCore.Builder;
             using Microsoft.Extensions.DependencyInjection;
             using Microsoft.Extensions.Hosting;

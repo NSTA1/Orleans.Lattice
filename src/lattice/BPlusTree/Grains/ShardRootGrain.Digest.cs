@@ -336,4 +336,36 @@ internal sealed partial class ShardRootGrain
             IsLeaf = state.State.RootIsLeaf,
         });
     }
+
+    /// <inheritdoc />
+    public async Task<ShardTopologyNode?> GetTopologySnapshotAsync(int depthLimit, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await PrepareForOperationAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Empty shard (no root yet): nothing to describe.
+        if (state.State.RootNodeId is null)
+        {
+            return null;
+        }
+
+        if (state.State.RootIsLeaf)
+        {
+            // Flat-tree case: the single root leaf is the whole topology, so
+            // the one unavoidable leaf call here is O(1) - it never fans out.
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
+            var leafNode = await leaf.GetTopologyNodeAsync();
+            return leafNode with { ShardIndex = ShardIndex };
+        }
+
+        // Internal-rooted tree: the root internal node reconstructs the
+        // structure from the per-child snapshot tables that mutations have
+        // already propagated upward, so leaves are summarised in-place and
+        // never called. Cost is bounded by the internal nodes visited under
+        // depthLimit, not by leaf count.
+        var root = grainFactory.GetGrain<IBPlusInternalGrain>(state.State.RootNodeId!.Value);
+        var topology = await root.GetTopologyAsync(depthLimit);
+        return topology with { ShardIndex = ShardIndex };
+    }
 }

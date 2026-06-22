@@ -57,22 +57,24 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// but serves them off the snapshot leaf's replayed projection
     /// state rather than the live <c>Entries</c> dictionary.
     /// <para>
-    /// When <paramref name="limit"/> is non-negative the result is
-    /// truncated to at most that many keys, allowing the snapshot
-    /// cursor's per-page k-way merge to bound its per-shard fetch
-    /// cost. <c>0</c> returns an empty list; the default
-    /// <see cref="int.MaxValue"/> preserves the unbounded contract.
+    /// When <paramref name="reverse"/> is <see langword="true"/> the fetch returns
+    /// the <b>largest</b> <paramref name="limit"/> keys in range (still sorted
+    /// ascending) rather than the smallest, so the snapshot cursor's reverse k-way
+    /// merge - which walks each per-shard slice from its high end - sees the correct
+    /// top-of-range candidates. A forward fetch returns the smallest
+    /// <paramref name="limit"/> as before.
     /// </para>
     /// </summary>
-    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null);
+    Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false);
 
     /// <summary>
     /// Returns the sorted list of live key-value pairs this snapshot
     /// leaf observes in the optional [<paramref name="startInclusive"/>,
     /// <paramref name="endExclusive"/>) range. Same filter contract
     /// as <see cref="GetKeysAsync"/>, including the
-    /// <paramref name="limit"/> truncation knob and the optional
-    /// server-side <paramref name="predicate"/>.
+    /// <paramref name="limit"/> truncation knob, the optional
+    /// server-side <paramref name="predicate"/>, and the
+    /// <paramref name="reverse"/> top-of-range selection.
     /// </summary>
-    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null);
+    Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false);
 }

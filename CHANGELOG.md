@@ -4,13 +4,17 @@ All notable changes to the Orleans.Lattice package family are documented in this
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Storage.AzureTable`, and `Orleans.Lattice.Dashboards`. Packages ship in lockstep on the major and minor digits; patch digits may advance per-package.
+This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.Api.State`, and `Orleans.Lattice.Api.State.Grpc`. Packages ship in lockstep on the major and minor digits; patch digits may advance per-package.
 
 ## [Unreleased]
 
 Items merged into `main` after the v7.3.1 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+### Added
+
+- **F-110 - Orleans.Lattice.Api.State: read-only cluster-state introspection surface.** A new optional package-family member exposes a cluster's tree state and metadata over a transport-agnostic read facade, with no write, delete, or reconfigure verb. `ISiloBuilder.AddLatticeStateApi(...)` (called after `AddLattice`) registers the facade and a shared metrics sampler in-process; the companion `Orleans.Lattice.Api.State.Grpc` package binds it over a code-first gRPC service (`AddLatticeStateApiGrpc` + `MapLatticeStateApiGrpc`) consumed by the public `LatticeStateApiGrpcClient`. The surface covers tree / view discovery with per-tree lifecycle state and effective config (catalog), a paged depth-limited tree-structure snapshot backed by pushed-up O(shards) topology metadata, snapshot-isolated predicate-capable entry / key-range inspection and single-key fetch, a resumable server-streaming change-observation feed that stays off the write hot path, and a coalesced live metrics / topology-delta stream for dashboard gauges. The gRPC binding fails closed: with authorization required and no authorizer registered, the default `DenyAllStateApiAuthorizer` rejects every call, and the authorization seam carries the requested operation and target tree id. Many subscribers to one metrics request share a single reference-counted sampling loop, and registering nothing adds zero overhead. The facade is built to be reused in-process by a later MCP bridge. New packages `Orleans.Lattice.Api.State` and `Orleans.Lattice.Api.State.Grpc`; see [`docs/lattice.api.state/README.md`](docs/lattice.api.state/README.md) (#836).
 
 ### Fixed
 

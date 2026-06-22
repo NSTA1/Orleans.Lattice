@@ -55,6 +55,14 @@
     <ProjectReference Include="..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
     <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
+    <!--
+      Pulled in solely so docs/lattice.api.state/*.md can show the state-API
+      registration and client wiring as `csharp verify` snippets. The
+      DocsSnippetCompilationTests harness compiles every `csharp verify` fence
+      under docs/ against this test project's reference graph.
+    -->
+    <ProjectReference Include="..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
   </ItemGroup>
 
 </Project>
