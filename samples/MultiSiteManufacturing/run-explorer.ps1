@@ -86,18 +86,21 @@ if ([string]::IsNullOrWhiteSpace($Endpoint)) {
 Write-Host "Explorer endpoint: $Endpoint" -ForegroundColor Cyan
 
 # Best-effort reachability probe (non-fatal): the cluster may still be settling.
+# Note: the probe socket is named $probe (not $client) so it cannot collide with
+# the [ValidateSet]-constrained $Client parameter - PowerShell variable names are
+# case-insensitive, and assigning a socket to $client would trip that validator.
 try {
     $uri = [Uri]$Endpoint
-    $client = [System.Net.Sockets.TcpClient]::new()
-    $iar = $client.BeginConnect($uri.Host, $uri.Port, $null, $null)
+    $probe = [System.Net.Sockets.TcpClient]::new()
+    $iar = $probe.BeginConnect($uri.Host, $uri.Port, $null, $null)
     if ($iar.AsyncWaitHandle.WaitOne(2000)) {
-        $client.EndConnect($iar)
+        $probe.EndConnect($iar)
         Write-Host "Endpoint is reachable (TCP)." -ForegroundColor Green
     } else {
         Write-Host "Warning: $Endpoint did not accept a TCP connection within 2s." -ForegroundColor Yellow
         Write-Host "  Start the cluster first: ./run.ps1" -ForegroundColor Yellow
     }
-    $client.Close()
+    $probe.Close()
 } catch {
     Write-Host "Warning: could not probe $Endpoint ($($_.Exception.Message))." -ForegroundColor Yellow
 }
@@ -140,7 +143,11 @@ try {
         $env:ASPNETCORE_URLS = $webUrl
         Write-Host "Launching the Blazor web explorer at $webUrl ..." -ForegroundColor Cyan
         Write-Host "  Open $webUrl in a browser once it has started." -ForegroundColor Cyan
-        & dotnet run --project $webProject
+        # Pass --urls through to the app (after --) so the bound address is
+        # authoritative. dotnet run otherwise applies the Web project's
+        # launchSettings.json applicationUrl, which would override
+        # ASPNETCORE_URLS and bind a different port than the one printed above.
+        & dotnet run --project $webProject -- --urls $webUrl
         if ($LASTEXITCODE -ne 0) { throw "dotnet run (web head) failed (exit $LASTEXITCODE)." }
     }
 }
