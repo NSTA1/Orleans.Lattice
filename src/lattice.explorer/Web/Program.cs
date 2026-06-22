@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Web.Components;
 
@@ -13,6 +14,7 @@ builder.Services.AddRazorComponents()
 // The config backing store, shared connection, and session live in DI. The JSON
 // store sits under the server's per-user local app-data folder.
 builder.Services.AddExplorerConfiguration();
+builder.Services.AddExplorerCatalog();
 
 var app = builder.Build();
 

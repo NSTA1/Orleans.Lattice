@@ -14,26 +14,11 @@ else if (!Session.IsConfigured)
 }
 else
 {
-    <div class="explorer-config-toolbar">
-        <CogButton Title="Connection settings" OnClick="OpenDialog" />
-    </div>
-
     @ChildContent
-
-    @if (_showDialog)
-    {
-        <div class="explorer-config-overlay">
-            <ConfigurationDialog Initial="Session.Current"
-                                 AllowCancel="true"
-                                 OnSaved="CloseDialog"
-                                 OnCancelled="CloseDialog" />
-        </div>
-    }
 }
 
 @code {
     private bool _initialized;
-    private bool _showDialog;
 
     /// <summary>The explorer content shown once a valid endpoint is configured.</summary>
     [Parameter]
@@ -47,18 +32,6 @@ else
     }
 
     private void OnConfigured() => StateHasChanged();
-
-    private void OpenDialog()
-    {
-        _showDialog = true;
-        StateHasChanged();
-    }
-
-    private void CloseDialog()
-    {
-        _showDialog = false;
-        StateHasChanged();
-    }
 
     private void OnConfigurationChanged() => InvokeAsync(StateHasChanged);
 

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 
 namespace Orleans.Lattice.Explorer;
@@ -30,6 +31,7 @@ public static class MauiProgram
             options.FilePath = Path.Combine(
                 FileSystem.AppDataDirectory,
                 ExplorerConfigStoreOptions.DefaultFileName));
+        builder.Services.AddExplorerCatalog();
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();
