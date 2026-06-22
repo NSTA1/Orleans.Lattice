@@ -441,7 +441,7 @@ code, .explorer-mono {
 .explorer-nav {
     display: flex;
     flex-direction: column;
-    width: 16rem;
+    width: 20rem;
     flex-shrink: 0;
     border-right: 1px solid var(--border);
     background: var(--bg-panel);
@@ -449,15 +449,22 @@ code, .explorer-mono {
 
 .explorer-nav-header {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
     padding: 0.6rem 0.65rem;
     border-bottom: 1px solid var(--border);
 }
 
+.explorer-nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .explorer-nav-toggle {
-    display: inline-flex;
-    flex: 1;
+    display: flex;
+    width: 100%;
     padding: 2px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -499,6 +506,7 @@ code, .explorer-mono {
     justify-content: center;
     width: 1.9rem;
     height: 1.9rem;
+    margin-left: auto;
     padding: 0;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
@@ -932,10 +940,31 @@ code, .explorer-mono {
 
 .explorer-topology-canvas {
     flex: 1 1 auto;
-    overflow: auto;
+    overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--bg-input);
+}
+
+.explorer-topo-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    touch-action: none;
+}
+
+.explorer-topo-svg.is-panning {
+    cursor: grabbing;
+}
+
+.explorer-topology-reset {
+    padding: 0.3rem 0.7rem;
+}
+
+.explorer-topology-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
 }
 
 .explorer-topo-edge {

@@ -7,8 +7,22 @@
 
 <nav class="explorer-nav" aria-label="Tree and view catalog">
     <header class="explorer-nav-header">
-        <CogButton Title="Connection settings" OnClick="OpenConfig" />
-        <AuthButton />
+        <div class="explorer-nav-actions">
+            <CogButton Title="Connection settings" OnClick="OpenConfig" />
+            <AuthButton />
+
+            <button type="button"
+                    class="explorer-nav-refresh"
+                    title="Refresh"
+                    aria-label="Refresh catalog"
+                    disabled="@_loading"
+                    @onclick="RefreshAsync">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                    <path fill="currentColor"
+                          d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
+                </svg>
+            </button>
+        </div>
 
         <div class="explorer-nav-toggle" role="tablist" aria-label="Catalog kind">
             <button type="button"
@@ -33,18 +47,6 @@
                 Tag indexes
             </button>
         </div>
-
-        <button type="button"
-                class="explorer-nav-refresh"
-                title="Refresh"
-                aria-label="Refresh catalog"
-                disabled="@_loading"
-                @onclick="RefreshAsync">
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
-                <path fill="currentColor"
-                      d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
-            </svg>
-        </button>
     </header>
 
     <div class="explorer-nav-body">

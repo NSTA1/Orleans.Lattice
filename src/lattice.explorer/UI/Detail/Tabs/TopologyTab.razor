@@ -1,7 +1,9 @@
 @using Orleans.Lattice.Api.State
 @using Orleans.Lattice.Explorer.Core.Topology
+@using Microsoft.JSInterop
 @inherits DetailTabBase
 @inject ITopologyReader TopologyReader
+@inject IJSRuntime JS
 
 <div class="explorer-topology">
     <div class="explorer-topology-toolbar">
@@ -15,6 +17,13 @@
             <input type="checkbox" checked="@_showLeaves" @onchange="OnToggleLeaves" />
             Show leaf nodes
         </label>
+        @if (_canvasReady)
+        {
+            <button type="button" class="explorer-btn explorer-topology-reset" @onclick="ResetViewAsync">
+                Reset view
+            </button>
+            <span class="explorer-topology-hint">scroll to zoom, drag to pan</span>
+        }
         @if (_truncated)
         {
             <span class="explorer-topology-trunc" title="Depth or node budget reached">truncated</span>
@@ -45,35 +54,36 @@
     }
     else
     {
-        var width = Math.Max(1, _graph.ColumnCount) * ColumnSpacing + Margin * 2;
-        var height = Math.Max(1, _graph.LevelCount) * LevelSpacing + Margin * 2;
         <div class="explorer-topology-canvas">
-            <svg viewBox="@($"0 0 {width} {height}")"
-                 width="@width" height="@height"
+            <svg @ref="_svg"
+                 class="explorer-topo-svg"
+                 viewBox="@_homeViewBox"
+                 preserveAspectRatio="xMidYMid meet"
                  role="img" aria-label="Tree topology graph">
                 @foreach (var edge in _graph.Edges)
                 {
+                    var from = _points[edge.FromId];
+                    var to = _points[edge.ToId];
                     <line class="explorer-topo-edge"
-                          x1="@Cx(edge.FromColumn)" y1="@Cy(edge.FromLevel)"
-                          x2="@Cx(edge.ToColumn)" y2="@Cy(edge.ToLevel)" />
+                          x1="@F(from.X)" y1="@F(from.Y)"
+                          x2="@F(to.X)" y2="@F(to.Y)" />
                 }
                 @foreach (var node in _graph.Nodes)
                 {
-                    var cx = Cx(node.Column);
-                    var cy = Cy(node.Level);
+                    var p = _points[node.Node.NodeId];
                     var expandable = node.Node.HasMoreChildren;
                     <g class="explorer-topo-node @(expandable ? "is-expandable" : null) @(node.Node.SplitInProgress ? "is-splitting" : null)"
-                       transform="@($"translate({cx},{cy})")"
+                       transform="@($"translate({F(p.X)},{F(p.Y)})")"
                        @onclick="@(() => OnNodeClickAsync(node.Node))">
                         <title>@NodeTooltip(node)</title>
-                        <circle class="explorer-topo-dot explorer-topo-load-@node.LoadBucket" r="@NodeRadius" />
+                        <circle class="explorer-topo-dot explorer-topo-load-@node.LoadBucket" r="@F(RadialLayout.NodeRadius)" />
                         @if (node.LeafBadge > 0)
                         {
                             @((MarkupString)$"<text class=\"explorer-topo-badge\" x=\"0\" y=\"4\">{node.LeafBadge}</text>")
                         }
                         @if (expandable)
                         {
-                            @((MarkupString)$"<text class=\"explorer-topo-expand\" x=\"0\" y=\"{NodeRadius + 12}\">+</text>")
+                            @((MarkupString)$"<text class=\"explorer-topo-expand\" x=\"0\" y=\"{F(RadialLayout.NodeRadius + 12)}\">+</text>")
                         }
                     </g>
                 }
@@ -83,17 +93,23 @@
 </div>
 
 @code {
-    private const double ColumnSpacing = 64;
-    private const double LevelSpacing = 80;
-    private const double Margin = 32;
-    private const double NodeRadius = 11;
-
     private IReadOnlyList<TopologyNode> _roots = Array.Empty<TopologyNode>();
     private TopologyGraph? _graph;
+    private Dictionary<string, RadialPoint> _points = new(StringComparer.Ordinal);
+    private string _homeViewBox = "0 0 100 100";
     private bool _showLeaves;
     private bool _truncated;
     private bool _loading;
     private string? _error;
+
+    private ElementReference _svg;
+    private IJSObjectReference? _module;
+    private string? _appliedViewKey;
+    private bool _canvasReady;
+
+    private string ViewKey => $"{Selection.Id}|{_showLeaves}|{_graph?.Nodes.Count ?? 0}|{_homeViewBox}";
+
+    private static string F(double value) => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -164,11 +180,84 @@
         }
     }
 
-    private void Rebuild() => _graph = TopologyLayout.Build(_roots, _showLeaves);
+    private void Rebuild()
+    {
+        _graph = TopologyLayout.Build(_roots, _showLeaves);
+        BuildRadial();
+    }
 
-    private static double Cx(double column) => Margin + column * ColumnSpacing + ColumnSpacing / 2;
+    private void BuildRadial()
+    {
+        _points = new Dictionary<string, RadialPoint>(StringComparer.Ordinal);
 
-    private static double Cy(int level) => Margin + level * LevelSpacing + LevelSpacing / 2;
+        if (_graph is null || _graph.Nodes.Count == 0)
+        {
+            _homeViewBox = "0 0 100 100";
+            return;
+        }
+
+        var rootCount = _graph.Nodes.Count(n => n.Level == 0);
+        foreach (var node in _graph.Nodes)
+        {
+            _points[node.Node.NodeId] = RadialLayout.Project(node.Column, node.Level, _graph.ColumnCount, rootCount);
+        }
+
+        var extent = RadialLayout.Extent(_graph.LevelCount, rootCount);
+        var size = extent * 2;
+        _homeViewBox = $"{F(-extent)} {F(-extent)} {F(size)} {F(size)}";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var hasCanvas = _graph is not null && _graph.Nodes.Count > 0;
+        if (hasCanvas != _canvasReady)
+        {
+            _canvasReady = hasCanvas;
+            StateHasChanged();
+        }
+
+        if (!hasCanvas)
+        {
+            return;
+        }
+
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/Orleans.Lattice.Explorer.UI/topology-interop.js");
+            await _module.InvokeVoidAsync("attach", _svg);
+
+            if (_appliedViewKey != ViewKey)
+            {
+                _appliedViewKey = ViewKey;
+                await _module.InvokeVoidAsync("home", _svg);
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit went away (navigation/teardown); nothing to do.
+        }
+        catch (OperationCanceledException)
+        {
+            // Render raced with disposal.
+        }
+    }
+
+    private async Task ResetViewAsync()
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _module.InvokeVoidAsync("reset", _svg);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
 
     private static string NodeTooltip(PositionedNode node)
     {
@@ -181,5 +270,31 @@
             _ => n.Kind.ToString(),
         };
         return $"{kind} (shard {n.ShardIndex}, depth {n.Depth})\nkeys: {n.SubtreeKeyCount:N0}, tombstones: {n.SubtreeTombstoneCount:N0}";
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && _module is not null)
+        {
+            var module = _module;
+            _module = null;
+            _ = DisposeModuleAsync(module);
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private static async Task DisposeModuleAsync(IJSObjectReference module)
+    {
+        try
+        {
+            await module.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 }
