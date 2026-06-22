@@ -20,6 +20,7 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
         string treeId,
         int pageSize,
         string? continuationToken = null,
+        TagFilter? tagFilter = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -30,6 +31,8 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
             PageSize = DataPaging.Normalize(pageSize),
             ContinuationToken = string.IsNullOrEmpty(continuationToken) ? null : continuationToken,
             ValuePreviewBudget = ScanPreviewBudget,
+            IndexName = tagFilter?.IndexName,
+            Tag = tagFilter?.Tag,
         };
 
         var response = await _client.ScanEntriesAsync(request, cancellationToken).ConfigureAwait(false);
@@ -43,6 +46,33 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
             Entries = entries,
             ContinuationToken = response.ContinuationToken,
         };
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        var names = new List<string>();
+        string? token = null;
+        do
+        {
+            var page = await _client.ListTagIndexesAsync(
+                new CatalogRequest { SourceTreeId = treeId, PageToken = token },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var entry in page.Entries)
+            {
+                names.Add(entry.IndexName);
+            }
+
+            token = page.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(token));
+
+        return names;
     }
 
     /// <inheritdoc />

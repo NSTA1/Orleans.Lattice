@@ -29,6 +29,9 @@ internal abstract class LatticeStateGrpcServiceBase
     /// <summary>Enumerates the materialised views. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<ViewCatalogPage> ListViews(CatalogRequest request, ServerCallContext context);
 
+    /// <summary>Enumerates the tag-index membership trees. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<TagIndexCatalogPage> ListTagIndexes(CatalogRequest request, ServerCallContext context);
+
     /// <summary>Returns the structural node graph of a tree. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<StructureResponse> GetTreeStructure(StructureRequest request, ServerCallContext context);
 
@@ -77,6 +80,7 @@ internal abstract class LatticeStateGrpcServiceBase
         {
             binder.AddMethod(methods.ListTrees, (UnaryServerMethod<CatalogRequest, TreeCatalogPage>?)null);
             binder.AddMethod(methods.ListViews, (UnaryServerMethod<CatalogRequest, ViewCatalogPage>?)null);
+            binder.AddMethod(methods.ListTagIndexes, (UnaryServerMethod<CatalogRequest, TagIndexCatalogPage>?)null);
             binder.AddMethod(methods.GetTreeStructure, (UnaryServerMethod<StructureRequest, StructureResponse>?)null);
             binder.AddMethod(methods.ScanEntries, (UnaryServerMethod<EntryScanRequest, EntryScanResponse>?)null);
             binder.AddMethod(methods.GetEntry, (UnaryServerMethod<EntryGetRequest, EntryGetResponse>?)null);
@@ -89,6 +93,7 @@ internal abstract class LatticeStateGrpcServiceBase
 
         binder.AddMethod(methods.ListTrees, new UnaryServerMethod<CatalogRequest, TreeCatalogPage>(serviceImpl.ListTrees));
         binder.AddMethod(methods.ListViews, new UnaryServerMethod<CatalogRequest, ViewCatalogPage>(serviceImpl.ListViews));
+        binder.AddMethod(methods.ListTagIndexes, new UnaryServerMethod<CatalogRequest, TagIndexCatalogPage>(serviceImpl.ListTagIndexes));
         binder.AddMethod(methods.GetTreeStructure, new UnaryServerMethod<StructureRequest, StructureResponse>(serviceImpl.GetTreeStructure));
         binder.AddMethod(methods.ScanEntries, new UnaryServerMethod<EntryScanRequest, EntryScanResponse>(serviceImpl.ScanEntries));
         binder.AddMethod(methods.GetEntry, new UnaryServerMethod<EntryGetRequest, EntryGetResponse>(serviceImpl.GetEntry));
@@ -148,6 +153,10 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     /// <inheritdoc />
     public override Task<ViewCatalogPage> ListViews(CatalogRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (q, req, ct) => q.ListViewsAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<TagIndexCatalogPage> ListTagIndexes(CatalogRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (q, req, ct) => q.ListTagIndexesAsync(req, ct));
 
     /// <inheritdoc />
     public override Task<StructureResponse> GetTreeStructure(StructureRequest request, ServerCallContext context)

@@ -24,6 +24,8 @@ public class TopologyReaderTests
             => Task.FromResult(new TreeCatalogPage());
         public Task<ViewCatalogPage> ListViewsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new ViewCatalogPage());
+        public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new TagIndexCatalogPage());
         public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new EntryScanResponse { TreeId = "t" });
         public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)

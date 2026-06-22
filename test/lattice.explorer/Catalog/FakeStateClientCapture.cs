@@ -17,11 +17,17 @@ internal sealed class FakeStateClientCapture : ILatticeStateClient
     public Func<CatalogRequest, Task<ViewCatalogPage>> OnListViews { get; set; } =
         _ => Task.FromResult(new ViewCatalogPage());
 
+    public Func<CatalogRequest, Task<TagIndexCatalogPage>> OnListTagIndexes { get; set; } =
+        _ => Task.FromResult(new TagIndexCatalogPage());
+
     public Task<TreeCatalogPage> ListTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => OnListTrees(request);
 
     public Task<ViewCatalogPage> ListViewsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => OnListViews(request);
+
+    public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => OnListTagIndexes(request);
 
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });

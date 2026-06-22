@@ -86,6 +86,7 @@ internal sealed class LatticeStateQuery(
         var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
 
         var ordered = allIds
+            .Where(id => !IsTagIndexTree(id))
             .Where(id => request.IncludeSystemTrees || !IsReservedTree(id))
             .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
             .OrderBy(id => id, StringComparer.Ordinal);
@@ -172,6 +173,59 @@ internal sealed class LatticeStateQuery(
             ClusterId = cluster?.ClusterId ?? string.Empty,
             ServiceId = cluster?.ServiceId ?? string.Empty,
         });
+    }
+
+    public async Task<TagIndexCatalogPage> ListTagIndexesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+
+        var ordered = allIds
+            .Where(IsTagIndexTree)
+            .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
+            .OrderBy(id => id, StringComparer.Ordinal);
+
+        var tagFactory = request.SourceTreeId is null ? null : _services.GetService<ILatticeTagIndexFactory>();
+        var pageSize = request.EffectivePageSize;
+        var entries = new List<TagIndexStateSummary>(pageSize);
+        string? nextToken = null;
+
+        foreach (var id in ordered)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entries.Count == pageSize)
+            {
+                nextToken = entries[^1].TreeId;
+                break;
+            }
+
+            var indexName = id[LatticeConstants.TagIndexTreePrefix.Length..];
+
+            if (tagFactory is not null)
+            {
+                var covered = await tagFactory.CreateMultiTree(indexName)
+                    .CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
+                if (!covered.Contains(request.SourceTreeId!, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+            }
+
+            var entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
+            entries.Add(new TagIndexStateSummary
+            {
+                IndexName = indexName,
+                TreeId = id,
+                ShardCount = entry?.ShardCount ?? 0,
+            });
+        }
+
+        return new TagIndexCatalogPage { Entries = entries, NextPageToken = nextToken };
     }
 
     public async Task<TreeStructureResult> GetTreeStructureAsync(
@@ -267,6 +321,11 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (!string.IsNullOrEmpty(request.IndexName) && request.Tag is not null)
+        {
+            return await ScanByTagAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
         var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
 
         var fresh = string.IsNullOrEmpty(request.ContinuationToken);
@@ -327,6 +386,62 @@ internal sealed class LatticeStateQuery(
         }
 
         return EntryScanResult.Found(request.TreeId, records, continuation);
+    }
+
+    private async Task<EntryScanResult> ScanByTagAsync(
+        EntryScanRequest request,
+        CancellationToken cancellationToken)
+    {
+        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return EntryScanResult.NotFound(request.TreeId);
+        }
+
+        var tagFactory = _services.GetService<ILatticeTagIndexFactory>();
+        if (tagFactory is null)
+        {
+            return EntryScanResult.Found(request.TreeId, Array.Empty<EntryRecord>(), continuationToken: null);
+        }
+
+        var index = tagFactory.Create(tree, request.IndexName!);
+        var pageSize = ClampPageSize(request.PageSize);
+        var previewBudget = ClampScanPreviewBudget(request.ValuePreviewBudget);
+
+        // Tag-filtered paging is keyed on the source key (the membership query
+        // yields keys in ascending ordinal order); the continuation token is the
+        // last source key returned, applied as an exclusive lower bound.
+        var after = string.IsNullOrEmpty(request.ContinuationToken) ? null : request.ContinuationToken;
+
+        var records = new List<EntryRecord>(pageSize);
+        string? nextToken = null;
+
+        await foreach (var key in index.WithAllTags(request.Tag!)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (after is not null && string.CompareOrdinal(key, after) <= 0)
+            {
+                continue;
+            }
+
+            if (records.Count == pageSize)
+            {
+                nextToken = records[^1].Key;
+                break;
+            }
+
+            var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+            if (versioned.Value is null)
+            {
+                // The membership row outlived its primary key (pending reconcile);
+                // skip it so the filtered view only shows live rows.
+                continue;
+            }
+
+            records.Add(BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget));
+        }
+
+        return EntryScanResult.Found(request.TreeId, records, nextToken);
     }
 
     public async Task<EntryDetailResult> GetEntryAsync(
@@ -511,6 +626,9 @@ internal sealed class LatticeStateQuery(
     private static bool IsReservedTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
         || treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+
+    private static bool IsTagIndexTree(string treeId) =>
+        treeId.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Collects the cluster-wide set of materialised views, deduplicated by name.

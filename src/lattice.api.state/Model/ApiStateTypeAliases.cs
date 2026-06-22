@@ -73,4 +73,10 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="ClusterInfo"/>.</summary>
     public const string ClusterInfo = "ola.ci";
+
+    /// <summary>Alias for <see cref="TagIndexStateSummary"/>.</summary>
+    public const string TagIndexStateSummary = "ola.tis";
+
+    /// <summary>Alias for <see cref="TagIndexCatalogPage"/>.</summary>
+    public const string TagIndexCatalogPage = "ola.tip";
 }

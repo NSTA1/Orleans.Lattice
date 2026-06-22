@@ -18,6 +18,9 @@ public interface ILatticeStateClient
     /// <summary>Lists the materialised views as a deterministic, paged catalog.</summary>
     Task<ViewCatalogPage> ListViewsAsync(CatalogRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the tag-index membership trees as a deterministic, paged catalog.</summary>
+    Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Returns the structural node graph of a tree.</summary>
     Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default);
 

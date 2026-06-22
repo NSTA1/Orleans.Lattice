@@ -72,6 +72,71 @@ public class DataReaderTests
     }
 
     [Test]
+    public async Task ScanAsync_WithTagFilter_PassesIndexAndTag()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("orders", pageSize: 25, continuationToken: null,
+            tagFilter: new TagFilter("by-status", "open"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastScan!.TreeId, Is.EqualTo("orders"));
+            Assert.That(client.LastScan!.IndexName, Is.EqualTo("by-status"));
+            Assert.That(client.LastScan!.Tag, Is.EqualTo("open"));
+        });
+    }
+
+    [Test]
+    public async Task ScanAsync_WithoutTagFilter_LeavesIndexAndTagNull()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("orders", pageSize: 25);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastScan!.IndexName, Is.Null);
+            Assert.That(client.LastScan!.Tag, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ListTagIndexesForTreeAsync_PassesSourceTreeId_AndPagesAllNames()
+    {
+        var calls = 0;
+        var client = new FakeEntryStateClient
+        {
+            OnListTagIndexes = req =>
+            {
+                calls++;
+                return calls == 1
+                    ? new TagIndexCatalogPage
+                    {
+                        Entries = new[] { new TagIndexStateSummary { IndexName = "by-status", TreeId = "tag-by-status" } },
+                        NextPageToken = "tag-by-status",
+                    }
+                    : new TagIndexCatalogPage
+                    {
+                        Entries = new[] { new TagIndexStateSummary { IndexName = "by-owner", TreeId = "tag-by-owner" } },
+                        NextPageToken = null,
+                    };
+            },
+        };
+        var reader = new DataReader(client);
+
+        var names = await reader.ListTagIndexesForTreeAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastTagIndexes!.SourceTreeId, Is.EqualTo("orders"));
+            Assert.That(names, Is.EqualTo(new[] { "by-status", "by-owner" }));
+        });
+    }
+
+    [Test]
     public async Task GetEntryAsync_Found_ReturnsMappedEntry()
     {
         var client = new FakeEntryStateClient
