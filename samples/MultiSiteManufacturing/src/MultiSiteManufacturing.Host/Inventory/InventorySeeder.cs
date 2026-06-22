@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Lattice;
 using Orleans.Lattice;
 using Orleans.Lattice.Primitives;
 
@@ -15,11 +16,16 @@ namespace MultiSiteManufacturing.Host.Inventory;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The seeder gates on <see cref="IInventorySeedStateGrain"/>: once the
-/// flag is set against a given Azure Table Storage account, subsequent
-/// host starts no-op and preserve any operator mutations. To force a
-/// re-seed, delete the <c>msmfgGrainState</c> and <c>msmfgLatticeFacts*</c>
-/// tables from Azurite (or the target storage account).
+/// The seeder gates on <see cref="IInventorySeedStateGrain"/> together
+/// with the lattice fact backend: it skips only when the durable seed
+/// marker is set <em>and</em> the lattice tree still holds parts, so
+/// operator mutations are preserved across restarts. If the marker
+/// survives but the (non-durable) lattice data was lost on an abrupt
+/// silo restart, the seeder re-seeds rather than leaving the cluster
+/// flagged "seeded" over empty trees. To force a full re-seed from a
+/// clean slate, delete the <c>msmfgGrainState</c> and
+/// <c>msmfgLatticeFacts*</c> tables from Azurite (or the target storage
+/// account).
 /// </para>
 /// <para>
 /// Before emitting, the seeder snapshots every site's chaos configuration
@@ -60,11 +66,27 @@ public sealed class InventorySeeder(
     public async Task SeedAsync(CancellationToken cancellationToken)
     {
         var seedFlag = grains.GetGrain<IInventorySeedStateGrain>(IInventorySeedStateGrain.SingletonKey);
-        if (!await seedFlag.TryMarkSeededAsync())
+        var alreadyMarked = await seedFlag.HasSeededAsync();
+
+        // The seed marker lives in durable grain storage, but the lattice
+        // fact tree it guards is not guaranteed to survive an abrupt silo
+        // restart (for example recreating the container to pick up a new
+        // image). Trusting the marker alone can leave the cluster flagged
+        // "seeded" over empty trees, so verify the lattice backend actually
+        // holds parts before skipping; re-seed when it does not.
+        if (alreadyMarked && await LatticeInventoryPresentAsync(cancellationToken))
         {
             logger.LogInformation("Inventory already seeded; skipping bulk load.");
             return;
         }
+
+        if (alreadyMarked)
+        {
+            logger.LogWarning(
+                "Inventory seed marker is set but the lattice fact tree is empty; the seeded data did not survive a restart. Re-seeding.");
+        }
+
+        await seedFlag.TryMarkSeededAsync();
 
         logger.LogInformation("Seeding {Count} parts into the federation…", TotalParts);
 
@@ -95,6 +117,18 @@ public sealed class InventorySeeder(
         }
 
         logger.LogInformation("Inventory seed complete.");
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when the lattice fact backend already holds at
+    /// least one part, used to distinguish a genuinely seeded cluster from
+    /// one whose durable seed marker outlived the (non-durable) lattice
+    /// data across a restart.
+    /// </summary>
+    private async Task<bool> LatticeInventoryPresentAsync(CancellationToken cancellationToken)
+    {
+        var parts = await router.GetBackend(LatticeFactBackend.BackendName).ListPartsAsync(cancellationToken);
+        return parts.Count > 0;
     }
 
     private async Task EmitAllAsync(CancellationToken cancellationToken)

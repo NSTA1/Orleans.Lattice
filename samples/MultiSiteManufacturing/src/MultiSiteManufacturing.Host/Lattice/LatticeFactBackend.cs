@@ -32,8 +32,11 @@ public sealed class LatticeFactBackend(
     /// <summary>Default Lattice tree id that holds every fact across every part.</summary>
     public const string FactTreeId = "mfg-facts";
 
+    /// <summary><see cref="IFactBackend.Name"/> this backend registers under.</summary>
+    public const string BackendName = "lattice";
+
     /// <inheritdoc />
-    public string Name => "lattice";
+    public string Name => BackendName;
 
     private ILattice Tree => grainFactory.GetGrain<ILattice>(treeId);
 

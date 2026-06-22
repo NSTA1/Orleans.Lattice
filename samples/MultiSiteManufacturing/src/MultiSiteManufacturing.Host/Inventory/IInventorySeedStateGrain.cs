@@ -5,7 +5,10 @@ namespace MultiSiteManufacturing.Host.Inventory;
 /// populated the inventory against the current Azure Table Storage account.
 /// Keyed with <see cref="SingletonKey"/>. When the <c>HasSeeded</c> flag is
 /// set, <see cref="InventorySeeder"/> skips seeding on subsequent host
-/// starts so operator mutations are preserved across restarts.
+/// starts so operator mutations are preserved across restarts - provided
+/// the lattice data the flag guards still exists. If the durable flag
+/// outlives the (non-durable) lattice trees across an abrupt restart, the
+/// seeder re-seeds rather than trusting the flag alone.
 /// </summary>
 public interface IInventorySeedStateGrain : IGrainWithIntegerKey
 {
