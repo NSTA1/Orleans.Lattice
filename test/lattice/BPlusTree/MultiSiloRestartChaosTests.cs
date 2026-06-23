@@ -137,6 +137,66 @@ public class MultiSiloRestartChaosTests
     /// </summary>
     private static bool IsToleratedDuringRestart(Exception _) => true;
 
+    /// <summary>
+    /// Polls a post-window read on a bounded deadline, swallowing only the
+    /// transient exceptions a silo reactivation legitimately raises while
+    /// the just-restarted secondary's shards are still coming up on the
+    /// surviving silo. A read that returns a value (including <c>null</c>
+    /// for a genuinely absent key) is returned immediately so the universe
+    /// assertions still observe real key loss; only throwing reads are
+    /// retried. Once the deadline elapses the last transient exception is
+    /// rethrown so a permanently-wedged reactivation still fails loudly.
+    /// </summary>
+    private static async Task<T> ReadWithReactivationRetryAsync<T>(
+        Func<Task<T>> read, TimeSpan deadline)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                return await read();
+            }
+            catch (Exception ex) when (IsTransientReactivationException(ex))
+            {
+                if (sw.Elapsed >= deadline)
+                {
+                    throw;
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
+            }
+        }
+    }
+
+    /// <summary>
+    /// True for the transient exceptions a read may observe while the
+    /// restarted silo's shards are still reactivating: the lattice
+    /// activation-readiness timeout and Orleans' own transient
+    /// messaging / placement / membership failures (in particular
+    /// <c>SiloUnavailableException</c> thrown when a call lands on an
+    /// activation whose host is being torn down). Genuine universe defects
+    /// surface as a <c>null</c> / non-envelope read result, not as one of
+    /// these exceptions.
+    /// </summary>
+    private static bool IsTransientReactivationException(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException!)
+        {
+            if (e is ShardActivationTimeoutException or TimeoutException)
+            {
+                return true;
+            }
+            var typeName = e.GetType().Name;
+            if (typeName is "OrleansMessageRejectionException"
+                or "SiloUnavailableException"
+                or "OrleansException")
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     [Test]
     public async Task Chaos_secondary_silo_restart_under_load_preserves_universe()
     {
@@ -251,12 +311,26 @@ public class MultiSiloRestartChaosTests
         // handoff after the chaos window closes.
         await Task.Delay(TimeSpan.FromSeconds(2));
 
-        // ---- Post-window invariants.
-        var finalCount = await tree.CountAsync();
+        // ---- Post-window invariants. After the chaos window closes the
+        // just-restarted secondary can still be mid-handoff: a read that
+        // lands on an activation whose host is being torn down surfaces as
+        // SiloUnavailableException / OrleansMessageRejectionException - a
+        // convergence artifact, not an invariant violation, yet the 2s
+        // delay above is not always enough for membership to settle under
+        // CI load. Settle each post-window read on a bounded deadline so a
+        // transient reactivation fault is retried rather than failing the
+        // run; a genuinely wedged cluster still fails loudly once the
+        // budget elapses. Genuine key loss surfaces as a null / non-envelope
+        // read result, which is NOT an exception and so is never retried.
+        var settleDeadline = TimeSpan.FromSeconds(60);
+        var finalCount = await ReadWithReactivationRetryAsync(
+            () => tree.CountAsync(), settleDeadline);
         var envelopeViolations = new List<string>();
         for (int i = 0; i < UniverseSize; i++)
         {
-            var v = await tree.GetAsync(KeyOf(i));
+            var idx = i;
+            var v = await ReadWithReactivationRetryAsync(
+                () => tree.GetAsync(KeyOf(idx)), settleDeadline);
             if (v is null)
             {
                 envelopeViolations.Add($"key {KeyOf(i)} missing post-window");
