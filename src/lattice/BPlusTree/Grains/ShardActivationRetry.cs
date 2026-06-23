@@ -26,6 +26,20 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// bound.
 /// </para>
 /// <para>
+/// <b>Transient silo-membership churn.</b> In addition to the cold-start
+/// seed timeout, this envelope also absorbs the transient faults a grain
+/// RPC observes when its target activation's host is restarting, draining,
+/// or has just left the cluster - Orleans' <c>SiloUnavailableException</c>
+/// (the call landed on an activation whose silo is gone) and
+/// <c>OrleansMessageRejectionException</c> (the runtime rejected a forward
+/// to a deactivating grain). Both clear once the Orleans directory
+/// re-places the activation on a live silo, so retrying under the same
+/// idempotency contract turns a membership-convergence artifact into a
+/// transparent reissue instead of surfacing it to the operator. Detection
+/// is by type name (see <see cref="IsTransientSiloChurn"/>) to avoid a
+/// compile-time dependency on the Orleans.Runtime types.
+/// </para>
+/// <para>
 /// <b>Scoping for the wider audit.</b> This helper is presently consumed by
 /// <see cref="LatticeGrain.ReshardAsync"/> only - the observably-broken path
 /// under the bench-startup pattern that motivated the fix. The wider audit
@@ -75,7 +89,7 @@ internal static class ShardActivationRetry
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        ShardActivationTimeoutException? last = null;
+        Exception? last = null;
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             try
@@ -83,7 +97,7 @@ internal static class ShardActivationRetry
                 await operation().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
                 return;
             }
-            catch (ShardActivationTimeoutException ex)
+            catch (Exception ex) when (ex is ShardActivationTimeoutException || IsTransientSiloChurn(ex))
             {
                 last = ex;
                 if (attempt == MaxAttempts) break;
@@ -93,8 +107,8 @@ internal static class ShardActivationRetry
             }
         }
 
-        // Budget exhausted: rethrow the most-recent typed exception so
-        // operators see the same shape they would have seen pre-envelope.
+        // Budget exhausted: rethrow the most-recent exception so operators
+        // see the same shape they would have seen pre-envelope.
         throw last!;
     }
 
@@ -108,14 +122,14 @@ internal static class ShardActivationRetry
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        ShardActivationTimeoutException? last = null;
+        Exception? last = null;
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             try
             {
                 return await operation().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             }
-            catch (ShardActivationTimeoutException ex)
+            catch (Exception ex) when (ex is ShardActivationTimeoutException || IsTransientSiloChurn(ex))
             {
                 last = ex;
                 if (attempt == MaxAttempts) break;
@@ -126,5 +140,34 @@ internal static class ShardActivationRetry
         }
 
         throw last!;
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> - or any exception in its inner
+    /// chain - is one of the transient silo-membership-churn faults a grain
+    /// RPC can observe when its target activation's host is restarting,
+    /// draining, or has just left the cluster: Orleans'
+    /// <c>SiloUnavailableException</c> (the call landed on an activation
+    /// whose silo is gone) and <c>OrleansMessageRejectionException</c> (the
+    /// runtime rejected a forward to a deactivating grain). Both clear once
+    /// the Orleans directory re-places the activation on a live silo, so the
+    /// operation is safe to retry under the same idempotency contract as the
+    /// cold-start seed timeout. Matched by type name - one of the Orleans
+    /// types is internal - mirroring the detection the atomic-write saga
+    /// coordinator already uses for the deactivation-race rejection shape.
+    /// </summary>
+    internal static bool IsTransientSiloChurn(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException!)
+        {
+            var typeName = e.GetType().Name;
+            if (typeName.Contains("SiloUnavailableException", StringComparison.Ordinal)
+                || typeName.Contains("OrleansMessageRejectionException", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

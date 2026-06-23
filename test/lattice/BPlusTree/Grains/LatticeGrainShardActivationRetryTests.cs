@@ -301,4 +301,130 @@ public class LatticeGrainShardActivationRetryTests
         Assert.That(calls, Is.LessThanOrEqualTo(2),
             "Envelope must not retry InvalidOperationException through the seed-timeout path.");
     }
+
+    // -------------------------------------------------------------------------
+    // Transient silo-membership churn - the same two envelopes that absorb the
+    // cold-start seed timeout also absorb the SiloUnavailableException /
+    // OrleansMessageRejectionException shapes a grain RPC observes while a
+    // target activation's host is restarting, draining, or has just left the
+    // cluster. These pin that each call site actually routes the churn fault
+    // through its envelope (the read/write central RetryOnStaleRoutingAsync
+    // seam and the per-call ShardActivationRetry seam).
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// A single-key read whose underlying shard call throws a transient
+    /// <c>SiloUnavailableException</c>-shaped fault on the first activation
+    /// must retry through the central stale-routing envelope and surface the
+    /// second attempt's success.
+    /// </summary>
+    [Test]
+    public async Task GetAsync_retries_through_transient_silo_churn_then_succeeds()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
+
+        var calls = 0;
+        shardRoot.GetAsync("k1").Returns(_ =>
+        {
+            calls++;
+            if (calls == 1) throw new FakeSiloUnavailableException("silo-gone");
+            return Encoding.UTF8.GetBytes("v1");
+        });
+
+        var result = await grain.GetAsync("k1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(2), "Central envelope did not retry the transient silo-churn fault.");
+            Assert.That(Encoding.UTF8.GetString(result!), Is.EqualTo("v1"));
+        });
+    }
+
+    /// <summary>
+    /// A single-key write whose underlying shard call throws a transient
+    /// <c>OrleansMessageRejectionException</c>-shaped fault (forward to a
+    /// deactivating grain) on the first activation must retry through the
+    /// write-side central envelope.
+    /// </summary>
+    [Test]
+    public async Task SetAsync_retries_through_transient_silo_churn_then_succeeds()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
+
+        var calls = 0;
+        shardRoot.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+            .Returns(_ =>
+            {
+                calls++;
+                if (calls == 1) throw new FakeOrleansMessageRejectionException("forward-rejected");
+                return Task.CompletedTask;
+            });
+
+        await grain.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        Assert.That(calls, Is.EqualTo(2));
+    }
+
+    /// <summary>
+    /// A per-call <see cref="ShardActivationRetry"/> seam (here the
+    /// single-shard digest read) must also absorb a transient silo-churn
+    /// fault, not just the cold-start seed timeout.
+    /// </summary>
+    [Test]
+    public async Task GetLeafProjectionDigestAsync_retries_through_transient_silo_churn_then_succeeds()
+    {
+        var (grain, factory) = CreateGrain();
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
+
+        var expected = new LeafProjectionDigest
+        {
+            Hash = new byte[] { 0x01, 0x02 },
+            EntryCount = 9,
+            CheckpointOffset = 3,
+            Version = 1,
+        };
+
+        var calls = 0;
+        shardRoot.GetShardProjectionDigestAsync(Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls++;
+                if (calls == 1) throw new FakeSiloUnavailableException("silo-gone");
+                return expected;
+            });
+
+        var digest = await grain.GetLeafProjectionDigestAsync(0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(digest.EntryCount, Is.EqualTo(9));
+        });
+    }
+
+    /// <summary>
+    /// Fake <see cref="Exception"/> whose simple type name contains
+    /// <c>SiloUnavailableException</c> so the type-name detection in
+    /// <c>ShardActivationRetry.IsTransientSiloChurn</c> classifies it as
+    /// transient silo churn without a dependency on Orleans.Runtime internals.
+    /// </summary>
+    private sealed class FakeSiloUnavailableException : Exception
+    {
+        public FakeSiloUnavailableException(string message) : base(message) { }
+    }
+
+    /// <summary>
+    /// Fake <see cref="Exception"/> whose simple type name contains
+    /// <c>OrleansMessageRejectionException</c>, mirroring the forward-rejected
+    /// shape the runtime raises against a deactivating grain.
+    /// </summary>
+    private sealed class FakeOrleansMessageRejectionException : Exception
+    {
+        public FakeOrleansMessageRejectionException(string message) : base(message) { }
+    }
 }

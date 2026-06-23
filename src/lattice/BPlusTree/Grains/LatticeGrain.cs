@@ -345,6 +345,15 @@ internal sealed partial class LatticeGrain(
                     if (DateTime.UtcNow >= deadline) throw;
                     await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                 }
+                catch (Exception churnEx) when (ShardActivationRetry.IsTransientSiloChurn(churnEx))
+                {
+                    // Target activation's host is restarting, draining, or
+                    // has just left the cluster (SiloUnavailableException, or
+                    // a forward-to-deactivating rejection); the directory
+                    // re-places it on retry, so absorb within the budget.
+                    if (DateTime.UtcNow >= deadline) throw;
+                    await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+                }
                 catch (InvalidOperationException)
                 {
                     if (invalidOpRetried) throw;
@@ -413,6 +422,15 @@ internal sealed partial class LatticeGrain(
                     // Seed-timeout is retriable by construction; absorb
                     // into the wall-clock budget with a per-attempt
                     // backoff (mirrors RetryOnStaleRoutingAsync).
+                    if (DateTime.UtcNow >= deadline) throw;
+                    await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+                }
+                catch (Exception churnEx) when (ShardActivationRetry.IsTransientSiloChurn(churnEx))
+                {
+                    // Target activation's host is restarting, draining, or
+                    // has just left the cluster (SiloUnavailableException, or
+                    // a forward-to-deactivating rejection); the directory
+                    // re-places it on retry, so absorb within the budget.
                     if (DateTime.UtcNow >= deadline) throw;
                     await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                 }
@@ -494,6 +512,15 @@ internal sealed partial class LatticeGrain(
                     // Seed-timeout is retriable by construction; absorb
                     // into the wall-clock budget with a per-attempt
                     // backoff (mirrors RetryOnStaleRoutingAsync).
+                    if (DateTime.UtcNow >= deadline) throw;
+                    await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+                }
+                catch (Exception churnEx) when (ShardActivationRetry.IsTransientSiloChurn(churnEx))
+                {
+                    // Target activation's host is restarting, draining, or
+                    // has just left the cluster (SiloUnavailableException, or
+                    // a forward-to-deactivating rejection); the directory
+                    // re-places it on retry, so absorb within the budget.
                     if (DateTime.UtcNow >= deadline) throw;
                     await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                 }
@@ -954,6 +981,16 @@ internal sealed partial class LatticeGrain(
                         // Seed-timeout is retriable by construction; absorb
                         // into the existing wall-clock budget with a per-
                         // attempt backoff (mirrors RetryOnStaleRoutingAsync).
+                        if (DateTime.UtcNow >= deadline) throw;
+                        await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+                    }
+                    catch (Exception churnEx) when (ShardActivationRetry.IsTransientSiloChurn(churnEx))
+                    {
+                        // Target activation's host is restarting, draining,
+                        // or has just left the cluster (SiloUnavailableException,
+                        // or a forward-to-deactivating rejection); the
+                        // directory re-places it on retry, so absorb within
+                        // the existing wall-clock budget with a backoff.
                         if (DateTime.UtcNow >= deadline) throw;
                         await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
                     }
@@ -2525,6 +2562,17 @@ internal sealed partial class LatticeGrain(
                 if (DateTime.UtcNow >= deadline) throw;
                 await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
             }
+            catch (Exception ex) when (ShardActivationRetry.IsTransientSiloChurn(ex))
+            {
+                // The target activation's host is restarting, draining, or
+                // has just left the cluster (SiloUnavailableException, or a
+                // forward-to-deactivating rejection). The Orleans directory
+                // re-places the activation on retry, so absorb the
+                // membership-convergence artifact within the same wall-clock
+                // budget with a backoff rather than surfacing it.
+                if (DateTime.UtcNow >= deadline) throw;
+                await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+            }
             catch (InvalidOperationException)
             {
                 if (invalidOpRetried) throw;
@@ -2572,6 +2620,17 @@ internal sealed partial class LatticeGrain(
                 // See the generic overload for the rationale: seed-timeout
                 // is retriable by construction; absorb within the wall-clock
                 // budget with a per-attempt backoff.
+                if (DateTime.UtcNow >= deadline) throw;
+                await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
+            }
+            catch (Exception ex) when (ShardActivationRetry.IsTransientSiloChurn(ex))
+            {
+                // The target activation's host is restarting, draining, or
+                // has just left the cluster (SiloUnavailableException, or a
+                // forward-to-deactivating rejection). The Orleans directory
+                // re-places the activation on retry, so absorb the
+                // membership-convergence artifact within the same wall-clock
+                // budget with a backoff rather than surfacing it.
                 if (DateTime.UtcNow >= deadline) throw;
                 await Task.Delay(ShardActivationRetryBackoff, cancellationToken);
             }

@@ -173,4 +173,166 @@ public class ShardActivationRetryTests
         Assert.ThrowsAsync<ArgumentNullException>(async () =>
             await ShardActivationRetry.RunAsync(null!));
     }
+
+    // -------------------------------------------------------------------------
+    // Transient silo-membership churn - the envelope also absorbs the
+    // SiloUnavailableException / OrleansMessageRejectionException shapes a
+    // grain RPC observes while a target activation's host is restarting,
+    // draining, or has just left the cluster, identically to the seed-timeout
+    // case. Detection is by type name, so the test doubles need only carry the
+    // matching name (they cannot reference the internal Orleans.Runtime type).
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// A <c>SiloUnavailableException</c>-shaped fault on the first attempt is
+    /// absorbed and the second attempt's success surfaces to the caller.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_retries_through_silo_unavailable_then_succeeds()
+    {
+        var calls = 0;
+        await ShardActivationRetry.RunAsync(() =>
+        {
+            calls++;
+            if (calls == 1) throw new FakeSiloUnavailableException("silo-gone-1");
+            return Task.CompletedTask;
+        });
+
+        Assert.That(calls, Is.EqualTo(2), "Envelope did not retry the transient silo-churn fault.");
+    }
+
+    /// <summary>
+    /// An <c>OrleansMessageRejectionException</c>-shaped fault (forward to a
+    /// deactivating grain) on the first attempt is absorbed and the retry
+    /// succeeds.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_retries_through_message_rejection_then_succeeds()
+    {
+        var calls = 0;
+        await ShardActivationRetry.RunAsync(() =>
+        {
+            calls++;
+            if (calls == 1) throw new FakeOrleansMessageRejectionException("forward-rejected-1");
+            return Task.CompletedTask;
+        });
+
+        Assert.That(calls, Is.EqualTo(2));
+    }
+
+    /// <summary>
+    /// A churn fault wrapped as the inner exception of an outer wrapper is
+    /// still detected and retried - the envelope walks the inner chain.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_retries_through_wrapped_silo_churn_then_succeeds()
+    {
+        var calls = 0;
+        await ShardActivationRetry.RunAsync(() =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                throw new InvalidOperationException(
+                    "wrapper", new FakeSiloUnavailableException("inner-silo-gone"));
+            }
+            return Task.CompletedTask;
+        });
+
+        Assert.That(calls, Is.EqualTo(2));
+    }
+
+    /// <summary>
+    /// When every attempt throws a churn fault the budget exhausts and the
+    /// most-recent exception is rethrown unwrapped, matching the seed-timeout
+    /// exhaustion contract.
+    /// </summary>
+    [Test]
+    public void RunAsync_rethrows_silo_churn_after_budget_exhausted()
+    {
+        var calls = 0;
+        var ex = Assert.ThrowsAsync<FakeSiloUnavailableException>(async () =>
+            await ShardActivationRetry.RunAsync(() =>
+            {
+                calls++;
+                throw new FakeSiloUnavailableException($"silo-gone-{calls}");
+            }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(ShardActivationRetry.MaxAttempts),
+                "Envelope did not exhaust the full retry budget on the churn path.");
+            Assert.That(ex!.Message, Is.EqualTo($"silo-gone-{ShardActivationRetry.MaxAttempts}"),
+                "Envelope rethrew the wrong attempt's exception (must be the last).");
+        });
+    }
+
+    /// <summary>
+    /// The generic <see cref="ShardActivationRetry.RunAsync{T}"/> overload
+    /// absorbs a churn fault and returns the retry's value, identically to the
+    /// void overload.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_generic_retries_through_silo_churn_then_returns_value()
+    {
+        var calls = 0;
+        var result = await ShardActivationRetry.RunAsync(() =>
+        {
+            calls++;
+            if (calls == 1) throw new FakeOrleansMessageRejectionException("forward-rejected-1");
+            return Task.FromResult(7);
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(result, Is.EqualTo(7));
+        });
+    }
+
+    /// <summary>
+    /// <see cref="ShardActivationRetry.IsTransientSiloChurn"/> matches both
+    /// churn shapes (including when nested as an inner exception) and rejects
+    /// unrelated exceptions.
+    /// </summary>
+    [Test]
+    public void IsTransientSiloChurn_matches_churn_shapes_only()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ShardActivationRetry.IsTransientSiloChurn(
+                new FakeSiloUnavailableException("x")), Is.True);
+            Assert.That(ShardActivationRetry.IsTransientSiloChurn(
+                new FakeOrleansMessageRejectionException("x")), Is.True);
+            Assert.That(ShardActivationRetry.IsTransientSiloChurn(
+                new InvalidOperationException("outer", new FakeSiloUnavailableException("inner"))),
+                Is.True, "Predicate must walk the inner-exception chain.");
+            Assert.That(ShardActivationRetry.IsTransientSiloChurn(
+                new InvalidOperationException("unrelated")), Is.False);
+            Assert.That(ShardActivationRetry.IsTransientSiloChurn(
+                new ShardActivationTimeoutException("seed")), Is.False,
+                "Seed-timeout is handled by its own catch arm, not the churn predicate.");
+        });
+    }
+
+    /// <summary>
+    /// Fake <see cref="Exception"/> whose simple type name contains
+    /// <c>SiloUnavailableException</c>, so the type-name detection in
+    /// <see cref="ShardActivationRetry.IsTransientSiloChurn"/> classifies it as
+    /// transient silo churn without taking a dependency on Orleans.Runtime.
+    /// </summary>
+    private sealed class FakeSiloUnavailableException : Exception
+    {
+        public FakeSiloUnavailableException(string message) : base(message) { }
+    }
+
+    /// <summary>
+    /// Fake <see cref="Exception"/> whose simple type name contains
+    /// <c>OrleansMessageRejectionException</c>, mirroring the forward-rejected
+    /// shape the runtime raises against a deactivating grain.
+    /// </summary>
+    private sealed class FakeOrleansMessageRejectionException : Exception
+    {
+        public FakeOrleansMessageRejectionException(string message) : base(message) { }
+    }
 }
