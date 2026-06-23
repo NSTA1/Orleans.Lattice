@@ -576,17 +576,36 @@ internal sealed partial class BPlusLeafGrain
     /// <paramref name="treeId"/> when (a) this leaf carries a non-null
     /// <see cref="State.LeafNodeState.ShardIndex"/> and (b) that shard index is
     /// actually referenced by the map's physical shard set. In every other
-    /// case - a legacy slot-less leaf, a registry lookup that returns no map or
-    /// throws, or a map drawn from a foreign physical shard space - this
-    /// returns <see langword="null"/> so <see cref="ShouldApplyDuringReplay"/>
-    /// falls back to the legacy stamped-<see cref="LatticeMutation.ShardIndex"/>
-    /// axis. The guard is what makes the map-based ownership resolution safe to
-    /// enable unconditionally: a transient registry failure or a mismatched map
-    /// can never cause a leaf to reject its own writes.
+    /// case - a system tree, a legacy slot-less leaf, a registry lookup that
+    /// returns no map or throws, or a map drawn from a foreign physical shard
+    /// space - this returns <see langword="null"/> so
+    /// <see cref="ShouldApplyDuringReplay"/> falls back to the legacy
+    /// stamped-<see cref="LatticeMutation.ShardIndex"/> axis. The guard is what
+    /// makes the map-based ownership resolution safe to enable unconditionally:
+    /// a transient registry failure or a mismatched map can never cause a leaf
+    /// to reject its own writes.
+    /// <para>
+    /// System trees (IDs starting with
+    /// <see cref="LatticeConstants.SystemTreePrefix"/>) skip the registry lookup
+    /// entirely. The registry is itself backed by the
+    /// <see cref="LatticeConstants.RegistryTreeId"/> system tree, so a registry
+    /// leaf that called back into the (non-reentrant, singleton) registry grain
+    /// during its own activation - which happens inside the registry's own
+    /// write turn - would deadlock. System trees never undergo the adaptive
+    /// shard split that this slot-ownership resolution guards against, so the
+    /// legacy stamp axis is always correct for them. This mirrors the
+    /// system-tree guard every other leaf-to-registry call site uses.
+    /// </para>
     /// </summary>
     private async Task<ShardMap?> ResolveReplayShardMapAsync(string treeId)
     {
         if (state.State.ShardIndex is not int leafShardIndex)
+            return null;
+
+        // The registry is backed by a system tree; a system-tree leaf must
+        // never call the registry during activation or it deadlocks the
+        // singleton registry grain inside its own write turn.
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             return null;
 
         try
