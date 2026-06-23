@@ -233,7 +233,7 @@ internal sealed partial class BPlusLeafGrain
     /// activation-time cursor publish would be redundant.
     /// </returns>
     /// <remarks>
-    /// Per-entry filter: <see cref="ShouldApplyDuringReplay(in LatticeMutation, int?, string?, string?)"/>
+    /// Per-entry filter: <see cref="ShouldApplyDuringReplay(in LatticeMutation, int?, string?, string?, ShardMap?)"/>
     /// drops entries whose <see cref="LatticeMutation.ShardIndex"/>
     /// does not match this leaf's persisted shard, and entries whose
     /// key falls outside this leaf's persisted
@@ -257,6 +257,24 @@ internal sealed partial class BPlusLeafGrain
         var partitionCount = Math.Max(1, resolvedOptions.WalPartitions);
         var detector = context.ActivationServices?.GetService<ILatticeFallOffLogDetector>();
         var projection = (ILeafProjection)this;
+
+        // Resolve the leaf's current slot-ownership view once for the whole
+        // replay. After an adaptive split a post-split write routed to the
+        // donor shard for an already-moved slot is shadow-forwarded into the
+        // target's WAL but keeps the DONOR's source stamp
+        // (mutation.ShardIndex = donor). Gating Set/Delete/Tombstone replay on
+        // the stamped ShardIndex alone (issue #909) drops such a record on a
+        // cold reactivation from a checkpoint that pre-dates the forward,
+        // resurrecting a drained value or losing a tombstone. The fix resolves
+        // ownership positively by the key's virtual slot under the current
+        // routing map (mirroring the snapshot-leaf fix for issue #907): a
+        // record is owned by this leaf iff the current map routes its key's
+        // slot to this leaf's shard. The map is fetched best-effort and is
+        // only trusted when it actually references this leaf's shard, so a
+        // registry hiccup or a foreign physical shard space can never cause a
+        // leaf to reject its own writes - in that case replay falls back to
+        // the legacy stamp-based axis.
+        var replayShardMap = await ResolveReplayShardMapAsync(treeId);
 
         var anyAdvanced = false;
         // Pass 1: per-partition tail replay, deferring every saga
@@ -321,7 +339,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, replayShardMap, cancellationToken);
             if (advanced)
                 anyAdvanced = true;
             if (maxApplied > perPartitionMaxApplied[partition])
@@ -449,6 +467,7 @@ internal sealed partial class BPlusLeafGrain
         long checkpoint,
         ILeafProjection projection,
         List<DeferredTerminal> deferredTerminals,
+        ShardMap? replayShardMap,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
@@ -482,7 +501,8 @@ internal sealed partial class BPlusLeafGrain
                     entry.Mutation,
                     state.State.ShardIndex,
                     state.State.LowKeyInclusive,
-                    state.State.HighKeyExclusive))
+                    state.State.HighKeyExclusive,
+                    replayShardMap))
                 {
                     // Defer saga terminals AND DeleteRange to pass 2:
                     // - Terminals: see the DeferredTerminal docstring
@@ -551,36 +571,100 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Best-effort resolution of the leaf's current slot-ownership map for the
+    /// activation-time replay filter. Returns the routing map published for
+    /// <paramref name="treeId"/> when (a) this leaf carries a non-null
+    /// <see cref="State.LeafNodeState.ShardIndex"/> and (b) that shard index is
+    /// actually referenced by the map's physical shard set. In every other
+    /// case - a system tree, a legacy slot-less leaf, a registry lookup that
+    /// returns no map or throws, or a map drawn from a foreign physical shard
+    /// space - this returns <see langword="null"/> so
+    /// <see cref="ShouldApplyDuringReplay"/> falls back to the legacy
+    /// stamped-<see cref="LatticeMutation.ShardIndex"/> axis. The guard is what
+    /// makes the map-based ownership resolution safe to enable unconditionally:
+    /// a transient registry failure or a mismatched map can never cause a leaf
+    /// to reject its own writes.
+    /// <para>
+    /// System trees (IDs starting with
+    /// <see cref="LatticeConstants.SystemTreePrefix"/>) skip the registry lookup
+    /// entirely. The registry is itself backed by the
+    /// <see cref="LatticeConstants.RegistryTreeId"/> system tree, so a registry
+    /// leaf that called back into the (non-reentrant, singleton) registry grain
+    /// during its own activation - which happens inside the registry's own
+    /// write turn - would deadlock. System trees never undergo the adaptive
+    /// shard split that this slot-ownership resolution guards against, so the
+    /// legacy stamp axis is always correct for them. This mirrors the
+    /// system-tree guard every other leaf-to-registry call site uses.
+    /// </para>
+    /// </summary>
+    private async Task<ShardMap?> ResolveReplayShardMapAsync(string treeId)
+    {
+        if (state.State.ShardIndex is not int leafShardIndex)
+            return null;
+
+        // The registry is backed by a system tree; a system-tree leaf must
+        // never call the registry during activation or it deadlocks the
+        // singleton registry grain inside its own write turn.
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            return null;
+
+        try
+        {
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var map = await registry.GetShardMapAsync(treeId);
+            if (map is not null && map.GetPhysicalShardIndices().Contains(leafShardIndex))
+                return map;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best-effort: a registry hiccup must never block leaf recovery.
+            // Fall back to the stamp-based filter (pre-#909 behaviour).
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Per-WAL-entry filter for the activation-time materialiser.
     /// Decides whether a given WAL entry should be replayed against
-    /// this leaf's projection, keyed on the leaf's persisted
-    /// <see cref="State.LeafNodeState.ShardIndex"/> and on the leaf's
-    /// persisted [<see cref="State.LeafNodeState.LowKeyInclusive"/>,
+    /// this leaf's projection, keyed on the leaf's slot ownership and on
+    /// the leaf's persisted [<see cref="State.LeafNodeState.LowKeyInclusive"/>,
     /// <see cref="State.LeafNodeState.HighKeyExclusive"/>) ownership
     /// range.
     /// <list type="bullet">
     ///   <item>
     ///     <see cref="MutationKind.Set"/> /
-    ///     <see cref="MutationKind.Delete"/> are applied iff the
-    ///     entry's <see cref="LatticeMutation.ShardIndex"/> matches
-    ///     the leaf's owning shard <em>and</em> the entry's
-    ///     <see cref="LatticeMutation.Key"/> falls in the leaf's
-    ///     persisted ownership range. The range check is open on
-    ///     either side - a <see langword="null"/> bound means "no
-    ///     constraint on that side", used for the chain's leftmost
-    ///     and rightmost leaves and for legacy state shapes that
-    ///     pre-date the slot. Keying on key-range (not on authoring
-    ///     leaf grain id) is essential for the rebuild-from-WAL
-    ///     scenario: a leaf born from a split has no Entries until
-    ///     replay populates them, and the entries that belong to it
-    ///     were authored by the donor sibling pre-split. Pre-Option A
-    ///     leaves whose <see cref="State.LeafNodeState.ShardIndex"/>
-    ///     slot is null apply unconditionally on the shard axis;
-    ///     leaves with both range bounds null apply unconditionally
-    ///     on the range axis - both axes preserve the legacy V1
-    ///     single-leaf-per-shard semantics so a legacy-shaped state
-    ///     must not start dropping its own writes after a binary
-    ///     upgrade.
+    ///     <see cref="MutationKind.Delete"/> are applied iff the entry's
+    ///     <see cref="LatticeMutation.Key"/> is owned by this leaf's
+    ///     shard <em>and</em> the key falls in the leaf's persisted
+    ///     ownership range. Shard ownership is resolved positively by
+    ///     the key's virtual slot under
+    ///     <paramref name="currentShardMap"/> when one is available
+    ///     (<c>currentShardMap.Resolve(key) == leafShardIndex</c>);
+    ///     otherwise it falls back to the stamped
+    ///     <see cref="LatticeMutation.ShardIndex"/>. Resolving by slot
+    ///     rather than by the stamp is what keeps a shadow-forwarded
+    ///     record (a post-split write routed to the donor for an
+    ///     already-moved slot, forwarded into the target's WAL with the
+    ///     donor's stamp) applied on the target leaf that now owns the
+    ///     slot, while still dropping genuine sibling-shard data that a
+    ///     shared WAL partition multiplexes through (its slot resolves
+    ///     to another shard) and donor orphans on the donor leaf (their
+    ///     slot has moved away). The range check is open on either side
+    ///     - a <see langword="null"/> bound means "no constraint on
+    ///     that side", used for the chain's leftmost and rightmost
+    ///     leaves and for legacy state shapes that pre-date the slot.
+    ///     Keying on key-range (not on authoring leaf grain id) is
+    ///     essential for the rebuild-from-WAL scenario: a leaf born from
+    ///     a split has no Entries until replay populates them, and the
+    ///     entries that belong to it were authored by the donor sibling
+    ///     pre-split. Pre-Option A leaves whose
+    ///     <see cref="State.LeafNodeState.ShardIndex"/> slot is null
+    ///     apply unconditionally on the shard axis; leaves with both
+    ///     range bounds null apply unconditionally on the range axis -
+    ///     both axes preserve the legacy V1 single-leaf-per-shard
+    ///     semantics so a legacy-shaped state must not start dropping
+    ///     its own writes after a binary upgrade.
     ///   </item>
     ///   <item>
     ///     <see cref="MutationKind.Tombstone"/> reap envelopes
@@ -619,10 +703,11 @@ internal sealed partial class BPlusLeafGrain
         in LatticeMutation mutation,
         int? leafShardIndex,
         string? lowKeyInclusive,
-        string? highKeyExclusive) => mutation.Kind switch
+        string? highKeyExclusive,
+        ShardMap? currentShardMap) => mutation.Kind switch
     {
         MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone =>
-            (leafShardIndex is null || mutation.ShardIndex == leafShardIndex.Value)
+            IsShardOwnedDuringReplay(mutation, leafShardIndex, currentShardMap)
             && (lowKeyInclusive is null
                 || string.CompareOrdinal(mutation.Key, lowKeyInclusive) >= 0)
             && (highKeyExclusive is null
@@ -632,4 +717,25 @@ internal sealed partial class BPlusLeafGrain
         MutationKind.TxAbort => true,
         _ => false,
     };
+
+    /// <summary>
+    /// Shard-axis half of <see cref="ShouldApplyDuringReplay"/>. A
+    /// slot-less (legacy) leaf owns every shard-axis entry. Otherwise the
+    /// entry is owned iff the current routing map resolves its key's slot to
+    /// this leaf's shard; when no map is available the legacy stamped
+    /// <see cref="LatticeMutation.ShardIndex"/> is used instead.
+    /// </summary>
+    private static bool IsShardOwnedDuringReplay(
+        in LatticeMutation mutation,
+        int? leafShardIndex,
+        ShardMap? currentShardMap)
+    {
+        if (leafShardIndex is not int shard)
+            return true;
+
+        if (currentShardMap is not null)
+            return currentShardMap.Resolve(mutation.Key) == shard;
+
+        return mutation.ShardIndex == shard;
+    }
 }
