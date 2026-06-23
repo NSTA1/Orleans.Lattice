@@ -166,4 +166,30 @@ public readonly record struct LatticeSnapshotCoordinate
     /// </para>
     /// </summary>
     [Id(3)] public IReadOnlyDictionary<int, IReadOnlyList<long>>? PerShardPerPartitionWalOffsets { get; init; }
+
+    /// <summary>
+    /// The authoritative routing map captured at <c>OpenSnapshot*Async</c>
+    /// time, pinned at <see cref="TreeMapVersion"/>. Used by the per-shard
+    /// snapshot leaves to drop donor-orphan keys: after an adaptive shard
+    /// split the source shard physically retains its pre-split copy of every
+    /// migrated key (the orphan is unreachable through the live read path but
+    /// is still present in the source's replayed WAL prefix). A snapshot leaf
+    /// for shard <c>S</c> surfaces a replayed key only when this map still
+    /// routes that key's virtual slot to <c>S</c>; keys whose slot the pinned
+    /// map assigns to a different shard are dropped, so each key is surfaced
+    /// exactly once - by the shard the pinned map identifies as its owner -
+    /// with that shard's point-in-time value. Resolving ownership against the
+    /// pinned map (rather than the source leaf's current
+    /// <c>MovedAwaySlots</c>) keeps the exclusion point-in-time consistent: a
+    /// slot that moves away after this coordinate was captured stays owned by
+    /// its pinned-map owner for the snapshot's lifetime.
+    /// <para>
+    /// <see langword="null"/> on coordinates persisted before this slot was
+    /// introduced, and on coordinates whose fan-out covers a single physical
+    /// shard (no sibling shard can hold an orphan copy, so no filtering is
+    /// required). When null the snapshot leaves surface every replayed key,
+    /// preserving the pre-fix behaviour for the no-split / single-shard case.
+    /// </para>
+    /// </summary>
+    [Id(4)] public ShardMap? PinnedShardMap { get; init; }
 }

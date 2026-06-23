@@ -49,6 +49,27 @@ internal sealed class SnapshotLeafGrain(
     private IReadOnlyList<long> _capturedOffsetsByPartition = Array.Empty<long>();
 
     /// <summary>
+    /// The sorted, ascending set of virtual slots the pinned snapshot
+    /// shard map assigns to this leaf's <see cref="_shardIndex"/>, or
+    /// <see langword="null"/> when ownership filtering is disabled
+    /// (single-shard snapshot or a legacy coordinate carrying no pinned
+    /// map). When non-null, a replayed key is surfaced only when its
+    /// virtual slot is a member of this set; keys whose slot the pinned
+    /// map assigns to a sibling shard are donor orphans left behind by an
+    /// adaptive shard split and are dropped from every scan. See
+    /// <see cref="LatticeSnapshotCoordinate.PinnedShardMap"/>.
+    /// </summary>
+    private int[]? _ownedVirtualSlots;
+
+    /// <summary>
+    /// Virtual shard count the pinned map was sized at; used to recompute
+    /// a key's virtual slot for the <see cref="_ownedVirtualSlots"/>
+    /// membership check. Only meaningful when
+    /// <see cref="_ownedVirtualSlots"/> is non-null.
+    /// </summary>
+    private int _ownedVirtualShardCount;
+
+    /// <summary>
     /// True once the WAL replay has completed and the snapshot
     /// projection is stable.
     /// </summary>
@@ -98,7 +119,7 @@ internal sealed class SnapshotLeafGrain(
                 + "AddLattice registers it unconditionally; a missing registration indicates a host wiring bug.");
 
     /// <inheritdoc />
-    public async Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, CancellationToken cancellationToken)
+    public async Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(capturedOffsetsByPartition);
@@ -111,7 +132,13 @@ internal sealed class SnapshotLeafGrain(
             if (capturedOffsetsByPartition[i] < 0)
                 throw new ArgumentOutOfRangeException(nameof(capturedOffsetsByPartition), $"Captured offset for partition {i} must be non-negative.");
         }
+        if (ownedVirtualSlots is not null && virtualShardCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0 when an owned-slot set is supplied.");
         cancellationToken.ThrowIfCancellationRequested();
+
+        var ownedSlots = ownedVirtualSlots is null
+            ? null
+            : ownedVirtualSlots as int[] ?? ownedVirtualSlots.ToArray();
 
         if (_opened)
         {
@@ -122,7 +149,9 @@ internal sealed class SnapshotLeafGrain(
             // per-partition arrays element-wise.
             if (_treeId != treeId
                 || _shardIndex != shardIndex
-                || !PartitionOffsetsEqual(_capturedOffsetsByPartition, capturedOffsetsByPartition))
+                || !PartitionOffsetsEqual(_capturedOffsetsByPartition, capturedOffsetsByPartition)
+                || _ownedVirtualShardCount != (ownedSlots is null ? 0 : virtualShardCount)
+                || !OwnedSlotsEqual(_ownedVirtualSlots, ownedSlots))
             {
                 throw new InvalidOperationException(
                     $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' was already opened against ({_treeId}, {_shardIndex}, [{string.Join(',', _capturedOffsetsByPartition)}]); refusing to re-open against ({treeId}, {shardIndex}, [{string.Join(',', capturedOffsetsByPartition)}]).");
@@ -133,6 +162,8 @@ internal sealed class SnapshotLeafGrain(
         _treeId = treeId;
         _shardIndex = shardIndex;
         _capturedOffsetsByPartition = capturedOffsetsByPartition;
+        _ownedVirtualSlots = ownedSlots;
+        _ownedVirtualShardCount = ownedSlots is null ? 0 : virtualShardCount;
 
         await ReplayWalAsync(cancellationToken);
 
@@ -157,6 +188,57 @@ internal sealed class SnapshotLeafGrain(
             if (a[i] != b[i]) return false;
         }
         return true;
+    }
+
+    private static bool OwnedSlotsEqual(int[]? a, int[]? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        if (a.Length != b.Length) return false;
+        for (var i = 0; i < a.Length; i++)
+        {
+            if (a[i] != b[i]) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when this leaf should surface
+    /// <paramref name="key"/> under the pinned snapshot shard map. When
+    /// ownership filtering is disabled (<see cref="_ownedVirtualSlots"/>
+    /// is null) every key is surfaced. Otherwise the key is surfaced only
+    /// when the pinned map still routes its virtual slot to this leaf's
+    /// shard; a key whose slot the map assigns elsewhere is a donor orphan
+    /// left behind by an adaptive shard split and is dropped. The check
+    /// mirrors the live read path's <c>IsKeyMovedAway</c> guard but resolves
+    /// ownership positively against the pinned map's owned-slot set rather
+    /// than the source leaf's current moved-away set, keeping the exclusion
+    /// point-in-time consistent with the snapshot coordinate.
+    /// </summary>
+    private bool IsKeyOwned(string key)
+    {
+        var owned = _ownedVirtualSlots;
+        if (owned is null) return true;
+        var slot = ShardMap.GetVirtualSlot(key, _ownedVirtualShardCount);
+        return Array.BinarySearch(owned, slot) >= 0;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when the per-key mutation
+    /// <paramref name="mutation"/> belongs to this leaf's owning shard.
+    /// When the pinned snapshot map is available (multi-shard snapshot)
+    /// ownership is resolved by the key's virtual slot under that map, so
+    /// a shadow-forwarded record carrying a sibling shard's stamp is still
+    /// applied by the shard the pinned map identifies as the key's owner.
+    /// Falls back to the stamped <c>ShardIndex</c> match for single-shard
+    /// or legacy coordinates that carry no pinned map (no split can have
+    /// produced a foreign stamp there).
+    /// </summary>
+    private bool IsMutationOwned(in LatticeMutation mutation)
+    {
+        if (_ownedVirtualSlots is not null)
+            return IsKeyOwned(mutation.Key);
+        return mutation.ShardIndex == _shardIndex;
     }
 
     /// <inheritdoc />
@@ -185,6 +267,11 @@ internal sealed class SnapshotLeafGrain(
             if (value.IsTombstone || value.IsExpired(nowTicks))
                 continue;
             if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+                continue;
+            // Drop donor orphans: a key the pinned snapshot map no longer
+            // routes to this shard was migrated to a sibling shard by an
+            // adaptive split and is surfaced by that shard's leaf instead.
+            if (!IsKeyOwned(key))
                 continue;
             result.Add(key);
             if (reverse)
@@ -227,6 +314,13 @@ internal sealed class SnapshotLeafGrain(
             if (value.Value is null)
                 continue;
             if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+                continue;
+            // Drop donor orphans: see GetKeysAsync. Doing this in the leaf
+            // (before the value is reduced to bytes) is load-bearing -
+            // the cursor-side k-way merge has no HLC to pick an LWW winner,
+            // so a stale orphan that reaches the merge could mask the owning
+            // shard's post-split update or its post-split delete.
+            if (!IsKeyOwned(key))
                 continue;
             result.Add(new KeyValuePair<string, byte[]>(key, value.Value));
             if (reverse)
@@ -364,15 +458,32 @@ internal sealed class SnapshotLeafGrain(
         // shardIndex modulo WalPartitions hashes there (saga
         // terminals) and EVERY key whose WalPartitionHash hashes
         // there (per-key writes). The snapshot leaf must filter out
-        // mutations whose ShardIndex does not match this leaf's
-        // owning shard so it does not absorb sibling shards' data.
+        // mutations that do not belong to this leaf's owning shard so
+        // it does not absorb sibling shards' data.
+        //
+        // Ownership is resolved by the key's virtual slot under the
+        // pinned snapshot map (when available), NOT by the mutation's
+        // stamped ShardIndex. The stamp records the shard that authored
+        // the record, which is not the same as the shard that owns the
+        // key after an adaptive split: a write routed to a donor shard
+        // for an already-moved slot is shadow-forwarded into the target
+        // shard's WAL but keeps the donor's stamp. Filtering on the stamp
+        // would drop that forwarded record on the target's snapshot leaf
+        // (a cold, checkpoint-free replay) and resurrect the pre-forward
+        // value - e.g. a post-split delete forwarded through the donor
+        // would be lost and the deleted key would reappear with its stale
+        // drained value. Resolving ownership by slot keeps the forwarded
+        // record so the LWW merge applies it, while still dropping donor
+        // orphans (a moved key's pre-split copy retained on the donor) and
+        // sibling-shard entries multiplexed into a shared WAL partition.
+        // See issue #907 and docs/lattice/shard-splitting.md.
+        //
         // Range / TxCommit / TxAbort apply unconditionally - the
-        // per-shard scope is enforced by the writer-side routing
-        // (saga terminals are pre-routed by shard via
-        // shardIndex % WalPartitions), and the range tombstone
-        // iterates only this snapshot's _entries (already filtered).
+        // range tombstone iterates only this snapshot's _entries
+        // (already ownership-filtered) and saga terminals are pre-routed
+        // by shard via shardIndex % WalPartitions.
         if (mutation.Kind is MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone
-            && mutation.ShardIndex != _shardIndex)
+            && !IsMutationOwned(mutation))
         {
             return;
         }

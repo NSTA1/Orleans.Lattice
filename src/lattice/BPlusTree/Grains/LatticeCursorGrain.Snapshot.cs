@@ -23,6 +23,82 @@ internal sealed partial class LatticeCursorGrain
     /// cursor will re-increment the gauge.
     /// </summary>
     private bool _snapshotPinGaugeHeld;
+
+    /// <summary>
+    /// Per-activation cache of the pinned shard map's owned-slot sets,
+    /// keyed by physical shard index. Lazily built on first page from
+    /// <see cref="LatticeSnapshotCoordinate.PinnedShardMap"/> and reused
+    /// across every page of the cursor's lifetime; rebuilt after a
+    /// reactivation from the persisted coordinate. <see langword="null"/>
+    /// until first built, and the build yields an empty map / null
+    /// per-shard sets when the coordinate carries no pinned map (single-
+    /// shard or legacy snapshot - no donor-orphan filtering required).
+    /// </summary>
+    private Dictionary<int, int[]>? _ownedSlotsByShard;
+
+    /// <summary>Virtual shard count backing <see cref="_ownedSlotsByShard"/>.</summary>
+    private int _ownedSlotsVsc;
+
+    /// <summary>True once <see cref="_ownedSlotsByShard"/> has been built for this activation.</summary>
+    private bool _ownedSlotsBuilt;
+
+    /// <summary>
+    /// Resolves the owned virtual-slot set the snapshot leaf for
+    /// <paramref name="shardIndex"/> must filter against, derived from the
+    /// coordinate's pinned shard map. Returns <c>(null, 0)</c> when the
+    /// coordinate carries no pinned map, disabling the leaf-side filter.
+    /// The per-shard sets are computed once per activation and cached.
+    /// </summary>
+    private (IReadOnlyList<int>? OwnedSlots, int VirtualShardCount) ResolveOwnedSlots(
+        LatticeSnapshotCoordinate coord, int shardIndex)
+    {
+        if (!_ownedSlotsBuilt)
+        {
+            var pinned = coord.PinnedShardMap;
+            if (pinned is not null && pinned.Slots.Length > 0)
+            {
+                _ownedSlotsByShard = BuildOwnedSlotsByShard(pinned.Slots);
+                _ownedSlotsVsc = pinned.VirtualShardCount;
+            }
+            _ownedSlotsBuilt = true;
+        }
+
+        if (_ownedSlotsByShard is null)
+            return (null, 0);
+
+        // A shard that appears in the fan-out but owns no slot under the
+        // pinned map surfaces nothing (any key it holds is an orphan); the
+        // empty array makes every key fail the ownership check.
+        return _ownedSlotsByShard.TryGetValue(shardIndex, out var owned)
+            ? (owned, _ownedSlotsVsc)
+            : (Array.Empty<int>(), _ownedSlotsVsc);
+    }
+
+    /// <summary>
+    /// Partitions a pinned shard map's slot array into per-shard ascending
+    /// owned-slot lists. The forward scan over <paramref name="slots"/>
+    /// produces each shard's list already sorted ascending, so the snapshot
+    /// leaf can binary-search it.
+    /// </summary>
+    private static Dictionary<int, int[]> BuildOwnedSlotsByShard(int[] slots)
+    {
+        var lists = new Dictionary<int, List<int>>();
+        for (var slot = 0; slot < slots.Length; slot++)
+        {
+            var shard = slots[slot];
+            if (!lists.TryGetValue(shard, out var list))
+            {
+                list = new List<int>();
+                lists[shard] = list;
+            }
+            list.Add(slot);
+        }
+
+        var result = new Dictionary<int, int[]>(lists.Count);
+        foreach (var (shard, list) in lists)
+            result[shard] = list.ToArray();
+        return result;
+    }
     /// <inheritdoc />
     public async Task OpenSnapshotAsync(string treeId, LatticeCursorSpec spec, LatticeSnapshotCoordinate coordinate)
     {
@@ -275,7 +351,8 @@ internal sealed partial class LatticeCursorGrain
         bool reverse)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
+        var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
+        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, default);
         return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
@@ -290,7 +367,8 @@ internal sealed partial class LatticeCursorGrain
         bool reverse)
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, default);
+        var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
+        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, default);
         return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
@@ -384,8 +462,18 @@ internal sealed partial class LatticeCursorGrain
                 }
             }
             if (pickShard < 0) return;
-            output.Add(pickKey!);
+            var picked = perShard[pickShard][cursors[pickShard]];
             cursors[pickShard] += reverse ? -1 : 1;
+            // Defensive de-duplication: the leaf-side donor-orphan filter
+            // already guarantees each key is owned by exactly one shard, so
+            // equal keys should never reach this merge. If a residual cross-
+            // shard duplicate ever does, equal keys are adjacent in the
+            // sorted stream, so collapsing against the last emitted key drops
+            // it. This is a safety net only - value correctness comes from
+            // the leaf-side filter, not from this guard.
+            if (output.Count > 0 && string.CompareOrdinal(output[^1], picked) == 0)
+                continue;
+            output.Add(picked);
         }
     }
 
@@ -434,8 +522,14 @@ internal sealed partial class LatticeCursorGrain
                 }
             }
             if (pickShard < 0) return;
-            output.Add(perShard[pickShard][cursors[pickShard]]);
+            var picked = perShard[pickShard][cursors[pickShard]];
             cursors[pickShard] += reverse ? -1 : 1;
+            // Defensive de-duplication: see MergeSortedKeyLists. The leaf-side
+            // donor-orphan filter is the real fix; this only guards against a
+            // residual cross-shard duplicate reaching the client.
+            if (output.Count > 0 && string.CompareOrdinal(output[^1].Key, picked.Key) == 0)
+                continue;
+            output.Add(picked);
         }
     }
 

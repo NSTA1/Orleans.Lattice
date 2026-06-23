@@ -178,7 +178,18 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var (physicalTreeId, shardMap) = await GetRoutingAsync(cancellationToken);
+        // Capture the routing map fresh from the registry (force-refresh)
+        // rather than trusting this activation's cached map. A snapshot is a
+        // frozen replay: unlike the live scan path it cannot dynamically
+        // reconcile a topology change discovered mid-scan, so the shard set it
+        // fans out across, the per-shard WAL offsets it captures, and the
+        // pinned map it filters donor orphans against must all derive from one
+        // authoritative, post-any-prior-split map. A stale cached map omits a
+        // freshly-split target shard from the fan-out entirely (losing every
+        // post-split write routed there) while still replaying the donor's
+        // retained orphan copies, which both drops live data and resurrects
+        // moved-away keys. See issue #907.
+        var (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
@@ -250,7 +261,17 @@ internal sealed partial class LatticeGrain
         var coordinate = new LatticeSnapshotCoordinate(
             shardMap.Version,
             perShardPerPartitionOffsets,
-            registryHlc);
+            registryHlc)
+        {
+            // Pin the routing map so each snapshot leaf can drop donor-orphan
+            // keys whose virtual slot the map no longer assigns to it (see
+            // LatticeSnapshotCoordinate.PinnedShardMap). Only needed when the
+            // fan-out covers more than one physical shard - a single-shard
+            // snapshot has no sibling that could hold an orphan copy, so we
+            // leave the slot null there to avoid persisting the full slot
+            // array for the common no-split case.
+            PinnedShardMap = physicalShards.Count > 1 ? shardMap : null,
+        };
 
         var cursorId = Guid.NewGuid().ToString("N");
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));

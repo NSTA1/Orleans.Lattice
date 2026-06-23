@@ -150,6 +150,49 @@ the edge case where a split commits after all live cursors finished -
 reconciled entries from this path are also sorted and injected as a
 cursor, not appended. Bounded by `LatticeOptions.MaxScanRetries`.
 
+#### Snapshot scans - pinned-map slot ownership in the snapshot leaf
+
+A snapshot-isolated scan (`OpenSnapshotEntryCursorAsync` /
+`OpenSnapshotKeyCursorAsync`, the read-only state API, and the Explorer
+Data tab) cannot use the live in-line reconciliation above, because it
+must read a single, internally-consistent point in time. Instead the
+snapshot coordinate pins the registry's `ShardMap` at open
+(`LatticeSnapshotCoordinate.PinnedShardMap`, alongside the pinned
+`ShardMap.Version`, the per-shard / per-partition WAL offsets, and the
+registry HLC). The snapshot fan-out forces a fresh routing read so it
+opens against the post-split map, then for each fan-out shard it
+resolves that shard's owned virtual slots under the pinned map and
+passes them to the shard's snapshot leaf.
+
+The snapshot leaf is a cold, checkpoint-free replay: it rebuilds its
+view by replaying the WAL from the pinned offset. As it replays, it
+resolves each per-key mutation's ownership by the key's virtual slot
+under the pinned map - **not** by the mutation's stamped `ShardIndex`.
+Resolving by slot is what makes the snapshot view correct across a
+split, because the stamp records the shard that *authored* a record,
+which is not the same as the shard that *owns* the key after the split:
+
+* A moved key's pre-split copy is physically retained on the donor
+  shard (an orphan). Its stamp still names the donor, but the pinned
+  map now assigns its slot to the target, so the donor's snapshot leaf
+  drops it and only the target surfaces the key - no duplicate.
+* A write routed to the donor for an already-moved slot is
+  shadow-forwarded into the target shard's WAL but keeps the donor's
+  source stamp. Resolving by slot keeps that forwarded record on the
+  target's snapshot leaf, so the leaf's last-writer-wins merge applies
+  it. A stamp-based filter would drop it (its stamp names the donor)
+  and resurrect the pre-forward value - for example a post-split delete
+  forwarded through the donor would be lost and the deleted key would
+  reappear with its stale drained value.
+
+Ownership must be resolved against the *pinned* map version, not the
+current one, so the snapshot neither over-excludes (a key not yet moved
+at the pinned version) nor under-excludes (a key moved after the pinned
+version). The snapshot k-way merge additionally collapses equal,
+adjacent keys as a defensive net, but value correctness comes from the
+leaf-side ownership filter (the merge operates on raw bytes with no HLC
+and cannot pick the last-writer-wins winner on its own).
+
 ### Trade-offs
 
 * **Order**: Keys/Entries are streamed in strict lexicographic (or

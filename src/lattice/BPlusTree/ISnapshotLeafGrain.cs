@@ -45,8 +45,25 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// the two-pass collapses to a single forward walk for
     /// behavioural parity with the legacy scalar-offset shape.
     /// </param>
+    /// <param name="ownedVirtualSlots">
+    /// The sorted, ascending set of virtual slots the pinned snapshot
+    /// shard map (<see cref="LatticeSnapshotCoordinate.PinnedShardMap"/>)
+    /// assigns to this leaf's <paramref name="shardIndex"/>. When
+    /// non-null the leaf surfaces a replayed key only when its virtual
+    /// slot (computed with <paramref name="virtualShardCount"/>) is a
+    /// member of this set; keys whose slot the pinned map assigns to a
+    /// different shard are donor orphans left behind by an adaptive shard
+    /// split and are dropped. <see langword="null"/> disables the filter
+    /// (single-shard snapshot, or a legacy coordinate that captured no
+    /// pinned map) and the leaf surfaces every replayed key.
+    /// </param>
+    /// <param name="virtualShardCount">
+    /// The pinned map's virtual shard count, used to recompute each key's
+    /// virtual slot for the ownership check. Ignored when
+    /// <paramref name="ownedVirtualSlots"/> is <see langword="null"/>.
+    /// </param>
     /// <param name="cancellationToken">Cancels the replay loop between slices.</param>
-    Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, CancellationToken cancellationToken);
+    Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the sorted list of keys this snapshot leaf observes in
