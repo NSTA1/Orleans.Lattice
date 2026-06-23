@@ -37,6 +37,21 @@ public static class RadialLayout
     /// </summary>
     public const double MarginFraction = 0.10;
 
+    /// <summary>
+    /// The minimum arc, in canvas units, a density-aware ring leaves between the
+    /// centres of its two closest nodes so adjacent markers stay distinct rather
+    /// than overlapping into a smear. A little over a node's diameter
+    /// (<see cref="NodeRadius"/> x 2) to leave a visible gap.
+    /// </summary>
+    public const double MinNodeArc = (2 * NodeRadius) + 6;
+
+    /// <summary>
+    /// The minimum radial separation, in canvas units, kept between two
+    /// successive density-aware rings so parent-to-child edges always point
+    /// outward even when an inner ring is widened to fit its nodes.
+    /// </summary>
+    public const double MinRingGap = LevelStep;
+
     /// <summary>The ring radius for a given level and root count.</summary>
     /// <param name="level">The zero-based level (roots at level 0).</param>
     /// <param name="rootCount">The number of shard roots in the forest.</param>

@@ -196,13 +196,13 @@
             return;
         }
 
-        var rootCount = _graph.Nodes.Count(n => n.Level == 0);
+        var frame = RadialFrame.Build(_graph);
         foreach (var node in _graph.Nodes)
         {
-            _points[node.Node.NodeId] = RadialLayout.Project(node.Column, node.Level, _graph.ColumnCount, rootCount);
+            _points[node.Node.NodeId] = frame.Project(node.Column, node.Level);
         }
 
-        var extent = RadialLayout.Extent(_graph.LevelCount, rootCount);
+        var extent = frame.Extent;
         var size = extent * 2;
         _homeViewBox = $"{F(-extent)} {F(-extent)} {F(size)} {F(size)}";
     }
