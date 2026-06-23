@@ -193,6 +193,49 @@ adjacent keys as a defensive net, but value correctness comes from the
 leaf-side ownership filter (the merge operates on raw bytes with no HLC
 and cannot pick the last-writer-wins winner on its own).
 
+#### Live leaf reactivation - current-map slot ownership in the live leaf
+
+The authoritative live leaf has its own activation-time WAL replay, and
+the same stamp-versus-slot distinction applies to it. When a live leaf
+activates (a cold reactivation after deactivation, a silo move, or a
+crash), it rebuilds its in-memory projection by replaying every WAL
+entry past its persisted projection checkpoint through
+`BPlusLeafGrain.ShouldApplyDuringReplay`. Unlike the snapshot leaf the
+live leaf has no pinned map - it serves the *current* point in time -
+so it resolves per-mutation shard ownership by the key's virtual slot
+under the **current** registry `ShardMap`, fetched once at the start of
+replay.
+
+This matters only on a cold reactivation that replays a WAL suffix past
+a checkpoint taken *before* a shadow-forward. In steady state the live
+leaf applies the forwarded mutation in real time and folds it into its
+next checkpoint, so a warm leaf never re-evaluates the record. The
+trigger is a target leaf that checkpointed before a post-split write was
+shadow-forwarded through the donor, then reactivated cold:
+
+* A write routed to the donor for an already-moved slot is
+  shadow-forwarded into the target shard's WAL but keeps the donor's
+  source stamp. Resolving by slot keeps that forwarded record on the
+  target's live leaf (the current map routes its slot here), so the
+  leaf's last-writer-wins merge applies it on replay. A stamp-based
+  filter would drop it - its stamp names the donor - and resurrect the
+  pre-forward value, for example losing a post-split delete and
+  reappearing the deleted key with its stale drained value.
+* Genuine sibling-shard data multiplexed through a shared WAL partition
+  (partitions are keyed by key hash, not by shard) still resolves to
+  another shard under the current map and is dropped, and a donor leaf's
+  own orphan copies of moved slots are dropped because their slot now
+  routes to the target - the live read path already seals those orphans
+  via `MovedAwaySlots`.
+
+The current map is fetched best-effort and is trusted only when it
+references the leaf's own shard, so a registry hiccup at activation or a
+map drawn from a foreign physical shard space falls back to the legacy
+stamped-`ShardIndex` axis - a leaf can never reject its own writes.
+Slot-less legacy leaves (pre-split-feature persisted state with a null
+`ShardIndex`) keep their unconditional V1 single-leaf-per-shard
+semantics and apply on the shard axis regardless.
+
 ### Trade-offs
 
 * **Order**: Keys/Entries are streamed in strict lexicographic (or

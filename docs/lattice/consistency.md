@@ -212,6 +212,19 @@ the rare case of retry exhaustion, the affected call throws
 `InvalidOperationException` rather than returning silently incomplete
 results. See [Shard Splitting](shard-splitting.md).
 
+Linearizability of point reads is also preserved across a leaf
+reactivation that happens *after* a split. A post-split write routed to
+the donor for an already-moved slot is shadow-forwarded into the target
+shard's WAL but keeps the donor's source stamp; when the target's live
+leaf reactivates cold and replays the WAL past a checkpoint that
+pre-dates that forward, it resolves each replayed mutation's ownership
+by the key's virtual slot under the current `ShardMap` rather than by
+the stamped `ShardIndex`, so the forwarded record (for example a
+post-split delete) is applied rather than dropped - the moved key reads
+at its true last-writer-wins value and is never resurrected with a
+drained pre-forward copy. See [Shard Splitting - Live leaf
+reactivation](shard-splitting.md).
+
 ### Read-cache staleness
 
 `GetAsync`, `ExistsAsync`, and `GetManyAsync` are the only methods on
