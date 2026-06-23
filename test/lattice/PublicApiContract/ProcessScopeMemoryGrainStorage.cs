@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
 using Orleans.Storage;
 
@@ -36,6 +37,36 @@ internal sealed class ProcessScopeMemoryGrainStorage : IGrainStorage
     /// is the whole point.
     /// </summary>
     public static void Reset() => Store.Clear();
+
+    /// <summary>
+    /// Test-only corruption hook: flips the persisted <c>RootIsLeaf</c> flag to
+    /// <see langword="true"/> on every stored <see cref="ShardRootState"/> whose
+    /// <c>RootNodeId</c> equals <paramref name="internalRootNodeId"/>, leaving the
+    /// root pointer addressing an internal node. This reproduces the exact
+    /// baked-inconsistent topology observed live for issue 899's write-path crash
+    /// - a shard root that persisted <c>RootIsLeaf = true</c> over an internal
+    /// root - which a partial/raced promotion can leave on disk and which then
+    /// crash-loops every mutation that blind-casts the root to a leaf grain.
+    /// Mutates the stored POCO in place (the store holds it by reference), so a
+    /// subsequent <see cref="PublicApiContractClusterFixture.RestartClusterAsync"/>
+    /// rehydrates the corrupt flag cold from this provider. Returns the number of
+    /// shard-root records corrupted.
+    /// </summary>
+    public static int ForceRootIsLeafOverInternalRoot(GrainId internalRootNodeId)
+    {
+        var corrupted = 0;
+        foreach (var entry in Store.Values)
+        {
+            if (entry.State is ShardRootState shardRoot &&
+                shardRoot.RootNodeId == internalRootNodeId &&
+                !shardRoot.RootIsLeaf)
+            {
+                shardRoot.RootIsLeaf = true;
+                corrupted++;
+            }
+        }
+        return corrupted;
+    }
 
     /// <inheritdoc />
     public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
