@@ -596,4 +596,35 @@ public partial class BPlusLeafGrainTests
         // Donor's low is unchanged.
         Assert.That(state.State.LowKeyInclusive, Is.EqualTo("a"));
     }
+
+    [Test]
+    public async Task Split_skips_donor_checkpoint_advance_when_current_offset_already_past_captured_head()
+    {
+        // Regression for issue 905. A split is not instantaneous: while it
+        // is in flight the donor keeps applying WAL entries on a partition,
+        // advancing its projection checkpoint past the head captured at
+        // split start. At completion the split-time advance would try to
+        // move the checkpoint back to the (now stale) captured head, which
+        // trips the monotonic-non-decreasing guard in
+        // SetCheckpointOffsetAsync and throws ArgumentOutOfRangeException on
+        // the write path. The advance must be a no-op when the donor is
+        // already at or beyond the captured head.
+        var (grain, state, _, _) = BuildSplitFixture(walHead: 5L);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+
+        // Simulate the donor's materialiser having advanced the partition-0
+        // projection checkpoint well past the head the split will capture
+        // (5) while the split was being prepared.
+        state.State.ProjectionCheckpointOffset = 100L;
+
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        // The advance was skipped, so the checkpoint was neither moved
+        // backward to the captured head nor otherwise corrupted.
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(100L));
+    }
 }
