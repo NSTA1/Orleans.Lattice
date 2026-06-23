@@ -246,7 +246,10 @@ internal sealed partial class ShardRootGrain(
 
         if (state.State.RootNodeId is null) return null;
 
-        var leafId = state.State.RootIsLeaf
+        // Decide leaf-vs-internal by node TYPE so a corrupt RootIsLeaf flag
+        // over an internal root (issue 899) descends to the real leaf rather
+        // than blind-casting the internal root to IBPlusLeafGrain.
+        var leafId = RootIsLeafTyped
             ? state.State.RootNodeId!.Value
             : await TraverseToLeafAsync(key);
         var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -275,7 +278,10 @@ internal sealed partial class ShardRootGrain(
         // (key, inputIndex) pair so the per-leaf batched response can be
         // scattered back into the index-aligned result list.
         var leafBuckets = new Dictionary<GrainId, List<(string Key, int Index)>>();
-        if (state.State.RootIsLeaf)
+        // Type-correcting flat-tree fast path: a corrupt RootIsLeaf flag left
+        // true over an internal root (issue 899) falls through to per-key
+        // routing rather than bucketing the whole batch onto the internal root.
+        if (RootIsLeafTyped)
         {
             var rootLeaf = state.State.RootNodeId!.Value;
             var bucket = new List<(string, int)>(keys.Count);
@@ -1673,8 +1679,10 @@ internal sealed partial class ShardRootGrain(
         var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s));
 
         // Root-is-leaf fast path: route the entire batch to the single leaf
-        // in one grain call and one WriteStateAsync.
-        if (state.State.RootIsLeaf)
+        // in one grain call and one WriteStateAsync. Decided by node TYPE so a
+        // corrupt RootIsLeaf flag over an internal root (issue 899) takes the
+        // grouped internal-routing path below instead of blind-casting.
+        if (RootIsLeafTyped)
         {
             await MergeGroupAsync(entries, isCrossShardMigration);
             await forwardTask;
@@ -1777,7 +1785,7 @@ internal sealed partial class ShardRootGrain(
 
     private async Task<SplitResult?> TraverseForMergeAsync(string key, Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
     {
-        if (state.State.RootIsLeaf)
+        if (RootIsLeafTyped)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
             return await leaf.MergeManyAsync(entries, isCrossShardMigration);

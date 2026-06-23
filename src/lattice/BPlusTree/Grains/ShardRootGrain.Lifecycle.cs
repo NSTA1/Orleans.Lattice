@@ -65,7 +65,7 @@ internal sealed partial class ShardRootGrain
         }
 
         var rootId = state.State.RootNodeId!.Value;
-        if (state.State.RootIsLeaf)
+        if (RootIsLeafTyped)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(rootId);
             // CountAsync is a cheap read-only probe on IBPlusLeafGrain
@@ -108,7 +108,11 @@ internal sealed partial class ShardRootGrain
         }
 
         GrainId? leafId;
-        if (state.State.RootIsLeaf)
+        // Decide leaf-vs-internal by node TYPE so a corrupt RootIsLeaf flag
+        // over an internal root (issue 899) still purges the internal subtree
+        // and the leaf chain rather than treating the internal root as a leaf.
+        var rootIsLeafTyped = RootIsLeafTyped;
+        if (rootIsLeafTyped)
         {
             leafId = state.State.RootNodeId;
         }
@@ -118,7 +122,7 @@ internal sealed partial class ShardRootGrain
         }
 
         var internalNodeIds = new List<GrainId>();
-        if (!state.State.RootIsLeaf)
+        if (!rootIsLeafTyped)
         {
             await CollectInternalNodeIds(state.State.RootNodeId!.Value, internalNodeIds);
         }

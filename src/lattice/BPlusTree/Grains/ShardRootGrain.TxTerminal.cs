@@ -492,7 +492,9 @@ internal sealed partial class ShardRootGrain
             {
                 if (state.State.RootNodeId is null)
                     continue;
-                var leafId = state.State.RootIsLeaf
+                // Decided by node TYPE so a corrupt RootIsLeaf flag over an
+                // internal root (issue 899) descends instead of blind-casting.
+                var leafId = RootIsLeafTyped
                     ? state.State.RootNodeId!.Value
                     : await TraverseToLeafAsync(kvp.Key);
                 if (!leafTargets.TryGetValue(leafId, out var bucket) || bucket is null)

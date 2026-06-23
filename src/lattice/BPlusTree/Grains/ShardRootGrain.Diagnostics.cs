@@ -43,7 +43,7 @@ internal sealed partial class ShardRootGrain
             // No root yet - empty shard.
             depth = 0;
         }
-        else if (rootIsLeaf)
+        else if (RootIsLeafTyped)
         {
             if (deep)
             {
@@ -196,7 +196,7 @@ internal sealed partial class ShardRootGrain
             return default;
         }
 
-        if (state.State.RootIsLeaf)
+        if (RootIsLeafTyped)
         {
             return await AccumulateLeafUsageAsync(rootNodeId.Value.GetGuidKey(), cancellationToken);
         }

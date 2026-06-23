@@ -220,7 +220,10 @@ internal sealed partial class ShardRootGrain
         var maxLeafKeys = options.MaxLeafKeys;
         var clock = HybridLogicalClock.Zero;
 
-        GrainId rightmostLeafId = state.State.RootIsLeaf
+        // Decided by node TYPE so a corrupt RootIsLeaf flag over an internal
+        // root (issue 899) descends to the rightmost leaf rather than
+        // blind-casting the internal root to IBPlusLeafGrain.
+        GrainId rightmostLeafId = RootIsLeafTyped
             ? state.State.RootNodeId!.Value
             : await TraverseToRightmostLeafAsync();
 

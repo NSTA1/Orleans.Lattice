@@ -53,10 +53,12 @@ internal sealed partial class ShardRootGrain
             };
         }
 
-        if (state.State.RootIsLeaf)
+        if (RootIsLeafTyped)
         {
             // Flat-tree fallback: no internal node exists to host the
-            // chained fold, so read the single root leaf directly.
+            // chained fold, so read the single root leaf directly. Decided by
+            // node TYPE: a corrupt RootIsLeaf flag over an internal root
+            // (issue 899) reads the internal subtree digest below instead.
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
             return await leaf.GetProjectionDigestAsync();
         }
@@ -99,7 +101,7 @@ internal sealed partial class ShardRootGrain
             };
         }
 
-        if (state.State.RootIsLeaf)
+        if (RootIsLeafTyped)
         {
             // Flat-tree case: fold the single root leaf's in-range snapshot
             // and wrap it with the leaf's own checkpoint offset. For a full
@@ -350,10 +352,13 @@ internal sealed partial class ShardRootGrain
             return null;
         }
 
-        if (state.State.RootIsLeaf)
+        if (RootIsLeafTyped)
         {
             // Flat-tree case: the single root leaf is the whole topology, so
             // the one unavoidable leaf call here is O(1) - it never fans out.
+            // Decided by node TYPE: a corrupt RootIsLeaf flag over an internal
+            // root (issue 899) takes the internal-rooted path below instead of
+            // blind-casting the internal root to IBPlusLeafGrain.
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
             var leafNode = await leaf.GetTopologyNodeAsync();
             return leafNode with { ShardIndex = ShardIndex };

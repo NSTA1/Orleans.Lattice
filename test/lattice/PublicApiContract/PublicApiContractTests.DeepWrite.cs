@@ -101,4 +101,96 @@ public partial class PublicApiContractTests
         Assert.That(leftmostCastFailure, Is.Null,
             "GetLeftmostLeafIdAsync must return a leaf-typed id so leaf-chain walkers (e.g. the replication snapshot producer) never cast an internal node to IBPlusLeafGrain.");
     }
+
+    // Diagnostic, topology and replication-digest siblings of the issue 899
+    // write-path fix. The same baked-inconsistent topology - a shard root whose
+    // persisted RootIsLeaf bit is true over an internal root - was observed live
+    // in the explorer as two distinct symptoms: a Topology panel that failed
+    // with a gRPC "Internal" error (GetTopologySnapshotAsync blind-cast the
+    // internal root to IBPlusLeafGrain and threw InvalidCastException) and a
+    // Metrics "live keys" value of zero (GetDiagnosticsAsync addressed an empty
+    // leaf grain by the internal root's guid and silently counted nothing, with
+    // no throw). The first issue 899 fix did not touch these diagnostic paths.
+    // This test injects the identical fault and asserts the diagnostic surface
+    // re-routes by node TYPE instead of trusting the persisted flag.
+    [Test]
+    public async Task Diagnostic_and_topology_paths_stay_correct_when_a_corrupt_root_is_leaf_flag_sits_over_an_internal_root()
+    {
+        var treeId = "pac-deepwrite-rootisleaf-diag";
+        var tree = await CreateDepthTwoTreeAsync(treeId);
+
+        var routing = await tree.GetRoutingAsync();
+        var shard = Client.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/0");
+
+        var rootRef = await shard.GetRootNodeRefAsync();
+        Assert.That(rootRef, Is.Not.Null, "Depth->=2 tree must have a root node.");
+        Assert.That(rootRef!.Value.IsLeaf, Is.False, "Depth->=2 tree root must be an internal node.");
+
+        var corrupted = ProcessScopeMemoryGrainStorage.ForceRootIsLeafOverInternalRoot(rootRef.Value.NodeId);
+        Assert.That(corrupted, Is.GreaterThanOrEqualTo(1),
+            "Test setup must corrupt the persisted shard-root RootIsLeaf flag over the internal root.");
+
+        await _fixture.RestartClusterAsync();
+        await _fixture.CreateSmallTreeAsync(
+            treeId,
+            shardCount: 1,
+            maxLeafKeys: DeepScanLeafKeys,
+            maxInternalChildren: DeepScanInternalChildren);
+
+        var rehydratedShard = Client.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/0");
+
+        // Topology snapshot (the live explorer "Internal" gRPC error): must not
+        // blind-cast the mis-flagged internal root to a leaf, and must return a
+        // real node describing the internal-rooted structure.
+        ShardTopologyNode? topology = null;
+        InvalidCastException? topologyFailure = null;
+        try
+        {
+            topology = await rehydratedShard.GetTopologySnapshotAsync(8, CancellationToken.None);
+        }
+        catch (InvalidCastException ex)
+        {
+            topologyFailure = ex;
+        }
+
+        Assert.That(topologyFailure, Is.Null,
+            "GetTopologySnapshotAsync must read the internal-rooted subtree instead of casting the mis-flagged internal root to IBPlusLeafGrain.");
+        Assert.That(topology, Is.Not.Null, "The corrupt-root shard still has data, so its topology snapshot must be non-null.");
+
+        // Diagnostics live-key count (the live explorer "live keys = 0" metric):
+        // must descend the internal subtree and count every live key rather than
+        // address an empty leaf grain by the internal root's guid (which returns
+        // zero with no throw - a silent wrong answer pre-fix).
+        ShardDiagnosticReport? diag = null;
+        InvalidCastException? diagFailure = null;
+        try
+        {
+            diag = await rehydratedShard.GetDiagnosticsAsync(deep: false);
+        }
+        catch (InvalidCastException ex)
+        {
+            diagFailure = ex;
+        }
+
+        Assert.That(diagFailure, Is.Null,
+            "GetDiagnosticsAsync must not blind-cast the mis-flagged internal root to IBPlusLeafGrain.");
+        Assert.That(diag, Is.Not.Null);
+        Assert.That(diag!.Value.LiveKeys, Is.EqualTo(DeepScanKeyCount),
+            "GetDiagnosticsAsync must walk the internal subtree and count every live key, not silently report zero from an empty leaf grain addressed by the internal root's guid.");
+
+        // Replication anti-entropy digest folds the leaf chain through the same
+        // root-cast gate; it must not throw on the mis-flagged internal root.
+        InvalidCastException? digestFailure = null;
+        try
+        {
+            await rehydratedShard.GetShardProjectionDigestAsync(CancellationToken.None);
+        }
+        catch (InvalidCastException ex)
+        {
+            digestFailure = ex;
+        }
+
+        Assert.That(digestFailure, Is.Null,
+            "GetShardProjectionDigestAsync must fold the internal-rooted leaf chain instead of casting the mis-flagged internal root to IBPlusLeafGrain.");
+    }
 }

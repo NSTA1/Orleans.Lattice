@@ -176,6 +176,24 @@ internal sealed partial class ShardRootGrain
         => !TryGetLeafGrainType(out var leafType) || nodeId.Type == leafType;
 
     /// <summary>
+    /// Returns <see langword="true"/> only when this shard's root is BOTH
+    /// flagged as a leaf (<see cref="ShardRootState.RootIsLeaf"/>) AND the
+    /// persisted root node id actually addresses a leaf grain. A
+    /// baked-inconsistent topology that left the <c>RootIsLeaf</c> bit true over
+    /// an internal root (issue 899) returns <see langword="false"/> here, so a
+    /// caller's flat-tree fast path is skipped and the internal-rooted branch
+    /// runs instead of blind-casting the internal root to
+    /// <see cref="IBPlusLeafGrain"/>. When the root id is unset, or the leaf
+    /// grain type cannot be resolved (a non-runtime test factory, where
+    /// <see cref="IsLeafGrainId"/> is always true), this is exactly
+    /// <c>RootIsLeaf</c>, so healthy trees and fakes are unaffected.
+    /// </summary>
+    private bool RootIsLeafTyped
+        => state.State.RootIsLeaf
+           && state.State.RootNodeId is { } rootId
+           && IsLeafGrainId(rootId);
+
+    /// <summary>
     /// Defensive guard for the sorted-scan leaf walk. Given a node id that the
     /// scan believes addresses a leaf, returns a guaranteed leaf-typed id by
     /// descending through any internal node(s) the id actually resolves to,
