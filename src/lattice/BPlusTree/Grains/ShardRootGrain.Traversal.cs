@@ -110,6 +110,213 @@ internal sealed partial class ShardRootGrain
     private IBPlusInternalGrain ResolveInternalGrainSlow(GrainId internalId)
         => _internalGrains.GetOrAdd(internalId, static (id, gf) => gf.GetGrain<IBPlusInternalGrain>(id), grainFactory);
 
+    // Upper bound on the number of levels DescendToLeafAsync will walk
+    // before concluding the topology is cyclic / corrupt. A real B+ tree
+    // shard is far shallower than this (production fanout keeps even
+    // billion-key trees under ~6 levels); the cap exists only so a
+    // pathological self-referential routing pointer surfaces as a typed
+    // exception instead of an unbounded loop.
+    private const int MaxTreeDescentLevels = 64;
+
+    // Cached GrainType of the leaf grain, resolved once per activation from
+    // the grain factory. Used by the sorted-scan defensive guard
+    // (DescendToLeafAsync) to decide, by node TYPE rather than by a
+    // potentially-inconsistent ChildrenAreLeaves routing flag, whether a
+    // node id addresses a leaf or an internal node. See issue 899: a baked
+    // inconsistent topology (an internal node whose persisted
+    // childrenAreLeaves bit is true over internal children, or a leaf
+    // sibling pointer that crosses a node level) previously steered the
+    // scan's leaf walk onto an internal grain and threw InvalidCastException
+    // when that internal reference was invoked through IBPlusLeafGrain.
+    private GrainType? _leafGrainType;
+    private bool _leafGrainTypeResolved;
+
+    /// <summary>
+    /// Resolves (once per activation) the <see cref="GrainType"/> that the
+    /// grain factory assigns to leaf grains, used by the sorted-scan guard to
+    /// tell a leaf node id from an internal node id. Resolution asks the
+    /// factory for a leaf reference and reads its grain id type. When the
+    /// factory cannot yield a runtime-typed reference (for example a
+    /// unit-test fake that does not model real grain references) the leaf
+    /// type is left unresolved and <paramref name="leafType"/> is undefined;
+    /// callers then treat ids as leaves, degrading the guard to the historical
+    /// blind-walk behaviour for those fakes (which never model the cross-level
+    /// corruption the guard defends against anyway).
+    /// </summary>
+    private bool TryGetLeafGrainType(out GrainType leafType)
+    {
+        if (!_leafGrainTypeResolved)
+        {
+            _leafGrainTypeResolved = true;
+            try
+            {
+                _leafGrainType = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.Empty).GetGrainId().Type;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or InvalidCastException or NotSupportedException or NullReferenceException)
+            {
+                // The grain factory is not a runtime factory (e.g. a unit-test
+                // fake): leave the leaf type unresolved so the guard becomes a
+                // no-op rather than throwing on every scan.
+                _leafGrainType = null;
+            }
+        }
+
+        leafType = _leafGrainType ?? default;
+        return _leafGrainType.HasValue;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="nodeId"/> addresses
+    /// a leaf grain (as opposed to an internal node grain), decided purely by
+    /// the grain TYPE encoded in the id rather than by any routing-table flag.
+    /// When the leaf grain type cannot be resolved (a non-runtime factory) this
+    /// returns <see langword="true"/> so the scan guard degrades to a no-op.
+    /// </summary>
+    private bool IsLeafGrainId(GrainId nodeId)
+        => !TryGetLeafGrainType(out var leafType) || nodeId.Type == leafType;
+
+    /// <summary>
+    /// Defensive guard for the sorted-scan leaf walk. Given a node id that the
+    /// scan believes addresses a leaf, returns a guaranteed leaf-typed id by
+    /// descending through any internal node(s) the id actually resolves to,
+    /// taking the leftmost child at each level (or the rightmost when
+    /// <paramref name="rightmost"/> is set, for reverse scans). When the id is
+    /// already leaf-typed this is a synchronous no-op that returns the id
+    /// unchanged, so the common correct-topology path pays nothing beyond a
+    /// <see cref="GrainType"/> comparison.
+    /// <para>
+    /// This guard ensures the scan never blind-casts an internal node id to
+    /// <see cref="IBPlusLeafGrain"/> (the InvalidCastException of issue 899):
+    /// whether the offending id arrives from a leftmost / rightmost traversal
+    /// that trusted a corrupt <c>ChildrenAreLeaves</c> flag, or from a leaf
+    /// next / prev sibling pointer that crosses a node level, the scan
+    /// re-descends to a real leaf and continues rather than crashing.
+    /// </para>
+    /// </summary>
+    private async ValueTask<GrainId> DescendToLeafAsync(GrainId nodeId, bool rightmost)
+    {
+        if (IsLeafGrainId(nodeId))
+            return nodeId;
+
+        var currentId = nodeId;
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            if (IsLeafGrainId(currentId))
+                return currentId;
+
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            if (snapshot.ChildIds.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} sorted-scan descent reached internal node {currentId} with no children.");
+            }
+
+            currentId = rightmost ? snapshot.ChildIds[^1] : snapshot.ChildIds[0];
+        }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} sorted-scan descent from {nodeId} exceeded {MaxTreeDescentLevels} levels without reaching a leaf; tree topology may be corrupt.");
+    }
+
+    /// <summary>
+    /// Key-routed sibling of <see cref="DescendToLeafAsync"/> for the point
+    /// read / write paths. Given a node id that a caller believed addressed the
+    /// leaf owning <paramref name="key"/>, returns a guaranteed leaf-typed id by
+    /// continuing to route on <paramref name="key"/> through any internal node(s)
+    /// the id actually resolves to. When the id is already leaf-typed this is a
+    /// synchronous no-op returning the id unchanged, so the common
+    /// correct-topology path pays nothing beyond a <see cref="GrainType"/>
+    /// comparison.
+    /// <para>
+    /// This guard ensures a read or write never blind-casts an internal node id
+    /// to <see cref="IBPlusLeafGrain"/> (the InvalidCastException of issue 899)
+    /// when a baked-inconsistent topology mislabels an internal node as a leaf -
+    /// a persisted <c>RootIsLeaf</c> bit left true over an internal root, or a
+    /// routing snapshot whose <c>ChildrenAreLeaves</c> flag is true over internal
+    /// children. Unlike the scan guard it descends by key-routing rather than
+    /// leftmost / rightmost, so it lands on the leaf that actually owns the key.
+    /// When the leaf grain type cannot be resolved (a non-runtime test factory)
+    /// <see cref="IsLeafGrainId"/> is always true and this degrades to a no-op.
+    /// </para>
+    /// </summary>
+    private async ValueTask<GrainId> DescendToLeafForKeyAsync(GrainId nodeId, string key)
+    {
+        if (IsLeafGrainId(nodeId))
+            return nodeId;
+
+        var currentId = nodeId;
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            if (IsLeafGrainId(currentId))
+                return currentId;
+
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            if (snapshot.ChildIds.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} key-routed descent reached internal node {currentId} with no children.");
+            }
+
+            var (childId, _) = snapshot.Route(key);
+            currentId = childId;
+        }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} key-routed descent from {nodeId} for key '{key}' exceeded {MaxTreeDescentLevels} levels without reaching a leaf; tree topology may be corrupt.");
+    }
+
+    /// <summary>
+    /// Resolves the leaf grain id that owns <paramref name="key"/> within this
+    /// shard, recording every internal ancestor walked into
+    /// <paramref name="path"/> (deepest last) so a write caller can propagate
+    /// leaf splits back up the tree with the same shape the inline
+    /// path-pop loops used. Termination is decided by node TYPE
+    /// (<see cref="IsLeafGrainId"/>), not by the persisted <c>RootIsLeaf</c> /
+    /// <c>ChildrenAreLeaves</c> routing flags: a baked-inconsistent topology
+    /// (issue 899) that flags an internal node as a leaf no longer steers the
+    /// write onto an internal grain and throws InvalidCastException - the descent
+    /// continues by key-routing, recording each extra internal ancestor, until a
+    /// real leaf grain id is reached. When the leaf grain type cannot be resolved
+    /// (a non-runtime test factory) <see cref="IsLeafGrainId"/> is always true,
+    /// so the type-guard loop never runs and behaviour is identical to the
+    /// pre-guard flag-trusting walk.
+    /// </summary>
+    private async ValueTask<GrainId> ResolveWriteLeafAsync(string key, Stack<GrainId> path)
+    {
+        var currentId = state.State.RootNodeId!.Value;
+
+        // Flag-trusting walk that also records the ancestor path. Skipped when
+        // the persisted RootIsLeaf flag claims a single-leaf tree; the type
+        // guard below corrects either an internal root mislabelled as a leaf or
+        // a ChildrenAreLeaves flag that fired one level too early.
+        if (!state.State.RootIsLeaf)
+        {
+            while (true)
+            {
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var (childId, childrenAreLeaves) = snapshot.Route(key);
+                path.Push(currentId);
+                currentId = childId;
+                if (childrenAreLeaves)
+                    break;
+            }
+        }
+
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            if (IsLeafGrainId(currentId))
+                return currentId;
+
+            path.Push(currentId);
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var (childId, _) = snapshot.Route(key);
+            currentId = childId;
+        }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} write descent for key '{key}' exceeded {MaxTreeDescentLevels} levels without reaching a leaf; tree topology may be corrupt.");
+    }
+
     /// <summary>
     /// Returns the routing-table snapshot for the internal node identified
     /// by <paramref name="internalId"/>. On cache hit (the common case
@@ -170,6 +377,13 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
+        // Guard: route to a real leaf even if a corrupt RootIsLeaf /
+        // ChildrenAreLeaves flag resolved an internal node (issue 899).
+        if (!IsLeafGrainId(leafId))
+        {
+            leafId = await DescendToLeafForKeyAsync(leafId, key);
+        }
+
 #if LATTICE_DIAG
         // DIAG read-routing: capture the resolved leaf id alongside
         // the moved-away mask state at the moment of routing so that a
@@ -196,6 +410,13 @@ internal sealed partial class ShardRootGrain
             leafId = await TraverseToLeafAsync(key);
         }
 
+        // Guard: route to a real leaf even if a corrupt RootIsLeaf /
+        // ChildrenAreLeaves flag resolved an internal node (issue 899).
+        if (!IsLeafGrainId(leafId))
+        {
+            leafId = await DescendToLeafForKeyAsync(leafId, key);
+        }
+
         var leaf = ResolveLeafGrain(leafId);
         return await leaf.GetWithVersionAsync(key);
     }
@@ -210,6 +431,13 @@ internal sealed partial class ShardRootGrain
         else
         {
             leafId = await TraverseToLeafAsync(key);
+        }
+
+        // Guard: route to a real leaf even if a corrupt RootIsLeaf /
+        // ChildrenAreLeaves flag resolved an internal node (issue 899).
+        if (!IsLeafGrainId(leafId))
+        {
+            leafId = await DescendToLeafForKeyAsync(leafId, key);
         }
 
         var cache = ResolveLeafCacheGrain(leafId);
@@ -230,6 +458,13 @@ internal sealed partial class ShardRootGrain
             else
             {
                 leafId = await TraverseToLeafAsync(key);
+            }
+
+            // Guard: route to a real leaf even if a corrupt RootIsLeaf /
+            // ChildrenAreLeaves flag resolved an internal node (issue 899).
+            if (!IsLeafGrainId(leafId))
+            {
+                leafId = await DescendToLeafForKeyAsync(leafId, key);
             }
 
 #if LATTICE_DIAG
@@ -264,49 +499,23 @@ internal sealed partial class ShardRootGrain
 
     private async Task<SplitResult?> TraverseForWriteAsync(string key, byte[] value)
     {
-        if (state.State.RootIsLeaf)
-        {
-            var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = ResolveLeafGrain(rootLeafId);
-            await RecordAffectedLeafIfPreparedAsync(rootLeafId);
-            return await leaf.SetAsync(key, value);
-        }
-
         var path = StackPool.Get();
         try
         {
-        var currentId = state.State.RootNodeId!.Value;
+            var leafId = await ResolveWriteLeafAsync(key, path);
+            var leafGrain = ResolveLeafGrain(leafId);
+            await RecordAffectedLeafIfPreparedAsync(leafId);
+            var splitResult = await leafGrain.SetAsync(key, value);
 
-        while (true)
-        {
-            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-            var (childId, childrenAreLeaves) = snapshot.Route(key);
-
-            if (childrenAreLeaves)
+            while (splitResult is not null && path.Count > 0)
             {
-                path.Push(currentId);
-                path.Push(childId);
-                break;
+                var parentId = path.Pop();
+                var parentGrain = ResolveInternalGrain(parentId);
+                splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
+                InvalidateRoutingTable(parentId);
             }
 
-            path.Push(currentId);
-            currentId = childId;
-        }
-
-        var leafId = path.Pop();
-        var leafGrain = ResolveLeafGrain(leafId);
-        await RecordAffectedLeafIfPreparedAsync(leafId);
-        var splitResult = await leafGrain.SetAsync(key, value);
-
-        while (splitResult is not null && path.Count > 0)
-        {
-            var parentId = path.Pop();
-            var parentGrain = ResolveInternalGrain(parentId);
-            splitResult = await parentGrain.AcceptSplitAsync(splitResult.PromotedKey, splitResult.NewSiblingId);
-            InvalidateRoutingTable(parentId);
-        }
-
-        return splitResult;
+            return splitResult;
         }
         finally
         {
@@ -321,36 +530,10 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<SplitResult?> TraverseForWriteWithExpiryAsync(string key, byte[] value, long expiresAtTicks)
     {
-        if (state.State.RootIsLeaf)
-        {
-            var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = ResolveLeafGrain(rootLeafId);
-            await RecordAffectedLeafIfPreparedAsync(rootLeafId);
-            return await leaf.SetAsync(key, value, expiresAtTicks);
-        }
-
         var path = StackPool.Get();
         try
         {
-            var currentId = state.State.RootNodeId!.Value;
-
-            while (true)
-            {
-                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-                var (childId, childrenAreLeaves) = snapshot.Route(key);
-
-                if (childrenAreLeaves)
-                {
-                    path.Push(currentId);
-                    path.Push(childId);
-                    break;
-                }
-
-                path.Push(currentId);
-                currentId = childId;
-            }
-
-            var leafId = path.Pop();
+            var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
             await RecordAffectedLeafIfPreparedAsync(leafId);
             var splitResult = await leafGrain.SetAsync(key, value, expiresAtTicks);
@@ -373,35 +556,10 @@ internal sealed partial class ShardRootGrain
 
     private async Task<GetOrSetResult> TraverseForGetOrSetAsync(string key, byte[] value)
     {
-        if (state.State.RootIsLeaf)
-        {
-            var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = ResolveLeafGrain(rootLeafId);
-            return await leaf.GetOrSetAsync(key, value);
-        }
-
         var path = StackPool.Get();
         try
         {
-            var currentId = state.State.RootNodeId!.Value;
-
-            while (true)
-            {
-                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-                var (childId, childrenAreLeaves) = snapshot.Route(key);
-
-                if (childrenAreLeaves)
-                {
-                    path.Push(currentId);
-                    path.Push(childId);
-                    break;
-                }
-
-                path.Push(currentId);
-                currentId = childId;
-            }
-
-            var leafId = path.Pop();
+            var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
             var result = await leafGrain.GetOrSetAsync(key, value);
 
@@ -431,35 +589,10 @@ internal sealed partial class ShardRootGrain
 
     private async Task<CasResult> TraverseForSetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
-        if (state.State.RootIsLeaf)
-        {
-            var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = ResolveLeafGrain(rootLeafId);
-            return await leaf.SetIfVersionAsync(key, value, expectedVersion);
-        }
-
         var path = StackPool.Get();
         try
         {
-            var currentId = state.State.RootNodeId!.Value;
-
-            while (true)
-            {
-                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-                var (childId, childrenAreLeaves) = snapshot.Route(key);
-
-                if (childrenAreLeaves)
-                {
-                    path.Push(currentId);
-                    path.Push(childId);
-                    break;
-                }
-
-                path.Push(currentId);
-                currentId = childId;
-            }
-
-            var leafId = path.Pop();
+            var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
             var result = await leafGrain.SetIfVersionAsync(key, value, expectedVersion);
 
@@ -494,35 +627,10 @@ internal sealed partial class ShardRootGrain
 
     private async Task<CrdtApplyResult> TraverseForCrdtApplyAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
     {
-        if (state.State.RootIsLeaf)
-        {
-            var rootLeafId = state.State.RootNodeId!.Value;
-            var leaf = ResolveLeafGrain(rootLeafId);
-            return await leaf.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
-        }
-
         var path = StackPool.Get();
         try
         {
-            var currentId = state.State.RootNodeId!.Value;
-
-            while (true)
-            {
-                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-                var (childId, childrenAreLeaves) = snapshot.Route(key);
-
-                if (childrenAreLeaves)
-                {
-                    path.Push(currentId);
-                    path.Push(childId);
-                    break;
-                }
-
-                path.Push(currentId);
-                currentId = childId;
-            }
-
-            var leafId = path.Pop();
+            var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
             var result = await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
 
@@ -625,50 +733,95 @@ internal sealed partial class ShardRootGrain
 
     private async Task<GrainId> TraverseToLeftmostLeafAsync()
     {
+        GrainId leafId;
         if (state.State.RootIsLeaf)
         {
-            return state.State.RootNodeId!.Value;
+            leafId = state.State.RootNodeId!.Value;
         }
-
-        var currentId = state.State.RootNodeId!.Value;
-
-        while (true)
+        else
         {
-            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-            var childId = snapshot.ChildIds[0];
-            var childrenAreLeaves = snapshot.ChildrenAreLeaves;
-
-            if (childrenAreLeaves)
+            var currentId = state.State.RootNodeId!.Value;
+            while (true)
             {
-                return childId;
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var childId = snapshot.ChildIds[0];
+                if (snapshot.ChildrenAreLeaves)
+                {
+                    leafId = childId;
+                    break;
+                }
+                currentId = childId;
             }
-
-            currentId = childId;
         }
+
+        return await DescendToEdgeLeafTypeGuardAsync(leafId, leftmost: true);
     }
 
     private async Task<GrainId> TraverseToRightmostLeafAsync()
     {
+        GrainId leafId;
         if (state.State.RootIsLeaf)
         {
-            return state.State.RootNodeId!.Value;
+            leafId = state.State.RootNodeId!.Value;
+        }
+        else
+        {
+            var currentId = state.State.RootNodeId!.Value;
+            while (true)
+            {
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var childId = snapshot.ChildIds[snapshot.ChildIds.Length - 1];
+                if (snapshot.ChildrenAreLeaves)
+                {
+                    leafId = childId;
+                    break;
+                }
+                currentId = childId;
+            }
         }
 
-        var currentId = state.State.RootNodeId!.Value;
+        return await DescendToEdgeLeafTypeGuardAsync(leafId, leftmost: false);
+    }
 
-        while (true)
+    /// <summary>
+    /// Type-correcting edge descent for <see cref="TraverseToLeftmostLeafAsync"/>
+    /// and <see cref="TraverseToRightmostLeafAsync"/>: if the flag-trusting edge
+    /// walk stopped on a node that is not actually a leaf grain - a
+    /// baked-inconsistent <c>RootIsLeaf</c> bit left true over an internal root,
+    /// or a <c>ChildrenAreLeaves</c> flag true over internal children (issue 899)
+    /// - it keeps descending the requested edge (leftmost or rightmost) by node
+    /// TYPE (<see cref="IsLeafGrainId"/>) until a real leaf grain id is reached.
+    /// This guarantees every caller of <see cref="GetLeftmostLeafIdAsync"/> (the
+    /// scan surface, the replication snapshot producer, compaction, merge and
+    /// split leaf-chain walkers) receives a leaf-typed id it can safely cast to
+    /// <see cref="IBPlusLeafGrain"/>. No-op for healthy trees and for non-runtime
+    /// test factories, where <see cref="IsLeafGrainId"/> is always true.
+    /// </summary>
+    private async ValueTask<GrainId> DescendToEdgeLeafTypeGuardAsync(GrainId nodeId, bool leftmost)
+    {
+        if (IsLeafGrainId(nodeId))
+            return nodeId;
+
+        var currentId = nodeId;
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
         {
-            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-            var childId = snapshot.ChildIds[snapshot.ChildIds.Length - 1];
-            var childrenAreLeaves = snapshot.ChildrenAreLeaves;
+            if (IsLeafGrainId(currentId))
+                return currentId;
 
-            if (childrenAreLeaves)
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            if (snapshot.ChildIds.Length == 0)
             {
-                return childId;
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} edge descent reached internal node {currentId} with no children.");
             }
 
-            currentId = childId;
+            currentId = leftmost
+                ? snapshot.ChildIds[0]
+                : snapshot.ChildIds[snapshot.ChildIds.Length - 1];
         }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} edge descent from {nodeId} exceeded {MaxTreeDescentLevels} levels without reaching a leaf; tree topology may be corrupt.");
     }
 
     private async Task<SplitResult?> PromoteRootAsync(SplitResult splitResult)
@@ -736,18 +889,32 @@ internal sealed partial class ShardRootGrain
                 }
                 // Deeper race: the live root is at depth >= 2 (its
                 // children are themselves internal nodes) but our
-                // bubble is leaf-level. Routing the bubble safely
-                // would require traversing down to the correct
-                // internal parent; that path is not yet exercised in
-                // production. Log and fall through to the legacy
-                // wrap, which is still incorrect in this corner case
-                // but matches pre-fix behaviour rather than
-                // regressing the depth-1 path the U9k step 2 fix
-                // legitimately repaired.
+                // bubble is leaf-level. The legacy behaviour here wrapped
+                // a brand-new root ABOVE the depth->=2 root and seeded it
+                // with childrenAreLeaves = true (because the bubble is
+                // leaf-level) - even though the new root's children are
+                // the internal nodes below it. That baked a permanently
+                // inconsistent root whose ChildrenAreLeaves flag lied
+                // about its children, which every later sorted-scan then
+                // walked into and crashed on with the issue 899
+                // InvalidCastException (cast BPlusInternalGrain to
+                // IBPlusLeafGrain) - a fault that survived silo restarts
+                // because the corruption was persisted, not cached.
+                //
+                // Mirror the resume-path handling in CompletePromotionAsync:
+                // the leaf-level bubble's NewSiblingId belongs deeper in
+                // the tree than we can safely splice from here, and in
+                // practice it was already absorbed by the interleaved peer
+                // promotion that deepened the root (so the leaf is
+                // reachable via the live topology). Drop the stale bubble
+                // rather than wrapping a corrupt root; the caller's write
+                // retry envelope re-routes the user-visible mutation against
+                // the current topology.
                 logger.LogWarning(
-                    "ShardRootGrain {ShardId} PromoteRootAsync observed a depth->=2 race (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf=true); falling through to legacy wrap.",
+                    "ShardRootGrain {ShardId} PromoteRootAsync observed a depth->=2 race (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf=true); dropping the stale leaf-level bubble instead of wrapping a corrupt root.",
                     context.GrainId,
                     rootSnapshot.ChildrenAreLeaves);
+                return null;
             }
 
             state.State.PendingPromotion = splitResult;

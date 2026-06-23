@@ -156,7 +156,7 @@ public partial class PublicReplicationApiContractTests
     }
 
     /// <summary>
-    /// Regression for issue #894 (F-137): the explorer / state API "Data"
+    /// Regression for issue #894: the explorer / state API "Data"
     /// catalog lists trees via
     /// <see cref="ILatticeRegistry.GetAllTreeIdsAsync"/>. A tree authored
     /// only in the peer cluster - never locally registered or written on

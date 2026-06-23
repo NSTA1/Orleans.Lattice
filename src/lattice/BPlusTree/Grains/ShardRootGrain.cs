@@ -634,8 +634,11 @@ internal sealed partial class ShardRootGrain(
     private async Task SetManyLocalOnlyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         // Flat-tree shortcut: every entry routes to the root leaf, so
-        // the whole batch lands in one leaf.SetManyAsync call.
-        if (state.State.RootIsLeaf)
+        // the whole batch lands in one leaf.SetManyAsync call. Guarded by
+        // node type so a corrupt RootIsLeaf flag over an internal root
+        // (issue 899) falls through to the routed non-flat path instead of
+        // blind-casting the internal root to a leaf.
+        if (state.State.RootIsLeaf && IsLeafGrainId(state.State.RootNodeId!.Value))
         {
             var rootLeafId = state.State.RootNodeId!.Value;
             var leaf = ResolveLeafGrain(rootLeafId);
@@ -657,6 +660,10 @@ internal sealed partial class ShardRootGrain(
         foreach (var entry in entries)
         {
             var leafId = await TraverseToLeafAsync(entry.Key);
+            if (!IsLeafGrainId(leafId))
+            {
+                leafId = await DescendToLeafForKeyAsync(leafId, entry.Key);
+            }
             if (!buckets.TryGetValue(leafId, out var bucket))
             {
                 var parents = await CaptureLeafParentPathAsync(entry.Key);
@@ -889,8 +896,11 @@ internal sealed partial class ShardRootGrain(
     private async Task<IReadOnlyList<string>> SetManyWhereLocalOnlyAsync(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
-        // Flat-tree shortcut: every entry routes to the root leaf.
-        if (state.State.RootIsLeaf)
+        // Flat-tree shortcut: every entry routes to the root leaf. Guarded by
+        // node type so a corrupt RootIsLeaf flag over an internal root
+        // (issue 899) falls through to the routed non-flat path instead of
+        // blind-casting the internal root to a leaf.
+        if (state.State.RootIsLeaf && IsLeafGrainId(state.State.RootNodeId!.Value))
         {
             var rootLeafId = state.State.RootNodeId!.Value;
             var leaf = ResolveLeafGrain(rootLeafId);
@@ -911,6 +921,10 @@ internal sealed partial class ShardRootGrain(
         foreach (var entry in entries)
         {
             var leafId = await TraverseToLeafAsync(entry.Key);
+            if (!IsLeafGrainId(leafId))
+            {
+                leafId = await DescendToLeafForKeyAsync(leafId, entry.Key);
+            }
             if (!buckets.TryGetValue(leafId, out var bucket))
             {
                 var parents = await CaptureLeafParentPathAsync(entry.Key);
@@ -1048,17 +1062,38 @@ internal sealed partial class ShardRootGrain(
     {
         var parents = new List<GrainId>(capacity: 4);
         var currentId = state.State.RootNodeId!.Value;
-        while (true)
+
+        // Flag-trusting walk that records each ancestor. Skipped for a
+        // single-leaf tree; the type-extension below corrects a corrupt
+        // RootIsLeaf / ChildrenAreLeaves flag that stopped the walk on an
+        // internal node (issue 899) so the captured path still reaches the
+        // real leaf's parent. For a healthy tree (or a non-runtime test
+        // factory where IsLeafGrainId is always true) the extension loop never
+        // runs and the captured path is identical to the pre-guard walk.
+        if (!state.State.RootIsLeaf)
         {
-            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
-            var (childId, childrenAreLeaves) = snapshot.Route(key);
-            parents.Add(currentId);
-            if (childrenAreLeaves)
+            while (true)
             {
-                return parents;
+                var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+                var (childId, childrenAreLeaves) = snapshot.Route(key);
+                parents.Add(currentId);
+                currentId = childId;
+                if (childrenAreLeaves)
+                {
+                    break;
+                }
             }
+        }
+
+        while (!IsLeafGrainId(currentId))
+        {
+            parents.Add(currentId);
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            var (childId, _) = snapshot.Route(key);
             currentId = childId;
         }
+
+        return parents;
     }
 
     public async Task<bool> DeleteAsync(string key)
@@ -1081,22 +1116,27 @@ internal sealed partial class ShardRootGrain(
                 var forwardTask = TrackShadowForward(key, static (t, s) => t.DeleteAsync(s));
 
                 bool result;
-                if (state.State.RootIsLeaf)
+                GrainId leafId;
+                if (state.State.RootIsLeaf && IsLeafGrainId(state.State.RootNodeId!.Value))
                 {
-                    var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
-                    await RecordAffectedLeafIfPreparedAsync(state.State.RootNodeId!.Value);
-                    await MarkLeafDirtyAsync(state.State.RootNodeId!.Value);
-                    result = await leaf.DeleteAsync(key);
+                    leafId = state.State.RootNodeId!.Value;
                 }
                 else
                 {
                     // Traverse to the leaf.
-                    var leafId = await TraverseToLeafAsync(key);
-                    var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-                    await RecordAffectedLeafIfPreparedAsync(leafId);
-                    await MarkLeafDirtyAsync(leafId);
-                    result = await leafGrain.DeleteAsync(key);
+                    leafId = await TraverseToLeafAsync(key);
+                    // Guard: route to a real leaf even if a corrupt RootIsLeaf /
+                    // ChildrenAreLeaves flag resolved an internal node (issue 899).
+                    if (!IsLeafGrainId(leafId))
+                    {
+                        leafId = await DescendToLeafForKeyAsync(leafId, key);
+                    }
                 }
+
+                var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+                await RecordAffectedLeafIfPreparedAsync(leafId);
+                await MarkLeafDirtyAsync(leafId);
+                result = await leafGrain.DeleteAsync(key);
 
                 // tombstone forwarding for adaptive splits is handled by the
                 // comprehensive cleanup phase of the split coordinator. See
@@ -1137,6 +1177,13 @@ internal sealed partial class ShardRootGrain(
         else
         {
             leafId = await TraverseToLeafAsync(startInclusive);
+        }
+
+        // Guard: route to a real leaf even if a corrupt RootIsLeaf /
+        // ChildrenAreLeaves flag resolved an internal node (issue 899).
+        if (!IsLeafGrainId(leafId))
+        {
+            leafId = await DescendToLeafForKeyAsync(leafId, startInclusive);
         }
 
         // Walk the leaf chain, tombstoning matching entries in each leaf.
@@ -1804,6 +1851,10 @@ internal sealed partial class ShardRootGrain(
         }
 
         // Walk the sibling chain, collecting keys until the page is full.
+        // Guard: the start node must be a leaf. A corrupt ChildrenAreLeaves
+        // flag could have steered the traversal onto an internal node; if so
+        // re-descend to the leftmost leaf rather than blind-casting it.
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
         while (keys.Count < pageSize)
@@ -1839,7 +1890,10 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = nextSibling.Value;
+            // Guard: a next-sibling pointer must stay at leaf level. If it
+            // crosses onto an internal node, re-descend to that subtree's
+            // leftmost leaf rather than blind-casting it (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new KeysPage
@@ -1877,6 +1931,10 @@ internal sealed partial class ShardRootGrain(
         }
 
         // Walk the sibling chain backward, collecting keys in reverse until the page is full.
+        // Guard: the start node must be a leaf. If a corrupt ChildrenAreLeaves
+        // flag steered the traversal onto an internal node, re-descend to the
+        // rightmost leaf rather than blind-casting it (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: true);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
         while (keys.Count < pageSize)
@@ -1913,7 +1971,10 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = prevSibling.Value;
+            // Guard: a prev-sibling pointer must stay at leaf level. If it
+            // crosses onto an internal node, re-descend to that subtree's
+            // rightmost leaf rather than blind-casting it (issue 899).
+            leafId = await DescendToLeafAsync(prevSibling.Value, rightmost: true);
         }
 
         return new KeysPage
@@ -1951,6 +2012,10 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
+        // Guard: the start node must be a leaf; re-descend to the leftmost
+        // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
+        // rather than blind-casting it (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -1983,7 +2048,9 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = nextSibling.Value;
+            // Guard: keep the forward walk at leaf level across internal
+            // boundaries (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new EntriesPage
@@ -2021,6 +2088,10 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
+        // Guard: the start node must be a leaf; re-descend to the rightmost
+        // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
+        // rather than blind-casting it (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: true);
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2054,7 +2125,9 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = prevSibling.Value;
+            // Guard: keep the reverse walk at leaf level across internal
+            // boundaries (issue 899).
+            leafId = await DescendToLeafAsync(prevSibling.Value, rightmost: true);
         }
 
         return new EntriesPage
@@ -2101,6 +2174,9 @@ internal sealed partial class ShardRootGrain(
         }
 
         var keys = new List<string>(pageSize);
+        // Guard: re-descend to a real leaf if the start node is internal
+        // (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2120,7 +2196,9 @@ internal sealed partial class ShardRootGrain(
             if (nextSibling is null)
                 return new KeysPage { Keys = keys, HasMore = false };
 
-            leafId = nextSibling.Value;
+            // Guard: keep the walk at leaf level across internal boundaries
+            // (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new KeysPage { Keys = keys, HasMore = true };
@@ -2162,6 +2240,9 @@ internal sealed partial class ShardRootGrain(
         }
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        // Guard: re-descend to a real leaf if the start node is internal
+        // (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2181,7 +2262,9 @@ internal sealed partial class ShardRootGrain(
             if (nextSibling is null)
                 return new EntriesPage { Entries = entries, HasMore = false };
 
-            leafId = nextSibling.Value;
+            // Guard: keep the walk at leaf level across internal boundaries
+            // (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new EntriesPage { Entries = entries, HasMore = true };
@@ -2189,11 +2272,14 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<GrainId?> GetLeftmostLeafIdAsync()
     {
-        // The leftmost leaf is the first in the chain, or the root if no chain exists.
+        // Resolve the leftmost leaf by node TYPE rather than trusting the
+        // persisted RootIsLeaf flag: a baked-inconsistent flag left true over an
+        // internal root (issue 899) would otherwise return the internal root id
+        // to a caller that casts it to IBPlusLeafGrain (the replication snapshot
+        // producer, compaction / merge / split leaf-chain walkers). The guarded
+        // traversal returns a real leaf id or null for an empty shard.
         return state.State.RootNodeId is null
             ? null
-            : state.State.RootIsLeaf
-                ? state.State.RootNodeId
-                : await TraverseToLeftmostLeafAsync();
+            : await TraverseToLeftmostLeafAsync();
     }
 }
