@@ -446,8 +446,10 @@ internal sealed partial class ShardRootGrain
         // Non-prepared path: read the raw LwwValue (not the filtered VersionedValue)
         // so the entry's ExpiresAtTicks is forwarded verbatim. Using the filtered path
         // would drop TTL metadata, leaving the target shard with a non-expiring
-        // copy after the split commits.
-        var leafId = state.State.RootIsLeaf
+        // copy after the split commits. Decided by node TYPE so a corrupt
+        // RootIsLeaf flag over an internal root (issue 899) descends instead of
+        // blind-casting the internal root to IBPlusLeafGrain.
+        var leafId = RootIsLeafTyped
             ? state.State.RootNodeId!.Value
             : await TraverseToLeafAsync(key);
         var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -482,8 +484,10 @@ internal sealed partial class ShardRootGrain
 
         // Walk the leaf chain from leftmost and mark every leaf with
         // the moved-slot set. Idempotent on identical inputs - leaves
-        // that have already recorded the same set are no-ops.
-        var leafId = state.State.RootIsLeaf
+        // that have already recorded the same set are no-ops. Decided by
+        // node TYPE so a corrupt RootIsLeaf flag over an internal root
+        // (issue 899) descends to the leftmost leaf rather than blind-casting.
+        var leafId = RootIsLeafTyped
             ? state.State.RootNodeId!.Value
             : (await GetLeftmostLeafIdAsync())!.Value;
 
@@ -521,8 +525,10 @@ internal sealed partial class ShardRootGrain
         //
         // Root-is-leaf shards collapse to a single-leaf bucket; the
         // traversal path would otherwise try to read a routing table
-        // from a leaf grain and throw InvalidCastException.
-        if (state.State.RootIsLeaf)
+        // from a leaf grain and throw InvalidCastException. Decided by node
+        // TYPE so a corrupt RootIsLeaf flag over an internal root (issue 899)
+        // takes the per-key routing path below instead of blind-casting.
+        if (RootIsLeafTyped)
         {
             var rootLeafId = state.State.RootNodeId!.Value;
             var rootLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rootLeafId);
