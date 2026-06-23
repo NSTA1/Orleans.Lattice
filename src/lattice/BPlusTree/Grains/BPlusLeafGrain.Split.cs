@@ -276,13 +276,24 @@ internal sealed partial class BPlusLeafGrain
         // the WAL heads captured at split time. Each partition's
         // SetCheckpointOffsetAsync call is scoped to that partition so
         // the per-partition clamp is applied correctly.
+        //
+        // A split is not instantaneous: while it is in flight the donor
+        // keeps applying WAL entries on these partitions, advancing the
+        // projection checkpoint past the head captured at split start.
+        // The advance here is only meant to push the donor forward to
+        // the split frontier, so when the donor's current checkpoint for
+        // a partition already meets or exceeds the captured head, skip
+        // the advance entirely. Calling SetCheckpointOffsetAsync with a
+        // stale head would otherwise ask it to move the checkpoint
+        // backward and trip the monotonic-non-decreasing guard. See
+        // issue 905.
         if (resolvedHeads is not null)
         {
             var projection = (ILeafProjection)this;
             for (var p = 0; p < resolvedHeads.Length; p++)
             {
                 var donorHead = resolvedHeads[p];
-                if (donorHead > 0)
+                if (donorHead > 0 && GetCurrentCheckpointForPartition(p) < donorHead)
                 {
                     using (LatticeApplyOffsetContext.BeginScope(p, donorHead))
                     {
