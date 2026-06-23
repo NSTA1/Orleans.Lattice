@@ -163,4 +163,5 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 
 - [FX-015](https://github.com/NSTA1/Orleans.Lattice/issues/436) - Per-partition resume cursor on outbound shipper
 - [FX-016](https://github.com/NSTA1/Orleans.Lattice/issues/437) - Tag `apply.duration` and inbound apply counters with the source peer
+- [FX-046](https://github.com/NSTA1/Orleans.Lattice/issues/901) - De-flake `SetManyAtomicAsync_visibility_on_remote_site_is_zero_or_all_throughout_convergence`: the continuous remote-site reader failed on a transient one-round-lagged key during in-flight cross-cluster convergence; settle a multi-round snapshot on a bounded re-read budget before recording a partial-visibility violation, so a stuck key still fails while a transient ship/apply window does not
 
