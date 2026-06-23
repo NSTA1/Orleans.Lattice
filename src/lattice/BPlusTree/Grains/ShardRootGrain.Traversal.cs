@@ -110,6 +110,114 @@ internal sealed partial class ShardRootGrain
     private IBPlusInternalGrain ResolveInternalGrainSlow(GrainId internalId)
         => _internalGrains.GetOrAdd(internalId, static (id, gf) => gf.GetGrain<IBPlusInternalGrain>(id), grainFactory);
 
+    // Upper bound on the number of levels DescendToLeafAsync will walk
+    // before concluding the topology is cyclic / corrupt. A real B+ tree
+    // shard is far shallower than this (production fanout keeps even
+    // billion-key trees under ~6 levels); the cap exists only so a
+    // pathological self-referential routing pointer surfaces as a typed
+    // exception instead of an unbounded loop.
+    private const int MaxTreeDescentLevels = 64;
+
+    // Cached GrainType of the leaf grain, resolved once per activation from
+    // the grain factory. Used by the sorted-scan defensive guard
+    // (DescendToLeafAsync) to decide, by node TYPE rather than by a
+    // potentially-inconsistent ChildrenAreLeaves routing flag, whether a
+    // node id addresses a leaf or an internal node. See issue 899: a baked
+    // inconsistent topology (an internal node whose persisted
+    // childrenAreLeaves bit is true over internal children, or a leaf
+    // sibling pointer that crosses a node level) previously steered the
+    // scan's leaf walk onto an internal grain and threw InvalidCastException
+    // when that internal reference was invoked through IBPlusLeafGrain.
+    private GrainType? _leafGrainType;
+    private bool _leafGrainTypeResolved;
+
+    /// <summary>
+    /// Resolves (once per activation) the <see cref="GrainType"/> that the
+    /// grain factory assigns to leaf grains, used by the sorted-scan guard to
+    /// tell a leaf node id from an internal node id. Resolution asks the
+    /// factory for a leaf reference and reads its grain id type. When the
+    /// factory cannot yield a runtime-typed reference (for example a
+    /// unit-test fake that does not model real grain references) the leaf
+    /// type is left unresolved and <paramref name="leafType"/> is undefined;
+    /// callers then treat ids as leaves, degrading the guard to the historical
+    /// blind-walk behaviour for those fakes (which never model the cross-level
+    /// corruption the guard defends against anyway).
+    /// </summary>
+    private bool TryGetLeafGrainType(out GrainType leafType)
+    {
+        if (!_leafGrainTypeResolved)
+        {
+            _leafGrainTypeResolved = true;
+            try
+            {
+                _leafGrainType = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.Empty).GetGrainId().Type;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or InvalidCastException or NotSupportedException or NullReferenceException)
+            {
+                // The grain factory is not a runtime factory (e.g. a unit-test
+                // fake): leave the leaf type unresolved so the guard becomes a
+                // no-op rather than throwing on every scan.
+                _leafGrainType = null;
+            }
+        }
+
+        leafType = _leafGrainType ?? default;
+        return _leafGrainType.HasValue;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="nodeId"/> addresses
+    /// a leaf grain (as opposed to an internal node grain), decided purely by
+    /// the grain TYPE encoded in the id rather than by any routing-table flag.
+    /// When the leaf grain type cannot be resolved (a non-runtime factory) this
+    /// returns <see langword="true"/> so the scan guard degrades to a no-op.
+    /// </summary>
+    private bool IsLeafGrainId(GrainId nodeId)
+        => !TryGetLeafGrainType(out var leafType) || nodeId.Type == leafType;
+
+    /// <summary>
+    /// Defensive guard for the sorted-scan leaf walk. Given a node id that the
+    /// scan believes addresses a leaf, returns a guaranteed leaf-typed id by
+    /// descending through any internal node(s) the id actually resolves to,
+    /// taking the leftmost child at each level (or the rightmost when
+    /// <paramref name="rightmost"/> is set, for reverse scans). When the id is
+    /// already leaf-typed this is a synchronous no-op that returns the id
+    /// unchanged, so the common correct-topology path pays nothing beyond a
+    /// <see cref="GrainType"/> comparison.
+    /// <para>
+    /// This guard ensures the scan never blind-casts an internal node id to
+    /// <see cref="IBPlusLeafGrain"/> (the InvalidCastException of issue 899):
+    /// whether the offending id arrives from a leftmost / rightmost traversal
+    /// that trusted a corrupt <c>ChildrenAreLeaves</c> flag, or from a leaf
+    /// next / prev sibling pointer that crosses a node level, the scan
+    /// re-descends to a real leaf and continues rather than crashing.
+    /// </para>
+    /// </summary>
+    private async ValueTask<GrainId> DescendToLeafAsync(GrainId nodeId, bool rightmost)
+    {
+        if (IsLeafGrainId(nodeId))
+            return nodeId;
+
+        var currentId = nodeId;
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            if (IsLeafGrainId(currentId))
+                return currentId;
+
+            var snapshot = await GetRoutingTableSnapshotAsync(currentId);
+            if (snapshot.ChildIds.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} sorted-scan descent reached internal node {currentId} with no children.");
+            }
+
+            currentId = rightmost ? snapshot.ChildIds[^1] : snapshot.ChildIds[0];
+        }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} sorted-scan descent from {nodeId} exceeded {MaxTreeDescentLevels} levels without reaching a leaf; tree topology may be corrupt.");
+    }
+
     /// <summary>
     /// Returns the routing-table snapshot for the internal node identified
     /// by <paramref name="internalId"/>. On cache hit (the common case
@@ -736,18 +844,32 @@ internal sealed partial class ShardRootGrain
                 }
                 // Deeper race: the live root is at depth >= 2 (its
                 // children are themselves internal nodes) but our
-                // bubble is leaf-level. Routing the bubble safely
-                // would require traversing down to the correct
-                // internal parent; that path is not yet exercised in
-                // production. Log and fall through to the legacy
-                // wrap, which is still incorrect in this corner case
-                // but matches pre-fix behaviour rather than
-                // regressing the depth-1 path the U9k step 2 fix
-                // legitimately repaired.
+                // bubble is leaf-level. The legacy behaviour here wrapped
+                // a brand-new root ABOVE the depth->=2 root and seeded it
+                // with childrenAreLeaves = true (because the bubble is
+                // leaf-level) - even though the new root's children are
+                // the internal nodes below it. That baked a permanently
+                // inconsistent root whose ChildrenAreLeaves flag lied
+                // about its children, which every later sorted-scan then
+                // walked into and crashed on with the issue 899
+                // InvalidCastException (cast BPlusInternalGrain to
+                // IBPlusLeafGrain) - a fault that survived silo restarts
+                // because the corruption was persisted, not cached.
+                //
+                // Mirror the resume-path handling in CompletePromotionAsync:
+                // the leaf-level bubble's NewSiblingId belongs deeper in
+                // the tree than we can safely splice from here, and in
+                // practice it was already absorbed by the interleaved peer
+                // promotion that deepened the root (so the leaf is
+                // reachable via the live topology). Drop the stale bubble
+                // rather than wrapping a corrupt root; the caller's write
+                // retry envelope re-routes the user-visible mutation against
+                // the current topology.
                 logger.LogWarning(
-                    "ShardRootGrain {ShardId} PromoteRootAsync observed a depth->=2 race (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf=true); falling through to legacy wrap.",
+                    "ShardRootGrain {ShardId} PromoteRootAsync observed a depth->=2 race (rootChildrenAreLeaves={RootChildrenAreLeaves}, bubble.ChildIsLeaf=true); dropping the stale leaf-level bubble instead of wrapping a corrupt root.",
                     context.GrainId,
                     rootSnapshot.ChildrenAreLeaves);
+                return null;
             }
 
             state.State.PendingPromotion = splitResult;

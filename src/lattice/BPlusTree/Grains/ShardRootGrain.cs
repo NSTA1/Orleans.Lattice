@@ -1804,6 +1804,10 @@ internal sealed partial class ShardRootGrain(
         }
 
         // Walk the sibling chain, collecting keys until the page is full.
+        // Guard: the start node must be a leaf. A corrupt ChildrenAreLeaves
+        // flag could have steered the traversal onto an internal node; if so
+        // re-descend to the leftmost leaf rather than blind-casting it.
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
         while (keys.Count < pageSize)
@@ -1839,7 +1843,10 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = nextSibling.Value;
+            // Guard: a next-sibling pointer must stay at leaf level. If it
+            // crosses onto an internal node, re-descend to that subtree's
+            // leftmost leaf rather than blind-casting it (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new KeysPage
@@ -1877,6 +1884,10 @@ internal sealed partial class ShardRootGrain(
         }
 
         // Walk the sibling chain backward, collecting keys in reverse until the page is full.
+        // Guard: the start node must be a leaf. If a corrupt ChildrenAreLeaves
+        // flag steered the traversal onto an internal node, re-descend to the
+        // rightmost leaf rather than blind-casting it (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: true);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
         while (keys.Count < pageSize)
@@ -1913,7 +1924,10 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = prevSibling.Value;
+            // Guard: a prev-sibling pointer must stay at leaf level. If it
+            // crosses onto an internal node, re-descend to that subtree's
+            // rightmost leaf rather than blind-casting it (issue 899).
+            leafId = await DescendToLeafAsync(prevSibling.Value, rightmost: true);
         }
 
         return new KeysPage
@@ -1951,6 +1965,10 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
+        // Guard: the start node must be a leaf; re-descend to the leftmost
+        // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
+        // rather than blind-casting it (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -1983,7 +2001,9 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = nextSibling.Value;
+            // Guard: keep the forward walk at leaf level across internal
+            // boundaries (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new EntriesPage
@@ -2021,6 +2041,10 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
+        // Guard: the start node must be a leaf; re-descend to the rightmost
+        // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
+        // rather than blind-casting it (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: true);
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2054,7 +2078,9 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            leafId = prevSibling.Value;
+            // Guard: keep the reverse walk at leaf level across internal
+            // boundaries (issue 899).
+            leafId = await DescendToLeafAsync(prevSibling.Value, rightmost: true);
         }
 
         return new EntriesPage
@@ -2101,6 +2127,9 @@ internal sealed partial class ShardRootGrain(
         }
 
         var keys = new List<string>(pageSize);
+        // Guard: re-descend to a real leaf if the start node is internal
+        // (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2120,7 +2149,9 @@ internal sealed partial class ShardRootGrain(
             if (nextSibling is null)
                 return new KeysPage { Keys = keys, HasMore = false };
 
-            leafId = nextSibling.Value;
+            // Guard: keep the walk at leaf level across internal boundaries
+            // (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new KeysPage { Keys = keys, HasMore = true };
@@ -2162,6 +2193,9 @@ internal sealed partial class ShardRootGrain(
         }
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        // Guard: re-descend to a real leaf if the start node is internal
+        // (issue 899).
+        leafId = await DescendToLeafAsync(leafId, rightmost: false);
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2181,7 +2215,9 @@ internal sealed partial class ShardRootGrain(
             if (nextSibling is null)
                 return new EntriesPage { Entries = entries, HasMore = false };
 
-            leafId = nextSibling.Value;
+            // Guard: keep the walk at leaf level across internal boundaries
+            // (issue 899).
+            leafId = await DescendToLeafAsync(nextSibling.Value, rightmost: false);
         }
 
         return new EntriesPage { Entries = entries, HasMore = true };
