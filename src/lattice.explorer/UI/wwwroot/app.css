@@ -149,7 +149,8 @@ code, .explorer-mono {
 
 .explorer-shell {
     display: flex;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
     background: var(--bg);
 }
 
@@ -172,7 +173,7 @@ code, .explorer-mono {
     display: flex;
     flex-direction: column;
     flex: 1;
-    min-height: 100vh;
+    min-height: 0;
     width: 100%;
     min-width: 0;
 }
