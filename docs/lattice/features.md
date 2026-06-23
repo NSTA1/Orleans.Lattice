@@ -192,6 +192,7 @@ _None currently tracked._
 - [FX-042](https://github.com/NSTA1/Orleans.Lattice/issues/803) - Atomic re-key retraction in materialised views needs a core atomic set+delete primitive
 - [FX-043](https://github.com/NSTA1/Orleans.Lattice/issues/816) - Materialised views: durable runtime-view registration so a runtime-created view survives a silo restart, plus an `ILatticeViewFactory.DeleteAsync` view-teardown API
 - [FX-044](https://github.com/NSTA1/Orleans.Lattice/issues/845) - Aggregation view `CountAsync` streamed every group-value key to count them; add a server-side ranged `ILattice.CountAsync(start, end)` and count the group values over the reserved-row floor without materialising keys
+- [FX-045](https://github.com/NSTA1/Orleans.Lattice/issues/899) - `InvalidCastException` at B+ tree internal depth >= 2 crashes scans, writes, reads, and the leaf-chain walkers (replication snapshot producer, compaction / merge / split) whenever a persisted `RootIsLeaf` / `ChildrenAreLeaves` routing flag is left inconsistent over an internal node; fix the root-promotion race that bakes it and harden every leaf-resolving path to terminate by node type
 
 ## Gaps & potential additions
 
