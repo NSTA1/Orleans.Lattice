@@ -628,6 +628,38 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<long[]> SnapshotWalHeadAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Captures a durable, frozen, fully-materialised projection baseline for
+    /// this shard at snapshot-cursor open time, keyed by
+    /// <paramref name="token"/> (the per-cursor
+    /// <see cref="LatticeSnapshotCoordinate.SnapshotBaselineToken"/>). Walks the
+    /// shard's leaf chain, freezes every leaf's committed cache plus
+    /// per-partition frontier and prepared sagas, captures a uniform
+    /// per-partition <c>capturedHead</c> after every freeze (so
+    /// <c>frontier_p &lt;= capturedHead_p</c> with no overshoot), folds each
+    /// leaf's own <c>(frontier_p, capturedHead_p]</c> WAL tail exactly once
+    /// (CRDT folds are not idempotent), unions the per-leaf results, and
+    /// persists them to the per-cursor, per-shard
+    /// <see cref="Grains.ISnapshotBaselineStorageGrain"/>.
+    /// <para>
+    /// This is the fix for the class of bug where a zero-observable-writes
+    /// snapshot scan replayed the WAL from offset 0 and silently returned
+    /// empty / partial results once <c>LatticeWalGc</c> trimmed the prefix the
+    /// replay needed. Serving the cursor from the frozen baseline removes the
+    /// dependency on the WAL prefix entirely.
+    /// </para>
+    /// </summary>
+    /// <param name="token">
+    /// The cursor's per-open baseline token. Must not be <see cref="Guid.Empty"/>.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk and the per-leaf folds.</param>
+    /// <returns>
+    /// The uniform per-partition WAL head the baseline was frozen at (carried
+    /// onto the snapshot coordinate for the WAL retention pin and diagnostics)
+    /// and the materialised row count used by the snapshot-open budget gate.
+    /// </returns>
+    Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(Guid token, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
     /// While the returned task is incomplete or the split has not been completed,
     /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>

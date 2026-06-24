@@ -1,3 +1,6 @@
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -157,6 +160,92 @@ internal sealed partial class ShardRootGrain
             heads[p] = await coordinator.GetHeadOffsetAsync(cancellationToken);
         }
         return heads;
+    }
+
+    /// <inheritdoc />
+    public async Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(Guid token, CancellationToken cancellationToken)
+    {
+        if (token == Guid.Empty)
+            throw new ArgumentException("Snapshot baseline token must not be empty.", nameof(token));
+        cancellationToken.ThrowIfCancellationRequested();
+        await PrepareForOperationAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Pass 1 (freeze): walk this shard's leaf chain and freeze each leaf's
+        // committed cache, per-partition projection frontier, and in-flight
+        // prepared sagas. Reading the next-sibling pointer before the freeze is
+        // unnecessary here (the freeze is read-only and does not deactivate the
+        // leaf), but we keep the leaf handle alongside its freeze so the fold
+        // pass can target the exact same leaf with the uniform capturedHead.
+        var leftmostId = await GetLeftmostLeafIdAsync();
+        var frozen = new List<(IBPlusLeafGrain Leaf, LeafBaselineFreeze Freeze)>();
+        if (leftmostId is not null)
+        {
+            var leafId = leftmostId.Value;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
+                var freeze = await leaf.FreezeProjectionAsync(cancellationToken);
+                frozen.Add((leaf, freeze));
+
+                var next = await leaf.GetNextSiblingAsync();
+                if (next is null)
+                    break;
+                leafId = next.Value;
+            }
+        }
+
+        // Capture capturedHead AFTER every freeze has returned. Because each
+        // freeze happened earlier in wall-clock than this head read,
+        // head_now >= head_at_freeze >= frontier_at_freeze for every leaf and
+        // partition, so frontier_p <= capturedHead_p uniformly with no
+        // overshoot. The uniform head also keeps a cross-leaf saga atomic: a
+        // terminal beyond capturedHead leaves its saga pending (invisible) on
+        // every leaf the saga touched.
+        var capturedHead = await SnapshotWalHeadAsync(cancellationToken);
+
+        // Pass 2 (fold + union): fold each leaf's own (frontier, capturedHead]
+        // tail on top of its frozen cache and union the results. Leaves own
+        // disjoint key ranges, so a collision here can only be a donor-orphan
+        // duplicate left behind by an adaptive split; LWW-merging on collision
+        // keeps the highest-timestamp variant (the snapshot leaf's read-time
+        // IsKeyOwned filter then drops the orphan for the non-owning shard).
+        var union = new SortedDictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal);
+        foreach (var (leaf, freeze) in frozen)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rows = await leaf.FoldTailOntoFrozenAsync(freeze, capturedHead, cancellationToken);
+            foreach (var row in rows)
+            {
+                if (union.TryGetValue(row.Key, out var existing))
+                    union[row.Key] = LwwValue<byte[]>.Merge(existing, row.Value);
+                else
+                    union[row.Key] = row.Value;
+            }
+        }
+
+        var materialised = new List<LeafSnapshotRow>(union.Count);
+        long rowBytes = 0;
+        foreach (var (key, value) in union)
+        {
+            materialised.Add(new LeafSnapshotRow(key, value));
+            rowBytes += LeafEntryCache.EntryBytes(key, value.IsTombstone ? null : value.Value);
+        }
+
+        var baseline = new SnapshotShardBaseline
+        {
+            Rows = materialised,
+            CapturedHeadPerPartition = capturedHead,
+            CapturedAtTicks = DateTime.UtcNow.Ticks,
+            RowBytes = rowBytes,
+        };
+
+        var baselineGrain = grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(
+            SnapshotLeafGrain.BuildBaselineKey(TreeId, ShardIndex, token));
+        await baselineGrain.SaveAsync(baseline, cancellationToken);
+
+        return new SnapshotBaselineCaptureResult(capturedHead, materialised.Count);
     }
 }
 
