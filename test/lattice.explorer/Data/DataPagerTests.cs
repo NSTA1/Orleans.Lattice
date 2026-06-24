@@ -122,7 +122,69 @@ public class DataPagerTests
         reader.FailNextScan = true;
         Assert.ThrowsAsync<InvalidOperationException>(async () => await pager.ResetAsync("tree-1", pageSize: 1));
 
-        Assert.That(KeysOf(pager), Is.EqualTo(new[] { "k0" }), "a failed reset must not discard the visible page");
+        Assert.Multiple(() =>
+        {
+            Assert.That(KeysOf(pager), Is.EqualTo(new[] { "k0" }), "a failed reset must not discard the visible page");
+            Assert.That(reader.CancelCalls, Is.EqualTo(0), "a failed reset must not release the still-valid cursor");
+        });
+    }
+
+    [Test]
+    public async Task ResetAsync_ReleasesThePreviousSnapshotCursor()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 3);
+        var pager = new DataPager(reader);
+
+        await pager.ResetAsync("tree-1", pageSize: 1); // opens cursor-1 (still live)
+        await pager.ResetAsync("tree-1", pageSize: 1); // opens cursor-2, releases cursor-1
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.CancelCalls, Is.EqualTo(1), "the superseded snapshot's cursor must be released");
+            Assert.That(reader.LastCancelToken, Is.EqualTo("cursor-1"));
+            Assert.That(pager.CanGoNext, Is.True, "the new snapshot remains usable");
+        });
+    }
+
+    [Test]
+    public async Task ResetAsync_AfterDrainedScan_DoesNotCancel()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 1);
+        var pager = new DataPager(reader);
+
+        await pager.ResetAsync("tree-1", pageSize: 1); // single page: cursor already drained/closed
+        await pager.ResetAsync("tree-1", pageSize: 1);
+
+        Assert.That(reader.CancelCalls, Is.EqualTo(0), "a drained snapshot has no open cursor to release");
+    }
+
+    [Test]
+    public async Task CloseAsync_ReleasesTheLiveCursor_AndIsIdempotent()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 3);
+        var pager = new DataPager(reader);
+        await pager.ResetAsync("tree-1", pageSize: 1); // cursor-1 live
+
+        await pager.CloseAsync();
+        await pager.CloseAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.CancelCalls, Is.EqualTo(1), "close releases the cursor once, then is a no-op");
+            Assert.That(reader.LastCancelToken, Is.EqualTo("cursor-1"));
+        });
+    }
+
+    [Test]
+    public async Task CloseAsync_AfterDrain_IsNoOp()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 1);
+        var pager = new DataPager(reader);
+        await pager.ResetAsync("tree-1", pageSize: 1); // single page: drained, no live cursor
+
+        await pager.CloseAsync();
+
+        Assert.That(reader.CancelCalls, Is.EqualTo(0), "a drained snapshot has no open cursor to release");
     }
 
     private static string[] KeysOf(DataPager pager) => pager.Current.Entries.Select(e => e.Key).ToArray();
@@ -140,6 +202,10 @@ public class DataPagerTests
         private int _position;
 
         public int ScanCalls { get; private set; }
+
+        public int CancelCalls { get; private set; }
+
+        public string? LastCancelToken { get; private set; }
 
         public bool FailNextScan { get; set; }
 
@@ -188,6 +254,22 @@ public class DataPagerTests
 
         public Task<DataEntry?> GetEntryAsync(string treeId, string key, CancellationToken cancellationToken = default)
             => Task.FromResult<DataEntry?>(null);
+
+        public Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default)
+        {
+            CancelCalls++;
+            LastCancelToken = continuationToken;
+
+            // Emulate the server closing the named cursor: a later replay of this
+            // token is then rejected. Cancelling a stale token is a tolerated
+            // no-op (it never matches the live cursor).
+            if (!string.IsNullOrEmpty(continuationToken) && continuationToken == _liveToken)
+            {
+                _liveToken = null;
+            }
+
+            return Task.CompletedTask;
+        }
 
         public Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());

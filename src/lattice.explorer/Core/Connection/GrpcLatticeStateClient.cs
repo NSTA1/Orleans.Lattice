@@ -77,6 +77,9 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
     public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
         => _client.GetEntryAsync(request, cancellationToken);
 
+    public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
+        => _client.CancelScanAsync(request, cancellationToken);
+
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => _client.GetMetricsSnapshotAsync(request, cancellationToken);
 

@@ -28,6 +28,16 @@ public interface IDataReader
     Task<DataEntry?> GetEntryAsync(string treeId, string key, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Best-effort release of the snapshot scan cursor named by
+    /// <paramref name="continuationToken"/> (as returned by a prior
+    /// <see cref="ScanAsync"/> page), so its server-side WAL pin and baseline are
+    /// freed promptly instead of lingering until the cursor's idle TTL. A
+    /// <see langword="null"/> or empty token, or one naming an already-drained or
+    /// unknown cursor, is a no-op. Never throws for an unknown cursor.
+    /// </summary>
+    Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lists the clean names of the tag indexes that cover
     /// <paramref name="treeId"/>, for the Data tab's tag filter. Returns an
     /// empty list when the table has no associated tag indexes.

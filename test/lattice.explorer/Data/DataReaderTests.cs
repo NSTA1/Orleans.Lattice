@@ -194,4 +194,32 @@ public class DataReaderTests
 
         Assert.That(await reader.GetEntryAsync("t", "k"), Is.Null);
     }
+
+    [Test]
+    public async Task CancelScanAsync_BuildsRequestWithTreeAndToken()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.CancelScanAsync("tree-1", "cursor-9");
+
+        Assert.That(client.LastCancel, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastCancel!.TreeId, Is.EqualTo("tree-1"));
+            Assert.That(client.LastCancel.ContinuationToken, Is.EqualTo("cursor-9"));
+        });
+    }
+
+    [Test]
+    public async Task CancelScanAsync_WithEmptyToken_SkipsTheRoundTrip()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.CancelScanAsync("tree-1", null);
+        await reader.CancelScanAsync("tree-1", string.Empty);
+
+        Assert.That(client.LastCancel, Is.Null, "an empty token names no cursor, so no cancel call is made");
+    }
 }

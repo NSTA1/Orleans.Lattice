@@ -167,6 +167,10 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         => ExecuteAsync((c, ct) => c.GetEntryAsync(request, ct), cancellationToken);
 
     /// <inheritdoc />
+    public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.CancelScanAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => ExecuteAsync((c, ct) => c.GetMetricsSnapshotAsync(request, ct), cancellationToken);
 

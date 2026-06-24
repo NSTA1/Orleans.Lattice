@@ -88,4 +88,19 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
             ? DataEntry.From(response.Entry)
             : null;
     }
+
+    /// <inheritdoc />
+    public async Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        // An empty token names no cursor: nothing to release, so skip the round trip.
+        if (string.IsNullOrEmpty(continuationToken))
+        {
+            return;
+        }
+
+        var request = new EntryScanCancelRequest { TreeId = treeId, ContinuationToken = continuationToken };
+        await _client.CancelScanAsync(request, cancellationToken).ConfigureAwait(false);
+    }
 }

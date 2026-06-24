@@ -13,6 +13,7 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     public EntryScanRequest? LastScan { get; private set; }
     public EntryGetRequest? LastGet { get; private set; }
     public CatalogRequest? LastTagIndexes { get; private set; }
+    public EntryScanCancelRequest? LastCancel { get; private set; }
 
     public Func<EntryScanRequest, EntryScanResponse> OnScan { get; set; } =
         _ => new EntryScanResponse { TreeId = "t" };
@@ -33,6 +34,12 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     {
         LastGet = request;
         return Task.FromResult(OnGet(request));
+    }
+
+    public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
+    {
+        LastCancel = request;
+        return Task.FromResult(new EntryScanCancelResponse());
     }
 
     public Task<TreeCatalogPage> ListTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)

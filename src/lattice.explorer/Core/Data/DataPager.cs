@@ -20,6 +20,13 @@ public sealed class DataPager(IDataReader reader)
     private readonly IDataReader _reader = reader ?? throw new ArgumentNullException(nameof(reader));
     private readonly List<DataPage> _pages = new();
 
+    // The continuation token of the current snapshot's still-open (undrained)
+    // server cursor, or null when the scan has been fully drained (the server
+    // closes the cursor on the final page). Tracked so an abandoned scan -
+    // superseded by a reset or torn down on dispose - can release its cursor
+    // promptly instead of leaking it until the idle TTL.
+    private string? _liveContinuation;
+
     /// <summary>The tree or view id the current snapshot scans, or <see langword="null"/> before the first reset.</summary>
     public string? TreeId { get; private set; }
 
@@ -47,7 +54,10 @@ public sealed class DataPager(IDataReader reader)
     /// <summary>
     /// Opens a fresh point-in-time snapshot from the first page, discarding any
     /// previously cached pages. On failure the previously cached pages are left
-    /// untouched so the caller can surface the error and retry.
+    /// untouched so the caller can surface the error and retry. When the prior
+    /// snapshot still had an open cursor, it is released best-effort after the
+    /// new snapshot opens so its server-side WAL pin and baseline are freed
+    /// promptly rather than lingering until the idle TTL.
     /// </summary>
     public async Task ResetAsync(
         string treeId,
@@ -57,6 +67,11 @@ public sealed class DataPager(IDataReader reader)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
+        // Capture the outgoing snapshot's live cursor before mutating state so a
+        // scan failure leaves both the cached pages and the old cursor intact.
+        var oldTreeId = TreeId;
+        var oldContinuation = _liveContinuation;
+
         var page = await _reader.ScanAsync(treeId, pageSize, null, tagFilter, cancellationToken).ConfigureAwait(false);
 
         TreeId = treeId;
@@ -65,6 +80,9 @@ public sealed class DataPager(IDataReader reader)
         _pages.Clear();
         _pages.Add(page);
         PageIndex = 0;
+        _liveContinuation = page.HasMore ? page.ContinuationToken : null;
+
+        await CancelCursorAsync(oldTreeId, oldContinuation, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -95,6 +113,10 @@ public sealed class DataPager(IDataReader reader)
         var page = await _reader.ScanAsync(TreeId!, PageSize, token, TagFilter, cancellationToken).ConfigureAwait(false);
         _pages.Add(page);
         PageIndex = _pages.Count - 1;
+
+        // The cursor advanced in place; the prior frontier token is now consumed,
+        // so the live cursor is the new frontier (or drained, if this was last).
+        _liveContinuation = page.HasMore ? page.ContinuationToken : null;
     }
 
     /// <summary>Moves to the previous (cached) page. A no-op on the first page.</summary>
@@ -104,5 +126,28 @@ public sealed class DataPager(IDataReader reader)
         {
             PageIndex--;
         }
+    }
+
+    /// <summary>
+    /// Releases the current snapshot's open cursor (if any) best-effort. Intended
+    /// for tab teardown so an abandoned scan does not retain its server-side WAL
+    /// pin and baseline until the idle TTL. Idempotent; safe to call repeatedly.
+    /// </summary>
+    public async Task CloseAsync(CancellationToken cancellationToken = default)
+    {
+        var treeId = TreeId;
+        var continuation = _liveContinuation;
+        _liveContinuation = null;
+        await CancelCursorAsync(treeId, continuation, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task CancelCursorAsync(string? treeId, string? continuationToken, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(treeId) || string.IsNullOrEmpty(continuationToken))
+        {
+            return;
+        }
+
+        await _reader.CancelScanAsync(treeId, continuationToken, cancellationToken).ConfigureAwait(false);
     }
 }

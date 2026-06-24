@@ -352,4 +352,21 @@
 
         return new DateTime(entry.ExpiresAtTicks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
     }
+
+    /// <summary>
+    /// Releases the active snapshot cursor best-effort on teardown so an
+    /// abandoned scan does not retain its server-side WAL pin and baseline until
+    /// the idle TTL. Fire-and-forget with a fresh token: the base disposal
+    /// cancels <see cref="DetailTabBase.TabToken"/>, so the cancel must not ride
+    /// on it.
+    /// </summary>
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && _pager is not null)
+        {
+            _ = _pager.CloseAsync(CancellationToken.None);
+        }
+
+        base.Dispose(disposing);
+    }
 }
