@@ -164,13 +164,18 @@ opens against the post-split map, then for each fan-out shard it
 resolves that shard's owned virtual slots under the pinned map and
 passes them to the shard's snapshot leaf.
 
-The snapshot leaf is a cold, checkpoint-free replay: it rebuilds its
-view by replaying the WAL from the pinned offset. As it replays, it
-resolves each per-key mutation's ownership by the key's virtual slot
-under the pinned map - **not** by the mutation's stamped `ShardIndex`.
-Resolving by slot is what makes the snapshot view correct across a
-split, because the stamp records the shard that *authored* a record,
-which is not the same as the shard that *owns* the key after the split:
+The snapshot leaf serves a durable frozen baseline captured at open time
+(see [Snapshot Cursors](snapshot-cursors.md)): the per-shard projection
+is materialised once by walking the shard's leaf chain and folding each
+leaf's WAL tail, then persisted and seeded into the leaf with no
+serve-time WAL replay. Whether a per-key record reaches the served view
+is resolved by the key's virtual slot under the pinned map - **not** by
+the mutation's stamped `ShardIndex` - applied both when the baseline is
+folded at capture and again through the leaf's `IsKeyOwned` filter when
+the durable rows are seeded. Resolving by slot is what makes the snapshot
+view correct across a split, because the stamp records the shard that
+*authored* a record, which is not the same as the shard that *owns* the
+key after the split:
 
 * A moved key's pre-split copy is physically retained on the donor
   shard (an orphan). Its stamp still names the donor, but the pinned
