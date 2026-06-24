@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
@@ -229,6 +230,37 @@ internal sealed partial class LatticeCursorGrain
     }
 
     /// <summary>
+    /// Deletes every per-shard frozen baseline this snapshot cursor captured at
+    /// open time. Called from the close path and the idle-TTL expiry so a
+    /// baseline never outlives its cursor. Best-effort: a clear failure leaves
+    /// an orphaned baseline row that is harmless (it is keyed by a token no
+    /// other cursor reuses) and can be reclaimed by storage GC. No-op for a
+    /// legacy coordinate that carries no baseline token.
+    /// </summary>
+    private async Task TryDeleteSnapshotBaselinesAsync()
+    {
+        if (state.State.SnapshotCoordinate is not { } coord) return;
+        if (coord.SnapshotBaselineToken == Guid.Empty) return;
+
+        var treeId = state.State.TreeId;
+        foreach (var shardIndex in coord.PerShardWalOffsets.Keys)
+        {
+            try
+            {
+                var baselineGrain = grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(
+                    SnapshotLeafGrain.BuildBaselineKey(treeId, shardIndex, coord.SnapshotBaselineToken));
+                await baselineGrain.ClearAsync(default);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "Snapshot cursor {CursorKey}: failed to delete frozen baseline for shard {ShardIndex}; the row is keyed by a per-open token and will be reclaimed by storage GC.",
+                    CursorKey, shardIndex);
+            }
+        }
+    }
+
+    /// <summary>
     /// Snapshot-aware keys page. Fans out across per-shard snapshot
     /// leaves indicated by the persisted coordinate, k-way merges
     /// their sorted slices, and persists the new cursor position.
@@ -352,7 +384,7 @@ internal sealed partial class LatticeCursorGrain
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, default);
+        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
         return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
@@ -368,7 +400,7 @@ internal sealed partial class LatticeCursorGrain
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, default);
+        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
         return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
@@ -604,6 +636,16 @@ internal sealed partial class LatticeCursorGrain
             MixUInt64((ulong)coord.TreeMapVersion);
             MixUInt64((ulong)coord.RegistrySnapshotHlc.WallClockTicks);
             MixUInt64((ulong)coord.RegistrySnapshotHlc.Counter);
+
+            // Mix the per-open baseline token so two cursors that capture
+            // structurally-identical coordinates (same map version, same heads,
+            // same registry HLC) still activate distinct snapshot leaves bound
+            // to their own frozen-baseline rows. The token is a fresh Guid per
+            // open, so it also guarantees per-open snapshot-leaf-key uniqueness.
+            Span<byte> tokenBytes = stackalloc byte[16];
+            coord.SnapshotBaselineToken.TryWriteBytes(tokenBytes);
+            MixUInt64(BinaryPrimitives.ReadUInt64LittleEndian(tokenBytes));
+            MixUInt64(BinaryPrimitives.ReadUInt64LittleEndian(tokenBytes[8..]));
 
             var shards = new int[coord.PerShardWalOffsets.Count];
             var idx = 0;

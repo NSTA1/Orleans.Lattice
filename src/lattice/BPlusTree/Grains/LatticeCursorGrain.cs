@@ -102,6 +102,10 @@ internal sealed partial class LatticeCursorGrain(
         await ReleasePointInTimePinAsync(rethrow: false);
         await TryUnregisterSnapshotPinAsync();
 
+        // Delete the per-shard frozen baselines captured for this cursor so
+        // they do not outlive it. Best-effort; mirrors the WAL-pin release.
+        await TryDeleteSnapshotBaselinesAsync();
+
         await state.ClearStateAsync();
     }
 
@@ -508,6 +512,10 @@ internal sealed partial class LatticeCursorGrain(
         // closed snapshot cursor does not retain WAL prefix that the
         // GC would otherwise be free to trim.
         await TryUnregisterSnapshotPinAsync();
+
+        // Delete the per-shard frozen baselines captured for this cursor so
+        // they do not outlive it. Best-effort; mirrors the WAL-pin release.
+        await TryDeleteSnapshotBaselinesAsync();
 
         if (state.State.Phase == LatticeCursorPhase.NotStarted
             || state.State.Phase == LatticeCursorPhase.Closed)
