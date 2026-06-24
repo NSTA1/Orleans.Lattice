@@ -312,6 +312,23 @@ public sealed class StateDtoSerializationTests
     }
 
     [Test]
+    public void EntryScanCancelRequest_round_trips()
+    {
+        var original = new EntryScanCancelRequest
+        {
+            TreeId = "tree-a",
+            ContinuationToken = "cursor-1",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("tree-a"));
+            Assert.That(copy.ContinuationToken, Is.EqualTo("cursor-1"));
+        });
+    }
+
+    [Test]
     public void StateObserveRequest_round_trips()
     {
         var original = new StateObserveRequest

@@ -477,6 +477,34 @@ internal sealed class LatticeStateQuery(
         return EntryDetailResult.Found(treeId, record);
     }
 
+    public async Task CancelScanAsync(
+        string treeId,
+        string? continuationToken,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // An empty token names no cursor, and reserved system trees never expose
+        // a scan cursor: both are a no-op rather than a grain call.
+        if (string.IsNullOrEmpty(continuationToken) || IsReservedTree(treeId))
+        {
+            return;
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        try
+        {
+            await tree.CloseCursorAsync(continuationToken, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            // The token names an unknown, already-drained, or already-closed
+            // cursor (including an expired snapshot pin): a best-effort cancel
+            // tolerates every one of these as a successful no-op.
+        }
+    }
+
     private async Task<EntryRecord> BuildEntryRecordAsync(
         ILattice tree,
         string key,

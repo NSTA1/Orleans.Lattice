@@ -138,4 +138,22 @@ internal interface ILatticeStateQuery
         string treeId,
         string key,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Releases the server-side snapshot cursor named by a scan continuation
+    /// token, freeing its WAL-retention pin and per-shard baseline promptly
+    /// instead of waiting for the cursor's idle TTL. Intended for a client that
+    /// abandons a multi-page scan before draining it (e.g. the explorer
+    /// refreshing, re-filtering, or navigating away). The operation is
+    /// best-effort and idempotent: an empty token, or one that names an unknown,
+    /// already-drained, or already-closed cursor, is a tolerated no-op rather
+    /// than a fault.
+    /// </summary>
+    /// <param name="treeId">Logical tree the cursor was opened against.</param>
+    /// <param name="continuationToken">The cursor's continuation token.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task CancelScanAsync(
+        string treeId,
+        string? continuationToken,
+        CancellationToken cancellationToken = default);
 }

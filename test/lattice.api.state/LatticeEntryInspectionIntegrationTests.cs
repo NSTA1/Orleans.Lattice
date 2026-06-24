@@ -377,4 +377,67 @@ public sealed class LatticeEntryInspectionIntegrationTests
         // rather than leaking an InvalidOperationException through the facade.
         Assert.ThrowsAsync<ArgumentException>(async () => await _fixture.Query.ScanEntriesAsync(request));
     }
+
+    [Test]
+    public async Task CancelScan_closes_live_cursor_so_a_later_page_request_is_rejected()
+    {
+        await _fixture.CreatePopulatedTreeAsync("scan-cancel", keyCount: 40, shardCount: 3);
+
+        // Open a multi-page snapshot and read only the first page, leaving the
+        // cursor live (undrained).
+        var first = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = "scan-cancel", PageSize = 5 });
+        Assert.That(first.ContinuationToken, Is.Not.Null, "a multi-page scan must leave a live cursor");
+
+        await _fixture.Query.CancelScanAsync("scan-cancel", first.ContinuationToken);
+
+        // The cursor is gone: replaying its token is now a rejected client request.
+        Assert.ThrowsAsync<ArgumentException>(async () => await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "scan-cancel",
+            PageSize = 5,
+            ContinuationToken = first.ContinuationToken,
+        }));
+    }
+
+    [Test]
+    public async Task CancelScan_unknown_token_is_a_tolerated_noop()
+    {
+        await _fixture.RegisterTreeAsync("scan-cancel-unknown", shardCount: 2);
+
+        // Cancelling an unknown cursor must not fault: best-effort cleanup is
+        // idempotent and tolerant.
+        Assert.DoesNotThrowAsync(
+            async () => await _fixture.Query.CancelScanAsync("scan-cancel-unknown", "not-a-real-cursor"));
+    }
+
+    [Test]
+    public async Task CancelScan_empty_token_is_a_tolerated_noop()
+    {
+        await _fixture.RegisterTreeAsync("scan-cancel-empty", shardCount: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.DoesNotThrowAsync(async () => await _fixture.Query.CancelScanAsync("scan-cancel-empty", null));
+            Assert.DoesNotThrowAsync(async () => await _fixture.Query.CancelScanAsync("scan-cancel-empty", string.Empty));
+        });
+    }
+
+    [Test]
+    public async Task CancelScan_treats_reserved_tree_as_a_noop()
+    {
+        await _fixture.RegisterViewBackingTreeAsync("view-cancel-probe");
+
+        Assert.DoesNotThrowAsync(
+            async () => await _fixture.Query.CancelScanAsync("view-cancel-probe", "any-token"));
+    }
+
+    [Test]
+    public void CancelScan_cancellation_is_observed()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.ThrowsAsync<OperationCanceledException>(
+            async () => await _fixture.Query.CancelScanAsync("any", "token", cts.Token));
+    }
 }
