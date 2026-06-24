@@ -24,24 +24,45 @@ visibility semantics differ.
 
 ## How the snapshot is captured
 
-`OpenSnapshot*CursorAsync` performs three deterministic steps before
+`OpenSnapshot*CursorAsync` performs these deterministic steps before
 returning the cursor ID:
 
 1. **Routing capture.** The current `RoutingInfo` (tree map version,
    shard count) is snapshotted so all paging fan-outs target the same
    shard layout.
-2. **Per-shard WAL head capture.** Every shard root reports its current
-   WAL head offset through `IShardRootGrain.SnapshotWalHeadAsync`. The
-   resulting `IReadOnlyDictionary<int, long>` is the bound for each
-   shard's replay window.
+2. **Per-shard frozen-baseline capture.** Every shard root walks its
+   leaf chain through `IShardRootGrain.CaptureSnapshotBaselineAsync`,
+   freezing each `BPlusLeafGrain`'s committed projection and folding its
+   own `(leaf_frontier, capturedHead]` WAL tail exactly once (CRDT folds
+   are not idempotent, so each record is applied to a single leaf a
+   single time). The per-leaf results are unioned into one fully
+   materialised per-shard projection and persisted durably to a new
+   `ISnapshotBaselineStorageGrain` keyed by
+   `{treeId}/{shardIndex}/{baselineToken:N}`. The uniform `capturedHead`
+   (each shard's per-partition WAL head, read after every leaf has
+   frozen) is the bound recorded on the coordinate.
 3. **Registry HLC capture.** The current `IWalCursorRegistry` snapshot
    HLC pins the WAL retention floor.
 
-The three values are packaged as a
+The captured values are packaged as a
 `LatticeSnapshotCoordinate` (Orleans-serializable; alias `ol.lsc`) and
-persisted on `LatticeCursorState.SnapshotCoordinate`. The coordinate is
-deterministic - replaying with the same coordinate yields the same page
-sequence, even after silo failover.
+persisted on `LatticeCursorState.SnapshotCoordinate`. The coordinate
+carries a fresh per-open `SnapshotBaselineToken` that identifies the
+durable baseline rows. The coordinate is deterministic - replaying with
+the same coordinate yields the same page sequence, even after silo
+failover.
+
+> **Why a frozen baseline rather than open-time WAL replay?** A snapshot
+> scan is an ephemeral reader, not a registered WAL cursor. Earlier
+> versions replayed each shard's WAL from offset `0` to the captured head
+> at every page; once `LatticeWalGc` trimmed the committed prefix the
+> reader depended on, that from-zero replay silently returned empty or
+> partial results (and restarted any CRDT counter fold from zero). Freezing
+> and materialising the projection once at open, then serving those durable
+> rows, removes the dependency on the WAL prefix entirely: a later trim
+> cannot perturb an already-frozen baseline, and a leaf rebuilt after
+> eviction reloads the same rows for a stable point-in-time view across
+> failover.
 
 ## How pages are materialised
 
@@ -50,35 +71,44 @@ On every `NextKeysAsync` / `NextEntriesAsync` call, the cursor grain:
 1. Resolves the per-page sub-range from the cursor's persisted
    bookmark.
 2. Fans out to the per-shard transient `ISnapshotLeafGrain`s addressed
-   by `{treeId}/{shardIndex}/{coordinateHash}`. Each snapshot leaf
-   replays its shard's WAL from `0` to `capturedOffset_s` exclusive
-   through `ILeafReplayCoordinatorGrain.ReadSliceAsync(...)`, applying
-   set / delete / range-delete / saga-commit / saga-abort mutations
-   into an in-memory `SortedDictionary`.
+   by `{treeId}/{shardIndex}/{coordinateHash}`. Each snapshot leaf seeds
+   its in-memory `SortedDictionary` once from its durable
+   `SnapshotShardBaseline` rows - through the same `IsKeyOwned`
+   donor-orphan / virtual-slot ownership filter the live read path uses -
+   and performs **no WAL replay**. A coordinate persisted before the
+   frozen-baseline store existed (empty `SnapshotBaselineToken`) falls
+   back to the legacy from-zero WAL replay for wire compatibility.
 3. Performs a k-way merge of the per-shard pages back into the
    cursor's scan order, advancing the persisted bookmark.
 
 The snapshot leaves are activation-cached and idle-evict after
 `LatticeOptions.SnapshotLeafIdleTtl` (default 30 minutes). A
-subsequent page after eviction transparently rebuilds the leaf -
-the underlying WAL prefix is kept alive by the cursor's
-`IWalCursorRegistry` pin.
+subsequent page after eviction transparently rebuilds the leaf by
+reloading the same durable frozen baseline, so the view stays stable
+regardless of any WAL trimming that happened in the meantime.
 
 ## WAL retention
 
-A snapshot cursor registers a per-cursor WAL retention pin through
+A snapshot cursor still registers a per-cursor WAL retention pin through
 `IWalCursorRegistry.ReportCursorAsync(...)` for the lifetime of the
-cursor. The pin participates in `LatticeWalGc`'s standard trim
-predicate, so the WAL prefix below the captured offset is kept alive
-until the cursor is closed (`CloseCursorAsync`), evicted by the
-idle-TTL reminder, or expires on `LatticeOptions.MaxCursorSnapshotPinTtl`
-(reused from the point-in-time cursor surface).
+cursor. Because pages are served from the durable frozen baseline rather
+than the WAL, the pin is a defensive retention floor (and a diagnostic
+anchor) rather than a correctness dependency: even if the pinned prefix
+were trimmed, the already-captured baseline continues to serve the
+snapshot. The durable per-shard baselines are deleted when the cursor is
+closed (`CloseCursorAsync`) or evicted by the idle-TTL reminder; an
+interrupted delete leaves a baseline row keyed by a per-open token no
+other cursor reuses, reclaimable by storage GC.
 
 ## Bounding the cost
 
-Open-time replay cost is gated by
+Open-time cost is gated by
 `LatticeOptions.MaxSnapshotReplayEntries` (default 10 million entries
-per shard). If any shard's `head - 0` exceeds this budget,
+per shard). With the frozen-baseline store the per-shard cost is the
+**materialised baseline row count** - what the snapshot leaf seeds into
+memory - rather than the captured WAL head: after a GC trim the head can
+be arbitrarily large while the real projection is small. If the deepest
+shard's baseline exceeds this budget,
 `OpenSnapshot*CursorAsync` fails fast with
 `LatticeSnapshotReplayBudgetExceededException` and no snapshot leaf is
 materialised.

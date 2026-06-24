@@ -42,6 +42,10 @@ internal static class TypeAliases
     internal const string LeafNodeState = "ol.lns";
     internal const string LeafSnapshotBlob = "ol.lsb";
     internal const string LeafSnapshotRow = "ol.lsr";
+    internal const string SnapshotShardBaseline = "ol.ssb";
+    internal const string LeafBaselineFreeze = "ol.bsf";
+    internal const string LeafBaselinePendingEntry = "ol.bpe";
+    internal const string SnapshotBaselineCaptureResult = "ol.sbc";
     internal const string ShardRootState = "ol.srs";
     internal const string DirtyLeavesSnapshot = "ol.dls";
     internal const string PendingBulkGraft = "ol.pbg";
@@ -263,6 +267,7 @@ internal static class TypeAliases
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
     internal const string ITxRegistryGrain = "ol.gxr";
     internal const string ILeafSnapshotStorageGrain = "ol.gsx";
+    internal const string ISnapshotBaselineStorageGrain = "ol.sbs";
     internal const string ILatticeQueueGrain = "ol.glq";
 
     // Cluster-internal FIFO queue (ILatticeQueue<T>) grain wire-return shape:

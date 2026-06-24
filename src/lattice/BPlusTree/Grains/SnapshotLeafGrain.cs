@@ -76,38 +76,25 @@ internal sealed class SnapshotLeafGrain(
     private bool _opened;
 
     /// <summary>
-    /// Sorted by key. Committed projection entries (live values plus
-    /// tombstones; tombstones are filtered out at scan time). LWW
-    /// merge applied during replay so the dictionary's value for any
-    /// key is the highest-timestamp variant the WAL prefix carries.
+    /// The transient WAL fold backing this snapshot leaf's projection.
+    /// Created in <see cref="OpenAsync"/>; on the legacy from-zero replay
+    /// path it absorbs the captured WAL prefix, and on the frozen-baseline
+    /// path it is seeded from the durable per-shard
+    /// <see cref="State.SnapshotShardBaseline"/> with no further replay.
+    /// Range scans iterate <see cref="SnapshotProjectionFolder.Entries"/>.
+    /// <see langword="null"/> until the leaf is opened.
     /// </summary>
-    private readonly SortedDictionary<string, LwwValue<byte[]>> _entries = new(StringComparer.Ordinal);
+    private SnapshotProjectionFolder? _folder;
 
     /// <summary>
-    /// Pending saga buckets indexed by transaction id. A prepared
-    /// <see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>
-    /// is buffered here until its terminal <see cref="MutationKind.TxCommit"/>
-    /// / <see cref="MutationKind.TxAbort"/> appears later in the same
-    /// WAL prefix; sagas whose terminal lands after the captured
-    /// offset stay pending and are invisible to scans (the snapshot
-    /// view hides incomplete sagas, mirroring the registry-snapshot
-    /// semantics for the foreground read path).
+    /// The per-cursor frozen-baseline token carried on the snapshot
+    /// coordinate (<see cref="LatticeSnapshotCoordinate.SnapshotBaselineToken"/>).
+    /// <see cref="Guid.Empty"/> selects the legacy from-zero replay path for
+    /// coordinates persisted before the frozen-baseline store existed; a
+    /// non-empty token addresses this leaf's durable
+    /// <see cref="State.SnapshotShardBaseline"/> row.
     /// </summary>
-    private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
-
-    /// <summary>
-    /// Parallel side-map to <see cref="_pendingTx"/> recording, per
-    /// <c>(transactionId, key)</c>, the typed CRDT delta and merge mode a
-    /// prepared mutation carried. On the saga's terminal
-    /// <see cref="MutationKind.TxCommit"/> the drain folds the recorded
-    /// delta into this snapshot's current visible state via the matching
-    /// primitive's <c>MergeDelta</c> instead of merging the prepared LWW
-    /// value, so the read-snapshot view of a CRDT key mid-saga matches the
-    /// live leaf's terminal-fold behaviour (the per-replica union) rather
-    /// than diverging to last-writer-wins. Only populated for prepared
-    /// CRDT-mode mutations; LWW prepares leave it untouched.
-    /// </summary>
-    private readonly Dictionary<Guid, Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>> _pendingTxDeltas = new();
+    private Guid _baselineToken;
 
     private CrdtShapeRegistry? _resolvedCrdtShapeRegistry;
 
@@ -119,7 +106,7 @@ internal sealed class SnapshotLeafGrain(
                 + "AddLattice registers it unconditionally; a missing registration indicates a host wiring bug.");
 
     /// <inheritdoc />
-    public async Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, CancellationToken cancellationToken)
+    public async Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, Guid baselineToken, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(capturedOffsetsByPartition);
@@ -149,6 +136,7 @@ internal sealed class SnapshotLeafGrain(
             // per-partition arrays element-wise.
             if (_treeId != treeId
                 || _shardIndex != shardIndex
+                || _baselineToken != baselineToken
                 || !PartitionOffsetsEqual(_capturedOffsetsByPartition, capturedOffsetsByPartition)
                 || _ownedVirtualShardCount != (ownedSlots is null ? 0 : virtualShardCount)
                 || !OwnedSlotsEqual(_ownedVirtualSlots, ownedSlots))
@@ -164,21 +152,76 @@ internal sealed class SnapshotLeafGrain(
         _capturedOffsetsByPartition = capturedOffsetsByPartition;
         _ownedVirtualSlots = ownedSlots;
         _ownedVirtualShardCount = ownedSlots is null ? 0 : virtualShardCount;
+        _baselineToken = baselineToken;
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry());
 
-        await ReplayWalAsync(cancellationToken);
+        if (baselineToken != Guid.Empty)
+        {
+            // Frozen-baseline path: serve from the durable per-shard baseline
+            // captured at open time. No WAL replay happens here, so a WAL GC
+            // that trims the prefix after capture cannot perturb this view,
+            // and a rebuild after eviction reloads the same frozen rows for a
+            // stable point-in-time view across failover.
+            await SeedFromBaselineAsync(cancellationToken);
+        }
+        else
+        {
+            // Legacy from-zero replay path for coordinates persisted before
+            // the frozen-baseline store existed (wire/back-compat).
+            await ReplayWalAsync(cancellationToken);
+        }
 
         _opened = true;
 
         if (logger.IsEnabled(LogLevel.Debug))
         {
             logger.LogDebug(
-                "SnapshotLeafGrain opened: tree={TreeId}, shard={ShardIndex}, capturedOffsets=[{CapturedOffsets}], entries={EntryCount}, pendingSagas={PendingSagaCount}.",
-                treeId, shardIndex, string.Join(',', capturedOffsetsByPartition), _entries.Count, _pendingTx.Count);
+                "SnapshotLeafGrain opened: tree={TreeId}, shard={ShardIndex}, baselineToken={BaselineToken}, capturedOffsets=[{CapturedOffsets}], entries={EntryCount}, pendingSagas={PendingSagaCount}.",
+                treeId, shardIndex, baselineToken, string.Join(',', capturedOffsetsByPartition), _folder.Entries.Count, _folder.PendingSagaCount);
         }
 
         _ = optionsMonitor;
         _ = context;
     }
+
+    /// <summary>
+    /// Seeds the projection from the durable per-shard
+    /// <see cref="State.SnapshotShardBaseline"/> captured at open time,
+    /// filtering each row through the same <see cref="IsKeyOwned"/> donor-orphan
+    /// exclusion the scan path applies so a key migrated to a sibling shard by
+    /// an adaptive split is surfaced only by its pinned-map owner. Performs no
+    /// WAL replay.
+    /// </summary>
+    private async Task SeedFromBaselineAsync(CancellationToken cancellationToken)
+    {
+        var baselineGrain = grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(
+            BuildBaselineKey(_treeId, _shardIndex, _baselineToken));
+        var baseline = await baselineGrain.LoadAsync(cancellationToken);
+        if (baseline is null)
+        {
+            throw new InvalidOperationException(
+                $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' could not load its frozen baseline "
+                + $"('{BuildBaselineKey(_treeId, _shardIndex, _baselineToken)}'). The cursor's coordinate references a "
+                + "baseline that was never captured or was already cleared; the open cannot fall back to a from-zero "
+                + "WAL replay without risking an empty/partial view on a GC-trimmed log.");
+        }
+
+        var folder = _folder!;
+        foreach (var row in baseline.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsKeyOwned(row.Key))
+                folder.SeedRow(row.Key, row.Value);
+        }
+    }
+
+    /// <summary>
+    /// Builds the durable per-cursor, per-shard frozen-baseline grain key
+    /// <c>{treeId}/{shardIndex}/{baselineToken:N}</c>. Shared with the
+    /// shard-root capture path so both address the same storage row.
+    /// </summary>
+    internal static string BuildBaselineKey(string treeId, int shardIndex, Guid baselineToken) =>
+        $"{treeId}/{shardIndex}/{baselineToken:N}";
 
     private static bool PartitionOffsetsEqual(IReadOnlyList<long> a, IReadOnlyList<long> b)
     {
@@ -249,7 +292,7 @@ internal sealed class SnapshotLeafGrain(
             return Task.FromResult(new List<string>());
         var result = new List<string>();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        foreach (var (key, value) in _entries)
+        foreach (var (key, value) in _folder!.Entries)
         {
             if (!InRange(key, startInclusive, endExclusive, afterExclusive, beforeExclusive))
             {
@@ -299,7 +342,7 @@ internal sealed class SnapshotLeafGrain(
             return Task.FromResult(new List<KeyValuePair<string, byte[]>>());
         var result = new List<KeyValuePair<string, byte[]>>();
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        foreach (var (key, value) in _entries)
+        foreach (var (key, value) in _folder!.Entries)
         {
             if (!InRange(key, startInclusive, endExclusive, afterExclusive, beforeExclusive))
             {
@@ -339,8 +382,8 @@ internal sealed class SnapshotLeafGrain(
     /// <summary>
     /// Mutation deferred during pass 1 of the snapshot-leaf replay to
     /// be applied in pass 2 once every partition's per-key Set/Delete
-    /// entries have been absorbed into <see cref="_entries"/> and
-    /// every prepare into <see cref="_pendingTx"/>. Same rationale as
+    /// entries have been absorbed into the folder's projection and
+    /// every prepare into its pending-saga buckets. Same rationale as
     /// the activation-time materialiser's <c>DeferredTerminal</c> -
     /// see <c>BPlusLeafGrain.Activation.cs</c> for the saga atomicity
     /// and <see cref="MutationKind.DeleteRange"/> ordering proofs.
@@ -399,13 +442,29 @@ internal sealed class SnapshotLeafGrain(
                 foreach (var entry in slice)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (entry.Mutation.Kind is MutationKind.TxCommit or MutationKind.TxAbort or MutationKind.DeleteRange)
+                    if (SnapshotProjectionFolder.IsDeferredKind(entry.Mutation.Kind))
                     {
                         deferred.Add(new DeferredTerminal(entry.Mutation));
                     }
                     else
                     {
-                        ApplyEntry(entry.Mutation);
+                        // Per-shard ownership filter for per-key records: the
+                        // shared WAL partition multiplexes every shard's
+                        // writes, so a record this leaf does not own must not
+                        // be absorbed. Resolved by the key's virtual slot
+                        // under the pinned snapshot map when available, else by
+                        // the stamped shard index. Saga terminals / range
+                        // deletes are deferred above and applied unconditionally
+                        // in pass 2 (the range tombstone iterates only this
+                        // leaf's already-filtered entries, and terminals are
+                        // pre-routed by shard).
+                        if (entry.Mutation.Kind is MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone
+                            && !IsMutationOwned(entry.Mutation))
+                        {
+                            totalEntriesObserved++;
+                            continue;
+                        }
+                        _folder!.Apply(entry.Mutation);
                     }
                     totalEntriesObserved++;
                 }
@@ -418,15 +477,15 @@ internal sealed class SnapshotLeafGrain(
         }
 
         // Pass 2: drain every deferred saga terminal and range-delete
-        // tombstone. By this point pass 1 has fully populated
-        // _pendingTx across every partition and _entries carries every
-        // Set/Delete, so each terminal's pending-bucket flip is
+        // tombstone. By this point pass 1 has fully populated the
+        // folder's pending buckets across every partition and its entries
+        // carry every Set/Delete, so each terminal's pending-bucket flip is
         // complete and each range tombstone iterates the full
-        // pre-tombstone Cache.
+        // pre-tombstone projection.
         foreach (var d in deferred)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ApplyEntry(d.Mutation);
+            _folder!.Apply(d.Mutation);
         }
 
         sw.Stop();
@@ -442,259 +501,6 @@ internal sealed class SnapshotLeafGrain(
         {
             LatticeMetrics.SnapshotReplayEntries.Add(totalEntriesObserved, tags);
         }
-    }
-
-    /// <summary>
-    /// Replays a single WAL mutation against the snapshot leaf's
-    /// in-memory projection. Mirrors the kind-dispatch in
-    /// <c>BPlusLeafGrain.Projection.cs</c> but stores into the
-    /// snapshot's own dictionaries rather than the live leaf state.
-    /// </summary>
-    private void ApplyEntry(in LatticeMutation mutation)
-    {
-        // Per-shard filter: under multi-partition WAL replay the
-        // snapshot leaf reads from coordinators 0..WalPartitions-1,
-        // each of which carries mutations for EVERY shard whose
-        // shardIndex modulo WalPartitions hashes there (saga
-        // terminals) and EVERY key whose WalPartitionHash hashes
-        // there (per-key writes). The snapshot leaf must filter out
-        // mutations that do not belong to this leaf's owning shard so
-        // it does not absorb sibling shards' data.
-        //
-        // Ownership is resolved by the key's virtual slot under the
-        // pinned snapshot map (when available), NOT by the mutation's
-        // stamped ShardIndex. The stamp records the shard that authored
-        // the record, which is not the same as the shard that owns the
-        // key after an adaptive split: a write routed to a donor shard
-        // for an already-moved slot is shadow-forwarded into the target
-        // shard's WAL but keeps the donor's stamp. Filtering on the stamp
-        // would drop that forwarded record on the target's snapshot leaf
-        // (a cold, checkpoint-free replay) and resurrect the pre-forward
-        // value - e.g. a post-split delete forwarded through the donor
-        // would be lost and the deleted key would reappear with its stale
-        // drained value. Resolving ownership by slot keeps the forwarded
-        // record so the LWW merge applies it, while still dropping donor
-        // orphans (a moved key's pre-split copy retained on the donor) and
-        // sibling-shard entries multiplexed into a shared WAL partition.
-        // See issue #907 and docs/lattice/shard-splitting.md.
-        //
-        // Range / TxCommit / TxAbort apply unconditionally - the
-        // range tombstone iterates only this snapshot's _entries
-        // (already ownership-filtered) and saga terminals are pre-routed
-        // by shard via shardIndex % WalPartitions.
-        if (mutation.Kind is MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone
-            && !IsMutationOwned(mutation))
-        {
-            return;
-        }
-        switch (mutation.Kind)
-        {
-            case MutationKind.Set:
-                if (mutation.IsPrepared)
-                    AddPreparedMutation(mutation.TransactionId, mutation.Key, BuildLww(mutation, isTombstone: mutation.IsTombstone), mutation.Delta, mutation.Mode);
-                else
-                    MergeIntoEntries(mutation.Key, BuildLww(mutation, isTombstone: mutation.IsTombstone));
-                break;
-            case MutationKind.Delete:
-                if (mutation.IsPrepared)
-                    AddPreparedMutation(mutation.TransactionId, mutation.Key, BuildLww(mutation, isTombstone: true));
-                else
-                    MergeIntoEntries(mutation.Key, BuildLww(mutation, isTombstone: true));
-                break;
-            case MutationKind.DeleteRange:
-                ApplyDeleteRange(mutation);
-                break;
-            case MutationKind.TxCommit:
-                ApplyTxCommit(mutation.TransactionId);
-                break;
-            case MutationKind.TxAbort:
-                ApplyTxAbort(mutation.TransactionId);
-                break;
-            case MutationKind.Tombstone:
-                ApplyTombstoneReap(mutation);
-                break;
-            default:
-                // Defensive forward-compat: unknown kinds are dropped,
-                // matching BPlusLeafGrain.ShouldApplyDuringReplay.
-                break;
-        }
-    }
-
-    private static LwwValue<byte[]> BuildLww(in LatticeMutation mutation, bool isTombstone) => new()
-    {
-        Value = isTombstone ? null : mutation.Value,
-        Timestamp = mutation.Timestamp,
-        IsTombstone = isTombstone,
-        ExpiresAtTicks = isTombstone ? 0 : mutation.ExpiresAtTicks,
-        OriginClusterId = mutation.OriginClusterId,
-        VectorClock = mutation.VectorClock,
-    };
-
-    private void MergeIntoEntries(string key, LwwValue<byte[]> incoming)
-    {
-        if (_entries.TryGetValue(key, out var existing))
-        {
-            _entries[key] = LwwValue<byte[]>.Merge(existing, incoming);
-        }
-        else
-        {
-            _entries[key] = incoming;
-        }
-    }
-
-    private void AddPreparedMutation(Guid txId, string key, LwwValue<byte[]> incoming, byte[]? delta = null, LatticeMergeMode mode = LatticeMergeMode.LwwRegister)
-    {
-        if (!_pendingTx.TryGetValue(txId, out var bucket))
-        {
-            bucket = new Dictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal);
-            _pendingTx[txId] = bucket;
-        }
-        bucket[key] = incoming;
-
-        // Record the typed CRDT delta + merge mode so the terminal drain
-        // folds it (the per-replica union) rather than merging the prepared
-        // LWW value, keeping the read-snapshot view consistent with the live
-        // leaf. LWW prepares carry no delta and leave the side-map untouched.
-        if (delta is not null && mode != LatticeMergeMode.LwwRegister)
-        {
-            if (!_pendingTxDeltas.TryGetValue(txId, out var deltaBucket))
-            {
-                deltaBucket = new Dictionary<string, (byte[], LatticeMergeMode)>(StringComparer.Ordinal);
-                _pendingTxDeltas[txId] = deltaBucket;
-            }
-            deltaBucket[key] = (delta, mode);
-        }
-    }
-
-    private void ApplyDeleteRange(in LatticeMutation mutation)
-    {
-        var endExclusive = mutation.EndExclusiveKey;
-        if (endExclusive is null)
-            return;
-        var startInclusive = mutation.Key;
-        if (string.CompareOrdinal(startInclusive, endExclusive) >= 0)
-            return;
-
-        List<string>? toRewrite = null;
-        var matchedKeys = mutation.MatchedKeys;
-        if (matchedKeys is not null)
-        {
-            // Predicate-filtered range delete: tombstone exactly the matched
-            // key set the authoring leaf recorded, without re-evaluating the
-            // predicate against the snapshot's (possibly divergent) values.
-            foreach (var key in matchedKeys)
-            {
-                if (string.CompareOrdinal(key, startInclusive) < 0
-                    || string.CompareOrdinal(key, endExclusive) >= 0)
-                    continue;
-                if (_entries.ContainsKey(key))
-                    (toRewrite ??= []).Add(key);
-            }
-        }
-        else
-        {
-            foreach (var (key, _) in _entries)
-            {
-                if (string.CompareOrdinal(key, startInclusive) < 0)
-                    continue;
-                if (string.CompareOrdinal(key, endExclusive) >= 0)
-                    break;
-                (toRewrite ??= []).Add(key);
-            }
-        }
-
-        if (toRewrite is null)
-            return;
-
-        var tombstone = new LwwValue<byte[]>
-        {
-            Value = null,
-            Timestamp = mutation.Timestamp,
-            IsTombstone = true,
-            ExpiresAtTicks = 0,
-            OriginClusterId = mutation.OriginClusterId,
-            VectorClock = mutation.VectorClock,
-        };
-
-        foreach (var key in toRewrite)
-        {
-            MergeIntoEntries(key, tombstone);
-        }
-    }
-
-    private void ApplyTxCommit(Guid txId)
-    {
-        _pendingTxDeltas.Remove(txId, out var deltaBucket);
-        if (!_pendingTx.Remove(txId, out var bucket))
-            return;
-        foreach (var (key, value) in bucket)
-        {
-            if (deltaBucket is not null && deltaBucket.TryGetValue(key, out var dm))
-            {
-                // CRDT-mode prepared entry: fold the typed delta into this
-                // snapshot's current visible state rather than merging the
-                // prepared LWW value, matching the live leaf's terminal-fold
-                // behaviour so the read snapshot converges by the per-replica
-                // union. The fold preserves the prepared entry's HLC so the
-                // snapshot's as-of ordering is unchanged.
-                var folded = FoldPreparedCrdtDelta(key, dm.Delta, dm.Mode);
-                MergeIntoEntries(key, value with { Value = folded });
-            }
-            else
-            {
-                MergeIntoEntries(key, value);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Folds a prepared CRDT mutation's typed <paramref name="delta"/> into
-    /// this snapshot's current visible state for <paramref name="key"/> under
-    /// <paramref name="mode"/>, returning the re-serialised post-fold state
-    /// bytes. Mirrors the live leaf's terminal-commit fold so a read snapshot
-    /// of a CRDT key mid-saga converges by the per-replica union.
-    /// </summary>
-    private byte[] FoldPreparedCrdtDelta(string key, byte[] delta, LatticeMergeMode mode)
-    {
-        var registry = ResolveCrdtShapeRegistry();
-        var shape = registry.TryGet(_treeId, mode)
-            ?? throw new InvalidOperationException(
-                $"No CrdtShape is registered for tree '{_treeId}' at mode '{mode}'. "
-                + "A prepared CRDT-mode entry cannot fold its typed delta on the snapshot "
-                + "leaf's terminal commit without a shape descriptor.");
-
-        var typedDelta = shape.DeserializeDelta(delta);
-        object typedState;
-        if (_entries.TryGetValue(key, out var existing)
-            && !existing.IsTombstone
-            && existing.Value is { Length: > 0 } existingBytes)
-        {
-            typedState = shape.DeserializeState(existingBytes);
-        }
-        else
-        {
-            typedState = shape.CreateEmpty();
-        }
-        shape.MergeDelta(typedState, typedDelta);
-        return shape.SerializeState(typedState);
-    }
-
-    private void ApplyTxAbort(Guid txId)
-    {
-        _pendingTxDeltas.Remove(txId);
-        _pendingTx.Remove(txId);
-    }
-
-    private void ApplyTombstoneReap(in LatticeMutation mutation)
-    {
-        if (!_entries.TryGetValue(mutation.Key, out var existing))
-            return;
-        if (existing.Timestamp > mutation.Timestamp)
-            return;
-        var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        if (!existing.IsTombstone && !existing.IsExpired(nowTicks))
-            return;
-        _entries.Remove(mutation.Key);
     }
 
     private static bool InRange(string key, string? startInclusive, string? endExclusive, string? afterExclusive, string? beforeExclusive)

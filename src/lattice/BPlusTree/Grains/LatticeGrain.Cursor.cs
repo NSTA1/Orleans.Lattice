@@ -146,9 +146,11 @@ internal sealed partial class LatticeGrain
     /// against for its lifetime.
     /// </description></item>
     /// <item><description>
-    /// Fan out <see cref="IShardRootGrain.SnapshotWalHeadAsync"/> across
-    /// every physical shard to capture per-shard next-to-be-assigned WAL
-    /// offsets concurrently.
+    /// Fan out <see cref="IShardRootGrain.CaptureSnapshotBaselineAsync"/>
+    /// across every physical shard to freeze a durable, per-cursor frozen
+    /// baseline (each shard's leaf-chain projection at a uniform
+    /// per-partition captured WAL head) concurrently. The captured heads
+    /// double as the per-shard WAL-retention pin offsets.
     /// </description></item>
     /// <item><description>
     /// Take a registry-decision snapshot via the per-tree
@@ -159,10 +161,10 @@ internal sealed partial class LatticeGrain
     /// <item><description>
     /// Gate the open against
     /// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/> using the
-    /// largest captured WAL offset as a conservative per-shard cost
-    /// projection (each captured offset is the count of records the
-    /// snapshot leaf will replay for that shard). Fail-fast with
-    /// <see cref="LatticeSnapshotReplayBudgetExceededException"/> so an
+    /// largest per-shard frozen-baseline row count as a conservative
+    /// per-shard cost projection (the snapshot leaf materialises exactly
+    /// these rows; it no longer replays the WAL at serve time). Fail-fast
+    /// with <see cref="LatticeSnapshotReplayBudgetExceededException"/> so an
     /// expensive open does not silently consume per-shard memory.
     /// </description></item>
     /// </list>
@@ -193,52 +195,49 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        // Step 2: per-shard per-partition WAL-head capture, concurrent
-        // across shards. The fan-out is intentionally not linearizable
-        // across shards in real time - the registry snapshot below
-        // resolves cross-shard saga visibility uniformly so the union
-        // of all captures still encodes a deterministic tree-wide
-        // view. Each shard returns one offset per WAL partition
-        // (length equals the tree's pinned WalPartitions) so the
-        // snapshot leaf can drive its per-partition replay with
-        // saga-atomicity preserved across the multi-partition
-        // boundary. Per-shard ShardActivationRetry wrap: a single
-        // shard's cold-start seed-timeout retries only that shard,
-        // not the whole fan-out.
-        var headTasks = new Task<long[]>[physicalShards.Count];
+        // Step 2: per-shard frozen-baseline capture, concurrent across
+        // shards. Each shard freezes its leaf chain, captures a uniform
+        // per-partition WAL head, folds each leaf's own (frontier, head]
+        // tail exactly once, and persists the materialised per-shard
+        // baseline keyed by this open's baseline token. Serving the cursor
+        // then reads those frozen rows with no WAL replay, so a later WAL
+        // GC that trims the prefix cannot turn the scan empty/partial (the
+        // bug this fixes). Per-shard ShardActivationRetry wrap: a single
+        // shard's cold-start seed-timeout retries only that shard, not the
+        // whole fan-out.
+        var baselineToken = Guid.NewGuid();
+        var captureTasks = new Task<SnapshotBaselineCaptureResult>[physicalShards.Count];
         for (var i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            headTasks[i] = ShardActivationRetry.RunAsync(
-                () => shard.SnapshotWalHeadAsync(cancellationToken),
+            captureTasks[i] = ShardActivationRetry.RunAsync(
+                () => shard.CaptureSnapshotBaselineAsync(baselineToken, cancellationToken),
                 cancellationToken);
         }
-        await Task.WhenAll(headTasks);
+        await Task.WhenAll(captureTasks);
         cancellationToken.ThrowIfCancellationRequested();
 
         var perShardPerPartitionOffsets = new Dictionary<int, IReadOnlyList<long>>(physicalShards.Count);
-        long maxOffset = 0;
+        long maxBaselineRows = 0;
         for (var i = 0; i < physicalShards.Count; i++)
         {
-            var perPartition = headTasks[i].Result;
-            perShardPerPartitionOffsets[physicalShards[i]] = perPartition;
-            for (var p = 0; p < perPartition.Length; p++)
-            {
-                if (perPartition[p] > maxOffset) maxOffset = perPartition[p];
-            }
+            var capture = captureTasks[i].Result;
+            perShardPerPartitionOffsets[physicalShards[i]] = capture.CapturedHeadPerPartition;
+            if (capture.RowCount > maxBaselineRows) maxBaselineRows = capture.RowCount;
         }
 
-        // Step 4: replay-budget gate. Each shard's snapshot leaf will
-        // replay records [0, capturedOffset), so MaxSnapshotReplayEntries
-        // bounds the per-shard rebuild cost. We compare against the
-        // deepest shard rather than the sum because the leaves rebuild
-        // in parallel and the operator-facing knob is "per shard" - the
-        // same shape as MaxLeafReplayEntries on activation-time replay.
+        // Step 4: replay-budget gate. With the frozen-baseline store the
+        // per-shard cost is the materialised baseline row count (what the
+        // snapshot leaf seeds into memory), NOT the captured WAL head: after
+        // a GC trim the head can be arbitrarily large while the real
+        // projection is tiny. Compare against the deepest shard rather than
+        // the sum because the baselines are seeded in parallel and the
+        // operator-facing knob is "per shard", mirroring MaxLeafReplayEntries.
         var opts = Options;
-        if (opts.MaxSnapshotReplayEntries > 0 && maxOffset > opts.MaxSnapshotReplayEntries)
+        if (opts.MaxSnapshotReplayEntries > 0 && maxBaselineRows > opts.MaxSnapshotReplayEntries)
         {
             throw new LatticeSnapshotReplayBudgetExceededException(
-                $"Snapshot open for tree '{TreeId}' would replay {maxOffset} WAL entries on the deepest shard, " +
+                $"Snapshot open for tree '{TreeId}' would materialise {maxBaselineRows} baseline rows on the deepest shard, " +
                 $"exceeding LatticeOptions.MaxSnapshotReplayEntries={opts.MaxSnapshotReplayEntries}. " +
                 "Trigger a leaf-projection rebuild (RebuildLeafProjectionAsync) or raise the cap.");
         }
@@ -271,6 +270,12 @@ internal sealed partial class LatticeGrain
             // leave the slot null there to avoid persisting the full slot
             // array for the common no-split case.
             PinnedShardMap = physicalShards.Count > 1 ? shardMap : null,
+
+            // Per-cursor frozen-baseline identity. The per-shard baseline rows
+            // captured above are persisted under this token; the snapshot
+            // leaves load and serve them instead of replaying the WAL, and the
+            // cursor close path deletes them by re-deriving the same keys.
+            SnapshotBaselineToken = baselineToken,
         };
 
         var cursorId = Guid.NewGuid().ToString("N");

@@ -24,10 +24,12 @@ namespace Orleans.Lattice;
 /// <item>
 /// <description>
 /// <see cref="PerShardWalOffsets"/> - the next-to-be-assigned WAL
-/// sequence number on every shard the snapshot covers, captured by
-/// <c>IShardRootGrain.SnapshotWalHeadAsync</c>. The snapshot leaves
-/// replay records <c>[0, offset)</c> on each shard; writes that
-/// append after the capture are invisible by construction.
+/// sequence number on every shard the snapshot covers, captured at open
+/// time. With the frozen-baseline store this is the WAL retention pin
+/// anchor and a diagnostic bound (the per-shard projection is captured
+/// and served from a durable <see cref="Grains.SnapshotShardBaseline"/>
+/// rather than replayed per page); writes that append after the capture
+/// are invisible by construction.
 /// </description>
 /// </item>
 /// <item>
@@ -192,4 +194,22 @@ public readonly record struct LatticeSnapshotCoordinate
     /// </para>
     /// </summary>
     [Id(4)] public ShardMap? PinnedShardMap { get; init; }
+
+    /// <summary>
+    /// Per-cursor identity of the durable frozen-baseline rows this snapshot
+    /// reads instead of replaying the write-ahead log. A fresh
+    /// <see cref="Guid"/> is minted at every <c>OpenSnapshot*Async</c> and the
+    /// matching per-shard <see cref="Grains.SnapshotShardBaseline"/> rows are
+    /// persisted under <c>{treeId}/{shardIndex}/{token:N}</c>, so the cursor's
+    /// view is frozen at open time and a later WAL GC that trims the prefix
+    /// cannot perturb it.
+    /// <para>
+    /// <see cref="Guid.Empty"/> on coordinates persisted before the
+    /// frozen-baseline store existed. The snapshot leaf treats an empty token
+    /// as the legacy from-zero WAL-replay path for wire/back-compat with any
+    /// in-flight cursor opened before the upgrade; a non-empty token selects
+    /// the frozen-baseline serve path.
+    /// </para>
+    /// </summary>
+    [Id(5)] public Guid SnapshotBaselineToken { get; init; }
 }

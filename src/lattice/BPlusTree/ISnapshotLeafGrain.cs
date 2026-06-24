@@ -62,8 +62,18 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// virtual slot for the ownership check. Ignored when
     /// <paramref name="ownedVirtualSlots"/> is <see langword="null"/>.
     /// </param>
+    /// <param name="baselineToken">
+    /// The cursor's per-open frozen-baseline token
+    /// (<see cref="LatticeSnapshotCoordinate.SnapshotBaselineToken"/>). When
+    /// non-empty the leaf seeds its projection from the durable per-shard
+    /// <see cref="Grains.SnapshotShardBaseline"/> captured at open time
+    /// (through the same <paramref name="ownedVirtualSlots"/> ownership filter)
+    /// and performs <b>no</b> WAL replay, so a later WAL GC cannot perturb the
+    /// view. <see cref="Guid.Empty"/> selects the legacy from-zero WAL-replay
+    /// path for coordinates persisted before the frozen-baseline store existed.
+    /// </param>
     /// <param name="cancellationToken">Cancels the replay loop between slices.</param>
-    Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, CancellationToken cancellationToken);
+    Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, Guid baselineToken, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the sorted list of keys this snapshot leaf observes in
