@@ -8,6 +8,7 @@ using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
+using Orleans.Lattice.Storage.AzureTable;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using MultiSiteManufacturing.Host;
 using MultiSiteManufacturing.Host.Baseline;
@@ -216,6 +217,17 @@ builder.Host.UseOrleans(silo =>
             {
                 options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
             });
+        });
+
+        // Persist the lattice write-ahead log to Azure Table Storage
+        // (Azurite locally) rather than the in-memory baseline AddLattice
+        // installs. The WAL now survives silo restarts alongside grain
+        // state, clustering, and reminders, all backed by the same
+        // per-cluster Azurite instance. Must follow AddLattice - the last
+        // AddWalStorage-with-factory call wins.
+        silo.AddAzureTableWalStorage(options =>
+        {
+            options.ServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
 
         // Drive the deep storage gauges (snapshot / leaf-state / total bytes)
