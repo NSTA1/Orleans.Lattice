@@ -17,9 +17,9 @@
             </select>
         </label>
         <div class="explorer-data-pager">
-            <button type="button" class="explorer-btn" disabled="@(_loading || _pageIndex == 0)" @onclick="PreviousPageAsync">Prev</button>
-            <span class="explorer-data-pagenum">Page @(_pageIndex + 1)</span>
-            <button type="button" class="explorer-btn" disabled="@(_loading || !_page.HasMore)" @onclick="NextPageAsync">Next</button>
+            <button type="button" class="explorer-btn" disabled="@(_loading || !_pager.CanGoPrevious)" @onclick="PreviousPage">Prev</button>
+            <span class="explorer-data-pagenum">Page @(_pager.PageIndex + 1)</span>
+            <button type="button" class="explorer-btn" disabled="@(_loading || !_pager.CanGoNext)" @onclick="NextPageAsync">Next</button>
         </div>
     </div>
 
@@ -57,7 +57,7 @@
 
     <div class="explorer-data-body">
         <div class="explorer-data-keys">
-            @if (_loading && _page.Entries.Count == 0)
+            @if (_loading && _pager.Current.Entries.Count == 0)
             {
                 <div class="explorer-data-state">Loading entries...</div>
             }
@@ -68,7 +68,7 @@
                     <button type="button" class="explorer-btn-link" @onclick="ReloadFirstPageAsync">Try again</button>
                 </div>
             }
-            else if (_page.Entries.Count == 0)
+            else if (_pager.Current.Entries.Count == 0)
             {
                 <div class="explorer-data-state">No entries on this page.</div>
             }
@@ -83,7 +83,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var entry in _page.Entries)
+                        @foreach (var entry in _pager.Current.Entries)
                         {
                             <tr class="explorer-data-keyrow @(entry.Key == _selectedKey ? "is-selected" : null)"
                                 @onclick="@(() => SelectAsync(entry.Key))">
@@ -167,9 +167,7 @@
 </div>
 
 @code {
-    private DataPage _page = DataPage.Empty;
-    private readonly List<string?> _pageStartTokens = new() { null };
-    private int _pageIndex;
+    private DataPager _pager = default!;
     private int _pageSize = DataPaging.DefaultPageSize;
     private bool _loading;
     private string? _error;
@@ -187,8 +185,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _pager = new DataPager(DataReader);
         await LoadTagIndexesAsync();
-        await LoadPageAsync();
+        await ReloadFirstPageAsync();
     }
 
     private async Task LoadTagIndexesAsync()
@@ -211,37 +210,10 @@
         }
     }
 
-    private async Task LoadPageAsync()
+    private Task ReloadFirstPageAsync()
     {
-        _loading = true;
-        _error = null;
-        StateHasChanged();
-
-        try
-        {
-            _page = await DataReader.ScanAsync(Selection.Id, _pageSize, _pageStartTokens[_pageIndex], _activeTagFilter, TabToken);
-        }
-        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
-        {
-            return;
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _page = DataPage.Empty;
-        }
-        finally
-        {
-            _loading = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task ReloadFirstPageAsync()
-    {
-        ResetPaging();
         ClearSelection();
-        await LoadPageAsync();
+        return RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, TabToken));
     }
 
     private async Task OnTagKeyUp(KeyboardEventArgs e)
@@ -260,17 +232,13 @@
         }
 
         _activeTagFilter = new TagFilter(_selectedIndex, _tagValue.Trim());
-        ResetPaging();
-        ClearSelection();
-        await LoadPageAsync();
+        await ReloadFirstPageAsync();
     }
 
     private async Task ClearTagFilterAsync()
     {
         _activeTagFilter = null;
-        ResetPaging();
-        ClearSelection();
-        await LoadPageAsync();
+        await ReloadFirstPageAsync();
     }
 
     private async Task OnPageSizeChanged(ChangeEventArgs e)
@@ -281,38 +249,45 @@
         }
 
         // Page-size change opens a fresh snapshot from the first page.
-        ResetPaging();
-        ClearSelection();
-        await LoadPageAsync();
+        await ReloadFirstPageAsync();
     }
 
-    private async Task NextPageAsync()
+    private Task NextPageAsync()
     {
-        if (!_page.HasMore)
+        ClearSelection();
+        return RunAsync(() => _pager.NextAsync(TabToken));
+    }
+
+    private void PreviousPage()
+    {
+        ClearSelection();
+        _pager.Previous();
+        StateHasChanged();
+    }
+
+    private async Task RunAsync(Func<Task> operation)
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            await operation();
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
         {
             return;
         }
-
-        if (_pageIndex == _pageStartTokens.Count - 1)
+        catch (Exception ex)
         {
-            _pageStartTokens.Add(_page.ContinuationToken);
+            _error = ex.Message;
         }
-
-        _pageIndex++;
-        ClearSelection();
-        await LoadPageAsync();
-    }
-
-    private async Task PreviousPageAsync()
-    {
-        if (_pageIndex == 0)
+        finally
         {
-            return;
+            _loading = false;
+            StateHasChanged();
         }
-
-        _pageIndex--;
-        ClearSelection();
-        await LoadPageAsync();
     }
 
     private async Task SelectAsync(string? key)
@@ -347,13 +322,6 @@
             _detailLoading = false;
             StateHasChanged();
         }
-    }
-
-    private void ResetPaging()
-    {
-        _pageStartTokens.Clear();
-        _pageStartTokens.Add(null);
-        _pageIndex = 0;
     }
 
     private void ClearSelection()
