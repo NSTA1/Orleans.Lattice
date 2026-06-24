@@ -44,6 +44,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary single-entry get RPC method name.</summary>
     public const string GetEntryMethodName = "GetEntry";
 
+    /// <summary>The unary scan-cursor cancel RPC method name.</summary>
+    public const string CancelScanMethodName = "CancelScan";
+
     /// <summary>The server-streaming change-observation RPC method name.</summary>
     public const string ObserveChangesMethodName = "ObserveChanges";
 
@@ -68,6 +71,8 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<EntryScanResponse> entryScanResponseSerializer,
         Serializer<EntryGetRequest> entryGetRequestSerializer,
         Serializer<EntryGetResponse> entryGetResponseSerializer,
+        Serializer<EntryScanCancelRequest> entryScanCancelRequestSerializer,
+        Serializer<EntryScanCancelResponse> entryScanCancelResponseSerializer,
         Serializer<StateObserveRequest> observeRequestSerializer,
         Serializer<StateChangeNotification> changeNotificationSerializer,
         Serializer<TreeMetricsRequest> metricsRequestSerializer,
@@ -85,6 +90,8 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(entryScanResponseSerializer);
         ArgumentNullException.ThrowIfNull(entryGetRequestSerializer);
         ArgumentNullException.ThrowIfNull(entryGetResponseSerializer);
+        ArgumentNullException.ThrowIfNull(entryScanCancelRequestSerializer);
+        ArgumentNullException.ThrowIfNull(entryScanCancelResponseSerializer);
         ArgumentNullException.ThrowIfNull(observeRequestSerializer);
         ArgumentNullException.ThrowIfNull(changeNotificationSerializer);
         ArgumentNullException.ThrowIfNull(metricsRequestSerializer);
@@ -134,6 +141,13 @@ internal sealed class LatticeStateGrpcMethods
             requestMarshaller: LatticeStateGrpcMarshallers.Create(entryGetRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(entryGetResponseSerializer));
 
+        CancelScan = new Method<EntryScanCancelRequest, EntryScanCancelResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CancelScanMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(entryScanCancelRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(entryScanCancelResponseSerializer));
+
         ObserveChanges = new Method<StateObserveRequest, StateChangeNotification>(
             type: MethodType.ServerStreaming,
             serviceName: ServiceName,
@@ -181,6 +195,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary <c>GetEntry</c> RPC.</summary>
     public Method<EntryGetRequest, EntryGetResponse> GetEntry { get; }
 
+    /// <summary>The unary <c>CancelScan</c> RPC.</summary>
+    public Method<EntryScanCancelRequest, EntryScanCancelResponse> CancelScan { get; }
+
     /// <summary>The server-streaming <c>ObserveChanges</c> subscription RPC.</summary>
     public Method<StateObserveRequest, StateChangeNotification> ObserveChanges { get; }
 
@@ -213,6 +230,8 @@ internal sealed class LatticeStateGrpcMethods
             serializerProvider.GetRequiredService<Serializer<EntryScanResponse>>(),
             serializerProvider.GetRequiredService<Serializer<EntryGetRequest>>(),
             serializerProvider.GetRequiredService<Serializer<EntryGetResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<EntryScanCancelRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<EntryScanCancelResponse>>(),
             serializerProvider.GetRequiredService<Serializer<StateObserveRequest>>(),
             serializerProvider.GetRequiredService<Serializer<StateChangeNotification>>(),
             serializerProvider.GetRequiredService<Serializer<TreeMetricsRequest>>(),

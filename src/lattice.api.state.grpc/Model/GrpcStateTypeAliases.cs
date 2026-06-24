@@ -23,6 +23,9 @@ public static class GrpcStateTypeAliases
     /// <summary>Alias for <see cref="EntryScanResponse"/>.</summary>
     public const string EntryScanResponse = "olag.esresp";
 
+    /// <summary>Alias for <see cref="EntryScanCancelResponse"/>.</summary>
+    public const string EntryScanCancelResponse = "olag.escresp";
+
     /// <summary>Alias for <see cref="EntryGetResponse"/>.</summary>
     public const string EntryGetResponse = "olag.egresp";
 }

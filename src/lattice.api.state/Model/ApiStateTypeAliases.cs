@@ -50,6 +50,9 @@ public static class ApiStateTypeAliases
     /// <summary>Alias for <see cref="EntryScanRequest"/>.</summary>
     public const string EntryScanRequest = "ola.esr";
 
+    /// <summary>Alias for <see cref="EntryScanCancelRequest"/>.</summary>
+    public const string EntryScanCancelRequest = "ola.escr";
+
     /// <summary>Alias for <see cref="StateChangeNotification"/>.</summary>
     public const string StateChangeNotification = "ola.scn";
 

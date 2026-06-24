@@ -222,6 +222,44 @@ public class LatticeStateGrpcClientE2ETests
             Is.EquivalentTo(new[] { GrpcStateClusterFixture.KeyAt(1), GrpcStateClusterFixture.KeyAt(4) }));
     }
 
+    [Test]
+    public async Task client_cancels_a_scan_cursor_over_the_transport()
+    {
+        await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);
+
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        // Open a multi-page scan and read only the first page, leaving a live cursor.
+        var open = await client.ScanEntriesAsync(new EntryScanRequest { TreeId = TreeId, PageSize = 5 });
+        Assert.That(open.ContinuationToken, Is.Not.Null.And.Not.Empty, "a multi-page scan must leave a live cursor");
+
+        // Cancel returns a clean ack over the wire.
+        var ack = await client.CancelScanAsync(new EntryScanCancelRequest
+        {
+            TreeId = TreeId,
+            ContinuationToken = open.ContinuationToken,
+        });
+        Assert.That(ack, Is.Not.Null);
+
+        // The cursor is gone: replaying its token now surfaces an InvalidArgument fault.
+        var replay = Assert.ThrowsAsync<RpcException>(async () => await client.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = TreeId,
+            PageSize = 5,
+            ContinuationToken = open.ContinuationToken,
+        }));
+        Assert.That(replay!.StatusCode, Is.EqualTo(StatusCode.InvalidArgument),
+            "replaying a cancelled cursor's token is a rejected client request");
+
+        // Cancelling an unknown cursor is a tolerated no-op, not a fault.
+        Assert.DoesNotThrowAsync(async () => await client.CancelScanAsync(new EntryScanCancelRequest
+        {
+            TreeId = TreeId,
+            ContinuationToken = "not-a-real-cursor",
+        }));
+    }
+
     private static async Task<List<EntryRecord>> ScanAllAsync(LatticeStateApiGrpcClient client, string treeId)
     {
         var all = new List<EntryRecord>();

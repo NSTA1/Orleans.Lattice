@@ -134,6 +134,14 @@ public sealed class StateGrpcDtoSerializationTests
     }
 
     [Test]
+    public void EntryScanCancelResponse_round_trips()
+    {
+        var copy = RoundTrip(new EntryScanCancelResponse());
+
+        Assert.That(copy, Is.EqualTo(new EntryScanCancelResponse()));
+    }
+
+    [Test]
     public void StructureResponse_round_trips_with_nodes()
     {
         var original = new StructureResponse

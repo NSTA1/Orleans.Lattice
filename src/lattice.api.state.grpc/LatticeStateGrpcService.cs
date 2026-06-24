@@ -41,6 +41,9 @@ internal abstract class LatticeStateGrpcServiceBase
     /// <summary>Returns the full record for a single key. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<EntryGetResponse> GetEntry(EntryGetRequest request, ServerCallContext context);
 
+    /// <summary>Releases a snapshot scan cursor named by a continuation token. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<EntryScanCancelResponse> CancelScan(EntryScanCancelRequest request, ServerCallContext context);
+
     /// <summary>Streams change notifications for a tree until the call is cancelled. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task ObserveChanges(
         StateObserveRequest request,
@@ -84,6 +87,7 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.GetTreeStructure, (UnaryServerMethod<StructureRequest, StructureResponse>?)null);
             binder.AddMethod(methods.ScanEntries, (UnaryServerMethod<EntryScanRequest, EntryScanResponse>?)null);
             binder.AddMethod(methods.GetEntry, (UnaryServerMethod<EntryGetRequest, EntryGetResponse>?)null);
+            binder.AddMethod(methods.CancelScan, (UnaryServerMethod<EntryScanCancelRequest, EntryScanCancelResponse>?)null);
             binder.AddMethod(methods.ObserveChanges, (ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>?)null);
             binder.AddMethod(methods.ObserveMetrics, (ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             binder.AddMethod(methods.GetMetricsSnapshot, (UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
@@ -97,6 +101,7 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.GetTreeStructure, new UnaryServerMethod<StructureRequest, StructureResponse>(serviceImpl.GetTreeStructure));
         binder.AddMethod(methods.ScanEntries, new UnaryServerMethod<EntryScanRequest, EntryScanResponse>(serviceImpl.ScanEntries));
         binder.AddMethod(methods.GetEntry, new UnaryServerMethod<EntryGetRequest, EntryGetResponse>(serviceImpl.GetEntry));
+        binder.AddMethod(methods.CancelScan, new UnaryServerMethod<EntryScanCancelRequest, EntryScanCancelResponse>(serviceImpl.CancelScan));
         binder.AddMethod(methods.ObserveChanges, new ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>(serviceImpl.ObserveChanges));
         binder.AddMethod(methods.ObserveMetrics, new ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.ObserveMetrics));
         binder.AddMethod(methods.GetMetricsSnapshot, new UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.GetMetricsSnapshot));
@@ -218,6 +223,14 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
                 Key = result.Key,
                 Entry = result.Entry,
             };
+        });
+
+    /// <inheritdoc />
+    public override Task<EntryScanCancelResponse> CancelScan(EntryScanCancelRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (q, req, ct) =>
+        {
+            await q.CancelScanAsync(req.TreeId, req.ContinuationToken, ct).ConfigureAwait(false);
+            return new EntryScanCancelResponse();
         });
 
     /// <inheritdoc />

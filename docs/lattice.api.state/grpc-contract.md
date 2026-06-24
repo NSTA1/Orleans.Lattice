@@ -4,18 +4,23 @@
 
 ## Service
 
-The service name on the wire is `orleans.lattice.api.state` (so each method's full path is `/orleans.lattice.api.state/<Rpc>`). It exposes eight RPCs: six unary and two server-streaming. Each maps one-to-one onto a facade verb.
+The service name on the wire is `orleans.lattice.api.state` (so each method's full path is `/orleans.lattice.api.state/<Rpc>`). It exposes eleven RPCs: nine unary and two server-streaming. Each maps one-to-one onto a facade verb.
 
 | RPC | Kind | Request | Response | Surface |
 |---|---|---|---|---|
 | `ListTrees` | unary | `CatalogRequest` | `TreeCatalogPage` | [Discovery](surfaces.md#discovery) |
 | `ListViews` | unary | `CatalogRequest` | `ViewCatalogPage` | [Discovery](surfaces.md#discovery) |
+| `ListTagIndexes` | unary | `CatalogRequest` | `TagIndexCatalogPage` | [Discovery](surfaces.md#discovery) |
 | `GetTreeStructure` | unary | `StructureRequest` | `StructureResponse` | [Structure](surfaces.md#structure) |
 | `ScanEntries` | unary | `EntryScanRequest` | `EntryScanResponse` | [Entries](surfaces.md#entries) |
 | `GetEntry` | unary | `EntryGetRequest` | `EntryGetResponse` | [Entries](surfaces.md#entries) |
+| `CancelScan` | unary | `EntryScanCancelRequest` | `EntryScanCancelResponse` | [Entries](surfaces.md#entries) |
 | `GetMetricsSnapshot` | unary | `TreeMetricsRequest` | `TreeMetricsSnapshot` | [Metrics](surfaces.md#metrics) |
+| `GetClusterInfo` | unary | `ClusterInfoRequest` | `ClusterInfo` | Cluster info |
 | `ObserveChanges` | server-streaming | `StateObserveRequest` | `StateChangeNotification` | [Change observation](surfaces.md#change-observation) |
 | `ObserveMetrics` | server-streaming | `TreeMetricsRequest` | `TreeMetricsSnapshot` | [Metrics](surfaces.md#metrics) |
+
+`CancelScan` is a best-effort, idempotent cleanup verb: it releases the server-side snapshot cursor named by a scan continuation token, freeing its WAL-retention pin and per-shard baseline promptly rather than waiting for the cursor's idle TTL. A client that abandons a multi-page scan before draining it (refresh, re-filter, navigate away) should call it. Cancelling an empty token, or one that names an unknown, already-drained, or already-closed cursor, is a tolerated no-op; the empty `EntryScanCancelResponse` is a bare acknowledgement.
 
 ## Messages
 
