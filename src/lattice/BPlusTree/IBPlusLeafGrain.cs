@@ -1,6 +1,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
 using Orleans.Concurrency;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
 /// <summary>
@@ -790,6 +791,43 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </para>
     /// </summary>
     Task CaptureSnapshotAsync();
+
+    /// <summary>
+    /// First pass of the per-shard snapshot-baseline capture: freezes this
+    /// leaf's committed projection cache, its per-partition projection frontier
+    /// (the offsets the cache already reflects), and its in-flight prepared
+    /// sagas into a serializable <see cref="LeafBaselineFreeze"/>. Read-only -
+    /// no leaf state is mutated. The shard root captures every leaf's freeze,
+    /// then reads a uniform per-partition <c>capturedHead</c> <b>after</b> all
+    /// freezes have returned so that <c>frontier_p &lt;= capturedHead_p</c> for
+    /// every leaf and partition with no overshoot, and finally calls
+    /// <see cref="FoldTailOntoFrozenAsync"/> on each leaf with that head.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token observed during the freeze.</param>
+    Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Second pass of the per-shard snapshot-baseline capture: re-seeds a
+    /// transient fold from <paramref name="freeze"/> (committed rows plus
+    /// prepared sagas) and replays only this leaf's own
+    /// <c>(frontier_p, capturedHead_p]</c> WAL tail on top of it, returning the
+    /// materialised committed rows. Each WAL record is applied exactly once
+    /// relative to the frozen cache, so non-idempotent CRDT folds are never
+    /// double-counted; leaves own disjoint key ranges, so no record is
+    /// double-applied across the chain. Read-only - no leaf state is mutated.
+    /// </summary>
+    /// <param name="freeze">This leaf's frozen projection from <see cref="FreezeProjectionAsync"/>.</param>
+    /// <param name="capturedHead">
+    /// The uniform per-partition WAL head the shard captured after every leaf
+    /// froze. Indexed by WAL partition number; the fold reads
+    /// <c>(freeze.FrontierPerPartition[p], capturedHead[p] - 1]</c> per
+    /// partition. Must not be <c>null</c>.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token observed during the fold.</param>
+    Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenAsync(
+        LeafBaselineFreeze freeze,
+        long[] capturedHead,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Test-only seam: requests that the grain runtime collect this
