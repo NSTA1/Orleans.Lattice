@@ -55,13 +55,17 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         // to hold the canonical post-merge state; this strip is
         // scoped to the encoded bytes only.
         //
-        // Mode is not stripped here because the WalRecord type itself
-        // no longer marks the slot with [Id] - the canonical Orleans
-        // serializer never writes the field, so there is nothing to
-        // strip. The merge mode is hoisted into the framing header
-        // (EncodedBatchHeader.Mode) once per batch and re-stamped on
-        // decoded records by the Decode(span, treeId, mode) overload
-        // below.
+        // Mode is NOT stripped here: since wire id 26 the WalRecord type
+        // tags the slot with [Id(26)], so the canonical Orleans
+        // serializer persists it (omitting the bytes when it holds the
+        // enum default LwwRegister). Persisting the mode is what makes a
+        // delta-only CRDT record self-describing on the durable storage
+        // replay path, which - unlike the cross-cluster ship path - has
+        // no per-batch framing header to recover it from (issue #926).
+        // The cross-cluster receiver still re-stamps the mode from the
+        // framing header via Decode(span, treeId, mode); that override is
+        // now idempotent because the decoded record already carries the
+        // same mode from its own bytes.
         var stripValue = record.Op == MutationKind.Set
             && record.Mode != LatticeMergeMode.LwwRegister
             && record.Delta is not null
@@ -85,13 +89,13 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
     {
         // Serializer<T> exposes a span overload of Deserialize that
         // avoids copying the bytes; we delegate directly. The returned
-        // record carries TreeId == string.Empty (stripped on encode)
-        // and Mode == LwwRegister (the field is not serialised, so it
-        // always decodes to the enum default). Forensic tooling that
-        // calls this single-argument overload accepts those
-        // invariants. Call sites with the tree id and merge mode in
-        // hand should call the Decode(span, treeId, mode) overload
-        // instead.
+        // record carries TreeId == string.Empty (stripped on encode) but
+        // Mode is now recovered verbatim from the bytes (wire id 26;
+        // LwwRegister for records whose mode was the default or that
+        // pre-date the tagged slot). Forensic tooling that calls this
+        // single-argument overload accepts the empty-TreeId invariant.
+        // Call sites with the tree id in hand should call the
+        // Decode(span, treeId) overload to restore it.
         return _serializer.Deserialize(encoded);
     }
 
@@ -102,11 +106,12 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         var record = _serializer.Deserialize(encoded);
         // Re-stamp TreeId from the caller-supplied context. The
         // producer's Encode stripped this slot; this overload is the
-        // seam where it is restored. Mode is left at its enum default
-        // (LwwRegister) - call sites that carry the framing header's
-        // Mode field through (the receiver-side replication apply
-        // seam) should use the Decode(span, treeId, mode) overload
-        // instead.
+        // seam where it is restored. Mode is recovered verbatim from the
+        // bytes (wire id 26), so the durable storage replay path gets the
+        // authored merge mode with no resolver dependency. Cross-cluster
+        // apply seams that carry the framing header's Mode forward should
+        // still use the Decode(span, treeId, mode) overload; that
+        // override is idempotent against the now-durable slot.
         return record with { TreeId = treeId };
     }
 
@@ -117,9 +122,10 @@ public sealed class OrleansBinaryWalRecordEncoder(Serializer<WalRecord> serializ
         var record = _serializer.Deserialize(encoded);
         // Re-stamp both TreeId and Mode from the caller-supplied
         // batch-level context. The framing header carries Mode once
-        // per batch since wire version 5, and the WalRecord.Mode slot
-        // is not serialised so it must be supplied here for the
-        // apply path's mode-dispatch switch to work.
+        // per batch since wire version 5; the override is retained for
+        // that path and is idempotent against the now-durable Mode slot
+        // (wire id 26) because the decoded record already carries the
+        // same authored mode from its own bytes.
         return record with { TreeId = treeId, Mode = mode };
     }
 }

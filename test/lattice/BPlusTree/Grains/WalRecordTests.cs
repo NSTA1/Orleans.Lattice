@@ -299,6 +299,49 @@ public class WalRecordAtomicBatchRoundTripTests
             Assert.That(decoded.AtomicBatchIndex, Is.EqualTo(0));
         });
     }
+
+    [Test]
+    public void Mode_round_trips_through_canonical_serialization()
+    {
+        // Since wire id 26 the Mode slot is durably serialised so a
+        // delta-only CRDT record is self-describing on the storage
+        // replay path (issue #926). Guards against the slot being
+        // accidentally de-tagged again, which would silently lose the
+        // merge mode on read-back.
+        var entry = new WalRecord
+        {
+            TreeId = "tree",
+            Op = MutationKind.Set,
+            Key = "k",
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            Mode = LatticeMergeMode.OrSet,
+            Delta = new byte[] { 7, 7 },
+        };
+
+        var decoded = RoundTrip(entry);
+
+        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.OrSet));
+    }
+
+    [Test]
+    public void Mode_decodes_default_for_legacy_record_without_the_slot()
+    {
+        // A record authored before the slot was tagged carries no Mode
+        // bytes; it must decode as the LwwRegister default, exactly as a
+        // plain LWW write does.
+        var entry = new WalRecord
+        {
+            TreeId = "tree",
+            Op = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        };
+
+        var decoded = RoundTrip(entry);
+
+        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
+    }
 }
 
 [TestFixture]

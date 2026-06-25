@@ -2018,12 +2018,17 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // The provider-boundary WalEntry carries the LatticeMutation-
         // shaped payload; project it to the durability-shaped WalRecord
         // so the on-disk format matches AppendEncodedBatchAsync exactly.
-        // The legacy AppendBatchAsync path has no mode/origin context,
-        // so we fall back to LwwRegister and an empty origin id (the
-        // converter preserves the mutation's own origin when present).
+        // Carry the mutation's own declared merge mode through so a
+        // delta-only CRDT entry persisted on this legacy WalEntry seam
+        // keeps its authored mode on disk (wire id 26). Hardcoding
+        // LwwRegister here would re-introduce issue #926 on the Azure
+        // provider: the stored record would replay as an LWW null and
+        // silently empty the key on any tree the resolver does not know.
+        // Origin falls back to empty because the converter preserves the
+        // mutation's own origin id when present.
         var record = WalRecordConverter.ToWalRecord(
             entry.Mutation,
-            LatticeMergeMode.LwwRegister,
+            entry.Mutation.Mode,
             string.Empty);
         _serializer.Serialize(record, buffer);
         var payload = CompressPayload(buffer.WrittenSpan, out var compressionTag);

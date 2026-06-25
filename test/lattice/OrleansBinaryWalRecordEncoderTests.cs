@@ -328,37 +328,78 @@ public sealed class OrleansBinaryWalRecordEncoderTests
         Assert.That(failures, Is.Zero);
     }
 
-    // --- Mode strip / restamp ---
+    // --- Mode durability / restamp ---
 
     [Test]
-    public void Encode_strips_Mode_slot_from_encoded_bytes()
+    public void Encode_persists_Mode_slot_in_encoded_bytes()
     {
-        // Since wire version 5 the encoder elides the [Id(9)]
-        // Mode slot at serialisation time because Mode is constant
-        // within a single shipped batch and hoisted into the framing
-        // header. The byte payload of an encoded record must therefore
-        // equal the byte payload of the same record with Mode reset
-        // to its enum default (LwwRegister).
+        // Since wire id 26 the encoder persists the Mode slot so a
+        // delta-only CRDT record is self-describing on the durable
+        // storage replay path (issue #926). The byte payload of an
+        // encoded record must therefore equal the byte payload of the
+        // same record with only TreeId stripped - Mode is preserved.
         var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
         var record = MakeSet() with { Mode = LatticeMergeMode.OrSet };
 
         var writer = new ArrayBufferWriter<byte>();
         encoder.Encode(in record, writer);
 
-        var stripped = _serializer.SerializeToArray(record with
+        var expected = _serializer.SerializeToArray(record with
         {
             TreeId = string.Empty,
-            Mode = LatticeMergeMode.LwwRegister,
         });
-        Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(stripped));
+        Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(expected));
     }
 
     [Test]
-    public void Decode_with_treeId_only_returns_record_with_default_Mode()
+    public void Encode_persists_Mode_durably_through_roundtrip()
     {
-        // The 2-arg overload restores TreeId only; Mode falls back to
-        // the enum default (LwwRegister). Call sites that have the
-        // batch-level Mode in hand should use the 3-arg overload.
+        // Making Mode durable (wire id 26) must not perturb the
+        // steady-state byte shape of the overwhelmingly common plain-LWW
+        // write, and a typed CRDT mode must survive the encode -> decode
+        // round-trip without any per-batch framing header (the durable
+        // storage replay path has none; issue #926). Deriving every
+        // encoding from one base record keeps the time-based Timestamp
+        // identical so the comparison isolates Mode.
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var baseRecord = MakeSet();
+
+        // Implicit default vs explicitly-stamped LwwRegister are the same
+        // enum value, so the encoded bytes must be identical.
+        var implicitWriter = new ArrayBufferWriter<byte>();
+        encoder.Encode(in baseRecord, implicitWriter);
+        var explicitLww = baseRecord with { Mode = LatticeMergeMode.LwwRegister };
+        var explicitWriter = new ArrayBufferWriter<byte>();
+        encoder.Encode(in explicitLww, explicitWriter);
+        Assert.That(
+            implicitWriter.WrittenSpan.ToArray(),
+            Is.EqualTo(explicitWriter.WrittenSpan.ToArray()),
+            "LwwRegister is the enum default; stamping it explicitly must not change the bytes.");
+
+        // The LWW default round-trips back to LwwRegister...
+        Assert.That(
+            encoder.Decode(implicitWriter.WrittenSpan).Mode,
+            Is.EqualTo(LatticeMergeMode.LwwRegister));
+
+        // ...and a typed CRDT mode (no Delta, so Value is not stripped)
+        // round-trips back verbatim from the bytes alone, which is what a
+        // cold storage replay relies on to fold the delta.
+        var orSet = baseRecord with { Mode = LatticeMergeMode.OrSet };
+        var orSetWriter = new ArrayBufferWriter<byte>();
+        encoder.Encode(in orSet, orSetWriter);
+        Assert.That(
+            encoder.Decode(orSetWriter.WrittenSpan).Mode,
+            Is.EqualTo(LatticeMergeMode.OrSet),
+            "A non-default Mode must survive the encode -> decode round-trip from the bytes alone.");
+    }
+
+    [Test]
+    public void Decode_with_treeId_only_recovers_durable_Mode()
+    {
+        // The 2-arg overload restores TreeId from context and recovers
+        // the authored Mode verbatim from the bytes (wire id 26), so the
+        // storage replay path gets the real merge mode with no resolver
+        // dependency - the fix for issue #926.
         var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
         var record = MakeSet() with { Mode = LatticeMergeMode.OrSet };
 
@@ -366,7 +407,36 @@ public sealed class OrleansBinaryWalRecordEncoderTests
         encoder.Encode(in record, writer);
 
         var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId);
-        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
+        Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.OrSet));
+    }
+
+    [Test]
+    public void Decode_with_treeId_only_recovers_Mode_and_keeps_Value_stripped_for_crdt_delta()
+    {
+        // The end-to-end storage round-trip for a delta-only CRDT record:
+        // Encode strips the post-merge Value (Mode != LwwRegister and a
+        // typed Delta is present) but persists Mode and Delta; the 2-arg
+        // Decode recovers Mode and Delta from the bytes with Value null.
+        // This is exactly the record shape the leaf replay path observes,
+        // and the recovered Mode is what lets it fold the Delta instead of
+        // installing a null (issue #926).
+        var encoder = new OrleansBinaryWalRecordEncoder(_serializer);
+        var record = MakeSet(value: new byte[] { 9, 9, 9 }) with
+        {
+            Mode = LatticeMergeMode.OrSet,
+            Delta = new byte[] { 7, 7 },
+        };
+
+        var writer = new ArrayBufferWriter<byte>();
+        encoder.Encode(in record, writer);
+        var decoded = encoder.Decode(writer.WrittenSpan, record.TreeId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.Mode, Is.EqualTo(LatticeMergeMode.OrSet));
+            Assert.That(decoded.Value, Is.Null);
+            Assert.That(decoded.Delta, Is.EqualTo(record.Delta));
+        });
     }
 
     [Test]
@@ -438,7 +508,6 @@ public sealed class OrleansBinaryWalRecordEncoderTests
         {
             TreeId = string.Empty,
             Value = null,
-            Mode = LatticeMergeMode.LwwRegister,
         });
         Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(stripped));
 
@@ -540,10 +609,11 @@ public sealed class OrleansBinaryWalRecordEncoderTests
         var writer = new ArrayBufferWriter<byte>();
         encoder.Encode(in deleteRecord, writer);
 
+        // Only TreeId is stripped: Value is already null on a delete, and
+        // Mode is durable (wire id 26) so the OrSet tag survives verbatim.
         var expected = _serializer.SerializeToArray(deleteRecord with
         {
             TreeId = string.Empty,
-            Mode = LatticeMergeMode.LwwRegister,
         });
         Assert.That(writer.WrittenSpan.ToArray(), Is.EqualTo(expected));
     }

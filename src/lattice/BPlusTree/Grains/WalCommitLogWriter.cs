@@ -933,7 +933,23 @@ internal sealed class WalCommitLogWriter(
         var partitions = await optionsResolver.GetWalPartitionsAsync(entry.TreeId);
         var perTree = options.Get(entry.TreeId);
 
-        var resolvedMode = modeResolver.Resolve(entry.TreeId) ?? LatticeMergeMode.LwwRegister;
+        // Prefer the mode the producer already stamped onto the record.
+        // The leaf-side CRDT delta-apply builder (WalRecordBuilder.
+        // ForCrdtDelta) sets the authored merge mode (OrSet, PnCounter,
+        // ...) directly on the record; re-resolving it from the resolver
+        // here would discard it, because the resolver returns null ->
+        // LwwRegister for every tree it does not know (every tree on a
+        // single-cluster host, and any replicated-host tree absent from
+        // the configured replicated set). That clobbered a delta-only
+        // CRDT record's mode to LwwRegister on the WAL, so a cold replay
+        // skipped the fold and silently emptied the key (issue #926).
+        // Plain LWW Set/Delete records leave Mode at the enum default, so
+        // for them we still consult the resolver - that is the seam a
+        // replicated tree relies on to stamp its configured convergence
+        // mode onto every foreground write for cross-cluster typing.
+        var resolvedMode = entry.Mode != LatticeMergeMode.LwwRegister
+            ? entry.Mode
+            : modeResolver.Resolve(entry.TreeId) ?? LatticeMergeMode.LwwRegister;
 
         var resolvedOrigin = string.IsNullOrEmpty(entry.OriginClusterId)
             ? clusterIdResolver.Resolve(entry.TreeId)
