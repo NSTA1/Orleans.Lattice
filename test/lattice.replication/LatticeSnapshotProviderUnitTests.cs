@@ -3,6 +3,7 @@ using NSubstitute;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -73,6 +74,24 @@ public class LatticeSnapshotProviderUnitTests
         {
             yield return new KeyValuePair<string, byte[]>(key, value);
         }
+    }
+
+    /// <summary>
+    /// Yields the supplied entries and then throws
+    /// <see cref="EnumerationAbortedException"/>, simulating the source
+    /// grain async-enumerator being reclaimed mid-stream (idle expiry /
+    /// silo failover / cold start) - the failure mode a long-running
+    /// cross-cluster bootstrap export trips.
+    /// </summary>
+    private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> AbortingEntries(params (string Key, byte[] Value)[] entries)
+    {
+        await Task.CompletedTask;
+        foreach (var (key, value) in entries)
+        {
+            yield return new KeyValuePair<string, byte[]>(key, value);
+        }
+
+        throw new EnumerationAbortedException();
     }
 
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
@@ -251,5 +270,47 @@ public class LatticeSnapshotProviderUnitTests
         }
 
         Assert.That(collected, Is.Empty);
+    }
+
+    [Test]
+    public async Task Entries_resumes_and_yields_all_when_source_enumerator_is_reclaimed_mid_stream()
+    {
+        // Regression for the cross-cluster bootstrap re-bootstrap loop:
+        // the committed-projection pass must survive a mid-stream
+        // EnumerationAbortedException from the source grain enumerator
+        // (idle expiry over a slow/proxied cross-cluster export) by
+        // transparently resuming, rather than aborting the whole
+        // snapshot stream. ScanEntriesAsync re-opens the scan with the
+        // successor of the last yielded key as the new lower bound.
+        var (provider, _, cursors, lattice, _) = Create();
+        cursors.GetCausalStableAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<VersionVector?>(new VersionVector()));
+
+        // First scan yields a, b then the enumerator is reclaimed; the
+        // resilient resume re-opens the scan and yields the remaining c.
+        lattice.EntriesAsync(
+            Arg.Any<string?>(),
+            Arg.Any<string?>(),
+            Arg.Any<bool>(),
+            Arg.Any<bool?>(),
+            Arg.Any<CancellationToken>()).Returns(
+                AbortingEntries(("a", new byte[] { 1 }), ("b", new byte[] { 2 })),
+                EntriesOf(("c", new byte[] { 3 })));
+
+        lattice.GetWithVersionAsync("a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new VersionedValue { Value = new byte[] { 1 }, Version = Hlc(1) }));
+        lattice.GetWithVersionAsync("b", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new VersionedValue { Value = new byte[] { 2 }, Version = Hlc(2) }));
+        lattice.GetWithVersionAsync("c", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new VersionedValue { Value = new byte[] { 3 }, Version = Hlc(3) }));
+
+        var snapshot = await provider.ExportAsync(Tree, HybridLogicalClock.Zero);
+        var collected = new List<SnapshotEntry>();
+        await foreach (var e in snapshot.Entries)
+        {
+            collected.Add(e);
+        }
+
+        Assert.That(collected.Select(e => e.Key), Is.EqualTo(new[] { "a", "b", "c" }));
     }
 }

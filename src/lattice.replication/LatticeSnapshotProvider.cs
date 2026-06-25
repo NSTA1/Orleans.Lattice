@@ -175,8 +175,22 @@ internal sealed class LatticeSnapshotProvider(
             // the matching key; sagas snap0 had as Aborted are
             // dropped; sagas snap0 had as InFlight are hidden
             // (already covered by the prepared-row pass above).
+            //
+            // Resilience: this is a long-running export - cross-cluster
+            // bootstrap drains it over a (potentially proxied, WAN)
+            // gRPC stream and interleaves a per-key
+            // GetWithVersionAsync round-trip between pulls, which
+            // widens the gap between successive MoveNextAsync calls and
+            // makes idle-expiry of the source grain enumerator likely.
+            // ScanEntriesAsync wraps EntriesAsync with
+            // EnumerationAbortedException recovery and deterministic
+            // resume from the last yielded key, so a reclaimed
+            // enumerator is transparently re-opened instead of aborting
+            // the whole snapshot stream (which would fail the receiver's
+            // bootstrap drain and trap replication in a re-bootstrap
+            // loop with the high-water-mark pinned at HLC(0:0)).
             await foreach (var pair in lattice
-                .EntriesAsync(cancellationToken: cancellationToken)
+                .ScanEntriesAsync(cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
