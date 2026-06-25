@@ -79,6 +79,18 @@ public static class LatticeAzureTableServiceCollectionExtensions
             sp.GetService<IWalSaturationSignal>(),
             sp.GetServices<ILatticeCompressor>()));
 
+        // Durable WAL storage must not silently pair with a never-registered
+        // (process-local, restart-wiped) cursor registry: that pairing trims
+        // committed-but-not-yet-checkpointed writes across a full restart
+        // (issue #919). Register the cursor registry + leaf reporter and the
+        // WAL GC seams here so opting into durable Azure Table WAL gives the
+        // durable-leaf-pin-protected GC wiring out of the box. All three are
+        // idempotent (TryAddSingleton): a host that already called
+        // AddWalCursorRegistry / AddLatticeWalGc, or supplied its own factory,
+        // keeps its registration.
+        builder.AddWalCursorRegistry();
+        builder.AddLatticeWalGc();
+
         return builder;
     }
 }
