@@ -685,27 +685,38 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
 
         // Seal the source cluster's own consumption coordinate into the
-        // pinned frontier. A snapshot taken at asOfHlc reflects every
-        // source-retained entry up to that point - including source-origin
-        // baseline entries materialised into the local WAL during apply -
-        // so the receiver has effectively consumed the source's stream up
-        // to asOfHlc. A CausalStableFrontier, however, carries a
+        // pinned frontier at the snapshot's causal-stable cut. The cut is
+        // the maximum coordinate across the CausalStableFrontier: every
+        // entry the snapshot materialises - including the source-origin
+        // baseline entries appended to the local WAL during apply - is at
+        // or below it. A CausalStableFrontier, however, carries a
         // coordinate for an origin only when that origin authored data;
         // when the source authored nothing of its own its frontier has no
         // self entry, leaving HWM[source]=0 after the pin. The fall-off
         // detector then reads every retained source-origin baseline as a
         // trim gap and re-triggers bootstrap on every probe, looping
         // forever (worse under a durable WAL, which never discards the
-        // baselines). Pinning HWM[source]=asOfHlc (monotonic max) restores
-        // the invariant that HWM[source] covers every locally-retained
+        // baselines). The snapshot's AsOfHlc cannot be used as the seal:
+        // the export echoes it back from the resume lower-bound (the
+        // receiver's LastAppliedHlc), so it is zero for a cold bootstrap.
+        // Pinning HWM[source] at the cut (monotonic max) restores the
+        // invariant that HWM[source] covers every locally-retained
         // source-origin entry and makes incremental entries at or below the
-        // snapshot point proper dedupe no-ops.
+        // cut proper dedupe no-ops.
         var frontier = state.State.CausalStableFrontier;
+        var cut = HybridLogicalClock.Zero;
+        foreach (var clock in frontier.Entries.Values)
+        {
+            if (clock.CompareTo(cut) > 0)
+            {
+                cut = clock;
+            }
+        }
         if (!string.IsNullOrEmpty(sourceClusterId)
-            && asOfHlc.CompareTo(frontier.GetClock(sourceClusterId)) > 0)
+            && cut.CompareTo(frontier.GetClock(sourceClusterId)) > 0)
         {
             frontier = frontier.Clone();
-            frontier.Entries[sourceClusterId] = asOfHlc;
+            frontier.Entries[sourceClusterId] = cut;
         }
 
         // Idempotent: PinSnapshotAsync is a monotonic max + frontier
