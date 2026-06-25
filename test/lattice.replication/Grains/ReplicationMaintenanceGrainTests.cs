@@ -58,6 +58,9 @@ public partial class ReplicationMaintenanceGrainTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(new FallOffLogDecision(false, HybridLogicalClock.Zero, false, false));
         var introspection = Substitute.For<ILatticeWalIntrospection>();
+        introspection.GetOldestAvailableHlcByOriginAsync(
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
         var fakeState = new FakePersistentState<ReplicationMaintenanceState>();
         if (seed is not null)
         {
@@ -274,7 +277,7 @@ public partial class ReplicationMaintenanceGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await introspection.DidNotReceive().GetOldestAvailableHlcAsync(
+        await introspection.DidNotReceive().GetOldestAvailableHlcByOriginAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>());
         await detector.DidNotReceive().CheckAndTriggerAsync(
             Arg.Any<string>(), Arg.Any<string>(),
@@ -293,7 +296,7 @@ public partial class ReplicationMaintenanceGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await introspection.DidNotReceive().GetOldestAvailableHlcAsync(
+        await introspection.DidNotReceive().GetOldestAvailableHlcByOriginAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>());
         await detector.DidNotReceive().CheckAndTriggerAsync(
             Arg.Any<string>(), Arg.Any<string>(),
@@ -301,7 +304,7 @@ public partial class ReplicationMaintenanceGrainTests
     }
 
     [Test]
-    public async Task ProcessNextPhaseAsync_skips_fall_off_probe_when_oldest_hlc_is_null()
+    public async Task ProcessNextPhaseAsync_skips_fall_off_probe_when_wal_is_empty()
     {
         var opts = new LatticeReplicationOptions
         {
@@ -309,8 +312,35 @@ public partial class ReplicationMaintenanceGrainTests
             ReplicationPeers = new[] { "site-b" },
         };
         var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns((HybridLogicalClock?)null);
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await detector.DidNotReceive().CheckAndTriggerAsync(
+            Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhaseAsync_skips_fall_off_probe_when_only_self_origin_present()
+    {
+        // Regression for the origin-agnostic false positive: the WAL
+        // holds only locally authored (site-a) data and the peer
+        // site-b has never authored an entry. The probe must not
+        // declare a fall-off (and must not re-bootstrap) for site-b
+        // because there is no site-b-origin data behind its frontier.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplicationPeers = new[] { "site-b" },
+        };
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-a"] = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 },
+            });
 
         await grain.ProcessNextPhaseAsync();
 
@@ -329,14 +359,46 @@ public partial class ReplicationMaintenanceGrainTests
         };
         var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
         var hlc = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(hlc);
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-b"] = hlc,
+                ["site-c"] = hlc,
+                ["site-d"] = hlc,
+            });
 
         await grain.ProcessNextPhaseAsync();
 
         await detector.Received(1).CheckAndTriggerAsync(Tree, "site-b", hlc, Arg.Any<CancellationToken>());
         await detector.Received(1).CheckAndTriggerAsync(Tree, "site-c", hlc, Arg.Any<CancellationToken>());
         await detector.Received(1).CheckAndTriggerAsync(Tree, "site-d", hlc, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhaseAsync_skips_origins_that_are_not_current_peers()
+    {
+        // The WAL retains entries for an origin (site-z) that is not a
+        // current peer - e.g. a decommissioned cluster. Only the
+        // origin that is also a live peer (site-b) is probed.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ReplicationPeers = new[] { "site-b" },
+        };
+        var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-b"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+                ["site-z"] = new HybridLogicalClock { WallClockTicks = 2, Counter = 0 },
+            });
+
+        await grain.ProcessNextPhaseAsync();
+
+        await detector.Received(1).CheckAndTriggerAsync(
+            Tree, "site-b", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await detector.DidNotReceive().CheckAndTriggerAsync(
+            Tree, "site-z", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -348,12 +410,16 @@ public partial class ReplicationMaintenanceGrainTests
             ReplicationPeers = new[] { "", "  ", "site-b", null! },
         };
         var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                [""] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+                ["site-b"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+            });
 
         await grain.ProcessNextPhaseAsync();
 
-        // Empty / null peer entries are skipped; only "site-b" gets a probe.
+        // Empty-origin WAL entries are skipped; only "site-b" gets a probe.
         await detector.Received(1).CheckAndTriggerAsync(
             Tree, "site-b", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
         await detector.DidNotReceive().CheckAndTriggerAsync(
@@ -369,8 +435,12 @@ public partial class ReplicationMaintenanceGrainTests
             ReplicationPeers = new[] { "site-b", "site-c" },
         };
         var (grain, _, _, _, detector, introspection, _, _) = Create(opts);
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-b"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+                ["site-c"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+            });
         detector.CheckAndTriggerAsync(Tree, "site-b", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns<FallOffLogDecision>(_ => throw new InvalidOperationException("peer-b-failed"));
         detector.CheckAndTriggerAsync(Tree, "site-c", Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
@@ -447,8 +517,11 @@ public partial class ReplicationMaintenanceGrainTests
             LastFallOffCheckTicks = DateTime.UtcNow.Ticks,
         };
         var (grain, _, _, gc, detector, introspection, _, _) = Create(opts, seed);
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-b"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+            });
 
         await grain.ProcessNextPhaseAsync();
 
