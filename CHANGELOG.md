@@ -8,13 +8,25 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-Items merged into `main` after the v7.3.3 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
+Items merged into `main` after the v7.4.0 cut accumulate here under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
 ### Added
 
 - **F-110 - Orleans.Lattice.Api.State: read-only cluster-state introspection surface.** A new optional package-family member exposes a cluster's tree state and metadata over a transport-agnostic read facade, with no write, delete, or reconfigure verb. `ISiloBuilder.AddLatticeStateApi(...)` (called after `AddLattice`) registers the facade and a shared metrics sampler in-process; the companion `Orleans.Lattice.Api.State.Grpc` package binds it over a code-first gRPC service (`AddLatticeStateApiGrpc` + `MapLatticeStateApiGrpc`) consumed by the public `LatticeStateApiGrpcClient`. The surface covers tree / view discovery with per-tree lifecycle state and effective config (catalog), a paged depth-limited tree-structure snapshot backed by pushed-up O(shards) topology metadata, snapshot-isolated predicate-capable entry / key-range inspection and single-key fetch, a resumable server-streaming change-observation feed that stays off the write hot path, and a coalesced live metrics / topology-delta stream for dashboard gauges. The gRPC binding fails closed: with authorization required and no authorizer registered, the default `DenyAllStateApiAuthorizer` rejects every call, and the authorization seam carries the requested operation and target tree id. Many subscribers to one metrics request share a single reference-counted sampling loop, and registering nothing adds zero overhead. The facade is built to be reused in-process by a later MCP bridge. New packages `Orleans.Lattice.Api.State` and `Orleans.Lattice.Api.State.Grpc`; see [`docs/lattice.api.state/README.md`](docs/lattice.api.state/README.md) (#836).
+
+## [7.4.0] - 2026-06-25
+
+Core-library, Azure Table storage, and replication minor release (`Orleans.Lattice`, `Orleans.Lattice.Storage.AzureTable`, and `Orleans.Lattice.Replication`), all raised to `7.4.0`. Five correctness fixes across the write-ahead-log, snapshot-isolation, and cross-cluster replication paths, plus a new public option that adds API surface - hence the minor bump rather than a patch:
+
+- the core library now ships a per-silo background WAL garbage-collection scheduler, so a durable-WAL host running **without** the replication package - and every non-replicated tree in a replicated host - gets bounded WAL retention out of the box, controlled by the new `LatticeOptions.WalGcInterval` (default 1 hour, **enabled**) (#920);
+- snapshot-isolated scans no longer silently return empty or partial results after a WAL GC trim (FX-052);
+- durable WAL storage no longer loses committed writes across a full-cluster restart by trimming the WAL past a leaf's durable checkpoint (FX-053). The core durable-pin mechanism ships in `Orleans.Lattice`, and `Orleans.Lattice.Storage.AzureTable` is republished at `7.4.0` so `AddAzureTableWalStorage` auto-wires the durable-pin-protected WAL GC floor out of the box;
+- CRDT writes are no longer silently lost across a silo restart on a non-replicated tree, where the durable WAL did not persist the leaf-authored merge mode and a cold replay decoded the record as a plain LWW register and skipped the CRDT fold (FX-054). The durable `WalRecord.Mode` slot ships in `Orleans.Lattice`, and `Orleans.Lattice.Storage.AzureTable` is republished at `7.4.0` so its materialised write seam persists the authored mode;
+- cross-cluster replication bootstrap no longer fails forever when applying a committed CRDT snapshot row, which silently dropped a receiver's view of every CRDT key after an auto-bootstrap (#924).
+
+The remaining companion package versions (`Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Dashboards`) remain at `7.3.0` - they are unchanged by this release. Safe drop-in upgrade from v7.3.3; no public-API break and no wire-format change. The WAL GC scheduler is enabled by default - set `WalGcInterval` to `TimeSpan.Zero` to restore the previous caller-driven behaviour.
 
 ### Fixed
 
@@ -605,7 +617,8 @@ The v5.0.0 / v5.0.1 / v5.1.0 line shipped on top of `lattice-v4.1.1` and added o
 From v6.0.0 onward this file is the authoritative changelog, governed by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) discipline.
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.3...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.4.0...HEAD
+[7.4.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.3...v7.4.0
 [7.3.3]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.2...v7.3.3
 [7.3.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.1...v7.3.2
 [7.3.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.0...v7.3.1
