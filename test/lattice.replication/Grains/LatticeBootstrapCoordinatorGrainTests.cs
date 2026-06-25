@@ -571,9 +571,74 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(asOf, frontier, Arg.Any<CancellationToken>());
+        // The pinned frontier carries the source cluster's own
+        // consumption coordinate at the snapshot AsOfHlc even though the
+        // source authored nothing (the supplied frontier was empty), so
+        // HWM[source] is no longer left at zero.
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == asOf),
+            Arg.Any<CancellationToken>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         Assert.That(fake.State.InProgress, Is.False);
+    }
+
+    [Test]
+    public async Task ProcessNextPhase_pin_seals_source_coordinate_and_preserves_other_origins()
+    {
+        // Regression: when bootstrapping from a source that
+        // authored nothing of its own, the snapshot's CausalStableFrontier
+        // carries coordinates only for the origins that did author data
+        // (here "us"), leaving no entry for the source itself. The pin
+        // must seal HWM[source]=AsOfHlc so the durable WAL's retained
+        // source-origin baselines are not read as a perpetual trim gap by
+        // the fall-off detector, while still preserving every other
+        // origin's coordinate verbatim.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff);
+        var asOf = Hlc(99);
+        var frontier = new VersionVector();
+        frontier.Entries["us"] = Hlc(50);
+        fake.State.SnapshotAsOfHlc = asOf;
+        fake.State.CausalStableFrontier = frontier;
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v =>
+                v.GetClock(SourceCluster) == asOf
+                && v.GetClock("us") == Hlc(50)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhase_pin_does_not_regress_source_coordinate_already_above_asof()
+    {
+        // Guard: the source-coordinate seal is a monotonic max, so
+        // a frontier that already carries a source coordinate at or above
+        // the snapshot AsOfHlc (the source authored data of its own that
+        // post-dates the snapshot point) is pinned unchanged.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff);
+        var asOf = Hlc(99);
+        var frontier = new VersionVector();
+        frontier.Entries[SourceCluster] = Hlc(200);
+        fake.State.SnapshotAsOfHlc = asOf;
+        fake.State.CausalStableFrontier = frontier;
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(200)),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -843,7 +908,11 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(fake.State.LastAppliedHlc, Is.EqualTo(Hlc(50)));
 
         await grain.ProcessNextPhaseAsync(); // pins → LiveIncremental
-        await hwm.Received(1).PinSnapshotAsync(asOf, frontier, Arg.Any<CancellationToken>());
+        // Source-origin consumption coordinate sealed at AsOfHlc.
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == asOf),
+            Arg.Any<CancellationToken>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         Assert.That(fake.State.InProgress, Is.False);
     }
