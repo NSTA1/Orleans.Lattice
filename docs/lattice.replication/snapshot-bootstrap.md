@@ -651,13 +651,24 @@ producer's per-tree `ITxRegistryGrain` decisions:
    receiver can route it identically to a steady-state prepared WAL
    record.
 
-2. **Committed projection pass.** Drains `ILattice.EntriesAsync`
-   under the same frozen registry scope (via
+2. **Committed projection pass.** Drains the source tree's entries
+   via the resilient `ScanEntriesAsync` wrapper over
+   `ILattice.EntriesAsync`, under the same frozen registry scope (via
    `LatticeRegistrySnapshotContext`). Sagas the snapshot recorded as
    `Committed` surface their prepared value as the live one; sagas
    recorded as `Aborted` are dropped; sagas still `InFlight` against
    the snapshot are hidden from the committed scan because the
-   prepared rows pass above has already shipped them.
+   prepared rows pass above has already shipped them. The wrapper
+   matters here because the export is long-running and latency-prone:
+   a per-key version read and a (potentially proxied, cross-cluster)
+   stream write interleave between pulls, so the source grain
+   enumerator can idle-expire or be reclaimed by a deactivation
+   mid-stream. `ScanEntriesAsync` recovers from the resulting
+   `EnumerationAbortedException` and deterministically resumes from
+   the last yielded key, so a reclaimed enumerator is re-opened
+   instead of aborting the whole snapshot stream (which would fail the
+   receiver's bootstrap drain and leave its high-water-mark pinned,
+   re-triggering the fall-off detector on its next tick).
 
 The receiver replays prepared rows through
 `IReplicationApplyGrain.ApplyPreparedSetAsync` /
