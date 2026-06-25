@@ -236,8 +236,10 @@ public sealed class SingleClusterWalDurabilityTests
             registry,
             new FixedLatticeOptionsMonitor(new LatticeOptions { WalRetention = TimeSpan.FromMilliseconds(1) }));
 
-        // Default-off (WalGcInterval == Zero) is exactly why nothing
-        // trimmed this tree before now; enable it on a fast cadence.
+        // Before the core scheduler existed this non-replicated tree had no
+        // GC driver at all; here we drive it on a fast cadence (the first
+        // pass is staggered by up to one interval, so 50ms keeps the test
+        // prompt) and assert it trims.
         var scheduler = new LatticeWalGcScheduler(
             sp.GetRequiredService<IGrainFactory>(),
             ttlGc,

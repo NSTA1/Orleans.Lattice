@@ -721,6 +721,8 @@ Cadence at which the per-silo core WAL garbage-collection scheduler runs a `ILat
 
 A pass is retention housekeeping, not a latency-sensitive operation. Its cost scales with `trees × WalPartitions` storage reads (a head scan plus a trim per partition) and runs on every silo, so the default cadence is deliberately coarse to keep storage cost low (one fan-out per silo per hour). A host that needs a tighter disk bound - a high write rate paired with a small `WalRetention` - can lower it; `TimeSpan.Zero` (or any non-positive value) **disables** the scheduler entirely, restoring the historical caller-driven behaviour.
 
+The first pass is not run at silo start: it is staggered by a random offset of half to one full interval, so the silo finishes activating before the scheduler adds scan/trim I/O and a rolling cluster restart does not align every silo's fan-out into a correlated I/O storm.
+
 ```csharp verify
 // Tighten the cadence on a high-write durable-WAL host, or disable it.
 siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.FromMinutes(5));

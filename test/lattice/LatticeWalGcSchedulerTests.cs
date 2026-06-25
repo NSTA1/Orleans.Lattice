@@ -86,7 +86,8 @@ public sealed class LatticeWalGcSchedulerTests
             factory, gc, new LatticeOptions { WalGcInterval = TimeSpan.FromMilliseconds(25) });
 
         await scheduler.StartAsync(CancellationToken.None);
-        // The first pass runs immediately; the timer drives subsequent ones.
+        // The first pass runs after a randomized [interval/2, interval)
+        // startup stagger; the timer drives subsequent ones.
         await Task.Delay(200);
         await scheduler.StopAsync(CancellationToken.None);
 
@@ -174,6 +175,27 @@ public sealed class LatticeWalGcSchedulerTests
         Assert.That(async () => await scheduler.StopAsync(CancellationToken.None), Throws.Nothing);
 
         await registry.ReceivedWithAnyArgs().GetAllTreeIdsAsync();
+        await gc.DidNotReceiveWithAnyArgs().RunOnceAsync(default!, default);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_staggers_the_first_pass_instead_of_running_at_startup()
+    {
+        var gc = Substitute.For<ILatticeWalGc>();
+        var factory = FactoryWithTrees(out var registry, "alpha");
+
+        // With a 10s interval the first pass is offset by at least
+        // interval/2 (5s), so within a 300ms observation window it must not
+        // have run: the scheduler lets the silo settle and de-correlates the
+        // first pass across a rolling restart rather than firing at startup.
+        var scheduler = CreateScheduler(
+            factory, gc, new LatticeOptions { WalGcInterval = TimeSpan.FromSeconds(10) });
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await Task.Delay(300);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        await registry.DidNotReceive().GetAllTreeIdsAsync();
         await gc.DidNotReceiveWithAnyArgs().RunOnceAsync(default!, default);
     }
 

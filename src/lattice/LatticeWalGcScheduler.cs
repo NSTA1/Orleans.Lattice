@@ -46,6 +46,15 @@ namespace Orleans.Lattice;
 /// from a sibling silo therefore at worst issues a duplicate trim that
 /// the provider collapses to a no-op.
 /// </para>
+/// <para>
+/// The first pass is deliberately <i>not</i> run at startup: it is
+/// staggered by a random offset in <c>[interval/2, interval)</c> so the
+/// silo finishes activating before the scheduler adds WAL scan/trim I/O,
+/// and so a rolling cluster restart - which brings silos up one after
+/// another - does not align every silo's full-tree fan-out into a
+/// correlated I/O storm. Because each silo draws an independent offset,
+/// the periodic ticks stay phase-separated across the cluster.
+/// </para>
 /// </summary>
 internal sealed class LatticeWalGcScheduler(
     IGrainFactory grainFactory,
@@ -71,11 +80,52 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         using var timer = new PeriodicTimer(interval, _time);
+
+        // Stagger the first pass by a random offset in [interval/2, interval)
+        // rather than running immediately. This (a) lets the silo finish
+        // activating and rehydrating before the scheduler adds WAL scan/trim
+        // I/O - the first pass no longer lands in the already-busy startup
+        // window - and (b) de-correlates the first pass across silos so a
+        // rolling cluster restart, which brings silos up one after another,
+        // does not align every silo's full-tree fan-out into a correlated I/O
+        // storm. Each silo draws an independent offset, so their subsequent
+        // ticks stay phase-separated too.
+        if (!await SafeDelayAsync(RandomInitialDelay(interval), stoppingToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
         do
         {
             await RunPassAsync(stoppingToken).ConfigureAwait(false);
         }
         while (await SafeWaitAsync(timer, stoppingToken).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Computes the randomized delay before the first GC pass: a uniform
+    /// value in <c>[interval/2, interval)</c>. The floor of half an interval
+    /// guarantees the first pass never lands in the silo's activation window,
+    /// and the random component spreads the first pass across silos so a
+    /// rolling restart does not align every silo's fan-out.
+    /// </summary>
+    private static TimeSpan RandomInitialDelay(TimeSpan interval)
+    {
+        var half = interval / 2;
+        return half + (half * Random.Shared.NextDouble());
+    }
+
+    private async Task<bool> SafeDelayAsync(TimeSpan delay, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(delay, _time, stoppingToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

@@ -707,6 +707,12 @@ high write rate paired with a small `WalRetention` - can lower it; set
 admin trigger, an Orleans reminder, or - for replicated trees - the
 replication package's per-tree maintenance grain).
 
+The first pass is **not** run at silo start; it is staggered by a random
+offset of half to one full interval. That lets the silo finish activating
+before the scheduler adds scan/trim I/O, and de-correlates the first pass
+across silos so a rolling cluster restart does not align every silo's
+full-tree fan-out into a correlated I/O storm.
+
 ```csharp verify
 // Tighten the built-in scheduler on a high-write host, or disable it.
 siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.FromMinutes(5));
