@@ -196,6 +196,29 @@ builder.Host.UseOrleans(silo =>
             o.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
         });
 
+        // Dev-only membership tuning so a full `docker compose stop/start` of
+        // the silo group reconnects in seconds instead of minutes. After a
+        // whole-cluster stop the clustering table still lists the previous
+        // silo incarnations as Active. By default a restarted silo will attempt
+        // to join for MaxJoinAttemptTime (5 minutes) - pinging those stale,
+        // unreachable entries - before giving up and evicting them, and while it
+        // sits in Joining the read-only state API cannot serve, so the Explorer
+        // stays disconnected. Shrinking MaxJoinAttemptTime (with eviction on)
+        // lets a restarted silo drop the dead incarnations and go Active within
+        // seconds, and the tighter probe/vote limits declare a genuinely dead
+        // peer down quickly. These are convenience settings for the local sample
+        // topology; a production deployment should keep the secure defaults.
+        silo.Configure<ClusterMembershipOptions>(o =>
+        {
+            o.MaxJoinAttemptTime = TimeSpan.FromSeconds(20);
+            o.EvictWhenMaxJoinAttemptTimeExceeded = true;
+            o.NumMissedProbesLimit = 2;
+            o.ProbeTimeout = TimeSpan.FromSeconds(2);
+            o.NumVotesForDeathDeclaration = 1;
+            o.DefunctSiloExpiration = TimeSpan.FromMinutes(1);
+            o.DefunctSiloCleanupPeriod = TimeSpan.FromSeconds(30);
+        });
+
         silo.UseAzureTableReminderService(o =>
         {
             o.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
