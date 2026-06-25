@@ -33,8 +33,11 @@ public partial class ReplicationMaintenanceGrainTests
         };
         var topology = new FakeReplicationTopology(new[] { "site-b" });
         var (grain, _, _, _, detector, introspection, _, _) = Create(opts, topology: topology);
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-b"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+            });
 
         await grain.ProcessNextPhaseAsync();
 
@@ -60,7 +63,7 @@ public partial class ReplicationMaintenanceGrainTests
 
         // Empty topology short-circuits the probe before the WAL
         // introspection lookup; the detector is never invoked.
-        await introspection.DidNotReceive().GetOldestAvailableHlcAsync(
+        await introspection.DidNotReceive().GetOldestAvailableHlcByOriginAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>());
         await detector.DidNotReceive().CheckAndTriggerAsync(
             Arg.Any<string>(), Arg.Any<string>(),
@@ -79,8 +82,12 @@ public partial class ReplicationMaintenanceGrainTests
         };
         var topology = new FakeReplicationTopology(new[] { "site-c" });
         var (grain, _, _, _, detector, introspection, _, _) = Create(opts, topology: topology);
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-b"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+                ["site-c"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+            });
 
         await grain.ProcessNextPhaseAsync();
 
@@ -104,8 +111,11 @@ public partial class ReplicationMaintenanceGrainTests
         };
         var topology = new FakeReplicationTopology();
         var (grain, _, _, _, detector, introspection, _, _) = Create(opts, topology: topology);
-        introspection.GetOldestAvailableHlcAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 });
+        introspection.GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                ["site-b"] = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
+            });
 
         topology.EmitAdded("site-b");
 

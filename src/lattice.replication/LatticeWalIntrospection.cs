@@ -21,6 +21,18 @@ internal sealed class LatticeWalIntrospection(
     private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor =
         optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
 
+    // Bounded head window scanned per shard when grouping the oldest
+    // retained entry by origin. Trim removes a contiguous prefix, so
+    // the oldest retained entry of every origin that could have
+    // fallen off the log clusters near the head; with a handful of
+    // replicating clusters a small window captures every distinct
+    // origin while keeping the probe at one bounded RPC per shard and
+    // a correspondingly small page allocation.
+    private const int OriginScanBudget = 64;
+
+    private static readonly IReadOnlyDictionary<string, HybridLogicalClock> EmptyOriginMap =
+        new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+
     /// <inheritdoc />
     public async Task<HybridLogicalClock?> GetOldestAvailableHlcAsync(
         string treeName,
@@ -66,5 +78,60 @@ internal sealed class LatticeWalIntrospection(
         }
 
         return oldest;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetOldestAvailableHlcByOriginAsync(
+        string treeName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var options = _optionsMonitor.Get(treeName);
+        var partitions = options.ReplogPartitions;
+        if (partitions <= 0)
+        {
+            return EmptyOriginMap;
+        }
+
+        var pageTasks = new Task<WalShardPage>[partitions];
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var grain = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
+            // Read a bounded head window so the oldest retained entry
+            // of each distinct origin near the trim frontier is seen,
+            // not just the single global-oldest head entry.
+            pageTasks[partition] = grain.ReadAsync(0, OriginScanBudget, cancellationToken);
+        }
+
+        var pages = await Task.WhenAll(pageTasks).ConfigureAwait(false);
+
+        var localClusterId = options.ClusterId;
+        var oldestByOrigin = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        foreach (var page in pages)
+        {
+            foreach (var sequenced in page.Entries)
+            {
+                var origin = sequenced.Entry.OriginClusterId;
+                if (string.IsNullOrEmpty(origin))
+                {
+                    // Entries authored before origin stamping are
+                    // attributed to the local cluster so they group
+                    // as self-origin data (which the receiver-side
+                    // probe skips - you never fall off your own log).
+                    origin = localClusterId;
+                }
+
+                var ts = sequenced.Entry.Timestamp;
+                if (!oldestByOrigin.TryGetValue(origin, out var existing)
+                    || ts.CompareTo(existing) < 0)
+                {
+                    oldestByOrigin[origin] = ts;
+                }
+            }
+        }
+
+        return oldestByOrigin;
     }
 }

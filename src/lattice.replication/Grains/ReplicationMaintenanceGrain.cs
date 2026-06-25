@@ -218,10 +218,10 @@ internal sealed class ReplicationMaintenanceGrain(
             return;
         }
 
-        var oldestHlc = await _walIntrospection
-            .GetOldestAvailableHlcAsync(TreeName, CancellationToken.None)
+        var oldestByOrigin = await _walIntrospection
+            .GetOldestAvailableHlcByOriginAsync(TreeName, CancellationToken.None)
             .ConfigureAwait(true);
-        if (oldestHlc is null)
+        if (oldestByOrigin.Count == 0)
         {
             // WAL is empty for this tree - there's nothing a peer
             // could fall off of. Probing is a no-op until the first
@@ -229,16 +229,25 @@ internal sealed class ReplicationMaintenanceGrain(
             return;
         }
 
+        // The fall-off check is per data origin: probe each current
+        // peer against the oldest retained entry that peer authored.
+        // A direct dictionary lookup keyed by the peer's cluster id
+        // avoids building any intermediate set, and a peer with no
+        // authored entries simply has nothing to fall off of - which
+        // is what eliminated the origin-agnostic false-positive
+        // re-bootstrap loop. Self-origin data is never probed because
+        // the local cluster is never one of its own peers.
         foreach (var peer in peers)
         {
-            if (string.IsNullOrEmpty(peer))
+            if (string.IsNullOrEmpty(peer)
+                || !oldestByOrigin.TryGetValue(peer, out var oldest))
             {
                 continue;
             }
             try
             {
                 _ = await _fallOffDetector
-                    .CheckAndTriggerAsync(TreeName, peer, oldestHlc.Value, CancellationToken.None)
+                    .CheckAndTriggerAsync(TreeName, peer, oldest, CancellationToken.None)
                     .ConfigureAwait(true);
             }
             catch (Exception ex)
