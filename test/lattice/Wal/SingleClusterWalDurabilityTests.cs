@@ -1,6 +1,8 @@
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -168,6 +170,101 @@ public sealed class SingleClusterWalDurabilityTests
     }
 
     [Test]
+    public async Task LatticeWalGcScheduler_drives_RunOnceAsync_and_trims_the_wal_for_a_non_replicated_tree()
+    {
+        // Issue #920: a durable-WAL host without replication must get its
+        // WAL bounded once the core scheduler is enabled. This proves the
+        // end-to-end path: write -> advance the leaf cursor -> the
+        // background scheduler runs a GC pass over the registered tree ->
+        // the WAL is trimmed, with no replication package and no manual
+        // RunOnceAsync call.
+        var treeId = "sc-wal-sched-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+
+        for (var i = 0; i < 10; i++)
+        {
+            await tree.SetAsync($"k{i:D4}", Bytes($"v{i}"));
+        }
+
+        var sp = RequireSiloServices();
+        var registry = sp.GetRequiredService<IWalCursorRegistry>();
+        var cursorDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (DateTime.UtcNow < cursorDeadline)
+        {
+            var min = await registry.GetMinCursorAsync(treeId);
+            if (min is { } floor && floor.CompareTo(HybridLogicalClock.Zero) > 0)
+            {
+                break;
+            }
+            await Task.Delay(50);
+        }
+
+        // Accumulate trimmed-entry measurements attributed to this tree so
+        // a sibling fixture tree's GC does not bleed into the assertion.
+        var trimmedForTree = 0L;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (inst, lst) =>
+        {
+            if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                && inst.Name == "orleans.lattice.wal.entries_trimmed")
+            {
+                lst.EnableMeasurementEvents(inst);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == LatticeMetrics.TagTree
+                    && tag.Value is string t
+                    && string.Equals(t, treeId, StringComparison.Ordinal))
+                {
+                    Interlocked.Add(ref trimmedForTree, value);
+                }
+            }
+        });
+        listener.Start();
+
+        // Drive the scheduler over a WAL GC configured with a short
+        // wall-clock retention TTL so the already-written entries are
+        // unconditionally trim-eligible - this makes the end-to-end
+        // assertion deterministic rather than racing the leaf checkpoint
+        // advance. The GC still resolves the silo's in-memory WAL provider
+        // and placement through the captured silo IServiceProvider.
+        var ttlGc = new LatticeWalGc(
+            sp,
+            registry,
+            new FixedLatticeOptionsMonitor(new LatticeOptions { WalRetention = TimeSpan.FromMilliseconds(1) }));
+
+        // Before the core scheduler existed this non-replicated tree had no
+        // GC driver at all; here we drive it on a fast cadence (the first
+        // pass is staggered by up to one interval, so 50ms keeps the test
+        // prompt) and assert it trims.
+        var scheduler = new LatticeWalGcScheduler(
+            sp.GetRequiredService<IGrainFactory>(),
+            ttlGc,
+            new FixedLatticeOptionsMonitor(new LatticeOptions { WalGcInterval = TimeSpan.FromMilliseconds(50) }),
+            NullLogger<LatticeWalGcScheduler>.Instance);
+
+        await scheduler.StartAsync(CancellationToken.None);
+        try
+        {
+            var trimDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+            while (DateTime.UtcNow < trimDeadline && Interlocked.Read(ref trimmedForTree) <= 0)
+            {
+                await Task.Delay(50);
+            }
+        }
+        finally
+        {
+            await scheduler.StopAsync(CancellationToken.None);
+        }
+
+        Assert.That(Interlocked.Read(ref trimmedForTree), Is.GreaterThan(0),
+            "the enabled core WAL GC scheduler must trim the non-replicated tree's WAL once its leaf cursor has advanced.");
+    }
+
+    [Test]
     public async Task LatticeWalGc_RunOnceAsync_returns_empty_report_for_unknown_tree()
     {
         var treeId = "sc-wal-empty-" + Guid.NewGuid().ToString("N")[..8];
@@ -222,4 +319,20 @@ internal sealed class SiloServiceProviderCaptureForWalTests(IServiceProvider ser
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>
+/// Minimal <see cref="IOptionsMonitor{TOptions}"/> that returns a fixed
+/// <see cref="LatticeOptions"/> instance for every name, so a test can
+/// drive <see cref="LatticeWalGcScheduler"/> with an explicit
+/// <see cref="LatticeOptions.WalGcInterval"/> without reconfiguring the
+/// silo's shared options.
+/// </summary>
+internal sealed class FixedLatticeOptionsMonitor(LatticeOptions options) : IOptionsMonitor<LatticeOptions>
+{
+    public LatticeOptions CurrentValue => options;
+
+    public LatticeOptions Get(string? name) => options;
+
+    public IDisposable? OnChange(Action<LatticeOptions, string?> listener) => null;
 }
