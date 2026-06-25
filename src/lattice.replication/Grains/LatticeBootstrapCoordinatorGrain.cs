@@ -680,13 +680,40 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     private async Task PinAndCompleteAsync()
     {
         var treeName = TreeName;
+        var sourceClusterId = state.State.SourceClusterId;
+        var asOfHlc = state.State.SnapshotAsOfHlc;
         var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
+
+        // Seal the source cluster's own consumption coordinate into the
+        // pinned frontier. A snapshot taken at asOfHlc reflects every
+        // source-retained entry up to that point - including source-origin
+        // baseline entries materialised into the local WAL during apply -
+        // so the receiver has effectively consumed the source's stream up
+        // to asOfHlc. A CausalStableFrontier, however, carries a
+        // coordinate for an origin only when that origin authored data;
+        // when the source authored nothing of its own its frontier has no
+        // self entry, leaving HWM[source]=0 after the pin. The fall-off
+        // detector then reads every retained source-origin baseline as a
+        // trim gap and re-triggers bootstrap on every probe, looping
+        // forever (worse under a durable WAL, which never discards the
+        // baselines). Pinning HWM[source]=asOfHlc (monotonic max) restores
+        // the invariant that HWM[source] covers every locally-retained
+        // source-origin entry and makes incremental entries at or below the
+        // snapshot point proper dedupe no-ops.
+        var frontier = state.State.CausalStableFrontier;
+        if (!string.IsNullOrEmpty(sourceClusterId)
+            && asOfHlc.CompareTo(frontier.GetClock(sourceClusterId)) > 0)
+        {
+            frontier = frontier.Clone();
+            frontier.Entries[sourceClusterId] = asOfHlc;
+        }
+
         // Idempotent: PinSnapshotAsync is a monotonic max + frontier
         // merge, so a crash between this call and the WriteStateAsync
         // below replays safely on reactivation - the second pin with
         // identical (asOfHlc, frontier) is a no-op.
         await hwm
-            .PinSnapshotAsync(state.State.SnapshotAsOfHlc, state.State.CausalStableFrontier, CancellationToken.None)
+            .PinSnapshotAsync(asOfHlc, frontier, CancellationToken.None)
             .ConfigureAwait(true);
 
         state.State.Phase = LatticeBootstrapState.LiveIncremental;
