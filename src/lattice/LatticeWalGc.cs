@@ -138,6 +138,30 @@ public sealed class LatticeWalGc(
         }
     }
 
+    // Resolved lazily so a unit test that constructs the GC with a bare
+    // IServiceProvider (no grain runtime) still works: when the grain factory
+    // is absent the durable-materialiser-pin floor is simply not consulted and
+    // the GC trims by the in-memory registry exactly as before. When present,
+    // the GC floors its trim point under the slowest leaf's durable checkpoint
+    // for any leaf MISSING from the process-local registry, so a full silo /
+    // cluster restart that wiped the registry cannot trim past a dormant
+    // leaf's durable frontier.
+    private IGrainFactory? _grainFactoryCache;
+    private bool _grainFactoryResolved;
+
+    private IGrainFactory? GrainFactory
+    {
+        get
+        {
+            if (!_grainFactoryResolved)
+            {
+                _grainFactoryCache = services.GetService<IGrainFactory>();
+                _grainFactoryResolved = true;
+            }
+            return _grainFactoryCache;
+        }
+    }
+
     /// <inheritdoc />
     public async Task<LatticeWalGcReport> RunOnceAsync(
         string treeName,
@@ -179,6 +203,14 @@ public sealed class LatticeWalGc(
         }
 
         var minCursor = await cursors.GetMinCursorAsync(treeName, cancellationToken).ConfigureAwait(false);
+        // Floor the trim point under the durable leaf-materialiser pins for
+        // any leaf MISSING from the in-memory registry. This survives a full
+        // silo/cluster restart that wiped the registry: a forward consumer
+        // (e.g. the replication shipper) re-reports its durably-advanced
+        // cursor eagerly, but dormant leaves re-register only lazily, so
+        // without this floor the GC would trim past a leaf's durable
+        // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
+        minCursor = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);
         HybridLogicalClock? ttlCeiling = null;
@@ -267,6 +299,92 @@ public sealed class LatticeWalGc(
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
             ceiling, retainedBefore, retainedAfter, triggered, overThreshold);
+    }
+
+    /// <summary>
+    /// Lowers <paramref name="registryMin"/> to account for durable
+    /// leaf-materialiser pins (<see cref="IWalMaterialiserPinGrain"/>) whose
+    /// owning leaf is <b>absent</b> from the in-memory cursor registry - the
+    /// post-restart window where a dormant leaf has not yet re-activated and
+    /// re-reported its pin. For a present consumer the in-memory value is
+    /// fresher and already folded into <paramref name="registryMin"/>, so its
+    /// durable pin is skipped and steady-state trimming is byte-for-byte
+    /// unchanged.
+    /// <para>
+    /// A missing pin at a real frontier lowers the effective floor (more WAL
+    /// retained, always safe). A missing pin at
+    /// <see cref="HybridLogicalClock.Zero"/> - a leaf that activated but never
+    /// checkpointed - returns <see langword="null"/>, disabling the cursor
+    /// branch of the GC predicate entirely so the WAL head is retained for
+    /// that leaf (the TTL ceiling still bounds growth). When the grain factory
+    /// is unavailable (a bare-IServiceProvider unit-test construction) or no
+    /// durable pins exist, the registry minimum is returned unchanged.
+    /// </para>
+    /// </summary>
+    private async Task<HybridLogicalClock?> ApplyDurableMaterialiserFloorAsync(
+        string treeName,
+        HybridLogicalClock? registryMin,
+        CancellationToken cancellationToken)
+    {
+        var factory = GrainFactory;
+        if (factory is null)
+        {
+            return registryMin;
+        }
+
+        IReadOnlyDictionary<string, HybridLogicalClock> pins;
+        try
+        {
+            pins = await factory.GetGrain<IWalMaterialiserPinGrain>(treeName)
+                .GetPinsAsync()
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // The durable pin store is unavailable on this pass; fall back to
+            // the in-memory floor rather than failing the whole GC run. The
+            // next pass retries; a missed floor never trims unsafely because
+            // the present in-memory consumers still constrain the trim point.
+            return registryMin;
+        }
+
+        if (pins.Count == 0)
+        {
+            return registryMin;
+        }
+
+        var snapshot = await cursors.SnapshotAsync(treeName, cancellationToken).ConfigureAwait(false);
+        var present = new HashSet<string>(snapshot.Count, StringComparer.Ordinal);
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            present.Add(snapshot[i].ConsumerId);
+        }
+
+        var floor = registryMin;
+        foreach (var (consumerId, pin) in pins)
+        {
+            // A consumer present in the in-memory registry has a fresher
+            // (>=) cursor already folded into registryMin; its durable pin
+            // (possibly staler) must not raise the floor.
+            if (present.Contains(consumerId))
+            {
+                continue;
+            }
+
+            if (pin <= HybridLogicalClock.Zero)
+            {
+                // Never-checkpointed dormant leaf: block the cursor branch
+                // entirely so nothing is trimmed by cursor for this tree.
+                // Zero is the strongest possible floor, so short-circuit.
+                return null;
+            }
+
+            floor = floor is { } current
+                ? (pin < current ? pin : current)
+                : pin;
+        }
+
+        return floor;
     }
 
     /// <summary>
