@@ -141,6 +141,24 @@ public sealed class InMemoryWalCursorRegistryTests
     }
 
     [Test]
+    public void AddLatticeWalGc_registers_the_scheduler_once_across_repeated_calls()
+    {
+        var sc = new ServiceCollection();
+        var siloBuilder = SiloBuilderHelper.Wrap(sc);
+        siloBuilder.AddLatticeWalGc();
+        siloBuilder.AddLatticeWalGc();
+
+        var schedulerDescriptors = sc
+            .Where(d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService)
+                && d.ImplementationType == typeof(LatticeWalGcScheduler))
+            .ToArray();
+        Assert.That(schedulerDescriptors, Has.Length.EqualTo(1),
+            "TryAddEnumerable must register the core WAL GC scheduler exactly once even after repeated AddLatticeWalGc calls.");
+        Assert.That(schedulerDescriptors[0].Lifetime, Is.EqualTo(ServiceLifetime.Singleton),
+            "the scheduler must be a singleton so it owns the per-silo cadence.");
+    }
+
+    [Test]
     public void AddWalCursorRegistry_TryAddSingleton_is_idempotent_on_second_default_call()
     {
         var sc = new ServiceCollection();

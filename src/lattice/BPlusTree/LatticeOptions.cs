@@ -1018,6 +1018,43 @@ public class LatticeOptions
     public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
+    /// Cadence at which the per-silo core WAL garbage-collection
+    /// scheduler (<see cref="ILatticeWalGc"/>) runs a pass over every
+    /// registered tree, so a durable-WAL host gets bounded WAL retention
+    /// without the replication package and without any caller invoking
+    /// <see cref="ILatticeWalGc.RunOnceAsync"/>.
+    /// <para>
+    /// Defaults to <see cref="DefaultWalGcInterval"/> (1 hour),
+    /// <b>enabled</b>: the core library trims the WAL of every registered
+    /// tree (replicated or not) at least once an hour, so the WAL can no
+    /// longer grow without bound and <see cref="WalRetention"/> is
+    /// effective out of the box. A pass is retention housekeeping, not a
+    /// latency-sensitive operation, so the coarse default keeps the
+    /// storage cost low (one fan-out per silo per hour); a host that
+    /// needs a tighter disk bound - a high write rate paired with a small
+    /// <see cref="WalRetention"/> - can lower it, and
+    /// <see cref="TimeSpan.Zero"/> (or any non-positive value) disables
+    /// the scheduler entirely to restore the historical caller-driven
+    /// behaviour.
+    /// </para>
+    /// <para>
+    /// The scheduler composes with the replication maintenance grain
+    /// (which collects replicated trees on its own faster cadence):
+    /// <see cref="ILatticeWalGc.RunOnceAsync"/> and the underlying
+    /// <see cref="IWalStorageProvider.TrimAsync"/> are idempotent, so a
+    /// replicated tree collected by both drivers is trimmed safely. The
+    /// pass honours the minimum consumer cursor and the leaf-materialiser
+    /// checkpoint floor, so it never over-trims. This is a global knob
+    /// read from the default (unnamed) options; per-tree overrides do not
+    /// apply.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalGcInterval { get; set; } = DefaultWalGcInterval;
+
+    /// <summary>Default value for <see cref="WalGcInterval"/> (1 hour, enabled).</summary>
+    public static readonly TimeSpan DefaultWalGcInterval = TimeSpan.FromHours(1);
+
+    /// <summary>
     /// Optional advisory per-tree ceiling, in bytes, on retained WAL size.
     /// When set and the byte-accounting core reports that a tree's retained
     /// WAL exceeds this value, the host-scheduled WAL garbage collector

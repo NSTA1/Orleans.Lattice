@@ -690,10 +690,36 @@ the ceiling is not trimmed on every pass. It is inert unless
 ### Scheduling
 
 `ILatticeWalGc.RunOnceAsync(treeName)` is a single-pass GC invocation.
-The library does **not** install a background timer - the host owns the
-cadence so it can integrate with whatever scheduling infrastructure it
-already uses (Orleans reminders, hosted services, external schedulers). A
-typical inner-loop period is 30 to 60 seconds per replicated tree.
+
+The core library ships a per-silo background scheduler that drives this
+pass for **every** registered tree on the `LatticeOptions.WalGcInterval`
+cadence. It defaults to **1 hour, enabled**, so a durable-WAL host gets
+bounded WAL retention out of the box - including for non-replicated trees
+and for hosts that do not use the replication package - and
+`WalRetention` is effective with no extra wiring. A pass is retention
+housekeeping, not a latency-sensitive operation: its cost scales with
+`trees × WalPartitions` storage reads and runs on every silo, so the
+default cadence is deliberately coarse to keep the storage cost low (one
+fan-out per silo per hour). A host that needs a tighter disk bound - a
+high write rate paired with a small `WalRetention` - can lower it; set
+`WalGcInterval` to `TimeSpan.Zero` (or any non-positive value) to
+**disable** the built-in scheduler and let the host own the cadence (an
+admin trigger, an Orleans reminder, or - for replicated trees - the
+replication package's per-tree maintenance grain).
+
+```csharp verify
+// Tighten the built-in scheduler on a high-write host, or disable it.
+siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.FromMinutes(5));
+siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.Zero); // disable
+```
+
+The scheduler composes with the replication maintenance grain:
+`RunOnceAsync` and the underlying `IWalStorageProvider.TrimAsync` are
+idempotent, and the pass never trims past the minimum consumer cursor or
+the leaf-materialiser checkpoint floor, so a tree collected by both
+drivers is trimmed safely and it never over-trims. To drive a
+single pass manually instead (or in addition), call `RunOnceAsync`
+directly:
 
 ```text
 LatticeWalGcReport report = await gc.RunOnceAsync(

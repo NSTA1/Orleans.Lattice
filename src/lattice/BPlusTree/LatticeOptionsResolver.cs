@@ -430,6 +430,7 @@ internal sealed class LatticeOptionsResolver(
             StorageUsageCacheTtl = baseOptions.StorageUsageCacheTtl,
             StorageUsagePollInterval = baseOptions.StorageUsagePollInterval,
             StorageUsageDeepPollInterval = baseOptions.StorageUsageDeepPollInterval,
+            WalGcInterval = baseOptions.WalGcInterval,
             ShardForwardTimeout = baseOptions.ShardForwardTimeout,
             ActivationReadyTimeout = baseOptions.ActivationReadyTimeout,
             DigestPublishTimeout = baseOptions.DigestPublishTimeout,

@@ -111,6 +111,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalMaxBatchEntries`](#walmaxbatchentries) | `int` | 100 | Yes |
 | [`WalFlushPreflightTimeout`](#walflushpreflighttimeout) | `TimeSpan` | 5 seconds | Yes |
 | [`WalFlushTimeout`](#walflushtimeout) | `TimeSpan` | 15 seconds | Yes |
+| [`WalGcInterval`](#walgcinterval) | `TimeSpan` | 1 hour (enabled) | No (global; read from the default options) |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
@@ -713,6 +714,20 @@ This option can be changed freely at any time. The new value takes effect on the
 **Activation-time replay is partition-aware.** The leaf grain's activation-time materialiser iterates `[0, WalPartitions)` and runs an independent fall-off-log classification, slice read, and projection-checkpoint advance per partition. Per-partition checkpoints persist into the `LeafNodeState.ProjectionCheckpointOffsetsByPartition` slot (`long[]?`, additive `[Id]`), with partition 0 also mirrored into the legacy scalar `ProjectionCheckpointOffset` slot so a downgrade to a host that has never observed multi-partition state still reads a valid single-partition shape. Per-partition cursor consumer ids take the form `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}` so the per-shard WAL GC trims each partition independently against its own slowest consumer; on `WalPartitions = 1` the legacy unsuffixed shape `_lattice_materialiser_{treeId}_{leafGrainId}` is preserved for wire compatibility with hosts that have never enabled multi-partition replay.
 
 Must be `>= 1`. Values below 1 fail option validation at silo start.
+
+### `WalGcInterval`
+
+Cadence at which the per-silo core WAL garbage-collection scheduler runs a `ILatticeWalGc.RunOnceAsync` pass over **every** registered tree (default: 1 hour, **enabled**). The core library ships the WAL garbage collector, but historically only drove it for *replicated* trees (via the replication package's per-tree maintenance grain). That left two retention gaps: a durable-WAL host that runs **without** the replication package never trimmed its WAL at all, and every **non-replicated** tree in a replicated host was never collected - both grew without bound, and `WalRetention` was inert for them. The built-in scheduler closes the gap by collecting every registered tree, replicated or not, so `WalRetention` is effective out of the box.
+
+A pass is retention housekeeping, not a latency-sensitive operation. Its cost scales with `trees × WalPartitions` storage reads (a head scan plus a trim per partition) and runs on every silo, so the default cadence is deliberately coarse to keep storage cost low (one fan-out per silo per hour). A host that needs a tighter disk bound - a high write rate paired with a small `WalRetention` - can lower it; `TimeSpan.Zero` (or any non-positive value) **disables** the scheduler entirely, restoring the historical caller-driven behaviour.
+
+```csharp verify
+// Tighten the cadence on a high-write durable-WAL host, or disable it.
+siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.FromMinutes(5));
+siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.Zero); // disable
+```
+
+The scheduler composes with the replication maintenance grain (which collects replicated trees on its own faster cadence): `RunOnceAsync` and the underlying WAL `TrimAsync` are idempotent, and the pass never trims past the minimum consumer cursor or the leaf-materialiser checkpoint floor, so a tree collected by both drivers is trimmed safely and it never over-trims. A per-tree GC failure is logged and skipped without stalling the rest of the pass. This is a **global** knob read from the default (unnamed) options; per-tree overrides do not apply. It is read once when the scheduler starts; change it before silo start to take effect.
 
 ### `WalRetention`
 
