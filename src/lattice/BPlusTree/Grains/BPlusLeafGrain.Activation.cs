@@ -190,7 +190,14 @@ internal sealed partial class BPlusLeafGrain
             // stay in exactly one place.
             var clock = state.State.Clock;
             if (clock <= HybridLogicalClock.Zero)
+            {
+                // Never-checkpointed leaf: skip the in-memory registry (a
+                // Zero cursor would pin offset zero forever) but still seed
+                // a durable Zero "block" pin so the WAL GC retains this
+                // leaf's WAL head across a restart until it checkpoints.
+                await SeedDurableMaterialiserFrontierAsync();
                 return;
+            }
 
             await ReportCursorIfActiveAsync();
         }

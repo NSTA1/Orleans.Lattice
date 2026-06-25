@@ -372,10 +372,15 @@ public static class LatticeServiceCollectionExtensions
     /// Registers the WAL consumer-cursor registry on the silo. Single-cluster
     /// deployments need the registry so the leaf-as-materialiser cursor
     /// can pin the per-shard WAL GC against the leaf's durably-applied
-    /// frontier. The default <see cref="InMemoryWalCursorRegistry"/> is process-local;
-    /// after a silo restart every consumer must re-report its cursor before
-    /// the GC predicate can trim past it (the fall-off-log seam handles
-    /// that recovery). Idempotent: a host-supplied registration via
+    /// frontier. The default <see cref="InMemoryWalCursorRegistry"/> is
+    /// process-local and is wiped on restart; the durability backstop for that
+    /// is the cluster-wide <c>IWalMaterialiserPinGrain</c> (persisted through
+    /// the configured grain storage), which the WAL GC consults so it never
+    /// trims past a leaf's durable checkpoint for a leaf that has not yet
+    /// re-activated and re-reported after a restart. Forward consumers (for
+    /// example the replication shipper) still re-report their own
+    /// durably-persisted cursors on restart, and the fall-off-log seam handles
+    /// any genuine retention gap. Idempotent: a host-supplied registration via
     /// <paramref name="factory"/> takes precedence and a second call is a
     /// no-op.
     /// </summary>

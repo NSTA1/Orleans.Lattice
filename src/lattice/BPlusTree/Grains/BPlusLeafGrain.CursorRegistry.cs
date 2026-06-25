@@ -97,6 +97,11 @@ internal sealed partial class BPlusLeafGrain
             try
             {
                 await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
+                // Mirror the frontier into the durable pin store so the WAL
+                // GC's trim floor survives a full restart. Fire-and-forget
+                // and coalesced inside the reporter - no synchronous durable
+                // write is added to the checkpoint path here.
+                reporter.NoteDurableMaterialiserFrontier(treeId, consumerId, clock);
             }
             catch (Exception ex)
             {
@@ -110,6 +115,48 @@ internal sealed partial class BPlusLeafGrain
                     consumerId,
                     clock);
             }
+        }
+    }
+
+    /// <summary>
+    /// Seeds the durable WAL materialiser pin store with this leaf's
+    /// persisted checkpoint frontier (which may be
+    /// <see cref="HybridLogicalClock.Zero"/> for a leaf that has activated
+    /// but never checkpointed). Unlike <see cref="ReportCursorIfActiveAsync"/>
+    /// this is <b>not</b> gated on <c>Clock &gt; Zero</c>: a Zero seed is a
+    /// deliberate "block" pin that keeps the WAL head retained for a
+    /// never-checkpointed leaf across a restart, closing the edge where a
+    /// leaf has applied and shipped a write but never produced a checkpoint.
+    /// Reports to the in-memory registry are skipped for the Zero case (a
+    /// Zero cursor would either be rejected or pin the trim point at offset
+    /// zero); only the durable, GC-floor-only pin is seeded. The seed uses
+    /// the same per-partition consumer-id shape as
+    /// <see cref="ReportCursorIfActiveAsync"/> so a later real-frontier
+    /// report advances the same key rather than orphaning the Zero seed.
+    /// Never throws.
+    /// </summary>
+    private async Task SeedDurableMaterialiserFrontierAsync()
+    {
+        var reporter = ResolveCursorReporter();
+        if (reporter is null)
+        {
+            return;
+        }
+
+        var idBase = ResolveConsumerIdBase();
+        if (idBase is null)
+        {
+            return;
+        }
+
+        var treeId = state.State.TreeId!;
+        var clock = state.State.Clock;
+        var options = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, options.WalPartitions);
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+            reporter.NoteDurableMaterialiserFrontier(treeId, consumerId, clock);
         }
     }
 

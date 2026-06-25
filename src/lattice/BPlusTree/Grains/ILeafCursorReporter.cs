@@ -81,4 +81,31 @@ internal interface ILeafCursorReporter
     Task UnregisterTreeAsync(
         string treeName,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Publishes the leaf's durable checkpoint <paramref name="frontier"/> to
+    /// the cluster-wide durable pin store
+    /// (<see cref="IWalMaterialiserPinGrain"/>) so the WAL GC's trim floor
+    /// survives a full silo/cluster restart that wipes the process-local
+    /// <see cref="IWalCursorRegistry"/>.
+    /// <para>
+    /// Deliberately fire-and-forget and coalesced: the call returns
+    /// immediately without awaiting the durable write so the leaf's
+    /// foreground/checkpoint path takes on no synchronous storage latency.
+    /// A durable pin that lags the leaf's true frontier is always GC-safe
+    /// (it only retains more WAL), so the implementation debounces writes
+    /// and swallows transient failures. The leaf calls this on activation
+    /// (seeding a <see cref="HybridLogicalClock.Zero"/> "block" pin for a
+    /// leaf that has never checkpointed) and after each checkpoint flush.
+    /// Implementations with no durable backing (no grain factory, pre-WAL
+    /// hosts) treat this as a no-op.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose leaf is reporting.</param>
+    /// <param name="consumerId">Stable leaf-materialiser consumer id (the same id reported to the in-memory registry).</param>
+    /// <param name="frontier">The leaf's durable checkpoint frontier; <see cref="HybridLogicalClock.Zero"/> seeds a never-checkpointed block pin.</param>
+    void NoteDurableMaterialiserFrontier(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock frontier);
 }

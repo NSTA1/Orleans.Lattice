@@ -42,6 +42,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
+| `WalMaterialiserPinGrain` | `{treeId}` | `"my-tree"` |
 
 Parse the tree ID from the key using `key[..key.LastIndexOf('/')]` when needed.
 
