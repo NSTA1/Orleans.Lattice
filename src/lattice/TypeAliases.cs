@@ -355,6 +355,13 @@ internal static class TypeAliases
     internal const string LatticeWalProviderMissing = "ol.wpm";
     internal const string LatticeWalQuiescing = "ol.wqx";
 
+    // Durable leaf-materialiser WAL pin: the per-tree grain that persists
+    // each leaf's checkpoint frontier so the WAL GC never trims past a
+    // leaf's durable checkpoint after a full silo/cluster restart wipes the
+    // in-memory cursor registry.
+    internal const string IWalMaterialiserPinGrain = "ol.wpi";
+    internal const string WalMaterialiserPinState = "ol.wps";
+
     // Materialised views (Phase 1): the projected-write value type and its
     // effect-kind enum are the core serializable surface; the view
     // maintainer's durable checkpoint state lives in the replication package
