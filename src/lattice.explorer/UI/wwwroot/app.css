@@ -180,7 +180,7 @@ code, .explorer-mono {
 
 .explorer-brand {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 0.55rem;
     padding: 0.55rem 1rem;
     border-bottom: 1px solid var(--border);
@@ -651,12 +651,13 @@ code, .explorer-mono {
 /* Connection status banner */
 
 .explorer-connbar {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
-    border-bottom: 1px solid var(--border);
+    gap: 0.5rem;
+    margin-left: auto;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.8rem;
+    border-radius: var(--radius-sm);
 }
 
 .explorer-connbar-warn {
@@ -664,10 +665,15 @@ code, .explorer-mono {
     background: var(--bg-elevated);
 }
 
+.explorer-connbar-ok {
+    color: var(--ok);
+    background: var(--bg-elevated);
+}
+
 .explorer-connbar-down {
     color: var(--danger);
     background: var(--danger-surface);
-    border-bottom-color: var(--danger-border);
+    border: 1px solid var(--danger-border);
 }
 
 .explorer-conndot {
@@ -679,7 +685,6 @@ code, .explorer-mono {
 }
 
 .explorer-connmsg {
-    flex: 1;
     min-width: 0;
 }
 
@@ -961,7 +966,8 @@ code, .explorer-mono {
 }
 
 .explorer-topology-reset {
-    padding: 0.3rem 0.7rem;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.82rem;
 }
 
 .explorer-topology-hint {
