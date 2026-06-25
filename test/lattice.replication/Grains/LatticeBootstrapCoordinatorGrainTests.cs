@@ -563,6 +563,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Seed(fake, LatticeBootstrapState.IncrementalHandoff);
         var asOf = Hlc(99);
         var frontier = new VersionVector();
+        frontier.Entries["us"] = Hlc(99);
         fake.State.SnapshotAsOfHlc = asOf;
         fake.State.CausalStableFrontier = frontier;
         var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
@@ -572,12 +573,12 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         await grain.ProcessNextPhaseAsync();
 
         // The pinned frontier carries the source cluster's own
-        // consumption coordinate at the snapshot AsOfHlc even though the
-        // source authored nothing (the supplied frontier was empty), so
-        // HWM[source] is no longer left at zero.
+        // consumption coordinate at the snapshot's causal-stable cut (the
+        // maximum frontier coordinate) even though the source authored
+        // nothing of its own, so HWM[source] is no longer left at zero.
         await hwm.Received(1).PinSnapshotAsync(
             asOf,
-            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == asOf),
+            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(99)),
             Arg.Any<CancellationToken>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         Assert.That(fake.State.InProgress, Is.False);
@@ -589,8 +590,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // Regression: when bootstrapping from a source that
         // authored nothing of its own, the snapshot's CausalStableFrontier
         // carries coordinates only for the origins that did author data
-        // (here "us"), leaving no entry for the source itself. The pin
-        // must seal HWM[source]=AsOfHlc so the durable WAL's retained
+        // (here "us" and "other"), leaving no entry for the source itself.
+        // The pin must seal HWM[source] at the causal-stable cut (the
+        // maximum frontier coordinate) so the durable WAL's retained
         // source-origin baselines are not read as a perpetual trim gap by
         // the fall-off detector, while still preserving every other
         // origin's coordinate verbatim.
@@ -599,6 +601,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var asOf = Hlc(99);
         var frontier = new VersionVector();
         frontier.Entries["us"] = Hlc(50);
+        frontier.Entries["other"] = Hlc(70);
         fake.State.SnapshotAsOfHlc = asOf;
         fake.State.CausalStableFrontier = frontier;
         var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
@@ -610,23 +613,25 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         await hwm.Received(1).PinSnapshotAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
-                v.GetClock(SourceCluster) == asOf
-                && v.GetClock("us") == Hlc(50)),
+                v.GetClock(SourceCluster) == Hlc(70)
+                && v.GetClock("us") == Hlc(50)
+                && v.GetClock("other") == Hlc(70)),
             Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task ProcessNextPhase_pin_does_not_regress_source_coordinate_already_above_asof()
+    public async Task ProcessNextPhase_pin_does_not_regress_source_coordinate_already_at_cut()
     {
         // Guard: the source-coordinate seal is a monotonic max, so
-        // a frontier that already carries a source coordinate at or above
-        // the snapshot AsOfHlc (the source authored data of its own that
-        // post-dates the snapshot point) is pinned unchanged.
+        // a frontier whose source coordinate already equals the
+        // causal-stable cut (the source authored the maximum-HLC data in
+        // the snapshot itself) is pinned unchanged.
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.IncrementalHandoff);
         var asOf = Hlc(99);
         var frontier = new VersionVector();
         frontier.Entries[SourceCluster] = Hlc(200);
+        frontier.Entries["us"] = Hlc(99);
         fake.State.SnapshotAsOfHlc = asOf;
         fake.State.CausalStableFrontier = frontier;
         var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
@@ -637,7 +642,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await hwm.Received(1).PinSnapshotAsync(
             asOf,
-            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(200)),
+            Arg.Is<VersionVector>(v =>
+                v.GetClock(SourceCluster) == Hlc(200)
+                && v.GetClock("us") == Hlc(99)),
             Arg.Any<CancellationToken>());
     }
 
@@ -908,10 +915,13 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(fake.State.LastAppliedHlc, Is.EqualTo(Hlc(50)));
 
         await grain.ProcessNextPhaseAsync(); // pins → LiveIncremental
-        // Source-origin consumption coordinate sealed at AsOfHlc.
+        // The resume stream is empty and the frontier carries no
+        // coordinates, so the causal-stable cut is zero and there is no
+        // source-origin baseline to seal; the pin still completes with an
+        // unsealed source coordinate.
         await hwm.Received(1).PinSnapshotAsync(
             asOf,
-            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == asOf),
+            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == HybridLogicalClock.Zero),
             Arg.Any<CancellationToken>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         Assert.That(fake.State.InProgress, Is.False);
