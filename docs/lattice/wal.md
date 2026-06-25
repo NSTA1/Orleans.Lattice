@@ -214,6 +214,40 @@ unsuffixed `_lattice_materialiser_{treeId}_{leafGrainId}` shape is
 preserved so a host that has never enabled multi-partition replay is
 wire-compatible with its existing cursor registrations.
 
+### Surviving a full restart
+
+The per-shard WAL GC trims through the minimum cursor across the
+consumers currently registered in the WAL cursor registry. The default
+registry is process-local and is wiped when a silo restarts, so on a
+cold start a forward consumer that persists its own cursor (the
+replication shipper re-reports its durably-advanced cursor eagerly on
+activation) could momentarily be the only registered consumer for a
+tree, while a dormant leaf - which re-registers its pin only lazily, on
+its next activation and checkpoint flush - is absent. Without a
+backstop the GC would compute its trim floor over the forward consumer
+alone and trim the WAL past the leaf's durable checkpoint, discarding
+the committed-but-not-yet-checkpointed tail the leaf still needs to
+replay.
+
+To close that window each leaf also mirrors its checkpoint frontier
+into a cluster-wide durable pin grain (one activation per tree, keyed by
+the tree id, persisted through the configured grain storage). The
+mirror is fire-and-forget and coalesced off the checkpoint path - a
+debounce keeps a busy every-write-checkpoint leaf from issuing a durable
+write per write - and because a too-low durable pin only ever retains
+*more* WAL, a coalesced or slightly stale pin is always safe. On each
+pass the GC consults the durable pins and lowers its trim floor for any
+materialiser consumer that is **missing** from the in-memory registry
+(a consumer that is present has a fresher in-memory cursor already
+folded into the floor, so steady-state trimming is unchanged). A leaf
+that activated but never checkpointed seeds a durable `Zero` "block"
+pin, which holds the WAL head for that leaf until it produces its first
+checkpoint; the TTL ceiling (`LatticeOptions.WalRetention`) still bounds
+growth in that state. Because durable WAL storage is the deployment
+shape most exposed to this hazard, `AddAzureTableWalStorage`
+automatically wires the cursor registry and WAL GC seams (both
+idempotent) so durable storage never ships without the durable floor.
+
 ## Origin cluster id stamping
 
 Every WAL record carries `OriginClusterId` so multi-site receivers can
