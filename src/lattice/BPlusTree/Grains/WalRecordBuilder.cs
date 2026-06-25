@@ -145,8 +145,11 @@ internal static class WalRecordBuilder
     /// <see cref="WalRecord.Delta"/> into their current visible state via
     /// the registered <c>CrdtShape</c>. The merge mode is stamped onto
     /// the in-memory record so the leaf-side dispatch can dispatch on
-    /// <paramref name="mode"/> without re-resolving it; the wire-time
-    /// encoder re-stamps from the per-tree resolver.
+    /// <paramref name="mode"/> without re-resolving it; the producer-side
+    /// writer (<c>WalCommitLogWriter.RouteAsync</c>) preserves this
+    /// authored mode onto the durable record so a cold replay can fold
+    /// the delta without depending on the per-tree resolver knowing the
+    /// tree (issue #926).
     /// </summary>
     public static WalRecord ForCrdtDelta(
         string treeId,

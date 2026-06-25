@@ -128,26 +128,41 @@ public readonly record struct WalRecord
     /// entries and for entries decoded from older wire formats that
     /// pre-date this field.
     /// <para>
-    /// <b>Wire-shape note:</b> this slot is deliberately
-    /// <i>not</i> tagged with an Orleans <c>[Id]</c> attribute, so it is
-    /// neither serialised nor deserialised by the canonical
-    /// <see cref="OrleansBinaryWalRecordEncoder"/> codec. The merge mode
-    /// is uniformly per-tree-constant within a single shipped batch, so
-    /// the framing header (<c>EncodedBatchHeader.Mode</c>) carries it
-    /// once per batch and the receiver-side replication apply seam
-    /// re-stamps every decoded entry with that header value via
-    /// <see cref="IWalRecordEncoder.Decode(System.ReadOnlySpan{byte}, string, LatticeMergeMode)"/>.
-    /// Storage seams (the WAL append path) re-stamp the slot from the
-    /// activation-cached
-    /// <see cref="ILatticeMergeModeResolver.Resolve(string)"/> result on
-    /// read-back via the same overload. The previous wire id
-    /// (<c>[Id(9)]</c>) is permanently reserved and must never be
-    /// reused for a different field, because legacy WAL bytes authored
-    /// before the slot was de-tagged still carry it and Orleans
-    /// silently drops unknown ids on decode.
+    /// <b>Wire-shape note:</b> this slot is serialised at wire id
+    /// <c>26</c> so the declared merge mode is durable on the encoded
+    /// record and recoverable without any out-of-band context. The
+    /// canonical <see cref="OrleansBinaryWalRecordEncoder"/> codec omits
+    /// the slot from the bytes whenever it holds the enum default
+    /// (<see cref="LatticeMergeMode.LwwRegister"/>) - the overwhelmingly
+    /// common plain-LWW write - so the steady-state byte shape is
+    /// unchanged; only the typed-CRDT modes (which already drop the
+    /// stripped post-merge <see cref="Value"/> payload) pay the one or
+    /// two extra bytes. Persisting the mode is required because the WAL
+    /// <i>storage</i> replay path has no per-batch framing header to
+    /// hoist it from, and the activation-cached
+    /// <see cref="ILatticeMergeModeResolver.Resolve(string)"/> result is
+    /// not a sound source: it returns <see langword="null"/> for every
+    /// tree the resolver does not know (every tree on a single-cluster
+    /// host, and any replicated-host tree absent from the configured
+    /// replicated set), so a delta-only CRDT record would replay as an
+    /// LWW null and silently empty the key (see issue #926).
+    /// <para>
+    /// The cross-cluster ship path still carries the mode once per batch
+    /// in the framing header (<c>EncodedBatchHeader.Mode</c>) and the
+    /// receiver-side apply seam re-stamps every decoded entry via
+    /// <see cref="IWalRecordEncoder.Decode(System.ReadOnlySpan{byte}, string, LatticeMergeMode)"/>;
+    /// that override is now idempotent because the decoded record already
+    /// carries the same mode from its own bytes. The wire id <c>9</c>
+    /// (the slot's original tag, retired when it was briefly de-tagged)
+    /// is permanently reserved and must never be reused for a different
+    /// field, because legacy WAL bytes authored while it was tagged still
+    /// carry it; Orleans silently drops the unknown id <c>9</c> on decode
+    /// and such records fall back to the default, exactly as a pre-CRDT
+    /// LWW entry does.
+    /// </para>
     /// </para>
     /// </summary>
-    [field: NonSerialized]
+    [Id(26)]
     public LatticeMergeMode Mode { get; init; }
 
     /// <summary>

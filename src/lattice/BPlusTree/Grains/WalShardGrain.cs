@@ -1011,14 +1011,21 @@ internal sealed class WalShardGrain(
             .ReadAsync(_treeId, _shardIndex, fromOffsetExclusive, maxEntries, cancellationToken)
             .ConfigureAwait(true))
         {
-            // Re-resolve the declared replication mode from the resolver:
-            // the WAL deliberately does not carry the mode (it's
-            // recoverable from a deterministic, side-effect-free source)
-            // so the storage shape stays free of replication-only
-            // metadata. A null resolver result means "tree no longer in
-            // the replicated set"; ship as the canonical default so the
-            // outbound batch is still typed.
-            var mode = modeResolver.Resolve(walEntry.Mutation.TreeId) ?? LatticeMergeMode.LwwRegister;
+            // Recover the declared merge mode durably. Since wire id 26
+            // the encoded WAL record persists the authored mode, so a
+            // record decoded by the storage provider carries it on
+            // walEntry.Mutation.Mode - the authoritative source for the
+            // replay/fold. Only when the durable mode is the enum default
+            // (a plain LWW write, or a legacy record authored before the
+            // slot was tagged) do we consult the resolver, preserving the
+            // historical behaviour and the cross-cluster ship typing.
+            // This stops a non-replicated CRDT tree's delta-only record
+            // from replaying as an LWW null (issue #926): the resolver
+            // returns null -> LwwRegister for any tree it does not know,
+            // which previously clobbered the durable mode here.
+            var mode = walEntry.Mutation.Mode != LatticeMergeMode.LwwRegister
+                ? walEntry.Mutation.Mode
+                : modeResolver.Resolve(walEntry.Mutation.TreeId) ?? LatticeMergeMode.LwwRegister;
             // The WAL is durability-only at the core layer; the origin
             // cluster id is stamped upstream on the mutation itself by
             // the replication observer (when the replication package is

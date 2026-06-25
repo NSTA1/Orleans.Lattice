@@ -236,9 +236,16 @@ public interface IWalStorageProvider
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // Pass the entry's durable merge mode through so the
+            // re-encoded bytes are byte-faithful to the original append:
+            // since wire id 26 the encoder persists Mode, so hardcoding
+            // LwwRegister here would drop a CRDT record's mode from the
+            // re-encoded payload. The mutation carries the authored mode
+            // (recovered by the provider's decode), so it is the correct
+            // source.
             var record = BPlusTree.Grains.WalRecordConverter.ToWalRecord(
                 entry.Mutation,
-                LatticeMergeMode.LwwRegister,
+                entry.Mutation.Mode,
                 string.Empty);
             var writer = new System.Buffers.ArrayBufferWriter<byte>();
             encoder.Encode(in record, writer);

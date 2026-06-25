@@ -334,6 +334,27 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
+        // Defensive guard for a delta-only CRDT record whose authored
+        // merge mode could not be recovered (mutation.Mode == LwwRegister
+        // yet a typed Delta is present and the record is neither prepared
+        // nor a tombstone). This is the signature of a legacy WAL record
+        // authored before the mode was made durable (wire id 26) on a
+        // tree the resolver does not know - its mode is unrecoverable
+        // from every durable source, so the fold above could not run.
+        // Installing the stripped null Value verbatim would empty the key
+        // via LWW (a non-tombstone null at the record's recent timestamp
+        // beats the prior folded value) - the exact data-loss symptom of
+        // issue #926. Skip the record instead so the last folded value
+        // (loaded from the leaf checkpoint) is preserved; the lost
+        // increment is unrecoverable here, but the key is not destroyed.
+        if (mutation.Delta is not null
+            && !mutation.IsPrepared
+            && !mutation.IsTombstone
+            && mutation.Value is null)
+        {
+            return;
+        }
+
         var incoming = new LwwValue<byte[]>
         {
             Value = mutation.IsTombstone ? null : mutation.Value,
