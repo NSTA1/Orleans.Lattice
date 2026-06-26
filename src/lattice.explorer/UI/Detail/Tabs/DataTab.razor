@@ -23,6 +23,8 @@
         </div>
     </div>
 
+    <DataKeySearch Loading="@_loading" Disabled="@(_activeTagFilter is not null)" OnSearch="OnKeySearchAsync" />
+
     @if (_tagIndexes.Count > 0)
     {
         <div class="explorer-data-toolbar explorer-data-tagfilter">
@@ -183,6 +185,11 @@
     private string? _tagValue;
     private TagFilter? _activeTagFilter;
 
+    // The committed key starts-with filter, kept in sync from the search box so
+    // other reload triggers (Refresh, page size) reuse it. Only applied to an
+    // untagged scan; the state-API range is ignored under a tag filter.
+    private string _keyPrefix = string.Empty;
+
     protected override async Task OnInitializedAsync()
     {
         _pager = new DataPager(DataReader);
@@ -213,7 +220,17 @@
     private Task ReloadFirstPageAsync()
     {
         ClearSelection();
-        return RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, TabToken));
+
+        // A key prefix only applies to an untagged scan; the state-API range is
+        // ignored under a tag filter (and the prefix box is disabled then).
+        var prefix = _activeTagFilter is null && !string.IsNullOrEmpty(_keyPrefix) ? _keyPrefix : null;
+        return RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, prefix, TabToken));
+    }
+
+    private async Task OnKeySearchAsync(string prefix)
+    {
+        _keyPrefix = prefix;
+        await ReloadFirstPageAsync();
     }
 
     private async Task OnTagKeyUp(KeyboardEventArgs e)

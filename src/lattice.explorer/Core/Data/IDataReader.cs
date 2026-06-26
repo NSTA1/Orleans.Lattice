@@ -12,13 +12,16 @@ public interface IDataReader
     /// snapshot, or <see langword="null"/> to open a fresh snapshot scan. When a
     /// <paramref name="tagFilter"/> is supplied, only the rows of
     /// <paramref name="treeId"/> tagged with that value (in the named index) are
-    /// returned.
+    /// returned. When a non-empty <paramref name="keyPrefix"/> is supplied (and
+    /// no <paramref name="tagFilter"/> is active), the scan is bounded to the keys
+    /// that start with that prefix, served as a ranged seek over the sorted keys.
     /// </summary>
     Task<DataPage> ScanAsync(
         string treeId,
         int pageSize,
         string? continuationToken = null,
         TagFilter? tagFilter = null,
+        string? keyPrefix = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

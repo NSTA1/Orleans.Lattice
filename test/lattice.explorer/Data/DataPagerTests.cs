@@ -214,6 +214,7 @@ public class DataPagerTests
             int pageSize,
             string? continuationToken = null,
             TagFilter? tagFilter = null,
+            string? keyPrefix = null,
             CancellationToken cancellationToken = default)
         {
             ScanCalls++;

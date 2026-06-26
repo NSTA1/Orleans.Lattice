@@ -104,6 +104,75 @@ public class DataReaderTests
     }
 
     [Test]
+    public async Task ScanAsync_WithKeyPrefix_SetsRangeBounds()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("tree-1", pageSize: 25, keyPrefix: "abc");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastScan!.StartInclusive, Is.EqualTo("abc"));
+            Assert.That(client.LastScan!.EndExclusive, Is.EqualTo("abd"));
+        });
+    }
+
+    [Test]
+    public async Task ScanAsync_WithKeyPrefixAndTagFilter_IgnoresPrefixBounds()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("tree-1", pageSize: 25, keyPrefix: "abc",
+            tagFilter: new TagFilter("by-status", "open"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastScan!.StartInclusive, Is.Null);
+            Assert.That(client.LastScan!.EndExclusive, Is.Null);
+            Assert.That(client.LastScan!.IndexName, Is.EqualTo("by-status"));
+            Assert.That(client.LastScan!.Tag, Is.EqualTo("open"));
+        });
+    }
+
+    [Test]
+    public async Task ScanAsync_WithEmptyKeyPrefix_LeavesRangeBoundsNull()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("tree-1", pageSize: 25, keyPrefix: "");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastScan!.StartInclusive, Is.Null);
+            Assert.That(client.LastScan!.EndExclusive, Is.Null);
+        });
+    }
+
+    [Test]
+    public void PrefixUpperBound_IncrementsLastCodeUnit()
+    {
+        Assert.That(DataReader.PrefixUpperBound("abc"), Is.EqualTo("abd"));
+    }
+
+    [Test]
+    public void PrefixUpperBound_RollsOverTrailingMaxCodeUnits()
+    {
+        // 'a' followed by U+FFFF: the trailing max unit is dropped and the
+        // preceding 'a' is incremented to 'b'.
+        Assert.That(DataReader.PrefixUpperBound("a\uFFFF"), Is.EqualTo("b"));
+    }
+
+    [Test]
+    public void PrefixUpperBound_AllMaxCodeUnits_ReturnsNull()
+    {
+        Assert.That(DataReader.PrefixUpperBound("\uFFFF\uFFFF"), Is.Null);
+        Assert.That(DataReader.PrefixUpperBound(string.Empty), Is.Null);
+    }
+
+    [Test]
     public async Task ListTagIndexesForTreeAsync_PassesSourceTreeId_AndPagesAllNames()
     {
         var calls = 0;

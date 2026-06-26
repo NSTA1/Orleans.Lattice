@@ -36,6 +36,9 @@ public sealed class DataPager(IDataReader reader)
     /// <summary>The tag filter the current snapshot was opened with, if any.</summary>
     public TagFilter? TagFilter { get; private set; }
 
+    /// <summary>The key prefix the current snapshot was opened with, if any.</summary>
+    public string? KeyPrefix { get; private set; }
+
     /// <summary>The zero-based index of the page currently in view.</summary>
     public int PageIndex { get; private set; }
 
@@ -63,6 +66,7 @@ public sealed class DataPager(IDataReader reader)
         string treeId,
         int pageSize,
         TagFilter? tagFilter = null,
+        string? keyPrefix = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -72,11 +76,12 @@ public sealed class DataPager(IDataReader reader)
         var oldTreeId = TreeId;
         var oldContinuation = _liveContinuation;
 
-        var page = await _reader.ScanAsync(treeId, pageSize, null, tagFilter, cancellationToken).ConfigureAwait(false);
+        var page = await _reader.ScanAsync(treeId, pageSize, null, tagFilter, keyPrefix, cancellationToken).ConfigureAwait(false);
 
         TreeId = treeId;
         PageSize = pageSize;
         TagFilter = tagFilter;
+        KeyPrefix = keyPrefix;
         _pages.Clear();
         _pages.Add(page);
         PageIndex = 0;
@@ -110,7 +115,7 @@ public sealed class DataPager(IDataReader reader)
             return;
         }
 
-        var page = await _reader.ScanAsync(TreeId!, PageSize, token, TagFilter, cancellationToken).ConfigureAwait(false);
+        var page = await _reader.ScanAsync(TreeId!, PageSize, token, TagFilter, KeyPrefix, cancellationToken).ConfigureAwait(false);
         _pages.Add(page);
         PageIndex = _pages.Count - 1;
 

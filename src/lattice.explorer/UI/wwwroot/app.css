@@ -1077,6 +1077,68 @@ code, .explorer-mono {
     font-variant-numeric: tabular-nums;
 }
 
+.explorer-data-search-field {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 1 1 240px;
+    max-width: 420px;
+}
+
+.explorer-data-search-input {
+    width: 100%;
+    padding: 0.4rem 1.9rem 0.4rem 0.7rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.explorer-data-search-input::placeholder {
+    color: var(--text-dim);
+}
+
+.explorer-data-search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.explorer-data-search-input:disabled {
+    opacity: 0.55;
+}
+
+.explorer-data-search-clear {
+    position: absolute;
+    right: 0.4rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.2rem;
+    height: 1.2rem;
+    padding: 0;
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.explorer-data-search-clear:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--bg-elevated);
+}
+
+.explorer-data-search-hint {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+
 .explorer-data-body {
     display: grid;
     grid-template-columns: minmax(220px, 0.9fr) 1.4fr;
