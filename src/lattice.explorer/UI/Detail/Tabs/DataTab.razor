@@ -2,6 +2,7 @@
 @inherits DetailTabBase
 @inject IDataReader DataReader
 @inject IUiSessionStore SessionStore
+@inject IUiPreferenceStore Preferences
 
 <div class="explorer-data">
     <div class="explorer-data-toolbar">
@@ -197,10 +198,23 @@
     {
         _pager = new DataPager(DataReader);
 
-        // Restore this selection's retained search and page size (session-scoped,
-        // not durable) so the first scan and the controls reflect the prior view.
-        _keyPrefix = SessionStore.GetOrDefault(SearchStateKey, string.Empty);
-        _pageSize = DataPaging.Normalize(SessionStore.GetOrDefault(PageSizeStateKey, DataPaging.DefaultPageSize));
+        // Hydrate durable preferences before the first read so the controls and
+        // the first scan reflect the prior view. Tolerant of an unreachable
+        // backing store (for example during server prerender), in which case the
+        // first-render fallback re-seeds once browser storage becomes reachable.
+        await Preferences.EnsureLoadedAsync(TabToken);
+        await SeedFromPreferencesAndScanAsync();
+        _seededFromPreferences = Preferences.IsLoaded;
+    }
+
+    // Seeds this selection's retained view from durable preferences, then opens
+    // the first page. The page index is position (not a preference) so it stays
+    // in the in-memory session store and is replayed forward after the scan.
+    private async Task SeedFromPreferencesAndScanAsync()
+    {
+        // Durable per-selection preferences: prior search prefix and page size.
+        _keyPrefix = Preferences.GetOrDefault(SearchStateKey, string.Empty);
+        _pageSize = DataPaging.Normalize(Preferences.GetOrDefault(PageSizeStateKey, DataPaging.DefaultPageSize));
 
         // Capture the retained page before the first scan resets it; a fresh
         // snapshot always opens at page 0, so we replay forward to it afterwards.
@@ -216,15 +230,38 @@
         }
     }
 
+    // When durable preferences could not be hydrated during initialization (the
+    // backing store was unreachable, for example during server prerender), retry
+    // once on the first interactive render and re-seed if anything was retained.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _seededFromPreferences)
+        {
+            return;
+        }
+
+        await Preferences.EnsureLoadedAsync(TabToken);
+        if (!Preferences.IsLoaded)
+        {
+            return;
+        }
+
+        _seededFromPreferences = true;
+        await SeedFromPreferencesAndScanAsync();
+        StateHasChanged();
+    }
+
+    private bool _seededFromPreferences;
+
     private async Task LoadTagIndexesAsync()
     {
         try
         {
             _tagIndexes = await DataReader.ListTagIndexesForTreeAsync(Selection.Id, TabToken);
 
-            // Restore the retained index selection for this selection (session
-            // scoped); fall back to the first index when none is retained.
-            var retained = SessionStore.GetOrDefault(TagIndexStateKey, string.Empty);
+            // Restore the retained index selection for this selection (durable
+            // preference); fall back to the first index when none is retained.
+            var retained = Preferences.GetOrDefault(TagIndexStateKey, string.Empty);
             _selectedIndex = _tagIndexes.Contains(retained)
                 ? retained
                 : _tagIndexes.Count > 0 ? _tagIndexes[0] : null;
@@ -243,7 +280,7 @@
     }
 
     // Loads the distinct tag values for the selected index and restores this
-    // selection's retained value (session scoped, default empty / no filter).
+    // selection's retained value (durable preference, default empty / no filter).
     private async Task LoadRetainedTagFilterAsync()
     {
         if (string.IsNullOrEmpty(_selectedIndex))
@@ -273,7 +310,7 @@
             _tagValuesLoading = false;
         }
 
-        var retained = SessionStore.GetOrDefault(TagValueStateKey(_selectedIndex), string.Empty);
+        var retained = Preferences.GetOrDefault(TagValueStateKey(_selectedIndex), string.Empty);
         if (!string.IsNullOrEmpty(retained) && _tagValues.Contains(retained))
         {
             _tagValue = retained;
@@ -301,33 +338,34 @@
     {
         _keyPrefix = prefix;
 
-        // Retain per selection for the session; an empty search clears the entry.
+        // Retain per selection as a durable preference; an empty search clears it.
         if (string.IsNullOrWhiteSpace(prefix))
         {
-            SessionStore.Remove(SearchStateKey);
+            await Preferences.RemoveAsync(SearchStateKey, TabToken);
         }
         else
         {
-            SessionStore.Set(SearchStateKey, prefix);
+            await Preferences.SetAsync(SearchStateKey, prefix, owner: Selection.Id, TabToken);
         }
 
         await ReloadFirstPageAsync();
     }
 
-    // Session-store key for this selection's retained key search. The feature
+    // Durable-preference key for this selection's retained key search. The feature
     // prefix keeps it distinct from any other UI state stored for the selection.
     private string SearchStateKey => $"data-search:{Selection.Id}";
 
-    // Session-store key for this selection's retained page size.
+    // Durable-preference key for this selection's retained page size.
     private string PageSizeStateKey => $"data-pagesize:{Selection.Id}";
 
-    // Session-store key for this selection's retained current page index.
+    // Session-store key for this selection's retained current page index. Page
+    // position is ephemeral (not a preference), so it stays in the session store.
     private string PageStateKey => $"data-page:{Selection.Id}";
 
-    // Session-store key for this selection's retained tag index selection.
+    // Durable-preference key for this selection's retained tag index selection.
     private string TagIndexStateKey => $"data-tagindex:{Selection.Id}";
 
-    // Session-store key for this selection's retained tag value, per index.
+    // Durable-preference key for this selection's retained tag value, per index.
     private string TagValueStateKey(string indexName) => $"data-tagvalue:{Selection.Id}:{indexName}";
 
     // The user picked a different tag index: load its values, restore the
@@ -336,7 +374,7 @@
     {
         if (!string.IsNullOrEmpty(_selectedIndex))
         {
-            SessionStore.Set(TagIndexStateKey, _selectedIndex);
+            await Preferences.SetAsync(TagIndexStateKey, _selectedIndex, owner: Selection.Id, TabToken);
         }
 
         await LoadRetainedTagFilterAsync();
@@ -344,7 +382,7 @@
     }
 
     // The user picked a tag value (or the empty "(any)" option, which clears the
-    // filter). Retain per selection and index for the session, then refresh.
+    // filter). Retain per selection and index as a durable preference, then refresh.
     private async Task ApplyTagFilterAsync()
     {
         if (string.IsNullOrEmpty(_selectedIndex))
@@ -355,12 +393,12 @@
         if (string.IsNullOrEmpty(_tagValue))
         {
             _activeTagFilter = null;
-            SessionStore.Remove(TagValueStateKey(_selectedIndex));
+            await Preferences.RemoveAsync(TagValueStateKey(_selectedIndex), TabToken);
         }
         else
         {
             _activeTagFilter = new TagFilter(_selectedIndex, _tagValue);
-            SessionStore.Set(TagValueStateKey(_selectedIndex), _tagValue);
+            await Preferences.SetAsync(TagValueStateKey(_selectedIndex), _tagValue, owner: Selection.Id, TabToken);
         }
 
         await ReloadFirstPageAsync();
@@ -372,8 +410,8 @@
         {
             _pageSize = DataPaging.Normalize(size);
 
-            // Retain per selection for the session.
-            SessionStore.Set(PageSizeStateKey, _pageSize);
+            // Retain per selection as a durable preference.
+            await Preferences.SetAsync(PageSizeStateKey, _pageSize, owner: Selection.Id, TabToken);
         }
 
         // Page-size change opens a fresh snapshot from the first page.

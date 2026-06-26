@@ -55,6 +55,10 @@ public static class MauiProgram
         builder.Services.AddExplorerData();
         builder.Services.AddExplorerSession();
 
+        // The desktop head persists UI preferences to the platform preference
+        // store, overriding the in-memory fallback backing store.
+        builder.Services.AddScoped<IUiPreferenceBackingStore, MauiPreferenceBackingStore>();
+
         // Authentication. The desktop head rests the credential on the machine via
         // DPAPI (per-user encrypted) and signs in fully in-process.
         builder.Services.AddSingleton<ICredentialStore>(
