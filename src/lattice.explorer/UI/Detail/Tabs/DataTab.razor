@@ -201,8 +201,17 @@
         _keyPrefix = SessionStore.GetOrDefault(SearchStateKey, string.Empty);
         _pageSize = DataPaging.Normalize(SessionStore.GetOrDefault(PageSizeStateKey, DataPaging.DefaultPageSize));
 
+        // Capture the retained page before the first scan resets it; a fresh
+        // snapshot always opens at page 0, so we replay forward to it afterwards.
+        var targetPage = SessionStore.GetOrDefault(PageStateKey, 0);
+
         await LoadTagIndexesAsync();
         await ReloadFirstPageAsync();
+
+        if (targetPage > 0)
+        {
+            await RestoreToPageAsync(targetPage);
+        }
     }
 
     private async Task LoadTagIndexesAsync()
@@ -225,14 +234,15 @@
         }
     }
 
-    private Task ReloadFirstPageAsync()
+    private async Task ReloadFirstPageAsync()
     {
         ClearSelection();
 
         // A key prefix only applies to an untagged scan; the state-API range is
         // ignored under a tag filter (and the prefix box is disabled then).
         var prefix = _activeTagFilter is null && !string.IsNullOrEmpty(_keyPrefix) ? _keyPrefix : null;
-        return RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, prefix, TabToken));
+        await RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, prefix, TabToken));
+        PersistPage();
     }
 
     private async Task OnKeySearchAsync(string prefix)
@@ -258,6 +268,9 @@
 
     // Session-store key for this selection's retained page size.
     private string PageSizeStateKey => $"data-pagesize:{Selection.Id}";
+
+    // Session-store key for this selection's retained current page index.
+    private string PageStateKey => $"data-page:{Selection.Id}";
 
     private async Task OnTagKeyUp(KeyboardEventArgs e)
     {
@@ -298,17 +311,48 @@
         await ReloadFirstPageAsync();
     }
 
-    private Task NextPageAsync()
+    private async Task NextPageAsync()
     {
         ClearSelection();
-        return RunAsync(() => _pager.NextAsync(TabToken));
+        await RunAsync(() => _pager.NextAsync(TabToken));
+        PersistPage();
     }
 
     private void PreviousPage()
     {
         ClearSelection();
         _pager.Previous();
+        PersistPage();
         StateHasChanged();
+    }
+
+    // Retains the current page index per selection for the session; page 0 (the
+    // default first page) clears the entry rather than storing a zero.
+    private void PersistPage()
+    {
+        if (_pager.PageIndex <= 0)
+        {
+            SessionStore.Remove(PageStateKey);
+        }
+        else
+        {
+            SessionStore.Set(PageStateKey, _pager.PageIndex);
+        }
+    }
+
+    // Advances the freshly opened snapshot forward to the retained page on mount,
+    // bounded by the pages actually available (NextAsync is a no-op past the last
+    // page, so a shrunk dataset simply lands on the new last page).
+    private async Task RestoreToPageAsync(int targetPage)
+    {
+        await RunAsync(async () =>
+        {
+            while (_pager.PageIndex < targetPage && _pager.CanGoNext)
+            {
+                await _pager.NextAsync(TabToken);
+            }
+        });
+        PersistPage();
     }
 
     private async Task RunAsync(Func<Task> operation)
