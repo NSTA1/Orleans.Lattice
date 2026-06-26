@@ -44,7 +44,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             FakePersistentState<BootstrapCoordinatorState>? existingState = null,
             string treeName = Tree,
             ILatticeMergeModeResolver? mergeResolver = null,
-            LatticeReplicationOptions? replicationOptions = null)
+            LatticeReplicationOptions? replicationOptions = null,
+            IReadOnlyDictionary<string, HybridLogicalClock>? localOldestByOrigin = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
@@ -91,9 +92,19 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         optionsMonitor.CurrentValue.Returns(options);
+        // Default WAL introspection returns an empty per-origin map so the
+        // pin's local-oldest seal fold is a no-op unless a test supplies a
+        // map; existing seal tests therefore observe the frontier/applied
+        // cut unchanged.
+        var walIntrospection = Substitute.For<ILatticeWalIntrospection>();
+        walIntrospection
+            .GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(localOldestByOrigin
+                ?? new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
         var fakeState = existingState ?? new FakePersistentState<BootstrapCoordinatorState>();
         var grain = new LatticeBootstrapCoordinatorGrain(
             context, factory, provider, apply, reminders, resolver, optionsMonitor,
+            walIntrospection,
             NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState);
         return (grain, fakeState, factory, provider, reminders, apply, hwm, resolver);
     }
@@ -184,6 +195,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
                 context, null!, provider, applier, reminders, resolver, StubOptions(),
+                Substitute.For<ILatticeWalIntrospection>(),
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -200,6 +212,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
                 context, factory, null!, applier, reminders, resolver, StubOptions(),
+                Substitute.For<ILatticeWalIntrospection>(),
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -216,6 +229,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
                 context, factory, provider, null!, reminders, resolver, StubOptions(),
+                Substitute.For<ILatticeWalIntrospection>(),
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -232,6 +246,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
                 context, factory, provider, applier, reminders, null!, StubOptions(),
+                Substitute.For<ILatticeWalIntrospection>(),
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -249,6 +264,25 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(
             () => new LatticeBootstrapCoordinatorGrain(
                 context, factory, provider, applier, reminders, resolver, null!,
+                Substitute.For<ILatticeWalIntrospection>(),
+                NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_wal_introspection_is_null()
+    {
+        var context = Substitute.For<IGrainContext>();
+        var factory = Substitute.For<IGrainFactory>();
+        var provider = Substitute.For<IBootstrapSnapshotSource>();
+        var applier = Substitute.For<IReplicationApplier>();
+        var reminders = Substitute.For<IReminderRegistry>();
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        var fakeState = new FakePersistentState<BootstrapCoordinatorState>();
+        Assert.That(
+            () => new LatticeBootstrapCoordinatorGrain(
+                context, factory, provider, applier, reminders, resolver, StubOptions(),
+                null!,
                 NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState),
             Throws.InstanceOf<ArgumentNullException>());
     }
@@ -649,6 +683,121 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     }
 
     [Test]
+    public async Task ProcessNextPhase_pin_seals_source_at_applied_cursor_when_frontier_lags()
+    {
+        // Regression for the cross-cluster re-bootstrap loop: the snapshot's
+        // CausalStableFrontier is the producer's consumer-ack meet, which can
+        // omit (or undershoot) the source-origin coordinate whenever a
+        // consumer ack lags - exactly the cold-bootstrap / stuck-receiver
+        // case. Here the frontier carries only foreign origins ("us"/"other")
+        // with coordinates below the entries actually applied. Because every
+        // bootstrap entry is appended to the local WAL stamped
+        // OriginClusterId=source, LastAppliedHlc (200) is the authoritative
+        // max source-attributed HLC the bootstrap materialised. The pin must
+        // seal HWM[source] at that applied cursor - not the lagging frontier
+        // max (70) - so the fall-off detector does not read the retained
+        // source-origin baselines as a perpetual trim gap and loop forever.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff, lastAppliedHlc: Hlc(200));
+        var asOf = Hlc(99);
+        var frontier = new VersionVector();
+        frontier.Entries["us"] = Hlc(50);
+        frontier.Entries["other"] = Hlc(70);
+        fake.State.SnapshotAsOfHlc = asOf;
+        fake.State.CausalStableFrontier = frontier;
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v =>
+                v.GetClock(SourceCluster) == Hlc(200)
+                && v.GetClock("us") == Hlc(50)
+                && v.GetClock("other") == Hlc(70)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhase_pin_seals_source_above_local_wal_tombstone_omitted_by_snapshot()
+    {
+        // Regression for the residual re-bootstrap loop that survived the
+        // applied-cursor seal: the snapshot ships live entries only, so a
+        // source-origin tombstone (a delete that removes a key) never
+        // re-materialises as a snapshot entry and LastAppliedHlc (100) caps
+        // below it. That tombstone is nonetheless retained in the receiver's
+        // LOCAL WAL stamped OriginClusterId=source, and the fall-off detector
+        // probes exactly that local oldest-retained source coordinate (200).
+        // Sealing only at the applied cursor leaves HWM[source]=100 < 200, so
+        // the detector re-bootstraps forever. The pin must fold the local
+        // oldest-by-origin source coordinate (200) into the seal so
+        // HWM[source] covers the retained tombstone and the false-positive
+        // fall-off cannot recur - while preserving every other origin's
+        // coordinate verbatim.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff, lastAppliedHlc: Hlc(100));
+        var asOf = Hlc(99);
+        var frontier = new VersionVector();
+        frontier.Entries["us"] = Hlc(50);
+        frontier.Entries["other"] = Hlc(70);
+        fake.State.SnapshotAsOfHlc = asOf;
+        fake.State.CausalStableFrontier = frontier;
+        var localOldest = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [SourceCluster] = Hlc(200),
+            ["us"] = Hlc(40),
+        };
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake, localOldestByOrigin: localOldest);
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v =>
+                v.GetClock(SourceCluster) == Hlc(200)
+                && v.GetClock("us") == Hlc(50)
+                && v.GetClock("other") == Hlc(70)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhase_pin_local_wal_seal_does_not_regress_below_applied_cursor()
+    {
+        // Guard: the local oldest-by-origin fold is a monotonic max, so a
+        // local oldest source coordinate (30) that is below the applied
+        // cursor (200) leaves the seal at the applied cursor unchanged. The
+        // fold only ever raises HWM[source] to cover a retained source entry
+        // the snapshot omitted; it never lowers a higher applied seal.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff, lastAppliedHlc: Hlc(200));
+        var asOf = Hlc(99);
+        var frontier = new VersionVector();
+        frontier.Entries["us"] = Hlc(50);
+        fake.State.SnapshotAsOfHlc = asOf;
+        fake.State.CausalStableFrontier = frontier;
+        var localOldest = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [SourceCluster] = Hlc(30),
+        };
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake, localOldestByOrigin: localOldest);
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v =>
+                v.GetClock(SourceCluster) == Hlc(200)
+                && v.GetClock("us") == Hlc(50)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task ProcessNextPhase_transitions_to_Failed_when_export_throws()
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
@@ -916,12 +1065,14 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync(); // pins → LiveIncremental
         // The resume stream is empty and the frontier carries no
-        // coordinates, so the causal-stable cut is zero and there is no
-        // source-origin baseline to seal; the pin still completes with an
-        // unsealed source coordinate.
+        // coordinates, but a prior drain applied source-attributed entries
+        // up to Hlc(50). The seal folds that applied cursor into the cut so
+        // HWM[source] covers the retained source-origin baselines rather than
+        // being left at zero, which would re-arm the fall-off detector into a
+        // perpetual re-bootstrap loop.
         await hwm.Received(1).PinSnapshotAsync(
             asOf,
-            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == HybridLogicalClock.Zero),
+            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(50)),
             Arg.Any<CancellationToken>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         Assert.That(fake.State.InProgress, Is.False);
