@@ -68,8 +68,12 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
         optionsMonitor.CurrentValue.Returns(options);
         var fakeState = existingState ?? new FakePersistentState<BootstrapCoordinatorState>();
+        var walIntrospection = Substitute.For<ILatticeWalIntrospection>();
+        walIntrospection
+            .GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
         var grain = new LatticeBootstrapCoordinatorGrain(
-            context, factory, provider, apply, reminders, resolver, optionsMonitor, logger, fakeState);
+            context, factory, provider, apply, reminders, resolver, optionsMonitor, walIntrospection, logger, fakeState);
         return (grain, fakeState, provider, apply, hwm, logger);
     }
 

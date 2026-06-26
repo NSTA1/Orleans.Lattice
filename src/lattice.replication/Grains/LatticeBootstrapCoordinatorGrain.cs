@@ -47,6 +47,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     IReminderRegistry reminderRegistry,
     ILatticeMergeModeResolver mergeModeResolver,
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
+    ILatticeWalIntrospection walIntrospection,
     ILogger<LatticeBootstrapCoordinatorGrain> logger,
     [PersistentState("bootstrap-coordinator", LatticeOptions.StorageProviderName)]
     IPersistentState<BootstrapCoordinatorState> state)
@@ -73,6 +74,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         mergeModeResolver ?? throw new ArgumentNullException(nameof(mergeModeResolver));
     private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor =
         optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+    private readonly ILatticeWalIntrospection _walIntrospection =
+        walIntrospection ?? throw new ArgumentNullException(nameof(walIntrospection));
 
     /// <summary>
     /// Per-activation stopwatch timestamp captured when the coordinator
@@ -731,6 +734,40 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         if (state.State.LastAppliedHlc.CompareTo(cut) > 0)
         {
             cut = state.State.LastAppliedHlc;
+        }
+
+        // Fold the receiver's own oldest-retained source-origin WAL
+        // coordinate into the cut. The fall-off detector
+        // (LatticeFallOffLogDetector) declares a fall-off whenever
+        // HWM[source] is strictly below the oldest entry the source authored
+        // that the *local* WAL still retains - and
+        // ILatticeWalIntrospection.GetOldestAvailableHlcByOriginAsync is a
+        // purely local, per-origin reading of that WAL. Applied remote
+        // entries (including source-origin tombstones that delete a key and
+        // so never re-materialise as a live snapshot entry) are appended to
+        // the local WAL with their authoring origin preserved. Such a
+        // tombstone can sit strictly above LastAppliedHlc (the max *live*
+        // snapshot entry the bootstrap re-materialised), so sealing only at
+        // the applied cursor still leaves HWM[source] below the retained
+        // tombstone and the detector re-bootstraps on every probe forever
+        // (observed live against the MultiSiteManufacturing sample: localHwm
+        // frozen one entry below senderOldest while the loop never settled).
+        // Sealing at the very value the detector probes guarantees, by
+        // construction, that HWM[source] is at or above the local oldest
+        // source entry after the pin, so the false-positive fall-off cannot
+        // recur. This is safe because every locally-retained source entry has
+        // already been applied (a trimmed prefix is by definition durably
+        // consumed), so the seal never advances past unapplied data.
+        if (!string.IsNullOrEmpty(sourceClusterId))
+        {
+            var localOldestByOrigin = await _walIntrospection
+                .GetOldestAvailableHlcByOriginAsync(treeName, CancellationToken.None)
+                .ConfigureAwait(true);
+            if (localOldestByOrigin.TryGetValue(sourceClusterId, out var localOldestSource)
+                && localOldestSource.CompareTo(cut) > 0)
+            {
+                cut = localOldestSource;
+            }
         }
 
         if (!string.IsNullOrEmpty(sourceClusterId)
