@@ -16,8 +16,8 @@
             {
                 <button type="button"
                         role="tab"
-                        class="explorer-tab @(tab == _activeTab ? "is-active" : null)"
-                        aria-selected="@(tab == _activeTab)"
+                        class="explorer-tab @(_tabRestored && tab == _activeTab ? "is-active" : null)"
+                        aria-selected="@(_tabRestored && tab == _activeTab)"
                         @onclick="@(() => SetTab(tab))">
                     @DetailTabs.Label(tab)
                 </button>
@@ -35,6 +35,12 @@
             <div class="explorer-detail-empty">
                 <p>Select a tree or view to inspect it.</p>
             </div>
+        }
+        else if (!_tabRestored)
+        {
+            // Hold the body until the retained tab is known so the default tab
+            // never renders first and then switches (a visible flicker).
+            <div class="explorer-detail-empty" aria-busy="true"></div>
         }
         else
         {
@@ -81,12 +87,16 @@
         }
 
         await Preferences.EnsureLoadedAsync();
-        if (!Preferences.IsLoaded)
+
+        // Restore the retained tab if the mirror hydrated; otherwise fall back to
+        // the default so the body renders rather than staying blank when browser
+        // storage is unreachable (for example with JavaScript disabled).
+        RestoreTab();
+        if (!_tabRestored)
         {
-            return;
+            _tabRestored = true;
         }
 
-        RestoreTab();
         StateHasChanged();
     }
 
