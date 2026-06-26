@@ -196,9 +196,10 @@
     {
         _pager = new DataPager(DataReader);
 
-        // Restore this selection's retained search (session-scoped, not durable)
-        // so the first scan and the search box both reflect the prior prefix.
+        // Restore this selection's retained search and page size (session-scoped,
+        // not durable) so the first scan and the controls reflect the prior view.
         _keyPrefix = SessionStore.GetOrDefault(SearchStateKey, string.Empty);
+        _pageSize = DataPaging.Normalize(SessionStore.GetOrDefault(PageSizeStateKey, DataPaging.DefaultPageSize));
 
         await LoadTagIndexesAsync();
         await ReloadFirstPageAsync();
@@ -255,6 +256,9 @@
     // prefix keeps it distinct from any other UI state stored for the selection.
     private string SearchStateKey => $"data-search:{Selection.Id}";
 
+    // Session-store key for this selection's retained page size.
+    private string PageSizeStateKey => $"data-pagesize:{Selection.Id}";
+
     private async Task OnTagKeyUp(KeyboardEventArgs e)
     {
         if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_tagValue))
@@ -285,6 +289,9 @@
         if (int.TryParse(e.Value?.ToString(), out var size))
         {
             _pageSize = DataPaging.Normalize(size);
+
+            // Retain per selection for the session.
+            SessionStore.Set(PageSizeStateKey, _pageSize);
         }
 
         // Page-size change opens a fresh snapshot from the first page.
