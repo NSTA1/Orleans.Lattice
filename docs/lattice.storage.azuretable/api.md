@@ -67,10 +67,10 @@ See [Architecture](architecture.md) for the storage and commit model, and [Core 
 | Authentication | `ConnectionString`, `ServiceUri`, `TokenCredential`, `SharedKeyCredential`, `ServiceClient` |
 | Table and client | `TableName`, `DefaultTableName`, `ConfigureClientOptions` |
 | Azure SDK retry | `RetryMaxAttempts`, `RetryDelay`, `RetryMaxDelay`, `RetryNetworkTimeout`, `RetryMode` |
-| Commit pipeline | `PipelinePhaseTwoCommits`, `EliminateCandidateRowOnHotPath`, `PipelinedPhaseTwoFaultHandler`, `PhaseTwoCoalescingWindow`, `PhaseTwoCommitTimeout` |
+| Commit pipeline | `PipelinePhaseTwoCommits`, `EliminateCandidateRowOnHotPath`, `PipelinedPhaseTwoFaultHandler`, `PhaseTwoCoalescingWindow`, `PhaseTwoCommitTimeout`, `PhaseOneTransientRetryMaxAttempts`, `PhaseOneTransientRetryBaseDelay` |
 | Saturation | `HonorSaturationSignal`, `SaturationShortCircuitCooldown` |
 | Compression | `Compression`, `CompressionMinPayloadBytes` |
-| Defaults | `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultRetryNetworkTimeout`, `DefaultHonorSaturationSignal`, `DefaultSaturationShortCircuitCooldown`, `DefaultCompression`, `DefaultCompressionMinPayloadBytes` |
+| Defaults | `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultRetryNetworkTimeout`, `DefaultHonorSaturationSignal`, `DefaultSaturationShortCircuitCooldown`, `DefaultCompression`, `DefaultCompressionMinPayloadBytes`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultPhaseOneTransientRetryBaseDelay`, `DefaultPhaseOneTransientRetryMaxDelay` |
 
 Exactly one authentication mode must be configured. See [Configuration](configuration.md) for defaults, validation, and examples.
 
