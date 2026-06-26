@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Session;
 
 namespace Orleans.Lattice.Explorer.Tests.Session;
@@ -153,6 +154,28 @@ public class UiPreferenceStoreTests
             Assert.That(store.IsLoaded, Is.False);
             Assert.That(store.GetOrDefault("k", "fallback"), Is.EqualTo("fallback"));
         });
+    }
+
+    [Test]
+    public async Task SetAsync_RoundTripsCatalogItemAcrossInstances()
+    {
+        var backing = new InMemoryUiPreferenceBackingStore();
+        var item = new CatalogItem
+        {
+            Id = "tree-42",
+            Kind = CatalogKind.TagIndexes,
+            IndexName = "by-status",
+            ShardCount = 4,
+        };
+
+        var writer = CreateStore(backing);
+        await writer.SetAsync("nav-selected", item);
+
+        var reader = CreateStore(backing);
+        await reader.EnsureLoadedAsync();
+        var restored = reader.GetOrDefault<CatalogItem?>("nav-selected", null);
+
+        Assert.That(restored, Is.EqualTo(item));
     }
 
     private sealed class MutableTimeProvider : TimeProvider

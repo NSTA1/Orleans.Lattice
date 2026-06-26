@@ -1,9 +1,11 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Configuration
+@using Orleans.Lattice.Explorer.Core.Session
 @implements IDisposable
 @inject ICatalogReader CatalogReader
 @inject IExplorerSelection Selection
 @inject IExplorerSession Session
+@inject IUiPreferenceStore Preferences
 
 <nav class="explorer-nav" aria-label="Tree and view catalog">
     <header class="explorer-nav-header">
@@ -77,7 +79,7 @@
                     <li role="option" aria-selected="@isSelected">
                         <button type="button"
                                 class="explorer-nav-item @(isSelected ? "is-selected" : null)"
-                                @onclick="@(() => Select(item))">
+                                @onclick="@(() => SelectAsync(item))">
                             <span class="explorer-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Id)</span>
                             <span class="explorer-nav-item-meta">
                                 @if (item.Kind == CatalogKind.Trees)
@@ -163,12 +165,71 @@
     private bool _loading;
     private string? _error;
     private bool _showConfig;
+    private bool _preferencesApplied;
+
+    // Durable-preference keys for the navigation panel's global UI state: the
+    // catalog-kind toggle and the active catalog selection (the whole item, so
+    // it can be restored without re-discovering it from the catalog).
+    private const string KindStateKey = "nav-kind";
+    private const string SelectionStateKey = "nav-selected";
 
     protected override async Task OnInitializedAsync()
     {
         Selection.SelectionChanged += OnSelectionChanged;
         Session.ConfigurationChanged += OnConfigurationChanged;
+
+        // Restore the prior kind toggle and active selection before the first
+        // catalog load so the panel reopens where the user left it. Tolerant of
+        // an unreachable backing store (server prerender); the first-render
+        // fallback re-applies once browser storage becomes reachable.
+        await Preferences.EnsureLoadedAsync();
+        ApplyPreferences();
         await ReloadAsync();
+    }
+
+    // When preferences could not be hydrated during initialization (for example
+    // during server prerender), retry once on the first interactive render and
+    // re-apply the retained kind and selection.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _preferencesApplied)
+        {
+            return;
+        }
+
+        await Preferences.EnsureLoadedAsync();
+        if (!Preferences.IsLoaded)
+        {
+            return;
+        }
+
+        var previousKind = _kind;
+        ApplyPreferences();
+        if (_kind != previousKind)
+        {
+            await ReloadAsync();
+        }
+
+        StateHasChanged();
+    }
+
+    // Applies the retained kind and selection from durable preferences (once,
+    // and only after the mirror has hydrated).
+    private void ApplyPreferences()
+    {
+        if (_preferencesApplied || !Preferences.IsLoaded)
+        {
+            return;
+        }
+
+        _preferencesApplied = true;
+        _kind = Preferences.GetOrDefault(KindStateKey, CatalogKind.Trees);
+
+        var saved = Preferences.GetOrDefault<CatalogItem?>(SelectionStateKey, null);
+        if (saved is not null)
+        {
+            Selection.Select(saved);
+        }
     }
 
     private async Task SwitchKindAsync(CatalogKind kind)
@@ -179,6 +240,9 @@
         }
 
         _kind = kind;
+
+        // Retain the toggle as a durable preference.
+        await Preferences.SetAsync(KindStateKey, kind);
         await ReloadAsync();
     }
 
@@ -218,7 +282,13 @@
         }
     }
 
-    private void Select(CatalogItem item) => Selection.Select(item);
+    // Selects an item and retains it as a durable preference so the selection
+    // is restored when the panel reopens.
+    private async Task SelectAsync(CatalogItem item)
+    {
+        await Preferences.SetAsync(SelectionStateKey, item);
+        Selection.Select(item);
+    }
 
     private void OpenConfig()
     {
@@ -236,7 +306,10 @@
 
     private void OnConfigurationChanged() => InvokeAsync(async () =>
     {
+        // A new endpoint invalidates the retained selection (it belongs to the
+        // previous cluster); clear it so it is not restored against the new one.
         Selection.Select(null);
+        await Preferences.RemoveAsync(SelectionStateKey);
         await ReloadAsync();
     });
 
