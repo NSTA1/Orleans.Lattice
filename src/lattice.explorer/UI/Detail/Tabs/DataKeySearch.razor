@@ -40,6 +40,12 @@
     /// </summary>
     [Parameter] public EventCallback<string> OnSearch { get; set; }
 
+    /// <summary>
+    /// The prefix to seed the box with on first render, used to restore a
+    /// retained search when the tab is mounted for a selection.
+    /// </summary>
+    [Parameter] public string InitialValue { get; set; } = string.Empty;
+
     private string _value = string.Empty;
     private string _lastSearched = string.Empty;
     private CancellationTokenSource? _debounceCts;
@@ -48,6 +54,15 @@
     // prefixes keep the current page until the user commits explicitly.
     private const int AutoScanMinLength = 4;
     private static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(600);
+
+    protected override void OnInitialized()
+    {
+        // The component is re-created when the tab re-mounts on a selection
+        // change, so seeding here restores that selection's retained search
+        // without re-triggering it (the parent already scans with this prefix).
+        _value = InitialValue ?? string.Empty;
+        _lastSearched = _value;
+    }
 
     private async Task OnInput(ChangeEventArgs e)
     {

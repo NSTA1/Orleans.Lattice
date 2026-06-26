@@ -1,6 +1,7 @@
 @using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
 @inject IDataReader DataReader
+@inject IUiSessionStore SessionStore
 
 <div class="explorer-data">
     <div class="explorer-data-toolbar">
@@ -23,7 +24,8 @@
         </div>
     </div>
 
-    <DataKeySearch Loading="@_loading" Disabled="@(_activeTagFilter is not null)" OnSearch="OnKeySearchAsync" />
+    <DataKeySearch Loading="@_loading" Disabled="@(_activeTagFilter is not null)"
+                   InitialValue="@_keyPrefix" OnSearch="OnKeySearchAsync" />
 
     @if (_tagIndexes.Count > 0)
     {
@@ -193,6 +195,11 @@
     protected override async Task OnInitializedAsync()
     {
         _pager = new DataPager(DataReader);
+
+        // Restore this selection's retained search (session-scoped, not durable)
+        // so the first scan and the search box both reflect the prior prefix.
+        _keyPrefix = SessionStore.GetOrDefault(SearchStateKey, string.Empty);
+
         await LoadTagIndexesAsync();
         await ReloadFirstPageAsync();
     }
@@ -230,8 +237,23 @@
     private async Task OnKeySearchAsync(string prefix)
     {
         _keyPrefix = prefix;
+
+        // Retain per selection for the session; an empty search clears the entry.
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            SessionStore.Remove(SearchStateKey);
+        }
+        else
+        {
+            SessionStore.Set(SearchStateKey, prefix);
+        }
+
         await ReloadFirstPageAsync();
     }
+
+    // Session-store key for this selection's retained key search. The feature
+    // prefix keeps it distinct from any other UI state stored for the selection.
+    private string SearchStateKey => $"data-search:{Selection.Id}";
 
     private async Task OnTagKeyUp(KeyboardEventArgs e)
     {
