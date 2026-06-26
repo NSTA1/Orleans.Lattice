@@ -258,7 +258,7 @@ Key invariants:
 
 ## 4. Lattice trees
 
-All four trees persist to `msmfgLatticeFacts` in Azure Table Storage.
+All five trees persist to `msmfgLatticeFacts` in Azure Table Storage.
 Orleans grain state (chaos toggles, seed flag, baseline part grains,
 inventory) persists to `msmfgGrainState`. The replication WAL is a
 package-managed table separate from the lattice trees themselves.
