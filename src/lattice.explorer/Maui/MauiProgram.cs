@@ -4,6 +4,7 @@ using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.Metrics;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.UI.Authentication;
 
@@ -52,6 +53,11 @@ public static class MauiProgram
         builder.Services.AddExplorerMetrics();
         builder.Services.AddExplorerTopology();
         builder.Services.AddExplorerData();
+        builder.Services.AddExplorerSession();
+
+        // The desktop head persists UI preferences to the platform preference
+        // store, overriding the in-memory fallback backing store.
+        builder.Services.AddScoped<IUiPreferenceBackingStore, MauiPreferenceBackingStore>();
 
         // Authentication. The desktop head rests the credential on the machine via
         // DPAPI (per-user encrypted) and signs in fully in-process.

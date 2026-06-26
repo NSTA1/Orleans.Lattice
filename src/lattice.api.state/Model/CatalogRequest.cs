@@ -61,6 +61,14 @@ public sealed record CatalogRequest
     /// </summary>
     [Id(4)] public string? SourceTreeId { get; init; }
 
+    /// <summary>
+    /// Names the tag index whose distinct tag values
+    /// <see cref="ILatticeStateQuery.ListTagValuesAsync"/> enumerates (scoped to
+    /// the subject tree named by <see cref="SourceTreeId"/>). Ignored by every
+    /// other catalog endpoint. Defaults to <see langword="null"/>.
+    /// </summary>
+    [Id(5)] public string? IndexName { get; init; }
+
     /// <summary>The effective, clamped page size derived from <see cref="PageSize"/>.</summary>
     public int EffectivePageSize => PageSize switch
     {

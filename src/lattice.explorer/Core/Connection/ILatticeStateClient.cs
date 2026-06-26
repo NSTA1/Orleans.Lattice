@@ -21,6 +21,9 @@ public interface ILatticeStateClient
     /// <summary>Lists the tag-index membership trees as a deterministic, paged catalog.</summary>
     Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the distinct tag values of one tag index as a deterministic, paged catalog.</summary>
+    Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Returns the structural node graph of a tree.</summary>
     Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default);
 
@@ -29,6 +32,9 @@ public interface ILatticeStateClient
 
     /// <summary>Returns the full record for a single key.</summary>
     Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Releases a snapshot scan cursor named by a continuation token.</summary>
+    Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>Returns a single live metrics snapshot.</summary>
     Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default);

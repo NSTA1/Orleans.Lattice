@@ -1,8 +1,10 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Detail
+@using Orleans.Lattice.Explorer.Core.Session
 @using Orleans.Lattice.Explorer.UI.Detail.Tabs
 @implements IDisposable
 @inject IExplorerSelection Selection
+@inject IUiPreferenceStore Preferences
 
 <section class="explorer-detail" aria-label="Detail">
     @{
@@ -14,8 +16,8 @@
             {
                 <button type="button"
                         role="tab"
-                        class="explorer-tab @(tab == _activeTab ? "is-active" : null)"
-                        aria-selected="@(tab == _activeTab)"
+                        class="explorer-tab @(_tabRestored && tab == _activeTab ? "is-active" : null)"
+                        aria-selected="@(_tabRestored && tab == _activeTab)"
                         @onclick="@(() => SetTab(tab))">
                     @DetailTabs.Label(tab)
                 </button>
@@ -33,6 +35,12 @@
             <div class="explorer-detail-empty">
                 <p>Select a tree or view to inspect it.</p>
             </div>
+        }
+        else if (!_tabRestored)
+        {
+            // Hold the body until the retained tab is known so the default tab
+            // never renders first and then switches (a visible flicker).
+            <div class="explorer-detail-empty" aria-busy="true"></div>
         }
         else
         {
@@ -55,13 +63,55 @@
 
 @code {
     private DetailTab _activeTab = DetailTabs.Default;
+    private bool _tabRestored;
 
-    protected override void OnInitialized()
+    // Durable-preference key for the active detail tab (global, not per selection).
+    private const string TabStateKey = "detail-tab";
+
+    protected override async Task OnInitializedAsync()
     {
         Selection.SelectionChanged += OnSelectionChanged;
+
+        // Restore the prior active tab so the panel reopens on the same tab.
+        // Tolerant of an unreachable backing store (server prerender); the
+        // first-render fallback re-applies once browser storage is reachable.
+        await Preferences.EnsureLoadedAsync();
+        RestoreTab();
     }
 
-    private void SetTab(DetailTab tab)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _tabRestored)
+        {
+            return;
+        }
+
+        await Preferences.EnsureLoadedAsync();
+
+        // Restore the retained tab if the mirror hydrated; otherwise fall back to
+        // the default so the body renders rather than staying blank when browser
+        // storage is unreachable (for example with JavaScript disabled).
+        RestoreTab();
+        if (!_tabRestored)
+        {
+            _tabRestored = true;
+        }
+
+        StateHasChanged();
+    }
+
+    private void RestoreTab()
+    {
+        if (_tabRestored || !Preferences.IsLoaded)
+        {
+            return;
+        }
+
+        _tabRestored = true;
+        _activeTab = Preferences.GetOrDefault(TabStateKey, DetailTabs.Default);
+    }
+
+    private async Task SetTab(DetailTab tab)
     {
         if (_activeTab == tab)
         {
@@ -69,6 +119,9 @@
         }
 
         _activeTab = tab;
+
+        // Retain the active tab as a durable preference.
+        await Preferences.SetAsync(TabStateKey, tab);
         StateHasChanged();
     }
 

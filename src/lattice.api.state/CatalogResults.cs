@@ -59,3 +59,24 @@ public sealed record TagIndexCatalogPage
     /// </summary>
     [Id(1)] public string? NextPageToken { get; init; }
 }
+
+/// <summary>
+/// One page of the distinct tag values carried by a single tag index over its
+/// subject tree. <see cref="NextPageToken"/> is the cursor to pass back in the
+/// next <see cref="CatalogRequest"/> to continue enumeration; it is
+/// <see langword="null"/> on the final page.
+/// </summary>
+[GenerateSerializer]
+[Alias(ApiStateTypeAliases.TagValueCatalogPage)]
+[Immutable]
+public sealed record TagValueCatalogPage
+{
+    /// <summary>The distinct tag values on this page, in ascending ordinal order.</summary>
+    [Id(0)] public IReadOnlyList<string> Entries { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// The continuation cursor for the next page, or <see langword="null"/>
+    /// when this is the last page.
+    /// </summary>
+    [Id(1)] public string? NextPageToken { get; init; }
+}

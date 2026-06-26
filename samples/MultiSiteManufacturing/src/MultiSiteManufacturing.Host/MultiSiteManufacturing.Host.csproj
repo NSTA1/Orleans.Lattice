@@ -34,6 +34,11 @@
   <ItemGroup>
     <ProjectReference Include="..\MultiSiteManufacturing.Contracts\MultiSiteManufacturing.Contracts.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <!-- Azure Table-backed WAL storage. The docker-compose / Azurite path
+         persists each silo's lattice write-ahead log to Azure Table Storage
+         (Azurite locally) instead of the in-memory baseline, so the WAL
+         survives silo restarts alongside grain state and clustering. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
     <!-- Migration step 1: package-shipped replication wired in alongside the
          host-rolled pipeline (see ../../migration.md). The package observes
          only trees declared in LatticeReplicationOptions.ReplicatedTrees -

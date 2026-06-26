@@ -1,50 +1,54 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Configuration
+@using Orleans.Lattice.Explorer.Core.Session
 @implements IDisposable
 @inject ICatalogReader CatalogReader
 @inject IExplorerSelection Selection
 @inject IExplorerSession Session
+@inject IUiPreferenceStore Preferences
 
 <nav class="explorer-nav" aria-label="Tree and view catalog">
     <header class="explorer-nav-header">
-        <CogButton Title="Connection settings" OnClick="OpenConfig" />
-        <AuthButton />
+        <div class="explorer-nav-actions">
+            <CogButton Title="Connection settings" OnClick="OpenConfig" />
+            <AuthButton />
+
+            <button type="button"
+                    class="explorer-nav-refresh"
+                    title="Refresh"
+                    aria-label="Refresh catalog"
+                    disabled="@_loading"
+                    @onclick="RefreshAsync">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                    <path fill="currentColor"
+                          d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
+                </svg>
+            </button>
+        </div>
 
         <div class="explorer-nav-toggle" role="tablist" aria-label="Catalog kind">
             <button type="button"
                     role="tab"
-                    class="explorer-toggle-option @(_kind == CatalogKind.Trees ? "is-active" : null)"
-                    aria-selected="@(_kind == CatalogKind.Trees)"
+                    class="explorer-toggle-option @(_preferencesApplied && _kind == CatalogKind.Trees ? "is-active" : null)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Trees)"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.Trees))">
                 Trees
             </button>
             <button type="button"
                     role="tab"
-                    class="explorer-toggle-option @(_kind == CatalogKind.Views ? "is-active" : null)"
-                    aria-selected="@(_kind == CatalogKind.Views)"
+                    class="explorer-toggle-option @(_preferencesApplied && _kind == CatalogKind.Views ? "is-active" : null)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Views)"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.Views))">
                 Views
             </button>
             <button type="button"
                     role="tab"
-                    class="explorer-toggle-option @(_kind == CatalogKind.TagIndexes ? "is-active" : null)"
-                    aria-selected="@(_kind == CatalogKind.TagIndexes)"
+                    class="explorer-toggle-option @(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "is-active" : null)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.TagIndexes)"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.TagIndexes))">
                 Tag indexes
             </button>
         </div>
-
-        <button type="button"
-                class="explorer-nav-refresh"
-                title="Refresh"
-                aria-label="Refresh catalog"
-                disabled="@_loading"
-                @onclick="RefreshAsync">
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
-                <path fill="currentColor"
-                      d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
-            </svg>
-        </button>
     </header>
 
     <div class="explorer-nav-body">
@@ -75,7 +79,7 @@
                     <li role="option" aria-selected="@isSelected">
                         <button type="button"
                                 class="explorer-nav-item @(isSelected ? "is-selected" : null)"
-                                @onclick="@(() => Select(item))">
+                                @onclick="@(() => SelectAsync(item))">
                             <span class="explorer-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Id)</span>
                             <span class="explorer-nav-item-meta">
                                 @if (item.Kind == CatalogKind.Trees)
@@ -158,15 +162,70 @@
     };
     private string? _nextToken;
     private bool _hasMore;
-    private bool _loading;
+    private bool _loading = true;
     private string? _error;
     private bool _showConfig;
+    private bool _preferencesApplied;
+
+    // Durable-preference keys for the navigation panel's global UI state: the
+    // catalog-kind toggle and the active catalog selection (the whole item, so
+    // it can be restored without re-discovering it from the catalog).
+    private const string KindStateKey = "nav-kind";
+    private const string SelectionStateKey = "nav-selected";
 
     protected override async Task OnInitializedAsync()
     {
         Selection.SelectionChanged += OnSelectionChanged;
         Session.ConfigurationChanged += OnConfigurationChanged;
+
+        // Restore the prior kind toggle and active selection before the first
+        // catalog load so the panel opens on the retained kind (and never shows
+        // the default kind selected first). When browser storage is not yet
+        // reachable (server prerender), defer the first load to the first
+        // interactive render so the wrong kind is never shown.
+        await Preferences.EnsureLoadedAsync();
+        ApplyPreferences();
+        if (_preferencesApplied)
+        {
+            await ReloadAsync();
+        }
+    }
+
+    // Completes restoration on the first interactive render when initialization
+    // could not reach browser storage (for example after server prerender). Falls
+    // back to the defaults if storage is still unreachable so the panel always
+    // ends up with a selected kind and a loaded list rather than a blank toggle.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _preferencesApplied)
+        {
+            return;
+        }
+
+        await Preferences.EnsureLoadedAsync();
+        ApplyPreferences();
+        _preferencesApplied = true;
         await ReloadAsync();
+        StateHasChanged();
+    }
+
+    // Applies the retained kind and selection from durable preferences (once,
+    // and only after the mirror has hydrated).
+    private void ApplyPreferences()
+    {
+        if (_preferencesApplied || !Preferences.IsLoaded)
+        {
+            return;
+        }
+
+        _preferencesApplied = true;
+        _kind = Preferences.GetOrDefault(KindStateKey, CatalogKind.Trees);
+
+        var saved = Preferences.GetOrDefault<CatalogItem?>(SelectionStateKey, null);
+        if (saved is not null)
+        {
+            Selection.Select(saved);
+        }
     }
 
     private async Task SwitchKindAsync(CatalogKind kind)
@@ -177,6 +236,9 @@
         }
 
         _kind = kind;
+
+        // Retain the toggle as a durable preference.
+        await Preferences.SetAsync(KindStateKey, kind);
         await ReloadAsync();
     }
 
@@ -216,7 +278,13 @@
         }
     }
 
-    private void Select(CatalogItem item) => Selection.Select(item);
+    // Selects an item and retains it as a durable preference so the selection
+    // is restored when the panel reopens.
+    private async Task SelectAsync(CatalogItem item)
+    {
+        await Preferences.SetAsync(SelectionStateKey, item);
+        Selection.Select(item);
+    }
 
     private void OpenConfig()
     {
@@ -234,7 +302,10 @@
 
     private void OnConfigurationChanged() => InvokeAsync(async () =>
     {
+        // A new endpoint invalidates the retained selection (it belongs to the
+        // previous cluster); clear it so it is not restored against the new one.
         Selection.Select(null);
+        await Preferences.RemoveAsync(SelectionStateKey);
         await ReloadAsync();
     });
 

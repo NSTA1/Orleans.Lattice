@@ -68,6 +68,9 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
     public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => _client.ListTagIndexesAsync(request, cancellationToken);
 
+    public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => _client.ListTagValuesAsync(request, cancellationToken);
+
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => _client.GetTreeStructureAsync(request, cancellationToken);
 
@@ -76,6 +79,9 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
 
     public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
         => _client.GetEntryAsync(request, cancellationToken);
+
+    public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
+        => _client.CancelScanAsync(request, cancellationToken);
 
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
         => _client.GetMetricsSnapshotAsync(request, cancellationToken);

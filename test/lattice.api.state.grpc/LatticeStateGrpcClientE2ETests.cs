@@ -223,6 +223,29 @@ public class LatticeStateGrpcClientE2ETests
     }
 
     [Test]
+    public async Task client_lists_distinct_tag_values_end_to_end()
+    {
+        await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);
+        var index = _fixture.CreateTagIndex(TreeId, "by-status");
+        await index.Key(GrpcStateClusterFixture.KeyAt(1)).AddAsync(["open"]);
+        await index.Key(GrpcStateClusterFixture.KeyAt(4)).AddAsync(["open"]);
+        await index.Key(GrpcStateClusterFixture.KeyAt(2)).AddAsync(["closed"]);
+
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        var values = await client.ListTagValuesAsync(new CatalogRequest
+        {
+            SourceTreeId = TreeId,
+            IndexName = "by-status",
+            PageSize = 100,
+        });
+
+        Assert.That(values.Entries, Is.EqualTo(new[] { "closed", "open" }));
+        Assert.That(values.NextPageToken, Is.Null);
+    }
+
+    [Test]
     public async Task client_cancels_a_scan_cursor_over_the_transport()
     {
         await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);

@@ -155,6 +155,10 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         => ExecuteAsync((c, ct) => c.ListTagIndexesAsync(request, ct), cancellationToken);
 
     /// <inheritdoc />
+    public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.ListTagValuesAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => ExecuteAsync((c, ct) => c.GetTreeStructureAsync(request, ct), cancellationToken);
 
@@ -165,6 +169,10 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
     /// <inheritdoc />
     public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
         => ExecuteAsync((c, ct) => c.GetEntryAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
+    public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.CancelScanAsync(request, ct), cancellationToken);
 
     /// <inheritdoc />
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)

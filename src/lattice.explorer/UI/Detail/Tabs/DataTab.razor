@@ -1,6 +1,8 @@
 @using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
 @inject IDataReader DataReader
+@inject IUiSessionStore SessionStore
+@inject IUiPreferenceStore Preferences
 
 <div class="explorer-data">
     <div class="explorer-data-toolbar">
@@ -17,18 +19,21 @@
             </select>
         </label>
         <div class="explorer-data-pager">
-            <button type="button" class="explorer-btn" disabled="@(_loading || _pageIndex == 0)" @onclick="PreviousPageAsync">Prev</button>
-            <span class="explorer-data-pagenum">Page @(_pageIndex + 1)</span>
-            <button type="button" class="explorer-btn" disabled="@(_loading || !_page.HasMore)" @onclick="NextPageAsync">Next</button>
+            <button type="button" class="explorer-btn" disabled="@(_loading || !_pager.CanGoPrevious)" @onclick="PreviousPage">Prev</button>
+            <span class="explorer-data-pagenum">Page @(_pager.PageIndex + 1)</span>
+            <button type="button" class="explorer-btn" disabled="@(_loading || !_pager.CanGoNext)" @onclick="NextPageAsync">Next</button>
         </div>
     </div>
+
+    <DataKeySearch Loading="@_loading" Disabled="@(_activeTagFilter is not null)"
+                   InitialValue="@_keyPrefix" OnSearch="OnKeySearchAsync" />
 
     @if (_tagIndexes.Count > 0)
     {
         <div class="explorer-data-toolbar explorer-data-tagfilter">
             <label class="explorer-data-tagfilter-field">
                 Tag index
-                <select disabled="@_loading" @bind="_selectedIndex">
+                <select disabled="@_loading" @bind="_selectedIndex" @bind:after="OnTagIndexChangedAsync">
                     @foreach (var name in _tagIndexes)
                     {
                         <option value="@name">@name</option>
@@ -37,27 +42,26 @@
             </label>
             <label class="explorer-data-tagfilter-field">
                 Tag
-                <input type="text" disabled="@_loading" placeholder="tag value"
-                       @bind="_tagValue" @bind:event="oninput" @onkeyup="OnTagKeyUp" />
+                <select disabled="@(_loading || _tagValuesLoading)" @bind="_tagValue" @bind:after="ApplyTagFilterAsync">
+                    <option value="">@(_tagValuesLoading ? "Loading..." : "(any)")</option>
+                    @foreach (var value in _tagValues)
+                    {
+                        <option value="@value">@value</option>
+                    }
+                </select>
             </label>
-            <button type="button" class="explorer-btn"
-                    disabled="@(_loading || string.IsNullOrWhiteSpace(_tagValue))"
-                    @onclick="ApplyTagFilterAsync">
-                Filter
-            </button>
             @if (_activeTagFilter is not null)
             {
                 <span class="explorer-data-tagfilter-active">
                     Showing rows tagged <code>@_activeTagFilter.Tag</code> in <code>@_activeTagFilter.IndexName</code>
                 </span>
-                <button type="button" class="explorer-btn-link" disabled="@_loading" @onclick="ClearTagFilterAsync">Clear</button>
             }
         </div>
     }
 
     <div class="explorer-data-body">
         <div class="explorer-data-keys">
-            @if (_loading && _page.Entries.Count == 0)
+            @if (_loading && _pager.Current.Entries.Count == 0)
             {
                 <div class="explorer-data-state">Loading entries...</div>
             }
@@ -68,7 +72,7 @@
                     <button type="button" class="explorer-btn-link" @onclick="ReloadFirstPageAsync">Try again</button>
                 </div>
             }
-            else if (_page.Entries.Count == 0)
+            else if (_pager.Current.Entries.Count == 0)
             {
                 <div class="explorer-data-state">No entries on this page.</div>
             }
@@ -83,7 +87,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var entry in _page.Entries)
+                        @foreach (var entry in _pager.Current.Entries)
                         {
                             <tr class="explorer-data-keyrow @(entry.Key == _selectedKey ? "is-selected" : null)"
                                 @onclick="@(() => SelectAsync(entry.Key))">
@@ -167,9 +171,7 @@
 </div>
 
 @code {
-    private DataPage _page = DataPage.Empty;
-    private readonly List<string?> _pageStartTokens = new() { null };
-    private int _pageIndex;
+    private DataPager _pager = default!;
     private int _pageSize = DataPaging.DefaultPageSize;
     private bool _loading;
     private string? _error;
@@ -182,21 +184,87 @@
 
     private IReadOnlyList<string> _tagIndexes = Array.Empty<string>();
     private string? _selectedIndex;
-    private string? _tagValue;
+    private IReadOnlyList<string> _tagValues = Array.Empty<string>();
+    private bool _tagValuesLoading;
+    private string _tagValue = string.Empty;
     private TagFilter? _activeTagFilter;
+
+    // The committed key starts-with filter, kept in sync from the search box so
+    // other reload triggers (Refresh, page size) reuse it. Only applied to an
+    // untagged scan; the state-API range is ignored under a tag filter.
+    private string _keyPrefix = string.Empty;
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadTagIndexesAsync();
-        await LoadPageAsync();
+        _pager = new DataPager(DataReader);
+
+        // Hydrate durable preferences before the first read so the controls and
+        // the first scan reflect the prior view. Tolerant of an unreachable
+        // backing store (for example during server prerender), in which case the
+        // first-render fallback re-seeds once browser storage becomes reachable.
+        await Preferences.EnsureLoadedAsync(TabToken);
+        await SeedFromPreferencesAndScanAsync();
+        _seededFromPreferences = Preferences.IsLoaded;
     }
+
+    // Seeds this selection's retained view from durable preferences, then opens
+    // the first page. The page index is position (not a preference) so it stays
+    // in the in-memory session store and is replayed forward after the scan.
+    private async Task SeedFromPreferencesAndScanAsync()
+    {
+        // Durable per-selection preferences: prior search prefix and page size.
+        _keyPrefix = Preferences.GetOrDefault(SearchStateKey, string.Empty);
+        _pageSize = DataPaging.Normalize(Preferences.GetOrDefault(PageSizeStateKey, DataPaging.DefaultPageSize));
+
+        // Capture the retained page before the first scan resets it; a fresh
+        // snapshot always opens at page 0, so we replay forward to it afterwards.
+        var targetPage = SessionStore.GetOrDefault(PageStateKey, 0);
+
+        await LoadTagIndexesAsync();
+        await LoadRetainedTagFilterAsync();
+        await ReloadFirstPageAsync();
+
+        if (targetPage > 0)
+        {
+            await RestoreToPageAsync(targetPage);
+        }
+    }
+
+    // When durable preferences could not be hydrated during initialization (the
+    // backing store was unreachable, for example during server prerender), retry
+    // once on the first interactive render and re-seed if anything was retained.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _seededFromPreferences)
+        {
+            return;
+        }
+
+        await Preferences.EnsureLoadedAsync(TabToken);
+        if (!Preferences.IsLoaded)
+        {
+            return;
+        }
+
+        _seededFromPreferences = true;
+        await SeedFromPreferencesAndScanAsync();
+        StateHasChanged();
+    }
+
+    private bool _seededFromPreferences;
 
     private async Task LoadTagIndexesAsync()
     {
         try
         {
             _tagIndexes = await DataReader.ListTagIndexesForTreeAsync(Selection.Id, TabToken);
-            _selectedIndex = _tagIndexes.Count > 0 ? _tagIndexes[0] : null;
+
+            // Restore the retained index selection for this selection (durable
+            // preference); fall back to the first index when none is retained.
+            var retained = Preferences.GetOrDefault(TagIndexStateKey, string.Empty);
+            _selectedIndex = _tagIndexes.Contains(retained)
+                ? retained
+                : _tagIndexes.Count > 0 ? _tagIndexes[0] : null;
         }
         catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
         {
@@ -211,7 +279,190 @@
         }
     }
 
-    private async Task LoadPageAsync()
+    // Loads the distinct tag values for the selected index and restores this
+    // selection's retained value (durable preference, default empty / no filter).
+    private async Task LoadRetainedTagFilterAsync()
+    {
+        if (string.IsNullOrEmpty(_selectedIndex))
+        {
+            _tagValues = Array.Empty<string>();
+            _tagValue = string.Empty;
+            _activeTagFilter = null;
+            return;
+        }
+
+        _tagValuesLoading = true;
+        StateHasChanged();
+        try
+        {
+            _tagValues = await DataReader.ListTagValuesForIndexAsync(Selection.Id, _selectedIndex, TabToken);
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            _tagValues = Array.Empty<string>();
+        }
+        finally
+        {
+            _tagValuesLoading = false;
+        }
+
+        var retained = Preferences.GetOrDefault(TagValueStateKey(_selectedIndex), string.Empty);
+        if (!string.IsNullOrEmpty(retained) && _tagValues.Contains(retained))
+        {
+            _tagValue = retained;
+            _activeTagFilter = new TagFilter(_selectedIndex, retained);
+        }
+        else
+        {
+            _tagValue = string.Empty;
+            _activeTagFilter = null;
+        }
+    }
+
+    private async Task ReloadFirstPageAsync()
+    {
+        ClearSelection();
+
+        // A key prefix only applies to an untagged scan; the state-API range is
+        // ignored under a tag filter (and the prefix box is disabled then).
+        var prefix = _activeTagFilter is null && !string.IsNullOrEmpty(_keyPrefix) ? _keyPrefix : null;
+        await RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, prefix, TabToken));
+        PersistPage();
+    }
+
+    private async Task OnKeySearchAsync(string prefix)
+    {
+        _keyPrefix = prefix;
+
+        // Retain per selection as a durable preference; an empty search clears it.
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            await Preferences.RemoveAsync(SearchStateKey, TabToken);
+        }
+        else
+        {
+            await Preferences.SetAsync(SearchStateKey, prefix, owner: Selection.Id, TabToken);
+        }
+
+        await ReloadFirstPageAsync();
+    }
+
+    // Durable-preference key for this selection's retained key search. The feature
+    // prefix keeps it distinct from any other UI state stored for the selection.
+    private string SearchStateKey => $"data-search:{Selection.Id}";
+
+    // Durable-preference key for this selection's retained page size.
+    private string PageSizeStateKey => $"data-pagesize:{Selection.Id}";
+
+    // Session-store key for this selection's retained current page index. Page
+    // position is ephemeral (not a preference), so it stays in the session store.
+    private string PageStateKey => $"data-page:{Selection.Id}";
+
+    // Durable-preference key for this selection's retained tag index selection.
+    private string TagIndexStateKey => $"data-tagindex:{Selection.Id}";
+
+    // Durable-preference key for this selection's retained tag value, per index.
+    private string TagValueStateKey(string indexName) => $"data-tagvalue:{Selection.Id}:{indexName}";
+
+    // The user picked a different tag index: load its values, restore the
+    // retained value for that index, and refresh the display.
+    private async Task OnTagIndexChangedAsync()
+    {
+        if (!string.IsNullOrEmpty(_selectedIndex))
+        {
+            await Preferences.SetAsync(TagIndexStateKey, _selectedIndex, owner: Selection.Id, TabToken);
+        }
+
+        await LoadRetainedTagFilterAsync();
+        await ReloadFirstPageAsync();
+    }
+
+    // The user picked a tag value (or the empty "(any)" option, which clears the
+    // filter). Retain per selection and index as a durable preference, then refresh.
+    private async Task ApplyTagFilterAsync()
+    {
+        if (string.IsNullOrEmpty(_selectedIndex))
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_tagValue))
+        {
+            _activeTagFilter = null;
+            await Preferences.RemoveAsync(TagValueStateKey(_selectedIndex), TabToken);
+        }
+        else
+        {
+            _activeTagFilter = new TagFilter(_selectedIndex, _tagValue);
+            await Preferences.SetAsync(TagValueStateKey(_selectedIndex), _tagValue, owner: Selection.Id, TabToken);
+        }
+
+        await ReloadFirstPageAsync();
+    }
+
+    private async Task OnPageSizeChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var size))
+        {
+            _pageSize = DataPaging.Normalize(size);
+
+            // Retain per selection as a durable preference.
+            await Preferences.SetAsync(PageSizeStateKey, _pageSize, owner: Selection.Id, TabToken);
+        }
+
+        // Page-size change opens a fresh snapshot from the first page.
+        await ReloadFirstPageAsync();
+    }
+
+    private async Task NextPageAsync()
+    {
+        ClearSelection();
+        await RunAsync(() => _pager.NextAsync(TabToken));
+        PersistPage();
+    }
+
+    private void PreviousPage()
+    {
+        ClearSelection();
+        _pager.Previous();
+        PersistPage();
+        StateHasChanged();
+    }
+
+    // Retains the current page index per selection for the session; page 0 (the
+    // default first page) clears the entry rather than storing a zero.
+    private void PersistPage()
+    {
+        if (_pager.PageIndex <= 0)
+        {
+            SessionStore.Remove(PageStateKey);
+        }
+        else
+        {
+            SessionStore.Set(PageStateKey, _pager.PageIndex);
+        }
+    }
+
+    // Advances the freshly opened snapshot forward to the retained page on mount,
+    // bounded by the pages actually available (NextAsync is a no-op past the last
+    // page, so a shrunk dataset simply lands on the new last page).
+    private async Task RestoreToPageAsync(int targetPage)
+    {
+        await RunAsync(async () =>
+        {
+            while (_pager.PageIndex < targetPage && _pager.CanGoNext)
+            {
+                await _pager.NextAsync(TabToken);
+            }
+        });
+        PersistPage();
+    }
+
+    private async Task RunAsync(Func<Task> operation)
     {
         _loading = true;
         _error = null;
@@ -219,7 +470,7 @@
 
         try
         {
-            _page = await DataReader.ScanAsync(Selection.Id, _pageSize, _pageStartTokens[_pageIndex], _activeTagFilter, TabToken);
+            await operation();
         }
         catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
         {
@@ -228,91 +479,12 @@
         catch (Exception ex)
         {
             _error = ex.Message;
-            _page = DataPage.Empty;
         }
         finally
         {
             _loading = false;
             StateHasChanged();
         }
-    }
-
-    private async Task ReloadFirstPageAsync()
-    {
-        ResetPaging();
-        ClearSelection();
-        await LoadPageAsync();
-    }
-
-    private async Task OnTagKeyUp(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_tagValue))
-        {
-            await ApplyTagFilterAsync();
-        }
-    }
-
-    private async Task ApplyTagFilterAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_selectedIndex) || string.IsNullOrWhiteSpace(_tagValue))
-        {
-            return;
-        }
-
-        _activeTagFilter = new TagFilter(_selectedIndex, _tagValue.Trim());
-        ResetPaging();
-        ClearSelection();
-        await LoadPageAsync();
-    }
-
-    private async Task ClearTagFilterAsync()
-    {
-        _activeTagFilter = null;
-        ResetPaging();
-        ClearSelection();
-        await LoadPageAsync();
-    }
-
-    private async Task OnPageSizeChanged(ChangeEventArgs e)
-    {
-        if (int.TryParse(e.Value?.ToString(), out var size))
-        {
-            _pageSize = DataPaging.Normalize(size);
-        }
-
-        // Page-size change opens a fresh snapshot from the first page.
-        ResetPaging();
-        ClearSelection();
-        await LoadPageAsync();
-    }
-
-    private async Task NextPageAsync()
-    {
-        if (!_page.HasMore)
-        {
-            return;
-        }
-
-        if (_pageIndex == _pageStartTokens.Count - 1)
-        {
-            _pageStartTokens.Add(_page.ContinuationToken);
-        }
-
-        _pageIndex++;
-        ClearSelection();
-        await LoadPageAsync();
-    }
-
-    private async Task PreviousPageAsync()
-    {
-        if (_pageIndex == 0)
-        {
-            return;
-        }
-
-        _pageIndex--;
-        ClearSelection();
-        await LoadPageAsync();
     }
 
     private async Task SelectAsync(string? key)
@@ -349,13 +521,6 @@
         }
     }
 
-    private void ResetPaging()
-    {
-        _pageStartTokens.Clear();
-        _pageStartTokens.Add(null);
-        _pageIndex = 0;
-    }
-
     private void ClearSelection()
     {
         _selectedKey = null;
@@ -383,5 +548,22 @@
         }
 
         return new DateTime(entry.ExpiresAtTicks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    }
+
+    /// <summary>
+    /// Releases the active snapshot cursor best-effort on teardown so an
+    /// abandoned scan does not retain its server-side WAL pin and baseline until
+    /// the idle TTL. Fire-and-forget with a fresh token: the base disposal
+    /// cancels <see cref="DetailTabBase.TabToken"/>, so the cancel must not ride
+    /// on it.
+    /// </summary>
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && _pager is not null)
+        {
+            _ = _pager.CloseAsync(CancellationToken.None);
+        }
+
+        base.Dispose(disposing);
     }
 }

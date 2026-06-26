@@ -149,7 +149,8 @@ code, .explorer-mono {
 
 .explorer-shell {
     display: flex;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
     background: var(--bg);
 }
 
@@ -172,14 +173,14 @@ code, .explorer-mono {
     display: flex;
     flex-direction: column;
     flex: 1;
-    min-height: 100vh;
+    min-height: 0;
     width: 100%;
     min-width: 0;
 }
 
 .explorer-brand {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 0.55rem;
     padding: 0.55rem 1rem;
     border-bottom: 1px solid var(--border);
@@ -441,7 +442,7 @@ code, .explorer-mono {
 .explorer-nav {
     display: flex;
     flex-direction: column;
-    width: 16rem;
+    width: 20rem;
     flex-shrink: 0;
     border-right: 1px solid var(--border);
     background: var(--bg-panel);
@@ -449,15 +450,22 @@ code, .explorer-mono {
 
 .explorer-nav-header {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
     padding: 0.6rem 0.65rem;
     border-bottom: 1px solid var(--border);
 }
 
+.explorer-nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .explorer-nav-toggle {
-    display: inline-flex;
-    flex: 1;
+    display: flex;
+    width: 100%;
     padding: 2px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -499,6 +507,7 @@ code, .explorer-mono {
     justify-content: center;
     width: 1.9rem;
     height: 1.9rem;
+    margin-left: auto;
     padding: 0;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
@@ -642,12 +651,13 @@ code, .explorer-mono {
 /* Connection status banner */
 
 .explorer-connbar {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
-    border-bottom: 1px solid var(--border);
+    gap: 0.5rem;
+    margin-left: auto;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.8rem;
+    border-radius: var(--radius-sm);
 }
 
 .explorer-connbar-warn {
@@ -655,10 +665,15 @@ code, .explorer-mono {
     background: var(--bg-elevated);
 }
 
+.explorer-connbar-ok {
+    color: var(--ok);
+    background: var(--bg-elevated);
+}
+
 .explorer-connbar-down {
     color: var(--danger);
     background: var(--danger-surface);
-    border-bottom-color: var(--danger-border);
+    border: 1px solid var(--danger-border);
 }
 
 .explorer-conndot {
@@ -670,7 +685,6 @@ code, .explorer-mono {
 }
 
 .explorer-connmsg {
-    flex: 1;
     min-width: 0;
 }
 
@@ -932,10 +946,33 @@ code, .explorer-mono {
 
 .explorer-topology-canvas {
     flex: 1 1 auto;
-    overflow: auto;
+    min-height: 0;
+    overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--bg-input);
+}
+
+.explorer-topo-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    touch-action: none;
+}
+
+.explorer-topo-svg.is-panning {
+    cursor: grabbing;
+}
+
+.explorer-topology-reset {
+    padding: 0.3rem 0.8rem;
+    font-size: 0.82rem;
+}
+
+.explorer-topology-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
 }
 
 .explorer-topo-edge {
@@ -1038,6 +1075,68 @@ code, .explorer-mono {
     font-size: 0.8rem;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+}
+
+.explorer-data-search-field {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 1 1 240px;
+    max-width: 420px;
+}
+
+.explorer-data-search-input {
+    width: 100%;
+    padding: 0.4rem 1.9rem 0.4rem 0.7rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.explorer-data-search-input::placeholder {
+    color: var(--text-dim);
+}
+
+.explorer-data-search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.explorer-data-search-input:disabled {
+    opacity: 0.55;
+}
+
+.explorer-data-search-clear {
+    position: absolute;
+    right: 0.4rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.2rem;
+    height: 1.2rem;
+    padding: 0;
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.explorer-data-search-clear:hover:not(:disabled) {
+    color: var(--text);
+    background: var(--bg-elevated);
+}
+
+.explorer-data-search-hint {
+    font-size: 0.78rem;
+    color: var(--text-dim);
 }
 
 .explorer-data-body {

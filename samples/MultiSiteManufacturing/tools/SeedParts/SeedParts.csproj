@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MultiSiteManufacturing.Tools.SeedParts</RootNamespace>
+    <AssemblyName>SeedParts</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <UseAppHost>false</UseAppHost>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The Orleans client builder. The server/clustering/lattice packages
+         arrive transitively through the Host project reference below. -->
+    <PackageReference Include="Microsoft.Orleans.Client" Version="10.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reuse the sample's real fact write path (LatticeFactBackend +
+         FactJsonCodec + the Fact domain types) so the keys and values we
+         insert are byte-for-byte what the running sample produces. This
+         keeps the cluster's compliance fold and dashboard happy. -->
+    <ProjectReference Include="..\..\src\MultiSiteManufacturing.Host\MultiSiteManufacturing.Host.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -25,12 +25,16 @@ public class MetricsReaderTests
             => Task.FromResult(new ViewCatalogPage());
         public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new TagIndexCatalogPage());
+        public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new TagValueCatalogPage());
         public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new StructureResponse { TreeId = "t" });
         public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new EntryScanResponse { TreeId = "t" });
         public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new EntryGetResponse { TreeId = "t", Key = "k" });
+        public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new EntryScanCancelResponse());
         public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new ClusterInfo());
         public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)

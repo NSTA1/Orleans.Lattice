@@ -91,6 +91,26 @@ internal interface ILatticeStateQuery
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Enumerates the distinct tag values carried by a single tag index over its
+    /// subject tree, as a deterministic, paged catalog in ascending ordinal
+    /// order. The index is named by <see cref="CatalogRequest.IndexName"/> and
+    /// the subject tree by <see cref="CatalogRequest.SourceTreeId"/>; both are
+    /// required. Intended to populate a tag-value picker for a tag-filtered
+    /// entry scan. Returns an empty page when the subject tree is absent or
+    /// reserved, when no tag-index factory is registered, or when the index has
+    /// no members in that tree.
+    /// </summary>
+    /// <param name="request">
+    /// Paging request carrying the subject tree
+    /// (<see cref="CatalogRequest.SourceTreeId"/>) and index name
+    /// (<see cref="CatalogRequest.IndexName"/>).
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<TagValueCatalogPage> ListTagValuesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the structural node graph of the given tree - shard roots,
     /// internal nodes, and leaves - each annotated with node kind, key-range
     /// bounds, live/tombstone counts, fan-out, and depth, or a typed

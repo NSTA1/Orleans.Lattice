@@ -21,9 +21,16 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
         int pageSize,
         string? continuationToken = null,
         TagFilter? tagFilter = null,
+        string? keyPrefix = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        // A key prefix narrows the scan to a ranged seek over the sorted keys
+        // [prefix, prefixUpperBound). The state-API key range is ignored on a
+        // tag-filtered scan, so the prefix is honoured only when no tag filter is
+        // active (the UI also disables the prefix box while a tag filter is on).
+        var applyPrefix = tagFilter is null && !string.IsNullOrEmpty(keyPrefix);
 
         var request = new EntryScanRequest
         {
@@ -31,6 +38,8 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
             PageSize = DataPaging.Normalize(pageSize),
             ContinuationToken = string.IsNullOrEmpty(continuationToken) ? null : continuationToken,
             ValuePreviewBudget = ScanPreviewBudget,
+            StartInclusive = applyPrefix ? keyPrefix : null,
+            EndExclusive = applyPrefix ? PrefixUpperBound(keyPrefix!) : null,
             IndexName = tagFilter?.IndexName,
             Tag = tagFilter?.Tag,
         };
@@ -76,6 +85,31 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> ListTagValuesForIndexAsync(
+        string treeId,
+        string indexName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+
+        var values = new List<string>();
+        string? token = null;
+        do
+        {
+            var page = await _client.ListTagValuesAsync(
+                new CatalogRequest { SourceTreeId = treeId, IndexName = indexName, PageToken = token },
+                cancellationToken).ConfigureAwait(false);
+
+            values.AddRange(page.Entries);
+            token = page.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(token));
+
+        return values;
+    }
+
+    /// <inheritdoc />
     public async Task<DataEntry?> GetEntryAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -87,5 +121,45 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
         return response.Status == StateQueryStatus.Found && response.Entry is not null
             ? DataEntry.From(response.Entry)
             : null;
+    }
+
+    /// <summary>
+    /// Computes the exclusive upper bound for a starts-with scan over
+    /// ordinal-sorted keys: the smallest key that sorts strictly after every key
+    /// beginning with <paramref name="prefix"/>. Found by incrementing the last
+    /// code unit below <see cref="char.MaxValue"/> and dropping the tail. Returns
+    /// <see langword="null"/> when the prefix is empty or consists entirely of
+    /// <c>U+FFFF</c> code units, for which no finite upper bound exists (the scan
+    /// then runs to the last key).
+    /// </summary>
+    internal static string? PrefixUpperBound(string prefix)
+    {
+        for (var i = prefix.Length - 1; i >= 0; i--)
+        {
+            if (prefix[i] < char.MaxValue)
+            {
+                var bound = new char[i + 1];
+                prefix.AsSpan(0, i + 1).CopyTo(bound);
+                bound[i]++;
+                return new string(bound);
+            }
+        }
+
+        return null;
+    }
+
+    /// <inheritdoc />
+    public async Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        // An empty token names no cursor: nothing to release, so skip the round trip.
+        if (string.IsNullOrEmpty(continuationToken))
+        {
+            return;
+        }
+
+        var request = new EntryScanCancelRequest { TreeId = treeId, ContinuationToken = continuationToken };
+        await _client.CancelScanAsync(request, cancellationToken).ConfigureAwait(false);
     }
 }

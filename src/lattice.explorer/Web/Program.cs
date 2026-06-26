@@ -3,6 +3,7 @@ using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.Metrics;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.Web;
@@ -37,6 +38,13 @@ builder.Services.AddExplorerCatalog();
 builder.Services.AddExplorerMetrics();
 builder.Services.AddExplorerTopology();
 builder.Services.AddExplorerData();
+builder.Services.AddExplorerSession();
+
+// The web head persists UI preferences to the browser's localStorage (Data
+// Protection-encrypted), overriding the in-memory fallback backing store.
+builder.Services.AddScoped<
+    Orleans.Lattice.Explorer.Core.Session.IUiPreferenceBackingStore,
+    ProtectedLocalStoragePreferenceBackingStore>();
 
 // Authentication. The credential rests in an HttpOnly + Secure cookie encrypted
 // with Data Protection (no browser storage); the login dialog posts to the

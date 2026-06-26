@@ -12,13 +12,16 @@ public interface IDataReader
     /// snapshot, or <see langword="null"/> to open a fresh snapshot scan. When a
     /// <paramref name="tagFilter"/> is supplied, only the rows of
     /// <paramref name="treeId"/> tagged with that value (in the named index) are
-    /// returned.
+    /// returned. When a non-empty <paramref name="keyPrefix"/> is supplied (and
+    /// no <paramref name="tagFilter"/> is active), the scan is bounded to the keys
+    /// that start with that prefix, served as a ranged seek over the sorted keys.
     /// </summary>
     Task<DataPage> ScanAsync(
         string treeId,
         int pageSize,
         string? continuationToken = null,
         TagFilter? tagFilter = null,
+        string? keyPrefix = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -28,9 +31,30 @@ public interface IDataReader
     Task<DataEntry?> GetEntryAsync(string treeId, string key, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Best-effort release of the snapshot scan cursor named by
+    /// <paramref name="continuationToken"/> (as returned by a prior
+    /// <see cref="ScanAsync"/> page), so its server-side WAL pin and baseline are
+    /// freed promptly instead of lingering until the cursor's idle TTL. A
+    /// <see langword="null"/> or empty token, or one naming an already-drained or
+    /// unknown cursor, is a no-op. Never throws for an unknown cursor.
+    /// </summary>
+    Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lists the clean names of the tag indexes that cover
     /// <paramref name="treeId"/>, for the Data tab's tag filter. Returns an
     /// empty list when the table has no associated tag indexes.
     /// </summary>
     Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the distinct tag values carried by the tag index
+    /// <paramref name="indexName"/> over <paramref name="treeId"/>, in ascending
+    /// ordinal order, for the Data tab's tag-value picker. Returns an empty list
+    /// when the index has no members in that tree.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListTagValuesForIndexAsync(
+        string treeId,
+        string indexName,
+        CancellationToken cancellationToken = default);
 }
