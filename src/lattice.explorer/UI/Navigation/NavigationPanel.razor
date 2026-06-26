@@ -29,22 +29,22 @@
         <div class="explorer-nav-toggle" role="tablist" aria-label="Catalog kind">
             <button type="button"
                     role="tab"
-                    class="explorer-toggle-option @(_kind == CatalogKind.Trees ? "is-active" : null)"
-                    aria-selected="@(_kind == CatalogKind.Trees)"
+                    class="explorer-toggle-option @(_preferencesApplied && _kind == CatalogKind.Trees ? "is-active" : null)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Trees)"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.Trees))">
                 Trees
             </button>
             <button type="button"
                     role="tab"
-                    class="explorer-toggle-option @(_kind == CatalogKind.Views ? "is-active" : null)"
-                    aria-selected="@(_kind == CatalogKind.Views)"
+                    class="explorer-toggle-option @(_preferencesApplied && _kind == CatalogKind.Views ? "is-active" : null)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Views)"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.Views))">
                 Views
             </button>
             <button type="button"
                     role="tab"
-                    class="explorer-toggle-option @(_kind == CatalogKind.TagIndexes ? "is-active" : null)"
-                    aria-selected="@(_kind == CatalogKind.TagIndexes)"
+                    class="explorer-toggle-option @(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "is-active" : null)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.TagIndexes)"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.TagIndexes))">
                 Tag indexes
             </button>
@@ -162,7 +162,7 @@
     };
     private string? _nextToken;
     private bool _hasMore;
-    private bool _loading;
+    private bool _loading = true;
     private string? _error;
     private bool _showConfig;
     private bool _preferencesApplied;
@@ -179,17 +179,22 @@
         Session.ConfigurationChanged += OnConfigurationChanged;
 
         // Restore the prior kind toggle and active selection before the first
-        // catalog load so the panel reopens where the user left it. Tolerant of
-        // an unreachable backing store (server prerender); the first-render
-        // fallback re-applies once browser storage becomes reachable.
+        // catalog load so the panel opens on the retained kind (and never shows
+        // the default kind selected first). When browser storage is not yet
+        // reachable (server prerender), defer the first load to the first
+        // interactive render so the wrong kind is never shown.
         await Preferences.EnsureLoadedAsync();
         ApplyPreferences();
-        await ReloadAsync();
+        if (_preferencesApplied)
+        {
+            await ReloadAsync();
+        }
     }
 
-    // When preferences could not be hydrated during initialization (for example
-    // during server prerender), retry once on the first interactive render and
-    // re-apply the retained kind and selection.
+    // Completes restoration on the first interactive render when initialization
+    // could not reach browser storage (for example after server prerender). Falls
+    // back to the defaults if storage is still unreachable so the panel always
+    // ends up with a selected kind and a loaded list rather than a blank toggle.
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender || _preferencesApplied)
@@ -198,18 +203,9 @@
         }
 
         await Preferences.EnsureLoadedAsync();
-        if (!Preferences.IsLoaded)
-        {
-            return;
-        }
-
-        var previousKind = _kind;
         ApplyPreferences();
-        if (_kind != previousKind)
-        {
-            await ReloadAsync();
-        }
-
+        _preferencesApplied = true;
+        await ReloadAsync();
         StateHasChanged();
     }
 
