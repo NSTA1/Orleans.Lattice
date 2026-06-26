@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// <see cref="IUiPreferenceBackingStore"/>. Registered with a scoped lifetime so
 /// each session hydrates its own mirror once, then serves reads synchronously.
 /// </summary>
-public sealed class UiPreferenceStore : IUiPreferenceStore
+public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
 {
     /// <summary>The backing-store key under which the whole preference document is persisted.</summary>
     public const string BackingKey = "orleans.lattice.explorer.preferences.v1";
@@ -21,6 +21,13 @@ public sealed class UiPreferenceStore : IUiPreferenceStore
     private readonly TimeSpan _retention;
     private readonly Dictionary<string, PreferenceEntry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<string, object?> _deserialized = new(StringComparer.Ordinal);
+
+    // Serialises hydration and every mutation so the in-memory dictionaries are
+    // never written from two continuations at once. The store is a scoped service
+    // shared by sibling components (the navigation and detail panels), each of
+    // which hydrates on startup; without this gate their concurrent writes would
+    // corrupt the dictionaries.
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _loaded;
 
     /// <summary>Initialises the store over <paramref name="backing"/>.</summary>
@@ -48,48 +55,63 @@ public sealed class UiPreferenceStore : IUiPreferenceStore
             return;
         }
 
-        string? blob;
+        await _gate.WaitAsync(cancellationToken);
         try
         {
-            blob = await _backing.GetAsync(BackingKey, cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // The backing store is unreachable (e.g. browser storage during
-            // server prerender). Stay unloaded so a later call retries; reads
-            // fall back to their defaults in the meantime.
-            return;
-        }
+            // Re-check under the gate: a sibling component may have hydrated while
+            // this caller was waiting, so hydration runs exactly once.
+            if (_loaded)
+            {
+                return;
+            }
 
-        if (blob is not null)
-        {
+            string? blob;
             try
             {
-                var map = JsonSerializer.Deserialize<Dictionary<string, PreferenceEntry>>(blob);
-                if (map is not null)
+                blob = await _backing.GetAsync(BackingKey, cancellationToken);
+            }
+            catch
+            {
+                // The backing store is unreachable (e.g. browser storage during
+                // server prerender). Stay unloaded so a later call retries; reads
+                // fall back to their defaults in the meantime.
+                return;
+            }
+
+            if (blob is not null)
+            {
+                try
                 {
-                    _entries.Clear();
-                    foreach (var (key, entry) in map)
+                    var map = JsonSerializer.Deserialize<Dictionary<string, PreferenceEntry>>(blob);
+                    if (map is not null)
                     {
-                        if (entry is not null)
+                        _entries.Clear();
+                        foreach (var (key, entry) in map)
                         {
-                            _entries[key] = entry;
+                            if (key is not null && entry is not null)
+                            {
+                                _entries[key] = entry;
+                            }
                         }
                     }
                 }
+                catch (JsonException)
+                {
+                    // A corrupt document is discarded rather than wedging the session.
+                    _entries.Clear();
+                }
             }
-            catch (JsonException)
+
+            _loaded = true;
+
+            if (PruneExpired())
             {
-                // A corrupt document is discarded rather than wedging the session.
-                _entries.Clear();
+                await PersistAsync(cancellationToken);
             }
         }
-
-        _loaded = true;
-
-        if (PruneExpired())
+        finally
         {
-            await PersistAsync(cancellationToken).ConfigureAwait(false);
+            _gate.Release();
         }
     }
 
@@ -134,29 +156,45 @@ public sealed class UiPreferenceStore : IUiPreferenceStore
     public async Task SetAsync<T>(string key, T value, string? owner = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
-        await EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureLoadedAsync(cancellationToken);
 
-        _entries[key] = new PreferenceEntry
+        await _gate.WaitAsync(cancellationToken);
+        try
         {
-            Json = JsonSerializer.Serialize(value),
-            Owner = owner,
-            TouchedUnixMs = _clock.GetUtcNow().ToUnixTimeMilliseconds(),
-        };
-        _deserialized[key] = value;
+            _entries[key] = new PreferenceEntry
+            {
+                Json = JsonSerializer.Serialize(value),
+                Owner = owner,
+                TouchedUnixMs = _clock.GetUtcNow().ToUnixTimeMilliseconds(),
+            };
+            _deserialized[key] = value;
 
-        await PersistAsync(cancellationToken).ConfigureAwait(false);
+            await PersistAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     /// <inheritdoc />
     public async Task RemoveAsync(string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
-        await EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureLoadedAsync(cancellationToken);
 
-        if (_entries.Remove(key))
+        await _gate.WaitAsync(cancellationToken);
+        try
         {
-            _deserialized.Remove(key);
-            await PersistAsync(cancellationToken).ConfigureAwait(false);
+            if (_entries.Remove(key))
+            {
+                _deserialized.Remove(key);
+                await PersistAsync(cancellationToken);
+            }
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
@@ -164,27 +202,35 @@ public sealed class UiPreferenceStore : IUiPreferenceStore
     public async Task GarbageCollectAsync(IReadOnlyCollection<string> liveOwners, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(liveOwners);
-        await EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureLoadedAsync(cancellationToken);
 
-        var live = new HashSet<string>(liveOwners, StringComparer.Ordinal);
-        var changed = false;
-
-        foreach (var key in _entries.Keys.ToArray())
+        await _gate.WaitAsync(cancellationToken);
+        try
         {
-            var owner = _entries[key].Owner;
-            if (owner is not null && !live.Contains(owner))
+            var live = new HashSet<string>(liveOwners, StringComparer.Ordinal);
+            var changed = false;
+
+            foreach (var key in _entries.Keys.ToArray())
             {
-                _entries.Remove(key);
-                _deserialized.Remove(key);
-                changed = true;
+                var owner = _entries[key].Owner;
+                if (owner is not null && !live.Contains(owner))
+                {
+                    _entries.Remove(key);
+                    _deserialized.Remove(key);
+                    changed = true;
+                }
+            }
+
+            changed |= PruneExpired();
+
+            if (changed)
+            {
+                await PersistAsync(cancellationToken);
             }
         }
-
-        changed |= PruneExpired();
-
-        if (changed)
+        finally
         {
-            await PersistAsync(cancellationToken).ConfigureAwait(false);
+            _gate.Release();
         }
     }
 
@@ -219,11 +265,11 @@ public sealed class UiPreferenceStore : IUiPreferenceStore
         {
             if (_entries.Count == 0)
             {
-                await _backing.RemoveAsync(BackingKey, cancellationToken).ConfigureAwait(false);
+                await _backing.RemoveAsync(BackingKey, cancellationToken);
             }
             else
             {
-                await _backing.SetAsync(BackingKey, JsonSerializer.Serialize(_entries), cancellationToken).ConfigureAwait(false);
+                await _backing.SetAsync(BackingKey, JsonSerializer.Serialize(_entries), cancellationToken);
             }
         }
         catch
@@ -232,6 +278,9 @@ public sealed class UiPreferenceStore : IUiPreferenceStore
             // mirror authoritative; the next successful write reconciles it.
         }
     }
+
+    /// <inheritdoc />
+    public void Dispose() => _gate.Dispose();
 
     /// <summary>One persisted preference: its JSON-encoded value plus GC metadata.</summary>
     internal sealed class PreferenceEntry
