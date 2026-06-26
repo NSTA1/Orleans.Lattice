@@ -25,6 +25,7 @@ public readonly record struct ReplicationBatchEnvelope
     public IReadOnlyList<WalRecord> Entries { get; init; }
 
     public const int CurrentVersion = 1;
+    public const int CurrentMinorVersion = 1;
 }
 ```
 
@@ -46,7 +47,7 @@ Future breaking changes to the on-the-wire shape - new top-level fields that old
 
 This is the canonical fail-fast posture: an older receiver paired with a newer producer immediately surfaces a deployment-ordering bug rather than mis-applying a payload it cannot interpret. A newer receiver paired with an older producer is the "normal" mixed-version case during a rolling upgrade and decodes the payload directly.
 
-Forward-compatible additions (new `[Id(n)]` slots on `WalRecord` with stable defaults, like the `Mode` slot stamped by the commit-time observer when a tree's replication mode is declared) do not require a wire-version bump: the Orleans serializer's per-field id model handles them transparently and unknown ids on a legacy receiver decode as the default value.
+Forward-compatible additions (new `[Id(n)]` slots on `WalRecord` with stable defaults, like the `Mode` slot stamped by the commit-time observer when a tree's replication mode is declared) do not require a wire-version bump: the Orleans serializer's per-field id model handles them transparently and unknown ids on a legacy receiver decode as the default value. Such additive changes bump the diagnostic `CurrentMinorVersion` - separate from `CurrentVersion`, which is reserved for breaking changes that older receivers must reject - so logs and traces can correlate the producer's exact envelope shape; the minor version has no effect on encode/decode.
 
 ## `WalRecord.Value` strip on CRDT-mode entries
 
