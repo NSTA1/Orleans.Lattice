@@ -20,6 +20,9 @@ internal sealed class FakeStateClientCapture : ILatticeStateClient
     public Func<CatalogRequest, Task<TagIndexCatalogPage>> OnListTagIndexes { get; set; } =
         _ => Task.FromResult(new TagIndexCatalogPage());
 
+    public Func<CatalogRequest, Task<TagValueCatalogPage>> OnListTagValues { get; set; } =
+        _ => Task.FromResult(new TagValueCatalogPage());
+
     public Task<TreeCatalogPage> ListTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => OnListTrees(request);
 
@@ -28,6 +31,9 @@ internal sealed class FakeStateClientCapture : ILatticeStateClient
 
     public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => OnListTagIndexes(request);
+
+    public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => OnListTagValues(request);
 
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });

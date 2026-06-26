@@ -228,6 +228,54 @@ internal sealed class LatticeStateQuery(
         return new TagIndexCatalogPage { Entries = entries, NextPageToken = nextToken };
     }
 
+    public async Task<TagValueCatalogPage> ListTagValuesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.SourceTreeId);
+        ArgumentException.ThrowIfNullOrEmpty(request.IndexName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tree = _grainFactory.GetGrain<ILattice>(request.SourceTreeId);
+        if (IsReservedTree(request.SourceTreeId)
+            || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return new TagValueCatalogPage();
+        }
+
+        var tagFactory = _services.GetService<ILatticeTagIndexFactory>();
+        if (tagFactory is null)
+        {
+            return new TagValueCatalogPage();
+        }
+
+        var index = tagFactory.Create(tree, request.IndexName);
+        var pageSize = request.EffectivePageSize;
+        var values = new List<string>(pageSize);
+        string? nextToken = null;
+
+        // TagsAsync yields the distinct tags in ascending ordinal order; the page
+        // token is the last tag returned, applied as an exclusive lower bound.
+        await foreach (var tag in index.TagsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (request.PageToken is not null && string.CompareOrdinal(tag, request.PageToken) <= 0)
+            {
+                continue;
+            }
+
+            if (values.Count == pageSize)
+            {
+                nextToken = values[^1];
+                break;
+            }
+
+            values.Add(tag);
+        }
+
+        return new TagValueCatalogPage { Entries = values, NextPageToken = nextToken };
+    }
+
     public async Task<TreeStructureResult> GetTreeStructureAsync(
         StructureRequest request,
         CancellationToken cancellationToken = default)

@@ -46,4 +46,15 @@ public interface IDataReader
     /// empty list when the table has no associated tag indexes.
     /// </summary>
     Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the distinct tag values carried by the tag index
+    /// <paramref name="indexName"/> over <paramref name="treeId"/>, in ascending
+    /// ordinal order, for the Data tab's tag-value picker. Returns an empty list
+    /// when the index has no members in that tree.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListTagValuesForIndexAsync(
+        string treeId,
+        string indexName,
+        CancellationToken cancellationToken = default);
 }

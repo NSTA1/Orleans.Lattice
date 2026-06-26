@@ -37,6 +37,9 @@ internal sealed class FakeStateClient : ILatticeStateClient, IDisposable
     public Task<TagIndexCatalogPage> ListTagIndexesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new TagIndexCatalogPage());
 
+    public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new TagValueCatalogPage());
+
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });
 

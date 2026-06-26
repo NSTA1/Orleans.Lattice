@@ -85,6 +85,31 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> ListTagValuesForIndexAsync(
+        string treeId,
+        string indexName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+
+        var values = new List<string>();
+        string? token = null;
+        do
+        {
+            var page = await _client.ListTagValuesAsync(
+                new CatalogRequest { SourceTreeId = treeId, IndexName = indexName, PageToken = token },
+                cancellationToken).ConfigureAwait(false);
+
+            values.AddRange(page.Entries);
+            token = page.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(token));
+
+        return values;
+    }
+
+    /// <inheritdoc />
     public async Task<DataEntry?> GetEntryAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);

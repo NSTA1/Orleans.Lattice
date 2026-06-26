@@ -206,6 +206,40 @@ public class DataReaderTests
     }
 
     [Test]
+    public async Task ListTagValuesForIndexAsync_PassesTreeAndIndex_AndPagesAllValues()
+    {
+        var calls = 0;
+        var client = new FakeEntryStateClient
+        {
+            OnListTagValues = req =>
+            {
+                calls++;
+                return calls == 1
+                    ? new TagValueCatalogPage
+                    {
+                        Entries = new[] { "closed", "open" },
+                        NextPageToken = "open",
+                    }
+                    : new TagValueCatalogPage
+                    {
+                        Entries = new[] { "pending" },
+                        NextPageToken = null,
+                    };
+            },
+        };
+        var reader = new DataReader(client);
+
+        var values = await reader.ListTagValuesForIndexAsync("orders", "by-status");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastTagValues!.SourceTreeId, Is.EqualTo("orders"));
+            Assert.That(client.LastTagValues!.IndexName, Is.EqualTo("by-status"));
+            Assert.That(values, Is.EqualTo(new[] { "closed", "open", "pending" }));
+        });
+    }
+
+    [Test]
     public async Task GetEntryAsync_Found_ReturnsMappedEntry()
     {
         var client = new FakeEntryStateClient

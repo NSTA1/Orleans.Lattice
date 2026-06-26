@@ -32,7 +32,7 @@
         <div class="explorer-data-toolbar explorer-data-tagfilter">
             <label class="explorer-data-tagfilter-field">
                 Tag index
-                <select disabled="@_loading" @bind="_selectedIndex">
+                <select disabled="@_loading" @bind="_selectedIndex" @bind:after="OnTagIndexChangedAsync">
                     @foreach (var name in _tagIndexes)
                     {
                         <option value="@name">@name</option>
@@ -41,20 +41,19 @@
             </label>
             <label class="explorer-data-tagfilter-field">
                 Tag
-                <input type="text" disabled="@_loading" placeholder="tag value"
-                       @bind="_tagValue" @bind:event="oninput" @onkeyup="OnTagKeyUp" />
+                <select disabled="@(_loading || _tagValuesLoading)" @bind="_tagValue" @bind:after="ApplyTagFilterAsync">
+                    <option value="">@(_tagValuesLoading ? "Loading..." : "(any)")</option>
+                    @foreach (var value in _tagValues)
+                    {
+                        <option value="@value">@value</option>
+                    }
+                </select>
             </label>
-            <button type="button" class="explorer-btn"
-                    disabled="@(_loading || string.IsNullOrWhiteSpace(_tagValue))"
-                    @onclick="ApplyTagFilterAsync">
-                Filter
-            </button>
             @if (_activeTagFilter is not null)
             {
                 <span class="explorer-data-tagfilter-active">
                     Showing rows tagged <code>@_activeTagFilter.Tag</code> in <code>@_activeTagFilter.IndexName</code>
                 </span>
-                <button type="button" class="explorer-btn-link" disabled="@_loading" @onclick="ClearTagFilterAsync">Clear</button>
             }
         </div>
     }
@@ -184,7 +183,9 @@
 
     private IReadOnlyList<string> _tagIndexes = Array.Empty<string>();
     private string? _selectedIndex;
-    private string? _tagValue;
+    private IReadOnlyList<string> _tagValues = Array.Empty<string>();
+    private bool _tagValuesLoading;
+    private string _tagValue = string.Empty;
     private TagFilter? _activeTagFilter;
 
     // The committed key starts-with filter, kept in sync from the search box so
@@ -206,6 +207,7 @@
         var targetPage = SessionStore.GetOrDefault(PageStateKey, 0);
 
         await LoadTagIndexesAsync();
+        await LoadRetainedTagFilterAsync();
         await ReloadFirstPageAsync();
 
         if (targetPage > 0)
@@ -219,7 +221,13 @@
         try
         {
             _tagIndexes = await DataReader.ListTagIndexesForTreeAsync(Selection.Id, TabToken);
-            _selectedIndex = _tagIndexes.Count > 0 ? _tagIndexes[0] : null;
+
+            // Restore the retained index selection for this selection (session
+            // scoped); fall back to the first index when none is retained.
+            var retained = SessionStore.GetOrDefault(TagIndexStateKey, string.Empty);
+            _selectedIndex = _tagIndexes.Contains(retained)
+                ? retained
+                : _tagIndexes.Count > 0 ? _tagIndexes[0] : null;
         }
         catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
         {
@@ -231,6 +239,50 @@
             // fails the Data tab still works as an unfiltered scan.
             _tagIndexes = Array.Empty<string>();
             _selectedIndex = null;
+        }
+    }
+
+    // Loads the distinct tag values for the selected index and restores this
+    // selection's retained value (session scoped, default empty / no filter).
+    private async Task LoadRetainedTagFilterAsync()
+    {
+        if (string.IsNullOrEmpty(_selectedIndex))
+        {
+            _tagValues = Array.Empty<string>();
+            _tagValue = string.Empty;
+            _activeTagFilter = null;
+            return;
+        }
+
+        _tagValuesLoading = true;
+        StateHasChanged();
+        try
+        {
+            _tagValues = await DataReader.ListTagValuesForIndexAsync(Selection.Id, _selectedIndex, TabToken);
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            _tagValues = Array.Empty<string>();
+        }
+        finally
+        {
+            _tagValuesLoading = false;
+        }
+
+        var retained = SessionStore.GetOrDefault(TagValueStateKey(_selectedIndex), string.Empty);
+        if (!string.IsNullOrEmpty(retained) && _tagValues.Contains(retained))
+        {
+            _tagValue = retained;
+            _activeTagFilter = new TagFilter(_selectedIndex, retained);
+        }
+        else
+        {
+            _tagValue = string.Empty;
+            _activeTagFilter = null;
         }
     }
 
@@ -272,28 +324,45 @@
     // Session-store key for this selection's retained current page index.
     private string PageStateKey => $"data-page:{Selection.Id}";
 
-    private async Task OnTagKeyUp(KeyboardEventArgs e)
+    // Session-store key for this selection's retained tag index selection.
+    private string TagIndexStateKey => $"data-tagindex:{Selection.Id}";
+
+    // Session-store key for this selection's retained tag value, per index.
+    private string TagValueStateKey(string indexName) => $"data-tagvalue:{Selection.Id}:{indexName}";
+
+    // The user picked a different tag index: load its values, restore the
+    // retained value for that index, and refresh the display.
+    private async Task OnTagIndexChangedAsync()
     {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_tagValue))
+        if (!string.IsNullOrEmpty(_selectedIndex))
         {
-            await ApplyTagFilterAsync();
+            SessionStore.Set(TagIndexStateKey, _selectedIndex);
         }
+
+        await LoadRetainedTagFilterAsync();
+        await ReloadFirstPageAsync();
     }
 
+    // The user picked a tag value (or the empty "(any)" option, which clears the
+    // filter). Retain per selection and index for the session, then refresh.
     private async Task ApplyTagFilterAsync()
     {
-        if (string.IsNullOrWhiteSpace(_selectedIndex) || string.IsNullOrWhiteSpace(_tagValue))
+        if (string.IsNullOrEmpty(_selectedIndex))
         {
             return;
         }
 
-        _activeTagFilter = new TagFilter(_selectedIndex, _tagValue.Trim());
-        await ReloadFirstPageAsync();
-    }
+        if (string.IsNullOrEmpty(_tagValue))
+        {
+            _activeTagFilter = null;
+            SessionStore.Remove(TagValueStateKey(_selectedIndex));
+        }
+        else
+        {
+            _activeTagFilter = new TagFilter(_selectedIndex, _tagValue);
+            SessionStore.Set(TagValueStateKey(_selectedIndex), _tagValue);
+        }
 
-    private async Task ClearTagFilterAsync()
-    {
-        _activeTagFilter = null;
         await ReloadFirstPageAsync();
     }
 

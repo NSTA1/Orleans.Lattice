@@ -46,6 +46,8 @@ while (pageToken is not null);
 
 Each `TreeCatalogEntry` carries the tree id, its shard count, and its lifecycle. Set `IncludeSystemTrees` to surface reserved system trees, and `IncludeViewStats` on a `ListViewsAsync` request to populate per-view statistics.
 
+`ListTagIndexesAsync` lists the tag-index membership trees as their own category; set `SourceTreeId` to restrict it to the indexes that cover one tree. `ListTagValuesAsync` then enumerates the distinct tag values carried by a single index over its subject tree, in ascending ordinal order - pass both `SourceTreeId` (the subject tree) and `IndexName` (the index). Both are paged like the other catalogs, so a client can populate a tag picker without scanning the index tree itself.
+
 ## Structure
 
 `GetTreeStructureAsync` returns the structural node graph of a tree as a `StructureResponse`. `Roots` holds one `NodeStateSummary` per shard root; each node reports its kind (leaf or internal), child fan-out, and `SubtreeKeyCount` - the live-key count under that subtree. Summing the roots' subtree counts gives the tree's total live-key count.

@@ -82,4 +82,7 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="TagIndexCatalogPage"/>.</summary>
     public const string TagIndexCatalogPage = "ola.tip";
+
+    /// <summary>Alias for <see cref="TagValueCatalogPage"/>.</summary>
+    public const string TagValueCatalogPage = "ola.tvp";
 }

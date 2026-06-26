@@ -13,6 +13,7 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     public EntryScanRequest? LastScan { get; private set; }
     public EntryGetRequest? LastGet { get; private set; }
     public CatalogRequest? LastTagIndexes { get; private set; }
+    public CatalogRequest? LastTagValues { get; private set; }
     public EntryScanCancelRequest? LastCancel { get; private set; }
 
     public Func<EntryScanRequest, EntryScanResponse> OnScan { get; set; } =
@@ -23,6 +24,9 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
 
     public Func<CatalogRequest, TagIndexCatalogPage> OnListTagIndexes { get; set; } =
         _ => new TagIndexCatalogPage();
+
+    public Func<CatalogRequest, TagValueCatalogPage> OnListTagValues { get; set; } =
+        _ => new TagValueCatalogPage();
 
     public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)
     {
@@ -51,6 +55,12 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     {
         LastTagIndexes = request;
         return Task.FromResult(OnListTagIndexes(request));
+    }
+
+    public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+    {
+        LastTagValues = request;
+        return Task.FromResult(OnListTagValues(request));
     }
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });

@@ -218,6 +218,61 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public async Task ListTagValuesAsync_returns_distinct_values_in_ordinal_order()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 6);
+
+        var index = _fixture.CreateTagIndex("orders", "orders-by-status");
+        await index.Key("key-00000").AddAsync(["open"]);
+        await index.Key("key-00001").AddAsync(["closed"]);
+        await index.Key("key-00002").AddAsync(["open"]);
+        await index.Key("key-00003").AddAsync(["pending"]);
+
+        var page = await _fixture.Query.ListTagValuesAsync(
+            new CatalogRequest { SourceTreeId = "orders", IndexName = "orders-by-status" });
+
+        Assert.That(page.Entries, Is.EqualTo(new[] { "closed", "open", "pending" }));
+        Assert.That(page.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ListTagValuesAsync_pages_with_continuation_token()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 6);
+
+        var index = _fixture.CreateTagIndex("orders", "orders-by-status");
+        await index.Key("key-00000").AddAsync(["alpha"]);
+        await index.Key("key-00001").AddAsync(["bravo"]);
+        await index.Key("key-00002").AddAsync(["charlie"]);
+
+        var first = await _fixture.Query.ListTagValuesAsync(
+            new CatalogRequest { SourceTreeId = "orders", IndexName = "orders-by-status", PageSize = 2 });
+        Assert.That(first.Entries, Is.EqualTo(new[] { "alpha", "bravo" }));
+        Assert.That(first.NextPageToken, Is.EqualTo("bravo"));
+
+        var second = await _fixture.Query.ListTagValuesAsync(
+            new CatalogRequest
+            {
+                SourceTreeId = "orders",
+                IndexName = "orders-by-status",
+                PageSize = 2,
+                PageToken = first.NextPageToken,
+            });
+        Assert.That(second.Entries, Is.EqualTo(new[] { "charlie" }));
+        Assert.That(second.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ListTagValuesAsync_returns_empty_for_unknown_tree()
+    {
+        var page = await _fixture.Query.ListTagValuesAsync(
+            new CatalogRequest { SourceTreeId = "no-such-tree", IndexName = "orders-by-status" });
+
+        Assert.That(page.Entries, Is.Empty);
+        Assert.That(page.NextPageToken, Is.Null);
+    }
+
+    [Test]
     public async Task ScanEntriesAsync_with_index_and_tag_returns_only_tagged_rows()
     {
         await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 6);
