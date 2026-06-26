@@ -649,6 +649,44 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     }
 
     [Test]
+    public async Task ProcessNextPhase_pin_seals_source_at_applied_cursor_when_frontier_lags()
+    {
+        // Regression for the cross-cluster re-bootstrap loop: the snapshot's
+        // CausalStableFrontier is the producer's consumer-ack meet, which can
+        // omit (or undershoot) the source-origin coordinate whenever a
+        // consumer ack lags - exactly the cold-bootstrap / stuck-receiver
+        // case. Here the frontier carries only foreign origins ("us"/"other")
+        // with coordinates below the entries actually applied. Because every
+        // bootstrap entry is appended to the local WAL stamped
+        // OriginClusterId=source, LastAppliedHlc (200) is the authoritative
+        // max source-attributed HLC the bootstrap materialised. The pin must
+        // seal HWM[source] at that applied cursor - not the lagging frontier
+        // max (70) - so the fall-off detector does not read the retained
+        // source-origin baselines as a perpetual trim gap and loop forever.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff, lastAppliedHlc: Hlc(200));
+        var asOf = Hlc(99);
+        var frontier = new VersionVector();
+        frontier.Entries["us"] = Hlc(50);
+        frontier.Entries["other"] = Hlc(70);
+        fake.State.SnapshotAsOfHlc = asOf;
+        fake.State.CausalStableFrontier = frontier;
+        var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await hwm.Received(1).PinSnapshotAsync(
+            asOf,
+            Arg.Is<VersionVector>(v =>
+                v.GetClock(SourceCluster) == Hlc(200)
+                && v.GetClock("us") == Hlc(50)
+                && v.GetClock("other") == Hlc(70)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task ProcessNextPhase_transitions_to_Failed_when_export_throws()
     {
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
@@ -916,12 +954,14 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync(); // pins → LiveIncremental
         // The resume stream is empty and the frontier carries no
-        // coordinates, so the causal-stable cut is zero and there is no
-        // source-origin baseline to seal; the pin still completes with an
-        // unsealed source coordinate.
+        // coordinates, but a prior drain applied source-attributed entries
+        // up to Hlc(50). The seal folds that applied cursor into the cut so
+        // HWM[source] covers the retained source-origin baselines rather than
+        // being left at zero, which would re-arm the fall-off detector into a
+        // perpetual re-bootstrap loop.
         await hwm.Received(1).PinSnapshotAsync(
             asOf,
-            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == HybridLogicalClock.Zero),
+            Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(50)),
             Arg.Any<CancellationToken>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         Assert.That(fake.State.InProgress, Is.False);

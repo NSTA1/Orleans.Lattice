@@ -712,6 +712,27 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 cut = clock;
             }
         }
+
+        // Fold the applied-entry coordinate into the cut. Every snapshot
+        // entry is appended to the local WAL stamped OriginClusterId=source
+        // (see ApplyEntriesAsync), so LastAppliedHlc is the maximum
+        // source-attributed HLC the bootstrap materialised - an authoritative,
+        // receiver-local lower bound for the source-origin seal. The
+        // causal-stable frontier alone is the consumer-ack meet
+        // (min over consumer VCs) and can omit or zero the source coordinate
+        // whenever a consumer ack lags: a cold bootstrap, or a stuck receiver
+        // whose own lagging VC feeds back into the producer's meet. Sealing
+        // HWM[source] below the entries just applied makes the fall-off
+        // detector read the retained source-origin baselines as a perpetual
+        // trim gap and re-bootstrap forever (worse under a durable WAL, which
+        // never discards the baselines). Folding LastAppliedHlc into the cut
+        // closes that gap without trusting the producer to have populated the
+        // frontier's source component.
+        if (state.State.LastAppliedHlc.CompareTo(cut) > 0)
+        {
+            cut = state.State.LastAppliedHlc;
+        }
+
         if (!string.IsNullOrEmpty(sourceClusterId)
             && cut.CompareTo(frontier.GetClock(sourceClusterId)) > 0)
         {
