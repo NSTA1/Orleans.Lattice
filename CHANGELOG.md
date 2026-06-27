@@ -22,7 +22,7 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 ### Breaking
 
-- **F-107 - The `orleans.lattice.replication.wal.entries_appended` counter is removed.** It counted the redundant commit-time WAL append that no longer happens; the leaf commit-log writer is the single WAL appender and the log-tailing shipper is the producer. Producer ship-rate remains observable through `orleans.lattice.replication.wal.entries_shipped`. Dashboards or alerts that referenced the growth-rate-vs-ship-rate ratio should track ship-rate (and WAL retention / GC) instead (#795).
+- **F-107 - The `orleans.lattice.replication.wal.entries_appended` counter is removed.** It counted the redundant commit-time WAL append that no longer happens; the leaf commit-log writer is the single WAL appender and the log-tailing shipper is the producer. Producer ship-rate remains observable through `orleans.lattice.replication.wal.entries_shipped`. Dashboards or alerts that referenced the growth-rate-vs-ship-rate ratio should track ship-rate (and WAL retention / GC) instead. The bundled `Orleans.Lattice.Dashboards` replication dashboard is updated accordingly: the tree / cluster / silo template variables are re-pointed onto `wal.entries_shipped`, the dead `appended` series is dropped, and a new "leaf WAL append vs ship rate" panel is added (#795).
 
 ## [7.4.2] - 2026-06-26
 
