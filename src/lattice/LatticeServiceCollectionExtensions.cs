@@ -406,6 +406,14 @@ public static class LatticeServiceCollectionExtensions
         // AddWalCursorRegistry leave both registrations absent and the
         // leaf grain no-ops on the report path.
         builder.Services.TryAddSingleton<ILeafCursorReporter, LeafCursorReporter>();
+
+        // Reusable per-shard WAL tailing loop shared by every log consumer
+        // (materialised views, the replication producer, future change-feed /
+        // audit sinks). It depends on both the commit-log reader (registered by
+        // AddLattice) and the cursor registry registered just above, so it is
+        // wired here - where the registry is guaranteed present - rather than in
+        // AddLattice, which a core-only host may call without a cursor registry.
+        builder.Services.TryAddSingleton<Orleans.Lattice.Wal.IWalSubscriber, Orleans.Lattice.Wal.WalLogSubscriber>();
         return builder;
     }
 
