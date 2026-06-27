@@ -311,6 +311,64 @@ internal sealed partial class BPlusLeafGrain
             long persistedCheckpoint = GetPersistedCheckpointForPartition(partition);
             var checkpoint = checkpointOverride ?? persistedCheckpoint;
 
+            // Durable-frontier fall-off guard (issue #945: silent durable data
+            // loss). The cold-cache-reset override (checkpointOverride = -1, set
+            // by OnActivateAsync step 0.5 when the per-activation cache starts
+            // empty and no snapshot rehydrated) deliberately drives the replay
+            // from the absolute start so the full readable window is rebuilt,
+            // and it is also the value handed to the fall-off-log detector
+            // below. Feeding the detector -1 intentionally suppresses its
+            // shared-WAL replay-budget heuristic (a sibling-populated partition
+            // would otherwise trip the budget against this leaf's full range),
+            // but it ALSO blinds the detector's WAL-trim trigger
+            // (checkpoint > 0 && tail > checkpoint), because -1 is read as
+            // "nothing to lose". For a leaf that genuinely has a durable
+            // projection checkpoint, that blindness is unsafe: if the WAL has
+            // been trimmed past the durable checkpoint and no snapshot covers
+            // the gap, a cold replay rebuilds the leaf from only the surviving
+            // WAL suffix - dropping every key the trim removed - and then
+            // advances the persisted checkpoint and the durable materialiser
+            // pin over the lost data. The advanced pin licenses the WAL GC to
+            // trim further behind it, laundering the loss across the whole tree.
+            // Re-check the trim trigger here against the DURABLE checkpoint and
+            // surface the gap as a stale projection rather than silently
+            // materialising it away. Gated on the cold-reset override so the
+            // warm/snapshot-rehydrated path (where checkpoint == persisted) is
+            // unchanged - the detector already covers it.
+            //
+            // Loss condition is tail > checkpoint + 1, NOT the detector's looser
+            // tail > checkpoint. The replay reads strictly past the checkpoint
+            // (ReplayPartitionAsync passes fromExclusive = checkpoint), so the
+            // FIRST offset this leaf still needs is checkpoint + 1; the entry AT
+            // the checkpoint is already applied and harmless to lose. tail is the
+            // oldest still-readable offset (ICommitLogReader.GetTailOffsetAsync).
+            // When tail == checkpoint + 1 only the already-applied prefix was
+            // trimmed and the entire needed (checkpoint, head] window survives -
+            // this is the legitimate "durable floor kept the live tail" shape
+            // (issue #919), which must replay cleanly, not throw. Loss is real
+            // only when the first needed offset itself fell off the log, i.e.
+            // tail > checkpoint + 1. The detector can use the looser formula
+            // because it only steers a rebuild policy; this guard always throws,
+            // so it must be exact.
+            if (checkpointOverride is { } coldReplayStart
+                && coldReplayStart < persistedCheckpoint
+                && persistedCheckpoint > 0)
+            {
+                var trimCoordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+                    $"{treeId}/{partition}");
+                var tail = await trimCoordinator.GetTailOffsetAsync(cancellationToken);
+                if (tail > persistedCheckpoint + 1)
+                {
+                    throw new LeafProjectionStaleException(
+                        $"Leaf projection for tree '{treeId}' partition {partition} cannot be rebuilt " +
+                        $"from the WAL: the durable projection checkpoint (offset {persistedCheckpoint}) " +
+                        $"has fallen off the log (oldest readable offset {tail}) and no covering snapshot " +
+                        "is available, so a cold replay would silently rebuild the leaf over the lost " +
+                        "prefix and advance the materialiser pin past unrecoverable data. " +
+                        "Operator-driven projection rebuild is required.");
+                }
+            }
+
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG replay-enter] gid={context.GrainId} treeId={treeId} partition={partition} shardIndex={state.State.ShardIndex} " +
                 $"low='{state.State.LowKeyInclusive ?? "<null>"}' high='{state.State.HighKeyExclusive ?? "<null>"}' " +

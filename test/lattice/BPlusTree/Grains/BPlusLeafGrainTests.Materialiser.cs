@@ -841,6 +841,102 @@ public partial class BPlusLeafGrainTests
             Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public void Materialiser_cold_replay_surfaces_stale_projection_when_durable_checkpoint_trimmed_off_log()
+    {
+        // Regression for issue #945 (silent durable data loss). A leaf with a
+        // real durable projection checkpoint (offset 40) cold-restarts with an
+        // empty per-activation cache and no covering snapshot, so the
+        // activation coherence step (OnActivateAsync step 0.5) feeds the WAL
+        // replay the -1 "rebuild the whole window" override. That same override
+        // is what the leaf historically handed to the fall-off-log detector,
+        // which blinds the detector's WAL-trim trigger (checkpoint > 0 &&
+        // tail > checkpoint) because -1 is treated as "nothing to lose".
+        //
+        // Here the WAL has been trimmed past the durable checkpoint: the oldest
+        // readable offset (tail) is 50, well past the leaf's durable checkpoint
+        // 40. The committed prefix that held this leaf's keys is gone. Without
+        // the durable-frontier guard the leaf silently rebuilds from the
+        // surviving WAL suffix (only the unrelated "survivor" key), then
+        // advances its checkpoint (40 -> 55) and the durable materialiser pin
+        // over the lost data - laundering the loss across the whole tree. The
+        // activation must instead refuse to rebuild-to-empty and surface the
+        // gap as a LeafProjectionStaleException so an operator-driven rebuild
+        // is required.
+        var reader = Substitute.For<ICommitLogReader>();
+        reader.GetHeadOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(60L));
+        reader.GetTailOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(50L));
+        var detectorServices = new ServiceCollection().AddSingleton<ICommitLogReader>(reader).BuildServiceProvider();
+        var detector = new LatticeFallOffLogDetector(detectorServices);
+
+        // The replay coordinator reports the same trimmed WAL: head 60, oldest
+        // readable offset 50, and the surviving suffix carries only an
+        // unrelated key (this leaf's real data lived in the trimmed prefix).
+        var coord = BuildCoordinator(
+            head: 60,
+            new CommitLogSliceEntry(55, BuildCommittedSet("survivor", Encoding.UTF8.GetBytes("s"), hlcPhysical: 600)));
+        coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(50L));
+
+        var (grain, _, _, _) = CreateGrainWithMaterialiser(
+            coord,
+            persistedCheckpoint: 40,
+            detector: detector);
+
+        Assert.ThrowsAsync<LeafProjectionStaleException>(async () => await ActivateAsync(grain));
+    }
+
+    [Test]
+    public async Task Materialiser_cold_replay_replays_live_tail_when_only_applied_prefix_trimmed()
+    {
+        // Boundary companion to the #945 regression above, and the fast
+        // unit-level mirror of the #919 integration test
+        // Reactivated_leaf_replays_live_tail_after_gc_following_registry_wipe.
+        //
+        // The durable-frontier guard must distinguish REAL loss (the first
+        // offset this leaf still needs fell off the log) from the BENIGN case
+        // where only the already-applied prefix was trimmed and the entire
+        // still-needed window survives. The leaf replays strictly past its
+        // checkpoint (fromExclusive = checkpoint), so the first NEEDED offset is
+        // checkpoint + 1. Here the durable checkpoint is 40 and the oldest
+        // readable offset (tail) is exactly 41 == checkpoint + 1: the prefix
+        // [.., 40] was trimmed but the live tail [41, 42] - the committed-but-
+        // not-yet-checkpointed writes the WAL GC's durable floor deliberately
+        // retained - is fully present. This MUST replay cleanly and advance the
+        // checkpoint, NOT throw LeafProjectionStaleException. A guard that used
+        // the detector's looser tail > checkpoint formula would false-fire here
+        // and break legitimate reactivation after a GC.
+        var reader = Substitute.For<ICommitLogReader>();
+        reader.GetHeadOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(42L));
+        reader.GetTailOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(41L));
+        var detectorServices = new ServiceCollection().AddSingleton<ICommitLogReader>(reader).BuildServiceProvider();
+        var detector = new LatticeFallOffLogDetector(detectorServices);
+
+        var coord = BuildCoordinator(
+            head: 42,
+            new CommitLogSliceEntry(41, BuildCommittedSet("tail-a", Encoding.UTF8.GetBytes("a"), hlcPhysical: 410)),
+            new CommitLogSliceEntry(42, BuildCommittedSet("tail-b", Encoding.UTF8.GetBytes("b"), hlcPhysical: 420)));
+        coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(41L));
+
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(
+            coord,
+            persistedCheckpoint: 40,
+            detector: detector);
+
+        await ActivateAsync(grain);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(42),
+                "The leaf must replay the surviving live tail and advance the checkpoint to the head.");
+        });
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("tail-a"))!), Is.EqualTo("a"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("tail-b"))!), Is.EqualTo("b"));
+    }
+
     // -------------------------------------------------------------------
     // Cursor publish optimisation: redundant publish elision
     // -------------------------------------------------------------------
