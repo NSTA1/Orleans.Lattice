@@ -74,6 +74,24 @@ if (!string.IsNullOrWhiteSpace(filterRaw))
 
 var config = (IConfig)new HarnessConfig(resultsPath);
 
+// Opt-in alternate suite: the producer-side commit-observer microbench
+// (ReplicationCommitObserverBenchmarks) runs only when explicitly selected
+// via BENCH_MICROBENCH_SUITE=observer (or --suite observer). The default
+// path is unchanged so CI / the trend dashboard keep running the main
+// LatticeMicroBenchmarks suite.
+var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
+for (var i = 0; i < args.Length - 1; i++)
+{
+    if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+if (string.Equals(suite, "observer", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> observer (ReplicationCommitObserverBenchmarks)");
+    var observerSummary = BenchmarkRunner.Run<ReplicationCommitObserverBenchmarks>(config);
+    return observerSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
 if (!string.IsNullOrWhiteSpace(filterRaw))
 {
     // Map a comma-separated list of method names to a BDN GlobFilter so we can

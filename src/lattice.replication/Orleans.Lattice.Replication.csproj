@@ -21,6 +21,11 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Grpc" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Grpc.Tests" />
+    <!-- The microbench host drives the internal ReplicationMutationObserver /
+         IReplogSink directly so it can isolate the producer-side commit hot
+         path (ReplicationCommitObserverBenchmarks) without standing up an
+         Orleans silo. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

@@ -29,6 +29,11 @@
          The two versions co-exist at runtime in this project's bin/ because nothing
          else here pulls 5.0.0; the warning is a transitive-resolution false positive. -->
     <NoWarn>$(NoWarn);NU1608</NoWarn>
+    <!-- Selects the shipped nudge-only arm of ReplicationCommitObserverBenchmarks.
+         Undefined on the legacy `main` checkout, which compiles the WalRecord /
+         LocalVectorClockCache arm instead, so the identical harness measures
+         both sides of the #942 change. -->
+    <DefineConstants>$(DefineConstants);REPLOG_NUDGE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
