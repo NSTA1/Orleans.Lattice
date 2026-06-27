@@ -345,7 +345,7 @@ Byte budget for fallback snapshot repair.
 
 ### `ShipDoorbellEnabled`
 
-When enabled, new local writes can wake shipping promptly instead of waiting for the next cadence tick.
+When enabled, the commit-time nudge rings the log-tailing shipper's doorbell so a new local write wakes shipping promptly instead of waiting for the next cadence tick. There is no separate inline ship path - the shipper that tails the WAL is the only producer; the doorbell only short-circuits its timer wait.
 
 ### `FramingCompression`
 

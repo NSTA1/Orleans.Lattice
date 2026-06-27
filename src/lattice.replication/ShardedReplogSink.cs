@@ -1,4 +1,3 @@
-using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Replication.Grains;
@@ -8,20 +7,25 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Default <see cref="IReplogSink"/> registered by
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>.
-/// Routes each captured <see cref="WalRecord"/> to a single
-/// <see cref="IWalShardGrain"/> activation keyed by
-/// <c>{treeId}/{partition}</c>, where <c>partition</c> is a stable hash
-/// of the entry's key modulo
-/// <see cref="LatticeReplicationOptions.ReplogPartitions"/>.
+/// Reduced to a low-latency commit-time nudge: it advances the
+/// producer-side local vector clock cache and rings the per-peer shipper
+/// doorbells. It does <b>not</b> append to the write-ahead log.
 /// <para>
-/// The WAL append is awaited inline so a failure surfaces to the
-/// originating writer rather than being silently swallowed in a
-/// best-effort post-write append. Replaces the legacy
-/// <c>NoOpReplogSink</c> as the default once the WAL grain is wired
-/// into the pipeline.
+/// The write-ahead log is the single per-shard <c>IWalShardGrain</c>
+/// keyed <c>{treeId}/{partition}</c> that the foreground commit-log
+/// writer (<see cref="WalCommitLogWriter"/>) appends to on every commit,
+/// stamping the durable origin cluster id and vector clock. The
+/// <see cref="Grains.IReplicationShipperGrain"/> tails that same log in
+/// the background - it is the durable, log-first replication producer
+/// (one activation per <c>(tree, peer)</c>, a per-partition sequence
+/// checkpoint persisted across restarts, origin/maintenance filtering,
+/// and shard onboarding). A commit therefore reaches the WAL exactly
+/// once via the leaf; the historical second, redundant append on this
+/// commit-time path has been removed so the foreground write no longer
+/// pays a synchronous cross-grain WAL round-trip.
 /// </para>
 /// <para>
-/// On a successful append, the sink rings each per-<c>(tree, peer)</c>
+/// The sink rings each per-<c>(tree, peer)</c>
 /// shipper grain's <see cref="IReplicationShipperGrain.OnDoorbellAsync"/>
 /// - gated on <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/>
 /// - so the outbound ship loop short-circuits its next steady-state
@@ -41,16 +45,9 @@ namespace Orleans.Lattice.Replication;
 /// (e.g. service-registry-backed) have that topology drive the
 /// doorbell loop without needing to mirror membership back into
 /// <see cref="LatticeReplicationOptions.ReplicationPeers"/>.
-/// <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/> and the
-/// partition count remain options-resolved because they are
-/// behaviour knobs rather than membership.
-/// </para>
-/// <para>
-/// The partition count is read from the unnamed (default) options
-/// instance via <see cref="IOptionsMonitor{TOptions}.CurrentValue"/>.
-/// Per-tree partition-count overrides are not supported - if a future
-/// phase needs them, the resolution path will be widened to include the
-/// tree-id named instance.
+/// <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/> remains
+/// options-resolved because it is a behaviour knob rather than
+/// membership.
 /// </para>
 /// </summary>
 internal sealed class ShardedReplogSink(
@@ -64,21 +61,9 @@ internal sealed class ShardedReplogSink(
         topology ?? throw new ArgumentNullException(nameof(topology));
 
     /// <inheritdoc />
-    public async Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
+    public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         var resolved = options.CurrentValue;
-        var partitions = resolved.ReplogPartitions;
-        var partition = WalPartitionHash.Compute(entry.Key ?? string.Empty, partitions);
-        var grain = grainFactory.GetGrain<IWalShardGrain>($"{entry.TreeId}/{partition}");
-        await grain.AppendAsync(entry, cancellationToken).ConfigureAwait(false);
-
-        // Increment after the WAL grain confirms the append so the
-        // counter only reflects entries that actually committed; a
-        // throwing AppendAsync surfaces the original exception to the
-        // caller without contributing to the throughput metric.
-        LatticeReplicationMetrics.WalEntriesAppended.Add(
-            1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId ?? string.Empty));
 
         // Advance the producer-side local vector clock cache's local
         // diagonal entry for this tree. The receiver-side HWM grain
@@ -91,7 +76,7 @@ internal sealed class ShardedReplogSink(
         // (HLC.Zero) never advance the diagonal - pointwise-max in the
         // cache leaves it unchanged. Skipped entirely for foreign-origin
         // entries because foreign origins are advanced post-apply via
-        // AdvanceForeign, not post-WAL-append.
+        // AdvanceForeign, not post-commit.
         if (entry.TreeId is { Length: > 0 } treeId
             && entry.OriginClusterId is { Length: > 0 } originClusterId
             && string.Equals(originClusterId, resolved.ClusterId, StringComparison.Ordinal))
@@ -99,15 +84,17 @@ internal sealed class ShardedReplogSink(
             localVectorClockCache.AdvanceLocal(treeId, originClusterId, entry.Timestamp);
         }
 
-        // Doorbell fan-out: wake every shipper for this tree so
-        // newly-committed entries reach peers at sub-second latency.
-        // Peer membership is sourced from IReplicationTopology, not
-        // from LatticeReplicationOptions.ReplicationPeers, so a host-
-        // supplied dynamic topology drives this loop without having
-        // to mirror membership back into options. ShipDoorbellEnabled
-        // stays options-resolved because it is a per-tree behaviour
-        // knob, not membership. Best-effort and fire-and-forget - the
-        // commit-path semantics never depend on a doorbell ring.
+        // Doorbell fan-out: wake every shipper for this tree so the
+        // background log-tailing producer drains the newly-committed
+        // leaf WAL entries to peers at sub-second latency instead of
+        // waiting for its next steady-state timer tick. Peer membership
+        // is sourced from IReplicationTopology, not from
+        // LatticeReplicationOptions.ReplicationPeers, so a host-supplied
+        // dynamic topology drives this loop without having to mirror
+        // membership back into options. ShipDoorbellEnabled stays
+        // options-resolved because it is a per-tree behaviour knob, not
+        // membership. Best-effort and fire-and-forget - the commit-path
+        // semantics never depend on a doorbell ring.
         if (resolved.ShipDoorbellEnabled
             && entry.TreeId is { Length: > 0 } doorbellTreeId)
         {
@@ -124,6 +111,8 @@ internal sealed class ShardedReplogSink(
                 }
             }
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

@@ -14,22 +14,30 @@ Routing of a mutation to a partition is deterministic and process-independent: a
         commit (BPlusLeafGrain / ShardRootGrain)
                        │
                        ▼
-            IMutationObserver chain
-                       │
-                       ▼
-            ReplicationMutationObserver
-                       │
-                       ▼
-              ShardedReplogSink
+       commit-log writer (WalCommitLogWriter)   <- single WAL appender
                        │
               hash(key) % partitions
-                       │
-                       ▼
+                      │
+                      ▼
    IWalShardGrain "{treeId}/{partition}"
+                      │
+                      ▼
+                IWalStorageProvider
+
+  (in parallel, off the same commit - no WAL append)
+        IMutationObserver chain
                        │
                        ▼
-                IWalStorageProvider
+        ReplicationMutationObserver
+                      │
+                      ▼
+               ShardedReplogSink
+        commit-time nudge: advance the producer-side
+        local vector clock cache + ring each peer
+        shipper's doorbell so it drains the leaf WAL now
 ```
+
+The leaf commit-log writer is the single WAL appender: every commit reaches the per-shard `IWalShardGrain` exactly once through it. The commit-time `ShardedReplogSink` does **not** write the WAL - it is reduced to a low-latency nudge that advances the producer-side local vector clock cache for local-origin entries and rings each per-`(tree, peer)` shipper's doorbell. The shipper is the log-first replication producer: it tails the same leaf WAL from a durable per-partition cursor and ships to peers.
 
 For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequenceAsync`, `GetLiveEntryCountAsync`) and the turn-safe batching
 
@@ -49,7 +57,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 ## Producer-side filters
 
-Three options on `LatticeReplicationOptions` decide whether a mutation reaches the WAL at all. Filters run on the producer side at commit time, so a non-replicated mutation never touches a `WalShardGrain`:
+Three options on `LatticeReplicationOptions` decide whether a committed mutation is replicated to peers. The leaf commit-log writer appends every commit to the per-shard WAL regardless; these filters gate the commit-time replication nudge and are re-applied by the shipper as it tails the WAL, so a mutation that fails a filter stays in the local WAL but is never shipped:
 
 | Option | Default | Semantics |
 |---|---|---|
@@ -57,25 +65,27 @@ Three options on `LatticeReplicationOptions` decide whether a mutation reaches t
 | `KeyFilter` | `null` | Optional `Func<string, bool>` evaluated against the mutation's key. `null` = accept every key. |
 | `KeyPrefixes` | `null` | Optional declarative prefix allowlist. `null` or empty = no prefix restriction; otherwise the key must start with at least one listed prefix (ordinal, case-sensitive). |
 
-The three filters combine with logical AND - a mutation must satisfy every configured filter to be appended. For `DeleteRange` mutations, `KeyFilter` and `KeyPrefixes` are evaluated against the inclusive start key.
+The three filters combine with logical AND - a mutation must satisfy every configured filter to be shipped. For `DeleteRange` mutations, `KeyFilter` and `KeyPrefixes` are evaluated against the inclusive start key.
 
 Per-tree overrides are honoured: the observer resolves options via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeId)`, so `siloBuilder.ConfigureLatticeReplication("my-tree", o => o.KeyFilter = ...)` overrides the global default for that tree only.
 
 Filters are precompiled per tree id and cached on the observer so the commit-time hot path is bounded by a `ConcurrentDictionary` lookup, a single bool, and at most one delegate plus a linear prefix scan. The cache is invalidated on `IOptionsMonitor.OnChange`, so reconfiguring filters at runtime takes effect on the next mutation per tree.
 
-## Maintenance writes are skipped
+## Maintenance writes are skipped from replication
 
-Beyond the per-tree / per-key filters above, the observer skips a second class of mutation entirely: writes classified as `MutationCategory.Maintenance` on the `LatticeMutation.Category` slot. These are library-internal structural rewrites - resize, rebalance, compaction, internal node splits / merges - that operate on state the user never authored directly and that every converged peer will run independently against its own copy of the data. Replicating them would (a) inflate every peer's vector clock with edges the writer never authored, (b) pollute the dependency graph with non-user-authored edges, and (c) generate wire traffic for events that have no semantic causal meaning.
+Beyond the per-tree / per-key filters above, the observer skips a second class of mutation from replication: writes classified as `MutationCategory.Maintenance` on the `LatticeMutation.Category` slot. These are library-internal structural rewrites - resize, rebalance, compaction, internal node splits / merges - that operate on state the user never authored directly and that every converged peer will run independently against its own copy of the data. Replicating them would (a) inflate every peer's vector clock with edges the writer never authored, (b) pollute the dependency graph with non-user-authored edges, and (c) generate wire traffic for events that have no semantic causal meaning.
 
 User-driven writes - `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, bulk-load, and saga compensation rolls - emit with `MutationCategory.User` (the default) and follow the existing per-tree / per-key filter path unchanged. The classification is stamped on the mutation at the producing leaf grain and arrives at the observer pre-stamped; users do not interact with the classification mechanism directly.
 
-The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` - a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and still skips the WAL.
+The maintenance gate runs **before** mode resolution and per-key filters: a maintenance emit pays nothing more than a single enum compare on the commit-time hot path. The classification is also independent of `OriginClusterId` - a remote-origin maintenance emit (from a peer's apply path that itself ran under maintenance) is still `Maintenance` and is still excluded from replication. (The entry is appended to the WAL like any other commit; the shipper re-applies the same maintenance exclusion as it tails the log, so a maintenance entry is never shipped to a peer.)
 
-## Sink failure semantics
+## Durability and commit-time nudge failure semantics
 
-WAL-append failures propagate. A failure inside the replication sink's write call flows back out of the commit-time observer, and because the observer fires inside the originating grain's write path, the failure surfaces as the same exception the underlying storage provider threw - the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes it. This guarantees that every committed mutation is also captured for replication.
+WAL-append failures propagate. The leaf commit-log writer's append runs inside the originating grain's foreground commit path, so a storage-provider failure surfaces as the same exception the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes. Because the WAL is the single source of truth for replication, this guarantees that every committed mutation is durably captured for replication before the write reports success.
 
-There is intentionally no opt-in "best-effort" mode that would catch the exception and let the primary write report success while silently dropping the change-feed record. Silent change-feed drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
+The commit-time replication nudge is, by contrast, best-effort. `ShardedReplogSink` does not append to the WAL; it advances the in-memory producer-side local vector clock cache and rings each peer shipper's doorbell fire-and-forget. A doorbell ring that fails (silo loss, transient fault, missing activation) is logged at `Trace` and swallowed, so the commit path never fails on a nudge failure - a missed doorbell only delays the affected peer by one shipper timer tick.
+
+There is intentionally no opt-in "best-effort" mode that would catch the WAL-append exception and let the primary write report success while silently dropping the log record. Silent log drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
 
 The append-time failure semantics inside the WAL grain itself (offset rollback, per-caller TCS faulting, drain-on-deactivation) live in the core [`../lattice/wal.md`](../lattice/wal.md) under "Turn-safe batching protocol".
 
