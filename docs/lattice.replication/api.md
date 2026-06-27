@@ -115,7 +115,7 @@ See [Snapshot Bootstrap](snapshot-bootstrap.md), [Auto-Bootstrap](auto-bootstrap
 | `ILatticeBootstrapCoordinator` | interface | Drives receiver-side snapshot bootstrap. | `GetStateAsync`, `GetStatusAsync`, `BootstrapAsync` |
 | `LatticeBootstrapState` | enum | Bootstrap state-machine state. | `Idle`, request, apply, handoff, live, and failed states |
 | `BootstrapCoordinatorStatus` | readonly record struct | Observable bootstrap phase and source cluster. | State and source-cluster slots |
-| `SnapshotEntry` | readonly record struct | One row in a snapshot stream. | Key, value, timestamp, tombstone, TTL, origin, vector-clock, and delta slots |
+| `SnapshotEntry` | readonly record struct | One row in a snapshot stream. | Key, value, timestamp, prepared/tombstone flags, transaction id, source-shard index, atomic-batch size/index, TTL expiry, delta, and merge-mode slots |
 | `SnapshotStream` | sealed class | Async snapshot stream wrapper. | As-of HLC, causal-stable frontier, and entry stream |
 | `IRemoteSnapshotTransport` | interface | Fetches snapshot metadata and stream items from a remote cluster. | Metadata and streaming fetch methods |
 | `LatticeRemoteSnapshotService` | sealed class | Public remote snapshot transport service. | Implements `IRemoteSnapshotTransport` |
@@ -144,7 +144,7 @@ See [Auto-Bootstrap](auto-bootstrap.md), [WAL](wal.md), and [Observability](obse
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `ILatticeReplicationAdmin` | interface | Operator-driven snapshot re-seed controls. | `RequestSnapshotAsync`, `ForceRequestSnapshotAsync` |
-| `ILatticeWalIntrospection` | interface | Sender-side view of retained WAL availability. | `GetOldestAvailableHlcAsync` |
+| `ILatticeWalIntrospection` | interface | Sender-side view of retained WAL availability. | `GetOldestAvailableHlcAsync`, `GetOldestAvailableHlcByOriginAsync` |
 | `ILatticeFallOffLogDetector` | interface | Detects whether a peer cursor has fallen behind retained WAL. | Public check method returning `FallOffLogDecision` |
 
 The admin surface rate-limits routine re-seeds through `OperatorReseedMinInterval`; the force method bypasses that rate limit for disaster-recovery and scheduled re-seed scenarios.

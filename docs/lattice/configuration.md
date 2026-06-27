@@ -93,6 +93,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`PrefetchKeysScan`](#prefetchkeysscan) | `bool` | `false` | Yes |
 | [`ProjectionRebuildPolicy`](#projectionrebuildpolicy) | enum | `SnapshotThenWal` | Yes |
 | [`PublishEvents`](#publishevents) | `bool` | `false` | Yes |
+| [`QueueCapacity`](queues.md) | `int?` | `null` (unbounded) | Yes |
 | [`RetryPolicy`](retry-policy.md) | `ILatticeRetryPolicy?` | `null` (no retry) | Yes |
 | [`ShardForwardTimeout`](#shardforwardtimeout) | `TimeSpan` | 15 seconds | Yes (on next forward) |
 | [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |

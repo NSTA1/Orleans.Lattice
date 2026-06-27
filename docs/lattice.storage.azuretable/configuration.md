@@ -76,6 +76,8 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`PipelinedPhaseTwoFaultHandler`](#pipelinedphasetwofaulthandler) | `Action<Exception>?` | `null` |
 | [`PhaseTwoCoalescingWindow`](#phasetwocoalescingwindow) | `TimeSpan` | 5 ms |
 | [`PhaseTwoCommitTimeout`](#phasetwocommittimeout) | `TimeSpan?` | 3 seconds |
+| [`PhaseOneTransientRetryMaxAttempts`](#phaseonetransientretrymaxattempts) | `int` | `2` |
+| [`PhaseOneTransientRetryBaseDelay`](#phaseonetransientretrybasedelay) | `TimeSpan` | 25 ms |
 
 ### Saturation options
 
@@ -195,6 +197,14 @@ var options = new AzureTableWalStorageOptions
     PhaseTwoCommitTimeout = TimeSpan.FromSeconds(30),
 };
 ```
+
+### `PhaseOneTransientRetryMaxAttempts`
+
+Number of additional in-place retries the provider issues when a phase-1 batch commit faults transiently. Each retry resubmits the byte-identical batch at the same offsets, so an already-durable prior attempt is resolved as an idempotent-replay success and a genuine offset collision still surfaces immediately without retry. Default is 2 (three attempts total); each retry increments `orleans.lattice.provider.phase1.transient_retries`. Must be non-negative; set to 0 to surface every transient fault immediately.
+
+### `PhaseOneTransientRetryBaseDelay`
+
+Base delay for the jittered backoff between phase-1 transient retries. The wait before the n-th retry (1-based) is a random value in `[0, BaseDelay * n)`, capped at 250 ms, so multiple hot shards do not retry in lockstep. Default is 25 ms. Must be non-negative; set to `TimeSpan.Zero` to retry without delay.
 
 ### `HonorSaturationSignal`
 

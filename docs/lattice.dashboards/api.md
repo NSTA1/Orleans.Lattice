@@ -13,7 +13,7 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeDashboards` | static class | Retrieves the bundled Grafana dashboard JSON. | `GetGrafanaDashboardJson(LatticeDashboardKind)`, `All` |
-| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites` |
+| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews` |
 
 ### `LatticeDashboards`
 
