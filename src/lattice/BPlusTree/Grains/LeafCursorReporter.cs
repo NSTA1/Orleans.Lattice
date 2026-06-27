@@ -180,6 +180,66 @@ internal sealed class LeafCursorReporter(
         }
     }
 
+    /// <inheritdoc />
+    public async Task SeedDurableMaterialiserBlockAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock frontier,
+        CancellationToken cancellationToken)
+    {
+        if (grainFactory is null)
+        {
+            // No durable backing (pre-WAL host / bare-IServiceProvider): the
+            // block pin has no store to land in, so this is a no-op.
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            // Await the durable write so the block pin is persisted BEFORE the
+            // caller (a leaf at birth) lets any inherited/routed data become
+            // reachable in the WAL. The pin store's monotonic-max merge makes a
+            // Zero (or stale) seed a no-op once a real frontier has landed, so
+            // this is idempotent and safe on a recovery-path re-call.
+            await grainFactory.GetGrain<IWalMaterialiserPinGrain>(treeName)
+                .ReportAsync(consumerId, frontier)
+                .ConfigureAwait(false);
+
+            // Record the seed in the debounce state so a subsequent
+            // NoteDurableMaterialiserFrontier treats this consumer as already
+            // seeded (its first real frontier still writes through via the
+            // crossing-zero branch) rather than issuing a redundant durable
+            // write of the same value.
+            var key = (treeName, consumerId);
+            if (_durableDebounce.TryGetValue(key, out var current))
+            {
+                if (frontier > current.LastWritten)
+                {
+                    _durableDebounce[key] = (frontier, Environment.TickCount64);
+                }
+            }
+            else
+            {
+                _durableDebounce[key] = (frontier, Environment.TickCount64);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Swallow-and-log: the birth/create path must not fail because the
+            // durable pin store had a transient hiccup. A missed seed only
+            // narrows the protection window; the leaf's first checkpoint flush
+            // re-seeds via NoteDurableMaterialiserFrontier.
+            logger?.LogWarning(
+                ex,
+                "Failed to seed durable WAL materialiser block pin for tree {TreeId} consumer {ConsumerId} at {Frontier}; will re-seed on next checkpoint.",
+                treeName,
+                consumerId,
+                frontier);
+        }
+    }
+
     private async Task WriteDurablePinAsync(string treeName, string consumerId, HybridLogicalClock frontier)
     {
         try

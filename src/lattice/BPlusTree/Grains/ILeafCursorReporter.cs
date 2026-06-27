@@ -108,4 +108,38 @@ internal interface ILeafCursorReporter
         string treeName,
         string consumerId,
         HybridLogicalClock frontier);
+
+    /// <summary>
+    /// Durably seeds a leaf-materialiser <paramref name="frontier"/> pin
+    /// (<see cref="IWalMaterialiserPinGrain"/>) and <b>awaits</b> the write,
+    /// unlike the fire-and-forget <see cref="NoteDurableMaterialiserFrontier"/>.
+    /// A leaf calls this at <i>birth</i> - the moment it first acquires a tree
+    /// id and becomes capable of holding data (a split sibling's
+    /// <c>InitializeSiblingAsync</c> or a root/bulk-load leaf's
+    /// <c>SetTreeIdAsync</c>) - to plant a
+    /// <see cref="HybridLogicalClock.Zero"/> "block" pin <em>before</em> any
+    /// inherited or routed write becomes reachable in the WAL. Awaiting closes
+    /// the window the fire-and-forget mirror leaves open: a forward trim driver
+    /// (replication shipper, materialised view, or the wall-clock TTL ceiling)
+    /// could otherwise advance the WAL GC floor past the new leaf's
+    /// un-materialised frontier before the debounced durable write lands,
+    /// trimming committed-but-not-yet-checkpointed data the leaf still needs to
+    /// replay. The monotonic-max merge in the pin store makes a Zero seed a
+    /// no-op once the leaf has reported a real frontier, so the call is
+    /// idempotent and safe to re-issue on a recovery-path re-call. Transient
+    /// durable-write failures are swallowed (logged) so the foreground
+    /// birth/create path is never blocked; a missed seed only narrows the
+    /// protection window and the next checkpoint flush re-seeds. Implementations
+    /// with no durable backing (no grain factory, pre-WAL hosts) treat this as a
+    /// no-op.
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose leaf is being seeded.</param>
+    /// <param name="consumerId">Stable leaf-materialiser consumer id (the same id later reported to the in-memory registry).</param>
+    /// <param name="frontier">The block frontier to seed; <see cref="HybridLogicalClock.Zero"/> for a leaf whose entire data range is still un-materialised.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the durable write.</param>
+    Task SeedDurableMaterialiserBlockAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock frontier,
+        CancellationToken cancellationToken);
 }
