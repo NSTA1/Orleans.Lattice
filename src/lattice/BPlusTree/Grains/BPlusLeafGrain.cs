@@ -1800,6 +1800,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task SetTreeIdAsync(string treeId)
     {
         // See SetNextSiblingAsync above for the gate rationale.
+        var treeIdJustSet = false;
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
@@ -1809,6 +1810,7 @@ internal sealed partial class BPlusLeafGrain(
             try
             {
                 await PersistAsync();
+                treeIdJustSet = true;
             }
             catch
             {
@@ -1825,6 +1827,17 @@ internal sealed partial class BPlusLeafGrain(
         finally
         {
             _splitGate.Release();
+        }
+
+        // Birth seam (root / bulk-load leaf): durably seed a Zero "block" pin
+        // BEFORE the shard-root's follow-up MergeEntriesAsync makes this leaf's
+        // data reachable in the WAL, so a forward trim driver cannot trim past
+        // the leaf's un-materialised frontier in the pre-first-checkpoint
+        // window. Idempotent and non-throwing; runs outside the split gate so
+        // the durable pin RPC does not extend the gate hold.
+        if (treeIdJustSet)
+        {
+            await SeedDurableMaterialiserBlockPinAsync();
         }
     }
 
@@ -2008,26 +2021,45 @@ internal sealed partial class BPlusLeafGrain(
                 changed = true;
             }
 
-            if (!changed) return;
-
-            try
+            if (changed)
             {
-                await PersistAsync();
-            }
-            catch
-            {
-                state.State.TreeId = prevTreeId;
-                state.State.ShardIndex = prevShardIndex;
-                state.State.LowKeyInclusive = prevLowKey;
-                state.State.HighKeyExclusive = prevHighKey;
-                state.State.NextSibling = prevNext;
-                state.State.PrevSibling = prevPrev;
-                throw;
+                try
+                {
+                    await PersistAsync();
+                }
+                catch
+                {
+                    state.State.TreeId = prevTreeId;
+                    state.State.ShardIndex = prevShardIndex;
+                    state.State.LowKeyInclusive = prevLowKey;
+                    state.State.HighKeyExclusive = prevHighKey;
+                    state.State.NextSibling = prevNext;
+                    state.State.PrevSibling = prevPrev;
+                    throw;
+                }
             }
         }
         finally
         {
             _splitGate.Release();
+        }
+
+        // Birth seam (split sibling): durably seed a Zero "block" pin BEFORE the
+        // donor's CompleteSplitAsync proceeds to MergeEntriesAsync, which is
+        // what appends this sibling's inherited entries to the WAL. Awaiting the
+        // seed here guarantees the WAL GC sees a floor for the sibling the
+        // moment its data becomes reachable, so a forward trim driver
+        // (replication shipper, materialised view, or the wall-clock TTL
+        // ceiling) cannot trim past the sibling's un-materialised frontier in
+        // the window before its first checkpoint. Idempotent (the pin store's
+        // monotonic-max merge coalesces a Zero re-seed once a real frontier has
+        // landed) and non-throwing, so a recovery-path re-call is safe. Runs
+        // outside the split gate so the durable pin RPC does not extend the gate
+        // hold. Guarded on a set tree id so a malformed init (no tree id) is a
+        // no-op rather than seeding against an empty consumer id.
+        if (state.State.TreeId is not null)
+        {
+            await SeedDurableMaterialiserBlockPinAsync();
         }
     }
 

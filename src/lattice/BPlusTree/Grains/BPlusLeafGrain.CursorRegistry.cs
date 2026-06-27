@@ -160,6 +160,48 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// Durably seeds a <see cref="HybridLogicalClock.Zero"/> "block" pin for
+    /// this leaf and <b>awaits</b> the write, closing the window in which a
+    /// freshly-born data-capable leaf can have its WAL trimmed past its
+    /// un-materialised frontier before it registers any pin. Called at the two
+    /// tree-id birth seams - a split sibling's
+    /// <see cref="InitializeSiblingAsync"/> and a root/bulk-load leaf's
+    /// <see cref="SetTreeIdAsync"/> - <em>before</em> the inherited/routed
+    /// writes that follow (<see cref="MergeEntriesAsync"/>) make the leaf's data
+    /// reachable in the WAL. Seeds <see cref="HybridLogicalClock.Zero"/> (not the
+    /// current clock) because the leaf has checkpointed none of its data yet, so
+    /// its entire range is un-materialised; a Zero pin disables the WAL GC's
+    /// cursor-trim branch for the tree until the leaf produces its first durable
+    /// checkpoint and advances the pin past Zero. Idempotent and never throws
+    /// (the awaited seam swallows transient failures); a no-op when the host has
+    /// no cursor reporter (pre-WAL) or the tree id is unset.
+    /// </summary>
+    private async Task SeedDurableMaterialiserBlockPinAsync()
+    {
+        var reporter = ResolveCursorReporter();
+        if (reporter is null)
+        {
+            return;
+        }
+
+        var idBase = ResolveConsumerIdBase();
+        if (idBase is null)
+        {
+            return;
+        }
+
+        var treeId = state.State.TreeId!;
+        var options = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, options.WalPartitions);
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+            await reporter.SeedDurableMaterialiserBlockAsync(
+                treeId, consumerId, HybridLogicalClock.Zero, CancellationToken.None);
+        }
+    }
+
     private ILeafCursorReporter? ResolveCursorReporter()
     {
         if (_cursorReporterResolved)
