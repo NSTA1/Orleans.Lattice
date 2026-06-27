@@ -1,9 +1,12 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
+using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -14,18 +17,50 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="LeafSnapshotStorageGrainTests"/>: the grain is instantiated
 /// directly against a <see cref="FakePersistentState{T}"/>, so the tests
 /// exercise the save / load / clear contract and the <c>Captured</c> sentinel
-/// without a cluster.
+/// without a cluster. The leak-guard TTL reminder is driven against a
+/// substitute <see cref="IReminderRegistry"/>.
 /// </summary>
 [TestFixture]
 public sealed class SnapshotBaselineStorageGrainTests
 {
+    private const string TreeId = "mytree";
+
     private static (SnapshotBaselineStorageGrain grain, FakePersistentState<SnapshotShardBaseline> state) CreateGrain(
         FakePersistentState<SnapshotShardBaseline>? state = null)
     {
+        var (grain, st, _, _) = CreateGrainWithReminders(state);
+        return (grain, st);
+    }
+
+    private static (
+        SnapshotBaselineStorageGrain grain,
+        FakePersistentState<SnapshotShardBaseline> state,
+        IReminderRegistry reminders,
+        LatticeOptions options) CreateGrainWithReminders(
+        FakePersistentState<SnapshotShardBaseline>? state = null,
+        LatticeOptions? options = null)
+    {
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("snapshot-baseline", Guid.NewGuid().ToString("N")));
+        context.GrainId.Returns(GrainId.Create(
+            "snapshot-baseline", $"{TreeId}/0/{Guid.NewGuid():N}"));
+
+        var reminders = Substitute.For<IReminderRegistry>();
+        reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+            .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
+        reminders.RegisterOrUpdateReminder(
+                Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
+
+        var opts = options ?? new LatticeOptions();
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
+        optionsMonitor.CurrentValue.Returns(opts);
+
         state ??= new FakePersistentState<SnapshotShardBaseline>();
-        return (new SnapshotBaselineStorageGrain(context, state), state);
+        var grain = new SnapshotBaselineStorageGrain(
+            context, reminders, optionsMonitor,
+            new LoggerFactory().CreateLogger<SnapshotBaselineStorageGrain>(), state);
+        return (grain, state, reminders, opts);
     }
 
     private static SnapshotShardBaseline NewBaseline(long[] capturedHead, params (string key, byte[] value)[] rows)
@@ -214,6 +249,127 @@ public sealed class SnapshotBaselineStorageGrainTests
             State = new SnapshotShardBaseline(),
         };
         var (grain, _) = CreateGrain(state);
+
+        Assert.That(await grain.LoadAsync(CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task SaveAsync_arms_the_leak_guard_reminder()
+    {
+        var (grain, _, reminders, _) = CreateGrainWithReminders();
+
+        await grain.SaveAsync(NewBaseline([1], ("k", [1])), CancellationToken.None);
+
+        await reminders.Received(1).RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), "snapshot-baseline-retention", Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+    }
+
+    [Test]
+    public async Task SaveAsync_arms_the_reminder_with_the_configured_ttl()
+    {
+        var ttl = TimeSpan.FromHours(6);
+        var (grain, _, reminders, _) = CreateGrainWithReminders(
+            options: new LatticeOptions { SnapshotBaselineTtl = ttl });
+
+        await grain.SaveAsync(NewBaseline([1], ("k", [1])), CancellationToken.None);
+
+        await reminders.Received().RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), "snapshot-baseline-retention", ttl, ttl);
+    }
+
+    [Test]
+    public async Task SaveAsync_does_not_persist_or_arm_when_reminder_registration_throws()
+    {
+        // SlideTtlAsync swallows reminder-registry faults, so a host without a
+        // reminder service still persists the baseline - it just forgoes the
+        // automatic leak-guard backstop.
+        var (grain, state, reminders, _) = CreateGrainWithReminders();
+        reminders.RegisterOrUpdateReminder(
+                Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
+            .Returns<Task<IGrainReminder>>(_ => throw new InvalidOperationException("no reminder table"));
+
+        await grain.SaveAsync(NewBaseline([1], ("k", [1])), CancellationToken.None);
+
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+        Assert.That(await grain.LoadAsync(CancellationToken.None), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task TouchAsync_slides_the_reminder_for_a_persisted_baseline()
+    {
+        // Seed a captured baseline directly (no prior Save) so the slide
+        // debounce window is not already armed: a first touch on an active
+        // baseline must refresh the leak-guard reminder.
+        var seeded = NewBaseline([1], ("k", [1]));
+        seeded.Captured = true;
+        var state = new FakePersistentState<SnapshotShardBaseline> { State = seeded };
+        var (grain, _, reminders, _) = CreateGrainWithReminders(state);
+
+        await grain.TouchAsync(CancellationToken.None);
+
+        await reminders.Received(1).RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), "snapshot-baseline-retention", Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+    }
+
+    [Test]
+    public async Task TouchAsync_is_debounced_immediately_after_a_save()
+    {
+        // SaveAsync already armed the reminder; a touch inside the half-TTL
+        // debounce window must NOT rewrite the reminder table - the throttle
+        // that keeps a long active scan from hammering the reminder store.
+        var (grain, _, reminders, _) = CreateGrainWithReminders();
+        await grain.SaveAsync(NewBaseline([1], ("k", [1])), CancellationToken.None);
+        reminders.ClearReceivedCalls();
+
+        await grain.TouchAsync(CancellationToken.None);
+
+        await reminders.DidNotReceive().RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+    }
+
+    [Test]
+    public async Task TouchAsync_is_a_noop_when_no_baseline_has_been_persisted()
+    {
+        var (grain, _, reminders, _) = CreateGrainWithReminders();
+
+        await grain.TouchAsync(CancellationToken.None);
+
+        await reminders.DidNotReceive().RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+    }
+
+    [Test]
+    public void TouchAsync_honours_cancellation()
+    {
+        var (grain, _) = CreateGrain();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(
+            async () => await grain.TouchAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task ClearAsync_unregisters_the_leak_guard_reminder()
+    {
+        var (grain, _, reminders, _) = CreateGrainWithReminders();
+        await grain.SaveAsync(NewBaseline([1], ("k", [1])), CancellationToken.None);
+
+        await grain.ClearAsync(CancellationToken.None);
+
+        await reminders.Received().UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
+    }
+
+    [Test]
+    public async Task OnTtlExpiredAsync_clears_an_orphaned_baseline()
+    {
+        // Simulate the leak-guard reminder firing for a cursor that never
+        // closed: the persisted baseline must be reclaimed.
+        var (grain, _) = CreateGrain();
+        await grain.SaveAsync(NewBaseline([1], ("k", [1])), CancellationToken.None);
+
+        await grain.ReceiveReminder("snapshot-baseline-retention", new TickStatus());
 
         Assert.That(await grain.LoadAsync(CancellationToken.None), Is.Null);
     }

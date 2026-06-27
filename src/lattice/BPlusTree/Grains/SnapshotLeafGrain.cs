@@ -96,6 +96,40 @@ internal sealed class SnapshotLeafGrain(
     /// </summary>
     private Guid _baselineToken;
 
+    /// <summary>
+    /// True once this leaf's projection folder has been populated, by either
+    /// the in-memory <see cref="SeedAsync"/> seed (shard-root capture), the
+    /// durable baseline reload, or the legacy WAL replay. Distinguishes a
+    /// pre-seeded activation (which <see cref="OpenAsync"/> must NOT reload from
+    /// storage) from a fresh reactivation (which must).
+    /// </summary>
+    private bool _materialised;
+
+    /// <summary>
+    /// True once a durable per-shard <see cref="State.SnapshotShardBaseline"/>
+    /// exists for this leaf's token: set when seeded from the durable store
+    /// (already persisted by definition) or after <see cref="EnsurePersistedAsync"/>
+    /// flushes the in-memory seed. Gates the lazy flush and the sliding-TTL
+    /// touch; never set on the legacy empty-token replay path.
+    /// </summary>
+    private bool _persisted;
+
+    /// <summary>
+    /// The in-memory frozen baseline handed to <see cref="SeedAsync"/> by the
+    /// shard-root capture, retained by reference so a later
+    /// <see cref="EnsurePersistedAsync"/> can flush the identical rows without
+    /// re-materialising them from the folder. <see langword="null"/> on the
+    /// durable-reload and legacy paths (nothing to flush).
+    /// </summary>
+    private State.SnapshotShardBaseline? _seedBaseline;
+
+    /// <summary>
+    /// Wall-clock UTC of the last durable-baseline TTL slide issued from the
+    /// serve path, used to throttle the sliding-TTL touch to at most one
+    /// reminder-table refresh per <see cref="ResolveBaselineTouchInterval"/>.
+    /// </summary>
+    private DateTime _lastTtlTouchUtc = DateTime.MinValue;
+
     private CrdtShapeRegistry? _resolvedCrdtShapeRegistry;
 
     private CrdtShapeRegistry ResolveCrdtShapeRegistry() =>
@@ -144,6 +178,34 @@ internal sealed class SnapshotLeafGrain(
                 throw new InvalidOperationException(
                     $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' was already opened against ({_treeId}, {_shardIndex}, [{string.Join(',', _capturedOffsetsByPartition)}]); refusing to re-open against ({treeId}, {shardIndex}, [{string.Join(',', capturedOffsetsByPartition)}]).");
             }
+
+            // The cursor calls OpenAsync on every page (idempotent). Use that
+            // cadence to slide the durable baseline's leak-guard TTL while the
+            // scan is actively serving - throttled so a long scan refreshes the
+            // reminder rarely rather than on every page.
+            await MaybeTouchBaselineTtlAsync();
+            return;
+        }
+
+        if (_materialised)
+        {
+            // Pre-seeded in memory by the shard-root capture (SeedAsync) in this
+            // same activation. The rows are already folded; OpenAsync only needs
+            // to attach the cursor's read-time donor-orphan ownership filter and
+            // mark the leaf open. No durable load and no WAL replay - that is the
+            // whole point of the lazy-persist design (issue #916): a single-page
+            // scan serves entirely from this in-memory freeze and never persists.
+            if (_treeId != treeId
+                || _shardIndex != shardIndex
+                || _baselineToken != baselineToken
+                || !PartitionOffsetsEqual(_capturedOffsetsByPartition, capturedOffsetsByPartition))
+            {
+                throw new InvalidOperationException(
+                    $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' was seeded against ({_treeId}, {_shardIndex}, [{string.Join(',', _capturedOffsetsByPartition)}], token {_baselineToken:N}); refusing to open against ({treeId}, {shardIndex}, [{string.Join(',', capturedOffsetsByPartition)}], token {baselineToken:N}).");
+            }
+            _ownedVirtualSlots = ownedSlots;
+            _ownedVirtualShardCount = ownedSlots is null ? 0 : virtualShardCount;
+            _opened = true;
             return;
         }
 
@@ -157,12 +219,18 @@ internal sealed class SnapshotLeafGrain(
 
         if (baselineToken != Guid.Empty)
         {
-            // Frozen-baseline path: serve from the durable per-shard baseline
-            // captured at open time. No WAL replay happens here, so a WAL GC
-            // that trims the prefix after capture cannot perturb this view,
-            // and a rebuild after eviction reloads the same frozen rows for a
-            // stable point-in-time view across failover.
+            // Frozen-baseline reload path: this is a fresh reactivation (the
+            // in-memory seed was lost to idle eviction or failover) so reload the
+            // durable per-shard baseline that EnsurePersistedAsync flushed when
+            // the cursor first paged past page 1. No WAL replay happens here, so
+            // a WAL GC that trims the prefix after capture cannot perturb this
+            // view, and the reloaded rows are byte-identical to the freeze for a
+            // stable point-in-time view across failover. A baseline that was
+            // never persisted (single-page cursor, or a leaf evicted before its
+            // first read) surfaces as the load-failure below.
             await SeedFromBaselineAsync(cancellationToken);
+            _persisted = true;
+            _lastTtlTouchUtc = DateTime.UtcNow;
         }
         else
         {
@@ -171,6 +239,7 @@ internal sealed class SnapshotLeafGrain(
             await ReplayWalAsync(cancellationToken);
         }
 
+        _materialised = true;
         _opened = true;
 
         if (logger.IsEnabled(LogLevel.Debug))
@@ -184,8 +253,147 @@ internal sealed class SnapshotLeafGrain(
         _ = context;
     }
 
+    /// <inheritdoc />
+    public Task SeedAsync(string treeId, int shardIndex, State.SnapshotShardBaseline baseline, Guid baselineToken, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(baseline);
+        if (shardIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(shardIndex), "Shard index must be non-negative.");
+        if (baselineToken == Guid.Empty)
+            throw new ArgumentException("Seed requires a non-empty baseline token; the in-memory seed path does not exist for legacy coordinates.", nameof(baselineToken));
+        var capturedHead = baseline.CapturedHeadPerPartition;
+        if (capturedHead.Count == 0)
+            throw new ArgumentException("Baseline must carry at least one partition's captured head.", nameof(baseline));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_materialised)
+        {
+            // Idempotent re-seed: the shard-root capture retries (per-shard
+            // ShardActivationRetry) can replay a seed against an activation that
+            // already absorbed it. The activation is token-keyed, so a mismatch
+            // here is an upstream wiring bug and must surface loudly.
+            if (_treeId != treeId
+                || _shardIndex != shardIndex
+                || _baselineToken != baselineToken
+                || !PartitionOffsetsEqual(_capturedOffsetsByPartition, capturedHead))
+            {
+                throw new InvalidOperationException(
+                    $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' was already materialised against ({_treeId}, {_shardIndex}, token {_baselineToken:N}); refusing to re-seed against ({treeId}, {shardIndex}, token {baselineToken:N}).");
+            }
+            return Task.CompletedTask;
+        }
+
+        _treeId = treeId;
+        _shardIndex = shardIndex;
+        _capturedOffsetsByPartition = capturedHead;
+        _baselineToken = baselineToken;
+        _seedBaseline = baseline;
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry());
+
+        // Seed the rows verbatim. Donor-orphan ownership filtering is applied by
+        // the read path against the cursor-supplied owned-slot set (set on the
+        // subsequent OpenAsync), exactly as the durable-reload path filters at
+        // seed time - so the in-memory and reloaded views are identical.
+        foreach (var row in baseline.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _folder.SeedRow(row.Key, row.Value);
+        }
+
+        _materialised = true;
+
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            logger.LogDebug(
+                "SnapshotLeafGrain seeded in memory: tree={TreeId}, shard={ShardIndex}, baselineToken={BaselineToken}, capturedOffsets=[{CapturedOffsets}], rows={RowCount}.",
+                treeId, shardIndex, baselineToken, string.Join(',', capturedHead), _folder.Entries.Count);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public async Task EnsurePersistedAsync(CancellationToken cancellationToken)
+    {
+        // Already durable (flushed earlier, or reloaded from the durable store),
+        // or a legacy replay leaf with nothing to flush.
+        if (_persisted || _baselineToken == Guid.Empty)
+            return;
+        if (_seedBaseline is null)
+        {
+            // No in-memory baseline to flush. This only happens on the legacy
+            // replay path (guarded above) or a leaf that has not been seeded;
+            // either way there is nothing durable to write.
+            return;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var baselineGrain = grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(
+            BuildBaselineKey(_treeId, _shardIndex, _baselineToken));
+        await baselineGrain.SaveAsync(_seedBaseline, cancellationToken);
+        _persisted = true;
+        _lastTtlTouchUtc = DateTime.UtcNow;
+
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            logger.LogDebug(
+                "SnapshotLeafGrain flushed frozen baseline to durable store: tree={TreeId}, shard={ShardIndex}, baselineToken={BaselineToken}, rows={RowCount}.",
+                _treeId, _shardIndex, _baselineToken, _seedBaseline.Rows.Count);
+        }
+    }
+
     /// <summary>
-    /// Seeds the projection from the durable per-shard
+    /// Slides the durable baseline's leak-guard TTL while the cursor is actively
+    /// paging, throttled to at most one reminder-table refresh per
+    /// <see cref="ResolveBaselineTouchInterval"/> so a long scan keeps its
+    /// baseline alive without rewriting the reminder on every page. Best-effort:
+    /// a storage hiccup only risks the baseline expiring early, which a later
+    /// page would surface as a reload failure (the cursor then reopens).
+    /// </summary>
+    private async Task MaybeTouchBaselineTtlAsync()
+    {
+        if (!_persisted || _baselineToken == Guid.Empty)
+            return;
+        var interval = ResolveBaselineTouchInterval();
+        if (interval == Timeout.InfiniteTimeSpan)
+            return;
+        var now = DateTime.UtcNow;
+        if (now - _lastTtlTouchUtc < interval)
+            return;
+        _lastTtlTouchUtc = now;
+
+        try
+        {
+            var baselineGrain = grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(
+                BuildBaselineKey(_treeId, _shardIndex, _baselineToken));
+            await baselineGrain.TouchAsync(default);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "SnapshotLeafGrain {Key}: failed to slide frozen-baseline TTL; the baseline may expire early and force a cursor reopen.",
+                this.GetPrimaryKeyString());
+        }
+    }
+
+    /// <summary>
+    /// Resolves the minimum interval between sliding-TTL touches as half the
+    /// configured <see cref="LatticeOptions.SnapshotBaselineTtl"/> (clamped to a
+    /// one-minute floor), so an active scan refreshes the reminder at most a
+    /// couple of times per TTL window. Returns
+    /// <see cref="Timeout.InfiniteTimeSpan"/> when the TTL is disabled, which
+    /// suppresses touching entirely.
+    /// </summary>
+    private TimeSpan ResolveBaselineTouchInterval()
+    {
+        var ttl = optionsMonitor.Get(_treeId).SnapshotBaselineTtl;
+        if (ttl == Timeout.InfiniteTimeSpan)
+            return Timeout.InfiniteTimeSpan;
+        var half = TimeSpan.FromTicks(ttl.Ticks / 2);
+        return half < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : half;
+    }
+
     /// <see cref="State.SnapshotShardBaseline"/> captured at open time,
     /// filtering each row through the same <see cref="IsKeyOwned"/> donor-orphan
     /// exclusion the scan path applies so a key migrated to a sibling shard by
@@ -199,11 +407,12 @@ internal sealed class SnapshotLeafGrain(
         var baseline = await baselineGrain.LoadAsync(cancellationToken);
         if (baseline is null)
         {
-            throw new InvalidOperationException(
+            throw new LatticeSnapshotExpiredException(
                 $"SnapshotLeafGrain for '{this.GetPrimaryKeyString()}' could not load its frozen baseline "
-                + $"('{BuildBaselineKey(_treeId, _shardIndex, _baselineToken)}'). The cursor's coordinate references a "
-                + "baseline that was never captured or was already cleared; the open cannot fall back to a from-zero "
-                + "WAL replay without risking an empty/partial view on a GC-trimmed log.");
+                + $"('{BuildBaselineKey(_treeId, _shardIndex, _baselineToken)}'). The in-memory baseline was lost "
+                + "(idle eviction or failover before the cursor's first page made it durable) and no durable row "
+                + "exists; the open cannot fall back to a from-zero WAL replay without risking an empty/partial view "
+                + "on a GC-trimmed log. Open a fresh snapshot cursor.");
         }
 
         var folder = _folder!;

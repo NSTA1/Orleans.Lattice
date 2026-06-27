@@ -102,6 +102,7 @@ public class LatticeOptionsResolverPropagationGuardTests
             "MaxPinnedSagaDecisions",
             "MaxSnapshotReplayEntries",
             "SnapshotLeafIdleTtl",
+            "SnapshotBaselineTtl",
             "PrefetchEntriesScan",
             // WAL saturation back-pressure surface: the silo-scoped
             // WalSaturationSampler reads these directly from

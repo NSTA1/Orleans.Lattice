@@ -544,6 +544,33 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultSnapshotLeafIdleTtl = TimeSpan.FromMinutes(30);
 
     /// <summary>
+    /// Leak-guard retention window for the durable per-cursor, per-shard frozen
+    /// baselines persisted by a zero-observable-writes snapshot cursor. A
+    /// snapshot cursor seeds its baselines into transient snapshot leaves in
+    /// memory at open and only flushes them to the durable
+    /// <c>ISnapshotBaselineStorageGrain</c> store lazily, once a scan must
+    /// survive past its first page (issue #916). The normal lifecycle deletes
+    /// each baseline when the cursor closes or its idle TTL expires; this
+    /// retention window is the backstop for the abnormal case where neither
+    /// fires - a client that crashes or abandons a multi-page continuation token
+    /// without closing the cursor.
+    /// <para>
+    /// Implemented as a sliding self-clear reminder on each baseline row: a
+    /// still-active scan slides the window forward (throttled, so the reminder
+    /// table is not rewritten on every page), while an abandoned baseline is
+    /// reclaimed automatically once the window elapses with no activity. It also
+    /// bounds the maximum lifetime of a paused-then-resumed snapshot: a scan
+    /// idle longer than this window loses its baseline and must reopen. Default
+    /// 6 hours; set to <see cref="Timeout.InfiniteTimeSpan"/> to disable the
+    /// leak guard (baselines then rely solely on the close / idle-TTL delete).
+    /// </para>
+    /// </summary>
+    public TimeSpan SnapshotBaselineTtl { get; set; } = DefaultSnapshotBaselineTtl;
+
+    /// <summary>Default value for <see cref="SnapshotBaselineTtl"/> (6 hours).</summary>
+    public static readonly TimeSpan DefaultSnapshotBaselineTtl = TimeSpan.FromHours(6);
+
+    /// <summary>
     /// Optional retention window for <see cref="Orleans.Lattice.VersionVector"/>
     /// entries.
     /// <see cref="Orleans.Lattice.VersionVector.PruneOlderThan(long)"/> with

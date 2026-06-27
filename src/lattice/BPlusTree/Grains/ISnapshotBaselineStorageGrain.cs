@@ -46,4 +46,15 @@ internal interface ISnapshotBaselineStorageGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancellation token observed before the clear.</param>
     Task ClearAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Slides the leak-guard retention TTL forward without rewriting the
+    /// baseline payload. Called (throttled) by the serving snapshot leaf while a
+    /// cursor is actively paging, so a long-running scan keeps its durable
+    /// baseline alive past the configured
+    /// <see cref="LatticeOptions.SnapshotBaselineTtl"/> window. A no-op when no
+    /// baseline has been persisted for this (cursor, shard).
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token observed before the slide.</param>
+    Task TouchAsync(CancellationToken cancellationToken);
 }

@@ -66,6 +66,13 @@ if (options.SnapshotLeafIdleTtl <= TimeSpan.Zero
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.SnapshotLeafIdleTtl)} must be positive or {nameof(Timeout.InfiniteTimeSpan)}.");
 }
+if (options.SnapshotBaselineTtl <= TimeSpan.Zero
+    && options.SnapshotBaselineTtl != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.SnapshotBaselineTtl)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the leak-guard retention window for durably-persisted frozen snapshot baselines; infinite disables the backstop reminder).");
+}
 if (options.WalFlushTimeout <= TimeSpan.Zero
     && options.WalFlushTimeout != Timeout.InfiniteTimeSpan)
 {

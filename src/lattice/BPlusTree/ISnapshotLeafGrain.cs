@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -74,6 +75,56 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// </param>
     /// <param name="cancellationToken">Cancels the replay loop between slices.</param>
     Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, Guid baselineToken, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Seeds this snapshot leaf's projection directly from an already
+    /// materialised, in-memory per-shard frozen baseline, without any durable
+    /// storage round-trip. Called by
+    /// <see cref="IShardRootGrain.CaptureSnapshotBaselineAsync"/> at snapshot
+    /// once for the in-memory seed path (issue #916): the baseline lives only
+    /// in this transient leaf's memory until the owning cursor actually needs it
+    /// to survive past page 1, at which point <see cref="EnsurePersistedAsync"/>
+    /// flushes it.
+    /// <para>
+    /// Idempotent: a second seed with the same <paramref name="baselineToken"/>
+    /// and captured head is a no-op; a different token or head throws (the
+    /// activation is token-keyed, so a mismatch is an upstream wiring bug). The
+    /// rows are seeded verbatim (donor-orphan filtering is applied by the
+    /// read path against the cursor-supplied owned-slot set, exactly as the
+    /// durable-reload path filters at seed time).
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Tree the snapshot belongs to.</param>
+    /// <param name="shardIndex">Virtual shard this leaf materialises.</param>
+    /// <param name="baseline">
+    /// The fully materialised, key-ordered frozen baseline for this shard,
+    /// including its per-partition captured WAL head. Retained by reference so a
+    /// later <see cref="EnsurePersistedAsync"/> can flush the identical rows.
+    /// Must not be <see langword="null"/>.
+    /// </param>
+    /// <param name="baselineToken">
+    /// The cursor's per-open frozen-baseline token
+    /// (<see cref="LatticeSnapshotCoordinate.SnapshotBaselineToken"/>). Must be
+    /// non-empty - the in-memory seed path does not exist for legacy coordinates.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the seed loop between rows.</param>
+    Task SeedAsync(string treeId, int shardIndex, SnapshotShardBaseline baseline, Guid baselineToken, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Durably persists this leaf's in-memory frozen baseline to the per-cursor
+    /// <see cref="Grains.ISnapshotBaselineStorageGrain"/> if it has not already
+    /// been persisted. Called by the owning cursor the first time a page returns
+    /// <c>HasMore = true</c>, so the baseline survives a subsequent silo
+    /// failover or idle eviction for the remainder of a multi-page scan.
+    /// <para>
+    /// Idempotent and cheap to call repeatedly: a leaf already serving from a
+    /// durably-loaded baseline, or one already flushed, returns without I/O. A
+    /// no-op for the legacy (<see cref="Guid.Empty"/> token) replay path, which
+    /// has no durable baseline to flush.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation observed before the persist.</param>
+    Task EnsurePersistedAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the sorted list of keys this snapshot leaf observes in

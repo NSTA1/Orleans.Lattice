@@ -96,6 +96,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`QueueCapacity`](queues.md) | `int?` | `null` (unbounded) | Yes |
 | [`RetryPolicy`](retry-policy.md) | `ILatticeRetryPolicy?` | `null` (no retry) | Yes |
 | [`ShardForwardTimeout`](#shardforwardtimeout) | `TimeSpan` | 15 seconds | Yes (on next forward) |
+| [`SnapshotBaselineTtl`](snapshot-cursors.md#baseline-ttl-leak-guard) | `TimeSpan` | 6 hours | Yes |
 | [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |
 | [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
 | [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |

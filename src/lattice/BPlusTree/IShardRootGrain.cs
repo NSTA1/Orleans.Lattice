@@ -628,9 +628,9 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<long[]> SnapshotWalHeadAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Captures a durable, frozen, fully-materialised projection baseline for
-    /// this shard at snapshot-cursor open time, keyed by
-    /// <paramref name="token"/> (the per-cursor
+    /// Captures a frozen, fully-materialised projection baseline for this shard
+    /// at snapshot-cursor open time, keyed by <paramref name="token"/> (the
+    /// per-cursor
     /// <see cref="LatticeSnapshotCoordinate.SnapshotBaselineToken"/>). Walks the
     /// shard's leaf chain, freezes every leaf's committed cache plus
     /// per-partition frontier and prepared sagas, captures a uniform
@@ -638,8 +638,17 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <c>frontier_p &lt;= capturedHead_p</c> with no overshoot), folds each
     /// leaf's own <c>(frontier_p, capturedHead_p]</c> WAL tail exactly once
     /// (CRDT folds are not idempotent), unions the per-leaf results, and
-    /// persists them to the per-cursor, per-shard
-    /// <see cref="Grains.ISnapshotBaselineStorageGrain"/>.
+    /// <b>seeds them in memory</b> directly into the transient per-shard
+    /// <see cref="ISnapshotLeafGrain"/> the cursor will read.
+    /// <para>
+    /// The freeze is correctness-forced for every shard, but the durable write
+    /// is now lazy (issue #916): the baseline lives only in the snapshot leaf's
+    /// memory until the owning cursor's first page returns <c>HasMore = true</c>,
+    /// at which point the leaf flushes it to the per-cursor, per-shard
+    /// <see cref="Grains.ISnapshotBaselineStorageGrain"/>. A snapshot that drains
+    /// in a single page therefore performs no durable baseline write at capture
+    /// and no durable delete at close.
+    /// </para>
     /// <para>
     /// This is the fix for the class of bug where a zero-observable-writes
     /// snapshot scan replayed the WAL from offset 0 and silently returned

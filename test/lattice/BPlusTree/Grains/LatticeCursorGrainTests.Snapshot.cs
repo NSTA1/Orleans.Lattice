@@ -176,5 +176,140 @@ public partial class LatticeCursorGrainTests
             .Or.EqualTo(LatticeCursorPhase.Closed),
             "Close must clear or close the persisted phase.");
     }
+
+    // --- Lazy frozen-baseline persist (issue #916) ---
+
+    private static LatticeSnapshotCoordinate MakeTokenCoordinate(
+        Guid baselineToken,
+        params (int shard, long offset)[] shards)
+    {
+        var dict = new Dictionary<int, long>();
+        foreach (var (s, o) in shards) dict[s] = o;
+        return new LatticeSnapshotCoordinate(1, dict, HybridLogicalClock.Zero)
+        {
+            SnapshotBaselineToken = baselineToken,
+        };
+    }
+
+    private static (ISnapshotLeafGrain leaf, ISnapshotBaselineStorageGrain baseline) WireSnapshotShard(
+        IGrainFactory grainFactory, Guid token, int shardIndex, List<string> keys)
+    {
+        var key = SnapshotLeafGrain.BuildBaselineKey(TreeId, shardIndex, token);
+        var leaf = Substitute.For<ISnapshotLeafGrain>();
+        leaf.GetKeysAsync(
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<int>(), Arg.Any<LatticePredicateNode?>(), Arg.Any<bool>())
+            .Returns(_ => Task.FromResult(new List<string>(keys)));
+        grainFactory.GetGrain<ISnapshotLeafGrain>(key).Returns(leaf);
+
+        var baseline = Substitute.For<ISnapshotBaselineStorageGrain>();
+        grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(key).Returns(baseline);
+        return (leaf, baseline);
+    }
+
+    [Test]
+    public async Task NextKeysAsync_single_page_does_not_persist_baselines()
+    {
+        // A snapshot that drains in one page (HasMore == false) must NOT flush
+        // the in-memory seed to durable storage - the core write-amplification
+        // fix of issue #916.
+        var token = Guid.NewGuid();
+        var (grain, state, grainFactory) = CreateGrainWithFactory();
+        var (leaf, _) = WireSnapshotShard(grainFactory, token, 0, ["a", "b"]);
+
+        await grain.OpenSnapshotAsync(
+            TreeId,
+            new LatticeCursorSpec { Kind = LatticeCursorKind.Keys, ZeroObservableWrites = true },
+            MakeTokenCoordinate(token, (0, 0)));
+
+        var page = await grain.NextKeysAsync(10);
+
+        Assert.That(page.HasMore, Is.False);
+        Assert.That(page.Keys, Has.Count.EqualTo(2));
+        await leaf.DidNotReceive().EnsurePersistedAsync(Arg.Any<CancellationToken>());
+        Assert.That(state.State.SnapshotBaselinePersisted, Is.False,
+            "A single-page snapshot must never mark its baselines persisted.");
+    }
+
+    [Test]
+    public async Task NextKeysAsync_multi_page_persists_baselines_before_returning()
+    {
+        // The first page returns HasMore == true, so every shard's baseline must
+        // be flushed durably BEFORE the continuation token escapes to the client.
+        var token = Guid.NewGuid();
+        var (grain, state, grainFactory) = CreateGrainWithFactory();
+        var (leaf, _) = WireSnapshotShard(grainFactory, token, 0, ["a", "b", "c"]);
+
+        await grain.OpenSnapshotAsync(
+            TreeId,
+            new LatticeCursorSpec { Kind = LatticeCursorKind.Keys, ZeroObservableWrites = true },
+            MakeTokenCoordinate(token, (0, 0)));
+
+        var page = await grain.NextKeysAsync(3);
+
+        Assert.That(page.HasMore, Is.True);
+        await leaf.Received(1).EnsurePersistedAsync(Arg.Any<CancellationToken>());
+        Assert.That(state.State.SnapshotBaselinePersisted, Is.True,
+            "A multi-page snapshot must mark its baselines persisted once flushed.");
+    }
+
+    [Test]
+    public async Task NextKeysAsync_persists_baselines_only_once_across_pages()
+    {
+        // The persist fan-out is gated on the SnapshotBaselinePersisted flag, so
+        // a second HasMore page must not re-flush.
+        var token = Guid.NewGuid();
+        var (grain, _, grainFactory) = CreateGrainWithFactory();
+        var (leaf, _) = WireSnapshotShard(grainFactory, token, 0, ["a", "b", "c"]);
+
+        await grain.OpenSnapshotAsync(
+            TreeId,
+            new LatticeCursorSpec { Kind = LatticeCursorKind.Keys, ZeroObservableWrites = true },
+            MakeTokenCoordinate(token, (0, 0)));
+
+        await grain.NextKeysAsync(3);
+        await grain.NextKeysAsync(3);
+
+        await leaf.Received(1).EnsurePersistedAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CloseAsync_single_page_skips_durable_baseline_delete()
+    {
+        // Nothing was persisted, so the close path must issue zero ClearAsync
+        // calls - no delete-amplification to mirror the absent write.
+        var token = Guid.NewGuid();
+        var (grain, _, grainFactory) = CreateGrainWithFactory();
+        var (_, baseline) = WireSnapshotShard(grainFactory, token, 0, ["a", "b"]);
+
+        await grain.OpenSnapshotAsync(
+            TreeId,
+            new LatticeCursorSpec { Kind = LatticeCursorKind.Keys, ZeroObservableWrites = true },
+            MakeTokenCoordinate(token, (0, 0)));
+        await grain.NextKeysAsync(10);
+
+        await grain.CloseAsync();
+
+        await baseline.DidNotReceive().ClearAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CloseAsync_multi_page_deletes_persisted_baselines()
+    {
+        // A cursor that flushed its baselines must clean them up on close.
+        var token = Guid.NewGuid();
+        var (grain, _, grainFactory) = CreateGrainWithFactory();
+        var (_, baseline) = WireSnapshotShard(grainFactory, token, 0, ["a", "b", "c"]);
+
+        await grain.OpenSnapshotAsync(
+            TreeId,
+            new LatticeCursorSpec { Kind = LatticeCursorKind.Keys, ZeroObservableWrites = true },
+            MakeTokenCoordinate(token, (0, 0)));
+        await grain.NextKeysAsync(3);
+
+        await grain.CloseAsync();
+
+        await baseline.Received(1).ClearAsync(Arg.Any<CancellationToken>());
+    }
 }
 

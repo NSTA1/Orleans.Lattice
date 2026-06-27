@@ -71,6 +71,47 @@ public partial class LatticeCursorGrainTests
         return (grain, state, lattice);
     }
 
+    /// <summary>
+    /// Builds a cursor grain and returns the substitute <see cref="IGrainFactory"/>
+    /// backing it, so snapshot tests can wire per-shard
+    /// <see cref="ISnapshotLeafGrain"/> / <see cref="ISnapshotBaselineStorageGrain"/>
+    /// substitutes the lazy-persist fan-out reaches.
+    /// </summary>
+    private static (LatticeCursorGrain grain,
+                     FakePersistentState<LatticeCursorState> state,
+                     IGrainFactory grainFactory) CreateGrainWithFactory(
+        FakePersistentState<LatticeCursorState>? existingState = null,
+        LatticeOptions? options = null)
+    {
+        var context = Substitute.For<IGrainContext>();
+        context.GrainId.Returns(GrainId.Create("lattice-cursor", $"{TreeId}/{CursorId}"));
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var lattice = Substitute.For<ILattice>();
+        grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        grainFactory.GetGrain<ITxRegistryGrain>(TreeId).Returns(Substitute.For<ITxRegistryGrain>());
+
+        var reminders = Substitute.For<IReminderRegistry>();
+        reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+            .Returns(Task.FromResult<IGrainReminder?>(Substitute.For<IGrainReminder>()));
+
+        var opts = options ?? new LatticeOptions();
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.CurrentValue.Returns(opts);
+        optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
+
+        var state = existingState ?? new FakePersistentState<LatticeCursorState>();
+        var grain = new LatticeCursorGrain(
+            context,
+            grainFactory,
+            reminders,
+            optionsMonitor,
+            new ServiceCollection().BuildServiceProvider(),
+            new LoggerFactory().CreateLogger<LatticeCursorGrain>(),
+            state);
+        return (grain, state, grainFactory);
+    }
+
     private static async IAsyncEnumerable<T> ToAsyncEnumerable<T>(IEnumerable<T> items)
     {
         foreach (var item in items)
